@@ -266,6 +266,7 @@ class _Act:
         None  # while it runs: the injected error in the object's found pose, base frame
     )
     correct_hold: bool = True  # False replays the place uncorrected for the hold, as a baseline
+    allow_grasp_prediction: bool = False  # explicitly allow an unchanged-grip prediction when vision fails
     finds: list[str] = field(
         default_factory=list
     )  # the find log's rows of the finds it asked for (_log_find)

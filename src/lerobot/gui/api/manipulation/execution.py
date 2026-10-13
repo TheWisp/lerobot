@@ -87,6 +87,7 @@ class ActBody(BaseModel):
     )
     inject: InjectBody | None = None
     correct_hold: bool = True  # False: a place replays the demo against the target, uncorrected for the hold
+    allow_grasp_prediction: bool = False  # use the grasp-time hold if post-carry vision cannot verify it
     model_config = ConfigDict(extra="forbid")
 
 
@@ -409,6 +410,7 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
         moved = True
         run = recording._begin_run(demo, speed, delta, t_bc, plan)
         run.meta["inject"], run.meta["correct_hold"] = inject, act.correct_hold
+        run.meta["allow_grasp_prediction"] = act.allow_grasp_prediction
         run.meta["runner"] = "key_frames"
 
         def replanned(stage: str, p: dict[str, Any]) -> None:
@@ -711,7 +713,7 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
                 hold_task = None
                 if stopped():
                     return "stopped"
-                if act.correct_hold and demo_carry is None:
+                if act.correct_hold and not act.allow_grasp_prediction and demo_carry is None:
                     # This reference is known before grasping. Do not pick up an
                     # object whose required post-carry comparison cannot be made.
                     act.place = {
@@ -1000,7 +1002,18 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
             if demo_carry is not None and live_place is not None
             else None
         )
-        if fix_place is None and act.correct_hold:
+        fix, used, evidence = fix_place, "pre-place", "measured"
+        if not act.correct_hold:
+            fix, used, evidence = np.eye(4), "off", "off"
+        elif fix is None and act.allow_grasp_prediction:
+            # Carry the best grasp-time attachment forward under an explicit
+            # no-slip assumption. A group pose driven by the same arm joints
+            # does not make this an independent post-lift measurement.
+            fix, used = (
+                (fix_grip, "grip prediction") if fix_grip is not None else (fix_grasp, "grasp prediction")
+            )
+            evidence = "predicted"
+        if fix is None:
             # A grasp-time estimate cannot observe slip or a wrong initial find. Keep the closing and
             # refuse further approach/release when the held pose cannot be verified after the carry.
             act.place = {
@@ -1010,13 +1023,13 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
                 "live_place": live_place_problem,
                 "grasp_estimate_available": fix_grasp is not None,
                 "grip_measurement_available": fix_grip is not None,
+                "allow_grasp_prediction": act.allow_grasp_prediction,
             }
             fail(
                 f"cannot verify {held_obj}'s current held pose: {carry_problem or live_place_problem}; "
                 "placement stopped with the gripper closed"
             )
             return
-        fix, used = (fix_place, "pre-place") if act.correct_hold else (np.eye(4), "off")
         i_last = index(frames[hold_line]["t"])
         aimed = frame_now(frames[hold_line]["frame"]) @ demo.tips[i_last]
         shift_m, shift_deg = core.pose_residual(aimed @ fix, aimed)
@@ -1034,6 +1047,8 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
         act.place = {
             **(act.place or {}),
             "hold_used": used,
+            "hold_evidence": evidence,
+            "fallback_reason": (carry_problem or live_place_problem) if evidence == "predicted" else "",
             "demo_grip": summary(demo_grip, grip_problem),
             "live_grip": summary(live_grip, live_grip_problem),
             "demo_carry": summary(demo_carry, carry_problem),
@@ -1042,6 +1057,12 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
             "shift_deg": shift_deg,
             "fix": fix.tolist(),
         }
+        run.meta["hold_selection"] = {
+            "at": time.time(),
+            "source": used,
+            "evidence": evidence,
+            "reason": act.place["fallback_reason"],
+        }
         if (
             fix_grasp is not None
         ):  # what the camera saw against the grasp pose: what the closing and the lift did
@@ -1049,7 +1070,7 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
                 v * k
                 for v, k in zip(core.pose_residual(aimed @ fix_grasp, aimed), (1000.0, 1.0), strict=True)
             )
-            if used != "grasp pose":
+            if evidence == "measured":
                 seen_m, seen_deg = core.pose_residual(aimed @ fix, aimed @ fix_grasp)
                 act.place.update(seen_vs_grasp_pose_mm=seen_m * 1000.0, seen_vs_grasp_pose_deg=seen_deg)
         if fix_grip is not None and fix_place is not None:  # how far the lift and the carry moved the hold
@@ -1241,6 +1262,7 @@ async def act_start(body: ActBody, request: Request) -> dict:
         act.plan = act.place = None
         act.inject = body.inject.model_dump() if body.inject is not None and _injects(body.inject) else None
         act.correct_hold = body.correct_hold
+        act.allow_grasp_prediction = body.allow_grasp_prediction
         act.finds = []
         act.on, act.ok, act.reason, act.step, act.stop_requested, act.progress, act.speed = (
             True,

@@ -170,6 +170,7 @@ def _record_trial(run_dir: str | None = None) -> dict[str, Any]:
         "place": act.place,
         "inject": act.inject,
         "correct_hold": act.correct_hold,
+        "allow_grasp_prediction": act.allow_grasp_prediction,
     }
     if teach is not None and r.get("ok") and r.get("delta_cam") is not None:
         d = np.asarray(r["delta_cam"])

@@ -105,7 +105,7 @@ on the tray while the gripper carried it to the cube, as it had in a replay of t
 hide most of it, and its hidden points stay with what it lay on. So while the gripper holds it, its pose is the arm's,
 which neither the fingers nor the camera hide. This is a prediction of motion,
 not a fresh measurement of how the object sits between the fingers. Since
-2026-10-12, corrected placement requires a current visual hold and the demo's
+2026-10-12, corrected placement by default requires a current visual hold and the demo's
 carry reference. The runner validates the demo carry reference before starting
 the grasp stream; an unusable recorded reference prevents picking. Empty-arm
 approach may run while the reference is being measured. After lifting, the runner
@@ -114,6 +114,18 @@ observation pose. A failed live check retains the closing command; neither an
 encoder grasp estimate nor an earlier visual grip authorizes a blind placement.
 Rejection reports retain every observed reason, including weak appearance
 matches in views whose surface checks passed, rather than only the last reason.
+
+An act can explicitly set `allow_grasp_prediction=true` while retaining
+`correct_hold=true`. A verified post-lift hold still takes priority. If it is
+unavailable, the act uses the measured grasp-time attachment when available,
+otherwise the attachment predicted from the aimed object pose and the actual
+gripper pose at grasp. Both fallbacks assume that the hold stayed unchanged
+during lifting; neither certifies slip or corrects an unknown initial pose error.
+The chosen source, missing visual evidence, and selection time are recorded;
+replay labels subsequent frames as predicted with no post-lift verification.
+An absent grasp attachment still stops placement. This option leaves grasp,
+path feasibility, following-error and motor-protection checks in force; it does
+not lower pose acceptance thresholds or replace the correction with identity.
 
 If the live track cannot measure that hold, the runner now tries independent
 matches against the designated demo view for at most one additional track-wait

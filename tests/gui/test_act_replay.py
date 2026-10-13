@@ -451,3 +451,20 @@ def test_an_act_replay_exports_outside_the_gui_too(overlay, tmp_path):
     act = _act(tmp_path)
     video = overlay.render(act)
     assert video == act / "replay.mp4" and _frame_count(video) == 1
+
+
+@pytest.mark.parametrize("selected_at, expected", [(9.0, True), (11.0, False)])
+def test_replay_labels_prediction_only_after_it_was_selected(tmp_path, monkeypatch, selected_at, expected):
+    act = _act(tmp_path, held=False, groups=False)
+    meta = json.loads((act / "act.json").read_text())
+    meta["hold_selection"] = {
+        "at": selected_at,
+        "source": "grasp prediction",
+        "evidence": "predicted",
+    }
+    labels = []
+    monkeypatch.setattr(manipulation.replay, "_replay_text", lambda _img, text, *_args: labels.append(text))
+    manipulation.replay._replay_draw(act, meta, 0, {})
+    assert (
+        any("grasp prediction" in s and "no post-lift visual verification" in s for s in labels) is expected
+    )

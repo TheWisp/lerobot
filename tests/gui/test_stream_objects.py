@@ -1133,6 +1133,7 @@ def _run_place_act(
     blind_carry=False,
     inject=None,
     correct_hold=True,
+    allow_grasp_prediction=False,
     finds_wait_for_the_arm=False,
     box_moves_in_the_carry=None,
     covered_after_find=False,
@@ -1421,7 +1422,11 @@ def _run_place_act(
         manipulation.runtime._state.worker.pending.clear()
         manipulation.runtime._state.worker.jobs.clear()
         manipulation.runtime._state.act = manipulation.runtime._Act(
-            on=True, speed=4.0, inject=inject, correct_hold=correct_hold
+            on=True,
+            speed=4.0,
+            inject=inject,
+            correct_hold=correct_hold,
+            allow_grasp_prediction=allow_grasp_prediction,
         )
     manipulation.runtime._state.worker.proc = _FakeProc()
     views = {"demo": 0, "live": 0, "live_z": []}
@@ -2324,6 +2329,64 @@ def test_missing_carried_hold_stops_closed_even_when_a_grasp_estimate_exists(tmp
         )
         assert sim["streamed"][-1][-1] == 85.0
         assert _TipKinematics().forward_kinematics(sim["streamed"][-1])[2, 3] > 0.05
+    finally:
+        _end_place_state()
+
+
+@pytest.mark.usefixtures("act_simulation")
+@pytest.mark.parametrize("missing", ["demo", "live", "both"])
+def test_explicit_grasp_prediction_places_without_claiming_a_carried_measurement(
+    tmp_path, monkeypatch, missing
+):
+    """The opted-in prediction assumes the grasp persisted, and remains identified as such in saved evidence."""
+    try:
+        demo, sim, _views, m = _run_place_act(
+            tmp_path,
+            monkeypatch,
+            weak_carry=missing == "demo",
+            blind_carry=missing == "live",
+            blind=missing == "both",
+            allow_grasp_prediction=True,
+        )
+        act = manipulation.runtime._state.act
+        assert act.ok, act.reason
+        assert act.place["hold_evidence"] == "predicted" and act.place["fallback_reason"]
+        assert act.place["hold_used"] == ("grasp prediction" if missing == "both" else "grip prediction")
+        end = _TipKinematics().forward_kinematics(sim["streamed"][-1])
+        expected = m["box"] @ demo.tips[PLACE_AT["place_end"]] @ np.asarray(act.place["fix"])
+        assert core.pose_residual(end, expected)[0] <= 0.0005
+        row = manipulation.recording._load_trials()[-1]
+        assert row["allow_grasp_prediction"] and row["place"]["hold_evidence"] == "predicted"
+        meta = json.loads((pathlib.Path(row["run"]) / "act.json").read_text())
+        assert meta["allow_grasp_prediction"] and meta["hold_selection"]["evidence"] == "predicted"
+    finally:
+        _end_place_state()
+
+
+@pytest.mark.usefixtures("act_simulation")
+def test_fresh_visual_hold_overrides_allowed_grasp_prediction_after_slip(tmp_path, monkeypatch):
+    try:
+        _demo, _sim, _views, _m = _run_place_act(
+            tmp_path, monkeypatch, slip=True, allow_grasp_prediction=True
+        )
+        act = manipulation.runtime._state.act
+        assert act.ok, act.reason
+        assert act.place["hold_used"] == "pre-place" and act.place["hold_evidence"] == "measured"
+        assert act.place["grip_vs_place_mm"] == pytest.approx(6.0, abs=0.01)
+    finally:
+        _end_place_state()
+
+
+@pytest.mark.usefixtures("act_simulation")
+def test_prediction_permission_does_not_invent_a_missing_grasp_attachment(tmp_path, monkeypatch):
+    monkeypatch.setattr(manipulation.planning, "_grasp_pose_fix", lambda *a: None)
+    try:
+        _demo, sim, _views, _m = _run_place_act(
+            tmp_path, monkeypatch, blind=True, allow_grasp_prediction=True
+        )
+        act = manipulation.runtime._state.act
+        assert not act.ok and "cannot verify" in act.reason
+        assert act.place["hold_used"] == "unverified" and sim["streamed"][-1][-1] == 85.0
     finally:
         _end_place_state()
 
