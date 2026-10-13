@@ -1758,12 +1758,14 @@ def test_key_frame_execution_outcomes_across_grasp_and_placement_scenarios(tmp_p
         assert act.ok is (not bool(failed)), act.reason
         if scenario.get("inject"):
             assert "out of reach" in act.reason and not sim["streamed"]
+        elif scenario.get("weak_carry"):
+            assert not sim["streamed"], "an unusable demo carry reference prevents grasping"
         else:
             assert sim["streamed"], "the simulated grasp must actually execute"
         if scenario.get("empty_grip") or scenario.get("drop_in_lift"):
             assert "grasp missed" in act.reason
         elif scenario.get("weak_carry"):
-            assert "cannot verify" in act.reason and "gripper closed" in act.reason
+            assert "cannot verify" in act.reason and "before grasp" in act.reason
         elif scenario.get("inject"):
             assert not sim["targets"], "failed preflight must not command the arm"
         else:
@@ -2289,23 +2291,34 @@ def test_a_shift_during_the_lift_is_caught_at_the_pre_place(tmp_path, monkeypatc
 
 
 @pytest.mark.usefixtures("act_simulation")
-@pytest.mark.parametrize("missing", ["demo", "live", "both"])
-def test_missing_carried_hold_stops_closed_even_when_a_grasp_estimate_exists(tmp_path, monkeypatch, missing):
+@pytest.mark.parametrize("blind", [False, True])
+def test_missing_demo_carry_reference_stops_before_the_grasp(tmp_path, monkeypatch, blind):
+    """An unusable saved reference is known before picking; do not strand a payload at the carry check."""
+    try:
+        _demo, sim, _views, _m = _run_place_act(tmp_path, monkeypatch, weak_carry=not blind, blind=blind)
+        act = manipulation.runtime._state.act
+        assert not act.ok and "demo carry reference before grasp" in act.reason
+        assert act.place["reference_preflight"] == "failed before grasp"
+        assert not sim["streamed"], "no grasp or loaded motion may precede reference validation"
+        assert sim["grip"] < 82.0, "leave the empty gripper open"
+    finally:
+        _end_place_state()
+
+
+@pytest.mark.usefixtures("act_simulation")
+def test_missing_carried_hold_stops_closed_even_when_a_grasp_estimate_exists(tmp_path, monkeypatch):
     """Neither an earlier visual grip nor an encoder grasp estimate can certify the pose after a lift."""
     try:
         _demo, sim, _views, _m = _run_place_act(
             tmp_path,
             monkeypatch,
-            weak_carry=missing == "demo",
-            blind_carry=missing == "live",
-            blind=missing == "both",
+            blind_carry=True,
         )
         act = manipulation.runtime._state.act
         assert not act.ok and "cannot verify" in act.reason and "gripper closed" in act.reason
         assert act.place["hold_used"] == "unverified"
         assert act.place["grasp_estimate_available"]
-        if missing != "both":
-            assert act.place["grip_measurement_available"], "even a visual grip is stale after carrying"
+        assert act.place["grip_measurement_available"], "even a visual grip is stale after carrying"
         assert not [q for q, (_, stops) in zip(sim["streamed"], sim["sent_at"], strict=True) if stops >= 2], (
             "no correction, descent or release follows a failed verification"
         )
@@ -2917,6 +2930,34 @@ def test_a_demo_hold_the_worker_measured_is_kept_and_one_it_did_not_answer_is_as
             manipulation.runtime._state.demo = None
             manipulation.runtime._state.worker.pending.clear()
             manipulation.runtime._state.worker.jobs.clear()
+
+
+def test_demo_hold_reports_weak_matches_and_surface_rejections_together(tmp_path, monkeypatch):
+    """The last rejected surface must not hide earlier views that passed geometry but failed matching."""
+    import asyncio
+
+    demo, _kin, _box = _place_demo(tmp_path, time.time())
+    calls = []
+
+    async def locate(*args, **kwargs):
+        calls.append(kwargs)
+        return {
+            "answered": True,
+            "object": "gamepad",
+            "ok": len(calls) == 1,
+            "reason": "" if len(calls) == 1 else "surface overlap rejected",
+            "inliers": 14,
+            "card_points": 373,
+        }
+
+    monkeypatch.setattr(manipulation.holds, "_demo_hold_by_track", lambda *a: None)
+    monkeypatch.setattr(manipulation.acquisition, "_locate", locate)
+    hold, problem = asyncio.run(
+        manipulation.holds._demo_hold(demo, "gamepad", np.eye(4), lambda: False, "carry")
+    )
+    assert hold is None and len(calls) > 1
+    assert "1 view(s): a weak find" in problem and "14" in problem
+    assert f"{len(calls) - 1} view(s): surface overlap rejected" in problem
 
 
 def test_the_place_object_is_drawn_where_its_find_put_it(tmp_path):
@@ -3995,7 +4036,7 @@ def test_an_injected_aim_is_measured_but_does_not_authorize_a_blind_place(tmp_pa
     }
     calls, pivots = _spy_injection(monkeypatch)
     try:
-        demo, sim, _views, m = _run_place_act(tmp_path, monkeypatch, blind=True, inject=inject)
+        demo, sim, _views, m = _run_place_act(tmp_path, monkeypatch, blind_carry=True, inject=inject)
         act = manipulation.runtime._state.act
         assert not act.ok and "cannot verify" in act.reason
         g = demo.tips[manipulation.execution._grasp_index(demo)]
@@ -4029,7 +4070,7 @@ def test_a_wrong_find_does_not_authorize_placement_without_a_carried_pose(tmp_pa
     }
     calls, pivots = _spy_injection(monkeypatch)
     try:
-        demo, sim, _views, m = _run_place_act(tmp_path, monkeypatch, blind=True, inject=inject)
+        demo, sim, _views, m = _run_place_act(tmp_path, monkeypatch, blind_carry=True, inject=inject)
         act = manipulation.runtime._state.act
         assert not act.ok and "cannot verify" in act.reason
         centre = manipulation.planning._object_points(demo, "gamepad", np.eye(4)).mean(axis=0)

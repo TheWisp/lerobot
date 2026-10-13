@@ -106,10 +106,14 @@ hide most of it, and its hidden points stay with what it lay on. So while the gr
 which neither the fingers nor the camera hide. This is a prediction of motion,
 not a fresh measurement of how the object sits between the fingers. Since
 2026-10-12, corrected placement requires a current visual hold and the demo's
-carry reference. Both runners stop with the closing command retained if that
-comparison is unavailable; neither an encoder grasp estimate nor an earlier
-visual grip authorizes a blind placement. The key-frame runner checks at the
-first held line, which must be authored at a clear observation pose.
+carry reference. The runner validates the demo carry reference before starting
+the grasp stream; an unusable recorded reference prevents picking. Empty-arm
+approach may run while the reference is being measured. After lifting, the runner
+checks the live hold at the first held line, which must be authored at a clear
+observation pose. A failed live check retains the closing command; neither an
+encoder grasp estimate nor an earlier visual grip authorizes a blind placement.
+Rejection reports retain every observed reason, including weak appearance
+matches in views whose surface checks passed, rather than only the last reason.
 
 If the live track cannot measure that hold, the runner now tries independent
 matches against the designated demo view for at most one additional track-wait

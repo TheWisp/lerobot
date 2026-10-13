@@ -711,6 +711,15 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
                 hold_task = None
                 if stopped():
                     return "stopped"
+                if act.correct_hold and demo_carry is None:
+                    # This reference is known before grasping. Do not pick up an
+                    # object whose required post-carry comparison cannot be made.
+                    act.place = {
+                        "hold_used": "unverified",
+                        "demo_carry_problem": carry_problem,
+                        "reference_preflight": "failed before grasp",
+                    }
+                    return f"cannot verify {held_obj}'s demo carry reference before grasp: {carry_problem}"
                 if demo_grip is None and demo_carry is None and holding is None:
                     return (
                         f"how the demo holds {held_obj} cannot be known: no firm grip in the demo; at its grip, "

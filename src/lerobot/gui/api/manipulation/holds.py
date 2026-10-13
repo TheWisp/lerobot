@@ -22,6 +22,7 @@ import asyncio
 import json
 import pathlib
 import time
+from collections import Counter
 from collections.abc import Callable
 from typing import Any
 
@@ -153,7 +154,7 @@ async def _demo_hold(
             return None, f"{obj} is hidden in the gripper {where}: its own track does not see it there"
         return None, f"the demo never holds {obj} still in the gripper {where}"
     intr = await asyncio.get_event_loop().run_in_executor(runtime._RENDER_EXECUTOR, _recording_intr, demo)
-    holds, why, answered = [], "", True
+    holds, failures, answered = [], Counter(), True
     for f, i in frames:
         rgb, depth = await asyncio.get_event_loop().run_in_executor(
             runtime._RENDER_EXECUTOR, recording._stream_frame, demo.recording, f
@@ -168,12 +169,13 @@ async def _demo_hold(
         if found["ok"] and not acquisition._weak(found):
             holds.append(np.linalg.inv(demo.tips[i]) @ t_bc @ found["delta"] @ np.linalg.inv(t_bc))
         else:
-            why = found["reason"] or acquisition._weak(found)
+            failures[found["reason"] or acquisition._weak(found) or "view not verified"] += 1
     points = await asyncio.get_event_loop().run_in_executor(
         runtime._RENDER_EXECUTOR, planning._object_points, demo, obj, t_bc
     )
     avg = core.average_hold(holds, points.mean(axis=0))
     if avg is None:
+        why = "; ".join(f"{n} view(s): {reason}" for reason, n in failures.items())
         problem = (
             f"{obj} is not visible enough in the gripper in the demo: {len(holds)} of {len(frames)} still views "
             f"matched the demo's view of it ({why or 'their poses disagree'})"
