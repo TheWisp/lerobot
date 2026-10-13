@@ -245,6 +245,7 @@ class _Run:
                     "track_uv",
                     "track_vis",
                     "model_xyz",
+                    "model_valid",
                 )
                 or k.startswith(("other_track_", "other_mask_", "other_delta_", "other_model_", "other_fit_"))
             )

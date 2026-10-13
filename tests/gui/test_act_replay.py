@@ -172,7 +172,41 @@ def _partial_pose():
     )
     delta = np.eye(4)
     delta[0, 3] = 0.03
-    return {"ok": True, "delta": delta, "model_xyz": xyz}
+    return {"ok": True, "delta": delta, "model_xyz": xyz, "model_valid": np.ones(len(xyz), bool)}
+
+
+def test_pose_outline_excludes_unconfirmed_points_without_filtering_occluded_surface():
+    """A grasp added stray finite candidates to P2P's map. They are not an object outline;
+    confirmed points still belong to the predicted surface even outside the visible mask."""
+    r = _partial_pose()
+    candidate = np.array([[(700 - INTR["cx"]) * 0.45 / INTR["fx"], 0.0075, 0.45]])
+    r["model_xyz"] = np.vstack([r["model_xyz"], candidate])
+    r["model_valid"] = np.r_[r["model_valid"], False]
+    r["mask"] = np.zeros((H, W), bool)  # occlusion is not map invalidity
+    original = r["model_xyz"].copy()
+    img = np.zeros((H, W, 3), np.uint8)
+    state = manipulation.rendering._draw_track_estimate(img, INTR, r, r, "picked")
+    assert state == "available"
+    assert _has(img, range(480, 485), 250, manipulation.runtime.POSE_ESTIMATE_COLOUR)
+    assert not _has(img, range(735, 746), 250, manipulation.runtime.POSE_ESTIMATE_COLOUR)
+    np.testing.assert_array_equal(r["model_xyz"], original), "retain raw candidate geometry for diagnosis"
+
+
+@pytest.mark.parametrize("validity", [None, np.array([True]), np.zeros(196, bool)])
+def test_pose_outline_reports_missing_or_unusable_surface_validity(validity):
+    r = _partial_pose()
+    r["model_valid"] = validity
+    img = np.zeros((H, W, 3), np.uint8)
+    state = manipulation.rendering._draw_track_estimate(img, INTR, r, r, "picked")
+    if validity is None:
+        assert state == "available (surface validity unrecorded)"
+        assert _has(img, range(480, 485), 250, manipulation.runtime.POSE_ESTIMATE_COLOUR)
+    else:
+        expected = (
+            "surface unavailable" if len(validity) == len(r["model_xyz"]) else "surface validity invalid"
+        )
+        assert state == f"available ({expected})"
+        assert not _has(img, range(480, 485), 250, manipulation.runtime.POSE_ESTIMATE_COLOUR)
 
 
 @pytest.mark.parametrize("used", [False, True])

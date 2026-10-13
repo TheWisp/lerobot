@@ -13,8 +13,8 @@ point tracker), in the order every reply keeps.  Replies carry ``meta`` (JSON, w
 each object's counts) and, for each object ``i``, ``delta_i`` (4x4: its motion since the init
 frame, in the camera frame), ``mask_i`` (HxW bool, SAM2's current mask), ``live_uv_i`` (Kx2
 float32, its visible tracked points), ``fit_uv_i`` (Mx2 float32, the tracked points its pose was
-fitted on), ``fit_inlier_i`` (M bool, which of them the fit kept) and ``model_i`` (its key points so
-far, init frame).  Object 0 is also under the names without the index, with its counts at the top
+fitted on), ``fit_inlier_i`` (M bool, which of them the fit kept), ``model_i`` (all key-point rows,
+init frame), and ``model_valid_i`` (which rows P2P has confirmed). Object 0 is also under the names without the index, with its counts at the top
 of ``meta``, for a session that follows one object.  The first reply, before any request, is
 ``{"ready": true}`` once the models are on the GPU.
 
@@ -760,14 +760,18 @@ class Session:
             out[f"track_valid_{i}"] = valid[idx] if len(valid) >= len(visible) else np.ones(len(idx), bool)
             out[f"fit_uv_{i}"] = fit_uv
             out[f"fit_inlier_{i}"] = fit_inlier
-            # Its model so far: every key point it has adopted, in the first (init) frame's coordinates.
+            # Keep every row for diagnosis, including tentative/rejected points. The object validity is
+            # distinct from this frame's track visibility: a confirmed but occluded surface is still drawable.
             out[f"model_{i}"] = np.asarray(obj.key_points, dtype=np.float32).reshape(-1, 3)
+            model_valid = getattr(obj, "valid", None)
+            if model_valid is not None:
+                out[f"model_valid_{i}"] = np.asarray(model_valid, dtype=bool).copy()
             if masks is not None and i < len(masks):
                 out[f"mask_{i}"] = masks[i]
         out["meta"] = json.dumps(
             {"ok": True, "ms": ms, "software": self.software, "objects": objects, **objects[0]}
         )
-        for key in ("delta", "live_uv", "fit_uv", "fit_inlier", "model", "mask"):
+        for key in ("delta", "live_uv", "fit_uv", "fit_inlier", "model", "model_valid", "mask"):
             if f"{key}_0" in out:
                 out[key] = out[f"{key}_0"]
         return out

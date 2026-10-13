@@ -677,6 +677,7 @@ async def _apply_track_result(job: runtime._Job) -> None:
                     "uv",
                     "xyz",
                     "model_xyz",
+                    "model_valid",
                     "delta",
                     "face_teach",
                     "face_find",
@@ -759,6 +760,7 @@ async def _apply_track_result(job: runtime._Job) -> None:
         tr.model = {
             "t": job.created,
             "model_xyz": r.get("model_xyz"),
+            "model_valid": r.get("model_valid"),
             "raw_delta_cam": r.get("delta"),  # the worker's fit, even when the view rejects it
             "delta_cam": None if result is None else result["delta_cam"],  # this frame's, when trusted
             "held_delta_cam": held,  # the last trusted one, before any carrying by point groups

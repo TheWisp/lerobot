@@ -630,7 +630,7 @@ P2P_READY_S = 180.0  # the first start loads SAM2 and BootsTAPIR onto the GPU
 
 # The points a pose was fitted on, and every track the object owns (number, pixel, seen by the colour tracker), for the
 # server's checks of a view (the depth check needs a track's number to know where it was before).
-P2P_FIT_ARRAYS = ("fit_uv", "fit_inlier", "track_idx", "track_uv", "track_vis")
+P2P_FIT_ARRAYS = ("fit_uv", "fit_inlier", "track_idx", "track_uv", "track_vis", "model_valid")
 P2P_FIT_FIELDS = (
     "software",
     *P2P_FIT_ARRAYS,
@@ -813,7 +813,16 @@ class Scene:
         out["software"] = r.get("software", {})
         anchor = self.anchor[name]
         out["delta"] = np.asarray(r[f"delta_{i}"], dtype=float) @ anchor
-        for key in ("live_uv", "fit_uv", "fit_inlier", "mask", "track_idx", "track_uv", "track_vis"):
+        for key in (
+            "live_uv",
+            "fit_uv",
+            "fit_inlier",
+            "mask",
+            "track_idx",
+            "track_uv",
+            "track_vis",
+            "model_valid",
+        ):
             if f"{key}_{i}" in r:
                 out[key] = r[f"{key}_{i}"]
         back = np.linalg.inv(anchor)  # its key points, from the session's first frame to its own find's

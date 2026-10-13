@@ -200,6 +200,7 @@ async def worker_result(id: str, request: Request) -> dict:
         "xyz",
         "live_uv",
         "model_xyz",
+        "model_valid",
         "delta",
         "deltas",
         "seen",

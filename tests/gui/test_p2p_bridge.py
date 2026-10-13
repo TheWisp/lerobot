@@ -111,7 +111,12 @@ def test_visible_tracks_with_no_segmentation_remain_explainable_in_the_act_recor
         visible=np.ones(8, bool), track_2d=uv, valid=np.ones(8, bool), obj2track_map={0: np.arange(8)}
     )
     obj = SimpleNamespace(
-        lost=True, lost_streak=9, mean_residual=-1, key_points=np.ones((8, 3)), pose=np.eye(4)
+        lost=True,
+        lost_streak=9,
+        mean_residual=-1,
+        key_points=np.ones((8, 3)),
+        pose=np.eye(4),
+        valid=np.array([True, False] * 4),
     )
     session.pipe = SimpleNamespace(track_table=table, objects=[obj])
     support = {
@@ -133,6 +138,12 @@ def test_visible_tracks_with_no_segmentation_remain_explainable_in_the_act_recor
     mask = None if segmented is None else np.full((1, 1, 8, 8), segmented, bool)
     wire = session._answer(SimpleNamespace(intrinsics=np.eye(3), mask=mask), 1.0)
     result = {**json.loads(wire.pop("meta")), **wire}
+    np.testing.assert_array_equal(result["model_valid"], obj.valid)
+    scene = pw.Scene(lambda: None)
+    scene.order, scene.anchor, scene.reply = ["picked"], {"picked": np.eye(4)}, result
+    share = scene.share("picked")
+    np.testing.assert_array_equal(share["model_valid"], obj.valid)
+    np.testing.assert_array_equal(pw._others_arrays([("picked", share)])["other_model_valid_0"], obj.valid)
     tracker = pw.Tracker(None, None, None, None, p2p=SimpleNamespace(step=lambda *args: result))
     rgb, depth = np.zeros((8, 8, 3), np.uint8), np.full((8, 8), 0.4, np.float32)
     answer = tracker.step(pw._Frame(rgb, depth, "partial"), "p2p")
@@ -142,6 +153,9 @@ def test_visible_tracks_with_no_segmentation_remain_explainable_in_the_act_recor
     run.frame(SimpleNamespace(rgb=rgb, depth_m=depth, created=1.0), answer, {"ok": False}, "hold", None, None)
     manipulation.runtime._RUN_EXECUTOR.submit(lambda: None).result()
     recorded = run.frames[0]
+    arrays = np.load(tmp_path / "frames" / "000000.npz")
+    np.testing.assert_array_equal(arrays["model_valid"], obj.valid)
+    np.testing.assert_array_equal(arrays["model_xyz"], obj.key_points), "raw geometry remains available"
     assert recorded["software"] == software, "Source and configuration identity must survive recording"
     assert recorded["pose_jump_guard_info"] == guard_info, "Retain the physical reference behind the check"
     assert recorded["ok"] is False and recorded["n_matches"] == 8 and recorded["fit_points"] == 0

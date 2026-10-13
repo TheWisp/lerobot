@@ -174,7 +174,7 @@ def _draw_track_estimate(bgr, intr, result, arrays, name) -> str:
     """Draw the current raw fit using its own model in teach coordinates, even if following rejected it.
 
     Neither the current demo nor a previous fit can stand in for missing recorded data. A model is the
-    surface learned so far, including points now occluded; its outline is a prediction, not a visible mask.
+    confirmed surface learned so far, including points now occluded; its outline is a prediction, not a visible mask.
     The returned availability says nothing about acceptance by either the following or held-pose gate.
     """
     delta = arrays.get("delta")
@@ -189,12 +189,23 @@ def _draw_track_estimate(bgr, intr, result, arrays, name) -> str:
     cloud = np.asarray(cloud, dtype=float)
     if cloud.ndim != 2 or cloud.shape[1] != 3:
         return "available (surface unavailable)"
+    validity = arrays.get("model_valid")
+    availability = "available"
+    if validity is None:
+        # Older recordings omitted this distinction. Preserve their diagnostic picture without
+        # claiming that the tentative/rejected rows in it were a confirmed surface.
+        availability += " (surface validity unrecorded)"
+    else:
+        validity = np.asarray(validity, dtype=bool)
+        if validity.shape != (len(cloud),):
+            return "available (surface validity invalid)"
+        cloud = cloud[validity]
     cloud = cloud[np.isfinite(cloud).all(axis=1)]
     cloud = cloud[(cloud @ delta[:3, :3].T + delta[:3, 3])[:, 2] > 0]
     if len(cloud) < 3:
         return "available (surface unavailable)"
-    _draw_found(bgr, intr, cloud, delta, f"{name}: pose estimate", runtime.POSE_ESTIMATE_COLOUR)
-    return "available"
+    _draw_found(bgr, intr, cloud, delta, f"{name}: raw pose estimate", runtime.POSE_ESTIMATE_COLOUR)
+    return availability
 
 
 def _render_live(rgb, r, result, transported, teach, status) -> bytes:
