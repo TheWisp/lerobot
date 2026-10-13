@@ -10,6 +10,49 @@ and `preplace`. `showservo.motion.key_frames` converts that saved representation
 into key frames. This is data-format compatibility, not another execution path.
 Act requests cannot select a runner; an obsolete `runner` field is rejected.
 
+## Object-independent interaction sequences
+
+Objects are designated on the RGB-D recording and identified by user labels.
+The recorder, worker, tracker and act runner do not select a policy by object
+name or class. Shapes, poses and symmetry declarations belong to the demo.
+Names in historical tests and failure comments describe evidence, not runtime
+dispatch rules. The old `benchmarks/showservo_reset/reset_policy.py` experiment
+is a separate, scene-specific reset program; it is not imported or invoked by
+the demonstration framework and must not be used to reset a different demo.
+
+`demo_holdings` reads every recorded attachment from gripper commands and
+observations. Each grasp/release interval is executed in the same key-frame
+runner, with its own measured or explicitly predicted attachment correction.
+A held tool can follow several interaction segments before release. Completing
+the first such segment does not detach it from the gripper in group tracking.
+Later grasps repeat the reference, grasp and held-pose checks. A missing or
+failed second grasp cannot inherit the first grasp's correction. The editor
+shows every attachment interval and replay records each selection separately.
+
+For a subsequent attachment interval, an object used again is referenced at its
+visible pose before that interaction, after the preceding release. This avoids
+applying the object's earlier demonstrated displacement twice. That reference
+passes the same depth-surface verification as the initial reference. An unseen
+later reference is refused, rather than silently reusing the original pose.
+Grasp and release transitions need separate recorded follow segments; an
+attachment is to the object that segment names. A held key frame must reference
+another object or the world.
+
+**New demo** clears the previous demo's live object state, labels and injected
+error settings, without moving the arm or deleting saved data. A new recording
+cannot overwrite a different saved demo with the same name. Record with the
+leader or gizmo, save, designate the objects, then author the key frames. RGB-D
+recording does not require choosing a tracking object beforehand.
+
+This supports recording general hand-object and object-object motion sequences
+on the single gripper, with rigid pose-based replay. It does not infer contact
+forces, friction, deformation, liquid motion, or success for an unseen task.
+Several contacts inside a streamed segment remain a replayed demonstrated path;
+there is no general contact-dynamics solver or per-contact replanning. Occluded
+held-object accuracy remains limited by the documented visual checks and the
+explicit no-slip fallback. The sequence regressions use a simulated arm and
+supplied poses; a new physical task still needs its own observed trial.
+
 ## Code ownership
 
 `lerobot.gui.api.manipulation` assembles the endpoint routers. Code imports the

@@ -1201,6 +1201,19 @@ async function pgGo() {
 // ── the demo (Teach) and the act: record the arm and the object, save a dataset, replay it on the object ─
 const demoUI = {recording: false, lastList: ''};
 
+async function demoNew() {
+    try {
+        await pgPost('/api/pregrasp/demo/new', {});
+        document.getElementById('demo-name').value = '';
+        document.getElementById('pg-concept').value = '';
+        apDetailsToggle(true); apSub('teach');
+        demoStatus('New demo: record the whole interaction, then name its objects on the recording.');
+        de.curve = null; de.objects = []; de.kps = []; de.check = null; de.loadedFor = null;
+        apInjectClear();
+        await pgState();
+    } catch (e) { demoStatus(e.message, true); }
+}
+
 async function demoRecordToggle() {
     try {
         if (demoUI.recording) {
@@ -1211,7 +1224,7 @@ async function demoRecordToggle() {
         } else {
             const d = await pgPost('/api/pregrasp/demo/record/start', {});
             demoUI.recording = true;
-            demoStatus(d.tracking ? 'recording the arm, the object and the camera…' : 'recording the arm (start tracking in Setup to record the object too)…');
+            demoStatus(`recording the arm${d.camera ? ' and RGB-D camera' : ''}${d.tracking ? ', with live object tracking' : '; designate objects afterwards'}…`);
         }
     } catch (e) { demoStatus(e.message, true); }
     document.getElementById('demo-record-btn').textContent = demoUI.recording ? 'Stop recording' : 'Record';
@@ -1698,6 +1711,7 @@ async function apGuideTick() {
         jg = st.arm_connected ? await (await fetch('/api/jog/state')).json() : {};
     } catch (e) { apGuideShow('offline', 'the server is not answering', null, null); return; }
     const w = st.worker || {}, tr = st.track || {}, act = st.act || {}, demo = st.demo;
+    document.getElementById('demo-new-btn').style.display = (demo || st.teach) && !act.on && !st.recording ? '' : 'none';
     const last = tr.last || {};
     // The camera view follows the server whoever started or stopped the tracker (a script, an act): the tracker's
     // frames while it runs, the camera's own while the camera is live and it does not.
@@ -2057,11 +2071,11 @@ function deDrawStrip() {
     ctx.stroke();
     const line = (t, col) => { ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(x(t), 0); ctx.lineTo(x(t), h); ctx.stroke(); };
     keys.forEach(k => line(k.t, deFrameColour(k.frame)));
-    const hold = deCheckFresh() ? de.check.hold : null;
-    if (hold) { // while the demo held something, read from its gripper: from the firm grip to where it let go
+    const holds = deCheckFresh() ? (de.check.holds || (de.check.hold ? [de.check.hold] : [])) : [];
+    for (const hold of holds) {
         const a = x(hold.grip_t), b = hold.release_t == null ? w : x(hold.release_t);
         ctx.fillStyle = DE_HELD; ctx.fillRect(a, 0, Math.max(2, b - a), 3);
-        ctx.font = '10px sans-serif'; ctx.fillText('held', Math.min(a + 3, w - 22), h - 18);
+        ctx.font = '10px sans-serif'; ctx.fillText(`held: ${hold.object || 'object'}`, Math.min(a + 3, w - 22), h - 18);
     }
     de.objects.filter(o => o.status === 'done' && dePoseOf(o).t != null).forEach((o, n) => {
         // the frame the act reads each object's demo pose from, each label on its own line where two coincide

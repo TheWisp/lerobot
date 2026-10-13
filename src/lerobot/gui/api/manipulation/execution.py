@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import dataclasses
 import functools
 import logging
 import time
@@ -204,20 +205,21 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
             fail("mark a key frame first")
             return
         obj, others = planning._session_object(demo), planning._other_objects(demo)
-        holding = planning._holding(demo)
-        split = planning._grasp_split(frames, holding)
-        made_held = [core.held_at(holding, demo.t, frames, n) for n in range(len(frames))]
-        carries = any(made_held[split:])  # key frames after the grasp check made holding: the hold matters
-        held_obj = None if holding is None else holding["frame"]
-        if carries and held_obj not in demo.objects:
-            fail("the object held must be one clicked on the recording, to find it in the gripper")
-            return
-        first_line = next(
-            (n for n in range(split, len(frames)) if made_held[n] and frames[n]["move"] != "lift"), None
-        )  # a lift may come first: straight up from the grasp
-        if carries and (first_line is None or frames[first_line]["move"] != "line"):
-            fail("after the grasp the arm needs a straight line before it follows the demo again")
-            return
+        holdings = planning._holdings(demo)
+        phases = core.interaction_phases(holdings, demo.t, frames)
+        for holding in holdings:
+            made_held = [core.held_at(holding, demo.t, frames, n) for n in range(len(frames))]
+            split = holding["begins"] + 1
+            first_line = next(
+                (n for n in range(split, len(frames)) if made_held[n] and frames[n]["move"] != "lift"), None
+            )
+            if any(made_held[split:]):
+                if holding["frame"] not in demo.objects:
+                    fail("the object held must be one clicked on the recording, to find it in the gripper")
+                    return
+                if first_line is None or frames[first_line]["move"] != "line":
+                    fail("after the grasp the arm needs a straight line before it follows the demo again")
+                    return
         with runtime._state.lock:
             act.find_error = None
             live = bool(
@@ -293,19 +295,10 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
                     fail(problem)
                     return
             motions[name] = motion
+        # Assigned separately for each attachment, never reused across a regrasp.
         demo_grip = demo_carry = None
         grip_problem = carry_problem = ""
         hold_task: asyncio.Task | None = None
-        if carries:
-
-            async def demo_holds() -> tuple[tuple[dict | None, str], tuple[dict | None, str]]:
-                return (
-                    await holds._demo_hold(demo, held_obj, t_bc, stopped, "grip"),
-                    await holds._demo_hold(demo, held_obj, t_bc, stopped, "carry"),
-                )
-
-            hold_task = asyncio.create_task(demo_holds())
-            beside.append(hold_task)
         picked = obj or str(teach.keypoints.get("concept") or "object")  # its name in the point groups
         if with_groups:
             # The point groups carry the objects the act follows while no view places them: designated where the act's
@@ -729,439 +722,511 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
                     )
             return ""
 
-        # ── up to the grasp check: lines walked, re-aimed at their objects; follows planned where the arm stands ──
-        grip: dict[str, Any] = {}
-        grip_watch: asyncio.Task | None = None
-        closing, i_grasp_end = 1.0, None
-        last_follow: dict[str, Any] | None = None
-        waited = False
-        for n in range(split):
-            k = frames[n]
-            i = index(k["t"])
-            if k["move"] == "lift":
-                cur = jog.current_tip_and_anchor()
-                if cur is None:
-                    fail("the arm went away")
-                    return
-                up = np.array(cur[0], dtype=float)
-                up[2, 3] += k["up_mm"] / 1000.0
-                why = await walk_to(k["label"], lambda up=up: up)
+        original_demo = demo
+        for phase_index, (phase_start, phase_stop) in enumerate(phases):
+            if streaming:
+                await jog.joints_stop()
+                streaming = False
+            demo = dataclasses.replace(
+                original_demo, hold_index=phase_index, interaction_span=(phase_start, phase_stop)
+            )
+            if phase_start:
+                # A reused object may have moved in the demonstration too. Compare
+                # it with its pose at this interaction, not its original position.
+                demo.reference_constraints = {}
+                why = await asyncio.get_event_loop().run_in_executor(
+                    runtime._RENDER_EXECUTOR, holds._prepare_demo_references, demo
+                )
                 if why:
                     fail(why)
                     return
-                continue
-            if k["move"] == "line":
-                g = float(demo.q_cmd[i, gi])
-                if k["grip"] == "first":
-                    g_now = jog.current_gripper()
-                    jog.set_gripper(g)
-                    act.step = f"{k['label']}: setting the gripper"
-                    await asyncio.sleep(
-                        abs(g - (g if g_now is None else g_now)) / jog.GRIP_UNITS_S + runtime.ACT_TICK_S
+            holding = planning._holding(demo)
+            split = min(phase_stop, max(phase_start, planning._grasp_split(frames, holding)))
+            made_held = [core.held_at(holding, demo.t, frames, n) for n in range(len(frames))]
+            carries = any(made_held[split:phase_stop])
+            held_obj = None if holding is None else holding["frame"]
+            landing_obj = planning._landing_object(demo)
+            if phase_start:
+                landing_turn = None
+            demo_grip = demo_carry = None
+            grip_problem = carry_problem = ""
+            act.place = None
+            hold_task = None
+            if carries:
+
+                async def demo_holds(
+                    demo=demo, held_obj=held_obj
+                ) -> tuple[tuple[dict | None, str], tuple[dict | None, str]]:
+                    return (
+                        await holds._demo_hold(demo, held_obj, t_bc, stopped, "grip"),
+                        await holds._demo_hold(demo, held_obj, t_bc, stopped, "carry"),
                     )
-                else:
-                    jog.set_gripper(g)  # it moves on its own clock while the arm walks
-                why = await walk_to(k["label"], lambda f=k["frame"], i=i: frame_now(f) @ demo.tips[i])
+
+                hold_task = asyncio.create_task(demo_holds())
+                beside.append(hold_task)
+            # ── up to the grasp check: lines walked, re-aimed at their objects; follows planned where the arm stands ──
+            grip: dict[str, Any] = {}
+            grip_watch: asyncio.Task | None = None
+            closing, i_grasp_end = 1.0, None
+            last_follow: dict[str, Any] | None = None
+            waited = False
+            for n in range(phase_start, split):
+                k = frames[n]
+                i = index(k["t"])
+                if k["move"] == "lift":
+                    cur = jog.current_tip_and_anchor()
+                    if cur is None:
+                        fail("the arm went away")
+                        return
+                    up = np.array(cur[0], dtype=float)
+                    up[2, 3] += k["up_mm"] / 1000.0
+                    why = await walk_to(k["label"], lambda up=up: up)
+                    if why:
+                        fail(why)
+                        return
+                    continue
+                if k["move"] == "line":
+                    g = float(demo.q_cmd[i, gi])
+                    if k["grip"] == "first":
+                        g_now = jog.current_gripper()
+                        jog.set_gripper(g)
+                        act.step = f"{k['label']}: setting the gripper"
+                        await asyncio.sleep(
+                            abs(g - (g if g_now is None else g_now)) / jog.GRIP_UNITS_S + runtime.ACT_TICK_S
+                        )
+                    else:
+                        jog.set_gripper(g)  # it moves on its own clock while the arm walks
+                    why = await walk_to(k["label"], lambda f=k["frame"], tip=demo.tips[i]: frame_now(f) @ tip)
+                    if why:
+                        fail(why)
+                        return
+                    continue
+                if not waited:
+                    why = await caught_up()
+                    if why:
+                        fail(why)
+                        return
+                    waited = True
+                # The follow is aimed by the pose the act holds for its object, as every walk before it was; the line to
+                # the key frame before it is planned again from where the arm stands.
+                act.step = f"planning {k['label']}"
+                aim_then = follow() if k["frame"] == (obj or "") else None
+                planned = await plan_span(
+                    k["label"],
+                    (n - 1, n + 1),
+                    delta_cam=aim_then,
+                    aim=None if aim_then is None else aim_error(aim_then),
+                )
+                if not planned["ok"]:
+                    fail(planned["reason"])
+                    return
+                i0 = index(frames[n - 1]["t"])
+                closing = float(np.sign(demo.q_cmd[i, gi] - demo.q_cmd[i0, gi])) or 1.0
+                i_grasp_end, last_follow = i, planned
+                if (
+                    carries
+                    and holding is not None
+                    and n == holding["begins"]
+                    and k["label"] in planned["stage"]
+                ):
+                    grip_i = holding["grip"]
+                    at = list(planned["stage"]).index(k["label"]) + (grip_i - i0 - 1)
+                    if 0 < at < len(planned["q"]) - 1:
+                        # Where the plan put the held object: the grasp pose is judged against it.
+                        session_held = holding["frame"] == (obj or "")
+                        held_then = (
+                            planning._delta_base(demo, aim_then, t_bc)
+                            if session_held
+                            else motions.get(holding["frame"])
+                        )
+                        held_name = picked if session_held else holding["frame"]
+
+                        async def watch_grip(
+                            at: int = at,
+                            grip_i: int = grip_i,
+                            planned: dict = planned,
+                            closing: float = closing,
+                            held_then: np.ndarray | None = held_then,
+                            held_name: str = held_name,
+                            demo: runtime._Demo = demo,
+                            grip: dict = grip,
+                            demo_grip: dict | None = demo_grip,
+                            held_obj: str | None = held_obj,
+                        ) -> None:
+                            """Beside the stream, from its sample where the demo's grip became firm: once the gripper's
+                            reading stops, the grasp check (a miss halts the stream) and the fingertip then, the grasp pose;
+                            with the demo's grip showing the object, views of it in the gripper while the arm stands still,
+                            read while the act goes on. Post: ``grip`` holds ``fix`` and ``live`` as far as measured."""
+                            nonlocal halt, held
+                            while sent < at:
+                                if interrupted():
+                                    return
+                                await asyncio.sleep(runtime.ACT_TICK_S)
+                            g = g_prev = jog.current_gripper()
+                            t_prev = t0 = time.monotonic()
+                            while g is not None and time.monotonic() - t0 < runtime.GRIP_SETTLE_S:
+                                await asyncio.sleep(runtime.ACT_TICK_S)
+                                g = jog.current_gripper()
+                                if g is not None and time.monotonic() - t_prev >= core.GRIP_STILL_S:
+                                    if abs(g - g_prev) < core.GRIP_STILL_UNITS:
+                                        break
+                                    g_prev, t_prev = g, time.monotonic()
+                            cur = jog.current_tip_and_anchor()
+                            if g is None or cur is None or interrupted():
+                                return
+                            why = grasp_missed(float(planned["q"][at][gi]), g, grip_i, closing)
+                            if why:
+                                halt = why
+                                return
+                            # Without seeing the object: the grasp was aimed by its estimated pose, so the hold is the
+                            # demo's, changed by however far the arm landed from that aim.
+                            if held_then is not None:
+                                grip["fix"] = planning._grasp_pose_fix(demo.tips[grip_i], held_then, cur[0])
+                            if (
+                                with_groups
+                            ):  # the camera cannot see it in the fingers; the arm's joints say where it is
+                                with runtime._state.lock:
+                                    frames_g = list(runtime._state.groups_feed.frames.get(held_name, ()))
+                                if frames_g:
+                                    tip_obj = (
+                                        np.linalg.inv(cur[0]) @ t_bc @ frames_g[-1][1]
+                                    )  # how it sits in the fingers
+                                    held = (
+                                        held_name,
+                                        asyncio.create_task(groups._feed_held(held_name, tip_obj, t_bc)),
+                                    )
+                                    beside.append(held[1])
+                            if demo_grip is None:
+                                return
+                            views: list[Any] = []
+                            last, t_last = cur[0][:3, 3].copy(), time.monotonic()
+                            while len(views) < core.HOLD_VIEWS + 2:
+                                await asyncio.sleep(runtime.HOLD_VIEW_GAP_S)
+                                view = await holds._held_view(held_obj)
+                                if view is None or interrupted():
+                                    break
+                                now = time.monotonic()
+                                if (
+                                    np.linalg.norm(view[3][:3, 3] - last) / max(now - t_last, 1e-6)
+                                    > core.HOLD_STILL_M_S
+                                ):
+                                    break  # the lift has begun
+                                views.append(view)
+                                last, t_last = view[3][:3, 3].copy(), now
+                            if len(views) < core.HOLD_MIN_VIEWS:
+                                grip["live"] = (
+                                    None,
+                                    f"not measured: the arm stood still at the grip for {len(views)} views",
+                                )
+                                return
+                            grip["live"] = await holds._live_hold(
+                                demo,
+                                held_obj,
+                                demo_grip["hold"],
+                                t_bc,
+                                stopped,
+                                views=views,
+                                method=demo_grip.get("method", "find"),
+                            )
+
+                        grip_watch = asyncio.create_task(watch_grip())
+                        beside.append(grip_watch)
+                why = await stream(planned)
                 if why:
                     fail(why)
                     return
+            if split == phase_stop:
+                act.step, act.ok = "done", True
                 continue
             if not waited:
                 why = await caught_up()
                 if why:
                     fail(why)
                     return
-                waited = True
-            # The follow is aimed by the pose the act holds for its object, as every walk before it was; the line to
-            # the key frame before it is planned again from where the arm stands.
-            act.step = f"planning {k['label']}"
-            aim_then = follow() if k["frame"] == (obj or "") else None
-            planned = await plan_span(
-                k["label"],
-                (n - 1, n + 1),
-                delta_cam=aim_then,
-                aim=None if aim_then is None else aim_error(aim_then),
+
+            # ── from the grasp check on ──
+            if not carries:  # nothing held from here: the rest as planned
+                await jog.joints_stop()
+                streaming = False
+                rest = await plan_span("the rest", (split, phase_stop), landing=demo.landing)
+                if not rest["ok"]:
+                    fail(rest["reason"])
+                    return
+                why = await stream(rest)
+                if why:
+                    fail(why)
+                    return
+                act.step, act.ok = "done", True
+                continue
+            act.step = "checking the grasp"
+            g_obs = await gripper_still()
+            if g_obs is None:
+                fail("the arm went away")
+                return
+            if last_follow is not None and i_grasp_end is not None:
+                why = grasp_missed(float(last_follow["q"][-1][gi]), g_obs, i_grasp_end, closing)
+                if why:
+                    fail(why)
+                    return
+            closing_cmd = (
+                float(last_follow["q"][-1][gi]) if last_follow is not None else float(jog.current_gripper())
             )
-            if not planned["ok"]:
-                fail(planned["reason"])
-                return
-            i0 = index(frames[n - 1]["t"])
-            closing = float(np.sign(demo.q_cmd[i, gi] - demo.q_cmd[i0, gi])) or 1.0
-            i_grasp_end, last_follow = i, planned
-            if carries and holding is not None and n == holding["begins"] and k["label"] in planned["stage"]:
-                grip_i = holding["grip"]
-                at = list(planned["stage"]).index(k["label"]) + (grip_i - i0 - 1)
-                if 0 < at < len(planned["q"]) - 1:
-                    # Where the plan put the held object: the grasp pose is judged against it.
-                    session_held = holding["frame"] == (obj or "")
-                    held_then = (
-                        planning._delta_base(demo, aim_then, t_bc)
-                        if session_held
-                        else motions.get(holding["frame"])
-                    )
-                    held_name = picked if session_held else holding["frame"]
-
-                    async def watch_grip(
-                        at: int = at,
-                        grip_i: int = grip_i,
-                        planned: dict = planned,
-                        closing: float = closing,
-                        held_then: np.ndarray | None = held_then,
-                        held_name: str = held_name,
-                    ) -> None:
-                        """Beside the stream, from its sample where the demo's grip became firm: once the gripper's
-                        reading stops, the grasp check (a miss halts the stream) and the fingertip then, the grasp pose;
-                        with the demo's grip showing the object, views of it in the gripper while the arm stands still,
-                        read while the act goes on. Post: ``grip`` holds ``fix`` and ``live`` as far as measured."""
-                        nonlocal halt, held
-                        while sent < at:
-                            if interrupted():
-                                return
-                            await asyncio.sleep(runtime.ACT_TICK_S)
-                        g = g_prev = jog.current_gripper()
-                        t_prev = t0 = time.monotonic()
-                        while g is not None and time.monotonic() - t0 < runtime.GRIP_SETTLE_S:
-                            await asyncio.sleep(runtime.ACT_TICK_S)
-                            g = jog.current_gripper()
-                            if g is not None and time.monotonic() - t_prev >= core.GRIP_STILL_S:
-                                if abs(g - g_prev) < core.GRIP_STILL_UNITS:
-                                    break
-                                g_prev, t_prev = g, time.monotonic()
-                        cur = jog.current_tip_and_anchor()
-                        if g is None or cur is None or interrupted():
-                            return
-                        why = grasp_missed(float(planned["q"][at][gi]), g, grip_i, closing)
-                        if why:
-                            halt = why
-                            return
-                        # Without seeing the object: the grasp was aimed by its estimated pose, so the hold is the
-                        # demo's, changed by however far the arm landed from that aim.
-                        if held_then is not None:
-                            grip["fix"] = planning._grasp_pose_fix(demo.tips[grip_i], held_then, cur[0])
-                        if (
-                            with_groups
-                        ):  # the camera cannot see it in the fingers; the arm's joints say where it is
-                            with runtime._state.lock:
-                                frames_g = list(runtime._state.groups_feed.frames.get(held_name, ()))
-                            if frames_g:
-                                tip_obj = (
-                                    np.linalg.inv(cur[0]) @ t_bc @ frames_g[-1][1]
-                                )  # how it sits in the fingers
-                                held = (
-                                    held_name,
-                                    asyncio.create_task(groups._feed_held(held_name, tip_obj, t_bc)),
-                                )
-                                beside.append(held[1])
-                        if demo_grip is None:
-                            return
-                        views: list[Any] = []
-                        last, t_last = cur[0][:3, 3].copy(), time.monotonic()
-                        while len(views) < core.HOLD_VIEWS + 2:
-                            await asyncio.sleep(runtime.HOLD_VIEW_GAP_S)
-                            view = await holds._held_view()
-                            if view is None or interrupted():
-                                break
-                            now = time.monotonic()
-                            if (
-                                np.linalg.norm(view[3][:3, 3] - last) / max(now - t_last, 1e-6)
-                                > core.HOLD_STILL_M_S
-                            ):
-                                break  # the lift has begun
-                            views.append(view)
-                            last, t_last = view[3][:3, 3].copy(), now
-                        if len(views) < core.HOLD_MIN_VIEWS:
-                            grip["live"] = (
-                                None,
-                                f"not measured: the arm stood still at the grip for {len(views)} views",
-                            )
-                            return
-                        grip["live"] = await holds._live_hold(
-                            demo,
-                            held_obj,
-                            demo_grip["hold"],
-                            t_bc,
-                            stopped,
-                            views=views,
-                            method=demo_grip.get("method", "find"),
-                        )
-
-                    grip_watch = asyncio.create_task(watch_grip())
-                    beside.append(grip_watch)
-            why = await stream(planned)
-            if why:
-                fail(why)
-                return
-        if split == len(frames):
-            act.step, act.ok = "done", True
-            return
-        if not waited:
-            why = await caught_up()
-            if why:
-                fail(why)
-                return
-
-        # ── from the grasp check on ──
-        if not carries:  # nothing held from here: the rest as planned
-            await jog.joints_stop()
+            await jog.joints_stop()  # the grasp's closing kept
             streaming = False
-            rest = await plan_span("the rest", (split, len(frames)), landing=demo.landing)
-            if not rest["ok"]:
-                fail(rest["reason"])
+            # Check the carry as one plan, but execute only to its first held line before measuring the hold.
+            # Later lines may already touch the support: correcting there can slide or rotate it underneath the
+            # object. Mark the first held line at a clear observation pose; preserve the grasp throughout correction.
+            held_follow = next(
+                (n for n in range(split, phase_stop) if made_held[n] and frames[n]["move"] == "follow"), None
+            )
+            end_lines = held_follow if held_follow is not None else phase_stop
+            hold_line = min(n for n in range(split, end_lines) if frames[n]["move"] == "line")
+            act.step = "planning the carry"
+            carry = await plan_span("carry", (split, phase_stop))
+            if not carry["ok"] and landing_turn is not None:
+                # The turn the start took no longer plans from where the arm and the object are now, but any turn the
+                # demo's landing rule allows is the same place: rank them again.
+                saved, landing_turn = landing_turn, None
+                carry = await plan_span(
+                    "carry, the landing chosen again", (split, phase_stop), landing=demo.landing
+                )
+                landing_turn = (
+                    (carry["landing_centre"], float(carry["landing"]["turn_deg"]))
+                    if carry["ok"] and (carry.get("landing") or {}).get("turn_deg") is not None
+                    else saved
+                )
+            if not carry["ok"]:
+                fail(carry["reason"])
                 return
-            why = await stream(rest)
+            last_label = frames[hold_line]["label"]
+            last = max(j for j, s in enumerate(carry["stage"]) if s == last_label)
+            q_carry = np.array(carry["q"][: last + 1], dtype=float)
+            q_carry[:, gi] = closing_cmd  # the grasp's closing: on the object the fingers stand short of it
+            why = await stream(
+                {"q": q_carry, "times": carry["times"][: last + 1], "stage": carry["stage"][: last + 1]}
+            )
             if why:
                 fail(why)
                 return
-            act.step, act.ok = "done", True
-            return
-        act.step = "checking the grasp"
-        g_obs = await gripper_still()
-        if g_obs is None:
-            fail("the arm went away")
-            return
-        if last_follow is not None and i_grasp_end is not None:
-            why = grasp_missed(float(last_follow["q"][-1][gi]), g_obs, i_grasp_end, closing)
-            if why:
-                fail(why)
+            await jog.joints_stop()  # stand still to measure the hold, the closing kept
+            streaming = False
+            # Re-check at the first held line, before later approach/contact lines. An earlier grip estimate cannot
+            # replace a missing current visual hold when correction is enabled.
+            live_place, live_place_problem = None, "not measured: the demo's carry shows too little of it"
+            if demo_carry is not None:
+                act.step = f"checking how {held_obj} sits in the gripper"
+                why = await still()
+                if why:
+                    fail(f"at {last_label}: {why}")
+                    return
+                live_place, live_place_problem = await holds._live_hold(
+                    demo,
+                    held_obj,
+                    demo_carry["hold"],
+                    t_bc,
+                    lambda: act.stop_requested,
+                    method=demo_carry.get("method", "find"),
+                )
+                if act.stop_requested:
+                    fail("stopped")
+                    return
+            if grip_watch is not None:
+                await grip_watch
+            fix_grasp = grip.get("fix")
+            live_grip, live_grip_problem = grip.get(
+                "live", (None, "not measured: the demo's grip shows too little of it")
+            )
+            fix_grip = (
+                demo_grip["hold"] @ np.linalg.inv(live_grip["hold"])
+                if demo_grip is not None and live_grip is not None
+                else None
+            )
+            fix_place = (
+                demo_carry["hold"] @ np.linalg.inv(live_place["hold"])
+                if demo_carry is not None and live_place is not None
+                else None
+            )
+            fix, used, evidence = fix_place, "pre-place", "measured"
+            if not act.correct_hold:
+                fix, used, evidence = np.eye(4), "off", "off"
+            elif fix is None and act.allow_grasp_prediction:
+                # Carry the best grasp-time attachment forward under an explicit
+                # no-slip assumption. A group pose driven by the same arm joints
+                # does not make this an independent post-lift measurement.
+                fix, used = (
+                    (fix_grip, "grip prediction") if fix_grip is not None else (fix_grasp, "grasp prediction")
+                )
+                evidence = "predicted"
+            if fix is None:
+                # A grasp-time estimate cannot observe slip or a wrong initial find. Keep the closing and
+                # refuse further approach/release when the held pose cannot be verified after the carry.
+                act.place = {
+                    **(act.place or {}),
+                    "hold_used": "unverified",
+                    "demo_carry_problem": carry_problem,
+                    "live_place": live_place_problem,
+                    "grasp_estimate_available": fix_grasp is not None,
+                    "grip_measurement_available": fix_grip is not None,
+                    "allow_grasp_prediction": act.allow_grasp_prediction,
+                }
+                fail(
+                    f"cannot verify {held_obj}'s current held pose: {carry_problem or live_place_problem}; "
+                    "placement stopped with the gripper closed"
+                )
                 return
-        closing_cmd = (
-            float(last_follow["q"][-1][gi]) if last_follow is not None else float(jog.current_gripper())
-        )
-        await jog.joints_stop()  # the grasp's closing kept
-        streaming = False
-        # Check the carry as one plan, but execute only to its first held line before measuring the hold.
-        # Later lines may already touch the support: correcting there can slide or rotate it underneath the
-        # object. Mark the first held line at a clear observation pose; preserve the grasp throughout correction.
-        held_follow = next(
-            (n for n in range(split, len(frames)) if made_held[n] and frames[n]["move"] == "follow"), None
-        )
-        end_lines = held_follow if held_follow is not None else len(frames)
-        hold_line = min(n for n in range(split, end_lines) if frames[n]["move"] == "line")
-        act.step = "planning the carry"
-        carry = await plan_span("carry", (split, len(frames)))
-        if not carry["ok"] and landing_turn is not None:
-            # The turn the start took no longer plans from where the arm and the object are now, but any turn the
-            # demo's landing rule allows is the same place: rank them again.
-            saved, landing_turn = landing_turn, None
-            carry = await plan_span(
-                "carry, the landing chosen again", (split, len(frames)), landing=demo.landing
-            )
-            landing_turn = (
-                (carry["landing_centre"], float(carry["landing"]["turn_deg"]))
-                if carry["ok"] and (carry.get("landing") or {}).get("turn_deg") is not None
-                else saved
-            )
-        if not carry["ok"]:
-            fail(carry["reason"])
-            return
-        last_label = frames[hold_line]["label"]
-        last = max(j for j, s in enumerate(carry["stage"]) if s == last_label)
-        q_carry = np.array(carry["q"][: last + 1], dtype=float)
-        q_carry[:, gi] = closing_cmd  # the grasp's closing: on the object the fingers stand short of it
-        why = await stream(
-            {"q": q_carry, "times": carry["times"][: last + 1], "stage": carry["stage"][: last + 1]}
-        )
-        if why:
-            fail(why)
-            return
-        await jog.joints_stop()  # stand still to measure the hold, the closing kept
-        streaming = False
-        # Re-check at the first held line, before later approach/contact lines. An earlier grip estimate cannot
-        # replace a missing current visual hold when correction is enabled.
-        live_place, live_place_problem = None, "not measured: the demo's carry shows too little of it"
-        if demo_carry is not None:
-            act.step = f"checking how {held_obj} sits in the gripper"
-            why = await still()
-            if why:
-                fail(f"at {last_label}: {why}")
-                return
-            live_place, live_place_problem = await holds._live_hold(
-                demo,
-                held_obj,
-                demo_carry["hold"],
-                t_bc,
-                lambda: act.stop_requested,
-                method=demo_carry.get("method", "find"),
-            )
-            if act.stop_requested:
-                fail("stopped")
-                return
-        if grip_watch is not None:
-            await grip_watch
-        fix_grasp = grip.get("fix")
-        live_grip, live_grip_problem = grip.get(
-            "live", (None, "not measured: the demo's grip shows too little of it")
-        )
-        fix_grip = (
-            demo_grip["hold"] @ np.linalg.inv(live_grip["hold"])
-            if demo_grip is not None and live_grip is not None
-            else None
-        )
-        fix_place = (
-            demo_carry["hold"] @ np.linalg.inv(live_place["hold"])
-            if demo_carry is not None and live_place is not None
-            else None
-        )
-        fix, used, evidence = fix_place, "pre-place", "measured"
-        if not act.correct_hold:
-            fix, used, evidence = np.eye(4), "off", "off"
-        elif fix is None and act.allow_grasp_prediction:
-            # Carry the best grasp-time attachment forward under an explicit
-            # no-slip assumption. A group pose driven by the same arm joints
-            # does not make this an independent post-lift measurement.
-            fix, used = (
-                (fix_grip, "grip prediction") if fix_grip is not None else (fix_grasp, "grasp prediction")
-            )
-            evidence = "predicted"
-        if fix is None:
-            # A grasp-time estimate cannot observe slip or a wrong initial find. Keep the closing and
-            # refuse further approach/release when the held pose cannot be verified after the carry.
+            i_last = index(frames[hold_line]["t"])
+            aimed = frame_now(frames[hold_line]["frame"]) @ demo.tips[i_last]
+            shift_m, shift_deg = core.pose_residual(aimed @ fix, aimed)
+
+            def summary(hold: dict | None, problem: str) -> dict[str, Any] | str:
+                return (
+                    problem
+                    if hold is None
+                    else {
+                        **{k: hold[k] for k in ("n", "views", "spread_mm", "spread_deg")},
+                        "hold": np.asarray(hold["hold"]).tolist(),
+                    }
+                )
+
             act.place = {
                 **(act.place or {}),
-                "hold_used": "unverified",
-                "demo_carry_problem": carry_problem,
-                "live_place": live_place_problem,
-                "grasp_estimate_available": fix_grasp is not None,
-                "grip_measurement_available": fix_grip is not None,
-                "allow_grasp_prediction": act.allow_grasp_prediction,
+                "hold_used": used,
+                "hold_evidence": evidence,
+                "fallback_reason": (carry_problem or live_place_problem) if evidence == "predicted" else "",
+                "demo_grip": summary(demo_grip, grip_problem),
+                "live_grip": summary(live_grip, live_grip_problem),
+                "demo_carry": summary(demo_carry, carry_problem),
+                "live_place": summary(live_place, live_place_problem),
+                "shift_mm": shift_m * 1000.0,
+                "shift_deg": shift_deg,
+                "fix": fix.tolist(),
             }
-            fail(
-                f"cannot verify {held_obj}'s current held pose: {carry_problem or live_place_problem}; "
-                "placement stopped with the gripper closed"
+            run.meta["hold_selection"] = {
+                "object": held_obj,
+                "interaction": phase_index,
+                "at": time.time(),
+                "source": used,
+                "evidence": evidence,
+                "reason": act.place["fallback_reason"],
+            }
+            run.meta.setdefault("hold_selections", []).append(dict(run.meta["hold_selection"]))
+            run.meta.setdefault("holds", []).append(
+                {"interaction": phase_index, "object": held_obj, **act.place}
             )
-            return
-        i_last = index(frames[hold_line]["t"])
-        aimed = frame_now(frames[hold_line]["frame"]) @ demo.tips[i_last]
-        shift_m, shift_deg = core.pose_residual(aimed @ fix, aimed)
-
-        def summary(hold: dict | None, problem: str) -> dict[str, Any] | str:
-            return (
-                problem
-                if hold is None
-                else {
-                    **{k: hold[k] for k in ("n", "views", "spread_mm", "spread_deg")},
-                    "hold": np.asarray(hold["hold"]).tolist(),
-                }
-            )
-
-        act.place = {
-            **(act.place or {}),
-            "hold_used": used,
-            "hold_evidence": evidence,
-            "fallback_reason": (carry_problem or live_place_problem) if evidence == "predicted" else "",
-            "demo_grip": summary(demo_grip, grip_problem),
-            "live_grip": summary(live_grip, live_grip_problem),
-            "demo_carry": summary(demo_carry, carry_problem),
-            "live_place": summary(live_place, live_place_problem),
-            "shift_mm": shift_m * 1000.0,
-            "shift_deg": shift_deg,
-            "fix": fix.tolist(),
-        }
-        run.meta["hold_selection"] = {
-            "at": time.time(),
-            "source": used,
-            "evidence": evidence,
-            "reason": act.place["fallback_reason"],
-        }
-        if (
-            fix_grasp is not None
-        ):  # what the camera saw against the grasp pose: what the closing and the lift did
-            act.place["grasp_pose_mm"], act.place["grasp_pose_deg"] = (
-                v * k
-                for v, k in zip(core.pose_residual(aimed @ fix_grasp, aimed), (1000.0, 1.0), strict=True)
-            )
-            if evidence == "measured":
-                seen_m, seen_deg = core.pose_residual(aimed @ fix, aimed @ fix_grasp)
-                act.place.update(seen_vs_grasp_pose_mm=seen_m * 1000.0, seen_vs_grasp_pose_deg=seen_deg)
-        if fix_grip is not None and fix_place is not None:  # how far the lift and the carry moved the hold
-            moved_m, moved_deg = core.pose_residual(aimed @ fix_grip, aimed @ fix_place)
-            act.place.update(grip_vs_place_mm=moved_m * 1000.0, grip_vs_place_deg=moved_deg)
-        # The hold changes the target after the carry has already been checked. Plan its correction together with
-        # the remaining key frames before commanding it: a walk can otherwise stall at a wrist limit for 20 s.
-        act.step = "planning the hold correction and place"
-        placing = await plan_span(
-            "hold correction and place", (hold_line, len(frames)), fix, grip_cmd=closing_cmd
-        )
-        if not placing["ok"] and landing_turn is not None:
-            saved, landing_turn = landing_turn, None
-            placing = await plan_span(
-                "hold correction and place, the landing chosen again",
-                (hold_line, len(frames)),
-                fix,
-                grip_cmd=closing_cmd,
-                landing=demo.landing,
-            )
-            landing_turn = (
-                (placing["landing_centre"], float(placing["landing"]["turn_deg"]))
-                if placing["ok"] and (placing.get("landing") or {}).get("turn_deg") is not None
-                else saved
-            )
-        if landing_obj is not None and landing_obj in motions and held_follow is not None:
-            end_at = index(frames[held_follow]["t"])
-            then = run.meta.get("target", {}).get("motion_base")
-            if then is not None:  # how far the object landed on moved the place since the grasp
-                act.place["target_moved_mm"] = 1000.0 * float(
-                    np.linalg.norm(
-                        (motions[landing_obj] @ demo.tips[end_at])[:3, 3]
-                        - (np.asarray(then, dtype=float) @ demo.tips[end_at])[:3, 3]
-                    )
+            if (
+                fix_grasp is not None
+            ):  # what the camera saw against the grasp pose: what the closing and the lift did
+                act.place["grasp_pose_mm"], act.place["grasp_pose_deg"] = (
+                    v * k
+                    for v, k in zip(core.pose_residual(aimed @ fix_grasp, aimed), (1000.0, 1.0), strict=True)
                 )
-        if not placing["ok"]:
-            fail(placing["reason"])
-            return
-        # Settle at the corrected held line before descending or releasing; a feasible command does not prove
-        # that the loaded arm followed it. Both pieces use the very same checked joint path.
-        corrected = max(j for j, s in enumerate(placing["stage"]) if s == last_label)
-        why = await stream(
-            {
-                "q": placing["q"][: corrected + 1],
-                "times": placing["times"][: corrected + 1],
-                "stage": placing["stage"][: corrected + 1],
-            }
-        )
-        if why:
-            fail(why)
-            return
-        if corrected == len(placing["q"]) - 1:
-            act.step, act.ok = "done", True
-            return
-        placing = {
-            **placing,
-            "q": placing["q"][corrected:],
-            "times": placing["times"][corrected:] - placing["times"][corrected],
-            "stage": placing["stage"][corrected:],
-        }
-        # The follow the hold ends in streams to its end, the release included, and the held object is let go of there;
-        # what comes after streams on from that sample with the gripper empty.
-        release_label = None if held_follow is None else frames[held_follow]["label"]
-        ends = [j for j, s in enumerate(placing["stage"]) if s == release_label]
-        end = ends[-1] if ends else len(placing["q"]) - 1
-        why = await stream(
-            {
-                "q": placing["q"][: end + 1],
-                "times": placing["times"][: end + 1],
-                "stage": placing["stage"][: end + 1],
-            }
-        )
-        if held is not None:  # let go of: it rests where the arm put it
-            held[1].cancel()
-            await groups._groups_call("POST", "/objects/held", {held[0]: None})
-            held = None
-        if why:
-            fail(why)
-            return
-        if end < len(placing["q"]) - 1:
+                if evidence == "measured":
+                    seen_m, seen_deg = core.pose_residual(aimed @ fix, aimed @ fix_grasp)
+                    act.place.update(seen_vs_grasp_pose_mm=seen_m * 1000.0, seen_vs_grasp_pose_deg=seen_deg)
+            if (
+                fix_grip is not None and fix_place is not None
+            ):  # how far the lift and the carry moved the hold
+                moved_m, moved_deg = core.pose_residual(aimed @ fix_grip, aimed @ fix_place)
+                act.place.update(grip_vs_place_mm=moved_m * 1000.0, grip_vs_place_deg=moved_deg)
+            # The hold changes the target after the carry has already been checked. Plan its correction together with
+            # the remaining key frames before commanding it: a walk can otherwise stall at a wrist limit for 20 s.
+            act.step = "planning the hold correction and place"
+            placing = await plan_span(
+                "hold correction and place", (hold_line, phase_stop), fix, grip_cmd=closing_cmd
+            )
+            if not placing["ok"] and landing_turn is not None:
+                saved, landing_turn = landing_turn, None
+                placing = await plan_span(
+                    "hold correction and place, the landing chosen again",
+                    (hold_line, phase_stop),
+                    fix,
+                    grip_cmd=closing_cmd,
+                    landing=demo.landing,
+                )
+                landing_turn = (
+                    (placing["landing_centre"], float(placing["landing"]["turn_deg"]))
+                    if placing["ok"] and (placing.get("landing") or {}).get("turn_deg") is not None
+                    else saved
+                )
+            if landing_obj is not None and landing_obj in motions and held_follow is not None:
+                end_at = index(frames[held_follow]["t"])
+                then = run.meta.get("target", {}).get("motion_base")
+                if then is not None:  # how far the object landed on moved the place since the grasp
+                    act.place["target_moved_mm"] = 1000.0 * float(
+                        np.linalg.norm(
+                            (motions[landing_obj] @ demo.tips[end_at])[:3, 3]
+                            - (np.asarray(then, dtype=float) @ demo.tips[end_at])[:3, 3]
+                        )
+                    )
+            if not placing["ok"]:
+                fail(placing["reason"])
+                return
+            # Settle at the corrected held line before descending or releasing; a feasible command does not prove
+            # that the loaded arm followed it. Both pieces use the very same checked joint path.
+            corrected = max(j for j, s in enumerate(placing["stage"]) if s == last_label)
             why = await stream(
                 {
-                    "q": placing["q"][end:],
-                    "times": placing["times"][end:] - placing["times"][end],
-                    "stage": [placing["stage"][end + 1], *placing["stage"][end + 1 :]],
+                    "q": placing["q"][: corrected + 1],
+                    "times": placing["times"][: corrected + 1],
+                    "stage": placing["stage"][: corrected + 1],
                 }
             )
             if why:
                 fail(why)
                 return
-        act.step, act.ok = "done", True
+            if corrected == len(placing["q"]) - 1:
+                act.step, act.ok = "done", True
+                continue
+            placing = {
+                **placing,
+                "q": placing["q"][corrected:],
+                "times": placing["times"][corrected:] - placing["times"][corrected],
+                "stage": placing["stage"][corrected:],
+            }
+            # The follow the hold ends in streams to its end, the release included, and the held object is let go of there;
+            # what comes after streams on from that sample with the gripper empty.
+            release_t = None if holding["release"] is None else float(demo.t[holding["release"]])
+            release_label = next(
+                (
+                    k["label"]
+                    for k in frames[split:phase_stop]
+                    if release_t is not None and k["t"] >= release_t
+                ),
+                None,
+            )
+            ends = [j for j, s in enumerate(placing["stage"]) if s == release_label]
+            end = ends[-1] if ends else len(placing["q"]) - 1
+            why = await stream(
+                {
+                    "q": placing["q"][: end + 1],
+                    "times": placing["times"][: end + 1],
+                    "stage": placing["stage"][: end + 1],
+                }
+            )
+            if not why and release_label is not None:
+                run.meta["hold_selection"]["until"] = time.time()
+                run.meta["hold_selections"][-1]["until"] = run.meta["hold_selection"]["until"]
+            if (
+                held is not None and release_label is not None
+            ):  # the recorded release, after all held interactions
+                held[1].cancel()
+                await groups._groups_call("POST", "/objects/held", {held[0]: None})
+                held = None
+            if why:
+                fail(why)
+                return
+            if end < len(placing["q"]) - 1:
+                why = await stream(
+                    {
+                        "q": placing["q"][end:],
+                        "times": placing["times"][end:] - placing["times"][end],
+                        "stage": [placing["stage"][end + 1], *placing["stage"][end + 1 :]],
+                    }
+                )
+                if why:
+                    fail(why)
+                    return
+            act.step, act.ok = "done", True
     except Exception as e:  # the arm holds its last target; the operator sees why
         logger.exception("act failed")
         fail(f"act error: {e}")

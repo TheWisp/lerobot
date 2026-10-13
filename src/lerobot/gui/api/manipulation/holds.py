@@ -270,6 +270,7 @@ def _prepare_demo_references(demo: runtime._Demo) -> str:
     for obj in planning._act_objects(demo):
         f = planning._pose_frame(demo, obj)
         if f is None:
+            problems.append(f"{obj}'s demo pose is not visible before this interaction")
             continue
         raw = np.asarray(demo.objects[obj]["deltas"][f], dtype=float)
         try:
@@ -398,9 +399,9 @@ def _held_click(
     return acquisition._deepest_pixel(supported, depth_m.shape)
 
 
-async def _held_view() -> (
-    tuple[np.ndarray, np.ndarray, dict[str, float], np.ndarray, np.ndarray | None] | None
-):
+async def _held_view(
+    obj: str | None = None,
+) -> tuple[np.ndarray, np.ndarray, dict[str, float], np.ndarray, np.ndarray | None] | None:
     """A view of the held object as it is now: ``(rgb, depth, intrinsics, fingertip, live mask)``, the fingertip read
     just before the frame and the live track's mask while it tracks, or None without the arm. Pre: the arm stands
     still, or the fingertip is not where the frame shows it."""
@@ -414,7 +415,14 @@ async def _held_view() -> (
         runtime._state.lock
     ):  # a finger over the predicted middle: the live track's view is the next place to click
         test, state = runtime._state.test, (runtime._state.track.last or {}).get("state")
-    mask = test.result.get("live_mask") if state == "tracking" and test is not None else None
+        demo = runtime._state.demo
+        secondary = obj is not None and demo is not None and obj != planning._session_object(demo)
+        target = runtime._state.targets.get(obj) if secondary else None
+        found = runtime._state.located.get(obj, {}) if secondary else {}
+    if secondary:
+        mask = found.get("mask") if target is not None and target.last.get("state") == "tracking" else None
+    else:
+        mask = test.result.get("live_mask") if state == "tracking" and test is not None else None
     return rgb, depth_m, intr, cur[0], mask
 
 
@@ -456,7 +464,7 @@ async def _live_hold(
             return None, "stopped"
         if expired():
             break
-        view = (pending.pop(0) if pending else None) if pending is not None else await _held_view()
+        view = (pending.pop(0) if pending else None) if pending is not None else await _held_view(obj)
         if view is None:
             if pending is not None:
                 break

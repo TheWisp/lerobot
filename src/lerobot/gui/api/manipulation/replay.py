@@ -191,7 +191,16 @@ def _replay_draw(
                 f"{name}: {'trusted' if e['trusted'] else 'not trusted'}{', lost' if e['lost'] else ''}  "
                 f"{e['n_visible']} of {e['n_tracks']} points seen  depth agrees {e.get('depth_seen')}"
             )
-    selection = meta.get("hold_selection") or {}
+    stamp = f.get("t_result", f["t_frame"])
+    selections = meta.get("hold_selections") or [meta.get("hold_selection") or {}]
+    selection = next(
+        (
+            s
+            for s in reversed(selections)
+            if s.get("at", float("inf")) <= stamp < s.get("until", float("inf"))
+        ),
+        {},
+    )
     if selection.get("evidence") == "predicted" and f.get("t_result", f["t_frame"]) >= selection["at"]:
         lines.insert(0, f"HOLD: {selection['source']}; assumes no slip; no post-lift visual verification")
     lines += held_lines + carried_lines

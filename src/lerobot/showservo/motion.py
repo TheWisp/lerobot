@@ -1105,16 +1105,24 @@ def _key_marks_problem(marks: list[dict[str, Any]], t_start: float, t_end: float
 def demo_holding(
     t: np.ndarray, cmd: np.ndarray, obs: np.ndarray, frames: list[dict[str, Any]]
 ) -> dict[str, Any] | None:
-    """When the demo's gripper held something, or None: from the firm grip (:func:`firm_grip`) of the first follow
-    whose stretch has one, closing the way its command moved over it, to the first sample after where the command has
-    opened past the fingers' reading. ``cmd`` and ``obs`` are the gripper's command and reading per sample.
+    """The first recorded attachment, for callers inspecting a single grasp."""
+    return next(iter(demo_holdings(t, cmd, obs, frames)), None)
 
-    A lightly squeezed object stops the fingers barely short of the command: the pick-and-place demo's gamepad held
-    0.49 to 1.33 units short, under GRASP_HELD_SHORT at the end of the carry while the command crept open; the command
-    then opened past the reading at 20.22 s, where its release begins. Post: ``grip`` and ``release`` (None: held to
-    the end) sample indices, ``closing`` (+1 when closing raises the reading), ``frame`` of the follow it began in
-    and ``begins`` that follow's index in ``frames``."""
+
+def demo_holdings(
+    t: np.ndarray, cmd: np.ndarray, obs: np.ndarray, frames: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Every recorded grasp/release interval, independent of object names or task.
+
+    A firm grip starts an attachment to the object named by that recorded segment.
+    It ends when the opening command passes the observed fingers, not when an
+    interaction segment ends. A later recorded closing can attach another object
+    (or regrasp the same one). Grasp and release transitions need their own follow
+    segments so the segment's reference identifies the object being grasped.
+    """
     t, cmd, obs = (np.asarray(x, dtype=float) for x in (t, cmd, obs))
+    out: list[dict[str, Any]] = []
+    available = 0
 
     def index(tk: float) -> int:
         return int(np.argmin(np.abs(t - tk)))
@@ -1122,7 +1130,9 @@ def demo_holding(
     for n, k in enumerate(frames):
         if k["move"] != "follow":
             continue
-        i0, i1 = index(frames[n - 1]["t"]), index(k["t"])
+        i0, i1 = max(available, index(frames[n - 1]["t"])), index(k["t"])
+        if i0 >= i1:
+            continue
         closing = float(np.sign(cmd[i1] - cmd[i0])) or 1.0
         i = firm_grip(t, cmd, obs, i0, i1, closing)
         if i is None:
@@ -1130,14 +1140,44 @@ def demo_holding(
         j = i
         while j + 1 < len(t) and closing * (cmd[j + 1] - obs[j + 1]) > 0.0:
             j += 1
-        return {
-            "grip": i,
-            "release": j + 1 if j + 1 < len(t) else None,
-            "closing": closing,
-            "frame": k["frame"],
-            "begins": n,
-        }
-    return None
+        out.append(
+            {
+                "grip": i,
+                "release": j + 1 if j + 1 < len(t) else None,
+                "closing": closing,
+                "frame": k["frame"],
+                "begins": n,
+            }
+        )
+        available = j + 1
+    return out
+
+
+def holding_at(
+    holdings: list[dict[str, Any]], t: np.ndarray, frames: list[dict[str, Any]], n: int
+) -> dict[str, Any] | None:
+    """The attachment active at a key frame, including later grasps."""
+    return next((h for h in holdings if held_at(h, t, frames, n)), None)
+
+
+def interaction_phases(
+    holdings: list[dict[str, Any]], t: np.ndarray, frames: list[dict[str, Any]]
+) -> list[tuple[int, int]]:
+    """Contiguous key-frame ranges, each containing at most one grasp interval.
+
+    A boundary follows the actual release key frame; intermediate tool-use
+    segments keep their attachment. The final range includes the empty retreat.
+    """
+    start, out = 0, []
+    for h, following in zip(holdings[:-1], holdings[1:], strict=True):
+        release_t = float(t[h["release"]])
+        stop = next(n + 1 for n, k in enumerate(frames) if k["t"] >= release_t)
+        if stop > following["begins"]:
+            raise ValueError("mark the release and the next grasp in separate follow segments")
+        out.append((start, stop))
+        start = stop
+    out.append((start, len(frames)))
+    return out
 
 
 def held_at(holding: dict[str, Any] | None, t: np.ndarray, frames: list[dict[str, Any]], n: int) -> bool:

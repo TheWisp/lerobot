@@ -49,7 +49,8 @@ def _object_motion(
     if acquisition._weak(found):
         return None, acquisition._weak(found)
     f = _pose_frame(demo, obj)
-    assert f is not None, "a done object with a key frame in its frame has a pose frame"
+    if f is None:
+        return None, f"{obj}'s demo pose is not visible before this interaction"
     with runtime._state.lock:  # a placing view replaces both at once
         pin, stamp = np.asarray(found["delta"], dtype=float), found.get("stamp")
     if carry is not None and stamp is not None:
@@ -124,8 +125,13 @@ def _marks_problem(demo: runtime._Demo, kps: list[dict[str, Any]]) -> str:
     if any(k["frame"] == "" for k in frames) and not demo.taught:
         return "nothing was taught before this demo: the key frames follow an object clicked on its recording"
     trial = runtime._Demo(**{**demo.__dict__, "keypoints": kps})
-    holding = _holding(trial)
+    holdings = _holdings(trial)
+    try:
+        core.interaction_phases(holdings, trial.t, frames)
+    except ValueError as exc:
+        return str(exc)
     for n, k in enumerate(frames):
+        holding = core.holding_at(holdings, trial.t, frames, n)
         if (
             holding is not None
             and k["frame"] == holding["frame"]
@@ -208,7 +214,8 @@ def _reference_motion(demo: runtime._Demo, teach: runtime._Teach | None) -> tupl
             "turn it closer to how it lay in the demo, then press Act"
         )
     f = _pose_frame(demo, obj)
-    assert f is not None, "a done object with marks on it has a pose frame"
+    if f is None:
+        return None, f"{obj}'s demo pose is not visible before this interaction"
     reference, problem = holds._demo_control_pose(demo, obj, f)
     if reference is None:
         return None, problem
@@ -246,6 +253,18 @@ def _pose_choice(demo: runtime._Demo, obj: str) -> tuple[int, str] | None:
     """
     o = demo.objects.get(obj)
     times = recording._stream_times(demo.recording) if demo.recording is not None else np.zeros(0)
+    if o is not None and len(times) and demo.interaction_span and demo.interaction_span[0]:
+        a, b = demo.interaction_span
+        local = [k for k in core.key_frames(demo.keypoints)[a:b] if k["frame"] == obj]
+        if local:
+            # After an earlier contact, the object's demo pose need not equal its
+            # designation pose. Anchor this interaction before its first motion.
+            at = int(np.argmin(np.abs(times - (demo.t0 + local[0]["t"]))))
+            after = core.key_frames(demo.keypoints)[a - 1]["t"]
+            seen = np.flatnonzero(np.asarray(o["seen"])[: at + 1] & (times[: at + 1] >= demo.t0 + after))
+            if not len(seen):
+                return None
+            return int(seen[-1]), "before this interaction"
     pre = _approach_times(demo, obj)
     if o is None or o.get("status") != "done" or not len(times) or not pre:
         return None
@@ -492,11 +511,17 @@ def _landing_centre(demo: runtime._Demo, obj: str, t_bc: np.ndarray) -> np.ndarr
 
 
 def _holding(demo: runtime._Demo) -> dict[str, Any] | None:
-    """When the demo held something (:func:`core.demo_holding`), or None."""
+    """The attachment selected by the current interaction context, or None."""
+    holdings = _holdings(demo)
+    return holdings[demo.hold_index] if demo.hold_index < len(holdings) else None
+
+
+def _holdings(demo: runtime._Demo) -> list[dict[str, Any]]:
+    """All recorded attachments; object identity comes from the key frames."""
     from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
 
     gi = MOTOR_NAMES.index("gripper")
-    return core.demo_holding(demo.t, demo.q_cmd[:, gi], demo.q_obs[:, gi], core.key_frames(demo.keypoints))
+    return core.demo_holdings(demo.t, demo.q_cmd[:, gi], demo.q_obs[:, gi], core.key_frames(demo.keypoints))
 
 
 def _grasp_split(frames: list[dict[str, Any]], holding: dict[str, Any] | None) -> int:
@@ -524,6 +549,7 @@ def _act_steps(
     frames = core.key_frames(demo.keypoints)
     holding = _holding(demo)
     split = _grasp_split(frames, holding)
+    holdings = _holdings(demo)
     if isinstance(part, tuple):
         lo, hi = part
     else:
@@ -537,14 +563,16 @@ def _act_steps(
         m = motion(frames[n]["frame"])
         if m is None:
             break
-        held = core.held_at(holding, demo.t, frames, n)
+        attached = core.holding_at(holdings, demo.t, frames, n)
+        held = attached is not None
         steps.append(
             {
                 **frames[n],
                 "since": frames[n - 1]["t"] if n else None,
                 "motion": m,
-                "fix": fix if held else np.eye(4),
+                "fix": fix if attached is not None and attached == holding else np.eye(4),
                 "held": held,
+                "held_object": None if attached is None else attached["frame"],
             }
         )
     return steps

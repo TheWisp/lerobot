@@ -1713,3 +1713,28 @@ def test_a_recorded_trial_replays_frame_by_frame_under_the_table(gui_page):
     page.locator("#pg-replay button", has_text="Close").click()
     assert page.locator("#pg-replay").is_hidden()
     assert asked and errors == [], f"the page threw: {errors}"
+
+
+def test_new_demo_starts_without_the_previous_objects_or_name(gui_page, tmp_path, monkeypatch):
+    from lerobot.gui.api import manipulation
+    from tests.gui.test_generic_interactions import interaction_demo
+
+    demo, _ = interaction_demo()
+    demo.root = str(tmp_path / "saved")
+    state = manipulation.runtime._State(demo=demo)
+    monkeypatch.setattr(manipulation.runtime, "_state", state)
+    page = gui_page
+    page.route(
+        "**/api/showservo/cameras",
+        lambda r: r.fulfill(status=200, content_type="application/json", body="[]"),
+    )
+    page.click('button[data-tab="approach"]')
+    page.locator("#demo-new-btn").wait_for(state="visible")
+    page.locator("#demo-name").evaluate("e => e.value = 'old-recording'")
+    page.locator("#pg-concept").evaluate("e => e.value = 'old-object'")
+    page.click("#demo-new-btn")
+    page.wait_for_function("document.getElementById('demo-status').textContent.startsWith('New demo:')")
+    assert state.demo is None and state.teach is None
+    assert page.locator("#demo-name").input_value() == ""
+    assert page.locator("#pg-concept").input_value() == ""
+    assert page.locator("#ap-sub-teach").is_visible()

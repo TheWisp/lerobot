@@ -231,6 +231,8 @@ class _Demo:
     )
     video: list[bytes] | None = None  # the saved video decoded once for the editor, one JPEG per sample
     taught: bool = False  # recorded with an object taught first; unnamed marks follow that object
+    hold_index: int = 0  # transient execution context; each grasp has its own attachment correction
+    interaction_span: tuple[int, int] | None = None  # transient range of key frames being executed
     holds: dict[str, Any] = field(
         default_factory=dict
     )  # how the demo held the picked object, by the marks it was measured for

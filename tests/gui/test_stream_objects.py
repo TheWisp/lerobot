@@ -2619,7 +2619,7 @@ def test_a_lost_held_track_tries_fresh_visual_matches_within_a_bounded_wait(monk
     async def lost(*args):
         return None, "empty segmentation supplied no fit"
 
-    async def view():
+    async def view(_obj=None):
         return np.zeros((H, W, 3), np.uint8), np.full((H, W), 0.5), INTR, tip, None
 
     calls, clock = [], [0.0]

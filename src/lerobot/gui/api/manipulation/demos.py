@@ -34,7 +34,7 @@ from pydantic import BaseModel, Field
 
 from lerobot.showservo import motion as core
 
-from . import acquisition, camera, holds, planning, recording, runtime, worker
+from . import acquisition, camera, holds, planning, recording, runtime, tracking, worker
 
 router = APIRouter()
 
@@ -134,6 +134,42 @@ def _demo_from_samples(name: str, concept: str, samples: list, history: list, fk
 
 class DemoNameBody(BaseModel):
     name: str | None = None
+
+
+@router.post("/demo/new")
+async def demo_new() -> dict:
+    """Prepare an independent demonstration without touching saved datasets or moving the arm."""
+    with runtime._state.lock:
+        s = runtime._state
+        if s.act.on or s.recording is not None or s.camera_recording is not None:
+            raise HTTPException(409, "stop the current act or recording before starting a new demo")
+        if s.demo is not None and s.demo.root is None:
+            raise HTTPException(409, "save the current demo before starting a new one")
+    tasks = list(runtime._refinds)
+    for task in tasks:
+        task.cancel()
+    await tracking.track_stop()
+    if s.track.task is not None:
+        s.track.task.cancel()
+        tasks.append(s.track.task)
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+    with runtime._state.lock:
+        s.demo = s.teach = s.test = None
+        s.teach_job = s.find_job = None
+        s.located.clear()
+        s.targets.clear()
+        s.track.follow = False
+        s.track.history.clear()
+        s.track.last = {}
+        s.track.overlay = None
+        s.track.job = None
+        s.track.model = None
+        s.track.depths = runtime._PointDepths()
+        s.track.verification.clear()
+        s.track.verification_conflicts.clear()
+        s.track.hold_views.clear()
+    return {"status": "new demo"}
 
 
 @router.post("/demo/record/start")
@@ -261,6 +297,8 @@ def _write_demo(demo: runtime._Demo, teach: runtime._Teach | None) -> pathlib.Pa
     from lerobot.utils.constants import OBS_IMAGES
 
     root = _demos_root() / demo.name
+    if root.exists() and (demo.root is None or pathlib.Path(demo.root).resolve() != root.resolve()):
+        raise HTTPException(409, f"a different demo named {demo.name!r} already exists; choose a new name")
     stream = pathlib.Path(demo.recording) if demo.recording else None
     if stream is not None and root in stream.parents:
         # A re-save replaces the folder below; the stream steps aside first.
@@ -960,11 +998,25 @@ async def demo_key_frames_check(body: KeypointsBody) -> dict:
     shape = core.keypoints_problem(kps, float(demo.t[0]), float(demo.t[-1]))
     trial = runtime._Demo(**{**demo.__dict__, "keypoints": kps}) if not shape else demo
     frames = core.key_frames(trial.keypoints) if not shape else []
-    holding = planning._holding(trial) if frames else None
+    holdings = planning._holdings(trial) if frames else []
+    holding = next(iter(holdings), None)
     return {
         "problem": problem,
         "key_frames": [
-            {**k, "held": core.held_at(holding, trial.t, frames, n)} for n, k in enumerate(frames)
+            {
+                **k,
+                "held": core.holding_at(holdings, trial.t, frames, n) is not None,
+                "held_object": (core.holding_at(holdings, trial.t, frames, n) or {}).get("frame"),
+            }
+            for n, k in enumerate(frames)
+        ],
+        "holds": [
+            {
+                "object": h["frame"],
+                "grip_t": float(trial.t[h["grip"]]),
+                "release_t": None if h["release"] is None else float(trial.t[h["release"]]),
+            }
+            for h in holdings
         ],
         "hold": None
         if holding is None

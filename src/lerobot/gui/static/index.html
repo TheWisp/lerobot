@@ -532,6 +532,7 @@
                 <span id="ap-guide-text" style="color:#aaa; flex:1; min-width:240px;">connecting to the server…</span>
                 <span id="ap-guide-extra" style="display:flex; gap:6px; align-items:center;"></span>
                 <button class="btn-small" id="ap-guide-btn" onclick="apGuideAction()" style="display:none; min-width:150px;"></button>
+                <button class="btn-small" id="demo-new-btn" onclick="demoNew()" style="display:none;">New demo</button>
             </div>
             <div style="margin-top:6px; padding:0 14px; font-size:12px; color:#aaa;">
                 <label><input id="ap-hold-prediction" type="checkbox" checked onchange="apHoldPredictionSave()"> Allow grasp-pose fallback</label>
@@ -570,7 +571,7 @@
                 </div>
                 <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
                     <b style="min-width:70px;">Object</b>
-                    <input id="pg-concept" placeholder='e.g. "green cube"' style="min-width:180px;">
+                    <input id="pg-concept" placeholder="object description" style="min-width:180px;">
                     <button class="btn-small" id="pg-teach-btn" onclick="pgTeach()" title="by the name typed here, or click the object in the camera view; keep the arm clear of it">Teach object</button>
                     <span id="pg-worker-status" style="color:#888; font-size:12px;"></span>
                 </div>
@@ -635,8 +636,9 @@
             <div class="panel" style="padding: 14px; margin-top: 12px;" id="teach-panel">
                 <div class="ss-guide-note" style="margin-bottom:10px;">
                     Show the task once. Drive the arm with the leader arm (or the gizmo), press Record, do the task,
-                    press it again to stop. The recording holds the arm at the loop rate and, while tracking runs, the
-                    object's pose and the camera. Save writes it as a LeRobot dataset you can play back in the Data tab.
+                    press it again to stop. The recording keeps the arm commands and observations together with the
+                    camera's colour and depth. Designate objects afterwards in the Demo editor. Save writes a
+                    LeRobot dataset you can play back in the Data tab.
                 </div>
                 <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
                     <select id="jog-leader" style="min-width:90px;" title="teleop profile of the leader arm; the connected arm's side is used"></select>
@@ -680,7 +682,7 @@
                     <div style="flex:0 1 380px; min-width:280px;">
                         <div style="color:#aaa; font-size:12px; margin-bottom:4px;">Objects: click one in the frame and it is tracked through the whole recording. To name it, type the name before the click. Its pose is read on the frame you clicked it on; to read it on another frame, show that frame and press <b>pose here</b> on its row.</div>
                         <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin-bottom:6px;">
-                            <input id="de-obj-name" placeholder="name (optional), e.g. gamepad" style="width:200px;">
+                            <input id="de-obj-name" placeholder="object name (optional)" style="width:200px;">
                         </div>
                         <table id="de-obj-list" style="font-size:12px; border-collapse:collapse; width:100%; margin-bottom:12px;"></table>
                         <div id="de-add-row" style="display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin-bottom:6px; color:#aaa; font-size:12px;">
@@ -1267,7 +1269,7 @@ nebius iam auth-public-key generate \
     <script src="/static/bug_report.js?v=1"></script>
     <script src="/static/bridge.js?v=1"></script>
     <script src="/static/bridge_consumers.js?v=1"></script>
-    <script src="/static/showservo.js?v=92"></script>
+    <script src="/static/showservo.js?v=93"></script>
     <script src="/static/live_video.js?v=4"></script>
 </body>
 </html>
