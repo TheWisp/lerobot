@@ -225,4 +225,8 @@ def act_runner(request, monkeypatch):
     from lerobot.gui.api import pregrasp
 
     monkeypatch.setattr(pregrasp, "ACT_RUNNER", request.param)
+    # These state-machine simulations provide poses directly, not RGB-D that
+    # depicts those poses. Real reference validation is covered by the geometry
+    # integration tests, including abort-before-motion for both runners.
+    monkeypatch.setattr(pregrasp, "_prepare_demo_references", lambda demo: "")
     return request.param

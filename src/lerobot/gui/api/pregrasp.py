@@ -50,7 +50,7 @@ from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from lerobot.p2p_runtime import checkout_path
-from lerobot.showservo import pose_verification
+from lerobot.showservo import pose_verification, surface_constraint
 
 from . import _pregrasp_core as core
 
@@ -190,9 +190,9 @@ class _Track:
     # point groups' poses are stamped the same way, and the act carries a view by them from when it was seen.
     history: list = field(default_factory=list)
     depths: _PointDepths = field(default_factory=_PointDepths)  # the picked object's
-    # (when the frame was read, delta_cam) of every fit the worker made, trusted or not: what a hold is measured on
-    # while the gripper covers part of the object, as the demo's track was covered alike
-    raw: list = field(default_factory=list)
+    # (capture time, control delta_cam) of accepted observations. Held correction
+    # must not bypass visibility or geometry decisions through raw P2P history.
+    hold_views: list = field(default_factory=list)
     # The newest frame's object model as the session has it (the points the live view draws yellow, every one the
     # session adopted) with what places it: GET /track/model.npz, to inspect what the model took in
     model: dict[str, Any] | None = None
@@ -211,9 +211,9 @@ class _TargetTrack:
     n_points: int = 0  # the tracks it began with, for the trust test
     last: dict[str, Any] = field(default_factory=dict)  # the newest frame's readout
     depths: _PointDepths = field(default_factory=_PointDepths)
-    raw: list = field(
+    hold_views: list = field(
         default_factory=list
-    )  # (stamp, motion from the demo's view) of every fit, trusted or not
+    )  # (stamp, accepted motion from the demo's view), including geometry correction
 
 
 @dataclass
@@ -252,6 +252,10 @@ class _Demo:
     view_points: dict[str, Any] = field(
         default_factory=dict
     )  # each object's surface on its clicked frame, read once
+    surface_points: dict[str, Any] = field(default_factory=dict)  # eroded, dense reference observations
+    reference_constraints: dict[str, dict] = field(
+        default_factory=dict
+    )  # planning references, raw and checked
 
 
 @dataclass
@@ -973,8 +977,17 @@ async def _locate(
         "answered": True,  # the worker's own answer, found or not: a measurement
         "n_points": r.get("n_points"),
         "tracking": bool(r.get("tracking")),
+        "surface_constraint": r.get("surface_constraint"),
+        "raw_delta": r.get("raw_ref_delta"),
     }
-    result = {**_find_info(out), "tracking": out["tracking"], "view": out["view"]}
+    result = {
+        **_find_info(out),
+        "tracking": out["tracking"],
+        "view": out["view"],
+        "surface_constraint": out["surface_constraint"],
+        "raw_delta": None if out["raw_delta"] is None else np.asarray(out["raw_delta"]).tolist(),
+        "delta": None if out["delta"] is None else out["delta"].tolist(),
+    }
     out["find_id"] = _log_find("locate", obj, click, rgb, depth_m, out["mask"], result, log)
     return out
 
@@ -1270,6 +1283,7 @@ def _apply_others(
     depth_m: np.ndarray | None = None,
     intr: dict[str, float] | None = None,
     stamp: float | None = None,
+    decisions: dict[str, dict] | None = None,
 ) -> None:
     """The other objects of a tracked frame's session (``others``, ``other_delta_i``, ``other_mask_i``, and with
     Point2Pose ``other_fit_uv_i``, ``other_fit_inlier_i``, ``other_model_i``): each followed object's share moves its
@@ -1277,7 +1291,17 @@ def _apply_others(
     with _state.lock:
         targets = list(_state.targets.values())
     for target in targets:
-        _apply_other(target, r, shape, depth_m, intr, stamp)
+        _apply_other(
+            target,
+            r,
+            shape,
+            depth_m,
+            intr,
+            stamp,
+            None
+            if decisions is None
+            else decisions.get(target.obj, {"pose": None, "reason": "geometry decision missing"}),
+        )
 
 
 def _apply_other(
@@ -1287,6 +1311,7 @@ def _apply_other(
     depth_m: np.ndarray | None,
     intr: dict[str, float] | None,
     stamp: float | None,
+    decision: dict | None = None,
 ) -> None:
     """``target``'s share of a tracked frame moves its last find (its motion since its find, times the find's motion
     from the demo's view, and ``stamp``, when the frame was read) when the view places it; anything else leaves the
@@ -1334,6 +1359,8 @@ def _apply_other(
                 f"only {counted:.0%} of its points are seen with a depth that agrees within {tol * 1000:.0f} mm; "
                 f"a view counts from {need:.0%}"
             )
+    if trusted and decision is not None and decision.get("pose") is None:
+        trusted, why = False, decision.get("reason", "surface pose rejected")
     entry = None
     if (
         run is not None and f"other_delta_{i}" in r
@@ -1349,19 +1376,23 @@ def _apply_other(
             "seen": round(seen, 3),
             "trust_share": need,
             "delta": d.round(5).tolist(),  # the whole motion: its translation alone swings with a small turn
+            "surface_constraint": decision,
         }
         if depth is not None:  # the share of its tracks seen with a depth that agrees
             entry["depth_seen"] = round(depth[0] / max(1, depth[1]), 3)
         run.meta.setdefault("target_track", []).append(entry)
-    if share.get("ok") and not share.get("lost") and f"other_delta_{i}" in r:
-        target.raw.append((now_t, np.asarray(r[f"other_delta_{i}"], dtype=float) @ target.anchor))
-        del target.raw[:-TRACK_HISTORY_MAX]
     if not (share.get("ok") and trusted and f"other_delta_{i}" in r):
-        target.last = {"state": "untrusted" if share.get("ok") else "lost", "reason": why}
+        target.last = {
+            "state": "untrusted" if share.get("ok") else "lost",
+            "reason": why,
+            **({"surface_constraint": decision} if decision is not None else {}),
+        }
         return
     mask = None if r.get(f"other_mask_{i}") is None else np.asarray(r[f"other_mask_{i}"]).astype(bool)
     d = np.asarray(r[f"other_delta_{i}"], dtype=float)
-    view = d @ target.anchor
+    view = d @ target.anchor if decision is None else np.asarray(decision["pose"], dtype=float)
+    target.hold_views.append((now_t, view.copy()))
+    del target.hold_views[:-TRACK_HISTORY_MAX]
     _depth_accept(target.depths, depth, now_t)
     with _state.lock:
         found["delta"] = view
@@ -1369,7 +1400,11 @@ def _apply_other(
         found["tracked_at"] = time.time()
         if mask is not None:  # where the act's own find clicks it next
             found["mask"] = mask
-    target.last = {"state": "tracking", "n_visible": share.get("n_visible")}
+    target.last = {
+        "state": "tracking",
+        "n_visible": share.get("n_visible"),
+        **({"surface_constraint": decision} if decision is not None else {}),
+    }
     if mask is not None:
         _remember_seen(target.obj, mask, shape, "tracked by Point2Pose")
 
@@ -1493,7 +1528,10 @@ def _object_motion(
         pin, stamp = np.asarray(found["delta"], dtype=float), found.get("stamp")
     if carry is not None and stamp is not None:
         pin = carry(float(stamp)) @ pin
-    cam = pin @ np.linalg.inv(np.asarray(o["deltas"][f], dtype=float))
+    reference, problem = _demo_control_pose(demo, obj, f)
+    if reference is None:
+        return None, problem
+    cam = pin @ np.linalg.inv(reference)
     return t_bc @ cam @ np.linalg.inv(t_bc), ""
 
 
@@ -1603,7 +1641,9 @@ async def _demo_hold(
     Pre: a place is marked on a stream demo."""
     span = _hold_window(demo, window)
     o = demo.objects[obj]
-    key = json.dumps([obj, int(o["frame"]), window, span, np.round(t_bc, 5).tolist(), "track"])
+    key = json.dumps(
+        [obj, int(o["frame"]), window, span, np.round(t_bc, 5).tolist(), "surface-constrained-track"]
+    )
     if key in demo.holds:
         return demo.holds[key], ""
     by_track = await asyncio.get_event_loop().run_in_executor(
@@ -1612,7 +1652,9 @@ async def _demo_hold(
     if by_track is not None:  # a track that does not follow it is read again next time: it costs no worker
         demo.holds[key] = {**by_track, "window": window, "method": "track"}
         return demo.holds[key], ""
-    key = json.dumps([obj, int(o["frame"]), window, span, np.round(t_bc, 5).tolist()])
+    key = json.dumps(
+        [obj, int(o["frame"]), window, span, np.round(t_bc, 5).tolist(), "surface-constrained-find"]
+    )
     if key in demo.holds:
         kept = demo.holds[key]
         return (None, kept["problem"]) if "problem" in kept else (kept, "")
@@ -1689,8 +1731,8 @@ def _demo_hold_by_track(demo: _Demo, obj: str, t_bc: np.ndarray, window: str) ->
     """How the demo held ``obj`` in a hold ``window`` by its own track, as :func:`core.average_hold` reports it: its
     motion from the demo's view on each frame the demo held it still there, seen from the gripper; None when its track
     does not show it moving with the fingertip over the hold (:func:`_moves_with_tip`) or too few still views agree.
-    The live side reads the session's raw fits alike (:func:`_live_hold_by_track`): the gripper covers the object the
-    same way in both, where a find against the object's view at rest matched none."""
+    Both reference and live holds must pass the same measured-surface policy;
+    comparison against an uncorrected historical tilt would reintroduce it."""
     holding = _holding(demo)
     span = _hold_window(demo, window)
     if holding is None or span is None:
@@ -1698,21 +1740,82 @@ def _demo_hold_by_track(demo: _Demo, obj: str, t_bc: np.ndarray, window: str) ->
     release = len(demo.t) - 1 if holding["release"] is None else holding["release"]
     if not _moves_with_tip(demo, obj, t_bc, (float(demo.t[holding["grip"]]), float(demo.t[release]))):
         return None
-    o = demo.objects[obj]
+    views = _demo_surface_views(demo, obj, _still_held_frames(demo, obj, window))
     holds = [
-        np.linalg.inv(demo.tips[i]) @ t_bc @ np.asarray(o["deltas"][f], dtype=float) @ np.linalg.inv(t_bc)
-        for f, i in _still_held_frames(demo, obj, window)
+        np.linalg.inv(demo.tips[i]) @ t_bc @ np.asarray(check["pose"]) @ np.linalg.inv(t_bc)
+        for i, check in views
+        if check.get("pose") is not None
     ]
-    return core.average_hold(holds, _object_points(demo, obj, t_bc).mean(axis=0))
+    avg = core.average_hold(holds, _object_points(demo, obj, t_bc).mean(axis=0))
+    if avg is not None:
+        avg["surface_constraints"] = [check for _, check in views]
+    return avg
+
+
+def _demo_surface_views(demo: _Demo, obj: str, frames: list[tuple[int, int]]) -> list[tuple[int, dict]]:
+    """Re-evaluate recorded hold observations; no camera or tracker state is used."""
+    import cv2
+
+    o, out = demo.objects[obj], []
+    reference, intr = _object_surface(demo, obj), _recording_intr(demo)
+    for f, i in frames:
+        _rgb, depth = _stream_frame(demo.recording, f)
+        mask = np.asarray(o["masks"][f], np.uint8)
+        if mask.shape != depth.shape:
+            mask = cv2.resize(mask, (depth.shape[1], depth.shape[0]), interpolation=cv2.INTER_NEAREST)
+        check = _surface_decision(o["deltas"][f], reference, depth, mask, intr)
+        out.append((i, {"frame": int(f), **check}))
+    return out
+
+
+def _prepare_demo_references(demo: _Demo) -> str:
+    """Validate the few demo poses used to plan, off the event loop before motion.
+
+    Never rewrite recorded deltas. Keeping raw and measured references separate
+    prevents the inverse of an old false tilt from undoing a corrected live pose.
+    """
+    checks, problems = {}, []
+    for obj in _act_objects(demo):
+        f = _pose_frame(demo, obj)
+        if f is None:
+            continue
+        raw = np.asarray(demo.objects[obj]["deltas"][f], dtype=float)
+        try:
+            if not demo.objects[obj]["seen"][f]:
+                raise ValueError("object was not tracked in this reference frame")
+            check = _demo_surface_views(demo, obj, [(f, 0)])[0][1]
+        except (OSError, KeyError, ValueError, AssertionError) as exc:
+            check = {"state": "rejected", "pose": None, "reason": f"recorded surface unavailable: {exc}"}
+        checks[obj] = {**check, "frame": int(f), "raw_pose": raw.tolist()}
+        if check.get("pose") is None:
+            problems.append(f"{obj} demo reference frame {f}: {check['reason']}")
+    demo.reference_constraints = checks
+    return "; ".join(problems)
+
+
+def _demo_control_pose(demo: _Demo, obj: str, frame: int) -> tuple[np.ndarray | None, str]:
+    """Read prepared geometry without file IO in the control loop.
+
+    Pure composition/editor callers can still inspect an unprepared recording.
+    Every physical runner prepares references first and aborts on any rejection.
+    Loaded demos are prepared before preview; a changed selection cannot reuse
+    a checked pose from a different frame.
+    """
+    if not demo.reference_constraints:
+        return np.asarray(demo.objects[obj]["deltas"][frame], dtype=float), ""
+    check = demo.reference_constraints.get(obj, {})
+    if check.get("frame") != frame or check.get("pose") is None:
+        return None, f"{obj}'s demo reference is not verified: {check.get('reason', 'selection changed')}"
+    return np.asarray(check["pose"], dtype=float), ""
 
 
 def _held_track_views(demo: _Demo, obj: str, since: float) -> list[tuple[float, np.ndarray]]:
-    """The live session's raw fits of ``obj`` read after ``since``, each as its motion from the demo's view (camera
+    """Accepted, surface-checked poses of ``obj`` read after ``since``, each from the demo's view (camera
     frame): the session object's against its find of the demo's view, any other's as kept."""
     with _state.lock:
-        teach, raw = _state.teach, list(_state.track.raw)
+        teach, raw = _state.teach, list(_state.track.hold_views)
         target = _state.targets.get(obj)
-        other = list(target.raw) if target is not None else []
+        other = list(target.hold_views) if target is not None else []
     if obj == (_session_object(demo) or ""):
         ref = ((teach.keypoints.get("ref") if teach is not None else None) or {}).get("delta")
         start = max(since, (teach.stamp or 0.0) if teach is not None else 0.0)
@@ -1725,7 +1828,7 @@ def _held_track_views(demo: _Demo, obj: str, since: float) -> list[tuple[float, 
 async def _live_hold_by_track(
     demo: _Demo, obj: str, t_bc: np.ndarray, stopped: Callable[[], bool]
 ) -> tuple[dict | None, str]:
-    """``(hold, problem)``: how ``obj`` sits in the gripper by the live session's raw fits of it (:func:`_held_track_views`)
+    """``(hold, problem)``: how ``obj`` sits in the gripper by accepted surface-checked poses (:func:`_held_track_views`)
     over the frames read from now, the arm standing still, each seen from the gripper where it stands; as
     :func:`core.average_hold` reports it. Pre: the arm stands still holding ``obj``."""
     from . import jog
@@ -2275,6 +2378,10 @@ async def worker_result(id: str, request: Request) -> dict:
     ):
         if key in data.files:
             result[key] = np.asarray(data[key])
+    if job.kind in ("teach", "locate", "find"):
+        result = await asyncio.get_running_loop().run_in_executor(
+            _RENDER_EXECUTOR, _constrain_find_result, job, result
+        )
     job.result = result
     if job.kind == "teach":
         _apply_teach_result(job)
@@ -2315,6 +2422,10 @@ def _log_teach(job: _Job, r: dict[str, Any], used: bool) -> str | None:
             "card_points": r.get("ref_card_points"),
         }
         result.update(_find_info(find))
+        result["surface_constraint"] = r.get("surface_constraint")
+        for key in ("raw_ref_delta", "ref_delta"):
+            if r.get(key) is not None:
+                result[key] = np.asarray(r[key]).tolist()
     else:
         result.update(ok=bool(r.get("ok")), reason=r.get("reason") or "")
     mask = None if r.get("mask") is None else np.asarray(r["mask"]).astype(bool)
@@ -2355,6 +2466,7 @@ def _apply_teach_result(job: _Job) -> None:
                 "turn_deg": r.get("ref_turn_deg"),
                 "reason": r.get("ref_reason", ""),
                 "card_points": r.get("ref_card_points"),
+                "surface_constraint": r.get("surface_constraint"),
             }
         _state.teach = _Teach(
             at=time.strftime("%H:%M:%S"),
@@ -2394,7 +2506,9 @@ def _apply_find_result(job: _Job) -> None:
     if teach is None or teach.tip_pose is None:
         return
     result: dict[str, Any] = {
-        k: v for k, v in r.items() if k not in ("mask", "uv", "xyz", "delta", "face_teach", "face_find")
+        k: v
+        for k, v in r.items()
+        if k not in ("mask", "uv", "xyz", "delta", "raw_delta", "raw_ref_delta", "face_teach", "face_find")
     }
     result["mode"] = "features"
     result["camera_check"] = job.camera_check
@@ -2423,20 +2537,14 @@ def _compose_motion(
 ) -> np.ndarray | None:
     """Turn the worker's raw fit into the motion the arm uses, in ``result``, and return the transported pre-grasp.
 
-    The pose is the tracker's own rigid fit. Everything this function used to
-    compose on top of it — the resting prior, the axis from the object's face,
-    the footprint and long-axis turn rules — was replayed against ground truth
-    on the nine YCBInEOAT videos (2026-10-03) and scored below or equal to the
-    raw fit on every one: mean ADD-S AUC 44.1 to 67.8 against 80.5, and on the
-    videos' at-rest openings the prior turned two still objects by 13 and 115
-    degrees. The resting prior survives only as an explicit opt-in (``flat``):
-    the fit's motion re-expressed as a turn about the surface the object rests
-    on, measured in both frames, with the fit's own turn. Nothing has shown it
-    to help; it is kept for an operator who knows the object stays on the
-    table and wants to see the difference. Post: ``result['delta_cam']`` is the
-    motion used, with ``axis_source`` saying which: "fit", "surface" (opted
-    in), or "table" (the depth-only algorithm, whose motion is a turn about the
-    table normal by construction).
+    P2P proposals now pass measured-surface arbitration before this function.
+    A supported plane constrains tilt and normal offset; its unobserved tangent
+    motion remains the proposal's. Keep that decision ahead of the old opt-in
+    resting prior: a real observed tilt must never be forced level. The older
+    unconditional face/table/footprint priors regressed the nine reference videos
+    and remain off by default. This bounded geometry policy is evaluated
+    separately; it does not inherit their benchmark results. ``axis_source``
+    distinguishes "measured surface", "fit", opted-in "surface", and "table".
     """
     result["delta_cam"] = np.asarray(r["delta"], dtype=float)
     centroid = np.asarray(teach.keypoints["xyz"]).mean(axis=0)
@@ -2448,6 +2556,8 @@ def _compose_motion(
     ta, tb = r.get("table_teach"), r.get("table_find")
     if r.get("algo") == "depth":
         result.update({"axis_source": "table", "yaw_deg": r.get("yaw_deg"), "symmetric": r.get("symmetric")})
+    elif r.get("surface_constraint", {}).get("state") in ("corrected", "consistent"):
+        result["axis_source"] = "measured surface"
     elif flat and ta is not None and tb is not None:
         comp = core.compose_with_face(result["delta_cam"], ta, tb, centroid)
         result["delta_cam"] = comp["delta"]
@@ -2555,6 +2665,83 @@ def _view_points(demo: _Demo, obj: str) -> np.ndarray:
     if kept is None or kept[0] != key:
         kept = demo.view_points[obj] = (key, _object_points(demo, obj, np.eye(4)))
     return kept[1]
+
+
+def _reference_surface(recording: str, frame: int, mask: np.ndarray) -> np.ndarray:
+    """Dense interior depth in the designation's camera frame, never the tracker map."""
+    _rgb, depth = _stream_frame(recording, frame)
+    k = np.loadtxt(pathlib.Path(recording) / "cam_K.txt")
+    intr = {"fx": k[0, 0], "fy": k[1, 1], "cx": k[0, 2], "cy": k[1, 2]}
+    return surface_constraint.depth_points(depth, mask, intr)
+
+
+def _object_surface(demo: _Demo, obj: str) -> np.ndarray:
+    o = demo.objects[obj]
+    key = (int(o["frame"]), np.asarray(o["mask"], bool).tobytes())
+    kept = demo.surface_points.get(obj)
+    if kept is None or kept[0] != key:
+        kept = demo.surface_points[obj] = (key, _reference_surface(demo.recording, key[0], o["mask"]))
+    return kept[1]
+
+
+def _teach_surface(teach: _Teach) -> np.ndarray:
+    if teach.keypoints.get("mask") is None:
+        return np.asarray(teach.keypoints.get("xyz", np.empty((0, 3))))
+    return surface_constraint.depth_points(teach.depth_m, teach.keypoints["mask"], teach.intr)
+
+
+def _surface_decision(pose, reference, depth, mask, intr, check=None) -> dict:
+    """A failed measurement is an explicit rejection, including unexpected errors."""
+    try:
+        return surface_constraint.resolve(
+            pose,
+            reference,
+            depth,
+            mask,
+            intr,
+            noise_m=core.POINT_NOISE_M,
+            tol_m=core.ACT_REACH_TOL_M,
+            tol_deg=core.ACT_REACH_TOL_DEG,
+            surface=check,
+        )
+    except Exception as exc:
+        logger.exception("Surface pose constraint failed")
+        return {
+            "state": "rejected",
+            "pose": None,
+            "observed_dof": 0,
+            "reason": f"surface constraint error: {type(exc).__name__}: {exc}",
+        }
+
+
+def _constrain_find_result(job: _Job, result: dict) -> dict:
+    """Check acquisition as well as tracking; return raw and control poses separately."""
+    key, reference = None, None
+    try:
+        if result.get("ref_ok") and result.get("ref_delta") is not None:
+            key = "ref_delta"
+            reference = _reference_surface(
+                job.extra["ref_recording"], int(job.extra["ref_frame"]), job.arrays["ref_mask"]
+            )
+        elif job.kind == "find" and result.get("ok") and result.get("delta") is not None:
+            with _state.lock:
+                teach = _state.teach
+            if teach is not None:
+                key, reference = "delta", _teach_surface(teach)
+        if key is None:
+            return result
+        decision = _surface_decision(result[key], reference, job.depth_m, result.get("mask"), job.intr)
+    except (OSError, KeyError, ValueError, AssertionError) as exc:
+        decision = {"state": "rejected", "pose": None, "reason": f"reference surface unavailable: {exc}"}
+    if key is None:
+        return result
+    out = {**result, f"raw_{key}": np.asarray(result[key]).copy(), "surface_constraint": decision}
+    if decision["pose"] is None:
+        out["ref_ok" if key == "ref_delta" else "ok"] = False
+        out["ref_reason" if key == "ref_delta" else "reason"] = decision["reason"]
+    else:
+        out[key] = np.asarray(decision["pose"], dtype=float)
+    return out
 
 
 def _found_mask(
@@ -2771,7 +2958,7 @@ def _pose_verification_panel(bgr: np.ndarray, checks: list[dict] | None, slots: 
     Replay reserves the same number of rows for every frame, including frames
     without diagnostics, so exports retain a fixed size.
     """
-    panel = np.zeros((16 + 32 * slots, bgr.shape[1], 3), dtype=bgr.dtype)
+    panel = np.zeros((16 + 48 * slots, bgr.shape[1], 3), dtype=bgr.dtype)
     _draw_pose_verification(panel, checks, 18)
     return np.vstack([bgr, panel])
 
@@ -2850,12 +3037,12 @@ def _view_places(
     return ok, why, depth
 
 
-def _verify_track_poses(job: _Job, r: dict, teach: _Teach, accepted: bool) -> list[dict]:
-    """A diagnostic failure must remain visible without breaking the tracking loop."""
+def _verify_track_poses(job: _Job, r: dict, teach: _Teach, accepted: bool, log: bool = True) -> list[dict]:
+    """Compare and constrain off the event loop, before any control pose is accepted."""
     if r.get("algo") != "p2p":
         return []
     try:
-        return _compare_track_poses(job, r, teach, accepted)
+        return _compare_track_poses(job, r, teach, accepted, log)
     except Exception as exc:
         logger.exception("Pose verification unavailable at %.6f", job.created)
         missing = {"state": "unavailable", "reason": f"diagnostic error: {type(exc).__name__}: {exc}"}
@@ -2866,12 +3053,13 @@ def _verify_track_poses(job: _Job, r: dict, teach: _Teach, accepted: bool) -> li
                 "disagreement": False,
                 "groups": missing,
                 "surface": missing,
+                "constraint": {"state": "rejected", "pose": None, "reason": missing["reason"]},
             }
         ]
 
 
-def _compare_track_poses(job: _Job, r: dict, teach: _Teach, accepted: bool) -> list[dict]:
-    """Diagnostic only, on the render executor, after control acceptance was decided.
+def _compare_track_poses(job: _Job, r: dict, teach: _Teach, accepted: bool, log: bool = True) -> list[dict]:
+    """Compare raw P2P and prepare a separate control proposal on the render executor.
 
     Compare the frame's RAW P2P pose, not a stale accepted pose. Keep its exact
     frame time, each source's state and the acceptance decision together in the
@@ -2890,6 +3078,7 @@ def _compare_track_poses(job: _Job, r: dict, teach: _Teach, accepted: bool) -> l
             name,
             r.get("delta") if r.get("ok") else None,
             teach.keypoints.get("xyz"),
+            _teach_surface(teach),
             r.get("mask"),
             accepted,
             (r.get("session"), teach.stamp, teach.at),
@@ -2902,22 +3091,24 @@ def _compare_track_poses(job: _Job, r: dict, teach: _Teach, accepted: bool) -> l
             continue
         pose = r.get(f"other_delta_{i}") if share.get("ok") and not share.get("lost") else None
         pose = None if pose is None else np.asarray(pose) @ target.anchor
-        reference = None
+        reference = geometry = None
         if demo is not None and other in demo.objects:
             with contextlib.suppress(OSError, KeyError, ValueError):
                 reference = _view_points(demo, other)
+                geometry = _object_surface(demo, other)
         sources.append(
             (
                 other,
                 pose,
                 reference,
+                geometry,
                 r.get(f"other_mask_{i}"),
                 target.last.get("state") == "tracking",
                 (share.get("session"), target.anchor.tobytes()),
             )
         )
     checks = []
-    for name, pose, reference, mask, used, session in sources:
+    for name, pose, reference, geometry, mask, used, session in sources:
         started = time.perf_counter()
         ref = np.asarray(reference if reference is not None else np.empty((0, 3)), dtype=float).reshape(-1, 3)
         group, timing = None, {}
@@ -2966,8 +3157,15 @@ def _compare_track_poses(job: _Job, r: dict, teach: _Teach, accepted: bool) -> l
             ),
         }
         check["disagreement"] = any(check[k]["state"] == "disagreement" for k in ("groups", "surface"))
+        check["constraint"] = _surface_decision(pose, geometry, job.depth_m, mask, job.intr, check["surface"])
         check["elapsed_ms"] = (time.perf_counter() - started) * 1000
         checks.append(check)
+    if log:
+        _log_pose_conflicts(checks, tr)
+    return checks
+
+
+def _log_pose_conflicts(checks: list[dict], tr: _Track) -> None:
     conflicts = {
         (c["object"], key)
         for c in checks
@@ -2978,15 +3176,15 @@ def _compare_track_poses(job: _Job, r: dict, teach: _Teach, accepted: bool) -> l
         for key in ("groups", "surface"):
             if (check["object"], key) in conflicts - tr.verification_conflicts:
                 logger.warning(
-                    "Pose disagreement at %.6f: %s P2P vs %s; accepted=%s; %s",
-                    job.created,
+                    "Pose disagreement at %.6f: %s P2P vs %s; accepted=%s; control=%s; %s",
+                    check["t_frame"],
                     check["object"],
                     key,
                     check["accepted"],
+                    check.get("constraint", {}).get("state", "diagnostic only"),
                     check[key],
                 )
     tr.verification_conflicts = conflicts
-    return checks
 
 
 async def _apply_track_result(job: _Job) -> None:
@@ -3001,6 +3199,21 @@ async def _apply_track_result(job: _Job) -> None:
         teach, flat = _state.teach, _state.flat
     if stale or teach is None:
         return
+    checks = await asyncio.get_running_loop().run_in_executor(
+        _RENDER_EXECUTOR, _verify_track_poses, job, r, teach, False, False
+    )
+    # Teach/track can be replaced while the executor is measuring this frame.
+    with _state.lock:
+        if _state.track is not tr or tr.job != job.id or _state.teach is not teach:
+            return
+    missing = {"state": "rejected", "pose": None, "reason": "surface decision unavailable"}
+    decisions = (
+        {c["object"]: c.get("constraint", missing) for c in checks} if r.get("algo") == "p2p" else None
+    )
+    primary = checks[0].get("constraint", missing) if checks else missing
+    proposal = r
+    if decisions is not None and primary.get("pose") is not None:
+        proposal = {**r, "delta": np.asarray(primary["pose"], dtype=float), "surface_constraint": primary}
     status: dict[str, Any] = {
         k: r.get(k)
         for k in (
@@ -3025,9 +3238,11 @@ async def _apply_track_result(job: _Job) -> None:
     if r.get("ok"):
         trusted, why = core.find_trusted(int(r.get("n_inliers", 0)), int(teach.keypoints["n_points"]))
         if trusted:
-            trusted, why, depth = _view_places(r, job, teach)
+            trusted, why, depth = _view_places(proposal, job, teach)
             if depth is not None:
                 status["depth_seen"] = round(depth[0] / max(1, depth[1]), 3)
+            if trusted and decisions is not None and primary.get("pose") is None:
+                trusted, why = False, primary["reason"]
             if trusted:
                 _depth_accept(tr.depths, depth, job.created)
         if trusted:
@@ -3061,7 +3276,9 @@ async def _apply_track_result(job: _Job) -> None:
                 t_bc = _t_base_cam()
             except HTTPException:
                 t_bc = None
-            transported = _compose_motion(result, r, teach, flat, t_bc)
+            if decisions is not None:
+                result["surface_constraint"] = primary
+            transported = _compose_motion(result, proposal, teach, flat, t_bc)
             status.update(
                 {
                     k: result.get(k)
@@ -3097,16 +3314,23 @@ async def _apply_track_result(job: _Job) -> None:
         else:
             status.update(ok=False, state="untrusted", reason=why)
     _apply_others(
-        r, job.rgb.shape, job.depth_m, job.intr, job.created
+        r, job.rgb.shape, job.depth_m, job.intr, job.created, decisions
     )  # the same step's other objects: the one placed onto
     now = time.perf_counter()
     if tr.t_prev:
         tr.fps = 0.8 * tr.fps + 0.2 / max(now - tr.t_prev, 1e-3)
     tr.t_prev = now
     status["fps"] = tr.fps
-    status["pose_verification"] = await asyncio.get_event_loop().run_in_executor(
-        _RENDER_EXECUTOR, _verify_track_poses, job, r, teach, result is not None
-    )
+    for i, check in enumerate(checks):
+        target = _state.targets.get(check["object"])
+        check["accepted"] = (
+            result is not None if i == 0 else target is not None and target.last.get("state") == "tracking"
+        )
+        check["raw_p2p_used"] = bool(
+            check["accepted"] and check.get("constraint", {}).get("state") == "unchanged"
+        )
+    _log_pose_conflicts(checks, tr)
+    status["pose_verification"] = checks
     overlay = await asyncio.get_event_loop().run_in_executor(
         _RENDER_EXECUTOR, _render_live, job.rgb, r, result, transported, teach, status
     )
@@ -3126,9 +3350,9 @@ async def _apply_track_result(job: _Job) -> None:
         }
         tr.last, tr.overlay, tr.job = status, overlay, None
         tr.history.append((job.created, result is not None, None if result is None else result["delta_cam"]))
-        if r.get("ok") and r.get("delta") is not None:
-            tr.raw.append((job.created, np.asarray(r["delta"], dtype=float)))
-            del tr.raw[:-TRACK_HISTORY_MAX]
+        if result is not None:
+            tr.hold_views.append((job.created, np.asarray(result["delta_cam"], dtype=float).copy()))
+            del tr.hold_views[:-TRACK_HISTORY_MAX]
         del tr.history[:-TRACK_HISTORY_MAX]
         rec = _state.recording
         if rec is not None and _state.stream is None:
@@ -3504,6 +3728,7 @@ def _begin_run(demo: _Demo, speed: float, delta: np.ndarray, t_bc: np.ndarray, p
         "demo": demo.name,
         "demo_root": demo.root,
         "keypoints": list(demo.keypoints),
+        "demo_reference_constraints": dict(demo.reference_constraints),
         "speed": speed,
         "started": time.strftime("%Y-%m-%d %H:%M:%S"),
         "t_started": time.time(),
@@ -3980,6 +4205,7 @@ def _demo_info(demo: _Demo) -> dict[str, Any]:
         "act_objects": _act_objects(demo),  # the object whose find starts the session first, then the others
         "landing": demo.landing,
         "hold": _demo_hold_info(demo),
+        "reference_constraints": dict(demo.reference_constraints),
     }
 
 
@@ -4861,6 +5087,7 @@ async def demo_load(body: DemoLoadBody) -> dict:
     )
     if core.keypoints_problem(demo.keypoints, float(demo.t[0]), float(demo.t[-1])):
         demo.keypoints = []  # marks in a shape this version does not read
+    await asyncio.get_running_loop().run_in_executor(_RENDER_EXECUTOR, _prepare_demo_references, demo)
     if "teach_rgb" not in z.files:  # recorded without a taught object: nothing to re-teach
         with _state.lock:
             _discard_unsaved_stream(_state.demo)
@@ -5611,7 +5838,10 @@ def _reference_motion(demo: _Demo, teach: _Teach | None) -> tuple[np.ndarray | N
         )
     f = _pose_frame(demo, obj)
     assert f is not None, "a done object with marks on it has a pose frame"
-    return np.asarray(ref["delta"], dtype=float) @ np.linalg.inv(np.asarray(o["deltas"][f], dtype=float)), ""
+    reference, problem = _demo_control_pose(demo, obj, f)
+    if reference is None:
+        return None, problem
+    return np.asarray(ref["delta"], dtype=float) @ np.linalg.inv(reference), ""
 
 
 def _pose_frame(demo: _Demo, obj: str | None) -> int | None:
@@ -5878,10 +6108,12 @@ def _landing_centre(demo: _Demo, obj: str, t_bc: np.ndarray) -> np.ndarray:
     """The middle of the top of ``obj`` where the demo saw it on its pose frame, base frame: the turns a landing may
     take are about the vertical through it. The top is its surface within LANDING_TOP_M of its highest points (by the
     95th percentile, clear of depth noise). Pre: ``obj`` is a done object with a key frame in its frame."""
-    o = demo.objects[obj]
     f = _pose_frame(demo, obj)
     assert f is not None, "a done object with a key frame in its frame has a pose frame"
-    move = t_bc @ np.asarray(o["deltas"][f], dtype=float) @ np.linalg.inv(t_bc)
+    reference, problem = _demo_control_pose(demo, obj, f)
+    if reference is None:
+        raise ValueError(problem)
+    move = t_bc @ reference @ np.linalg.inv(t_bc)
     pts = _object_points(demo, obj, t_bc) @ move[:3, :3].T + move[:3, 3]
     return pts[pts[:, 2] >= np.percentile(pts[:, 2], 95) - LANDING_TOP_M].mean(axis=0)
 
@@ -8262,6 +8494,22 @@ async def _act_task(speed: float, server: str | None = None, runner: str | None 
     as it ran before them (:func:`_act_marks_task`), kept to compare on the rig. Pre: ``runner`` in ACT_RUNNERS."""
     runner = ACT_RUNNER if runner is None else runner
     assert runner in ACT_RUNNERS, f"a runner is one of {ACT_RUNNERS}"
+    with _state.lock:
+        demo, act = _state.demo, _state.act
+    if demo is not None:
+        try:
+            problem = await asyncio.get_running_loop().run_in_executor(
+                _RENDER_EXECUTOR, _prepare_demo_references, demo
+            )
+        except Exception as exc:
+            logger.exception("Demo surface validation failed before motion")
+            problem = f"demo surface validation error: {type(exc).__name__}: {exc}"
+        with _state.lock:
+            stale = _state.demo is not demo or _state.act is not act or act.stop_requested
+        if stale or problem:
+            act.on, act.ok, act.step = False, False, "aborted"
+            act.reason = "demo or act changed during surface validation" if stale else problem
+            return
     await (_act_key_frames_task if runner == "key_frames" else _act_marks_task)(speed, server)
 
 

@@ -1,4 +1,4 @@
-# Pose disagreement diagnostics
+# Pose verification and measured surface constraints
 
 Accepted Point2Pose updates can contain orientation drift even when every track
 is visible and passes the existing depth check. In the October 12 stacking
@@ -7,12 +7,58 @@ The depth check tests the tracked points' plausible depth and the distribution
 of the observed fit points; it does not establish that the returned orientation
 matches the visible surface.
 
-There is no continuous alignment rule between P2P, point groups and RGB-D. The
-initial find uses surface fitting. During tracking, an accepted P2P update
-replaces the stored pose, and group motion carries that pose between updates.
-The diagnostics in `pose_verification.py` report conflicts without changing
-these acceptance or control rules. They are not a fix for the underlying P2P
-error and do not stop an act.
+Since October 13, `surface_constraint.py` arbitrates the proposal before control
+acceptance, including initial finds. Raw comparisons remain in
+`pose_verification.py`. The policy corrects a supported observed plane's tilt and
+normal offset, retains non-planar proposals only when the general surface check
+agrees, and rejects unverified observations. Group motion still carries an
+accepted pose between observations; it is not an absolute orientation authority.
+The native P2P estimator and its model updates are unchanged by this correction.
+
+## Measured constraint
+
+The policy uses reference RGB-D from designation and current masked RGB-D. It
+does not fit against P2P's growing map or impose an upright, table or object-category
+prior. Five-pixel erosion excludes mask rims. A bounded robust plane fit uses
+alternating samples for fitting and validation, requires majority support in
+both, and rejects patches with too little physical span. The existing 3 mm
+correspondence allowance is split between reference and current planes. Normal
+and offset disagreement between the split fits must fit the existing 3°/3 mm
+placement tolerances. A quadratic validation check rejects predictable curvature
+beyond the per-surface noise budget and measured model residual. A small sphere's
+visible cap is a tested counterexample to relying only on a plane residual.
+
+For a supported corresponding patch, apply the shortest rotation aligning its
+normal, about its predicted patch centre. Then move only along the observed
+normal onto that plane. This constrains three pose components; tangential motion
+and twist remain the proposal's. Both old and corrected patches must have nearby
+majority overlap, using the existing 6 mm local association radius. Corrected
+point support must remain compatible with the noise allowance.
+
+If a reference plane is supported but the current patch cannot be verified,
+the proposal is rejected even if the older point-distance ICP check says
+consistent. An unavailable or failed check never supplies a hold observation.
+Non-planar references may retain an unchanged proposal when the general surface
+check agrees; this is not a six-dimensional accuracy guarantee.
+
+The policy is on by default for the P2P control path. Geometry runs before the
+existing visibility/depth/centre-support acceptance gates and before following
+can set an arm target. Replacing teach/track while geometry is running discards
+that result. Both the primary object and secondary targets use corrected poses.
+Held-object correction consumes accepted observations rather than raw P2P fits;
+recorded demo holds and fresh reference finds undergo the same surface policy.
+The selected demo planning references are also measured before either act runner
+can dispatch. Planning inverts these checked reference poses; inverting a raw,
+tilted demo pose would otherwise reintroduce its error into a corrected live pose.
+Rejection or a changed reference selection prevents using that reference.
+`act.json` preserves both versions in `demo_reference_constraints` without
+rewriting the original recording.
+Original worker poses remain available in the model/recording for diagnosis.
+
+This is a measured planar-patch constraint, not complete multi-surface fusion or
+an active-inspection controller. Symmetry, hidden slip and unobservable pose
+components remain unresolved. No statistical ground-truth accuracy claim follows
+from agreement with the same depth sensor.
 
 ## Comparisons
 
@@ -46,22 +92,28 @@ phase. The mask erosion is the same five pixels as the initial find; the fit
 radius and foreground exclusion use twice the existing point-noise allowance.
 The four recorded fixture checks took roughly 11–12 ms each after first import
 on the development host. Each live check records its own elapsed time. Work
-runs on the render executor after acceptance, but adds tracking-loop latency.
-Diagnostic exceptions are logged and recorded as unavailable, without stopping
-the existing tracking/control path.
+runs on the render executor before acceptance and adds tracking-loop latency.
+Exceptions are logged and recorded as unavailable; the affected proposal cannot
+reach control or held-pose history. Plane work uses at most 1600 points and 64
+deterministic RANSAC triples per surface, with bounded refinement.
 
 ## Reading a result
 
 The live picture and replay show per-object comparisons in a panel below the
 camera image. A conflict shows its rotation/centre difference and whether that
-P2P candidate was accepted. Replay's **Next pose disagreement** button jumps
+P2P candidate was used, corrected before use, or rejected. A third row reports
+the surface decision, correction angle and three observed components. Replay's
+**Next pose disagreement** button jumps
 between affected frames. Legacy acts say verification was not recorded; replay
 does not manufacture historical checks.
 
 `act.json` stores each frame's `pose_verification` and an act-level
 `pose_disagreements` event list. These retain frame time, raw P2P pose,
 acceptance, group prediction/reference time, surface alternative, residuals,
-point counts, thresholds and unavailable/inconclusive reasons. The arrays now
+point counts, thresholds and unavailable/inconclusive reasons. The `constraint`
+record includes the policy version, control proposal, support, validation errors,
+curvature evidence and rejection reason. `raw_p2p_used` distinguishes an unchanged
+proposal from a corrected observation. The arrays now
 also preserve other objects' raw deltas, models and fit points. The server log
 reports entry into each object/source conflict, including outside an act;
 repeated frames remain in the recording without repeating the server warning.
@@ -92,5 +144,40 @@ geometry; a live check instead uses that frame's raw P2P candidate, so its
 number can differ from a stale accepted target's historical error. Synthetic
 tests additionally cover real rigid motion, a genuinely tilted surface,
 occlusion and cumulative P2P drift against stationary groups. Integration tests
-cover separate object anchors, diagnostic failure, acceptance preservation,
-recording and replay visibility.
+cover separate object anchors, fail-closed diagnostic failure, raw/control pose
+separation, acquisition, historical hold validation and replay visibility.
+
+## October 13 constraint replay
+
+The nine synchronized static snapshots from `tracker-readiness/143413` improve
+against the earlier independent implementation of the visible-normal check:
+before fresh initialization, median disagreement is 22.63° raw versus 0.85°
+corrected; after initialization it is 5.78° versus 0.88°. The corrected maximum
+is below 0.98°. A cached pre-initialization frame remains excluded. These checks
+share sensor data and are not independent physical ground truth.
+
+Every saved production output from both complete local acts was processed:
+189 + 266 frames, 910 object observations, without changing native P2P state.
+For the target cube with at least 97% of tracks visible and native tracking
+available, the first act keeps 91/104 proposals, reducing paired median normal
+disagreement from 6.01° to 0.21° (corrected maximum 1.67°); the second keeps
+107/107, reducing 2.62° to 0.49° (maximum 0.84°). Rejected frames remain explicit.
+These are surface-policy results in the native initialization frame, not a
+complete GUI/control replay or proof of placement success. The separate old
+visibility and centre-support gates may reject more observations.
+
+The actual demo planning references also pass this policy: gamepad frame 98
+receives a 0.80° correction and cube frame 294 a 4.54° correction. Held-out normal
+residuals are 0.30° and 0.23°, respectively. This identifies an additional source
+of erroneous placement tilt in the recorded reference, separate from live drift.
+
+Availability decreases deliberately. In particular, the recorded `baseline`
+fixture's current patch fails the new plane check despite its old ICP-consistent
+label. The held gamepad has no frames with 97% track visibility in these two
+native replays; the historical raw-hold bypass must not be used to claim that
+in-hand ambiguity is fixed. Full-pose ground-truth regression across the nine
+reference videos has not been rerun for this frontend policy.
+
+Scripts, input coverage/hashes, all decisions and timing are preserved in the
+`20261013/surface-constraints` experiment archive. This change uses no physical
+robot motion during offline validation.

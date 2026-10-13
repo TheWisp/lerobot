@@ -56,7 +56,10 @@ uncertainty and can be broken by visible evidence of sliding or slip. Two object
 being stationary together does not prove attachment. Surrounding depth also
 explains occlusion and identifies samples belonging to other surfaces.
 
-**NOT IMPLEMENTED: pose updates by observable direction.** Fit persistent
+**PARTIALLY IMPLEMENTED:** the frontend now constrains a supported planar patch's
+normal and normal offset before accepting a P2P pose; see
+[the measured-surface policy](pose_verification.md). General multi-surface
+observability and uncertainty propagation remain **NOT IMPLEMENTED**. Fit persistent
 correspondences and visible surface geometry, then determine which translations
 and rotations the observations constrain. A textureless plane alone cannot
 determine sliding or rotation within that plane. Preserve uncertainty or multiple
@@ -72,8 +75,16 @@ immediate robot-control estimate.
 
 ## Which evidence is authoritative
 
-**PROPOSED POLICY, NOT IMPLEMENTED arbitration.** Authority belongs to supported
-observations of the relevant motion component, not permanently to one tracker.
+**PARTIALLY IMPLEMENTED:** measured planar geometry now constrains three pose
+components before control and hold-history acceptance. Unsupported current planes
+are rejected; non-planar references retain a proposal only when the existing
+general surface check agrees. This also covers acquisition and the demo poses
+used as planning references. Raw proposals remain recorded. Group comparison
+remains diagnostic: a group disagreement alone does not select a replacement or
+veto the pose. General joint arbitration is **NOT IMPLEMENTED**.
+
+Authority belongs to supported observations of the relevant motion component,
+not permanently to one tracker.
 
 | Evidence                     | Legitimate authority                                                                 | Limitation                                                                                                            |
 | ---------------------------- | ------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------- |
@@ -111,7 +122,16 @@ the placement tolerance, or when the motion budget is exhausted or no useful
 view is reachable. Record the original ambiguity, selected motion, acquired
 evidence and resulting uncertainty so replay shows why inspection helped or failed.
 
-## Current implementation and retest readiness
+## Implementation and retest evidence
+
+The measured-surface constraint described above was added after the following
+audit. It closes the raw hold-history bypass and constrains live and historical
+planning references by the same policy. Offline replay improves visible-face
+agreement while explicitly rejecting more occluded observations; detailed counts
+and limits are in [pose verification](pose_verification.md). This does not solve
+ambiguous held full-pose estimation or establish successful physical stacking.
+
+### Historical audit before measured-surface constraints
 
 Audit of LeRobot `7c59def47`, P2P `95bd7a8`, October 13, 2026:
 
@@ -126,7 +146,7 @@ Audit of LeRobot `7c59def47`, P2P `95bd7a8`, October 13, 2026:
 | Which P2P corrections are active?                           | Delayed-keyframe motion preservation is on. Consensus refit, refined-pose return and object-centred jump guard are locally off; depth lookup remains legacy because evaluated combinations worsened local pose agreement. |
 | Is physical stacking ready?                                 | Not established. The current estimator retains the known failure, and the architecture above has not been built or validated.                                                                                             |
 
-Current diagnostic checks use the planner's existing tolerances. They are not
+The diagnostic checks use the planner's existing tolerances. They are not
 calibrated six-dimensional confidence intervals. The recorded reference suite has
 pose ground truth; the local stacking recordings do not. Keep surface agreement,
 tracking availability and physical placement success distinct.

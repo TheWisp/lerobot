@@ -3075,7 +3075,7 @@ def test_a_view_of_the_picked_object_counts_only_the_points_whose_depth_agrees(c
         pregrasp._state.worker.jobs[job.id] = job
         track.job = job.id
         buf = io.BytesIO()
-        np.savez(buf, meta=json.dumps(meta), delta=np.eye(4), fit_uv=uv, fit_inlier=np.ones(25, bool), live_uv=uv,
+        np.savez(buf, meta=json.dumps(meta), delta=np.eye(4), mask=depth < 0.44, fit_uv=uv, fit_inlier=np.ones(25, bool), live_uv=uv,
                  track_idx=np.arange(25), track_uv=uv, track_vis=np.ones(25, bool))  # fmt: skip
         reply = client.post("/api/pregrasp/worker/result", params={"id": job.id}, content=buf.getvalue())
         assert reply.status_code == 200, reply.text

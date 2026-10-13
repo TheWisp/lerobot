@@ -2,7 +2,7 @@
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy at http://www.apache.org/licenses/LICENSE-2.0
-"""Independent pose comparisons for diagnosis, never a replacement pose or a control gate.
+"""Raw pose comparisons; control arbitration lives in ``surface_constraint``.
 
 Groups compare motion since a fixed common observation, not absolute registration.
 RGB-D supplies an alternative local surface fit, not ground truth: symmetry, shared
@@ -198,6 +198,21 @@ def lines(checks: list[dict]) -> list[tuple[str, bool]]:
             if "rotation_deg" in item:
                 text += f" {item['rotation_deg']:.1f} deg / {item['centre_mm']:.1f} mm"
             if conflict:
-                text += f"; P2P {'accepted' if check.get('accepted') else 'rejected'}"
+                decision = check.get("constraint") or {}
+                if check.get("accepted") and decision.get("state") in ("corrected", "consistent"):
+                    text += "; surface-constrained pose used"
+                else:
+                    text += f"; P2P {'accepted' if check.get('accepted') else 'rejected'}"
             out.append((text, conflict))
+        decision = check.get("constraint")
+        if decision is not None:
+            state = decision["state"]
+            text = f"{check['object']} control: {state}"
+            if state in ("corrected", "consistent"):
+                text += f" tilt {decision.get('rotation_deg', 0):.1f} deg; 3 observed DOF"
+            elif state == "rejected":
+                text += f"; {decision.get('reason', 'surface unavailable')}"
+            if not check.get("accepted") and state != "rejected":
+                text += "; withheld by visibility checks"
+            out.append((text, state == "rejected"))
     return out

@@ -1,4 +1,4 @@
-"""Recording and display of disagreements must not silently change the act's pose."""
+"""Correct measured pose before control while preserving the raw evidence in replay."""
 
 import asyncio
 import json
@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
 from lerobot.gui.api import pregrasp as p
 
@@ -59,7 +60,7 @@ def setup_case(monkeypatch, tmp_path):
     return job, teach, run, track
 
 
-def test_worker_result_records_and_warns_on_an_accepted_bad_pose_without_replacing_it(monkeypatch, tmp_path):
+def test_worker_result_corrects_bad_pose_before_control_and_records_both(monkeypatch, tmp_path):
     job, teach, run, track = setup_case(monkeypatch, tmp_path)
     shown = []
     monkeypatch.setattr(
@@ -73,9 +74,16 @@ def test_worker_result_records_and_warns_on_an_accepted_bad_pose_without_replaci
     assert check["accepted"] and check["surface"]["state"] == "disagreement"
     assert run.meta["pose_disagreements"][0]["frame"] == 0
     assert track.last["pose_verification"] == [check]
-    np.testing.assert_array_equal(p._state.test.result["delta_cam"], before)
+    corrected = np.asarray(check["constraint"]["pose"])
+    assert check["constraint"]["state"] == "corrected" and not check["raw_p2p_used"]
+    assert not np.allclose(corrected, before)
+    assert check["constraint"]["validation_normal_after_deg"] < 3
+    np.testing.assert_array_equal(p._state.test.result["delta_cam"], corrected)
+    np.testing.assert_array_equal(track.hold_views[-1][1], corrected)
     np.testing.assert_array_equal(job.result["delta"], before)
     with np.load(tmp_path / "frames/000000.npz") as z:
+        np.testing.assert_array_equal(z["delta"], before)
+        np.testing.assert_array_equal(z["delta_used"], corrected)
         for key in ("other_delta_0", "other_model_0", "other_fit_uv_0", "other_fit_inlier_0"):
             np.testing.assert_array_equal(z[key], job.result[key])
 
@@ -120,9 +128,7 @@ def test_disagreement_is_logged_once_on_entry_even_outside_recording(monkeypatch
     assert "accepted=True" in warnings[0].message
 
 
-def test_a_broken_diagnostic_is_recorded_as_unavailable_without_losing_the_control_pose(
-    monkeypatch, tmp_path
-):
+def test_a_broken_surface_check_cannot_publish_a_control_pose_or_hold_sample(monkeypatch, tmp_path):
     job, _, run, _ = setup_case(monkeypatch, tmp_path)
 
     def broken(*args, **kwargs):
@@ -135,7 +141,164 @@ def test_a_broken_diagnostic_is_recorded_as_unavailable_without_losing_the_contr
     check = run.frames[0]["pose_verification"][0]
     assert not check["disagreement"] and check["surface"]["state"] == "unavailable"
     assert "malformed diagnostic input" in check["surface"]["reason"]
-    np.testing.assert_array_equal(p._state.test.result["delta_cam"], job.result["delta"])
+    assert p._state.test is None
+    assert not p._state.track.hold_views
+    assert not check["accepted"]
+    assert check["constraint"]["state"] == "rejected"
+
+
+def test_missing_geometry_cannot_bypass_rejection_through_hold_history(monkeypatch, tmp_path):
+    job, _, _, track = setup_case(monkeypatch, tmp_path)
+    job.depth_m[:] = 0
+    monkeypatch.setattr(p, "_render_live", lambda *args: b"image")
+    asyncio.run(p._apply_track_result(job))
+    assert p._state.test is None and not track.hold_views
+    assert track.last["state"] == "untrusted"
+
+
+def test_geometry_result_from_a_replaced_teach_cannot_move_the_arm(monkeypatch, tmp_path):
+    job, _, _, track = setup_case(monkeypatch, tmp_path)
+    original = p._verify_track_poses
+
+    def replaced(*args):
+        result = original(*args)
+        p._state.teach = None
+        return result
+
+    monkeypatch.setattr(p, "_verify_track_poses", replaced)
+    asyncio.run(p._apply_track_result(job))
+    assert p._state.test is None and not track.hold_views
+
+
+def test_secondary_object_uses_corrected_absolute_pose_and_rejects_missing_depth(monkeypatch, tmp_path):
+    job, teach, _, _ = setup_case(monkeypatch, tmp_path)
+    reference = teach.keypoints["xyz"]
+    anchor = np.eye(4)
+    anchor[:3, 3] = [0.04, -0.02, 0.01]
+    target = p._TargetTrack(obj="cube", anchor=anchor)
+    found = {"delta": anchor.copy()}
+    monkeypatch.setattr(p._state, "run", None)
+    monkeypatch.setattr(p._state, "demo", SimpleNamespace(objects={"cube": {}}))
+    monkeypatch.setattr(p._state, "targets", {"cube": target})
+    monkeypatch.setattr(p._state, "located", {"cube": found})
+    monkeypatch.setattr(p, "_session_object", lambda _: "gamepad")
+    monkeypatch.setattr(p, "_view_points", lambda *_: reference)
+    monkeypatch.setattr(p, "_object_surface", lambda *_: reference)
+    monkeypatch.setattr(p, "_remember_seen", lambda *args: None)
+    monkeypatch.setattr(p, "_render_live", lambda *args: b"image")
+    job.result.update(
+        others=[{"name": "cube", "ok": True, "n_visible": 25, "n_tracks": 25}],
+        other_delta_0=job.result["delta"] @ np.linalg.inv(anchor),
+        other_mask_0=job.result["mask"],
+        other_fit_uv_0=None,
+        other_fit_inlier_0=None,
+    )
+    asyncio.run(p._apply_track_result(job))
+    check = p._state.track.last["pose_verification"][1]
+    assert check["accepted"] and check["constraint"]["state"] == "corrected"
+    np.testing.assert_allclose(found["delta"], check["constraint"]["pose"])
+    np.testing.assert_allclose(target.hold_views[-1][1], found["delta"])
+    held = found["delta"].copy()
+    p._state.track.job = job.id
+    job.created += 1
+    job.depth_m[:] = 0
+    asyncio.run(p._apply_track_result(job))
+    assert len(target.hold_views) == 1
+    np.testing.assert_array_equal(found["delta"], held)
+    assert target.last["surface_constraint"]["state"] == "rejected"
+
+
+def test_reference_acquisition_and_recorded_hold_receive_the_same_correction(monkeypatch, tmp_path):
+    job, teach, _, _ = setup_case(monkeypatch, tmp_path)
+    reference, raw = teach.keypoints["xyz"], job.result["delta"].copy()
+    monkeypatch.setattr(p, "_reference_surface", lambda *args: reference)
+    job.kind = "locate"
+    job.extra = {"ref_recording": "recorded", "ref_frame": 0}
+    job.arrays = {"ref_mask": job.result["mask"]}
+    answer = {"ok": True, "ref_ok": True, "ref_delta": raw, "mask": job.result["mask"]}
+    corrected = p._constrain_find_result(job, answer)
+    assert corrected["ref_ok"] and corrected["surface_constraint"]["state"] == "corrected"
+    np.testing.assert_array_equal(corrected["raw_ref_delta"], raw)
+    np.testing.assert_array_equal(answer["ref_delta"], raw)
+    assert not np.allclose(corrected["ref_delta"], raw)
+    demo = SimpleNamespace(
+        recording="recorded", objects={"cube": {"deltas": [raw, raw], "masks": [answer["mask"]] * 2}}
+    )
+    monkeypatch.setattr(p, "_object_surface", lambda *args: reference)
+    monkeypatch.setattr(p, "_recording_intr", lambda *args: job.intr)
+    monkeypatch.setattr(
+        p,
+        "_stream_frame",
+        lambda rec, frame: (job.rgb, job.depth_m if frame == 0 else np.zeros_like(job.depth_m)),
+    )
+    views = p._demo_surface_views(demo, "cube", [(0, 10), (1, 11)])
+    np.testing.assert_allclose(views[0][1]["pose"], corrected["ref_delta"])
+    assert views[1][1]["pose"] is None
+    job.depth_m[:] = 0
+    assert not p._constrain_find_result(job, answer)["ref_ok"]
+
+
+@pytest.mark.parametrize("runner", ["key_frames", "marks"])
+def test_unverified_demo_reference_aborts_before_either_runner_can_move(monkeypatch, tmp_path, runner):
+    job, teach, _, _ = setup_case(monkeypatch, tmp_path)
+    demo = SimpleNamespace(
+        objects={"cube": {"deltas": [job.result["delta"]], "seen": [True]}}, reference_constraints={}
+    )
+    monkeypatch.setattr(p._state, "demo", demo)
+    monkeypatch.setattr(p._state, "act", p._Act(on=True))
+    monkeypatch.setattr(p, "_act_objects", lambda _: ["cube"])
+    monkeypatch.setattr(p, "_pose_frame", lambda *_: 0)
+    monkeypatch.setattr(
+        p,
+        "_demo_surface_views",
+        lambda *args: [
+            (
+                0,
+                p._surface_decision(
+                    job.result["delta"], teach.keypoints["xyz"], job.depth_m, job.result["mask"], job.intr
+                ),
+            )
+        ],
+    )
+    started = []
+
+    async def motion(*args):
+        started.append(True)
+
+    monkeypatch.setattr(p, "_act_key_frames_task", motion)
+    monkeypatch.setattr(p, "_act_marks_task", motion)
+    asyncio.run(p._act_task(1.0, runner=runner))
+    assert started == [True]
+    assert demo.reference_constraints["cube"]["state"] == "corrected"
+    np.testing.assert_array_equal(demo.objects["cube"]["deltas"][0], job.result["delta"])
+    started.clear()
+    job.depth_m[:] = 0
+    asyncio.run(p._act_task(1.0, runner=runner))
+    assert not started and not p._state.act.on
+    assert "demo reference frame" in p._state.act.reason
+
+
+def test_planning_does_not_reintroduce_a_false_demo_tilt_by_inverting_raw_pose(monkeypatch):
+    from scipy.spatial.transform import Rotation
+
+    raw = np.eye(4)
+    raw[:3, :3] = Rotation.from_euler("x", 15, degrees=True).as_matrix()
+    demo = SimpleNamespace(
+        name="d",
+        recording="recorded",
+        objects={"cube": {"frame": 0, "status": "done", "deltas": [raw]}},
+        reference_constraints={
+            "cube": {"frame": 0, "pose": np.eye(4).tolist(), "raw_pose": raw.tolist(), "state": "corrected"}
+        },
+    )
+    monkeypatch.setattr(p, "_session_object", lambda _: "cube")
+    monkeypatch.setattr(p, "_pose_frame", lambda *_: 0)
+    found = {"object": "cube", "ok": True, "delta": np.eye(4), "inliers": 100, "card_points": 100}
+    teach = SimpleNamespace(keypoints={"ref": found})
+    monkeypatch.setattr(p._state, "located", {"cube": {**found, "view": ["d", 0]}})
+    for pose, why in [p._reference_motion(demo, teach), p._object_motion(demo, "cube", np.eye(4))]:
+        assert not why
+        np.testing.assert_allclose(pose, np.eye(4), atol=1e-12)
 
 
 def test_warning_distinguishes_missing_evidence_from_acceptance(monkeypatch):

@@ -2717,7 +2717,7 @@ def test_the_arm_moves_while_the_act_finds_its_objects(tmp_path, monkeypatch):
         _end_place_state()
 
 
-def test_the_demos_hold_is_read_from_its_track_when_the_track_moves_with_the_fingertip(tmp_path):
+def test_the_demos_hold_is_read_from_its_track_when_the_track_moves_with_the_fingertip(tmp_path, monkeypatch):
     """A find of the object's view at rest matched none of the pick-and-place demo's views of the gamepad in the
     gripper; its own track followed it there. When an object's track moves with the fingertip over the hold, the
     demo's hold is that track seen from the gripper at its still frames; an object whose track stays put gives none."""
@@ -2725,6 +2725,13 @@ def test_the_demos_hold_is_read_from_its_track_when_the_track_moves_with_the_fin
 
     from scipy.spatial.transform import Rotation
 
+    # This test isolates gripper-frame composition; surface acceptance has its
+    # own recorded and synthetic geometry tests.
+    monkeypatch.setattr(
+        pregrasp,
+        "_demo_surface_views",
+        lambda demo, obj, frames: [(i, {"pose": demo.objects[obj]["deltas"][f]}) for f, i in frames],
+    )
     demo, _kin, _box = _place_demo(tmp_path, time.time())
     times = pregrasp._stream_times(demo.recording) - demo.t0
     held = np.eye(4)
@@ -2788,7 +2795,7 @@ def test_the_live_hold_is_read_from_the_sessions_raw_fits_while_the_arm_stands_s
                 noisy = tip @ held @ np.linalg.inv(ref)
                 noisy[:3, 3] += rng.normal(scale=0.0003, size=3)
                 with pregrasp._state.lock:
-                    pregrasp._state.track.raw.append((time.time(), noisy))
+                    pregrasp._state.track.hold_views.append((time.time(), noisy))
 
         feed = asyncio.create_task(frames())
         try:
@@ -2799,7 +2806,9 @@ def test_the_live_hold_is_read_from_the_sessions_raw_fits_while_the_arm_stands_s
     try:
         with pregrasp._state.lock:
             pregrasp._state.demo, pregrasp._state.teach = demo, teach
-            pregrasp._state.track.raw = [(0.5, np.eye(4))]  # read before the session's find: not a view of it
+            pregrasp._state.track.hold_views = [
+                (0.5, np.eye(4))
+            ]  # read before the session's find: not a view of it
         hold, problem = asyncio.run(run())
         assert problem == "" and hold["method"] == "track" and hold["n"] >= core.HOLD_MIN_VIEWS
         assert np.allclose(hold["hold"][:3, 3], held[:3, 3], atol=0.001) and np.allclose(
@@ -2814,7 +2823,7 @@ def test_the_live_hold_is_read_from_the_sessions_raw_fits_while_the_arm_stands_s
     finally:
         with pregrasp._state.lock:
             pregrasp._state.demo = pregrasp._state.teach = None
-            pregrasp._state.track.raw = []
+            pregrasp._state.track.hold_views = []
 
 
 def test_a_demo_hold_the_worker_measured_is_kept_and_one_it_did_not_answer_is_asked_again(tmp_path):
@@ -3247,10 +3256,21 @@ def test_a_demo_saved_before_symmetry_reads_as_none(tmp_path):
     assert pregrasp._read_objects(root)["box"]["symmetry"] == 1
 
 
-def test_a_tracked_frame_moves_the_place_object_by_its_share(client, tmp_path):
+def test_a_tracked_frame_moves_the_place_object_by_its_share(client, tmp_path, monkeypatch):
     """The worker answers each tracked frame of the picked object with every other object of its Point2Pose session:
     the share of the object a place goes onto moves that object's find, through the same result as the picked one."""
     demo, _kin, box = _place_demo(tmp_path, time.time())
+    # Dispatch/composition test: this synthetic depth does not depict the moved
+    # objects. Geometric rejection and correction are exercised separately.
+    monkeypatch.setattr(
+        pregrasp,
+        "_surface_decision",
+        lambda pose, *args: {
+            "state": "unchanged",
+            "pose": None if pose is None else np.asarray(pose).tolist(),
+            "observed_dof": 0,
+        },
+    )
     anchor = np.eye(4)
     anchor[:3, 3] = [0.03, 0.01, 0.0]
     moved = np.eye(4)
@@ -4098,7 +4118,7 @@ def test_the_live_sessions_model_is_served_with_the_frame_and_motions_that_place
             pregrasp._state.track.job = None
             pregrasp._state.track.last = {}
             pregrasp._state.track.history = []
-            pregrasp._state.track.raw = []
+            pregrasp._state.track.hold_views = []
             pregrasp._state.worker.jobs.pop(job.id, None)
 
 
