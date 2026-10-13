@@ -105,6 +105,58 @@ def test_nonplanar_agreement_is_retained_but_a_conflict_is_not_silently_accepted
         assert (r["pose"] is not None) == (state == "consistent")
 
 
+def cylinder_scene():
+    k = {"fx": 600.0, "fy": 600.0, "cx": 80.0, "cy": 72.0}
+    y, x = np.indices((144, 160))
+    ray_y = (y - k["cy"]) / k["fy"]
+    a = 1 + ray_y**2
+    discriminant = 0.9**2 - 4 * a * (0.45**2 - 0.006**2)
+    depth = (0.9 - np.sqrt(np.maximum(discriminant, 0))) / (2 * a)
+    mask = (discriminant > 0) & (abs((x - k["cx"]) / k["fx"] * depth) < 0.05)
+    depth[~mask] = 0
+    return sc.depth_points(depth, mask, k), depth, mask, k
+
+
+def test_narrow_curved_surface_constrains_direction_without_inventing_axial_roll():
+    ref, depth, mask, k = cylinder_scene()
+    centre = ref.mean(axis=0)
+    pose = np.eye(4)
+    pose[:3, :3] = Rotation.from_euler("xz", [20, 2], degrees=True).as_matrix()
+    pose[:3, 3] = centre - pose[:3, :3] @ centre
+    r = sc.resolve(pose, ref, depth, mask, k, **LIMITS)
+    assert r["observed_dof"] == 2 and r["pose"] is not None, r
+    assert r["unobserved_rotation"] == "about the principal axis"
+    out = np.array(r["pose"])
+    # Rasterized depth and bounded subsampling perturb the fitted axis slightly.
+    np.testing.assert_allclose(out[:3, :3], Rotation.from_euler("x", 20, degrees=True).as_matrix(), atol=1e-4)
+    np.testing.assert_allclose(out[:3, :3] @ centre + out[:3, 3], centre, atol=1e-10)
+
+
+@pytest.mark.parametrize("change", ["partial", "foreground", "missing"])
+def test_axis_measurement_rejects_missing_or_different_surfaces(change):
+    ref, depth, mask, k = cylinder_scene()
+    if change == "partial":
+        mask[:, :80] = False
+    elif change == "foreground":
+        depth[mask] -= 0.03
+    else:
+        depth[:] = 0
+    assert sc.constrain_axis(np.eye(4), ref, depth, mask, k, **LIMITS)["pose"] is None
+
+
+def test_an_isotropic_surface_has_no_axis_to_constrain():
+    y, x = np.meshgrid(np.linspace(-0.02, 0.02, 50), np.linspace(-0.02, 0.02, 50))
+    assert sc._long_axis(np.column_stack((x.ravel(), y.ravel(), np.ones(x.size))), 0.003) is None
+
+
+def test_recorded_elongated_surface_has_supported_direction_despite_icp_roll_disagreement():
+    with np.load(Path(__file__).parent / "fixtures/axis_surface_20261013.npz") as z:
+        r = sc.resolve(z["pose"], z["ref"], z["depth"], z["mask"], json.loads(str(z["intr"])), **LIMITS)
+    assert r["pose"] is not None and r["observed_dof"] == 2, r
+    assert r["rotation_deg"] < 1
+    assert r["axis_support_after"] > 0.9
+
+
 @pytest.mark.parametrize("name", ["latest", "earlier", "clear", "baseline"])
 def test_recorded_wrong_tilts_improve_on_held_out_geometry(name):
     with np.load(Path(__file__).parent / "fixtures/pose_disagreement_20261012.npz") as z:

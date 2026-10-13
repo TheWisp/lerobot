@@ -17,7 +17,7 @@ from .pose_verification import MASK_EROSION, _pose
 # 99.9% chance of an all-inlier sample. The fixed seed makes replay reproducible.
 PLANE_TRIALS = 64
 MAX_POINTS = 1600
-POLICY_VERSION = "rgbd-plane-v1"
+POLICY_VERSION = "rgbd-plane-axis-v2"
 
 
 def _sample(points):
@@ -231,6 +231,99 @@ def constrain(pose, reference, depth, mask, intr, *, noise_m, tol_m, tol_deg):
     }
 
 
+def _long_axis(points, noise_m):
+    """A resolved principal direction, with independent interleaved validation.
+
+    The eigenvalue gap must exceed covariance changes from the supplied point
+    noise. A sphere/isotropic patch has no supported principal direction.
+    """
+    points = _sample(points)
+    if len(points) < 12:
+        return None
+
+    def fit(p):
+        centre = p.mean(axis=0)
+        _, s, axes = np.linalg.svd(p - centre, full_matrices=False)
+        span = s / np.sqrt(len(p))
+        # ||(X+E)'(X+E)-X'X|| <= 2 ||X|| ||E|| + ||E||^2.
+        # Require separated leading eigenvalues even after that perturbation.
+        if span[0] ** 2 - span[1] ** 2 <= 2 * (2 * noise_m * span[0] + noise_m**2):
+            return None
+        return centre, axes[0], span
+
+    full, train, test = fit(points), fit(points[::2]), fit(points[1::2])
+    if full is None or train is None or test is None:
+        return None
+    return {
+        "centre": full[0],
+        "axis": full[1],
+        "span": full[2],
+        "points": points,
+        "split_angle_deg": _angle(train[1], test[1]),
+    }
+
+
+def constrain_axis(pose, reference, depth, mask, intr, *, noise_m, tol_m, tol_deg):
+    """Constrain the two observed axis angles; keep proposed roll and translation.
+
+    This requires matching surface extents, split-axis agreement, and bidirectional
+    metric support. A shortened/occluded view cannot establish the same material
+    axis. Unlike a 6-DOF ICP disagreement, rotation around a narrow object's length
+    is not presented as an observed error. This does not establish grasp slip.
+    """
+    from scipy.spatial import cKDTree
+    from scipy.spatial.transform import Rotation
+
+    raw = _pose(pose)
+    out = {"state": "inconclusive", "pose": None, "observed_dof": 0, "policy": POLICY_VERSION}
+    if raw is None or reference is None or depth is None or mask is None or intr is None:
+        return {**out, "reason": "axis observation missing"}
+    if np.asarray(depth).ndim != 2 or np.shape(mask) != np.shape(depth):
+        return {**out, "reason": "depth and mask shapes differ"}
+    ref, live = _long_axis(reference, noise_m), _long_axis(depth_points(depth, mask, intr), noise_m)
+    if ref is None or live is None:
+        return {**out, "reason": "no separated principal surface axis"}
+    evidence = {
+        name: {"span_mm": (item["span"] * 1000).tolist(), "split_angle_deg": item["split_angle_deg"]}
+        for name, item in [("reference", ref), ("live", live)]
+    }
+    out["axis_evidence"] = evidence
+    if ref["split_angle_deg"] + live["split_angle_deg"] > tol_deg:
+        return {**out, "reason": "principal-axis split fits disagree"}
+    if np.max(abs(ref["span"] - live["span"])) > noise_m:
+        return {**out, "reason": "surface extents differ; axis may belong to a partial view"}
+    a = raw[:3, :3] @ ref["axis"]
+    b = live["axis"] * (1 if a @ live["axis"] >= 0 else -1)
+    cross = np.cross(a, b)
+    turn = float(np.arctan2(np.linalg.norm(cross), a @ b))
+    rotation = Rotation.from_rotvec(cross * turn / max(np.linalg.norm(cross), 1e-15)).as_matrix()
+    centre = raw[:3, :3] @ ref["centre"] + raw[:3, 3]
+    updated = raw.copy()
+    updated[:3, :3] = rotation @ raw[:3, :3]
+    updated[:3, 3] = centre - updated[:3, :3] @ ref["centre"]
+    # No centre correction: silhouette changes are not a measured translation.
+    # Both full clouds must support the proposal and the correction within the
+    # existing point-noise budget, rather than only a small matching fragment.
+    for label, candidate in [("before", raw), ("after", updated)]:
+        moved = ref["points"] @ candidate[:3, :3].T + candidate[:3, 3]
+        distances = [cKDTree(live["points"]).query(moved)[0], cKDTree(moved).query(live["points"])[0]]
+        support = min(float(np.mean(d <= noise_m)) for d in distances)
+        rms = max(float(np.sqrt(np.mean(np.minimum(d, 2 * noise_m) ** 2))) for d in distances)
+        out[f"axis_support_{label}"] = support
+        out[f"axis_rms_{label}_mm"] = rms * 1000
+        if support <= 0.5 or rms > min(noise_m, tol_m):
+            return {**out, "reason": "axis alignment lacks bidirectional measured surface support"}
+    return {
+        **out,
+        "state": "corrected" if turn > 1e-8 else "consistent",
+        "pose": updated.tolist(),
+        "observed_dof": 2,
+        "rotation_deg": float(np.degrees(turn)),
+        "unobserved_rotation": "about the principal axis",
+        "reason": "measured long axis constrains direction; roll and translation remain the proposal",
+    }
+
+
 def resolve(pose, reference, depth, mask, intr, *, noise_m, tol_m, tol_deg, surface=None):
     """Select the measured correction, retain agreement, or withhold the proposal.
 
@@ -242,6 +335,13 @@ def resolve(pose, reference, depth, mask, intr, *, noise_m, tol_m, tol_deg, surf
     constraint = constrain(pose, reference, depth, mask, intr, noise_m=noise_m, tol_m=tol_m, tol_deg=tol_deg)
     if constraint["pose"] is not None:
         return constraint
+    if constraint.get("reference_planar") is False:
+        axis = constrain_axis(
+            pose, reference, depth, mask, intr, noise_m=noise_m, tol_m=tol_m, tol_deg=tol_deg
+        )
+        if axis["pose"] is not None:
+            return {**constraint, **axis}
+        constraint["axis_reason"] = axis["reason"]
     if surface is None:
         surface = pose_verification.surface(
             pose, reference, depth, mask, intr, noise_m=noise_m, tol_m=tol_m, tol_deg=tol_deg

@@ -209,7 +209,9 @@ def lines(checks: list[dict]) -> list[tuple[str, bool]]:
             state = decision["state"]
             text = f"{check['object']} control: {state}"
             if state in ("corrected", "consistent"):
-                text += f" tilt {decision.get('rotation_deg', 0):.1f} deg; 3 observed DOF"
+                text += f" angle {decision.get('rotation_deg', 0):.1f} deg; {decision.get('observed_dof', 0)} observed DOF"
+                if decision.get("unobserved_rotation"):
+                    text += "; axial roll unobserved"
             elif state == "rejected":
                 text += f"; {decision.get('reason', 'surface unavailable')}"
             if not check.get("accepted") and state != "rejected":

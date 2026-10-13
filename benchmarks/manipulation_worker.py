@@ -1340,6 +1340,44 @@ class _QuarterTurnTier:
         return uv, desc
 
 
+class _ImageTurnTier:
+    """Rotate appearance by a measured angle, then undo that warp on its pixels.
+
+    Expand the canvas so an object near the image edge is not clipped. Depth and
+    intrinsics always remain in the original camera frame.
+    """
+
+    def __init__(self, tier: DinoTier, angle: float):
+        self.tier, self.angle = tier, angle
+
+    def teach(self, rgb: np.ndarray, mask: np.ndarray):
+        import cv2
+
+        height, width = mask.shape
+        warp = cv2.getRotationMatrix2D((width / 2, height / 2), self.angle, 1)
+        corners = np.array([[0, 0], [width, 0], [width, height], [0, height]])
+        moved = corners @ warp[:, :2].T + warp[:, 2]
+        low, high = moved.min(axis=0), moved.max(axis=0)
+        warp[:, 2] -= low
+        size = tuple(np.ceil(high - low).astype(int))
+        view = cv2.warpAffine(rgb, warp, size)
+        region = cv2.warpAffine(mask.astype(np.uint8), warp, size, flags=cv2.INTER_NEAREST) > 0
+        uv, desc = self.tier.teach(view, region)
+        inverse = cv2.invertAffineTransform(warp)
+        return uv @ inverse[:, :2].T + inverse[:, 2], desc
+
+
+def _outline_angle(mask: np.ndarray) -> float | None:
+    """A principal image axis is an appearance proposal, never pose evidence."""
+    y, x = np.nonzero(mask)
+    if len(x) < 3:
+        return None
+    _, values, axes = np.linalg.svd(np.column_stack((x - x.mean(), y - y.mean())), full_matrices=False)
+    if np.isclose(values[0], values[1]):
+        return None
+    return float(np.degrees(np.arctan2(axes[0, 1], axes[0, 0])))
+
+
 def _find_reference(
     ref: dict, frame: _Frame, mask: np.ndarray, tier: DinoTier, intr: CameraIntrinsics
 ) -> dict:
@@ -1365,15 +1403,21 @@ def _find_reference(
     # Acquisition has no previous pose to disambiguate an upside-down match on
     # a nearly planar object. Score independent appearance orientations by
     # their certified 3D consensus; continuous tracking keeps its normal cost.
-    fit = None
-    for turns in range(4):
-        candidate, _uv, _idx, _patches = _bind(
-            card, frame, mask, tier if turns == 0 else _QuarterTurnTier(tier, turns), intr
-        )
+    fit, matched_uv, matched_idx = None, None, None
+    tiers = [tier, *(_QuarterTurnTier(tier, turns) for turns in range(1, 4))]
+    ref_angle, live_angle = _outline_angle(view_mask), _outline_angle(mask)
+    if ref_angle is not None and live_angle is not None:
+        angle = (live_angle - ref_angle) % 180
+        # Both signs of a principal axis are possible. Appearance and the same
+        # 3D consensus check choose between them, not an assumed object symmetry.
+        if not np.isclose(angle % 90, 0):
+            tiers.extend(_ImageTurnTier(tier, angle + opposite) for opposite in (0, 180))
+    for appearance in tiers:
+        candidate, uv, idx, _patches = _bind(card, frame, mask, appearance, intr)
         if candidate is not None and (
             fit is None or (candidate.n_inliers, -candidate.rms) > (fit.n_inliers, -fit.rms)
         ):
-            fit = candidate
+            fit, matched_uv, matched_idx = candidate, uv, idx
     if fit is None:
         return {"ref_ok": False, "ref_reason": "the live view does not match the demo's view of the object"}
     # The pose is the demo view's surface laid on the live one (fit_surface): the matches place the object and grade
@@ -1382,7 +1426,17 @@ def _find_reference(
     reference, live_surface = _surface(view, view_mask, intr, 700), _surface(frame, mask, intr, 2000)
     motion = fit.transform
     if len(reference) >= SURFACE_MIN_POINTS and len(live_surface) >= SURFACE_MIN_POINTS:
-        motion, _cost = fit_surface(reference, live_surface, fit.transform, near_m=_inlier_radius(card))
+        radius = _inlier_radius(card)
+        refined, _cost = fit_surface(reference, live_surface, fit.transform, near_m=radius, turns=1)
+        # Geometry cannot reverse a symmetric object's ends, or erase the
+        # appearance evidence that selected this pose. Keep the original fit
+        # unless the local refinement retains at least its correspondence count.
+        if matched_uv is not None and matched_idx is not None:
+            z, valid = sample_depth(frame.depth, matched_uv)
+            moved = card.xyz[matched_idx] @ refined.rot.T + refined.trans
+            residual = np.linalg.norm(moved - intr.deproject(matched_uv, z), axis=1)
+            if np.count_nonzero(valid & (residual <= radius)) >= fit.n_inliers:
+                motion = refined
         # An object declared rotationally symmetric reads the same turned by 360/order deg about the axis it rests
         # on; of those equal motions the find reports the one that turns it least (fold_turn).
         motion = fold_turn(

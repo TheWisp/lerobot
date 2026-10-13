@@ -263,6 +263,65 @@ def test_reference_matching_uses_the_strongest_certified_image_orientation(worke
     assert tried == [0, 1, 2, 3]
 
 
+def test_arbitrary_image_rotation_maps_features_back_to_original_depth_pixels(worker):
+    import cv2
+
+    rgb = np.zeros((80, 120, 3), np.uint8)
+    mask = np.zeros((80, 120), bool)
+    mask[5:20, 4:85] = True  # deliberately near two edges
+
+    class Pixels:
+        def teach(self, image, region):
+            y, x = np.nonzero(region)
+            return np.column_stack((x, y)).astype(float), np.ones((len(x), 1))
+
+    uv, _ = worker._ImageTurnTier(Pixels(), 32.0).teach(rgb, mask)
+    xy = np.round(uv).astype(int)
+    assert mask[xy[:, 1], xy[:, 0]].all()
+    # Expanded canvas must preserve the entire object, up to rasterization.
+    assert len(uv) == pytest.approx(mask.sum(), rel=0.02)
+    rotated = cv2.warpAffine(mask.astype(np.uint8), cv2.getRotationMatrix2D((60, 40), 32, 1), (120, 80)) > 0
+    difference = (worker._outline_angle(rotated) - worker._outline_angle(mask) + 32 + 90) % 180 - 90
+    assert abs(difference) < 1
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_surface_refinement_keeps_the_correspondences_that_established_identity(
+    worker, tmp_path, monkeypatch, reverse
+):
+    from types import SimpleNamespace
+
+    from lerobot.showservo.pose import CameraIntrinsics, Rigid3
+
+    rec = write_stream(tmp_path / "rec", 1, t0=time.time())
+    intr = CameraIntrinsics(**{k: INTR[k] for k in ("fx", "fy", "cx", "cy")})
+    live = worker._Frame(np.zeros((H, W, 3), np.uint8), np.full((H, W), 0.45), "live")
+
+    def bind(card, *args):
+        return (
+            SimpleNamespace(n_inliers=len(card.xyz), rms=0.0, transform=Rigid3.identity()),
+            card.uv,
+            np.arange(len(card.xyz)),
+            None,
+        )
+
+    shift = np.array([0.0001, 0, 0])
+
+    def refit(reference, live, start, **kw):
+        assert kw["turns"] == 1
+        rotation = np.diag([-1.0, -1, 1]) if reverse else np.eye(3)
+        centre = reference.mean(axis=0)
+        return Rigid3(rotation, centre - rotation @ centre + shift), 0.0
+
+    monkeypatch.setattr(worker, "_bind", bind)
+    monkeypatch.setattr(worker, "fit_surface", refit)
+    result = worker._find_reference(
+        {"recording": str(rec), "frame": 0, "mask": box_mask()}, live, box_mask(), _GridTier(), intr
+    )
+    np.testing.assert_allclose(result["ref_delta"][:3, :3], np.eye(3))
+    np.testing.assert_allclose(result["ref_delta"][:3, 3], np.zeros(3) if reverse else shift, atol=1e-12)
+
+
 def test_a_tracked_frame_carries_what_the_rule_judges_the_object_placed_onto_by(worker):
     """The act's rule judges a view of the object placed onto as it judges the picked one: by its fit points against
     its middle. The worker sent only its motion and mask; it now sends its fit points and key points too, and leaves

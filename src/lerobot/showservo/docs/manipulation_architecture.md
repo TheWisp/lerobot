@@ -95,6 +95,22 @@ non-planar reference, the general surface check may retain an unchanged proposal
 when it agrees. Existing visibility, depth and centre-support gates still apply.
 Group-motion comparison remains diagnostic; it is not a blanket pose override.
 
+A non-planar elongated surface can also constrain its principal direction when
+the leading covariance eigenvalue is separated beyond the point-noise budget.
+Independent split fits must agree, the measured surface extents must match, and
+both surfaces must explain each other within the existing depth tolerance. This
+observes two angular components; axial roll and translation remain the proposal.
+The replay explicitly labels axial roll as unobserved. It is not a slip check or
+a substitute for a missing/shortened held-object view.
+
+Reference acquisition tries the measured image-axis alignment and its opposite
+in addition to quarter turns. These are appearance proposals only: pixels map
+back to the original RGB-D coordinates before the unchanged 3D consensus gate.
+Subsequent surface refinement is local and must preserve the matching-point
+consensus. A symmetric shape's slightly better surface fit cannot reverse the
+ends that the appearance match identified. Explicit user-declared symmetry
+continues to choose equivalent turns after registration.
+
 The same surface policy checks acquisition, secondary targets, observations used
 for held-object correction, and the saved demo reference poses inverted during
 planning. Raw proposals and actual control decisions remain separate in records
