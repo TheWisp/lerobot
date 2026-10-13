@@ -1092,17 +1092,19 @@ def _joints_start(j: _Jog, q_first: dict[str, float]) -> dict:
     return {"mode": "joints"}
 
 
-def _joints_stop(j: _Jog, require_unhalted: bool = False) -> dict:
-    """Take the follower back from joint targets: re-anchor the Cartesian walk where the arm is, gripper command kept."""
-    if not require_unhalted:
+def _joints_stop(j: _Jog, *, from_guarded_path: bool = False) -> dict:
+    """Hand back joint control, preserving the grasp and refusing to clear any freeze.
+
+    Only the checked guarded-path finish may bypass its own ownership guard.
+    Every handoff requires an unhalted arm; recovery is a separate operation.
+    """
+    if not from_guarded_path:
         _path_owned(j)
     _stop_loop(j)
     with j.lock:
         last = j.q_target
         j.mode, j.q_target, j.playback = "cartesian", None, None
-    _restart_from_present(
-        j, grip=None if last is None else last.get("gripper"), require_unhalted=require_unhalted
-    )
+    _restart_from_present(j, grip=None if last is None else last.get("gripper"), require_unhalted=True)
     return {"mode": "cartesian"}
 
 
@@ -1771,7 +1773,7 @@ def _finish_guarded_path(j: _Jog) -> dict:
             path.tick(time.monotonic(), current.q, pose, current.load, current.temps)
             if path.status != "done":
                 raise RuntimeError(path.reason or "arm left the path's final pose")
-        return _joints_stop(j, require_unhalted=True)
+        return _joints_stop(j, from_guarded_path=True)
     except Exception as e:
         with j.lock:
             j.halted, j.reason = True, f"path finish refused: {e}"

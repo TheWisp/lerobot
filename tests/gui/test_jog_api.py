@@ -275,6 +275,34 @@ def test_handing_the_arm_back_after_an_act_keeps_the_grasps_closing():
         jog._stop_loop(j)
 
 
+@pytest.mark.parametrize("during_read", [False, True])
+def test_act_handoff_cannot_clear_a_freeze_or_resume_commands(during_read):
+    """The real lift froze, but act cleanup restarted Cartesian control and cleared the fault."""
+    q = dict.fromkeys(MOTOR_NAMES, 0.0) | {"gripper": 82.44}
+    robot = _FakeRobot(q)
+    j = jog._Jog(robot=robot, kin=_FakeKin(), arm="left", workspace_min=(-1.0, -1.0, -1.0))
+    last = dict(q) | {"shoulder_lift": -3.1, "gripper": 83.43}
+    j.mode, j.q_target, j.q_cmd, j.grip_target = "joints", dict(last), dict(last), 83.43
+    reason = "playback joint still 3.1 deg behind after 0.5 s"
+
+    def freeze():
+        j.halted, j.reason = True, reason
+
+    if during_read:
+        robot.bus.on_request = freeze
+    else:
+        freeze()
+    try:
+        with pytest.raises(RuntimeError, match="arm froze during handoff"):
+            jog._joints_stop(j)
+        assert j.halted and j.reason == reason
+        assert j.q_cmd == last and j.grip_target == 83.43
+        assert not robot.sent, "cleanup must not restart the loop after a freeze"
+        assert j.thread is None or not j.thread.is_alive()
+    finally:
+        jog._stop_loop(j)
+
+
 @pytest.mark.parametrize("pending", [None, 95.0])
 def test_recovering_an_operator_stop_never_relaxes_a_responsive_gripper(monkeypatch, pending):
     """The held-pose check stopped at 83.43 commanded / 82.44 observed. Recovery used the observed opening on its
