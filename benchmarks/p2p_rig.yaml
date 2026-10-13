@@ -14,6 +14,15 @@ pipeline:
     max_num_obj: 1
     estimate_init_pose: false
 
+    # Correct historical-keyframe optimization without erasing intervening motion.
+    preserve_delayed_keyframe_motion: true
+    # Correcting the translation reference reduces rejections but worsens reported
+    # local poses. Retain the conservative check until that accuracy loss is resolved.
+    pose_jump_guard_object_center: false
+    # Local exception to the fork's nearest default: combined depth experiments
+    # worsened this rig's replay. Alternatives: nearest, edge. See p2p_regression.md.
+    tracked_depth_mode: legacy
+
     use_segmenter: true
 
     # depth related
@@ -153,6 +162,11 @@ register:
   # type: svd_residual_outlier
   type: svd_cluster_ransac
   params:
+    # Explicit local exceptions to the fork's enabled defaults. Consensus improves
+    # clear views but worsens later accuracy/availability; returning SDF refinement
+    # also worsens local replay. Keep both selectable and preserve rollback evidence.
+    consensus_refit: false
+    return_refined_pose: false
 
 
     threshold_method: mad

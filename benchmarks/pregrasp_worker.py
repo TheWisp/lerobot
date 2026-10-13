@@ -640,6 +640,7 @@ P2P_FIT_FIELDS = (
     "fit_points",
     "fit_inliers",
     "jump_guard_rejected",
+    "pose_jump_guard_info",
     "mask_pixels",
     "fit_support",
     "lost_streak",

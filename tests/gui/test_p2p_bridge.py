@@ -120,7 +120,16 @@ def test_visible_tracks_with_no_segmentation_remain_explainable_in_the_act_recor
         "extract_valid_kp_mask": np.ones(8, bool),
         "extract_inside_mask": np.full(8, segmented or False),
     }
-    session._fe = SimpleNamespace(valid_stats={0: support}, reg_stats={}, valid_indices={})
+    guard_info = {
+        "rejected": False,
+        "dt": 0.0005,
+        "origin_dt": 0.034,
+        "translation_reference": "object_center",
+        "reference_point": [0.02, 0.03, 0.4],
+    }
+    session._fe = SimpleNamespace(
+        valid_stats={0: support}, reg_stats={0: {"pose_jump_guard_info": guard_info}}, valid_indices={}
+    )
     mask = None if segmented is None else np.full((1, 1, 8, 8), segmented, bool)
     wire = session._answer(SimpleNamespace(intrinsics=np.eye(3), mask=mask), 1.0)
     result = {**json.loads(wire.pop("meta")), **wire}
@@ -134,6 +143,7 @@ def test_visible_tracks_with_no_segmentation_remain_explainable_in_the_act_recor
     pregrasp._RUN_EXECUTOR.submit(lambda: None).result()
     recorded = run.frames[0]
     assert recorded["software"] == software, "Source and configuration identity must survive recording"
+    assert recorded["pose_jump_guard_info"] == guard_info, "Retain the physical reference behind the check"
     assert recorded["ok"] is False and recorded["n_matches"] == 8 and recorded["fit_points"] == 0
     assert recorded["mask_pixels"] == (None if segmented is None else 64 * segmented)
     assert recorded["fit_support"] == {

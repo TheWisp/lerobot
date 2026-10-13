@@ -95,7 +95,7 @@ def _load_config(repo: pathlib.Path, config: pathlib.Path):
 # any other version is left as it is, and the bridge says so on stderr.
 
 
-def _unchanged(fn, pin: str) -> bool:
+def _unchanged(fn, pin: str | tuple[str, ...]) -> bool:
     import hashlib
     import inspect
 
@@ -108,7 +108,7 @@ def _unchanged(fn, pin: str) -> bool:
     return False
 
 
-def _rewrite(owner, name: str, pin: str, edits, helpers=None) -> bool:
+def _rewrite(owner, name: str, pin: str | tuple[str, ...], edits, helpers=None) -> bool:
     """Recompile ``owner.name`` from its own source, in its own module, with lines swapped: each edit (first, stop, new)
     replaces the lines from the one starting with ``first`` up to the one starting with ``stop`` (kept) by ``new``,
     indented as the first line it replaces. ``helpers`` join the module's names."""
@@ -305,7 +305,7 @@ def _speed_up_ransac() -> None:
         _rewrite(
             cls,
             "_RANSAC",
-            "528a022ce22d",
+            ("528a022ce22d", "5ccd187ce16f"),  # original / configurable consensus refit
             [("# 1) RANSAC on remaining pool", "if best_T is None or best_inl is None:", batched)],
             helpers={"_bridge_best_hypothesis": best_hypothesis},
         )
@@ -338,7 +338,7 @@ def _speed_up_depth() -> None:
     if _rewrite(
         cam,
         "convert_pixel_to_world",
-        "b5b5e14864dc",
+        ("b5b5e14864dc", "47e1698dc269"),  # original / selectable nearest pixel
         [
             ("# depth in meters", "# helper: build window indices", sampled),
             (
@@ -654,6 +654,24 @@ class Session:
 
         self.close()
         self.pipe = ModularPipeline(self.cfg)
+        # Record actual implementation settings, including defaults and local overrides.
+        # Older pins and other registration implementations may not support every option.
+        frontend = self.pipe.frontend
+        register = getattr(frontend, "register", None)
+        options = {
+            name: getattr(owner, attribute)
+            for name, owner, attribute in (
+                ("preserve_delayed_keyframe_motion", self.pipe, "preserve_delayed_keyframe_motion"),
+                ("pose_jump_guard_object_center", frontend, "pose_jump_guard_object_center"),
+                ("tracked_depth_mode", frontend, "tracked_depth_mode"),
+                ("consensus_refit", register, "_consensus_refit"),
+                ("return_refined_pose", register, "_return_refined_pose"),
+                ("enable_sdf_refine", register, "_enable_sdf_refine"),
+            )
+            if hasattr(owner, attribute)
+        }
+        if options:
+            self.software = {**self.software, "p2p_options": options}
         self.frame_id = 0
         self._fe = None
         frontend_step = self.pipe.frontend.step
@@ -726,6 +744,7 @@ class Session:
                     "fit_points": int(len(fit_uv)),
                     "fit_inliers": int(fit_inlier.sum()),
                     "jump_guard_rejected": bool(guard.get("rejected", False)),
+                    "pose_jump_guard_info": guard,
                     "mask_pixels": None if masks is None else int(masks[i].sum()),
                     "fit_support": self._fit_support(i),
                 }

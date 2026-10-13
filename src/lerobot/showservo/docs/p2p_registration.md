@@ -1,5 +1,9 @@
 # P2P returned a different pose from the one its fit statistics described
 
+**Replay coverage correction:** historical local comparisons below use frames
+2–130 of a 191-frame act, not its entirety. See the corrected scope and extended
+local validation in [regression evidence](p2p_regression.md).
+
 The October 12 investigation found a concrete upstream registration defect:
 `SVDClusterRANSACRegister.register` computes a surface-refined pose and scores
 its residuals, but returns the earlier sparse-fit seed. This is a control-flow
@@ -85,7 +89,7 @@ The initial counterfactual above uses a fixed SDF and recorded seeds. It does
 not establish six-dimensional ground truth, complete placement accuracy,
 occluded-view robustness or moving-object benchmark accuracy.
 
-**Subsequent full replay found a tracking regression.** On all 129 recorded
+**Subsequent replay found a tracking regression.** On 129 recorded
 frames (2–130) of act `20261012_205715`, the unmodified baseline and corrected
 pipeline were each run from the same recorded initialization, with Python,
 NumPy and Torch seeds set to 17. The correction uses fork commit `4abb818f` and
@@ -167,7 +171,7 @@ separately.
 
 The initial false tilt does not require occlusion or model growth. A new
 instrumented baseline replay reproduces both objects' matrices bit for bit on
-all 129 frames while recording the actual RANSAC refit inputs. During the
+the 129-frame window while recording the actual RANSAC refit inputs. During the
 unobstructed cube window, frames 2–16, one tracked depth edge is the most
 influential point in every leave-one-out fit of all correspondences.
 
@@ -268,7 +272,7 @@ tests also pass: 20 tests total. Restoring the original `_RANSAC` in memory
 makes all four regression cases fail while the clean case passes. These tests
 establish the narrow refit behavior, not overall tracking accuracy.
 
-The full 129-frame robot replay improves reported cube rotation from
+The 129-frame robot replay window improves reported cube rotation from
 initialization: median 6.99° → 4.76°, maximum 15.42° → 11.35°. Cube lost frames
 change 20 → 19, and gamepad lost frames 34 → 33. Rotation magnitude is not
 ground-truth angle error. All nine reference sequences were then replayed,
@@ -299,7 +303,7 @@ disagreement is 5.25° for baseline, 2.05° for nearest pixel and 2.29° for the
 neighbourhood rule; maxima are 7.13°, 6.45° and 4.47°. These are the same
 observed-normal diagnostic, not independent 6D ground truth.
 
-The full 129-frame recording reverses the apparent benefit of the neighbourhood
+The 129-frame recording window reverses the apparent benefit of the neighbourhood
 rule: reported cube rotation reaches 76.40°, versus baseline 15.42°. Nearest
 pixel reaches 12.92°, but fails the nine-video regression suite. Both full
 7,449-frame reference suites completed; neither candidate is selected for live

@@ -2,15 +2,25 @@
 
 A code-contract test and a tracking-accuracy test answer different questions.
 The SDF return fix passes its contract tests: its pose agrees with its residuals
-and fallback behavior. The full robot replay nevertheless develops worse poses
-under occlusion. The fix remains experimental; the unit-test result is not an
-approval for physical stacking.
+and fallback behavior. The evaluated robot replay window nevertheless develops worse poses
+under occlusion. The original standalone correction remained experimental under the policy
+used for that run; the unit-test result alone does not establish placement
+quality. The current selection policy and integrated configuration are recorded
+below and in [dependency setup](p2p_dependency.md).
 
 **October 13 rollback:** the live dependency selection was restored to baseline
 `c3d2068d7aa12945c146206dea315bf1379a561c` after these regressions. Candidate
 `4abb818f` remains on the fork's experimental branches for offline investigation.
 The baseline also has known failures; restoring it removes this experimental
 behavior change without claiming that the original stacking problem is solved.
+
+**Coverage correction (October 13):** older reports called frames 2–130 of act
+`20261012_205715` the full recording. That act actually contains 191 frames
+(0–190); the saved initialization precedes frame 2. Those historical numbers
+cover a 129-frame window only. The integrated configuration comparison below
+extends through frame 190 and checks a second recording. The original experiment
+outputs remain archived with this correction; the nine-video reference suite
+was already complete.
 
 ## Evaluation before changing the runtime
 
@@ -21,7 +31,17 @@ lost frames. Do not remove failures, truncate difficult sequences, restart at an
 occlusion, or score only the frames declared successful. Record source commits,
 bridge/configuration hashes, input hashes and the frame-to-ground-truth pairing.
 
-Run every available sequence in the reference suite. The local YCBInEOAT suite
+**Current selection policy (October 13, user-directed):** prefer correctness
+fixes enabled in this experimental setup when the combined configuration does
+not show a material regression on our complete robot recordings. More lost frames are not automatically a regression: rejecting an unreliable
+pose is preferable to reporting a wrong one. Reference-video
+regressions remain evidence to explain and preserve; they are not an automatic
+veto on a fix that helps the rig. Keep independent settings, exact source pins,
+explicit local exceptions and a reproducible previous configuration. Alternative
+depth rules are mutually exclusive; they cannot all be enabled together.
+
+When evaluating generalization, run every available reference sequence, retaining
+failures and complete coverage. The local YCBInEOAT suite
 contains nine sequences and 7,449 frames. It has ground-truth poses and meshes.
 Our integration protocol supplies only the first ground-truth mask and uses
 SAM2 for subsequent masks, as the live tracker does. This differs from a paper
@@ -80,8 +100,10 @@ automatic hardware interlock or a claim of zero regressions on unseen scenes.
 The October 13 experiment archive retains the actual runner, seeds, input
 hashes, full poses, masks protocol, per-frame errors, bridge logs and source
 identity. The source checkout and live tracker are not edited by diagnostic
-ablations. Any proposed estimator change needs its own complete comparison;
-improvement on one frozen-frame probe is insufficient.
+ablations. Any proposed estimator change needs its own complete local comparison;
+improvement on one frozen-frame probe is insufficient. A newly combined rig
+configuration must be checked as a combination, even when its constituent
+fixes have already been evaluated separately on all reference videos.
 
 Only then proceed to supervised physical trials with reset scenes, varied grasps
 and partial visibility. Keep the estimator experimental if a regression remains
@@ -135,7 +157,7 @@ repeatability check does not prove determinism for every sequence or machine.
 ## Rollback verification
 
 With the dependency pin restored to `c3d2068`, the current bridge was replayed
-over all 129 frames (2–130) of act `20261012_205715`, using the same inputs,
+over the 129-frame window (2–130) of act `20261012_205715`, using the same inputs,
 configuration and seed 17 as the archived pre-fix baseline. Both objects' pose
 matrices are bit-identical at every frame (maximum element difference zero),
 and their lost flags match. The pin check rejects the corrected `4abb818f`
@@ -152,7 +174,7 @@ the final refit. Candidate `583bf9d` repeats the refit when consensus changes,
 starting from `c3d2068`; it does **not** include the earlier SDF return repair.
 See [the diagnosis and unit-test limits](p2p_registration.md#clear-view-depth-edge-investigation-october-13).
 
-The candidate improves the full 129-frame robot replay but fails the complete
+The candidate improves the 129-frame robot replay window but fails the complete
 reference suite. All nine candidate sequences finished, totaling 7,449 frames,
 paired with the archived baseline runs above. The comparator verifies matching
 RGB-D, annotated poses, initialization mask, intrinsics, configuration and seed 17. Candidate provenance records the exact clean fork, LeRobot `1a1a00e56`,
@@ -189,7 +211,7 @@ The archive also retains the runner and an aborted initialization attempt:
 metadata writing failed before the first sequence, was repaired, then the
 entire suite ran to completion. No completed sequence was truncated or omitted.
 The baseline tracing observer was separately verified bit-identical for both
-objects across the 129-frame robot recording. All work here was offline; the
+objects across the 129-frame robot replay window. All work here was offline; the
 live worker continued on baseline `c3d2068`, with follow and act off and the arm
 disconnected.
 
@@ -231,7 +253,7 @@ with these tables. The experiment archives are
 `/home/feit/Documents/showservo-experiments/20261013/p2p-depth-lookup` and
 `/home/feit/Documents/showservo-experiments/20261013/p2p-edge-lookup`.
 
-The full 129-frame robot replay gives median/maximum reported cube rotation
+The 129-frame robot replay window gives median/maximum reported cube rotation
 6.99°/15.42° for baseline, 5.11°/12.92° for nearest pixel, and 17.39°/76.40°
 for the neighbourhood rule. Cube lost counts are 20/18/28; gamepad lost counts
 34/38/25. These rotation magnitudes are not ground-truth errors. Neither depth
@@ -273,7 +295,7 @@ On bleach hard, the baseline's frame-55 ADD spike is 39.61 mm; this correction
 reduces it to 8.53 mm. At frame 34, ADD improves from 91.50 to 37.26 mm but remains
 worse than the original frontend's 17.58 mm. Preserving time correspondence
 removes one defect without proving that the graph's geometric correction is
-accurate. The full 129-frame robot replay retains 20 cube and 34 gamepad lost
+accurate. The 129-frame robot replay window retains 20 cube and 34 gamepad lost
 frames; cube reported rotation has median 7.03° and maximum 15.42°, compared with
 6.99°/15.42° baseline. It does not resolve the early visible-object false tilt.
 
@@ -291,3 +313,138 @@ No experiment from this round changes the live P2P pin `c3d2068`. The GUI's
 camera diagnostics are deployed independently at LeRobot `72e42e692`. Tracking
 remains observational, with follow and act off and the arm disconnected. No
 physical placement trial was performed in this investigation round.
+
+## October 13 integrated rig selection
+
+The user changed the selection policy: experimental fixes should be available
+and normally enabled, with local regressions deciding exceptions. A reference
+video's failed strict screening check is evidence, not an automatic veto.
+The configurable fork `6b698084a8cf5fe941ab9c076da683f2b8e528b1` contains all four
+experiments. Its native suite passes 48 tests; 19 cases also pass through the
+bridge's source-checked performance patches. An all-switches-off replay matches
+both original object matrices and lost flags bit for bit for frames 2–130.
+
+### What regression means
+
+Contract correctness checks whether the returned pose, statistics and temporal
+composition obey their defined relationships. Pose accuracy on YCB means mesh
+point displacement against ground truth (ADD/ADD-S), including its tail. Tracking
+availability counts lost frames and intervals. A wrong pose with `lost:false`
+is a separate reliability failure; this flag does not mean the robot acted on it.
+The reference protocol supplies an initial mask, so none of those numbers measure
+the probability of initially finding an object. Local surface-normal agreement
+checks only two orientation directions and shares the sensor's depth errors.
+
+### Combined configurations on the original window
+
+Identical initialization, RGB-D and seed 17; frames 2–130 of act `20261012_205715`.
+All rows except legacy enable consensus refitting and delayed-keyframe correction.
+"Old return" preserves the original sparse-pose return after SDF statistics;
+"stage off" disables SDF refinement itself. Reported rotation is relative to
+initialization, **not ground-truth angular error**. Early normal agreement covers
+visible cube frames 2–16. No thresholds or object-specific priors were introduced.
+
+| Configuration                | Early normal median ° | Cube rotation median/max ° | Lost cube/gamepad |
+| ---------------------------- | --------------------: | -------------------------: | ----------------: |
+| All legacy behavior          |                  5.25 |               6.99 / 15.42 |           20 / 34 |
+| All fixes, nearest depth     |                  3.10 |               4.24 / 29.10 |            8 / 36 |
+| All fixes, legacy depth      |                  2.75 |               5.10 / 66.04 |            7 / 22 |
+| All fixes, edge depth        |                  1.78 |             54.92 / 147.18 |           29 / 26 |
+| Old return, nearest depth    |                  0.92 |              15.32 / 32.11 |           10 / 38 |
+| Old return, legacy depth     |                  2.10 |               4.76 / 11.35 |           19 / 33 |
+| SDF stage off, nearest depth |                  0.92 |               6.55 / 31.75 |           10 / 38 |
+| SDF stage off, legacy depth  |                  2.10 |               4.52 / 27.96 |           17 / 33 |
+| SDF stage off, edge depth    |                  2.29 |              24.15 / 82.57 |            5 / 27 |
+
+### Extended validation changes the choice
+
+The apparent best window configuration (consensus plus delayed correction, old
+return and legacy depth) was then checked through the end of this act and on
+another recorded act. Each run uses every saved frame after the same saved
+initialization: 2–190 (189 frames) and 2–267 (266 frames). Frames 0–1 precede the
+saved gamepad initialization and are explicitly excluded in input manifests.
+There are no subsequent resets or dropped difficult frames. The first 129
+outputs match the shorter paired runs bit for bit. These are offline paired
+replays, not new physical trials or exact replays of every historical live reset.
+
+| Act / configuration       | Lost cube | Lost gamepad | Early visible normal median ° |
+| ------------------------- | --------: | -----------: | ----------------------------: |
+| 20:57 legacy              |        30 |           71 |                          5.25 |
+| 20:57 consensus + delayed |        26 |           70 |                          2.10 |
+| 20:57 delayed only        |        30 |           71 |                          5.25 |
+| 19:42 legacy              |       115 |          259 |                          2.46 |
+| 19:42 consensus + delayed |       155 |          259 |                          1.64 |
+| 19:42 delayed only        |       114 |          259 |                          2.46 |
+
+On the final visible cube window of 20:57 (frames 180–190), consensus plus delayed
+worsens median normal disagreement from 2.16° to 3.90°; delayed alone preserves
+2.16°. In 19:42, consensus plus delayed loses the partly visible cube at frame
+113 instead of 117 and never recovers. The baseline later reports not lost on
+140–175 under severe occlusion, with implausible rotation and expanding model
+points; its 40-frame availability advantage is not evidence of 40 correct poses.
+The earlier loss was subsequently traced to the origin-dependent jump check,
+as documented below; it must not be equated with poorer estimation. The separate
+visible-surface tradeoff remains a local accuracy exception for consensus.
+
+**Selected rig default: delayed-keyframe correction on.** Consensus, the refined
+return and alternative depth lookup have explicit off/legacy overrides. This
+supersedes the provisional choice made from the shorter window. No blanket
+reference-suite veto was applied. The selected correction adds no lost frames
+on these two recordings and preserves the checked visible-surface agreement.
+This is limited evidence, not proof of better complete 6D tracking: both versions
+still fail badly under occlusion, including gamepad loss across most of 19:42.
+The source-level delayed-motion bug has a separate known-motion proof and the
+previous nine-video comparison; it is not justified by a rotation-magnitude score.
+
+Artifacts: `/home/feit/Documents/showservo-experiments/20261013/p2p-rig-defaults`.
+The archive retains all configurations, window/full trajectories, input hashes,
+coverage manifests, comparison code, test logs and source identities. Initial
+setup-only failures (missing import; untracked audit script) occurred before
+tracking and are retained separately. Historical scope errors remain identified
+in the original reports rather than silently rewriting their evidence.
+
+### Why the earlier loss was not fewer initial correspondences
+
+The user explicitly accepted increased uncertainty over wrong reported poses.
+A process-local trace reproduces both complete-run trajectories bit for bit
+through frame 114 of act 19:42. At frame 113, both baseline and consensus return
+the same registration candidate to numerical precision, with **11/11 inliers,
+one cluster** and the same source/target points. Their previous poses differ.
+The guard's relative rotation is 1.85° versus 4.95°; its origin translation is
+12.55 versus 34.48 mm. With the unchanged 30 mm threshold and single-cluster
+minimum of 12 inliers, only the latter is rejected.
+
+The matched-point centroid actually moves 0.54 mm between the consensus poses;
+the centroid of all 24 finite model points moves 0.78 mm. Model coordinates are
+in the initial camera frame. A rotation about the object therefore changes the
+transform's translation column by the camera-to-object lever arm. This is not a
+34 mm displacement of the object. The initial rejection then prevents map growth:
+consensus retains 25 model slots; the baseline grows to 50 and eventually 162.
+Fewer usable points later are a consequence, not the cause of the first rejection.
+
+Fork `95bd7a8808fc1aaf015d510dffcccaa3c6971a9c` adds
+`pipeline.params.pose_jump_guard_object_center` (default true). The corrected
+check measures the displacement of one identical finite model centroid under
+both poses, retaining all rotation, support and threshold rules. Missing usable
+model geometry falls back to the origin check. It reports both `dt` and
+`origin_dt`, the translation reference and reference point. The bridge, worker
+and act recorder preserve these values for later diagnosis. No object-specific
+prior, new threshold or support relaxation was added.
+
+Eight new tests cover the actual recorded rejection, known rotations about a
+distant object, coordinate-origin invariance, genuine translation/rotation jumps
+and unavailable model geometry. The integrated suite passes 56 tests. Restoring
+the origin check in memory makes four new cases fail (four still pass).
+
+Complete local replay still matters: with consensus, delayed correction and the
+centroid guard, 20:57 lost counts improve from 30/71 to 9/25, but final visible
+normal disagreement worsens from 2.16° to 6.00°. With all fixes plus nearest depth,
+lost counts become 7/57 and final disagreement 6.23°. With centroid guard and
+delayed correction alone, they become 8/59 and 7.10°. These are **reported-pose
+accuracy tradeoffs**, not simply extra uncertainty. This also shows why fewer
+lost frames cannot establish a tracking improvement. The corrected guard remains
+available with an explicit local off override. The final rig selection keeps the
+delayed correction on and retains the other local exceptions pending improvement
+of reported-pose accuracy. Both complete-recording comparisons, including failed
+and lost frames, remain in the archive; the policy does not require fewer lost
+frames when the alternative is an unreliable pose.

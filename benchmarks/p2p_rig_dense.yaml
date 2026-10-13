@@ -10,6 +10,13 @@ pipeline:
     max_num_obj: 1
     estimate_init_pose: false
 
+    preserve_delayed_keyframe_motion: true
+    # Correcting the translation reference reduces rejections but worsens reported
+    # local poses. Retain the conservative check until that accuracy loss is resolved.
+    pose_jump_guard_object_center: false
+    # Keep the rig's depth policy explicit when selecting the alternative register.
+    tracked_depth_mode: legacy
+
     use_segmenter: true
 
     # depth related

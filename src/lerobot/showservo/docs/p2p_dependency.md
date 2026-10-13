@@ -4,19 +4,38 @@ Point2Pose runs in its own Python environment. Its source comes from
 [TheWisp/point-to-pose](https://github.com/TheWisp/point-to-pose), a fork of
 [tzuyuan/point-to-pose](https://github.com/tzuyuan/point-to-pose).
 
-The fork's `main` follows upstream. Small fix branches hold independent bug
-fixes and their regression tests. `showservo-experiments` combines the changes
-selected for this workstream. Its initial integration preserves the two
-existing dense-registration commits and adds the SDF return-value correction
-without importing upstream's September runtime changes.
+The fork's `main` follows upstream. Small fix branches retain independent bug
+fixes and regression tests. `showservo-configurable` integrates the experiments
+without importing unrelated upstream runtime changes. The selected immutable
+commit is `95bd7a8808fc1aaf015d510dffcccaa3c6971a9c`.
 
-**Active selection after the October 13 rollback:** `p2p.lock.json` pins the
-pre-correction baseline `c3d2068d7aa12945c146206dea315bf1379a561c`. The corrected
-candidate `4abb818f` failed the [full regression comparison](p2p_regression.md)
-and is retained on the fork's experimental branches for offline investigation.
-The manifest's branch names the source lineage; its immutable commit selects
-the runtime. Rolling back preserves the baseline's known return/statistics
-inconsistency and tracking limitations; it does not establish placement accuracy.
+The fork defaults its correctness fixes on. The rig explicitly records local
+exceptions in `benchmarks/p2p_rig.yaml`, following the user's preference to fix
+problems unless our setup regresses:
+
+| Option                                             | Rig default | Local evidence                                                                                                                                   |
+| -------------------------------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `pipeline.params.preserve_delayed_keyframe_motion` | **true**    | Corrects historical-pose assignment; two complete local replays add no lost frames or disagreement in the checked visible-surface windows.       |
+| `register.params.consensus_refit`                  | false       | Better early clear views, but worse late normal agreement. Earlier loss is diagnosed separately below; lost count alone does not veto promotion. |
+| `register.params.return_refined_pose`              | false       | Returning SDF refinement worsens the recorded local trajectory. This override deliberately retains the known pose/statistics inconsistency.      |
+| `pipeline.params.tracked_depth_mode`               | legacy      | Nearest and edge modes remain selectable; their integrated local replays worsen later poses. Only one depth mode can be active.                  |
+
+`pipeline.params.pose_jump_guard_object_center` is also available (fork default
+true, rig override false). It corrects the origin-dependent translation check,
+but paired local replays show worse reported poses after its additional accepts.
+Both distances and the reference point are now retained in
+`pose_jump_guard_info` through the worker and act recording. This is an accuracy
+exception, not a rule against becoming uncertain.
+
+`enable_sdf_refine` remains true: the SDF stage still participates in candidate
+selection/statistics. Disabling that stage was separately tested and did not
+remove the observed local regressions. The dense-register configuration shares
+the explicit pipeline/depth policy; the new complete local comparisons use the
+normal sparse rig configuration, not dense mode.
+
+These are measured local exceptions, not a requirement that every reference
+video improve. Detailed results and limitations are in
+[regression evidence](p2p_regression.md#october-13-integrated-rig-selection).
 
 ## Install the selected source
 
@@ -44,7 +63,9 @@ an unknown source version.
 ## Identify a recorded experiment
 
 Each P2P result carries `software`: P2P commit, LeRobot commit and dirty flag,
-configuration SHA-256, bridge SHA-256, and environment SHA-256. Act recordings
+configuration SHA-256, bridge SHA-256, and environment SHA-256. After initialization,
+`software.p2p_options` also records the actual implementation settings, including
+defaults and local overrides; unsupported options are absent. Act recordings
 retain it alongside each frame and in `tracker_at_start`.
 
 `benchmarks/p2p.environment.json` snapshots the environment used for the initial
@@ -77,8 +98,14 @@ identical. Regenerate a reviewed baseline snapshot with:
 4. Switch the live process only at a safe restart; never restart the GUI while
    it owns a connected arm. Preserve the previous pin for rollback.
 
-The SDF correction is implemented once in the experimental fork commit and is
-excluded from the active baseline pin. Remaining bridge patches
-are historical performance/integration changes with source checks; migrating
-one requires separate equivalence checks. Do not combine dependency upgrades,
-new estimator designs and a small correctness fix into an untraceable update.
+Each correction is implemented once in the fork, with configuration switches
+for controlled comparisons. Bridge patches remain historical performance and
+integration changes with source checks. The configurable RANSAC and depth
+implementations have audited source hashes; all switches off reproduce both
+objects' old poses bit for bit over the original 129-frame comparison window.
+
+To reproduce the previous behavior on this pin, set the delayed-keyframe,
+consensus-refit, refined-return and object-center guard switches false and use
+depth mode `legacy`.
+The original pin `c3d2068d7aa12945c146206dea315bf1379a561c` is also retained.
+Do not switch pins or configurations inside an active robot run.
