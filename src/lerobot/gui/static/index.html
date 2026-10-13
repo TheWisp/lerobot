@@ -533,6 +533,10 @@
                 <span id="ap-guide-extra" style="display:flex; gap:6px; align-items:center;"></span>
                 <button class="btn-small" id="ap-guide-btn" onclick="apGuideAction()" style="display:none; min-width:150px;"></button>
             </div>
+            <div style="margin-top:6px; padding:0 14px; font-size:12px; color:#aaa;">
+                <label><input id="ap-hold-prediction" type="checkbox" checked onchange="apHoldPredictionSave()"> Allow grasp-pose fallback</label>
+                <span id="ap-hold-prediction-note">Uses the grasp-time pose if vision cannot verify the held object; assumes no slip.</span>
+            </div>
             <details id="ap-inject" style="display:none; margin-top:6px; padding:0 14px; font-size:12px;" ontoggle="apInjectToggle(this.open)">
                 <summary id="ap-inject-summary" style="cursor:pointer; color:#888;">inject an error</summary>
                 <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:6px; color:#888;" title="the arm's base frame, z up; turns are about the grasp point (the aim) or the object's centre (the find)">
@@ -1263,7 +1267,7 @@ nebius iam auth-public-key generate \
     <script src="/static/bug_report.js?v=1"></script>
     <script src="/static/bridge.js?v=1"></script>
     <script src="/static/bridge_consumers.js?v=1"></script>
-    <script src="/static/showservo.js?v=91"></script>
+    <script src="/static/showservo.js?v=92"></script>
     <script src="/static/live_video.js?v=4"></script>
 </body>
 </html>

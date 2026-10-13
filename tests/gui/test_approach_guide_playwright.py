@@ -1258,7 +1258,7 @@ def test_a_page_older_than_the_server_asks_to_be_reloaded_and_the_trials_ask_not
     assert errors == [], f"the page threw: {errors}"
 
 
-def test_an_injected_error_is_set_under_the_act_row_named_while_on_and_sent_with_act(gui_page, tmp_path):
+def test_act_controls_keep_injection_and_grasp_prediction_independent(gui_page, tmp_path):
     """The operator tests how the act absorbs a grasp aimed off: a fold under the Act row takes the error, keeps it
     across reloads, names it in its summary while it is on, and the Act button sends it."""
     import json
@@ -1327,7 +1327,9 @@ def test_an_injected_error_is_set_under_the_act_row_named_while_on_and_sent_with
 
     try:
         page.reload()
-        page.evaluate("localStorage.removeItem('ap-inject'); localStorage.removeItem('ap-inject-open')")
+        page.evaluate(
+            "localStorage.removeItem('ap-inject'); localStorage.removeItem('ap-inject-open'); localStorage.removeItem('ap-hold-prediction')"
+        )
         page.reload()
         to_act_row()
         summary = page.locator("#ap-inject-summary")
@@ -1335,6 +1337,19 @@ def test_an_injected_error_is_set_under_the_act_row_named_while_on_and_sent_with
         page.click("#ap-guide-btn")
         page.wait_for_function("document.getElementById('ap-guide-btn').disabled === false")
         assert sent[-1]["inject"] is None and sent[-1]["correct_hold"] is True, "off unless set"
+        fallback = page.locator("#ap-hold-prediction")
+        assert fallback.is_visible() and fallback.is_checked()
+        assert "assumes no slip" in page.locator("#ap-hold-prediction-note").inner_text()
+        assert sent[-1]["allow_grasp_prediction"] is True, "the UI sends the experimental default explicitly"
+
+        fallback.uncheck()
+        page.reload()
+        to_act_row()
+        assert not fallback.is_checked(), "strict verification survives a reload"
+        assert "stops if either is unavailable" in page.locator("#ap-hold-prediction-note").inner_text()
+        page.click("#ap-guide-btn")
+        page.wait_for_function("document.getElementById('ap-guide-btn').disabled === false")
+        assert sent[-1]["allow_grasp_prediction"] is False
 
         summary.click()
         page.select_option("#ap-inject-at", "aim")
@@ -1362,11 +1377,33 @@ def test_an_injected_error_is_set_under_the_act_row_named_while_on_and_sent_with
             "rz_deg": 10,
         }
         assert sent[-1]["correct_hold"] is False
+        assert sent[-1]["allow_grasp_prediction"] is False and fallback.is_disabled()
         page.click("#ap-inject button")
         assert summary.inner_text() == "inject an error"
+        assert fallback.is_enabled() and not fallback.is_checked(), "clearing injection keeps the hold policy"
+        fallback.check()
+        page.reload()
+        to_act_row()
+        assert fallback.is_checked(), "fallback survives a reload"
+        page.click("#ap-guide-btn")
+        page.wait_for_function("document.getElementById('ap-guide-btn').disabled === false")
+        assert sent[-1]["correct_hold"] is True and sent[-1]["allow_grasp_prediction"] is True
+        assert sent[-1]["inject"] is None
+        page.click("#ap-details-btn")
+        page.click('button.ap-subtab[data-sub="act"]')
+        count = len(sent)
+        page.locator("#act-panel button").filter(has_text="Go").click()
+        assert len(sent) == count + 1 and sent[-1]["allow_grasp_prediction"] is True
+        page.uncheck("#ap-inject-hold")
+        assert fallback.is_checked() and fallback.is_disabled()
+        page.click("#ap-guide-btn")
+        page.wait_for_function("document.getElementById('ap-guide-btn').disabled === false")
+        assert sent[-1]["correct_hold"] is False and sent[-1]["allow_grasp_prediction"] is False
         assert errors == [], f"the page threw: {errors}"
     finally:
-        page.evaluate("localStorage.removeItem('ap-inject'); localStorage.removeItem('ap-inject-open')")
+        page.evaluate(
+            "localStorage.removeItem('ap-inject'); localStorage.removeItem('ap-inject-open'); localStorage.removeItem('ap-hold-prediction')"
+        )
         with manipulation.runtime._state.lock:
             manipulation.runtime._state.demo = None
 

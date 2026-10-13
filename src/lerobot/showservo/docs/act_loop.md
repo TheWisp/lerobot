@@ -132,6 +132,13 @@ An absent grasp attachment still stops placement. This option leaves grasp,
 path feasibility, following-error and motor-protection checks in force; it does
 not lower pose acceptance thresholds or replace the correction with identity.
 
+The experimental Approach UI exposes **Allow grasp-pose fallback** next to its
+Act controls, enabled by default and remembered in that browser. Both Act and
+the detailed Go button send the selected policy explicitly. Disabling it
+restores strict demo/live hold verification; the API default remains strict for
+callers that omit the option. Turning hold correction off also turns the request's
+fallback off. Clearing injected errors leaves the fallback preference unchanged.
+
 If the live track cannot measure that hold, the runner now tries independent
 matches against the designated demo view for at most one additional track-wait
 budget (five seconds). Both measurements use that same reference frame. The

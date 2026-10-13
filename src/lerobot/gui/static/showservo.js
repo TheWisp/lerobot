@@ -1270,7 +1270,9 @@ function demoOpenData(repoId) {
 
 async function actGo() {
     try {
-        await pgPost('/api/pregrasp/act', {speed: Number(document.getElementById('act-speed').value || 1), ...apInjectBody()});
+        const options = apInjectBody();
+        await pgPost('/api/pregrasp/act', {speed: Number(document.getElementById('act-speed').value || 1), ...options,
+            allow_grasp_prediction: options.correct_hold && apAllowGraspPrediction});
         const tile = document.getElementById('jog-tile');
         if (tile.contentWindow) tile.contentWindow.postMessage({type: 'jog-reanchor'}, '*');
     } catch (e) { actStatus(e.message, true); }
@@ -1591,6 +1593,27 @@ async function pgDepth() {
 // existing handlers do the work; the guide only decides which of them is next.
 const apGuide = {timer: null, action: null, busy: false};
 
+// This experimental UI defaults to the grasp prediction requested for live trials. Keep the choice visible,
+// separate from injected errors, and send it explicitly; API callers retain strict verification by default.
+let apAllowGraspPrediction = true;
+try { apAllowGraspPrediction = localStorage.getItem('ap-hold-prediction') !== '0'; } catch (e) { /* storage may be unavailable */ }
+
+function apHoldPredictionFill() {
+    const input = document.getElementById('ap-hold-prediction');
+    if (!input) return;
+    input.checked = apAllowGraspPrediction;
+    input.disabled = !apInjectRead().correct_hold;
+    document.getElementById('ap-hold-prediction-note').textContent = input.disabled ? 'Hold correction is off.' :
+        apAllowGraspPrediction ? 'Uses the grasp-time pose if vision cannot verify the held object; assumes no slip.' :
+            'Requires verified demo and live held-object poses; stops if either is unavailable.';
+}
+
+function apHoldPredictionSave() {
+    apAllowGraspPrediction = document.getElementById('ap-hold-prediction').checked;
+    try { localStorage.setItem('ap-hold-prediction', apAllowGraspPrediction ? '1' : '0'); } catch (e) { /* storage may be unavailable */ }
+    apHoldPredictionFill();
+}
+
 // ── error injection: test how the act absorbs a grasp aimed off or an object found wrong. Off unless set, kept in this
 // browser; whenever one is set the fold's summary names it, so it is not left on unnoticed. ──
 const AP_INJECT_AXES = [['dx_mm', 'x', ' mm'], ['dy_mm', 'y', ' mm'], ['dz_mm', 'z', ' mm'], ['rx_deg', 'about x', '°'], ['ry_deg', 'about y', '°'], ['rz_deg', 'about z', '°']];
@@ -1619,6 +1642,7 @@ function apInjectFill() {
     const on = apInjectSummary(v), sum = document.getElementById('ap-inject-summary');
     sum.textContent = on || 'inject an error';
     sum.style.color = on ? '#e9a23b' : '#888';
+    apHoldPredictionFill();
 }
 
 function apInjectSave() {
