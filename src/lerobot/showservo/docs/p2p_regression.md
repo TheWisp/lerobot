@@ -143,3 +143,52 @@ checkout. All 25 targeted dependency, bridge and replay-comparison tests pass.
 The experiment archive retains `replay_rollback_seed17/` and
 `rollback_verification.json`. This verifies restoration of the baseline, not an
 improvement in its known tracking failures; no physical trial was run.
+
+## Consensus-refit experiment, October 13
+
+The separate clear-view investigation traced an unstable depth-edge
+correspondence and a sparse pose still influenced by a point discarded after
+the final refit. Candidate `583bf9d` repeats the refit when consensus changes,
+starting from `c3d2068`; it does **not** include the earlier SDF return repair.
+See [the diagnosis and unit-test limits](p2p_registration.md#clear-view-depth-edge-investigation-october-13).
+
+The candidate improves the full 129-frame robot replay but fails the complete
+reference suite. All nine candidate sequences finished, totaling 7,449 frames,
+paired with the archived baseline runs above. The comparator verifies matching
+RGB-D, annotated poses, initialization mask, intrinsics, configuration and seed 17. Candidate provenance records the exact clean fork, LeRobot `1a1a00e56`,
+the normal bridge hash and the additional experiment-bridge hash. The latter
+selects the separate checkout in that process only and retains the historical
+vectorized hypothesis search; the live dependency lock was never changed.
+
+| Sequence                    | ADD AUC, baseline → candidate |    P95 ADD mm | Not lost above 50 mm | Lost frames |
+| --------------------------- | ----------------------------: | ------------: | -------------------: | ----------: |
+| bleach0                     |                 22.89 → 27.67 | 268.8 → 354.2 |              401 → 0 |   106 → 515 |
+| bleach_hard_00_03_chaitanya |                 81.70 → 65.98 |  45.5 → 325.5 |               17 → 2 |     3 → 149 |
+| cracker_box_reorient        |                 87.75 → 87.59 |   21.1 → 21.0 |                0 → 0 |       5 → 4 |
+| cracker_box_yalehand0       |                 85.65 → 86.85 |  115.3 → 26.9 |               1 → 16 |     78 → 37 |
+| mustard0                    |                 89.70 → 91.55 |   14.8 → 11.7 |                0 → 2 |      10 → 4 |
+| mustard_easy_00_02          |                 76.13 → 75.22 |   74.6 → 79.7 |            164 → 157 |      8 → 14 |
+| sugar_box1                  |                 88.42 → 88.55 |   55.8 → 55.0 |                5 → 7 |     55 → 49 |
+| sugar_box_yalehand0         |                 73.23 → 71.19 |   36.2 → 37.7 |                3 → 1 |     10 → 37 |
+| tomato_soup_can_yalehand0   |                 75.89 → 73.88 |   50.6 → 56.0 |              44 → 90 |   158 → 120 |
+
+ADD AUC improves on four sequences and worsens on five; four have more large
+errors reported not lost. Every sequence fails at least one zero-regression
+screening criterion. Some changes are small, but the bleach hard sequence has
+a substantial accuracy and availability regression. Marking more frames lost
+does not solve that regression, since all emitted poses remain in the score.
+The 50 mm reporting limit remains unrelated to acceptable stacking error.
+
+The comparator exits 1 with `passed:false`; its complete ADD/ADD-S results are
+archived in `p2p-clearview/ycb_comparison.json`. The candidate remains on the
+experimental fork branch and was never promoted. Passing the 20 native unit
+tests does not override this failed tracking comparison. The exact mechanism
+of the candidate's broader regressions has not yet been isolated.
+
+The archive also retains the runner and an aborted initialization attempt:
+metadata writing failed before the first sequence, was repaired, then the
+entire suite ran to completion. No completed sequence was truncated or omitted.
+The baseline tracing observer was separately verified bit-identical for both
+objects across the 129-frame robot recording. All work here was offline; the
+live worker continued on baseline `c3d2068`, with follow and act off and the arm
+disconnected.

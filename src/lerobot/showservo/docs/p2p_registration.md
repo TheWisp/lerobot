@@ -162,3 +162,123 @@ arm connection or motion was used by the offline probes/replays. The existing
 GUI connection was used to park the idle arm before stopping its worker for
 the full replay. The old P2P checkout was preserved; the fork was installed
 separately.
+
+## Clear-view depth-edge investigation, October 13
+
+The initial false tilt does not require occlusion or model growth. A new
+instrumented baseline replay reproduces both objects' matrices bit for bit on
+all 129 frames while recording the actual RANSAC refit inputs. During the
+unobstructed cube window, frames 2–16, one tracked depth edge is the most
+influential point in every leave-one-out fit of all correspondences.
+
+That point starts at pixel (355, 311), sampling 413 mm depth. At frame 2 its
+tracked location is (354.62, 309.59); P2P truncates the coordinates and samples
+405 mm at (354, 309). Later samples differ from initialization by 8–10 mm.
+The saved 5×5 depth neighbourhoods show the abrupt surface-depth transition.
+This is an unstable depth correspondence on a visible object, rather than
+evidence that the object actually tilted. All correspondence weights are equal
+in these 15 frames because the uncertainty floor dominates; unequal weights
+do not explain this example.
+
+In 12 of the 15 frames, this point enters RANSAC's final least-squares fit and
+then fails the residual threshold. RANSAC recomputes the inlier flags but does
+not refit the pose after this change, so the rejected point still influences
+the returned pose. This is a demonstrated limitation of its one-pass refit,
+separate from the SDF return/statistics defect above. At frame 4 the point stays
+within the threshold even after tilting the fit, so repeated refitting alone
+cannot remove every bad correspondence.
+
+The group tracker was replayed from the same initial RGB-D and masks over the
+same complete recording, with its normal sampling, depth lookup and reseeding.
+It received no P2P poses or robot/grasp information. Its existing depth lookup
+uses a 5×5 median and rejects neighbourhoods whose 10th–90th percentile depth
+spread exceeds 12 mm. Applied to the suspect P2P track, this rejects its initial
+depth and all early current depths except frame 4. This explains a concrete
+input-quality advantage; it does not establish that groups always track better.
+
+The following comparison uses frames 6–16, when group context is available,
+and scores every method against the same observed top-surface normal:
+
+| Method                                                   | Median disagreement | Maximum disagreement |
+| -------------------------------------------------------- | ------------------: | -------------------: |
+| P2P baseline                                             |               5.25° |                7.13° |
+| Group tracker, including surrounding context             |               1.77° |                3.73° |
+| Diagnostic fit using only the group's own tracked points |               1.76° |                3.16° |
+| Direct depth-surface fit from initialization             |               1.60° |                3.26° |
+| Experimental P2P consensus refit                         |               2.10° |                3.65° |
+
+The own-point row is an independent diagnostic fit, not the production group's
+`own_ok` decision. The production group can use stationary surrounding context;
+frames 2–5 retain its initial pose and are excluded from this common-window
+table. Surface normals check two orientation directions, not full 6D pose.
+Depth fitting and scoring share the measured depth, so this is not independent
+ground truth. No upright or cube-specific prior enters any estimator. Changing
+the scoring mask erosion from 5 pixels to 3, 7 or 11 changes the measured normal
+by at most 1.23° in this window. These scores use a new common initial normal
+and should not be mixed with the earlier frozen-SDF probe's 5.67° median.
+
+Replacing just the fitter on P2P's fixed correspondences with the group's
+robust fitter at the same 5 mm threshold reduces median disagreement to 2.10°.
+Using 10 mm instead leaves 5.49° on the common window. The observed advantage
+therefore involves both depth association and robust fitting, not a universally
+better pose algorithm. A frozen-input rounded-depth probe also improves the
+score, but it has not passed complete-sequence validation and is not deployed.
+
+### What the two trackers actually share
+
+The camera reader takes one SDK frameset, applies `rs.align(rs.stream.color)`,
+and publishes the color/depth pair together under a lock. The GUI disables
+decimation and hole filling, but leaves spatial and temporal depth filtering
+enabled. It uses color-stream intrinsics for aligned depth. Alignment therefore
+establishes a common pixel grid; it does not guarantee error-free surface
+association at an edge. SDK frame pairing also does not establish identical
+exposure times. Our cached timestamp is host publication time, and this path
+does not retain separate sensor timestamps to measure their offset. See the
+RealSense documentation on [frame synchronization](https://dev.realsenseai.com/docs/frame-management/)
+and [alignment and occlusion](https://dev.realsenseai.com/docs/projection-texture-mapping-and-occlusion-with-intel-realsense-depth-cameras/).
+
+In the live application both trackers read that camera source, but independent
+loops can consume different frames. This offline comparison instead supplies
+identical saved image pairs and initial masks explicitly. They do not share a
+precomputed sparse point cloud: each selects and tracks image points, then
+performs its own depth lookup. P2P truncates pixel coordinates and samples one
+depth value; groups use rounded neighbourhoods and the median/spread check
+described above. These operations produce different fitting correspondences
+even from the same aligned images.
+
+SAM operates on RGB in that same color-image coordinate system. P2P propagates
+masks over subsequent frames; groups segment at designation and then track
+points. Sharing coordinates does not imply identical later masks or point
+sets. The frozen-correspondence fitter ablation separately holds the actual
+P2P 3D inputs fixed, isolating the refit from these input differences.
+
+### Consensus-refit candidate: rejected for live use
+
+Fork commit `583bf9d93fdfe76483e1f16980e97c176a7fa89f` on
+[`experiment/consensus-refit`](https://github.com/TheWisp/point-to-pose/tree/experiment/consensus-refit)
+repeats the sparse fit when its consensus changes, using the existing residual
+threshold, support minimum and iteration budget. An unchanged consensus still
+takes one fit. The bounded loop does not guarantee convergence if membership
+cycles. It starts from baseline `c3d2068` and does not include the SDF return fix.
+
+Four recorded-correspondence regression cases cover weighted/unweighted fits
+and a nonidentity prior. A known-motion clean case and 15 existing jump-guard
+tests also pass: 20 tests total. Restoring the original `_RANSAC` in memory
+makes all four regression cases fail while the clean case passes. These tests
+establish the narrow refit behavior, not overall tracking accuracy.
+
+The full 129-frame robot replay improves reported cube rotation from
+initialization: median 6.99° → 4.76°, maximum 15.42° → 11.35°. Cube lost frames
+change 20 → 19, and gamepad lost frames 34 → 33. Rotation magnitude is not
+ground-truth angle error. All nine reference sequences were then replayed,
+and the candidate **fails the broader regression comparison**; see
+[complete results](p2p_regression.md#consensus-refit-experiment-october-13).
+Neither estimator experiment is selected for live use. The unchanged baseline
+remains pinned, and no physical stacking trial followed these offline runs.
+
+Evidence, scripts, raw traces, manifests and the inspected figure are preserved
+in `/home/feit/Documents/showservo-experiments/20261013/p2p-clearview`. The
+remaining research question is how to improve depth association and geometric
+support without degrading tracking and model updates on moving objects. The
+clear-view cause is now concrete; a generally reliable replacement is not yet
+established, nor does this isolate every cause of the physical misplacement.
