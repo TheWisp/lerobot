@@ -13,6 +13,14 @@ point tracks, environmental rigid-motion groups, and current surface evidence.
 Rigidity lets visible parts constrain hidden parts; it does not reveal arbitrary
 motion of an entirely hidden object.
 
+Controller adaptations and their implementation status are recorded in the
+[manipulation architecture](manipulation_architecture.md#adaptation-mechanisms-and-their-limits):
+object-relative targets, equivalent landing selection, attachment correction,
+group propagation and playback progress. Its
+[concurrency contract](manipulation_architecture.md#waiting-parallel-work-and-servo-freezes)
+connects perception to the single key-frame runner without treating a delayed
+measurement as current or confusing observation waits with servo faults.
+
 ## Proposed architecture
 
 **NOT IMPLEMENTED as an integrated tracker.** The following is the proposed design
