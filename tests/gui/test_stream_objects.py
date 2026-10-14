@@ -939,6 +939,12 @@ def test_the_worker_locates_an_object_against_the_demo_view_and_teaches_nothing(
     )
     assert not unclicked["ok"] and "click" in unclicked["reason"]
 
+    refreshed = np.load(
+        io.BytesIO(worker._locate(live, Sam(), _GridTier(), intr, [360, 240], {**ref, "refresh_mask": True}))
+    )
+    assert json.loads(str(refreshed["meta"]))["ref_ok"]
+    np.testing.assert_array_equal(refreshed["ref_mask"], box_mask())
+
 
 def _two_object_demo(tmp_path, t0):
     """The bound demo with a second object, "box", designated on its stream: what a place goes onto."""
@@ -1846,14 +1852,13 @@ def test_key_frame_execution_outcomes_across_grasp_and_placement_scenarios(tmp_p
         assert act.ok is (not bool(failed)), act.reason
         if scenario.get("inject"):
             assert "out of reach" in act.reason and not sim["streamed"]
-        elif scenario.get("weak_carry"):
-            assert not sim["streamed"], "an unusable demo carry reference prevents grasping"
         else:
             assert sim["streamed"], "the simulated grasp must actually execute"
         if scenario.get("empty_grip") or scenario.get("drop_in_lift"):
             assert "grasp missed" in act.reason
         elif scenario.get("weak_carry"):
-            assert "cannot verify" in act.reason and "before grasp" in act.reason
+            assert "cannot verify" in act.reason and "gripper closed" in act.reason
+            assert act.place["held_view_attempts"], "try the alternate held references after lifting"
         elif scenario.get("inject"):
             assert not sim["targets"], "failed preflight must not command the arm"
         else:
@@ -2382,6 +2387,9 @@ def test_a_shift_during_the_lift_is_caught_at_the_pre_place(tmp_path, monkeypatc
 @pytest.mark.parametrize("blind", [False, True])
 def test_missing_demo_carry_reference_stops_before_the_grasp(tmp_path, monkeypatch, blind):
     """An unusable saved reference is known before picking; do not strand a payload at the carry check."""
+    from lerobot.gui.api.manipulation import held_views
+
+    monkeypatch.setattr(held_views, "references", lambda *a: [])
     try:
         _demo, sim, _views, _m = _run_place_act(tmp_path, monkeypatch, weak_carry=not blind, blind=blind)
         act = manipulation.runtime._state.act

@@ -368,7 +368,9 @@ def _constrain_find_result(job: runtime._Job, result: dict) -> dict:
         if result.get("ref_ok") and result.get("ref_delta") is not None:
             key = "ref_delta"
             reference = _reference_surface(
-                job.extra["ref_recording"], int(job.extra["ref_frame"]), job.arrays["ref_mask"]
+                job.extra["ref_recording"],
+                int(job.extra["ref_frame"]),
+                result.get("ref_mask", job.arrays["ref_mask"]),
             )
         elif job.kind == "find" and result.get("ok") and result.get("delta") is not None:
             with runtime._state.lock:

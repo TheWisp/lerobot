@@ -206,6 +206,7 @@ async def worker_result(id: str, request: Request) -> dict:
         "seen",
         "masks",
         "ref_delta",
+        "ref_mask",
         "fit_uv",
         "fit_inlier",
         "track_idx",

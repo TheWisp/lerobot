@@ -258,12 +258,15 @@ async def _locate(
     stopped: Callable[[], bool],
     track: bool = False,
     log: dict[str, Any] | None = None,
+    reference: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Find the demo's object ``obj`` under ``click`` on this frame against the demo's view of it, leaving the live
     track alone: the object a place goes onto, and the held object in the gripper. A find the worker was asked for is
     kept in the find log (:func:`_log_find`) with ``log``, why it was asked and where ``click`` came from.
 
     With ``track``, the object joins the live Point2Pose session from this frame (:func:`_store_located` follows it).
+    ``reference`` overrides only the recorded view used for this measurement; its transform is never installed
+    in the live tracker. It may request fresh segmentation of that saved view, returned as ``reference_mask``.
     Post: ``object``, ``ok``, ``delta`` (the motion from the demo's view, camera frame) or None, ``inliers``,
     ``card_points``, ``turn_deg``, ``reason``, ``mask`` (what SAM3 cut out at the click, or None), ``view`` (the demo
     and the frame of the view it was matched against), ``at``, ``stamp`` (when the frame ``delta`` is from was read:
@@ -278,19 +281,24 @@ async def _locate(
     out: dict[str, Any] = {"object": obj, "ok": False, "delta": None, "mask": None, "at": now, "stamp": now}
     if o is None or o.get("status") != "done" or demo.recording is None:
         return {**out, "reason": f"{obj!r} is not a tracked object of the current demo"}
-    out["view"] = [demo.name, int(o["frame"])]  # the demo view its motion is from
+    if reference is not None and track:
+        raise ValueError("a held-view reference cannot replace the live track's designation")
+    ref = o if reference is None else reference
+    out["view"] = [demo.name, int(ref["frame"])]  # the demo view its motion is from
     if not runtime._state.worker.running:
         return {**out, "reason": "start the worker first"}
     job = worker._queue_job("locate", obj, rgb, depth_m, intr, click=[int(click[0]), int(click[1])])
     job.extra = {
         "ref_recording": demo.recording,
-        "ref_frame": int(o["frame"]),
+        "ref_frame": int(ref["frame"]),
         "ref_object": obj,
         "ref_symmetry": int(o.get("symmetry") or 1),
     }
+    if ref.get("refresh_mask"):
+        job.extra["ref_refresh_mask"] = True
     if track:  # into the live session, beside the objects it already follows
         job.extra.update(track=True, scene=_session_names(demo, but=obj))
-    job.arrays = {"ref_mask": np.asarray(o["mask"], dtype=bool)}
+    job.arrays = {"ref_mask": np.asarray(ref["mask"], dtype=bool)}
     t0 = time.monotonic()
     while job.result is None:
         if stopped():
@@ -316,6 +324,7 @@ async def _locate(
         "tracking": bool(r.get("tracking")),
         "surface_constraint": r.get("surface_constraint"),
         "raw_delta": r.get("raw_ref_delta"),
+        "reference_mask": r.get("ref_mask"),
     }
     result = {
         **_find_info(out),

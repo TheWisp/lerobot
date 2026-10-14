@@ -238,6 +238,36 @@ def test_reference_acquisition_and_recorded_hold_receive_the_same_correction(mon
     assert not p.tracking._constrain_find_result(job, answer)["ref_ok"]
 
 
+def test_held_reference_geometry_uses_the_same_refreshed_mask_as_matching(monkeypatch, tmp_path):
+    job, _, _, _ = setup_case(monkeypatch, tmp_path)
+    job.kind = "locate"
+    job.extra = {"ref_recording": "recorded", "ref_frame": 17}
+    original = job.result["mask"]
+    refreshed = np.zeros_like(original)
+    job.arrays = {"ref_mask": original}
+    used = []
+
+    def surface(recording, frame, mask):
+        used.append((recording, frame, mask))
+        return np.zeros((12, 3))
+
+    monkeypatch.setattr(p.tracking, "_reference_surface", surface)
+    monkeypatch.setattr(p.tracking, "_surface_decision", lambda *a: {"pose": np.eye(4).tolist()})
+    p.tracking._constrain_find_result(
+        job,
+        {
+            "ok": True,
+            "ref_ok": True,
+            "ref_delta": np.eye(4),
+            "ref_mask": refreshed,
+            "mask": original,
+        },
+    )
+    assert used[0][:2] == ("recorded", 17)
+    assert used[0][2] is refreshed
+    assert job.arrays["ref_mask"] is original, "the saved segmentation stays intact"
+
+
 def test_unverified_demo_reference_aborts_before_the_runner_can_move(monkeypatch, tmp_path):
     job, teach, _, _ = setup_case(monkeypatch, tmp_path)
     demo = SimpleNamespace(

@@ -47,6 +47,25 @@ can set an arm target. Replacing teach/track while geometry is running discards
 that result. Both the primary object and secondary targets use corrected poses.
 Held-object correction consumes accepted observations rather than raw P2P fits;
 recorded demo holds and fresh reference finds undergo the same surface policy.
+When registration back to the original designation cannot establish a carried
+hold, the runner still measures at its first held observation line. It matches
+fresh live RGB-D against still held views from this demonstration attachment.
+SAM resegments each reference from its recorded mask's interior prompt; matching
+and surface verification use that same refreshed mask. These alternative
+reference transforms never enter the designation-based live tracker.
+
+For a reference fingertip pose `D`, current fingertip pose `L`, camera-to-base
+transform `B`, and reference-to-live visual registration `M`, the two attachments
+are `inverse(D) @ B` and `inverse(L) @ B @ M`. Their ratio gives the gripper
+correction without first matching the carried view back to the table view.
+Multiple fresh observations must agree within the existing hold tolerances.
+Rotation also requires at least two reference views agreeing within the planner's
+angular tolerance. If it does not, explicitly allowed grasp prediction supplies
+rotation while translation aligns the same matched material patch centre.
+This is logged and rendered as position measured, rotation predicted; it cannot
+satisfy a request that forbids predicted orientation. Inconclusive checks retain
+their individual find IDs and reasons. A shared hold wait budget bounds retries.
+
 The selected demo planning references are also measured before the key-frame runner
 can dispatch. Planning inverts these checked reference poses; inverting a raw,
 tilted demo pose would otherwise reintroduce its error into a corrected live pose.

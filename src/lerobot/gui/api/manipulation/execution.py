@@ -33,7 +33,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from lerobot.showservo import motion as core
 
-from . import acquisition, camera, groups, holds, planning, recording, runtime
+from . import acquisition, camera, groups, held_views, holds, planning, recording, runtime
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -709,12 +709,18 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
                 if act.correct_hold and not act.allow_grasp_prediction and demo_carry is None:
                     # This reference is known before grasping. Do not pick up an
                     # object whose required post-carry comparison cannot be made.
-                    act.place = {
-                        "hold_used": "unverified",
-                        "demo_carry_problem": carry_problem,
-                        "reference_preflight": "failed before grasp",
-                    }
-                    return f"cannot verify {held_obj}'s demo carry reference before grasp: {carry_problem}"
+                    direct_refs = await asyncio.get_running_loop().run_in_executor(
+                        runtime._RENDER_EXECUTOR, held_views.references, demo, held_obj
+                    )
+                    if not direct_refs:
+                        act.place = {
+                            "hold_used": "unverified",
+                            "demo_carry_problem": carry_problem,
+                            "reference_preflight": "failed before grasp",
+                        }
+                        return (
+                            f"cannot verify {held_obj}'s demo carry reference before grasp: {carry_problem}"
+                        )
                 if demo_grip is None and demo_carry is None and holding is None:
                     return (
                         f"how the demo holds {held_obj} cannot be known: no firm grip in the demo; at its grip, "
@@ -1012,13 +1018,14 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
             streaming = False
             # Re-check at the first held line, before later approach/contact lines. An earlier grip estimate cannot
             # replace a missing current visual hold when correction is enabled.
-            live_place, live_place_problem = None, "not measured: the demo's carry shows too little of it"
-            if demo_carry is not None:
+            live_place, live_place_problem = None, "designation-based demo carry reference unavailable"
+            if demo_carry is not None or act.correct_hold:
                 act.step = f"checking how {held_obj} sits in the gripper"
                 why = await still()
                 if why:
                     fail(f"at {last_label}: {why}")
                     return
+            if demo_carry is not None:
                 live_place, live_place_problem = await holds._live_hold(
                     demo,
                     held_obj,
@@ -1046,7 +1053,32 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
                 if demo_carry is not None and live_place is not None
                 else None
             )
+            direct, direct_problem, direct_attempts = None, "", []
+            if act.correct_hold and fix_place is None:
+                act.step = f"matching {held_obj} against the demo's held views"
+                prediction = fix_grip if fix_grip is not None else fix_grasp
+                direct, direct_problem, direct_attempts = await held_views.measure(
+                    demo, held_obj, t_bc, prediction, lambda: act.stop_requested
+                )
+                if act.stop_requested:
+                    fail("stopped")
+                    return
+                if (
+                    direct is not None
+                    and direct["orientation"] == "predicted"
+                    and not act.allow_grasp_prediction
+                ):
+                    direct_problem = "held position measured, but orientation still requires grasp prediction"
+                    direct = None
+                if direct is not None:
+                    fix_place = direct["fix"]
+                else:
+                    live_place_problem += f"; {direct_problem}"
             fix, used, evidence = fix_place, "pre-place", "measured"
+            if direct is not None:
+                used = "held-view registration"
+                if direct["orientation"] == "predicted":
+                    used, evidence = "held-view position; rotation predicted", "partly measured"
             if not act.correct_hold:
                 fix, used, evidence = np.eye(4), "off", "off"
             elif fix is None and act.allow_grasp_prediction:
@@ -1068,6 +1100,7 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
                     "grasp_estimate_available": fix_grasp is not None,
                     "grip_measurement_available": fix_grip is not None,
                     "allow_grasp_prediction": act.allow_grasp_prediction,
+                    "held_view_attempts": direct_attempts,
                 }
                 fail(
                     f"cannot verify {held_obj}'s current held pose: {carry_problem or live_place_problem}; "
@@ -1093,6 +1126,11 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
                 "hold_used": used,
                 "hold_evidence": evidence,
                 "fallback_reason": (carry_problem or live_place_problem) if evidence == "predicted" else "",
+                "held_view_comparison": None
+                if direct is None
+                else {k: v for k, v in direct.items() if k != "fix"},
+                "held_view_problem": direct_problem,
+                "held_view_attempts": direct_attempts,
                 "demo_grip": summary(demo_grip, grip_problem),
                 "live_grip": summary(live_grip, live_grip_problem),
                 "demo_carry": summary(demo_carry, carry_problem),
@@ -1107,7 +1145,7 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
                 "at": time.time(),
                 "source": used,
                 "evidence": evidence,
-                "reason": act.place["fallback_reason"],
+                "reason": direct["reason"] if evidence == "partly measured" else act.place["fallback_reason"],
             }
             run.meta.setdefault("hold_selections", []).append(dict(run.meta["hold_selection"]))
             run.meta.setdefault("holds", []).append(

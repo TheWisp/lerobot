@@ -203,6 +203,10 @@ def _replay_draw(
     )
     if selection.get("evidence") == "predicted" and f.get("t_result", f["t_frame"]) >= selection["at"]:
         lines.insert(0, f"HOLD: {selection['source']}; assumes no slip; no post-lift visual verification")
+    elif selection.get("evidence") == "partly measured":
+        lines.insert(0, "HOLD: position measured against held demo views; rotation remains predicted")
+    elif selection.get("source") == "held-view registration":
+        lines.insert(0, "HOLD: measured against held demo views")
     lines += held_lines + carried_lines
     for k, s in enumerate(lines):
         _replay_text(bgr, s, (8, 18 + 17 * k))

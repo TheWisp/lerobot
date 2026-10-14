@@ -1261,6 +1261,7 @@ def _job_ref(job: dict, data) -> dict | None:
         "frame": job["ref_frame"],
         "mask": data["ref_mask"],
         "symmetry": int(job.get("ref_symmetry") or 1),
+        "refresh_mask": bool(job.get("ref_refresh_mask")),
     }
 
 
@@ -1286,6 +1287,24 @@ def _locate(
         return _npz(meta=json.dumps({"ok": False, "reason": "a locate needs the demo's view of the object"}))
     if click is None:
         return _npz(meta=json.dumps({"ok": False, "reason": "a locate needs a click on the object"}))
+    reference_arrays = {}
+    if ref.get("refresh_mask"):
+        import cv2
+
+        rgb = cv2.imread(str(pathlib.Path(ref["recording"]) / "rgb" / f"{ref['frame']:06d}.jpg"))
+        if rgb is None:
+            return _npz(meta=json.dumps({"ok": False, "reason": "held reference image is missing"}))
+        region = cv2.resize(
+            np.asarray(ref["mask"], np.uint8), (rgb.shape[1], rgb.shape[0]), interpolation=cv2.INTER_NEAREST
+        )
+        if not region.any():
+            return _npz(meta=json.dumps({"ok": False, "reason": "held reference mask is empty"}))
+        y, x = np.unravel_index(cv2.distanceTransform(region, cv2.DIST_L2, 5).argmax(), region.shape)
+        refreshed = sam.mask_at(cv2.cvtColor(rgb, cv2.COLOR_BGR2RGB), int(x), int(y))
+        if refreshed is None:
+            return _npz(meta=json.dumps({"ok": False, "reason": "held reference could not be segmented"}))
+        ref = {**ref, "mask": refreshed}
+        reference_arrays["ref_mask"] = refreshed
     mask = sam.mask_at(frame.rgb, click[0], click[1])
     if mask is None:
         return _npz(meta=json.dumps({"ok": False, "reason": "SAM3 found no object under the click"}))
@@ -1294,7 +1313,7 @@ def _locate(
     if track is not None and found.get("ref_ok"):
         name, scene, keep = track
         found["tracking"] = scene.start(frame, intr, {name: mask}, keep)
-    return _npz(meta=json.dumps({"ok": True, **found}), mask=mask, **arrays)
+    return _npz(meta=json.dumps({"ok": True, **found}), mask=mask, **arrays, **reference_arrays)
 
 
 SURFACE_MIN_POINTS = (
