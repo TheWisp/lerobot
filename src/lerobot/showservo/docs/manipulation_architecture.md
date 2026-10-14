@@ -239,7 +239,8 @@ set, IK seeds or search budget is exhausted, that is a search failure, not proof
 that the object lies outside the arm's physical reach.
 
 The rotated-dowel scene on October 14 exposes three separate failure modes.
-The live object was about 89 degrees from the demo; the sequential reach
+The proposed full 3D object motion was about 87 degrees from the demo; this
+must not be read as an 87-degree turn in the tray plane. The sequential reach
 preview reported 108 mm residual at key frame 1, while an independent seed
 solved the same pose to about 2 mm and 2 degrees. A flipped tool pose had a
 kinematic path, but an initial offline candidate accepted as a two-jaw grasp
@@ -254,6 +255,21 @@ from the demo view; a box or CAD mesh must be validated against a known grasp
 before being treated as exact contact truth. The stricter reset-prototype check
 now refuses proximity-only grasps; its prior positive fixture is retained only
 to test the downstream carry and placement path in isolation.
+
+An offline comparison of the saved demo and live RGB-D object clouds gives
+independent support for the large 3D motion: after applying the proposed pose,
+the median demo-to-live nearest-surface distance is 0.74 mm and 95.6% of demo
+points lie within 3 mm of a live point. A further 30-degree roll about the
+object's long axis lowers that fraction to 76.1%; a -10-degree change raises
+it to 98.2%, so some roll uncertainty remains. This is surface agreement, not
+ground truth, since visibility differs and the live mask came from the tracker.
+It does not justify discarding the measured rotation to make the wrist easier
+to reach. A coarse offline search of rotations about the object's own long
+axis found 102 near-jaw poses with a low IK residual, but none had a verified
+opposing pinch; two cleared only the _observed_ obstacles after unknown mount
+space was excluded. Those are exploratory samples, not a safe act plan. The
+saved frame, tracker state, point-cloud plot and search scripts are under
+`/home/feit/Documents/showservo-experiments/20261015/grasp-freedom/`.
 
 ### Held-pose evidence: what the earlier comparison established
 
