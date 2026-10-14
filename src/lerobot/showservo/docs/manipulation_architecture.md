@@ -125,18 +125,17 @@ below distinguish accepted measurements from predictions and proposed work.
 ## Adaptation mechanisms and their limits
 
 This is the review map for consolidating adaptation within the single key-frame
-architecture. Status describes the implementation at `2c6953410` (October 14,
-2026). Object names in the evidence identify experiments, not policy branches.
+architecture. Status describes the reactive implementation of October 14, 2026. Object names in the evidence identify experiments, not policy branches.
 
-| Mechanism                              | Implemented behavior                                                                                                                                | Boundary or unresolved limitation                                                                                                                   |
-| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Object-relative targets                | Compose demo key frames with the current object's motion. Pre-grasp line targets update while approaching.                                          | A streamed follow/contact segment uses a precomputed path; new observations do not continuously retarget it.                                        |
-| Reacquisition and surface correction   | Fresh segmentation/registration recovers identity; verified surface geometry constrains supported pose components.                                  | Visibility is not a verified full pose. Rejection can leave only prediction available.                                                              |
-| Environment and attachment propagation | Groups carry established relationships through missing observations; a held group can be driven by arm kinematics.                                  | An arm-driven held group is not independent evidence that the object stayed fixed in the fingers.                                                   |
-| Held-object correction                 | Compare demo and live attachments, including direct matching to demo held views; replan the remaining path before applying a correction.            | Direct matching currently occurs while stopped at the first held line. Later clearer views do not update that correction during the contact stream. |
-| Equivalent landing search              | Search the rotations permitted by the demo, choose a feasible full path, and search again if the current landing fails after grasp/hold correction. | This is a bounded, demo-seeded search, not maximum reachability or general collision planning; details below.                                       |
-| Playback progress                      | Joint-lag guards slow/pause the demo clock and stop a stalled arm.                                                                                  | Joint tracking is not object-relative convergence. There is no automatic rewind after target motion or general terminal task-success check.         |
-| Repeated interactions                  | Rebase a reused object's reference before its next attachment and repeat the checks.                                                                | Corrections and observations must belong to that interaction; a previous grasp cannot authorize the next.                                           |
+| Mechanism                              | Implemented behavior                                                                                                                                | Boundary or unresolved limitation                                                                                                                         |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Object-relative targets                | Compose demo key frames with the current object's motion. Pre-grasp line targets update while approaching.                                          | Follow/contact samples are recomposed each control cycle; accepted poses are required, and missing observations remain predictions.                       |
+| Reacquisition and surface correction   | Fresh segmentation/registration recovers identity; verified surface geometry constrains supported pose components.                                  | Visibility is not a verified full pose. Rejection can leave only prediction available.                                                                    |
+| Environment and attachment propagation | Groups carry established relationships through missing observations; a held group can be driven by arm kinematics.                                  | An arm-driven held group is not independent evidence that the object stayed fixed in the fingers.                                                         |
+| Held-object correction                 | Compare demo and live attachments, including direct matching to demo held views; replan the remaining path before applying a correction.            | After the initial checkpoint, a background observer retries held matching through contact until opening starts; accepted results update the next command. |
+| Equivalent landing search              | Search the rotations permitted by the demo, choose a feasible full path, and search again if the current landing fails after grasp/hold correction. | This is a bounded, demo-seeded search, not maximum reachability or general collision planning; details below.                                             |
+| Playback progress                      | Joint-lag guards slow/pause the demo clock and stop a stalled arm.                                                                                  | A changed pose inserts bounded correction samples before phase progress; there is no rewind or independent terminal task-success check.                   |
+| Repeated interactions                  | Rebase a reused object's reference before its next attachment and repeat the checks.                                                                | Corrections and observations must belong to that interaction; a previous grasp cannot authorize the next.                                                 |
 
 ### Equivalent landings: current selection rule
 
@@ -215,9 +214,8 @@ follow segment; absence of visible target motion does not prove free-space clear
 
 Commit `972403e6b` installed direct held-view matching, including its position-only
 result when reference orientations disagree and prediction is explicitly allowed.
-It was not reverted. The deployed runner tries it at the first held line, before
-later approach/contact lines. It does not collect a moving carry window or retry
-at the later views that supported the offline comparison. In real run
+It was not reverted. That version tried it at the first held line, before
+later approach/contact lines, without collecting later moving views. In real run
 `20261014_075438`, P2P lost the object during grasping; six completed direct matches
 failed common-surface verification and the seventh expired with the shared
 five-second budget. Zero observations were accepted, so the recorded correction
@@ -231,16 +229,62 @@ Local evidence is in the experiment archive under
 RGB-D frames, arm samples and measurement decisions. These local artifacts are
 not bundled with this document.
 
-**Proposed, not implemented:** use supported observations gathered throughout
-free carry, expressed in the correct fingertip frame at each capture time. Keep
-measured components separate from unobservable ones, and retain prediction only
-for the latter under the declared fallback policy. Verify material-patch identity
-and account for partial visibility; removing the whole-shape extent or overlap
-gate alone would not establish a valid partial match. A changed attachment or
-slip invalidates the previous consensus. At a verified pre-contact boundary,
-choose the supported correction and replan from the current state. If the useful
-view only occurs later, plan a clear inspection pose that exposes it before
-contact; do not simply descend into contact to obtain a better image.
+### Per-cycle execution and attachment updates
+
+Every planned sample retains its object frame, local pose, held flag, gripper
+command, joint hint and floor reference. The live executor composes
+`object_motion @ local_pose @ attachment_correction` (the correction only when
+held) on each control cycle. A new accepted receiver pose or attachment estimate
+therefore changes the next command during a follow, including contact. The
+controller keeps the current demonstration phase; it does not rewind. Bounded
+correction steps precede phase advancement and its gripper event. Terminal
+settling also reads updated targets and uses the existing reach and servo
+settling tolerances, rather than requiring numerical-zero IK error at a limit.
+
+The motor loop owns the bus and receives at most one pending sample. A compare
+and swap prevents a slow solve from replacing an already consumed command.
+Updating the pending command preserves the playback clock and lag guards;
+a temporary empty producer queue cannot clear a hard-lag timeout. Release and
+withdrawal remain ordered. Sliced paths start from current joints, because their
+old endpoints may have changed during live execution.
+
+Every new step passes IK, calibrated joint bounds, joint-step limits and
+workspace/floor checks. An infeasible step holds phase and gripper while the
+executor searches the remaining path under the demo's permitted landing turns.
+This live search tries all sampled-feasible candidates in posture-cost order,
+including a bounded entry from the current command; it has no four-candidate
+cutoff. Changed observations invalidate a search beyond the existing solver
+accuracy; the next step is checked again before commanding it. Initial and
+checkpoint planning still use the four-candidate limit described above. Neither
+path provides general collision checking or exhaustive IK-branch search.
+
+After the initial hold checkpoint, direct held-view matching runs beside the
+trajectory with one worker request at a time. It uses the shared camera's frame
+publication timestamp and interpolated, checked encoder history, never FK at
+job completion. Missing timestamp brackets or serial gaps longer than two
+motor periods reject the frame. The host publication timestamp is **not a
+calibrated exposure timestamp**: sensor/processing latency remains a measurement
+uncertainty. This is not multi-camera fusion.
+
+The existing segmentation, surface checks and consensus rules remain required.
+An accepted full or permitted position-only correction updates live targets and
+the arm-driven group attachment. Prediction remains labelled as such; copying
+the correction into a group is not independent verification. Each observation
+window is bounded by the existing hold budget, and each result records its
+observation and acceptance times. Release and new interactions invalidate old
+results. Opening freezes further attachment updates; it does not remove the
+remaining release/withdrawal commands. Records retain correction revisions,
+per-command goals, and live landing-search attempts. More informative later
+views may still fail verification; live execution alone does not make a pose
+observable.
+
+The ring outline in replay is the saved controller pose, not proof of a fresh
+measurement. In run `20261014_075438`, the last accepted ring view was at +10.12 s.
+Later group records refused its own motion when visibility was below the
+tracker's 97% requirement and carried it with group 0 (the table). The resulting
+outline stayed almost fixed even if the object moved independently. Replanning
+from that estimate cannot repair the missing observation. Replays retain the
+last visual timestamp and own-group-fit refusal reason.
 
 ## Waiting, parallel work and servo freezes
 
@@ -265,29 +309,14 @@ the fingertip immediately before fetching the frame, without a capture-time join
 interpolation contract. Moving that helper into a background task unchanged
 would introduce image/arm timing error.
 
-**Proposed concurrency contract, not implemented:**
-
-- Extend reference preparation and caching to the direct held-view masks and
-  geometry before the hold checkpoint. Cache by recording/reference, calibration
-  and verification-policy identity, and invalidate it when those inputs change.
-- Capture immutable RGB-D, mask/reference identity, capture time and synchronized
-  joint/FK evidence during a checked free-space carry. Interpolate arm state at
-  capture time, reject unsupported timestamp gaps, and never attach the arm pose
-  at job completion to an older image.
-- Give tracking and fresh held measurements bounded scheduling budgets in the
-  perception worker. Coalesce/drop obsolete pending frames instead of growing a
-  queue. A delayed result retains its observation time, attachment/interaction
-  identity and evidence age; release, slip or a new grasp invalidates it.
-- Accumulate supported attachment evidence while the arm follows its already
-  checked carry. Do not silently splice a newly estimated correction into an
-  executing contact path. At the pre-contact boundary, use a fresh validated
-  consensus or the explicit fallback/refusal policy; wait only for any remaining
-  bounded measurement budget.
-- Prepare candidate plans from immutable state snapshots in the background.
-  Recheck the target, attachment, current joints and relevant scene geometry
-  before execution; invalidate stale plans. Parallel candidate solving needs
-  isolated solver state and bounded CPU use. It must not starve the control loop
-  or create another motor-bus owner.
+**Remaining concurrency work, not implemented:** prepare and cache direct
+held-view geometry before the checkpoint; introduce priority/coalescing in the
+shared perception worker; calibrate exposure time against encoder reads; and
+recognize attachment changes that invalidate an accumulating consensus. The
+initial stationary checkpoint and its bounded wait remain. The new observer
+starts after that checkpoint, rather than claiming to have removed the earlier
+7.18-second pause. Active inspection and general collision-aware transitions
+also remain unimplemented.
 
 Parallelizing matching hides computation only if the carry provides usable
 evidence. Repeated frames of the same uninformative view can still yield no pose.
@@ -301,7 +330,7 @@ separate intentional observation waits, queue/compute time, plan search,
 measurement age, servo catch-up and hardware faults. Validation must cover late
 results during rotation, changed target/attachment, cancellation/release, worker
 saturation and a real rollout demonstrating that fresh evidence was applied
-before contact without degrading control-loop latency. Replay accuracy alone
+during motion without degrading control-loop latency. Replay accuracy alone
 does not validate this scheduling or the physical correction.
 
 ## Regression coverage

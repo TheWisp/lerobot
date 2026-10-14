@@ -314,7 +314,7 @@ def _paint_groups(bgr: np.ndarray) -> np.ndarray:
 
 async def _feed_held(name: str, tip_obj: np.ndarray, t_bc: np.ndarray) -> None:
     """While the gripper holds ``name``: its pose by the arm's joints, the fingertip times how it sat in the fingers
-    when they closed (``tip_obj``), sent to the point groups every GROUPS_HELD_S (GroupTracker.hold). The fingers hide
+    when they closed (``tip_obj``, or a callback returning the current accepted attachment), sent to the point groups every GROUPS_HELD_S (GroupTracker.hold). The fingers hide
     it from the camera, and its hidden points stay with what it lay on; the arm does not lose it."""
     from .. import jog
 
@@ -322,7 +322,8 @@ async def _feed_held(name: str, tip_obj: np.ndarray, t_bc: np.ndarray) -> None:
     while True:
         cur = jog.current_tip_and_anchor()
         if cur is not None:
-            pose = inv_bc @ np.asarray(cur[0], dtype=float) @ tip_obj
+            attachment = tip_obj() if callable(tip_obj) else tip_obj
+            pose = inv_bc @ np.asarray(cur[0], dtype=float) @ attachment
             await _groups_call("POST", "/objects/held", {name: np.round(pose, 6).ravel().tolist()})
         await asyncio.sleep(runtime.GROUPS_HELD_S)
 

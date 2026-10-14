@@ -44,6 +44,19 @@ def fake_playback(monkeypatch, send) -> None:
             play["at"].append(time.time())
         return play["sent"], list(play["at"])
 
+    def update_next(expected, sample, due_s):
+        if play["sent"] != expected:
+            return False
+        k = expected + 1
+        assert len(play["samples"]) <= k + 1
+        if k == len(play["samples"]):
+            play["samples"].append(sample)
+            play["due"].append(due_s)
+        else:
+            play["samples"][k], play["due"][k] = sample, due_s
+        return True
+
+    monkeypatch.setattr(jog, "update_playback_next", update_next)
     monkeypatch.setattr(jog, "play_joints", play_joints)
     monkeypatch.setattr(jog, "playback_state", playback_state)
     monkeypatch.setattr(jog, "playback_stop", lambda: play.update(samples=[]))

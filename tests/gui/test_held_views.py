@@ -166,3 +166,49 @@ def test_runner_measures_after_lift_even_without_designation_based_demo_hold(tmp
         assert not np.allclose(calls[0][1], correction), "prediction is a seed, not the returned measurement"
     finally:
         _end_place_state()
+
+
+@pytest.mark.usefixtures("act_simulation")
+def test_runner_applies_measurement_that_arrives_during_contact_and_rejects_after_release(
+    tmp_path, monkeypatch
+):
+    import time
+
+    from lerobot.gui.api import jog, manipulation
+    from tests.gui.test_stream_objects import PLACE_AT, _TipKinematics
+
+    correction = np.eye(4)
+    correction[0, 3] = -0.012
+    published = []
+
+    async def watch(demo, obj, bc, prediction, stopped, publish, log):
+        while not stopped():
+            if jog.current_tip_and_anchor()[0][2, 3] < 0.035:
+                result = {
+                    "fix": correction,
+                    "orientation": "measured",
+                    "reason": "",
+                    "accepted_at": time.time(),
+                    "observed_at": time.time(),
+                }
+                publish(result)
+                published.append(result)
+                while not stopped():
+                    await asyncio.sleep(0.001)
+                publish({**result, "fix": np.eye(4)})
+                return
+            await asyncio.sleep(0.001)
+
+    monkeypatch.setattr(held_views, "watch", watch)
+    try:
+        demo, sim, _views, measured = _run_place_act(tmp_path, monkeypatch)
+        act = manipulation.runtime._state.act
+        assert act.ok, act.reason
+        assert published, "the estimate must arrive after the corrected hover, during descent"
+        np.testing.assert_allclose(act.place["fix"], correction)
+        wanted = measured["box"] @ demo.tips[PLACE_AT["place_end"]] @ correction
+        actual = _TipKinematics().forward_kinematics(sim["streamed"][-1])
+        np.testing.assert_allclose(actual[:3, 3], wanted[:3, 3], atol=0.0005)
+        assert act.place["hold_used"] == "held-view registration"
+    finally:
+        _end_place_state()

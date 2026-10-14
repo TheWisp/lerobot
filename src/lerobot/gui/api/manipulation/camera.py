@@ -72,6 +72,22 @@ async def _frame():
         raise HTTPException(500, f"camera read failed: {e}") from e
 
 
+async def timed_frame(after: float | None = None):
+    """An immutable aligned frame with its camera publication timestamp.
+
+    This is the camera's existing host perf-counter clock, not sensor exposure
+    time. Cameras without the timestamp contract cannot supply moving holds.
+    """
+    from .. import showservo
+
+    cam = showservo.live_camera()
+    read = getattr(cam, "read_newer_color_and_depth", None)
+    if read is None:
+        return None
+    rgb, depth, stamp = await asyncio.get_running_loop().run_in_executor(runtime._GRAB_EXECUTOR, read, after)
+    return rgb.copy(), depth.astype(np.float32) / 1000.0, cam.color_intrinsics(), stamp
+
+
 def _table_normal_cam(t_base_cam: np.ndarray) -> np.ndarray:
     """The table's up direction (base +z) seen from the camera."""
     return np.asarray(t_base_cam, dtype=float)[:3, :3].T @ np.array([0.0, 0.0, 1.0])

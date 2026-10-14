@@ -231,6 +231,10 @@ class _Jog:
     guarded_path: GuardedPath | None = None
     path_busy: bool = False  # reservation while a path is validated or handed back
     last_read_at: float = 0.0  # monotonic: the last complete, checked motor read
+    playback_live: bool = False  # a bounded producer can temporarily have no pending sample
+    pose_history: deque = field(
+        default_factory=lambda: deque(maxlen=600)
+    )  # 20 s at HZ; timed encoder samples
     tick_s: deque = field(default_factory=lambda: deque(maxlen=TICKS_TIMED))  # the last ticks' durations
     slow_ticks: deque = field(
         default_factory=lambda: deque(maxlen=SLOW_TICKS_KEPT)
@@ -388,7 +392,9 @@ def _advance_playback(j: _Jog, now: float) -> None:
     behind = errors.get(lagging, 0.0)
     pending = k < len(j.playback) and j.playback_sent >= 0
     opening = pending and j.playback[k].get("gripper", 0.0) < j.q_target.get("gripper", 0.0) - 1e-6
-    blocked = pending and (behind > PLAYBACK_STOP_LAG_DEG or (opening and behind > PLAYBACK_LAG_DEG))
+    blocked = (pending or (j.playback_live and j.playback_sent >= 0)) and (
+        behind > PLAYBACK_STOP_LAG_DEG or (opening and behind > PLAYBACK_LAG_DEG)
+    )
     j.playback_blocked = (j.playback_blocked if j.playback_blocked is not None else now) if blocked else None
     if blocked and now - j.playback_blocked >= PLAYBACK_HOLD_MAX_S:
         j.halted = True
@@ -461,6 +467,7 @@ def _loop(j: _Jog) -> None:
             j.good, j.bad_reads = state, 0
             _faults(robot.bus, state)
             q_obs = state.q
+            observed_at = time.perf_counter()
             t_read = time.perf_counter()
             if grip_target is not None:
                 step = GRIP_UNITS_S / HZ
@@ -549,6 +556,7 @@ def _loop(j: _Jog) -> None:
                     j.q_cmd, j.ref = q_cmd, ref
                 j.holding = holding
                 j.q_obs, j.temps, j.load = q_obs, temps, loads
+                j.pose_history.append((observed_at, dict(q_obs)))
                 j.last_read_at = time.monotonic()
                 j.ticks += 1
                 if j.record is not None:
@@ -1183,6 +1191,7 @@ def play_joints(samples: list[dict[str, float]], due_s: list[float]) -> None:
             raise RuntimeError(f"jog is frozen: {j.reason}")
         if j.mode != "joints":
             raise RuntimeError("the arm is not taking joint targets")
+        j.playback_live = False
         j.playback = [dict(s) for s in samples]
         j.playback_due = [float(t) for t in due_s]
         j.playback_t0 = j.playback_tick = time.monotonic()
@@ -1195,6 +1204,50 @@ def playback_state() -> tuple[int, list[float]]:
     j = _jog
     with j.lock:
         return j.playback_sent, list(j.playback_sent_at)
+
+
+def update_playback_next(expected: int, sample: dict[str, float], due_s: float) -> bool:
+    """Replace/append ONLY the next unsent sample, without resetting lag guards or the clock.
+
+    Compare-and-swap prevents a solve based on an older command from overwriting
+    a newer one consumed by the motor thread. The producer keeps at most one
+    command pending; gripper events therefore cannot be skipped by a slow solve.
+    """
+    j = _jog
+    with j.lock:
+        if not j.connected or j.halted or j.mode != "joints" or j.playback is None:
+            raise RuntimeError("the live joint stream is no longer active")
+        if j.playback_sent != expected:
+            return False
+        j.playback_live = True
+        k = expected + 1
+        if len(j.playback) > k + 1:
+            raise RuntimeError("live playback may have only one pending sample")
+        if due_s < (j.playback_due[expected] if expected >= 0 else 0.0):
+            raise ValueError("live playback time must not go backwards")
+        if k == len(j.playback):
+            j.playback.append(dict(sample))
+            j.playback_due.append(float(due_s))
+        else:
+            j.playback[k], j.playback_due[k] = dict(sample), float(due_s)
+        return True
+
+
+def joints_at(at: float, max_gap_s: float) -> dict[str, float] | None:
+    """Interpolate checked encoder reads bracketing a camera's perf-counter timestamp.
+
+    Never extrapolate a moving arm or bridge a serial-read stall. A caller may
+    retry after the next motor tick supplies the right bracket.
+    """
+    with _jog.lock:
+        history = list(_jog.pose_history)
+    for (ta, a), (tb, b) in zip(history, history[1:], strict=False):
+        if ta <= at <= tb:
+            if tb - ta > max_gap_s or tb <= ta:
+                return None
+            u = (at - ta) / (tb - ta)
+            return {m: a[m] + u * (b[m] - a[m]) for m in a}
+    return None
 
 
 def playback_stop() -> None:

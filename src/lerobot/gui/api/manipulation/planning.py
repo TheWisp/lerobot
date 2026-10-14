@@ -662,6 +662,21 @@ def _plan_act_once(
         gi,
         *(ranges if ranges is not None else (None, None)),
     )
+    # Retain the reference relation for every sample. Recomposition can update
+    # either side (receiving object and held attachment) without replaying an
+    # earlier phase or confusing a new live pose with the old planned world pose.
+    by_label = {s["label"]: s for s in steps}
+    local, names, attached = [], [], []
+    for label, pose in zip(plan["stage"], plan["poses"], strict=True):
+        s = by_label.get(label)
+        if s is None or s["move"] == "lift":
+            names.append(core.WORLD_FRAME)
+            local.append(pose)
+            attached.append(False)
+        else:
+            names.append(s["frame"])
+            local.append(np.linalg.inv(s["motion"]) @ pose @ np.linalg.inv(s["fix"]))
+            attached.append(s["held"])
     fine = (sol["residual_m"] <= core.ACT_REACH_TOL_M) & (sol["residual_deg"] <= core.ACT_REACH_TOL_DEG)
     pos = plan["poses"][:, :3, 3]
     lo, hi = np.asarray(box[0], dtype=float), np.asarray(box[1], dtype=float)
@@ -756,6 +771,14 @@ def _plan_act_once(
         "times": plan["times"],
         "q": sol["q"],
         "stage": plan["stage"],
+        "live_path": {
+            "local": np.stack(local),
+            "frames": names,
+            "held": np.asarray(attached),
+            "grips": plan["grips"],
+            "hints": plan["hints"],
+            "floor": plan["floor_ref"],
+        },
         "marks": marks,
         "summary": {
             "samples": len(plan["times"]),

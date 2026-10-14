@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import copy
 import dataclasses
 import functools
 import logging
@@ -31,9 +32,9 @@ import numpy as np
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
-from lerobot.showservo import motion as core
+from lerobot.showservo import motion as core, reactive
 
-from . import acquisition, camera, groups, held_views, holds, planning, recording, runtime
+from . import acquisition, camera, groups, held_views, holds, live_execution, planning, recording, runtime
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -263,6 +264,7 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
         if kin is None or cur is None:
             fail("connect the arm first")
             return
+        kin = copy.deepcopy(kin)  # planning FK/IK must not mutate the motor loop's model
         ranges = jog.servo_ranges()
         landing_obj = planning._landing_object(demo)
         landing_turn: tuple[np.ndarray, float] | None = (
@@ -529,17 +531,128 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
                     return f"{label}: not there after {runtime.ACT_STEP_TIMEOUT_S:.0f} s"
                 await asyncio.sleep(runtime.ACT_TICK_S)
 
+        live_fix = np.eye(4)
+        hold_watch = None
+        hold_live = False
+        hold_generation = 0
+        held_attachment = {}
+
+        def hold_prediction():
+            return live_fix.copy()
+
+        def hold_stopped(generation):
+            return generation != hold_generation or not hold_live or bool(interrupted())
+
+        async def reselect_live(planned, i, snapshot, correction, previous):
+            nonlocal landing_turn
+            path = reactive.slice_plan(planned, i)
+            if landing_obj is None or landing_turn is None or landing_obj not in path["live_path"]["frames"]:
+                return False
+            turns = core.landing_turns(demo.landing, int(demo.objects[landing_obj].get("symmetry") or 1))
+            if len(turns) == 1:
+                return False
+            centre, old_turn = landing_turn
+            current_centre = snapshot[landing_obj][:3, :3] @ centre + snapshot[landing_obj][:3, 3]
+            result = await asyncio.get_running_loop().run_in_executor(
+                runtime._ACT_EXECUTOR,
+                functools.partial(
+                    reactive.choose_turn,
+                    kin,
+                    path["live_path"],
+                    snapshot,
+                    correction,
+                    landing_obj,
+                    current_centre,
+                    turns,
+                    path["q"],
+                    previous,
+                    gi,
+                    ranges,
+                    jog.workspace_box(),
+                    (limits_before[0] * speed, limits_before[1] * speed),
+                    jog.HZ,
+                ),
+            )
+            run.meta.setdefault("live_replans", []).append({"at": time.time(), "phase": i, **result})
+            if interrupted() or result["turn_deg"] is None:
+                return False
+            # Recheck the current step on the next cycle. Changed observations
+            # invalidate the search result; no command from this search is sent.
+            fresh = {name: frame_now(name) for name in snapshot}
+            changes = [core.pose_residual(snapshot[name], fresh[name]) for name in snapshot]
+            changes.append(core.pose_residual(correction, live_fix))
+            changed = any(m > core.ACT_SOLVE_TOL_M or deg > core.ACT_SOLVE_TOL_DEG for m, deg in changes)
+            if changed:
+                run.meta["live_replans"][-1]["discarded"] = "observation changed during search"
+                return True
+            landing_turn = (centre, (old_turn + result["turn_deg"]) % 360.0)
+            return True
+
         async def stream(planned: dict[str, Any]) -> str:
             """Stream a plan's joints, then wait for the arm to settle on the last: "" or why not. The jog's loop plays
             them back on its own clock (:func:`jog.play_joints`); ``sent`` follows the samples that went out."""
             nonlocal streaming, sent
             q, times, stage = planned["q"], planned["times"], planned["stage"]
             sent = -1
+            if "live_path" in planned:
+                current = jog.current_tip_and_anchor()
+                if current is None:
+                    return "the arm went away"
+                # A prior slice may have been retargeted; never restart at its old world-space endpoint.
+                q = np.array(q, copy=True)
+                q[0] = [current[2][m] if m != "gripper" else q[0, gi] for m in MOTOR_NAMES]
+                planned = {**planned, "q": q}
             try:
                 await jog.joints_start(q_dict(q[0]))
             except RuntimeError as e:
                 return str(e)
             streaming = True
+            n = len(q)
+            if "live_path" in planned:
+
+                def observed(phase, command, stamp, goal):
+                    nonlocal sent, hold_live
+                    sent = phase
+                    act.step, act.progress = stage[phase], (phase + 1) / n
+                    run.target(
+                        stage[phase],
+                        joints=command,
+                        pose=goal,
+                        at=stamp,
+                        phase=phase,
+                        hold_revision=len(run.meta.get("hold_selections", [])),
+                    )
+                    if hold_live and (command[gi] - closing_cmd) * closing < -1e-6:
+                        # The attachment ends when opening starts, before withdrawal.
+                        hold_live = False
+                        if hold_watch is not None:
+                            hold_watch.cancel()
+
+                def live_motions():
+                    snapshots = {name: frame_now(name) for name in set(planned["live_path"]["frames"])}
+                    if obj in snapshots and inject and inject.get("at") == "aim":
+                        motion = snapshots[obj]
+                        snapshots[obj] = (
+                            _inject_transform(inject, (motion @ demo.tips[grasp_at])[:3, 3]) @ motion
+                        )
+                    return snapshots
+
+                def settled(lag):
+                    act.place = {**(act.place or {}), "settled_short_deg": lag}
+
+                why, _last = await live_execution.stream(
+                    planned,
+                    kin,
+                    live_motions,
+                    lambda: live_fix.copy(),
+                    interrupted,
+                    observed,
+                    reselect_live,
+                    limits_before,
+                    speed,
+                    settled=settled,
+                )
+                return why
             n = len(q)
             try:
                 jog.play_joints([q_dict(x) for x in q], [float(t) for t in times])
@@ -771,6 +884,12 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
                 hold_task = asyncio.create_task(demo_holds())
                 beside.append(hold_task)
             # ── up to the grasp check: lines walked, re-aimed at their objects; follows planned where the arm stands ──
+            hold_generation += 1
+            live_fix, hold_live = np.eye(4), False
+            if hold_watch is not None:
+                hold_watch.cancel()
+            hold_watch = None
+            held_attachment.clear()
             grip: dict[str, Any] = {}
             grip_watch: asyncio.Task | None = None
             closing, i_grasp_end = 1.0, None
@@ -897,9 +1016,16 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
                                     tip_obj = (
                                         np.linalg.inv(cur[0]) @ t_bc @ frames_g[-1][1]
                                     )  # how it sits in the fingers
+                                    held_attachment.update(
+                                        tip_obj=tip_obj, grasp_fix=grip.get("fix", np.eye(4))
+                                    )
                                     held = (
                                         held_name,
-                                        asyncio.create_task(groups._feed_held(held_name, tip_obj, t_bc)),
+                                        asyncio.create_task(
+                                            groups._feed_held(
+                                                held_name, lambda: held_attachment["tip_obj"], t_bc
+                                            )
+                                        ),
                                     )
                                     beside.append(held[1])
                             if demo_grip is None:
@@ -1008,9 +1134,11 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
             last = max(j for j, s in enumerate(carry["stage"]) if s == last_label)
             q_carry = np.array(carry["q"][: last + 1], dtype=float)
             q_carry[:, gi] = closing_cmd  # the grasp's closing: on the object the fingers stand short of it
-            why = await stream(
-                {"q": q_carry, "times": carry["times"][: last + 1], "stage": carry["stage"][: last + 1]}
-            )
+            carried_plan = reactive.slice_plan(carry, stop=last + 1)
+            carried_plan["q"] = q_carry
+            if "live_path" in carried_plan:
+                carried_plan["live_path"]["grips"] = np.full(last + 1, closing_cmd)
+            why = await stream(carried_plan)
             if why:
                 fail(why)
                 return
@@ -1166,6 +1294,69 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
             ):  # how far the lift and the carry moved the hold
                 moved_m, moved_deg = core.pose_residual(aimed @ fix_grip, aimed @ fix_place)
                 act.place.update(grip_vs_place_mm=moved_m * 1000.0, grip_vs_place_deg=moved_deg)
+            live_fix = np.asarray(fix).copy()
+            if held_attachment:
+                held_attachment["tip_obj"] = (
+                    np.linalg.inv(live_fix) @ held_attachment["grasp_fix"] @ held_attachment["tip_obj"]
+                )
+                held_attachment["grasp_fix"] = live_fix.copy()
+            hold_live = True
+
+            def publish_hold(result, held_obj=held_obj, phase_index=phase_index, generation=hold_generation):
+                nonlocal live_fix
+                if hold_stopped(generation):
+                    return
+                partial = result["orientation"] == "predicted"
+                if partial and not act.allow_grasp_prediction:
+                    return
+                live_fix = np.asarray(result["fix"]).copy()
+                at = result["accepted_at"]
+                source = "held-view position; rotation predicted" if partial else "held-view registration"
+                evidence = "partly measured" if partial else "measured"
+                run.meta["hold_selections"][-1]["until"] = at
+                selection = {
+                    "object": held_obj,
+                    "interaction": phase_index,
+                    "at": at,
+                    "observed_at": result["observed_at"],
+                    "source": source,
+                    "evidence": evidence,
+                    "fix": live_fix.tolist(),
+                    "reason": result["reason"],
+                }
+                run.meta["hold_selection"] = selection
+                run.meta["hold_selections"].append(dict(selection))
+                act.place.update(
+                    hold_used=source,
+                    hold_evidence=evidence,
+                    fix=live_fix.tolist(),
+                    held_view_comparison={k: v for k, v in result.items() if k != "fix"},
+                )
+                if held_attachment:
+                    # F = H_demo @ inv(H_live), hence H_new = inv(F_new) @ F_old @ H_old.
+                    held_attachment["tip_obj"] = (
+                        np.linalg.inv(live_fix) @ held_attachment["grasp_fix"] @ held_attachment["tip_obj"]
+                    )
+                    held_attachment["grasp_fix"] = live_fix.copy()
+
+            def log_hold(problem, attempts, held_obj=held_obj):
+                run.meta.setdefault("live_held_attempts", []).append(
+                    {"at": time.time(), "object": held_obj, "problem": problem, "attempts": attempts}
+                )
+
+            if act.correct_hold:
+                hold_watch = asyncio.create_task(
+                    held_views.watch(
+                        demo,
+                        held_obj,
+                        t_bc,
+                        hold_prediction,
+                        functools.partial(hold_stopped, hold_generation),
+                        publish_hold,
+                        log_hold,
+                    )
+                )
+                beside.append(hold_watch)
             # The hold changes the target after the carry has already been checked. Plan its correction together with
             # the remaining key frames before commanding it: a walk can otherwise stall at a wrist limit for 20 s.
             act.step = "planning the hold correction and place"
@@ -1202,25 +1393,14 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
             # Settle at the corrected held line before descending or releasing; a feasible command does not prove
             # that the loaded arm followed it. Both pieces use the very same checked joint path.
             corrected = max(j for j, s in enumerate(placing["stage"]) if s == last_label)
-            why = await stream(
-                {
-                    "q": placing["q"][: corrected + 1],
-                    "times": placing["times"][: corrected + 1],
-                    "stage": placing["stage"][: corrected + 1],
-                }
-            )
+            why = await stream(reactive.slice_plan(placing, stop=corrected + 1))
             if why:
                 fail(why)
                 return
             if corrected == len(placing["q"]) - 1:
                 act.step, act.ok = "done", True
                 continue
-            placing = {
-                **placing,
-                "q": placing["q"][corrected:],
-                "times": placing["times"][corrected:] - placing["times"][corrected],
-                "stage": placing["stage"][corrected:],
-            }
+            placing = reactive.slice_plan(placing, corrected)
             # The follow the hold ends in streams to its end, the release included, and the held object is let go of there;
             # what comes after streams on from that sample with the gripper empty.
             release_t = None if holding["release"] is None else float(demo.t[holding["release"]])
@@ -1234,13 +1414,10 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
             )
             ends = [j for j, s in enumerate(placing["stage"]) if s == release_label]
             end = ends[-1] if ends else len(placing["q"]) - 1
-            why = await stream(
-                {
-                    "q": placing["q"][: end + 1],
-                    "times": placing["times"][: end + 1],
-                    "stage": placing["stage"][: end + 1],
-                }
-            )
+            why = await stream(reactive.slice_plan(placing, stop=end + 1))
+            hold_live = False
+            if hold_watch is not None:
+                hold_watch.cancel()
             if not why and release_label is not None:
                 run.meta["hold_selection"]["until"] = time.time()
                 run.meta["hold_selections"][-1]["until"] = run.meta["hold_selection"]["until"]
@@ -1254,13 +1431,9 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
                 fail(why)
                 return
             if end < len(placing["q"]) - 1:
-                why = await stream(
-                    {
-                        "q": placing["q"][end:],
-                        "times": placing["times"][end:] - placing["times"][end],
-                        "stage": [placing["stage"][end + 1], *placing["stage"][end + 1 :]],
-                    }
-                )
+                withdrawal = reactive.slice_plan(placing, end)
+                withdrawal["stage"] = [placing["stage"][end + 1], *placing["stage"][end + 1 :]]
+                why = await stream(withdrawal)
                 if why:
                     fail(why)
                     return

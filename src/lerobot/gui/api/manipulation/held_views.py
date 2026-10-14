@@ -88,8 +88,11 @@ async def measure(
     t_bc: np.ndarray,
     predicted_fix: np.ndarray | None,
     stopped: Callable[[], bool],
+    *,
+    capture=None,
+    publish=None,
 ) -> tuple[dict | None, str, list[dict]]:
-    """Fresh held-view registration with the arm stopped before contact.
+    """Fresh held-view registration, stationary by default or with a timed capture provider.
 
     Prediction proposes the search region; fresh segmentation, matching, depth
     constraints and multi-frame agreement determine the measured correction.
@@ -109,7 +112,7 @@ async def measure(
         if cancelled():
             break
         ref = refs[attempt % len(refs)]
-        view = await holds._held_view(obj)
+        view = await (holds._held_view(obj) if capture is None else capture(obj))
         if view is None:
             return None, "the arm went away", attempts
         rgb, depth, intr, tip, mask = view
@@ -183,11 +186,73 @@ async def measure(
         # Sample different references and at least the normal hold view count;
         # an early three-view cluster must not win before the alternatives run.
         if result is not None and len(observations) >= core.HOLD_VIEWS:
+            if publish is not None and not cancelled():
+                publish(result)
             return result, "", attempts
     result = consensus(observations, predicted_fix)
+    if result is not None and publish is not None and not stopped():
+        publish(result)
     problem = (
         ""
         if result is not None
         else f"held-view comparison: {len(observations)} accepted views did not establish a current attachment"
     )
     return result, "stopped" if stopped() else problem, attempts
+
+
+async def watch(demo, obj, t_bc, prediction, stopped, publish, log):
+    """Keep measuring during motion; one job at a time, using capture-time FK.
+
+    Camera publication and encoder times share the host perf-counter clock.
+    Sensor exposure-to-publication latency remains a calibration uncertainty;
+    late jobs never substitute the arm's completion-time pose for the snapshot.
+    """
+    import copy
+
+    from .. import jog
+    from . import camera
+
+    original = jog.kinematics()
+    if original is None:
+        return
+    kin = copy.deepcopy(original)
+    last, observed_at = None, None
+
+    async def capture(_obj):
+        nonlocal last, observed_at
+        snapshot = await camera.timed_frame(last)
+        if snapshot is None:
+            return None
+        rgb, depth, intr, stamp = snapshot
+        last = stamp
+        # Wait for a right bracket, at most the existing history matching budget.
+        until = time.monotonic() + runtime.HISTORY_MATCH_S
+        q = jog.joints_at(stamp, 2.0 / jog.HZ)
+        while q is None and time.monotonic() < until and not stopped():
+            await asyncio.sleep(runtime.ACT_TICK_S)
+            q = jog.joints_at(stamp, 2.0 / jog.HZ)
+        if q is None:
+            return None
+        from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
+
+        tip = kin.forward_kinematics(np.array([q[m] for m in MOTOR_NAMES]))
+        observed_at = time.time() - (time.perf_counter() - stamp)
+        # A stale track mask is not a prompt on this newer image. Use the
+        # depth-supported attachment prediction to propose the click instead.
+        return rgb, depth, intr, tip, None
+
+    def deliver(result):
+        if not stopped():
+            publish({**result, "observed_at": observed_at, "accepted_at": time.time()})
+
+    while not stopped():
+        try:
+            _result, problem, attempts = await measure(
+                demo, obj, t_bc, prediction(), stopped, capture=capture, publish=deliver
+            )
+            log(problem, attempts)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log(f"live held measurement: {type(exc).__name__}: {exc}", [])
+        await asyncio.sleep(runtime.HOLD_VIEW_GAP_S)

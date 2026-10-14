@@ -295,6 +295,8 @@ class _Run:
         pose: np.ndarray | None = None,
         joints: np.ndarray | None = None,
         at: float | None = None,
+        phase: int | None = None,
+        hold_revision: int | None = None,
     ) -> None:
         """A target the act gave the arm, at ``at`` (wall clock) when it went out, or now."""
         entry: dict[str, Any] = {"t": time.time() if at is None else at, "step": step}
@@ -302,6 +304,10 @@ class _Run:
             entry["pose"] = np.asarray(pose, dtype=float).tolist()
         if joints is not None:
             entry["joints"] = np.asarray(joints, dtype=float).tolist()
+        if phase is not None:
+            entry["phase"] = phase
+        if hold_revision is not None:
+            entry["hold_revision"] = hold_revision
         self.targets.append(entry)
 
 
