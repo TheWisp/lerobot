@@ -192,19 +192,78 @@ def collides(a, b, margin=0.0):
     return bool(coal.collide(a, b, req, coal.CollisionResult()))
 
 
+def opposing_jaw_contacts(jaws, body, closing_axis, *, tolerance=0.002, max_penetration=0.003):
+    """Verify two jaw meshes meet opposite, non-edge faces of a measured rigid box.
+
+    Proximity alone does not establish a pinch: both jaws can graze the top, or
+    one can meet an end while the other misses the body. ``jaws`` are the two
+    calibrated collision objects at the closing configuration. The result is a
+    diagnostic dictionary so a rejected grasp can say what the geometry showed.
+    """
+    import coal
+
+    if len(jaws) != 2:
+        raise ValueError("a parallel-jaw pinch needs exactly two jaw bodies")
+    closing_axis = np.asarray(closing_axis, float)
+    if (
+        closing_axis.shape != (3,)
+        or not np.isfinite(closing_axis).all()
+        or np.linalg.norm(closing_axis) < 1e-9
+    ):
+        raise ValueError("the jaw closing axis must be a finite 3-vector")
+    local_axis = body.pose[:3, :3].T @ (closing_axis / np.linalg.norm(closing_axis))
+    target = box(body.size, body.pose)
+    points = []
+    distances = []
+    face_axes = []
+    for jaw in jaws:
+        result = coal.DistanceResult()
+        distance = float(coal.distance(jaw, target, coal.DistanceRequest(), result))
+        point = (np.asarray(result.getNearestPoint2()) - body.pose[:3, 3]) @ body.pose[:3, :3]
+        distances.append(distance)
+        points.append(point)
+        if not -max_penetration <= distance <= tolerance:
+            return {"ok": False, "reason": "a jaw misses or penetrates the object", "distances": distances}
+        half = body.size / 2
+        # A true face contact is near one boundary and inset from both edges.
+        possible = [
+            axis
+            for axis in range(3)
+            if abs(abs(point[axis]) - half[axis]) <= tolerance
+            and all(
+                abs(point[other]) <= half[other] - min(0.01, 0.1 * body.size[other])
+                for other in range(3)
+                if other != axis
+            )
+        ]
+        face_axes.append(possible)
+    shared = [axis for axis in face_axes[0] if axis in face_axes[1] and abs(local_axis[axis]) >= 0.75]
+    ok = any(np.sign(points[0][axis]) != np.sign(points[1][axis]) for axis in shared)
+    return {
+        "ok": bool(ok),
+        "reason": "" if ok else "the jaws do not meet opposing interior faces",
+        "distances": distances,
+        "points": points,
+    }
+
+
 class CollisionScene:
-    def __init__(self, robot, obstacles, floor, bodies, plane, bounds, clearance=0.007):
+    def __init__(self, robot, obstacles, floor, bodies, plane, bounds, clearance=0.007, unknown=None):
         import coal
 
         self.robot, self.bodies = robot, bodies
         self.plane, self.bounds = np.asarray(plane), np.asarray(bounds)
         self.clearance = clearance
         # Keep Python owners alive for the broad-phase manager's pointers.
-        self.obstacles, self.floor = obstacles, floor
+        self.obstacles, self.floor, self.unknown = obstacles, floor, unknown or []
         self.manager = coal.DynamicAABBTreeCollisionManager()
         for obstacle in obstacles:
             self.manager.registerObject(obstacle)
         self.manager.setup()
+        self.unknown_manager = coal.DynamicAABBTreeCollisionManager()
+        for obstacle in self.unknown:
+            self.unknown_manager.registerObject(obstacle)
+        self.unknown_manager.setup()
         self.floor_manager = coal.DynamicAABBTreeCollisionManager()
         for obstacle in floor:
             self.floor_manager.registerObject(obstacle)
@@ -254,7 +313,7 @@ class CollisionScene:
         tops = np.full(tuple(dims), -np.inf)
         clutter = valid & ~own & ~robot_mask
         np.maximum.at(tops, (ix[..., 0][clutter], ix[..., 1][clutter]), points[..., 2][clutter])
-        obstacles, floor = [], []
+        obstacles, floor, unknown = [], [], []
         for i in range(dims[0]):
             for j in range(dims[1]):
                 xy = bounds[0] + (np.array([i, j]) + 0.5) * resolution
@@ -281,15 +340,16 @@ class CollisionScene:
                     and np.isfinite(ray_point).all()
                     and ray_point[2] > plane @ np.r_[ray_point[:2], 1] + 0.005
                 )
+                unobserved = not seen[i, j] and not self_occluded
                 high = tops[i, j] if seen[i, j] else (-np.inf if self_occluded else 1.0)
                 if high <= z + 0.005:
                     continue
                 top = high + clearance
                 t[:3, 3] = [*xy, (bottom + top) / 2]
-                obstacles.append(
+                (unknown if unobserved else obstacles).append(
                     box([resolution + 2 * clearance, resolution + 2 * clearance, top - bottom], t)
                 )
-        return cls(robot, obstacles, floor, bodies, plane, bounds, clearance)
+        return cls(robot, obstacles, floor, bodies, plane, bounds, clearance, unknown)
 
     def _manager_hit(self, manager, obj):
         import coal
@@ -319,6 +379,9 @@ class CollisionScene:
             if self._manager_hit(self.manager, link) or self._manager_hit(self.floor_manager, link):
                 self.reason = f"scene collision {name}"
                 return False
+            if self._manager_hit(self.unknown_manager, link):
+                self.reason = f"unobserved scene space at {name}"
+                return False
             for key, body in self.bodies.items():
                 if attached and key == attached[0]:
                     continue
@@ -337,6 +400,9 @@ class CollisionScene:
             payload = box(body.size + 2 * self.clearance, pose)
             if self._manager_hit(self.manager, payload):
                 self.reason = "held object touches clutter"
+                return False
+            if self._manager_hit(self.unknown_manager, payload):
+                self.reason = "held object enters unobserved scene space"
                 return False
             corners = body.corners(pose)
             floor_z = np.c_[corners[:, :2], np.ones(len(corners))] @ self.plane

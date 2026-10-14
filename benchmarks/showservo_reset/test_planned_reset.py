@@ -11,9 +11,15 @@ from pathlib import Path
 from unittest.mock import patch
 
 import numpy as np
-from collision_scene import CollisionScene, MeshRobot
+from collision_scene import CollisionScene, MeshRobot, box, collides
 from motion_planner import NoPathError
 from planned_reset import ResetPlanner
+
+
+def _fixture_pinch(jaws, body, closing_axis):
+    """Keep the old positive fixture for downstream route tests only."""
+    target = box(body.size, body.pose)
+    return {"ok": all(collides(jaw, target, 0.002) for jaw in jaws), "reason": "fixture proximity"}
 
 
 @unittest.skipUnless(
@@ -54,12 +60,25 @@ class TransferTests(unittest.TestCase):
         )
         cls.start = np.array([rig.READY_MOTOR[n] for n in cls.robot.names])
 
-    def test_complete_transfer_has_collision_checked_arm_payload_and_release(self):
+    def test_a_proximity_only_grasp_is_refused(self):
+        goal = copy.deepcopy(self.scene.bodies["gamepad"])
+        goal.pose[0, 3] += 0.020
+        planner = ResetPlanner(self.scene)
+        with self.assertRaisesRegex(NoPathError, "central grasps rejected"):
+            planner.transfer("gamepad", goal, self.start)
+        self.assertTrue(any("closure lacks opposing jaw contact" in r["reason"] for r in planner.rejected))
+
+    def test_post_pinch_transfer_has_collision_checked_arm_payload_and_release(self):
         import rig
 
         goal = copy.deepcopy(self.scene.bodies["gamepad"])
         goal.pose[0, 3] += 0.020
-        with patch.object(rig, "_call", side_effect=AssertionError("offline planner called GUI")):
+        # This test isolates the rest of the route after an independently
+        # verified pinch; the fixture's measured box does not verify one.
+        with (
+            patch.object(rig, "_call", side_effect=AssertionError("offline planner called GUI")),
+            patch("planned_reset.opposing_jaw_contacts", side_effect=_fixture_pinch),
+        ):
             result = ResetPlanner(self.scene).transfer("gamepad", goal, self.start)
         self.assertEqual(
             [s.phase for s in result.segments],
@@ -75,8 +94,7 @@ class TransferTests(unittest.TestCase):
                 "retreat",
             ],
         )
-        # Geometry rejects the legacy empty pinch before choosing a closer one.
-        self.assertTrue(any("both jaws" in r["reason"] for r in result.rejected))
+        self.assertTrue(result.rejected)
         previous = self.start
         for segment in result.segments:
             np.testing.assert_allclose(segment.joints[0], previous)
@@ -115,7 +133,8 @@ class TransferTests(unittest.TestCase):
         goal = copy.deepcopy(self.scene.bodies["gamepad"])
         goal.pose[0, 3] += 0.020
         planner = ResetPlanner(self.scene)
-        nominal = planner.transfer("gamepad", goal, self.start)
+        with patch("planned_reset.opposing_jaw_contacts", side_effect=_fixture_pinch):
+            nominal = planner.transfer("gamepad", goal, self.start)
         lifted = nominal.segments[4].joints[-1]
         hold = nominal.segments[4].attached[1].copy()
         hold[0, 3] += 0.004  # measured four-millimetre grasp shift; not an encoder/target injection

@@ -13,7 +13,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-from collision_scene import Body, CollisionScene, MeshRobot, box, collides
+from collision_scene import Body, CollisionScene, MeshRobot, opposing_jaw_contacts
 from motion_planner import JointPlanner, NoPathError, SearchLimits, interpolate
 
 
@@ -108,14 +108,15 @@ class ResetPlanner:
         base_yaw = rig.grasp_yaw(yaw_source)
         failures = []
         candidates = [
-            (edge, skew, up, lateral)
+            (edge, skew, up, lateral, closing)
             for up in (0.0, 0.2, 0.4)
             for edge in (0, 180)
             for skew in (0, -12, 12)
             for lateral in (0.0, -0.002, -0.004, -0.006, -0.008)
+            for closing in (86, 90, 94, 98)
         ]
         started = time.monotonic()
-        for edge, skew, up, lateral in candidates:
+        for edge, skew, up, lateral, closing in candidates:
             yaw = (base_yaw + edge + skew + 180) % 360 - 180
             if time.monotonic() - started > 120:
                 self.rejected = failures
@@ -124,7 +125,7 @@ class ResetPlanner:
                 grasp = np.eye(4)
                 grasp[:3, :3] = rig._rz(yaw) @ rig.DEMO_GRASP_R
                 grasp[:2, 3] = source.pose[:2, 3] + rig._rz(yaw)[:2, :2] @ np.array(
-                    [0.007, (0.022 if name == "gamepad" else 0.018) + lateral]
+                    [0.007, source.size[1] / 2 + 0.002 + lateral]
                 )
                 floor_z = self.scene.plane @ np.r_[grasp[:2, 3], 1]
                 pre = grasp.copy()
@@ -137,7 +138,7 @@ class ResetPlanner:
                 # The calibrated tool origin is not the lowest jaw point. Derive
                 # contact height from the actual mesh through the closure range.
                 gap = float("inf")
-                for opening in (65, 75, 86 if name == "gamepad" else 94):
+                for opening in (65, 75, closing):
                     qprobe = qpre.copy()
                     qprobe[-1] = opening
                     self.robot.placements(qprobe)
@@ -157,19 +158,20 @@ class ResetPlanner:
                     raise NoPathError("no grasp below pregrasp with jaw/table clearance")
                 # Reject impossible contact geometry before spending RRT budget.
                 descend = self._line("grasp_descent", qpre, grasp, self.scene, near=name)
-                close = self._gripper(
-                    "close", descend.joints[-1], 86 if name == "gamepad" else 94, self.scene, name
-                )
-                # A candidate must reach both opposing jaw bodies at closure.
+                close = self._gripper("close", descend.joints[-1], closing, self.scene, name)
+                # Proximity to both jaw meshes is insufficient: one jaw can
+                # graze the top while the other stays beside it.
                 meshes = self.robot.placements(close.joints[-1])
-                obj = box(source.size, source.pose)
                 fingers = [
                     i
                     for i, g in enumerate(self.robot.geom.geometryObjects)
                     if g.name.startswith(("L6_", "L7_"))
                 ]
-                if not all(collides(meshes[i], obj, 0.002) for i in fingers):
-                    raise NoPathError("closure does not contact both jaws")
+                pinch = opposing_jaw_contacts(
+                    [meshes[i] for i in fingers], source, self.robot.tip(close.joints[-1])[:3, 0]
+                )
+                if not pinch["ok"]:
+                    raise NoPathError(f"closure lacks opposing jaw contact: {pinch['reason']}")
                 opened = self._gripper("open", start, 65, self.scene, "")
                 approach = self._segment("approach", opened.joints[-1], qpre, self.scene)
                 hold = np.linalg.inv(self.robot.tip(close.joints[-1])) @ source.pose
@@ -189,7 +191,13 @@ class ResetPlanner:
                 )
             except NoPathError as e:
                 failures.append(
-                    {"yaw_deg": yaw, "extra_height_fraction": up, "lateral_m": lateral, "reason": str(e)}
+                    {
+                        "yaw_deg": yaw,
+                        "extra_height_fraction": up,
+                        "lateral_m": lateral,
+                        "closing": closing,
+                        "reason": str(e),
+                    }
                 )
         self.rejected = failures
         raise NoPathError(f"all {len(candidates)} central grasps rejected")

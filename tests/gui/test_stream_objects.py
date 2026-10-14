@@ -1852,7 +1852,7 @@ def test_key_frame_execution_outcomes_across_grasp_and_placement_scenarios(tmp_p
         failed = any(scenario.get(k) for k in ("empty_grip", "drop_in_lift", "weak_carry", "inject"))
         assert act.ok is (not bool(failed)), act.reason
         if scenario.get("inject"):
-            assert "out of reach" in act.reason and not sim["streamed"]
+            assert "no solved joint path" in act.reason and not sim["streamed"]
         else:
             assert sim["streamed"], "the simulated grasp must actually execute"
         if scenario.get("empty_grip") or scenario.get("drop_in_lift"):
@@ -2066,7 +2066,9 @@ def test_a_place_landed_as_shown_past_a_servos_range_is_refused_before_the_arm_m
             tmp_path, monkeypatch, wrist_deg=80.0, box_turn_deg=40.0, ranges=(-WRIST_HI, WRIST_HI)
         )
         act = manipulation.runtime._state.act
-        assert not act.ok and "needs wrist_flex at 120 deg, past its servo's range" in act.reason, act.reason
+        assert not act.ok and "drives wrist_flex toward 120 deg, past its servo's range" in act.reason, (
+            act.reason
+        )
         assert sim["streamed"] == [] and sim["targets"] == [], "refused before the arm moved"
     finally:
         _end_place_state()
@@ -2241,7 +2243,8 @@ def test_a_landing_that_no_longer_plans_after_the_grasp_is_chosen_again(tmp_path
         carries = [p for p in record["plans"] if p["stage"].startswith("carry")]
         assert [p["ok"] for p in carries] == [False, True], carries
         assert (
-            "needs wrist_flex at" in carries[0]["reason"] and "past its servo's range" in carries[0]["reason"]
+            "drives wrist_flex toward" in carries[0]["reason"]
+            and "past its servo's range" in carries[0]["reason"]
         )
         again = carries[1]["landing"]["turn_deg"]
         assert again == (kept - 40.0) % 360.0, "turned back by the box's turn"
@@ -4083,10 +4086,10 @@ class _ReachKinematics(_TipKinematics):
         return super().inverse_kinematics(seed, target)
 
 
-def test_a_mark_the_objects_move_carries_out_of_reach_says_how_far(tmp_path):
-    """2026-10-07: "pre-place 1 is out of reach as the object lies now (57 mm short)", and the operator could not see
-    why: the cube lay farther out than in the demo, and its move carried the demo's pre-place with it. The reason says
-    how far the move carried the mark, and how much of that is away from the arm's base."""
+def test_a_failed_approach_reports_residual_and_object_motion_without_claiming_physical_unreachability(
+    tmp_path,
+):
+    """An IK path failure may be a configuration failure, even when an alternate grasp pose is reachable."""
     demo, _kin, _box = _place_demo(tmp_path, time.time())
     teach = manipulation.runtime._Teach(
         at="t",
@@ -4118,13 +4121,15 @@ def test_a_mark_the_objects_move_carries_out_of_reach_says_how_far(tmp_path):
             {"box": farther},
         )
         assert not plan["ok"]
-        assert plan["reason"].startswith("pre-place 1 is out of reach as the object lies now"), plan["reason"]
+        assert plan["reason"].startswith("the planned approach to pre-place 1 has no solved joint path"), (
+            plan["reason"]
+        )
         assert plan["reason"].endswith(
-            "box lies where it carries pre-place 1 50 mm from where the demo's arm was there, 50 mm farther out from "
-            "the arm's base"
+            "box's motion shifts that target 50 mm from the demo, including 50 mm radially away from the arm base"
         ), plan["reason"]
         mark = next(m for m in plan["marks"] if m["label"] == "pre-place 1")
         assert mark["object"] == "box" and mark["moved_mm"] == pytest.approx(50.0, abs=0.5)
+        assert mark["residual_mm"] > 0 and mark["residual_deg"] >= 0
     finally:
         with manipulation.runtime._state.lock:
             manipulation.runtime._state.teach = None

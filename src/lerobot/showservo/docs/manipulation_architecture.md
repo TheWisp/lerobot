@@ -213,6 +213,48 @@ and configurations, scores/margins, full-path rejection reasons, search duration
 and any exhausted budget. Currently they retain the selected turn, survivor
 count, selected cost and plan summaries, not the entire candidate search.
 
+### Grasp and transit freedom at an interaction
+
+**NOT IMPLEMENTED.** [Issue #267](https://github.com/TheWisp/lerobot/issues/267)
+tracks the gap between a demonstrated tool path and a task constraint. For a
+rigid pick and insertion, the required relation is the held object's pose
+relative to the receiving object at contact, modulo only a declared task
+symmetry. The demonstration's grip point, jaw side, wrist angle and free-space
+route are preferences. They may change when another pose of the same object
+makes the recorded grip awkward. A line mark before contact is a useful hover
+hint, not evidence that its exact Cartesian line is required. During an isolated
+rotation, orientation may matter while translation is free within a safe region;
+translation becomes required again at insertion. This distinction must be
+represented explicitly, not inferred from a single path or object name.
+
+A generic planner should sample candidate gripper-to-object attachments from
+the observed rigid surface and calibrated jaw geometry. It must verify that
+both jaws can close on opposing interior surface patches, that the open and
+closing sweeps clear support and clutter, and that a collision-checked joint
+path reaches the approach. The demonstrated attachment can rank feasible
+candidates. The selected attachment, followed by measured held-pose updates,
+determines the next gripper target for the required object relation. The target
+relation should be replanned as accepted observations change. If the sampled
+set, IK seeds or search budget is exhausted, that is a search failure, not proof
+that the object lies outside the arm's physical reach.
+
+The rotated-dowel scene on October 14 exposes three separate failure modes.
+The live object was about 89 degrees from the demo; the sequential reach
+preview reported 108 mm residual at key frame 1, while an independent seed
+solved the same pose to about 2 mm and 2 degrees. A flipped tool pose had a
+kinematic path, but an initial offline candidate accepted as a two-jaw grasp
+was a false positive: with the 3 mm proximity margin removed, one jaw missed
+and the other touched the object's top near an end. The reset prototype used
+the same proximity test. Its conservative RGB-D collision grid also reports a
+collision for the already-parked arm in the mount region outside reliable
+overhead view. The available route therefore has neither a verified pinch nor
+a full-scene clearance certificate. No physical retry was sent on that basis.
+The live object's simple box measured roughly 23 mm wide, versus roughly 15 mm
+from the demo view; a box or CAD mesh must be validated against a known grasp
+before being treated as exact contact truth. The stricter reset-prototype check
+now refuses proximity-only grasps; its prior positive fixture is retained only
+to test the downstream carry and placement path in isolation.
+
 ### Held-pose evidence: what the earlier comparison established
 
 A held pose is the object's attachment relative to the fingers. Given synchronized

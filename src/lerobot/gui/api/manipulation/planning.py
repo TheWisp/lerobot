@@ -699,6 +699,7 @@ def _plan_act_once(
                 "label": s["label"],
                 "t": s["t"],
                 "residual_mm": float(sol["residual_m"][idx] * 1000.0),
+                "residual_deg": float(sol["residual_deg"][idx]),
                 "ok": bool(fine[idx]),
                 "object": s["frame"] if s["frame"] not in ("", core.WORLD_FRAME) else None,
                 "moved_mm": float(np.linalg.norm(now - was) * 1000.0),
@@ -742,20 +743,28 @@ def _plan_act_once(
             gi,
         )
         reason = (
-            f"{plan['stage'][n]} needs {MOTOR_NAMES[j]} at {free['q'][0, j]:.0f} deg, past its servo's range of "
+            f"the planned path to {plan['stage'][n]} drives {MOTOR_NAMES[j]} toward {free['q'][0, j]:.0f} deg, past its servo's range of "
             f"{lo_j:.0f} to {hi_j:.0f} deg"
         )
     elif bad:
         m = bad[0]
-        reason = f"{m['label']} is out of reach as the object lies now ({m['residual_mm']:.0f} mm short)"
+        # A sequential IK failure does not prove the pose itself is outside the
+        # arm's reach. Another joint configuration or approach can solve it.
+        reason = (
+            f"the planned approach to {m['label']} has no solved joint path "
+            f"({m['residual_mm']:.0f} mm / {m['residual_deg']:.0f} deg pose residual)"
+        )
         if m.get("object") and m.get("moved_mm") is not None:
             reason += (
-                f": {m['object']} lies where it carries {m['label']} {m['moved_mm']:.0f} mm from where the demo's arm was"
-                f" there, {m['out_mm']:.0f} mm farther out from the arm's base"
+                f"; {m['object']}'s motion shifts that target {m['moved_mm']:.0f} mm from the demo,"
+                f" including {m['out_mm']:.0f} mm radially away from the arm base"
             )
     elif len(far):
         n = int(far[0])
-        reason = f"the straight line to {plan['stage'][n]} leaves the arm's reach ({sol['residual_m'][n] * 1000.0:.0f} mm short)"
+        reason = (
+            f"the straight line to {plan['stage'][n]} has no solved joint path "
+            f"({sol['residual_m'][n] * 1000.0:.0f} mm / {sol['residual_deg'][n]:.0f} deg pose residual)"
+        )
     elif np.any(low):
         n = int(np.argmax(np.where(low, floor - pos[:, 2], -np.inf)))
         reason = f"{plan['stage'][n]} would go {(floor[n] - pos[n, 2]) * 1000.0:.0f} mm below the table"

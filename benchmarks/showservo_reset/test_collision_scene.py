@@ -11,7 +11,7 @@ try:
 except ImportError:
     coal = None
 
-from collision_scene import Body, CollisionScene, box
+from collision_scene import Body, CollisionScene, box, opposing_jaw_contacts
 from motion_planner import JointPlanner, SearchLimits
 
 
@@ -46,6 +46,19 @@ class CollisionTests(unittest.TestCase):
         return CollisionScene(
             BoxRobot(), obstacles or [], floor or [], bodies or {}, [0, 0, 0], [[-1, -1], [1, 1]]
         )
+
+    def test_opposing_jaws_require_side_contacts_away_from_edges(self):
+        body = Body("bar", np.array([0.10, 0.02, 0.02]), pose())
+        left = box([0.012, 0.004, 0.01], pose(0, -0.013, 0))
+        right = box([0.012, 0.004, 0.01], pose(0, 0.013, 0))
+        self.assertTrue(opposing_jaw_contacts([left, right], body, [0, 1, 0])["ok"])
+        top = box([0.012, 0.004, 0.01], pose(0, -0.005, 0.015))
+        self.assertFalse(opposing_jaw_contacts([top, right], body, [0, 1, 0])["ok"])
+        end = box([0.012, 0.004, 0.01], pose(0.049, -0.013, 0))
+        self.assertFalse(opposing_jaw_contacts([end, right], body, [0, 1, 0])["ok"])
+        upper = box([0.012, 0.004, 0.01], pose(0, 0, 0.014))
+        lower = box([0.012, 0.004, 0.01], pose(0, 0, -0.014))
+        self.assertFalse(opposing_jaw_contacts([upper, lower], body, [0, 1, 0])["ok"])
 
     def test_target_contact_does_not_exempt_wrist_or_other_objects(self):
         object_ = Body("cube", np.array([0.02] * 3), pose(0, 0, 0.10))
@@ -113,7 +126,7 @@ class CollisionTests(unittest.TestCase):
         with patch("rig.pixel", return_value=(0, 0)):
             scene = CollisionScene.from_observation(BoxRobot(), {}, frame)
         self.assertFalse(scene.check(np.array([0, -0.2, 0.1])))
-        self.assertIn("scene collision", scene.reason)
+        self.assertIn("unobserved scene space", scene.reason)
 
     def test_oblique_self_occlusion_applies_at_the_hidden_tray_cell(self):
         # The self return and the hidden tray are in different XY cells.
@@ -132,6 +145,7 @@ class CollisionTests(unittest.TestCase):
         with patch("rig.pixel", return_value=(0, 0)):
             scene = CollisionScene.from_observation(BoxRobot(), {}, frame)
         self.assertFalse(scene.check(np.array([0, -0.2, 0.1])))
+        self.assertIn("scene collision", scene.reason)
 
     def test_self_occlusion_requires_a_finite_raised_depth_return(self):
         for point in ([np.nan] * 3, [100.0, -300.0, 0.0]):

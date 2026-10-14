@@ -166,9 +166,10 @@ a grasp or reset succeeded on hardware.
 
 The bounded RRT-Connect search checks intermediate joint configurations, keeps
 the gripper fixed during transit, and tries alternative central grasps on both
-sides. Grasp search varies yaw, height and small lateral offsets. It derives
-height from the jaw meshes through closure and requires both jaw bodies to
-reach the selected object's box. Descent, lift and retreat follow a straight
+sides. Grasp search varies yaw, height, gripper opening and small lateral offsets
+scaled from the measured box, without object-name-specific values. It derives
+height from the jaw meshes through closure and requires both jaws to meet
+opposing interior box faces along their closing axis. Descent, lift and retreat follow a straight
 tool corridor. Carry checks transform the held object's whole box with the
 planned tip-to-object transform; release and retreat use the destination scene.
 The default preserves the object's current yaw, consistent with this reset's
@@ -186,7 +187,8 @@ degrees and gripper-only motion at one unit. This is discrete collision checking
 not a continuous swept-volume or tracking-error guarantee.
 
 Model coverage has explicit limits. Missing columns inside the tray view are
-blocked up to one metre. The flat tray is **assumed** beneath recognized object
+blocked up to one metre and reported separately as unobserved space; an
+observed return still reports a scene collision. The flat tray is **assumed** beneath recognized object
 masks and depth returns within 12 mm of the measured robot mesh; those hidden
 surfaces were not observed. Object masks are protected from robot removal.
 Cables and attachments missing from the robot model can remain classified as
@@ -202,12 +204,14 @@ temperature or descent guards.
 
 ### Recorded evidence, October 12
 
-On the idealized positive fixture (tray and the two target boxes, with all other
-clutter explicitly omitted), it plans a 20 mm gamepad transfer including open,
-approach, descent, close, lift, carry, place, release and retreat. The original
-pinch offset and a 2 mm lateral adjustment fail the two-jaw contact check; a
-4 mm adjustment admits a plan. This is an offline test, not a successful
-physical transfer or evidence that the recorded clutter can be ignored.
+The October 12 idealized fixture (tray and the two target boxes, with all other
+clutter explicitly omitted) appeared to plan a 20 mm gamepad transfer. Its
+two-jaw test accepted mere 2 mm proximity. The October 14 audit found that
+the measured box and calibrated jaw meshes do not demonstrate an opposing
+pinch for any of the sampled grasps. The planner now refuses that fixture.
+The old positive geometry is retained **only** under a test-local mock of the
+pinch predicate to check the downstream carry, placement and release math;
+it is not a positive grasp or full-transfer regression.
 
 The calibrated mesh predicts jaw vertices about 16–21 mm below the virtual tool
 point at the tested demo grasp orientation. The planner now accounts for that
@@ -313,8 +317,8 @@ control back while connected. The enclosing rig experiment remains responsible
 for a checked park/recovery; this runner does not claim the old fold ramp is
 collision-checked.
 
-**Physical validation is pending.** The calibrated idealized-scene regression
-handles a measured 4 mm grasp shift; an opposite hypothetical shift is refused
+**Physical validation is pending.** With the pinch isolated as an assumed test
+precondition, the idealized-scene regression handles a measured 4 mm grasp shift; an opposite hypothetical shift is refused
 because the fixed jaw cannot retreat. Neither result establishes a physical
 reset or stack. In the recorded connected pose, the modeled fixed jaw is inside
 the 2 mm tray margin. Fresh synchronized geometry must resolve that refusal;
