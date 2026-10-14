@@ -1502,16 +1502,30 @@ def rank_landings(
     joint changes between them as hints, so the solve stays on the demo's arm configuration, and no joint past its
     servo's range [``lo``, ``hi``] (held there). A turn is dropped when a sample is out of reach as solved; the cost of
     the rest is the mean square of their arm joints' distance from the demo's (motor deg^2).
+    Reject a turn at its first unreachable sample: solving the rest cannot make that turn admissible.
     """
     q_demo = np.asarray(q_demo, dtype=float)
     arm = [k for k in range(q_demo.shape[1]) if k != grip_index]
     hints = np.vstack([np.zeros(q_demo.shape[1]), np.diff(q_demo, axis=0)])
     ranked = []
     for turn in turns:
-        sol = solve_plan_joints(
-            kin, poses_at(turn), q_demo[:, grip_index], hints, q_demo[0], grip_index, lo, hi
-        )
-        if np.any(sol["residual_m"] > ACT_REACH_TOL_M) or np.any(sol["residual_deg"] > ACT_REACH_TOL_DEG):
-            continue
-        ranked.append((float(np.mean((sol["q"][:, arm] - q_demo[:, arm]) ** 2)), float(turn)))
+        poses = poses_at(turn)
+        previous, joints = q_demo[0], []
+        for i in range(len(q_demo)):
+            sol = solve_plan_joints(
+                kin,
+                poses[i : i + 1],
+                q_demo[i : i + 1, grip_index],
+                hints[i : i + 1],
+                previous,
+                grip_index,
+                lo,
+                hi,
+            )
+            if sol["residual_m"][0] > ACT_REACH_TOL_M or sol["residual_deg"][0] > ACT_REACH_TOL_DEG:
+                break
+            previous = sol["q"][0]
+            joints.append(previous)
+        else:
+            ranked.append((float(np.mean((np.asarray(joints)[:, arm] - q_demo[:, arm]) ** 2)), float(turn)))
     return sorted(ranked)

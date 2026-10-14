@@ -1946,6 +1946,52 @@ def test_the_landing_taken_is_within_the_servos_with_joints_nearest_the_demos():
     )
 
 
+@pytest.mark.parametrize("failure", ["position", "rotation"])
+def test_landing_search_stops_at_first_bad_sample_and_preserves_feasible_ranking(monkeypatch, failure):
+    """An invalid prefix cannot be repaired by later samples; viable candidates keep their full cost."""
+    kin = _YawKinematics()
+    demo_q = np.array(
+        [
+            [150.0, 30.0, 40.0, 0.0, 80.0, 0.0, 85.0],
+            [151.0, 30.0, 30.0, 0.0, 82.0, 0.0, 70.0],
+            [152.0, 30.0, 20.0, 0.0, 84.0, 0.0, 60.0],
+        ]
+    )
+    tips = np.stack([kin.forward_kinematics(q) for q in demo_q])
+    hi = np.array([155.0, np.nan, np.nan, np.nan, 93.3, np.nan, np.nan])
+    lo = -hi
+
+    def poses_at(turn):
+        poses = tips.copy()
+        if failure == "position":
+            poses[:, 0, 3] += turn / 1000.0
+        else:
+            poses = core.turn_about(np.zeros(3), turn) @ poses
+        return poses
+
+    turns = [0.0, 2.0, 40.0]
+    hints = np.vstack([np.zeros(7), np.diff(demo_q, axis=0)])
+    expected = []
+    solve = core.solve_plan_joints
+    for turn in turns:
+        sol = solve(kin, poses_at(turn), demo_q[:, 6], hints, demo_q[0], 6, lo, hi)
+        if np.all(sol["residual_m"] <= core.ACT_REACH_TOL_M) and np.all(
+            sol["residual_deg"] <= core.ACT_REACH_TOL_DEG
+        ):
+            expected.append((float(np.mean((sol["q"][:, :6] - demo_q[:, :6]) ** 2)), turn))
+    assert len(expected) == 2
+    calls = []
+
+    def counted(*args, **kwargs):
+        calls.append(len(args[1]))
+        return solve(*args, **kwargs)
+
+    monkeypatch.setattr(core, "solve_plan_joints", counted)
+    actual = core.rank_landings(kin, turns, poses_at, demo_q, lo, hi, 6)
+    np.testing.assert_allclose(actual, sorted(expected), atol=1e-12)
+    assert sum(calls) == 7, "two complete valid paths and only the first sample of the invalid path"
+
+
 def test_the_solve_continues_from_the_arm_and_reports_what_it_cannot_reach():
     kin = _StepKinematics()
     n = 40
