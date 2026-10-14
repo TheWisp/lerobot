@@ -430,3 +430,63 @@ slip, initial grasps or target motion. Full held orientation remains unresolved.
 Durable local evidence: `/home/feit/Documents/showservo-experiments/20261014/held-reset/`
 contains reset telemetry/images, the actual retest, acquisition attempts and the
 command reconstruction audit in `retest/report.json`.
+
+### Comparison of the three successful October 14 rounds
+
+The observed position update is not yet evidence of better insertion accuracy or
+speed. A read-only comparison of the three physical recordings gives:
+
+| Act               | Held position during insertion                        | First to last arm command | Insertion sequence to release | Approximate final ring displacement |
+| ----------------- | ----------------------------------------------------- | ------------------------: | ----------------------------: | ----------------------------------: |
+| `20261014_075438` | Grasp prediction, earlier controller                  |                   27.83 s |                        5.29 s |                                4 mm |
+| `20261014_140613` | Grasp prediction, per-frame controller                |                   36.96 s |                        8.26 s |                                9 mm |
+| `20261014_163916` | Measured position accepted during per-frame execution |                   42.24 s |                        7.97 s |                                9 mm |
+
+All three used speed 1, no injected error, and completed insertion and withdrawal.
+Timing uses actual command-consumption timestamps. The insertion interval starts
+with the first key-frame-6 command and ends at recorded gripper release; it does
+not claim to identify first physical contact. The newest insertion interval is
+0.285 s shorter than the preceding one, but this single pair cannot attribute that
+difference to the correction. Its whole-arm path was also longer: approximately
+691 mm versus 496 mm, using encoder FK resampled at 10 Hz. Different object starts,
+grasps, selected landing angles and controller versions confound a causal speed
+comparison. The stationary checkpoint still accounts for command gaps of 7.18,
+5.99 and 5.80 s respectively.
+
+Ring displacement is an independent _disturbance proxy_, not peg-to-hole error.
+Offline Lucas–Kanade matching of visible ring features from the initial RGB to
+the final RGB gives 3.84, 8.97 and 8.70 mm respectively, using calibrated
+projection onto an approximate ring-height plane. Each match passes a forward/
+backward image check and must remain on the visible ring. A separate outer-contour
+ellipse measurement gives 4.52, 10.49 and 9.03 mm. Stationary-background image
+motion at the ring is under 0.11 pixels in every run. Segmentation thresholds,
+shadows, partial occlusion and ring tilt affect the measurements, so the rounded
+values do not establish a small improvement between the last two rounds. These
+evaluation scripts use the visible green ring to select pixels; they do not add
+object-specific rules to the controller. Neither measurement uses P2P, group
+transport or the held-pose estimate as truth. Missing rim observations during
+occlusion remain gaps rather than interpolated motion evidence.
+
+In the newest run, the attachment was accepted 2.194 s after the insertion sequence
+started, with 5.779 s remaining before release. It therefore cannot explain better
+initial approach alignment. The 4.987 mm command change and 1.217 mm inter-view
+spread reported above remain evidence of correction application and estimator
+agreement, respectively; neither is an independently measured reduction in task
+error. Rotation still used prediction. The peg and bore are partly occluded at
+the critical entry frames, preventing a defensible millimetre-scale alignment
+comparison from these recordings alone.
+
+A causal evaluation requires matched repeats on one controller version, with the
+held observer running in both conditions and only application of its updates
+changed. This keeps computation and other target adaptation comparable. Measure
+approach alignment when independently visible, ring movement, contact duration
+and success across repeatable grasp offsets. The current three trials establish
+that the update reaches hardware; they do not establish an accuracy benefit or a
+regression caused by that update.
+
+Durable local evidence: `/home/feit/Documents/showservo-experiments/20261014/round-comparison/`
+contains `metrics.json`, the reproducible measurement scripts, annotated raw
+image crops, timing plots, rim-feature diagnostics and
+`insertion_comparison.mp4`. The video aligns the beginning of the insertion
+sequence, preserves elapsed time, and labels when the held-position update was
+applied. This comparison issued no hardware commands.
