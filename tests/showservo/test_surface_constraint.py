@@ -94,6 +94,17 @@ def test_recorded_visible_held_patch_survives_a_change_in_occluded_surface(name)
     assert np.linalg.norm(corrected[:3, :3] @ point + corrected[:3, 3] - raw_point) < 0.003
 
 
+def test_newly_visible_live_face_cannot_replace_the_matched_reference_face():
+    with np.load(Path(__file__).parent / "fixtures/held_new_face_20261014.npz") as z:
+        r = sc.constrain(z["pose"], z["ref"], z["depth"], z["mask"], json.loads(str(z["intr"])), **LIMITS)
+    assert r["pose"] is not None, r
+    # Whole-live fitting selected another face and rotated a good appearance
+    # registration by 72 degrees. The shared patch agrees within reach tolerance.
+    assert r["rotation_deg"] < LIMITS["tol_deg"]
+    assert abs(r["normal_shift_mm"]) < LIMITS["tol_m"] * 1000
+    assert r["visibility"]["common_live_points"] < r["visibility"]["live_points"]
+
+
 @pytest.mark.parametrize("case", ["missing", "foreground", "narrow"])
 def test_insufficient_or_foreground_geometry_cannot_certify_a_pose(case):
     ref, depth, mask, k, pose, _ = scene()
@@ -205,11 +216,12 @@ def test_recorded_wrong_tilts_improve_on_held_out_geometry(name):
             json.loads(str(z[f"{name}_intr"])),
             **LIMITS,
         )
-    if name != "baseline":
-        assert r["pose"] is not None, r
-        assert r["validation_normal_after_deg"] < 3
-        assert r["validation_normal_after_deg"] < r["validation_normal_before_deg"]
-    else:
-        # The earlier point-distance check called this consistent. Its current
-        # patch does not pass plane verification; consistency cannot bypass that.
-        assert r["state"] == "rejected" and r["reference_planar"] and not r["live_planar"]
+    # Even the baseline has a supported common patch once newly visible live
+    # material is excluded. Require improvement on the split held-out geometry,
+    # not the old whole-cloud rejection or just a successful return value.
+    assert r["pose"] is not None, r
+    assert r["reference_planar"] and r["live_planar"]
+    assert r["validation_normal_after_deg"] < LIMITS["tol_deg"]
+    assert r["validation_normal_after_deg"] < r["validation_normal_before_deg"]
+    assert r["corrected_plane_rms_mm"] < r["raw_plane_rms_mm"]
+    assert r["local_support_after"] >= r["local_support_before"]

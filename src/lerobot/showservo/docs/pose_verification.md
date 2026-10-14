@@ -32,7 +32,11 @@ Before fitting the reference plane, project its points through the candidate
 pose into the current mask and exclude missing depth and nearer occlusion using
 the same visibility selector as the general surface check. The fitting majority
 is relative to this visible reference subset. Hidden reference faces must not
-compete against the currently visible face. The existing local metric support,
+compete against the currently visible face. Conversely, only live points within
+the existing 6 mm association radius of that transformed subset enter the live
+plane fit. Newly exposed live material must not replace the shared patch with a
+different dominant face. This is policy `rgbd-common-plane-axis-v4`; both selected
+point counts are recorded. The existing local metric support,
 split-fit, span and curvature checks still decide whether the overlap is usable.
 
 For a supported corresponding patch, apply the shortest rotation aligning its
@@ -188,6 +192,15 @@ diagnostics, not independent pose accuracy or a successful physical rollout.
 Synthetic coverage also checks a completely hidden perpendicular dominant face,
 and attachment tests ensure ambiguous rotation cannot move a hidden cloud centre
 and masquerade as a measured position change.
+
+`held_new_face_20261014.npz` captures the reverse visibility change during reset:
+the reference is frame 87 of that act, while the fresh scene exposes more of the
+released dowel. Whole-live fitting proposed a 72° rotation. Restricting both
+clouds to the common local patch yields 2.55° and 0.083 mm normal displacement.
+This regression protects against newly visible geometry overriding the shared
+material; it does not establish absolute pose accuracy. The historical baseline
+fixture also gains a supported common patch: its held-out normal disagreement
+falls from 4.71° to 1.14° and plane RMS from 0.814 to 0.554 mm.
 
 ## October 13 constraint replay
 

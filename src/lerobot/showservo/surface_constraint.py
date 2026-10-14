@@ -17,7 +17,7 @@ from .pose_verification import MASK_EROSION, _pose
 # 99.9% chance of an all-inlier sample. The fixed seed makes replay reproducible.
 PLANE_TRIALS = 64
 MAX_POINTS = 1600
-POLICY_VERSION = "rgbd-visible-plane-axis-v3"
+POLICY_VERSION = "rgbd-common-plane-axis-v4"
 
 
 def _sample(points):
@@ -165,9 +165,16 @@ def constrain(pose, reference, depth, mask, intr, *, noise_m, tol_m, tol_deg):
         raw, _sample(reference), depth, mask, intr, noise_m=noise_m
     )
     result["visibility"] = visibility
+    live_points = depth_points(depth, mask, intr)
+    moved_reference = visible @ raw[:3, :3].T + raw[:3, 3]
+    # The converse visibility change matters too: newly exposed live material
+    # must not replace the reference patch with a different dominant face. Use
+    # the existing association radius to select the local common live surface.
+    nearby = cKDTree(moved_reference).query(live_points)[0] <= 2 * noise_m
+    visibility.update(live_points=len(live_points), common_live_points=int(nearby.sum()))
     ref_info, live_info = {}, {}
     ref = _plane(visible, noise_m, ref_info)
-    live = _plane(depth_points(depth, mask, intr), noise_m, live_info)
+    live = _plane(live_points[nearby], noise_m, live_info)
     result["evidence"] = {"reference": ref_info, "live": live_info}
     result.update(reference_planar=ref is not None, live_planar=live is not None)
     if ref is None or live is None:

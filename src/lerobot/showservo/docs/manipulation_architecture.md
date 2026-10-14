@@ -94,6 +94,9 @@ foreground do not participate in the reference plane fit. This uses the same
 visibility rule and noise allowance as the general surface comparison. Otherwise
 a gripper hiding one face can make the independently fitted majority planes
 describe different physical faces, producing a false rotation disagreement.
+Conversely, live plane fitting uses only points within the existing local
+association radius of the transformed visible reference subset. This prevents
+newly revealed material from replacing the common patch with another face.
 The result records the visible sample counts and the reference patch's material
 anchor. Held-view correction uses that same anchor in demo and live fingertip
 coordinates; it does not extrapolate a partial-view rotation to the centre of
