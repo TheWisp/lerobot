@@ -25,7 +25,6 @@ import dataclasses
 import functools
 import logging
 import time
-from collections.abc import Callable
 from typing import Any, Literal
 
 import numpy as np
@@ -135,9 +134,9 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
     the last view that placed it (:func:`_view_places`), moved on with what it rests on (the point groups, when acts
     use them). The whole act is planned and judged from the arm's present joints before anything moves.
 
-    Before the grasp check (:func:`_grasp_split`) a line is walked, re-aimed every tick at its frame's object as it
-    moves, the gripper set first or moved along as the key frame says; a follow is planned from where the arm stands
-    and streamed. During the follow the demo's hold begins in, what the grip shows is read on the fly, as the old act
+    Before the grasp check (:func:`_grasp_split`) each line and lift is planned from the observed joints and streamed
+    through the same live, checked path as a follow. Object-frame goals are re-aimed every cycle. During the follow
+    the demo's hold begins in, what the grip shows is read on the fly, as the old act
     did (the grasp check, the grasp pose, views of the held object while the arm stands still). From the grasp check
     on, while the demo held something: the lines made holding are streamed as one plan with the grasp's closing kept;
     at the first held line, the arm stands still while the held object is found in the gripper, reaches it corrected for
@@ -485,51 +484,6 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
             if frame == (obj or ""):
                 return approach()
             return other_now(frame)
-
-        async def walk_to(label: str, aim: Callable[[], np.ndarray]) -> str:
-            """Walk the arm to ``aim()``, asked again every tick, until it arrives: "" or why not. Arrived is within
-            ACT_ARRIVE_M of it, or, as for a stream's end, with the commanded joints on it and the arm stopped with
-            every joint within ACT_STALL_DEG of its command: held short by the servos, which waiting does not close."""
-            act.step = label
-            t0 = time.monotonic()
-            kin = jog.kinematics()
-            arm = [m for m in MOTOR_NAMES if m != "gripper"]
-            seen: list[tuple[float, np.ndarray]] = []
-            while True:
-                why = interrupted()
-                if why:
-                    return why
-                target = aim()
-                jog.set_target_pose(target)
-                run.target(act.step, pose=target)
-                cur, st = jog.current_tip_and_anchor(), jog.current_status()
-                if cur is not None and not st.get("holding"):
-                    e_m, e_deg = core.pose_residual(cur[0], target)
-                    if e_m <= runtime.ACT_ARRIVE_M and e_deg <= core.ACT_REACH_TOL_DEG:
-                        return ""
-                    if kin is not None and st.get("q_cmd") and st.get("q_obs"):
-                        now = time.monotonic()
-                        q_obs = np.array([st["q_obs"][m] for m in arm])
-                        seen = [(w, v) for w, v in seen if now - w <= runtime.ACT_STILL_S] + [(now, q_obs)]
-                        stopped = (
-                            now - seen[0][0] >= 0.8 * runtime.ACT_STILL_S
-                            and np.ptp([v for _w, v in seen], axis=0).max() < runtime.ACT_STILL_DEG
-                        )
-                        lag = max(abs(st["q_cmd"][m] - st["q_obs"][m]) for m in arm)
-                        c_m, c_deg = core.pose_residual(
-                            kin.forward_kinematics(np.array([st["q_cmd"][m] for m in MOTOR_NAMES])), target
-                        )
-                        commanded = c_m <= runtime.ACT_ARRIVE_M and c_deg <= core.ACT_REACH_TOL_DEG
-                        if stopped and lag <= runtime.ACT_STALL_DEG and commanded:
-                            shorts = {
-                                **(act.place or {}).get("walk_short_mm", {}),
-                                label: round(e_m * 1000.0, 1),
-                            }
-                            act.place = {**(act.place or {}), "walk_short_mm": shorts}
-                            return ""
-                if time.monotonic() - t0 > runtime.ACT_STEP_TIMEOUT_S:
-                    return f"{label}: not there after {runtime.ACT_STEP_TIMEOUT_S:.0f} s"
-                await asyncio.sleep(runtime.ACT_TICK_S)
 
         live_fix = np.eye(4)
         hold_watch = None
@@ -962,30 +916,21 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
             for n in range(phase_start, split):
                 k = frames[n]
                 i = index(k["t"])
-                if k["move"] == "lift":
-                    cur = jog.current_tip_and_anchor()
-                    if cur is None:
-                        fail("the arm went away")
+                if k["move"] in ("line", "lift"):
+                    # Preflight and execution must take the same IK branch. A free-running Cartesian walk could
+                    # wind a joint into a physical stop even when the separately checked plan had a safe branch.
+                    act.step = f"planning {k['label']}"
+                    aim_then = follow() if k["frame"] == (obj or "") else None
+                    planned = await plan_span(
+                        k["label"],
+                        (n, n + 1),
+                        delta_cam=aim_then,
+                        aim=None if aim_then is None else aim_error(aim_then),
+                    )
+                    if not planned["ok"]:
+                        fail(planned["reason"])
                         return
-                    up = np.array(cur[0], dtype=float)
-                    up[2, 3] += k["up_mm"] / 1000.0
-                    why = await walk_to(k["label"], lambda up=up: up)
-                    if why:
-                        fail(why)
-                        return
-                    continue
-                if k["move"] == "line":
-                    g = float(demo.q_cmd[i, gi])
-                    if k["grip"] == "first":
-                        g_now = jog.current_gripper()
-                        jog.set_gripper(g)
-                        act.step = f"{k['label']}: setting the gripper"
-                        await asyncio.sleep(
-                            abs(g - (g if g_now is None else g_now)) / jog.GRIP_UNITS_S + runtime.ACT_TICK_S
-                        )
-                    else:
-                        jog.set_gripper(g)  # it moves on its own clock while the arm walks
-                    why = await walk_to(k["label"], lambda f=k["frame"], tip=demo.tips[i]: frame_now(f) @ tip)
+                    why = await stream(planned)
                     if why:
                         fail(why)
                         return
@@ -1505,6 +1450,17 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
             if end < len(placing["q"]) - 1:
                 withdrawal = reactive.slice_plan(placing, end)
                 withdrawal["stage"] = [placing["stage"][end + 1], *placing["stage"][end + 1 :]]
+                # A later key frame may close the fingers again while the just-released object is still between
+                # them. In the 2026-10-14 insertion replay this coincided with the shoulder straining and freezing
+                # at the first withdrawal step. Do not reclose until a new grasp interaction.
+                if release_label is not None:
+                    before = np.asarray(withdrawal["q"])[:, gi].copy()
+                    withdrawal = reactive.keep_released(withdrawal, gi, closing)
+                    run.meta["release_open_guard"] = {
+                        "at": time.time(),
+                        "gripper_at_release": float(before[0]),
+                        "suppressed_samples": int(np.count_nonzero(before != withdrawal["q"][:, gi])),
+                    }
                 why = await stream(withdrawal)
                 if why:
                     fail(why)

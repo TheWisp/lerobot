@@ -2380,12 +2380,7 @@ def test_the_act_follows_an_object_moved_during_the_approach_and_grasps_where_it
 
     def set_target_pose(pose):
         sim["targets"].append(np.array(pose))
-        sim["q"][:3] += (
-            np.asarray(pose)[:3, 3] * 1000.0 - sim["q"][:3]
-        ) * 0.34  # the walk covers a third per tick
-        if len(sim["targets"]) == 3:
-            with manipulation.runtime._state.lock:
-                manipulation.runtime._state.track.history.append((_time.time(), True, moved))
+        pytest.fail("Act must execute its checked joint plan, not a separate Cartesian walk")
 
     async def joints_start(q_first):
         sim["q"] = np.array([q_first[m] for m in MOTOR_NAMES])
@@ -2455,7 +2450,7 @@ def test_the_act_follows_an_object_moved_during_the_approach_and_grasps_where_it
         async def tracker():  # the camera keeps seeing the gamepad where it was left
             while True:
                 await asyncio.sleep(0.01)
-                if len(sim["targets"]) >= 3:
+                if len(sim["streamed"]) >= 3:
                     with manipulation.runtime._state.lock:
                         manipulation.runtime._state.track.history.append((_time.time(), True, moved))
 
@@ -2469,8 +2464,7 @@ def test_the_act_follows_an_object_moved_during_the_approach_and_grasps_where_it
         asyncio.run(run())
         act = manipulation.runtime._state.act
         assert act.ok, act.reason
-        assert np.allclose(sim["targets"][0], tips[10]), "the approach first aims where the object was"
-        assert np.allclose(sim["targets"][-1], moved @ tips[10]), "then follows it to where it was moved"
+        assert not sim["targets"]
         end = kin.forward_kinematics(sim["streamed"][-1])
         assert np.linalg.norm(end[:3, 3] - (moved @ tips[25])[:3, 3]) <= core.ACT_SOLVE_TOL_M, (
             "the grasp is replayed on the moved object"
@@ -2486,9 +2480,13 @@ def test_the_act_follows_an_object_moved_during_the_approach_and_grasps_where_it
         assert rec.parent == tmp_path / "demos" / ".acts", "an unsaved demo's acts go under the demos folder"
         summary = json.loads((rec / "act.json").read_text())
         assert summary["result"]["ok"] and summary["demo"] == demo.name
-        assert any("pose" in x for x in summary["targets"]) and any(
-            "joints" in x for x in summary["targets"]
-        ), "the approach's poses and the grasp's joints"
+        approach_targets = [x for x in summary["targets"] if x["step"] == "pre-grasp 1" and x.get("pose")]
+        assert approach_targets and any("joints" in x for x in approach_targets), (
+            "the approach's checked joint commands keep their live pose targets"
+        )
+        assert np.allclose(approach_targets[-1]["pose"], moved @ tips[10]), (
+            "the checked approach follows the object after it moves"
+        )
         arm = np.load(rec / "arm.npz")
         assert arm["q_obs"].shape == (3, 7) and arm["tip_obs"].shape == (3, 4, 4)
         assert manipulation.runtime._state.run is None
@@ -2575,7 +2573,7 @@ def test_views_of_a_covered_object_move_neither_the_arm_nor_the_grasp(tmp_path, 
 
     def set_target_pose(pose):
         sim["targets"].append(np.array(pose))
-        sim["q"][:3] += (np.asarray(pose)[:3, 3] * 1000.0 - sim["q"][:3]) * 0.34
+        pytest.fail("Act must execute its checked joint plan, not a separate Cartesian walk")
 
     async def joints_start(q_first):
         sim["q"] = np.array([q_first[m] for m in MOTOR_NAMES])
@@ -2638,7 +2636,7 @@ def test_views_of_a_covered_object_move_neither_the_arm_nor_the_grasp(tmp_path, 
         async def tracker():  # once the arm is over it, the camera sees only the corner the wrist leaves
             while True:
                 await asyncio.sleep(0.005)
-                if not sim["targets"]:
+                if len(sim["streamed"]) < 2:
                     continue
                 job = manipulation.runtime._Job(
                     id=f"corner-{len(reasons)}",
@@ -2669,7 +2667,7 @@ def test_views_of_a_covered_object_move_neither_the_arm_nor_the_grasp(tmp_path, 
         assert all(not ok for _w, ok, _d in manipulation.runtime._state.track.history[1:]), (
             "none of them became the pose"
         )
-        assert all(np.allclose(p, tips[10]) for p in sim["targets"]), "the arm never aimed where they put it"
+        assert not sim["targets"]
         end = kin.forward_kinematics(sim["streamed"][-1])
         assert np.linalg.norm(end[:3, 3] - tips[25][:3, 3]) <= core.ACT_SOLVE_TOL_M, (
             "the grasp, on the pose held"

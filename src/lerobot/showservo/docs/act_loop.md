@@ -334,6 +334,52 @@ pictures and the method are in [`docs/proofs/act-loop/EVIDENCE.md`](../../../../
 
 ### Persistent joint lag during playback
 
+Act now plans each pre-grasp line and clearance lift from the observed joints
+and executes it through the same checked, live-recomposed joint stream as a
+follow. Earlier, preflight checked a joint path but the actual approach used
+the independent Cartesian controller, which could choose a different wrist
+configuration. In two insertion approaches on 2026-10-14 the commanded left
+wrist roll reached +125–127 motor degrees while its encoder stopped near +97
+and reported full permitted load; the arm froze before grasping. A target
+reachable on the checked branch did not make that separate Cartesian walk
+safe. Live target updates still cause the stream to recompute the remaining
+motion; an update that needs an unpermitted joint configuration is refused.
+
+The connected arm's calibrated servo ranges are intersected with optional
+`fields.joint_limits_deg.<arm>.<joint>.min/max` in its robot profile, in motor
+degrees. This assembly's left wrist was measured to stop around +97, so its
+profile uses a +90 working maximum. Planning, IK, guarded paths, and the final
+motor-command clamp share this bound; it also catches settle trim or a direct
+leader command after IK. Direct joint playback rejects out-of-range samples
+before streaming, so the follower cannot wait for a clipped, unreachable goal.
+A command-space test sweeps every arm joint across its working interval and
+outside goals, checking the step and bound invariants. The bound is specific
+to the measured arm, not a default for all SO-107s. A range check cannot
+detect a collision, excessive load inside the range, or a bad pose estimate.
+The offline action-space sweep
+in `benchmarks/showservo_action_sweep.py` tests recorded targets and nearby
+perturbations against the connected arm's model and profile, but real motion
+remains necessary to check those physical effects. With the `white` profile,
+its two failed insertion approaches (`20261014_221606` and `221744`) gave 132
+sampled targets and ±5 mm / ±5 degree perturbations: 54 planned feasibly, 78
+were refused, and no solved path exceeded the +90 wrist bound. The later live
+targets that previously drove +125–127 degree commands were among the refused
+ones. This is a sampled IK/reachability check, not a continuous-space proof or
+a collision/load test.
+
+The first physical retest passed the old wrist failure point, grasped, and
+reached the insertion/release, but shoulder lift then stopped 5.3 degrees
+behind its command on the first withdrawal line and the bounded playback
+guard froze it. Its measured load climbed from about 30% to 62% as the joint
+stopped; this is consistent with contact but does not identify the contact
+point. The demo's withdrawal gripper command had moved from the released
+opening of 65.7 to 73.8, toward closing, before the arm moved. The runner now
+keeps the released opening (or permits further opening) through withdrawal
+until a distinct new grasp interaction, and records how many gripper samples
+this suppressed. The scene changed when the arm was recovered and parked, so
+that second change still needs a physical retest; neither the offline sweep
+nor this one run certifies collision-free withdrawal.
+
 Joint playback pauses when an arm joint is more than 3 degrees behind its last
 sample. After a 0.5 second catch-up wait, transport can continue within a
 5 degree following budget. The soft wait becomes available again once all arm

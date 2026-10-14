@@ -837,6 +837,112 @@ def test_each_joints_range_is_half_its_servos_calibrated_span_either_way():
         jog._jog = old
 
 
+def test_profile_working_stop_narrows_only_the_measured_arms_joint_and_every_path_sees_it():
+    """The left wrist stops near +97 on this assembly although its servo advertises a much wider span.
+
+    Gizmo IK, Act preflight, and guarded paths must share the measured +90 operating bound. The right arm and every
+    other joint keep their calibrated limits, and callers cannot mutate the stored bound through servo_ranges().
+    """
+    wrist = MOTOR_NAMES.index("wrist_roll")
+    lo, hi = np.full(len(MOTOR_NAMES), -180.0), np.full(len(MOTOR_NAMES), 180.0)
+    lo[-1] = hi[-1] = np.nan
+    fields = {"joint_limits_deg": {"left": {"wrist_roll": {"max": 90.0}}}}
+    left_lo, left_hi = jog._profile_joint_ranges(fields, "left", lo, hi)
+    right_lo, right_hi = jog._profile_joint_ranges(fields, "right", lo, hi)
+    assert left_hi[wrist] == 90.0 and left_lo[wrist] == -180.0
+    assert right_hi[wrist] == 180.0 and right_lo[wrist] == -180.0
+    assert np.all(left_hi[:wrist] == hi[:wrist])
+    j = jog._Jog(robot=SimpleNamespace(bus=object()), joint_ranges=(left_lo, left_hi))
+    old, jog._jog = jog._jog, j
+    try:
+        plan_lo, plan_hi = jog.servo_ranges()
+        assert plan_hi[wrist] == 90.0
+        plan_hi[wrist] = 180.0
+        assert jog.servo_ranges()[1][wrist] == 90.0
+    finally:
+        jog._jog = old
+
+
+def test_final_motor_command_cannot_cross_the_profile_working_stop():
+    lo, hi = np.full(len(MOTOR_NAMES), -180.0), np.full(len(MOTOR_NAMES), 180.0)
+    lo[-1] = hi[-1] = np.nan
+    ranges = jog._profile_joint_ranges(
+        {"joint_limits_deg": {"left": {"wrist_roll": {"max": 90}}}}, "left", lo, hi
+    )
+    q = dict.fromkeys(MOTOR_NAMES, 0.0) | {"wrist_roll": 88.0}
+    assert jog._clamped({"wrist_roll.pos": 125.0}, q, ranges)["wrist_roll.pos"] == 90.0
+    assert jog._clamped({"wrist_roll.pos": 93.0}, q, ranges)["wrist_roll.pos"] == 90.0
+    q["wrist_roll"] = 97.0
+    assert jog._clamped({"wrist_roll.pos": 125.0}, q, ranges)["wrist_roll.pos"] == 90.0
+    assert jog._clamped({"shoulder_lift.pos": 40.0}, q, ranges)["shoulder_lift.pos"] == 12.0
+
+
+def test_motor_command_sweep_respects_step_and_working_bounds_on_every_joint():
+    lo, hi = np.full(len(MOTOR_NAMES), -180.0), np.full(len(MOTOR_NAMES), 180.0)
+    lo[-1] = hi[-1] = np.nan
+    limits = {m: {"min": -40.0 + i, "max": 40.0 + i} for i, m in enumerate(MOTOR_NAMES) if m != "gripper"}
+    ranges = jog._profile_joint_ranges({"joint_limits_deg": {"left": limits}}, "left", lo, hi)
+    for i, m in enumerate(MOTOR_NAMES):
+        if m == "gripper":
+            continue
+        low, high = ranges[0][i], ranges[1][i]
+        for observed in np.linspace(low, high, 9):
+            for target in np.linspace(low - 60, high + 60, 21):
+                commanded = jog._clamped({f"{m}.pos": target}, {m: observed}, ranges)[f"{m}.pos"]
+                assert low <= commanded <= high
+                assert abs(commanded - observed) <= jog.MAX_STEP_DEG + 1e-9
+        # A pose already beyond the configured stop may only be commanded back toward it.
+        for observed, target in ((high + 10, high + 50), (low - 10, low - 50)):
+            commanded = jog._clamped({f"{m}.pos": target}, {m: observed}, ranges)[f"{m}.pos"]
+            assert abs(commanded - observed) <= jog.MAX_STEP_DEG + 1e-9
+            assert abs(commanded - (high if observed > high else low)) < abs(
+                observed - (high if observed > high else low)
+            )
+
+
+def test_direct_joint_stream_rejects_outside_working_goal_before_playback_or_handoff(monkeypatch):
+    lo, hi = np.full(len(MOTOR_NAMES), -180.0), np.full(len(MOTOR_NAMES), 180.0)
+    lo[-1] = hi[-1] = np.nan
+    ranges = jog._profile_joint_ranges(
+        {"joint_limits_deg": {"left": {"wrist_roll": {"max": 90}}}}, "left", lo, hi
+    )
+    q = dict.fromkeys(MOTOR_NAMES, 0.0)
+    bad = {**q, "wrist_roll": 125.0}
+    j = jog._Jog(robot=object(), mode="joints", q_target=q.copy(), q_obs=q.copy(), joint_ranges=ranges)
+    monkeypatch.setattr(jog, "_jog", j)
+    with pytest.raises(RuntimeError, match="wrist_roll target 125.0"):
+        jog.set_target_joints(bad)
+    with pytest.raises(RuntimeError, match="wrist_roll target 125.0"):
+        jog.play_joints([q, bad], [0.0, 0.1])
+    assert j.playback is None and j.q_target == q
+    jog.play_joints([q], [0.0])
+    with pytest.raises(RuntimeError, match="wrist_roll target 125.0"):
+        jog.update_playback_next(-1, bad, 0.1)
+    assert len(j.playback) == 1
+    with pytest.raises(RuntimeError, match="gripper joint target is not finite"):
+        jog.play_joints([{**q, "gripper": float("nan")}], [0.0])
+    monkeypatch.setattr(jog, "_stop_loop", lambda *_: pytest.fail("invalid goal stopped the motor loop"))
+    with pytest.raises(RuntimeError, match="wrist_roll target 125.0"):
+        jog._joints_start(j, bad)
+    assert jog._clip_working_target(bad, ranges)["wrist_roll"] == 90.0
+
+
+@pytest.mark.parametrize(
+    "limits",
+    [
+        {"left": {"wrist_roll": {"min": 100, "max": 90}}},
+        {"left": {"wrist_roll": {"max": "90"}}},
+        {"left": {"gripper": {"max": 90}}},
+        {"left": {"wrist_typo": {"max": 90}}},
+        {"left": {"wrist_roll": {"maximum": 90}}},
+    ],
+)
+def test_profile_working_limits_reject_invalid_or_empty_ranges(limits):
+    lo, hi = np.full(len(MOTOR_NAMES), -180.0), np.full(len(MOTOR_NAMES), 180.0)
+    with pytest.raises(ValueError, match="joint_limits_deg"):
+        jog._profile_joint_ranges({"joint_limits_deg": limits}, "left", lo, hi)
+
+
 def test_the_models_limits_narrow_to_the_servos_through_the_alignment_and_never_widen():
     """A servo's range, in the degrees the arm is driven in, maps to the model's joint by ``urdf = sign * motor +
     offset``; the model keeps whichever bound is tighter, and a joint without a servo range keeps its own."""
@@ -915,10 +1021,20 @@ def test_the_connect_narrows_the_models_limits_to_the_servos(tmp_path, monkeypat
     from lerobot.robots.so107_description import cartesian_ik
 
     (tmp_path / "white.json").write_text(
-        json.dumps({"type": "bi_so107_follower", "fields": {"left_arm_port": "/dev/fake", "id": "white"}})
+        json.dumps(
+            {
+                "type": "bi_so107_follower",
+                "fields": {
+                    "left_arm_port": "/dev/fake",
+                    "id": "white",
+                    "joint_limits_deg": {"left": {"wrist_roll": {"max": 90.0}}},
+                },
+            }
+        )
     )
     monkeypatch.setattr(robot_api, "ROBOT_PROFILES_DIR", tmp_path)
     cal = {m: SimpleNamespace(range_min=1000, range_max=3000) for m in MOTOR_NAMES}
+    cal["wrist_roll"] = SimpleNamespace(range_min=0, range_max=4095)
     bus = SimpleNamespace(
         motors={m: SimpleNamespace(id=i + 1, model="sts3215") for i, m in enumerate(MOTOR_NAMES)},
         calibration=cal,
@@ -957,6 +1073,7 @@ def test_the_connect_narrows_the_models_limits_to_the_servos(tmp_path, monkeypat
         jog._connect(jog.ConnectBody(profile="white", arm="left"))
     ((kin, lo, hi),) = narrowed
     assert kin == "the model" and hi[0] == pytest.approx(1000 * 360 / 4095) and lo[0] == -hi[0]
+    assert hi[MOTOR_NAMES.index("wrist_roll")] == 90.0
     assert np.isnan(hi[MOTOR_NAMES.index("gripper")])
 
 

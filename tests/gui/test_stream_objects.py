@@ -1244,8 +1244,6 @@ def _run_place_act(
     box_turn_deg=0.0,
     landing="exact",
     ranges=None,
-    walk_short_mm=0.0,
-    solve_short=False,
     world=False,
     as_key_frames=False,
     two_preplaces=False,
@@ -1270,9 +1268,7 @@ def _run_place_act(
     shoulder reads that much short of its command while the gripper holds the gamepad, as the load holds it down. With
     ``wrist_deg`` the demo turns the arm's wrist that far for the place (:func:`_place_demo`); ``box_turn_deg`` turns
     the box about its middle as well as moving it; ``landing`` is the demo's landing rule and ``ranges`` what the arm
-    reports as its servos' ranges. With ``walk_short_mm`` every walk stops that far short of its target along x, the
-    arm's status showing the joints commanded on the target and read that far from it; with ``solve_short`` too, the
-    joints commanded are where the arm stopped, as when the solve cannot reach the target. With ``world`` the demo's
+    reports as its servos' ranges. With ``world`` the demo's
     arm rises 20 mm and moves 10 mm along x after the place end, its gripper opening on to 75, and its last sample is a
     world waypoint. With ``as_key_frames`` the marks are stored as the key frames they make ("key" marks). With
     ``two_preplaces`` a second pre-place comes before the one marked, in the carry; with ``drop_in_lift`` the gamepad
@@ -1383,10 +1379,12 @@ def _run_place_act(
         "closed_at": None,
         "targets": [],
         "target_at": [],
+        "first_move_at": None,
         "streamed": [],
         "sent_at": [],
         "stops": 0,
         "first_answer": None,
+        "first_answer_wall": None,
         "find_answers": [],
         "grips_set": [],
     }
@@ -1403,30 +1401,10 @@ def _run_place_act(
         return final
 
     def set_target_pose(pose):
-        sim["targets"].append(np.array(pose))
-        sim["target_at"].append(_time.monotonic())
-        sim["walk_cmd"] = (
-            np.asarray(pose)[:3, 3] * 1000.0
-        )  # the walk's joints: the fake arm's tip is its first three
-        sim["stop_at"] = sim["walk_cmd"] - [
-            walk_short_mm,
-            0.0,
-            0.0,
-        ]  # held short of them by that much along x
-        sim["q"][:3] += (sim["stop_at"] - sim["q"][:3]) * 0.34
+        pytest.fail("Act must use the checked joint stream, not a separate Cartesian walk")
 
     def status():
-        out = {"connected": True, "halted": False, "holding": False}
-        if (
-            walk_short_mm
-        ):  # the servos' view: the joints commanded, on the target or where the solve stopped, and read
-            q_cmd = sim["q"].copy()
-            q_cmd[:3] = sim.get("stop_at" if solve_short else "walk_cmd", sim["q"][:3])
-            out.update(
-                q_cmd=dict(zip(MOTOR_NAMES, map(float, q_cmd), strict=True)),
-                q_obs=dict(zip(MOTOR_NAMES, map(float, sim["q"]), strict=True)),
-            )
-        return out
+        return {"connected": True, "halted": False, "holding": False}
 
     async def joints_start(q_first):
         sim["q"] = np.array([q_first[m] for m in MOTOR_NAMES])
@@ -1436,6 +1414,8 @@ def _run_place_act(
 
     def set_target_joints(q):
         sim["q"] = np.array([q[m] for m in MOTOR_NAMES])
+        if sim["first_move_at"] is None and np.max(np.abs(sim["q"][:6] - [80, -20, 90, 0, 0, 0])) > 0.1:
+            sim["first_move_at"] = _time.monotonic()
         if float(q["gripper"]) >= 84.0 > sim["grip"]:
             sim["closed_at"] = _time.monotonic()
         sim["grip"] = float(q["gripper"])
@@ -1538,7 +1518,7 @@ def _run_place_act(
         taught = False
         while True:
             await asyncio.sleep(0.002)
-            if finds_wait_for_the_arm and not sim["targets"]:
+            if finds_wait_for_the_arm and sim["first_move_at"] is None:
                 continue
             with manipulation.runtime._state.lock:
                 pending = list(manipulation.runtime._state.worker.pending)
@@ -1557,6 +1537,7 @@ def _run_place_act(
                 manipulation.tracking._apply_others({"others": [share], "other_delta_0": moved}, (H, W))
             if pending and sim["first_answer"] is None:
                 sim["first_answer"] = _time.monotonic()
+                sim["first_answer_wall"] = _time.time()
             for job_id in pending:
                 job = manipulation.runtime._state.worker.jobs[job_id]
                 found = {
@@ -1648,6 +1629,11 @@ def _run_place_act(
     )
 
 
+def _act_targets(tmp_path):
+    row = json.loads((tmp_path / "trials.jsonl").read_text().splitlines()[-1])
+    return json.loads((pathlib.Path(row["run"]) / "act.json").read_text())["targets"]
+
+
 @pytest.mark.usefixtures("act_simulation")
 def test_after_letting_go_the_act_goes_on_to_the_world_waypoints_where_the_demos_arm_was(
     tmp_path, monkeypatch
@@ -1672,7 +1658,9 @@ def test_after_letting_go_the_act_goes_on_to_the_world_waypoints_where_the_demos
         line = tips[k:] - placed
         d = (tips[-1] - placed) / np.linalg.norm(tips[-1] - placed)
         assert np.abs(line - np.outer(line @ d, d)).max() <= 0.0005, "a straight line"
-        assert sim["streamed"][-1][gi] == pytest.approx(75.0), "the gripper as the demo had it there"
+        assert sim["streamed"][-1][gi] == pytest.approx(60.0), (
+            "withdrawal keeps the released opening instead of regrasping the object"
+        )
         row = json.loads((tmp_path / "trials.jsonl").read_text().splitlines()[-1])
         assert row["result"] == "done"
     finally:
@@ -2041,26 +2029,25 @@ def test_a_lift_after_the_grasp_raises_the_held_object_straight_up_before_the_ca
 
 
 def test_a_lift_before_the_grasp_is_walked_straight_up_from_where_the_arm_stands(tmp_path, monkeypatch):
-    """Before the grasp, lines are walked: a lift there is walked to where the arm stands, its height higher, before the
-    next pre-grasp comes down to the gamepad."""
+    """A checked pre-grasp lift rises from the arm's arrival pose before the next pre-grasp descends."""
     try:
         demo, sim, _views, m = _run_place_act(tmp_path, monkeypatch, lift_before_mm=25.0)
         act = manipulation.runtime._state.act
         assert act.ok, act.reason
         pre = m["pick"] @ demo.tips[PLACE_AT["pregrasp"]]
-        k = int(np.flatnonzero([np.allclose(p, pre) for p in sim["targets"]])[-1])
-        up = sim["targets"][
-            k + 1
-        ]  # where the arm stood, arrived within ACT_ARRIVE_M of the pre-grasp, 25 mm higher
+        targets = _act_targets(tmp_path)
+        first = [np.asarray(x["pose"]) for x in targets if x["step"] == "key frame 1" and x.get("pose")]
+        lift = [np.asarray(x["pose"]) for x in targets if x["step"] == "lift 1" and x.get("pose")]
+        second = [np.asarray(x["pose"]) for x in targets if x["step"] == "key frame 2" and x.get("pose")]
+        assert first and lift and second and sim["streamed"]
+        assert np.allclose(first[-1], pre)
+        up = lift[-1]
         near = manipulation.runtime.ACT_ARRIVE_M
         assert np.allclose(up[:3, :3], pre[:3, :3]) and np.all(np.abs(up[:2, 3] - pre[:2, 3]) <= near), (
             "straight up"
         )
         assert 0.025 - near <= up[2, 3] - pre[2, 3] <= 0.025 + near, "by the lift's height"
-        after = next(
-            p for p in sim["targets"][k + 1 :] if not np.allclose(p, up)
-        )  # each walk aims every tick
-        assert np.allclose(after, m["pick"] @ demo.tips[20]), "then the second pre-grasp"
+        assert np.allclose(second[-1], m["pick"] @ demo.tips[20]), "then the second pre-grasp"
     finally:
         _end_place_state()
 
@@ -2350,33 +2337,6 @@ def test_the_reach_preview_searches_a_landing_once_per_find_and_never_during_an_
 
 
 @pytest.mark.usefixtures("act_simulation")
-def test_a_walk_held_short_by_the_servos_has_arrived_and_the_act_goes_on(tmp_path, monkeypatch):
-    """An act of 2026-10-08 stood 4.9 mm off its pre-place for 20 s, every joint within 0.8 deg of its command, and
-    gave up. Stopped with the walk on its target and the joints within the servos' band, a walk has arrived as far as
-    it will, as a stream's end has; the act goes on and records how far short each such walk stood."""
-    try:
-        _demo, _sim, _views, _m = _run_place_act(tmp_path, monkeypatch, walk_short_mm=5.0)
-        act = manipulation.runtime._state.act
-        assert act.ok, act.reason
-        short = act.place["walk_short_mm"]
-        assert "pre-grasp 1" in short and all(4.0 < v < 6.0 for v in short.values()), short
-    finally:
-        _end_place_state()
-
-
-@pytest.mark.usefixtures("act_simulation")
-def test_a_walk_whose_solve_stops_short_has_not_arrived(tmp_path, monkeypatch):
-    """The servos' shortfall is accepted only with the command on the target. A solve that stops short of it (a joint
-    at its limit, say) leaves the arm on its command and still short: that walk has not arrived, and gives up."""
-    try:
-        _run_place_act(tmp_path, monkeypatch, walk_short_mm=5.0, solve_short=True)
-        act = manipulation.runtime._state.act
-        assert not act.ok and act.reason.startswith("pre-grasp 1: not there after"), act.reason
-    finally:
-        _end_place_state()
-
-
-@pytest.mark.usefixtures("act_simulation")
 def test_a_shift_during_the_lift_is_caught_at_the_pre_place(tmp_path, monkeypatch):
     """The grip measured before the lift is not the grip after it when the lift moves the object in the fingers: the
     pre-place measurement, seen well on both sides, is the one the place uses, and the shift is reported."""
@@ -2408,7 +2368,9 @@ def test_missing_demo_carry_reference_stops_before_the_grasp(tmp_path, monkeypat
         act = manipulation.runtime._state.act
         assert not act.ok and "demo carry reference before grasp" in act.reason
         assert act.place["reference_preflight"] == "failed before grasp"
-        assert not sim["streamed"], "no grasp or loaded motion may precede reference validation"
+        assert not [q for q in sim["streamed"] if q[-1] >= 82.0], (
+            "empty-arm approach may stream, but grasp and loaded motion wait for reference validation"
+        )
         assert sim["grip"] < 82.0, "leave the empty gripper open"
     finally:
         _end_place_state()
@@ -2910,7 +2872,7 @@ def test_a_tracking_session_with_a_weak_initial_find_must_refind_before_moving(
             assert not sim["targets"] and not sim["streamed"], "no motion on either weak reference"
         else:
             assert act.ok, act.reason
-            assert sim["target_at"][0] > sim["find_answers"][0], "wait for a strong reference before moving"
+            assert sim["first_move_at"] > sim["find_answers"][0], "wait for a strong reference before moving"
     finally:
         _end_place_state()
 
@@ -2921,14 +2883,18 @@ def test_the_arm_moves_while_the_act_finds_its_objects(tmp_path, monkeypatch):
     take the worker's time; none of it holds the arm back. With a worker that answers nothing until the arm moves,
     the act walks toward the first pre-grasp on the track it began with and places as usual."""
     try:
-        demo, sim, _views, m = _run_place_act(tmp_path, monkeypatch, finds_wait_for_the_arm=True)
+        _demo, sim, _views, m = _run_place_act(tmp_path, monkeypatch, finds_wait_for_the_arm=True)
         act = manipulation.runtime._state.act
         assert act.ok, act.reason
-        assert sim["target_at"][0] < sim["first_answer"], "the arm moved before any find was answered"
-        first_pre = int(
-            np.argmin(np.abs(demo.t - min(k["t"] for k in demo.keypoints if k["kind"] == "pregrasp")))
+        assert sim["first_move_at"] < sim["first_answer"], "the arm moved before any find was answered"
+        early = [
+            x
+            for x in _act_targets(tmp_path)
+            if x["step"] == "pre-grasp 1" and x.get("pose") and x["t"] < sim["first_answer_wall"]
+        ]
+        assert early and np.allclose(np.asarray(early[0]["composition"]["motion"]), m["pick"]), (
+            "the checked approach begins on the track it began with"
         )
-        assert np.allclose(sim["targets"][0], m["pick"] @ demo.tips[first_pre]), "on the track it began with"
     finally:
         _end_place_state()
 

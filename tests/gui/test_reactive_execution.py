@@ -20,6 +20,21 @@ def pose(x):
     return t
 
 
+@pytest.mark.parametrize("closing", [1.0, -1.0])
+def test_withdrawal_does_not_reclose_on_the_just_released_object(closing):
+    gi = MOTOR_NAMES.index("gripper")
+    released = 65.0 if closing > 0 else 35.0
+    q = np.zeros((4, len(MOTOR_NAMES)))
+    q[:, gi] = [released, released + closing * 8, released - closing * 5, released + closing * 30]
+    original = q.copy()
+    plan = {"q": q, "live_path": {"grips": q[:, gi].copy(), "frames": ["arbitrary"] * len(q)}}
+    guarded = reactive.keep_released(plan, gi, closing)
+    np.testing.assert_array_equal(guarded["q"][:, gi], [released, released, released - closing * 5, released])
+    np.testing.assert_array_equal(guarded["live_path"]["grips"], guarded["q"][:, gi])
+    np.testing.assert_array_equal(plan["q"], original)
+    assert guarded["live_path"]["frames"] == ["arbitrary"] * len(q)
+
+
 @pytest.mark.parametrize("change", ["target", "attachment", "both", "during_solve"])
 def test_update_during_contact_retargets_remaining_phase_and_preserves_release(monkeypatch, change):
     kin = _TipKinematics()

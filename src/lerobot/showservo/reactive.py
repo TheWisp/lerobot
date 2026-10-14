@@ -25,6 +25,27 @@ def slice_plan(plan: dict, start: int = 0, stop: int | None = None) -> dict:
     return out
 
 
+def keep_released(plan: dict, grip_index: int, closing: float) -> dict:
+    """Keep the just-released gripper open through the remainder of this interaction.
+
+    A line after a release may set its gripper to the demo's later, more closed
+    opening *before* withdrawing. That can regrasp the object while the arm is
+    still in contact. A later interaction with an explicit new grasp gets its
+    own plan and can close again. Additional opening remains permitted.
+    """
+    q = np.asarray(plan["q"]).copy()
+    released = float(q[0, grip_index])
+    if closing > 0:
+        q[:, grip_index] = np.minimum(q[:, grip_index], released)
+    else:
+        q[:, grip_index] = np.maximum(q[:, grip_index], released)
+    out = {**plan, "q": q}
+    if "live_path" in plan:
+        path = {**plan["live_path"], "grips": q[:, grip_index].copy()}
+        out["live_path"] = path
+    return out
+
+
 def targets(path: dict, motions: dict[str, np.ndarray], fix: np.ndarray) -> np.ndarray:
     return np.stack(
         [

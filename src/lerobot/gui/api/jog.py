@@ -168,6 +168,9 @@ class _Jog:
     kin: Any = None
     ctrl: Any = None
     alignment: dict = field(default_factory=dict)
+    joint_ranges: tuple[np.ndarray, np.ndarray] | None = (
+        None  # servo calibration intersected with profile working limits
+    )
     thread: threading.Thread | None = None
     stop: threading.Event = field(default_factory=threading.Event)
     lock: threading.Lock = field(default_factory=threading.Lock)
@@ -490,20 +493,25 @@ def _loop(j: _Jog) -> None:
                         q_cmd, holding = None, False
                     else:
                         # The plan checked these joints. Do not add the Cartesian settle trim to them.
-                        robot.send_action(_clamped({f"{m}.pos": command[m] for m in MOTOR_NAMES}, q_obs))
+                        robot.send_action(
+                            _clamped({f"{m}.pos": command[m] for m in MOTOR_NAMES}, q_obs, j.joint_ranges)
+                        )
                         q_cmd, holding, grip = command, False, command["gripper"]
                         j.q_target = command
             elif mode == "leader" and leader is not None:
                 # The human drives: the leader's joints go straight to the follower, gripper included.
                 act = leader.get_action()
                 q_lead = {m: float(act[f"{m}.pos"]) for m in MOTOR_NAMES}
-                robot.send_action(_clamped({f"{m}.pos": q_lead[m] for m in MOTOR_NAMES}, q_obs))
-                q_cmd, holding, grip = q_lead, False, q_lead["gripper"]
+                sent = _clamped({f"{m}.pos": q_lead[m] for m in MOTOR_NAMES}, q_obs, j.joint_ranges)
+                robot.send_action(sent)
+                q_cmd, holding, grip = {m: sent[f"{m}.pos"] for m in MOTOR_NAMES}, False, q_lead["gripper"]
                 j.settle, j.goal_prev = _Settle(), None  # the human closes the loop
             elif mode == "joints" and q_target is not None:
                 # An act replays the demo's own joints, corrected: they go straight to the follower, gripper included.
                 robot.send_action(
-                    _clamped(_trimmed(j, {f"{m}.pos": q_target[m] for m in MOTOR_NAMES}), q_obs)
+                    _clamped(
+                        _trimmed(j, {f"{m}.pos": q_target[m] for m in MOTOR_NAMES}), q_obs, j.joint_ranges
+                    )
                 )
                 q_cmd, holding, grip = dict(q_target), False, q_target["gripper"]
             elif not halted and target is not None and ref is not None:
@@ -523,7 +531,7 @@ def _loop(j: _Jog) -> None:
                         "gripper_pos": grip,
                     }
                 )
-                robot.send_action(_clamped(_trimmed(j, out), q_obs))
+                robot.send_action(_clamped(_trimmed(j, out), q_obs, j.joint_ranges))
                 q_cmd = {m: float(out[f"{m}.pos"]) for m in MOTOR_NAMES}  # the goal itself, untrimmed
                 # A held tick (no IK solution, or an implausible joint jump) must
                 # not let the reference run ahead of the arm; it waits here and
@@ -685,7 +693,8 @@ def _connect(body: ConnectBody) -> dict:
     try:
         if not robot.is_calibrated:
             raise RuntimeError(f"arm {motor_id!r} reports uncalibrated")
-        _limit_to_servos(kin, alignment, *_servo_ranges_of(robot.bus))  # no solve asks past a servo's stop
+        joint_ranges = _profile_joint_ranges(fields, body.arm, *_servo_ranges_of(robot.bus))
+        _limit_to_servos(kin, alignment, *joint_ranges)  # every IK path uses the arm's actual working bounds
         protection = _read_protection(robot.bus)
         q0 = np.array([_read_checked(robot.bus, None).q[m] for m in MOTOR_NAMES], dtype=float)
         urdf_deg = np.array(
@@ -696,7 +705,7 @@ def _connect(body: ConnectBody) -> dict:
         lo, hi = np.degrees(kin._inner._inner.q_lo), np.degrees(kin._inner._inner.q_hi)
         if np.any(urdf_deg[:6] < lo[:6] + 2) or np.any(urdf_deg[:6] > hi[:6] - 2):
             logger.info("jog: start pose outside the URDF limits; ramping to the ready pose first")
-            _ramp_joints(robot, dict(READY_DEG))
+            _ramp_joints(robot, dict(READY_DEG), ranges=joint_ranges)
             q0 = np.array([_read_checked(robot.bus, None).q[m] for m in MOTOR_NAMES], dtype=float)
         t0 = kin.forward_kinematics(q0)
         ctrl = CartesianIKController(
@@ -717,6 +726,7 @@ def _connect(body: ConnectBody) -> dict:
         kin=kin,
         ctrl=ctrl,
         alignment=alignment,
+        joint_ranges=joint_ranges,
         max_linear_m_s=_jog.max_linear_m_s,
         max_angular_rad_s=_jog.max_angular_rad_s,
         max_rot_delta_rad=_jog.max_rot_delta_rad,
@@ -861,13 +871,70 @@ def _faults(bus: Any, state: _ArmState) -> None:
             raise RuntimeError(f"{name}: {bus.packet_handler.getRxPacketError(error)}")
 
 
-def _clamped(action: dict[str, float], q: dict[str, float]) -> dict[str, float]:
+def _clamped(
+    action: dict[str, float], q: dict[str, float], ranges: tuple[np.ndarray, np.ndarray] | None = None
+) -> dict[str, float]:
     """Each joint's goal in ``action`` at most MAX_STEP_DEG from its checked reading ``q``: the follower's own clamp,
-    which read the joints again unchecked, is off."""
+    which read the joints again unchecked, is off. The final send also respects measured working limits, including
+    any trim or leader command added after IK. If the arm is already outside a bound, a relative step may move it
+    toward the bound but never farther past it."""
+    from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
+
     out = {}
     for key, v in action.items():
         m = key.removesuffix(".pos")
-        out[key] = q[m] + float(np.clip(v - q[m], -MAX_STEP_DEG, MAX_STEP_DEG)) if m in q else v
+        wanted = float(v)
+        if not np.isfinite(wanted):
+            raise RuntimeError(f"{m} motor command is not finite")
+        if ranges is not None and m in MOTOR_NAMES:
+            i = MOTOR_NAMES.index(m)
+            lo, hi = ranges[0][i], ranges[1][i]
+            if np.isfinite(lo):
+                wanted = max(wanted, float(lo))
+            if np.isfinite(hi):
+                wanted = min(wanted, float(hi))
+        out[key] = q[m] + float(np.clip(wanted - q[m], -MAX_STEP_DEG, MAX_STEP_DEG)) if m in q else wanted
+    return out
+
+
+def _ensure_working_target(target: dict[str, float], ranges: tuple[np.ndarray, np.ndarray] | None) -> None:
+    """Reject a direct joint goal the connected arm cannot be commanded to reach.
+
+    An invalid playback sample must fail before it becomes the following-error
+    reference; silently clipping only the motor packet would leave playback
+    waiting for an impossible goal and freeze the arm.
+    """
+    from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
+
+    for m, value in target.items():
+        if m not in MOTOR_NAMES:
+            continue
+        if not np.isfinite(value):
+            raise RuntimeError(f"{m} joint target is not finite")
+        if ranges is None or m == "gripper":
+            continue
+        i = MOTOR_NAMES.index(m)
+        lo, hi = ranges[0][i], ranges[1][i]
+        if (np.isfinite(lo) and value < lo - 1e-6) or (np.isfinite(hi) and value > hi + 1e-6):
+            raise RuntimeError(
+                f"{m} target {value:.1f} deg is outside its working range {lo:.1f} to {hi:.1f}"
+            )
+
+
+def _clip_working_target(
+    target: dict[str, float], ranges: tuple[np.ndarray, np.ndarray] | None
+) -> dict[str, float]:
+    """Follow a human leader as far as this arm's measured joint bounds allow."""
+    if ranges is None:
+        return dict(target)
+    from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
+
+    out = dict(target)
+    for i, m in enumerate(MOTOR_NAMES):
+        if m not in out or m == "gripper":
+            continue
+        lo, hi = ranges[0][i], ranges[1][i]
+        out[m] = float(np.clip(out[m], lo if np.isfinite(lo) else -np.inf, hi if np.isfinite(hi) else np.inf))
     return out
 
 
@@ -998,7 +1065,13 @@ def _restart_from_present(j: _Jog, grip: float | None = None, require_unhalted: 
     j.thread.start()
 
 
-def _ramp_joints(robot: Any, target: dict[str, float], deg_s: float = RAMP_DEG_S, hz: float = 50.0) -> None:
+def _ramp_joints(
+    robot: Any,
+    target: dict[str, float],
+    deg_s: float = RAMP_DEG_S,
+    hz: float = 50.0,
+    ranges: tuple[np.ndarray, np.ndarray] | None = None,
+) -> None:
     """Interpolate every listed joint from its present position to ``target`` at a bounded rate.
 
     Joint space, so it works from the fold where the IK cannot. Each step is read and checked first and its goal held to
@@ -1006,6 +1079,7 @@ def _ramp_joints(robot: Any, target: dict[str, float], deg_s: float = RAMP_DEG_S
     connected and no loop is streaming to it. Post: the last goal sent is ``target``; the gripper is left where it is
     unless listed. Raises RuntimeError on bad reads.
     """
+    _ensure_working_target(target, ranges)
     state = _read_checked(robot.bus, None)
     start = {m: state.q[m] for m in target}
     span = max(abs(target[m] - start[m]) for m in target)
@@ -1025,7 +1099,7 @@ def _ready(j: _Jog) -> dict:
     """Bring the arm to the working pose in joint space, then re-anchor the walk there."""
     _path_owned(j)  # recheck in the worker: a path may reserve the arm while this job is queued
     _stop_loop(j)
-    _ramp_joints(j.robot, dict(READY_DEG))
+    _ramp_joints(j.robot, dict(READY_DEG), ranges=j.joint_ranges)
     _restart_from_present(j)
     return {"pose": dict(READY_DEG)}
 
@@ -1085,7 +1159,8 @@ def _leader_start(j: _Jog, profile: str, arm: str) -> dict:
         leader.disconnect()
         raise
     _stop_loop(j)
-    _ramp_joints(j.robot, q_lead)  # meet the leader where it is; never snap to it
+    q_lead = _clip_working_target(q_lead, j.joint_ranges)
+    _ramp_joints(j.robot, q_lead, ranges=j.joint_ranges)  # meet the permitted leader pose; never snap to it
     with j.lock:
         j.leader, j.leader_id, j.mode = leader, leader_id, "leader"
         j.q_cmd = dict(q_lead)
@@ -1113,8 +1188,9 @@ def _joints_start(j: _Jog, q_first: dict[str, float]) -> dict:
     re-anchors it where the arm ends up.
     """
     _path_owned(j)  # recheck in the worker: a path may reserve the arm while this job is queued
+    _ensure_working_target(q_first, j.joint_ranges)
     _stop_loop(j)
-    _ramp_joints(j.robot, dict(q_first))  # meet the first configuration; never snap to it
+    _ramp_joints(j.robot, dict(q_first), ranges=j.joint_ranges)  # meet the checked configuration; never snap
     with j.lock:
         j.mode, j.q_target, j.playback = "joints", dict(q_first), None
         j.q_cmd = dict(q_first)
@@ -1173,6 +1249,7 @@ def set_target_joints(q: dict[str, float]) -> None:
             raise RuntimeError(f"jog is frozen: {j.reason}")
         if j.mode != "joints":
             raise RuntimeError("the arm is not taking joint targets")
+        _ensure_working_target(q, j.joint_ranges)
         j.q_target = dict(q)
 
 
@@ -1191,6 +1268,8 @@ def play_joints(samples: list[dict[str, float]], due_s: list[float]) -> None:
             raise RuntimeError(f"jog is frozen: {j.reason}")
         if j.mode != "joints":
             raise RuntimeError("the arm is not taking joint targets")
+        for sample in samples:
+            _ensure_working_target(sample, j.joint_ranges)
         j.playback_live = False
         j.playback = [dict(s) for s in samples]
         j.playback_due = [float(t) for t in due_s]
@@ -1219,6 +1298,7 @@ def update_playback_next(expected: int, sample: dict[str, float], due_s: float) 
             raise RuntimeError("the live joint stream is no longer active")
         if j.playback_sent != expected:
             return False
+        _ensure_working_target(sample, j.joint_ranges)
         j.playback_live = True
         k = expected + 1
         if len(j.playback) > k + 1:
@@ -1289,17 +1369,60 @@ def kinematics() -> Any | None:
 
 
 def servo_ranges() -> tuple[np.ndarray, np.ndarray] | None:
-    """Each joint's range in the motor degrees the arm is driven in, ``(lo, hi)`` in MOTOR_NAMES order, or None when no
-    arm is connected. A joint's degrees run from the middle of its servo's calibrated span, so it reaches half the span
-    either way and the servo stops it there whatever it is asked (the model's own limits are wider). The gripper, in
-    its own units, is NaN: no limit here."""
+    """Calibrated servo ranges intersected with this arm's measured profile working limits.
+
+    The gripper uses its own units and has NaN here. Return copies so a planner cannot change the connected arm's
+    bounds while exploring alternatives.
+    """
 
     j = _jog
     with j.lock:
-        robot = j.robot if j.connected else None
+        if not j.connected:
+            return None
+        ranges = j.joint_ranges
+        robot = j.robot
+    if ranges is not None:
+        return tuple(bound.copy() for bound in ranges)
     if robot is None:
         return None
     return _servo_ranges_of(robot.bus)
+
+
+def _profile_joint_ranges(
+    fields: dict, arm: str, servo_lo: np.ndarray, servo_hi: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """Intersect calibrated motor degrees with optional measured working bounds from a robot profile.
+
+    ``fields.joint_limits_deg.<arm>.<joint>.min/max`` names motor degrees, not URDF degrees. A motor may report a
+    larger calibrated span than the assembled arm can physically turn through (for example, an attached wrist cable).
+    The profile is the operator's measurement of that assembly; it cannot widen a servo's range. Missing sides retain
+    the calibrated bound. Never derive a working limit from one stalled act or apply another arm's bound.
+    """
+    from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
+
+    lo, hi = np.asarray(servo_lo, dtype=float).copy(), np.asarray(servo_hi, dtype=float).copy()
+    configured = fields.get("joint_limits_deg", {})
+    if not isinstance(configured, dict) or any(side not in ("left", "right") for side in configured):
+        raise ValueError("joint_limits_deg must map left/right arms to joint bounds")
+    limits = configured.get(arm, {})
+    if not isinstance(limits, dict):
+        raise ValueError(f"joint_limits_deg.{arm} must map joint names to bounds")
+    for name, bounds in limits.items():
+        if name not in MOTOR_NAMES or name == "gripper" or not isinstance(bounds, dict):
+            raise ValueError(f"joint_limits_deg.{arm}.{name} needs an arm joint and min/max bounds")
+        if not bounds or any(side not in ("min", "max") for side in bounds):
+            raise ValueError(f"joint_limits_deg.{arm}.{name} needs min and/or max")
+        i = MOTOR_NAMES.index(name)
+        for side, value in bounds.items():
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not np.isfinite(value):
+                raise ValueError(f"joint_limits_deg.{arm}.{name}.{side} must be finite motor degrees")
+            if side == "min":
+                lo[i] = max(lo[i], float(value))
+            else:
+                hi[i] = min(hi[i], float(value))
+        if not lo[i] < hi[i]:
+            raise ValueError(f"joint_limits_deg.{arm}.{name} leaves no working interval")
+    return lo, hi
 
 
 def _servo_ranges_of(bus: Any) -> tuple[np.ndarray, np.ndarray]:
@@ -1501,6 +1624,15 @@ def _state_locked(j: _Jog) -> dict:
     )
     ff = getattr(j.robot, "_gravity_ff", None)
     offsets = ff.offset_deg(q_cmd) if ff is not None else {}
+    joint_ranges = (
+        {
+            m: {"min": float(j.joint_ranges[0][i]), "max": float(j.joint_ranges[1][i])}
+            for i, m in enumerate(MOTOR_NAMES)
+            if np.isfinite(j.joint_ranges[0][i]) and np.isfinite(j.joint_ranges[1][i])
+        }
+        if j.joint_ranges is not None
+        else None
+    )
     return {
         "connected": True,
         "arm": j.arm,
@@ -1508,6 +1640,7 @@ def _state_locked(j: _Jog) -> dict:
         "tip_offset_mm": (j.tip_offset[:3, 3] * 1000.0).tolist() if j.tip_offset is not None else None,
         "tip_calibrated": j.tip_calibrated,
         "joint_zero_deg": dict(j.joint_zero_deg),
+        "joint_ranges_deg": joint_ranges,
         "workspace_min_mm": [v * 1000.0 for v in j.workspace_min],
         "halted": halted,
         "reason": reason,
@@ -1677,7 +1810,8 @@ def _path_snapshot(j: _Jog) -> dict:
 
 def _guarded_ranges(j: _Jog) -> tuple[np.ndarray, np.ndarray]:
     """Intersection with model limits: FK clamps outside them, so servo ranges alone cannot validate a path."""
-    lo, hi = _servo_ranges_of(j.robot.bus)
+    configured = getattr(j, "joint_ranges", None)
+    lo, hi = configured if configured is not None else _servo_ranges_of(j.robot.bus)
     inner = j.kin._inner._inner
     bounds = np.array(
         [
