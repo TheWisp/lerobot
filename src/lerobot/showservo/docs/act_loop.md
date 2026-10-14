@@ -380,6 +380,28 @@ this suppressed. The scene changed when the arm was recovered and parked, so
 that second change still needs a physical retest; neither the offline sweep
 nor this one run certifies collision-free withdrawal.
 
+The next physical insertion trial (`20261014_235641`, `de707d09f`) again froze
+at key frame 4: shoulder lift stopped at 11.7 degrees while its command reached
+6.6 degrees; load rose to about 61% of the register scale. Recovery and release
+let the arm move and park, but the camera does not establish what, if anything,
+it contacted. The prediction-enabled carry did not make a stationary held-view
+check: planning the carry took about 1.6 seconds, and no fresh held correction
+arrived before the freeze. Thus this trial did not reproduce the old long
+observation pause, nor does it prove it gone in strict mode.
+
+The ring remained within 0.4 mm in the point-group history, but P2P differed by
+about 12 mm and 16–19 degrees as the carry was planned. The measured plane
+corrected only tilt and normal offset, leaving tangent motion to P2P; several
+contradictory views still entered the live ring target. A synchronized group
+conflict now withholds a remaining contradictory surface-constrained pose
+instead of publishing it. This is a conservative ambiguity rule, not a claim
+that the point group is ground truth or that the conflict caused the shoulder
+stall. The dowel's tangled blue outline after recovery was the raw P2P model;
+its 99 mm / 59 degree disagreement was visibly marked rejected, and it was
+not a control pose. Evidence is in
+`/home/feit/Documents/showservo-experiments/20261014/pause-test-2355/` and
+the act record in `demos/insertion/acts/20261014_235641`.
+
 Joint playback pauses when an arm joint is more than 3 degrees behind its last
 sample. After a 0.5 second catch-up wait, transport can continue within a
 5 degree following budget. The soft wait becomes available again once all arm

@@ -58,6 +58,23 @@ def test_missing_groups_are_unknown_and_redesignation_starts_a_new_reference():
     assert r["state"] == "baseline" and r["reference_t"] == 3
 
 
+def test_surface_plane_cannot_certify_tangent_drift_against_a_stationary_group():
+    """The insertion ring moved 12 mm in P2P while its group stayed within 0.4 mm."""
+    predicted = np.eye(4)
+    shifted = predicted.copy()
+    shifted[0, 3] = 0.012
+    group = {**pv.difference(shifted, predicted, CENTRE, **LIMITS), "predicted_pose": predicted.tolist()}
+    partial = {"state": "corrected", "pose": shifted.tolist(), "observed_dof": 3}
+    withheld = pv.with_group_consistency(partial, group, CENTRE, **LIMITS)
+    assert withheld["state"] == "rejected" and withheld["pose"] is None
+    assert withheld["group_residual"]["centre_mm"] == pytest.approx(12)
+    # If the measured correction actually resolves the conflict, use it.
+    aligned = pv.with_group_consistency({**partial, "pose": predicted.tolist()}, group, CENTRE, **LIMITS)
+    assert aligned["state"] == "corrected"
+    # A held object's group is driven by the arm; slip evidence may contradict it.
+    assert pv.with_group_consistency(partial, group, CENTRE, held=True, **LIMITS) is partial
+
+
 def scene(degrees=0):
     """A measured plane truly rotated, with no world-up assumption in the check."""
     intr = {"fx": 600.0, "fy": 600.0, "cx": 80.0, "cy": 72.0}

@@ -269,7 +269,7 @@ def test_live_view_shows_a_partial_pose_when_following_rejects_it(monkeypatch):
     jpeg = manipulation.rendering._render_live(teach.rgb, r, None, None, teach, {"state": "occluded"})
     img = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)
     assert _has(img, range(480, 485), 250, manipulation.runtime.POSE_ESTIMATE_COLOUR)
-    assert any("Pose estimate: available; following: rejected" in s for s in labels)
+    assert any("Blue raw P2P outline: available; control pose: rejected" in s for s in labels)
 
 
 def test_a_replayed_frame_draws_every_object_the_act_followed_by_name(overlay, tmp_path):

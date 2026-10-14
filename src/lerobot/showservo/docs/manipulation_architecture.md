@@ -108,7 +108,13 @@ whether that plane supports a correction. When a reference plane is supported
 but the current plane is not verified, the observation is rejected. For a
 non-planar reference, the general surface check may retain an unchanged proposal
 when it agrees. Existing visibility, depth and centre-support gates still apply.
-Group-motion comparison remains diagnostic; it is not a blanket pose override.
+Synchronized group motion is an additional consistency gate, not a pose override.
+If a surface correction still disagrees with the group at the existing planning
+tolerance, the view is withheld and the last placed pose is carried forward.
+This matters for planar targets: depth can correct tilt and normal offset but
+does not verify the P2P proposal's tangent motion. An arm-driven held group is
+excluded from this gate because it is the attachment prediction being tested,
+not independent evidence against a visible slip correction.
 
 A non-planar elongated surface can also constrain its principal direction when
 the leading covariance eigenvalue is separated beyond the point-noise budget.
@@ -142,15 +148,15 @@ below distinguish accepted measurements from predictions and proposed work.
 This is the review map for consolidating adaptation within the single key-frame
 architecture. Status describes the reactive implementation of October 14, 2026. Object names in the evidence identify experiments, not policy branches.
 
-| Mechanism                              | Implemented behavior                                                                                                                                | Boundary or unresolved limitation                                                                                                        |
-| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| Object-relative targets                | Compose demo key frames with the current object's motion. Pre-grasp line targets update while approaching.                                          | Follow/contact samples are recomposed each control cycle; accepted poses are required, and missing observations remain predictions.      |
-| Reacquisition and surface correction   | Fresh segmentation/registration recovers identity; verified surface geometry constrains supported pose components.                                  | Visibility is not a verified full pose. Rejection can leave only prediction available.                                                   |
-| Environment and attachment propagation | Groups carry established relationships through missing observations; a held group can be driven by arm kinematics.                                  | An arm-driven held group is not independent evidence that the object stayed fixed in the fingers.                                        |
-| Held-object correction                 | Maintain one attachment estimate; direct matching to suitable demo held views updates the next trajectory command.                                  | With grasp prediction allowed, observe from the start of carry through contact. Strict mode still requires verification before approach. |
-| Equivalent landing search              | Search the rotations permitted by the demo, choose a feasible full path, and search again if the current landing fails after grasp/hold correction. | This is a bounded, demo-seeded search, not maximum reachability or general collision planning; details below.                            |
-| Playback progress                      | Joint-lag guards slow/pause the demo clock and stop a stalled arm.                                                                                  | A changed pose inserts bounded correction samples before phase progress; there is no rewind or independent terminal task-success check.  |
-| Repeated interactions                  | Rebase a reused object's reference before its next attachment and repeat the checks.                                                                | Corrections and observations must belong to that interaction; a previous grasp cannot authorize the next.                                |
+| Mechanism                              | Implemented behavior                                                                                                                                              | Boundary or unresolved limitation                                                                                                        |
+| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| Object-relative targets                | Compose demo key frames with the current object's motion. Pre-grasp line targets update while approaching.                                                        | Follow/contact samples are recomposed each control cycle; accepted poses are required, and missing observations remain predictions.      |
+| Reacquisition and surface correction   | Fresh segmentation/registration recovers identity; verified surface geometry constrains supported pose components. A remaining group conflict withholds the pose. | Visibility is not a verified full pose. Rejection can leave only prediction available.                                                   |
+| Environment and attachment propagation | Groups carry established relationships through missing observations; a held group can be driven by arm kinematics.                                                | An arm-driven held group is not independent evidence that the object stayed fixed in the fingers.                                        |
+| Held-object correction                 | Maintain one attachment estimate; direct matching to suitable demo held views updates the next trajectory command.                                                | With grasp prediction allowed, observe from the start of carry through contact. Strict mode still requires verification before approach. |
+| Equivalent landing search              | Search the rotations permitted by the demo, choose a feasible full path, and search again if the current landing fails after grasp/hold correction.               | This is a bounded, demo-seeded search, not maximum reachability or general collision planning; details below.                            |
+| Playback progress                      | Joint-lag guards slow/pause the demo clock and stop a stalled arm.                                                                                                | A changed pose inserts bounded correction samples before phase progress; there is no rewind or independent terminal task-success check.  |
+| Repeated interactions                  | Rebase a reused object's reference before its next attachment and repeat the checks.                                                                              | Corrections and observations must belong to that interaction; a previous grasp cannot authorize the next.                                |
 
 ### Equivalent landings: current selection rule
 

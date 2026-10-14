@@ -331,7 +331,8 @@ def _render_live(rgb, r, result, transported, teach, status) -> bytes:
         y += 28
     replay._replay_text(
         bgr,
-        f"Pose estimate: {estimate}; following: {'accepted' if result is not None and result.get('ok') else 'rejected'}",
+        f"Blue raw P2P outline: {estimate}; control pose: "
+        f"{'accepted' if result is not None and result.get('ok') else 'rejected'}",
         (8, y + 18),
         runtime.POSE_ESTIMATE_COLOUR,
     )

@@ -579,7 +579,15 @@ def _compare_track_poses(
             ),
         }
         check["disagreement"] = any(check[k]["state"] == "disagreement" for k in ("groups", "surface"))
-        check["constraint"] = _surface_decision(pose, geometry, job.depth_m, mask, job.intr, check["surface"])
+        surface_decision = _surface_decision(pose, geometry, job.depth_m, mask, job.intr, check["surface"])
+        check["constraint"] = pose_verification.with_group_consistency(
+            surface_decision,
+            check["groups"],
+            ref.mean(axis=0) if len(ref) else np.zeros(3),
+            tol_m=core.ACT_REACH_TOL_M,
+            tol_deg=core.ACT_REACH_TOL_DEG,
+            held=context.get("why") == "held",
+        )
         check["elapsed_ms"] = (time.perf_counter() - started) * 1000
         checks.append(check)
     if log:

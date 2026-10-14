@@ -65,6 +65,35 @@ def difference(a: np.ndarray, b: np.ndarray, centre: np.ndarray, tol_m: float, t
     }
 
 
+def with_group_consistency(
+    decision: dict, group_check: dict, centre: np.ndarray, *, tol_m: float, tol_deg: float, held: bool = False
+) -> dict:
+    """Withhold a partly constrained pose that still contradicts synchronized group motion.
+
+    A plane observes its normal and offset, but cannot arbitrate tangent motion;
+    an axis similarly leaves translation and axial roll to the proposal. Keep the
+    last placed view until those hypotheses agree. A held object's group pose is
+    driven by the same arm attachment being measured, so it is not independent
+    evidence against a visible slip correction.
+    """
+    if held or group_check.get("state") != "disagreement" or decision.get("pose") is None:
+        return decision
+    proposed = _pose(decision["pose"])
+    predicted = _pose(group_check.get("predicted_pose"))
+    if proposed is None or predicted is None:
+        return decision
+    residual = difference(proposed, predicted, np.asarray(centre, dtype=float), tol_m, tol_deg)
+    if residual["state"] != "disagreement":
+        return decision
+    return {
+        **decision,
+        "state": "rejected",
+        "pose": None,
+        "group_residual": residual,
+        "reason": "measured surface leaves a pose that contradicts synchronized point-group motion",
+    }
+
+
 @dataclass
 class GroupReference:
     epoch: Any = None

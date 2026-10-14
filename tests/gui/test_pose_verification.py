@@ -97,6 +97,29 @@ def test_stale_group_pose_is_explicitly_unavailable(monkeypatch, tmp_path):
     assert not check["accepted"] and check["disagreement"]
 
 
+def test_group_conflict_with_partial_surface_cannot_publish_a_control_pose(monkeypatch, tmp_path):
+    job, _, _, track = setup_case(monkeypatch, tmp_path)
+    shifted = np.eye(4)
+    shifted[0, 3] = 0.012
+    job.result["delta"] = shifted
+    group = {
+        **pose_verification.difference(shifted, np.eye(4), np.zeros(3), 0.003, 3.0),
+        "predicted_pose": np.eye(4).tolist(),
+    }
+    monkeypatch.setattr(pose_verification.GroupReference, "compare", lambda *args, **kwargs: group)
+    monkeypatch.setattr(
+        p.tracking,
+        "_surface_decision",
+        lambda *args: {"state": "corrected", "pose": shifted.tolist(), "observed_dof": 3},
+    )
+    monkeypatch.setattr(p.rendering, "_render_live", lambda *args: b"image")
+    asyncio.run(p.tracking._apply_track_result(job))
+    check = track.last["pose_verification"][0]
+    assert check["groups"]["state"] == "disagreement"
+    assert check["constraint"]["state"] == "rejected"
+    assert not check["accepted"] and p.runtime._state.test is None
+
+
 def test_secondary_object_compares_raw_pose_in_its_original_designation_frame(monkeypatch, tmp_path):
     job, teach, _, _ = setup_case(monkeypatch, tmp_path)
     anchor = np.eye(4)
