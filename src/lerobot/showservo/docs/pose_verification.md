@@ -28,6 +28,13 @@ placement tolerances. A quadratic validation check rejects predictable curvature
 beyond the per-surface noise budget and measured model residual. A small sphere's
 visible cap is a tested counterexample to relying only on a plane residual.
 
+Before fitting the reference plane, project its points through the candidate
+pose into the current mask and exclude missing depth and nearer occlusion using
+the same visibility selector as the general surface check. The fitting majority
+is relative to this visible reference subset. Hidden reference faces must not
+compete against the currently visible face. The existing local metric support,
+split-fit, span and curvature checks still decide whether the overlap is usable.
+
 For a supported corresponding patch, apply the shortest rotation aligning its
 normal, about its predicted patch centre. Then move only along the observed
 normal onto that plane. This constrains three pose components; tangential motion
@@ -62,6 +69,9 @@ Multiple fresh observations must agree within the existing hold tolerances.
 Rotation also requires at least two reference views agreeing within the planner's
 angular tolerance. If it does not, explicitly allowed grasp prediction supplies
 rotation while translation aligns the same matched material patch centre.
+That centre is the reference anchor returned by the surface constraint, not the
+centroid of the entire reference mask. Its paired fingertip coordinates and the
+capture-time fingertip transform are retained with each accepted held attempt.
 This is logged and rendered as position measured, rotation predicted; it cannot
 satisfy a request that forbids predicted orientation. Inconclusive checks retain
 their individual find IDs and reasons. A shared hold wait budget bounds retries.
@@ -165,6 +175,19 @@ tests additionally cover real rigid motion, a genuinely tilted surface,
 occlusion and cumulative P2P drift against stationary groups. Integration tests
 cover separate object anchors, fail-closed diagnostic failure, raw/control pose
 separation, acquisition, historical hold validation and replay visibility.
+
+`held_overlap_20261014.npz` records two rejected held-view comparisons from
+`insertion/acts/20261014_140613`: finds `20261014_140630_986_dowel_locate`
+and `20261014_140638_391_dowel_locate`, both against demo frame 350. It contains
+metric depth, masks, intrinsics, raw registrations and reference depth points;
+the saved SAM3 reference mask reproduces the original 1,399-point surface.
+The old whole-reference plane comparisons requested about 66° and 72° corrections
+with 25–27 mm offsets. Selecting the shared visible surface instead yields local
+support above 90% and submillimetre normal offsets. These are verification
+diagnostics, not independent pose accuracy or a successful physical rollout.
+Synthetic coverage also checks a completely hidden perpendicular dominant face,
+and attachment tests ensure ambiguous rotation cannot move a hidden cloud centre
+and masquerade as a measured position change.
 
 ## October 13 constraint replay
 

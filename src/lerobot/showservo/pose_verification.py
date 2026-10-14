@@ -97,6 +97,40 @@ class GroupReference:
         }
 
 
+def visible_reference(pose, reference, depth, mask, intr, *, noise_m):
+    """Reference samples visible through the current object mask and measured depth.
+
+    Keep reference coordinates: a centroid of these samples is a material patch,
+    unlike the centroid of a changing silhouette. Foreground depth occludes a
+    sample; missing depth and pixels outside the object's interior supply no
+    evidence. This is visibility selection, not a pose or surface acceptance.
+    """
+    import cv2
+
+    ref = np.asarray(reference, dtype=float).reshape(-1, 3)
+    depth, mask = np.asarray(depth, float), np.asarray(mask, bool)
+    inside = cv2.erode(mask.astype(np.uint8), np.ones((MASK_EROSION, MASK_EROSION), np.uint8)) > 0
+    valid = inside & np.isfinite(depth) & (depth > 0)
+    predicted = ref @ pose[:3, :3].T + pose[:3, 3]
+    ids = np.flatnonzero(np.isfinite(predicted).all(axis=1) & (predicted[:, 2] > 0))
+    projected = predicted[ids]
+    uv = np.round(
+        projected[:, :2] / projected[:, 2:] * [intr["fx"], intr["fy"]] + [intr["cx"], intr["cy"]]
+    ).astype(int)
+    h, w = depth.shape
+    bounds = (uv[:, 0] >= 0) & (uv[:, 0] < w) & (uv[:, 1] >= 0) & (uv[:, 1] < h)
+    ids, uv = ids[bounds], uv[bounds]
+    observed = depth[uv[:, 1], uv[:, 0]]
+    same_object = valid[uv[:, 1], uv[:, 0]]
+    occluded = same_object & (observed < predicted[ids, 2] - 2 * noise_m)
+    visible = ids[same_object & ~occluded]
+    return ref[visible], {
+        "reference_points": len(ref),
+        "visible_reference_points": len(visible),
+        "occluded_reference_points": int(occluded.sum()),
+    }
+
+
 def surface(pose, reference, depth, mask, intr, *, noise_m, tol_m, tol_deg) -> dict:
     """Compare P2P to a bounded local fit of reference geometry to current RGB-D.
 
@@ -120,38 +154,17 @@ def surface(pose, reference, depth, mask, intr, *, noise_m, tol_m, tol_deg) -> d
     v, u = np.nonzero(valid)
     z = depth[v, u]
     live = _points(np.column_stack(((u - intr["cx"]) * z / intr["fx"], (v - intr["cy"]) * z / intr["fy"], z)))
-    predicted = ref @ pose[:3, :3].T + pose[:3, 3]
-    front = np.isfinite(predicted).all(axis=1) & (predicted[:, 2] > 0)
-    ids = np.flatnonzero(front)
-    projected = predicted[ids]
-    uv = np.round(
-        np.column_stack(
-            (
-                intr["fx"] * projected[:, 0] / projected[:, 2] + intr["cx"],
-                intr["fy"] * projected[:, 1] / projected[:, 2] + intr["cy"],
-            )
-        )
-    ).astype(int)
-    h, w = depth.shape
-    bounds = (uv[:, 0] >= 0) & (uv[:, 0] < w) & (uv[:, 1] >= 0) & (uv[:, 1] < h)
-    ids, uv = ids[bounds], uv[bounds]
-    observed = depth[uv[:, 1], uv[:, 0]]
-    same_object = valid[uv[:, 1], uv[:, 0]]
     near_m = 2 * noise_m
-    occluded = same_object & (observed < predicted[ids, 2] - near_m)
-    visible = ids[same_object & ~occluded]
+    centre = ref.mean(axis=0)
+    ref, visibility = visible_reference(pose, ref, depth, mask, intr, noise_m=noise_m)
     evidence = {
-        "reference_points": len(ref),
-        "visible_reference_points": len(visible),
-        "occluded_reference_points": int(occluded.sum()),
+        **visibility,
         "live_points": len(live),
         "noise_mm": noise_m * 1000,
         "fit_radius_mm": near_m * 1000,
     }
-    if len(visible) < 6 or len(live) < 6:
+    if len(ref) < 6 or len(live) < 6:
         return {"state": "inconclusive", "reason": "too little overlapping depth", **evidence}
-    centre = ref.mean(axis=0)
-    ref = ref[visible]
     moved = ref @ pose[:3, :3].T + pose[:3, 3]
     tree = cKDTree(live)
     raw_dist, _ = tree.query(moved)

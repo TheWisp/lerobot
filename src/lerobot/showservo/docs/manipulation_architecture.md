@@ -88,6 +88,18 @@ The correction rotates around the predicted reference patch centre and then
 moves only along the observed normal. It does not assume a level table or an
 upright object and does not change P2P's internal map.
 
+The planar check first projects reference points through the proposed pose into
+the live object mask. Points outside the mask, without depth, or behind measured
+foreground do not participate in the reference plane fit. This uses the same
+visibility rule and noise allowance as the general surface comparison. Otherwise
+a gripper hiding one face can make the independently fitted majority planes
+describe different physical faces, producing a false rotation disagreement.
+The result records the visible sample counts and the reference patch's material
+anchor. Held-view correction uses that same anchor in demo and live fingertip
+coordinates; it does not extrapolate a partial-view rotation to the centre of
+hidden reference geometry. Cross-reference/temporal agreement is still required,
+and inconsistent rotations retain the explicitly permitted grasp prediction.
+
 Split-sample agreement, surface span, curvature and local overlap checks decide
 whether that plane supports a correction. When a reference plane is supported
 but the current plane is not verified, the observation is rejected. For a

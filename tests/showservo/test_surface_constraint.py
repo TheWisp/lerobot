@@ -45,7 +45,12 @@ def test_corrects_false_tilt_and_offset_but_keeps_tangential_position_and_twist(
     np.testing.assert_allclose(
         out[:3, :3], Rotation.from_euler("z", 12, degrees=True).as_matrix(), atol=1e-10
     )
-    np.testing.assert_allclose(out[:3, :3] @ centre + out[:3, 3], centre + [0.002, -0.001, 0], atol=1e-10)
+    # Visibility changes the supported patch's centre slightly. Preserve the
+    # tangential position at that measured anchor, not at an unseen cloud centre.
+    anchor = np.array(r["reference_point"])
+    expected = raw[:3, :3] @ anchor + raw[:3, 3]
+    expected[2] = centre[2]
+    np.testing.assert_allclose(out[:3, :3] @ anchor + out[:3, 3], expected, atol=1e-10)
     assert r["validation_normal_after_deg"] < 1e-5
     np.testing.assert_array_equal(raw, before)
 
@@ -55,6 +60,38 @@ def test_a_real_tilt_is_preserved_without_world_up_or_an_object_category():
     r = sc.constrain(pose, ref, depth, mask, k, **LIMITS)
     assert r["pose"] is not None
     np.testing.assert_allclose(r["pose"], pose, atol=1e-9)
+
+
+def test_hidden_dominant_face_cannot_override_the_visible_material_patch():
+    ref, depth, mask, k, pose, centre = scene()
+    y, z = np.meshgrid(np.linspace(-0.08, 0.08, 40), np.linspace(0.4, 0.5, 40))
+    hidden_face = np.column_stack((np.full(y.size, 0.08), y.ravel(), z.ravel()))
+    # This reference has more samples on a perpendicular face that is outside
+    # the current object mask. The visible face itself did not rotate.
+    r = sc.constrain(pose, np.concatenate((ref, hidden_face)), depth, mask, k, **LIMITS)
+    assert r["pose"] is not None, r
+    np.testing.assert_allclose(r["pose"], pose, atol=1e-10)
+    assert r["visibility"]["visible_reference_points"] < r["visibility"]["reference_points"] / 2
+    assert np.linalg.norm(np.array(r["reference_point"]) - centre) < 0.003
+
+
+@pytest.mark.parametrize("name", ["early", "later"])
+def test_recorded_visible_held_patch_survives_a_change_in_occluded_surface(name):
+    with np.load(Path(__file__).parent / "fixtures/held_overlap_20261014.npz") as z:
+        r = sc.resolve(
+            z[f"{name}_pose"],
+            z[f"{name}_ref"],
+            z[f"{name}_depth"],
+            z[f"{name}_mask"],
+            json.loads(str(z["intr"])),
+            **LIMITS,
+        )
+        point = np.array(r["reference_point"])
+        raw_point = z[f"{name}_pose"][:3, :3] @ point + z[f"{name}_pose"][:3, 3]
+    assert r["pose"] is not None and r["observed_dof"] == 3
+    assert r["local_support_before"] > 0.9 and r["local_support_after"] > 0.9
+    corrected = np.array(r["pose"])
+    assert np.linalg.norm(corrected[:3, :3] @ point + corrected[:3, 3] - raw_point) < 0.003
 
 
 @pytest.mark.parametrize("case", ["missing", "foreground", "narrow"])

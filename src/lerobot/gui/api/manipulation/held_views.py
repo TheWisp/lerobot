@@ -158,6 +158,8 @@ async def measure(
                 "find_id": found.get("find_id"),
                 "reason": found.get("reason") or acquisition._weak(found),
                 "constraint": check,
+                "tip": np.asarray(tip).tolist(),
+                "accepted": False,
             }
         )
         if found.get("reference_mask") is not None:
@@ -173,7 +175,10 @@ async def measure(
             continue
         desired = np.linalg.inv(demo.tips[ref["sample"]]) @ t_bc
         observed = np.linalg.inv(tip) @ t_bc @ np.asarray(found["delta"])
-        centre = np.r_[points.mean(axis=0), 1.0]
+        # Use the material patch that actually passed verification. Extrapolating
+        # a partial-view rotation to the whole reference cloud's centre can move
+        # the inferred attachment even when the visible patch did not move.
+        centre = np.r_[check.get("reference_point", points.mean(axis=0)), 1.0]
         observations.append(
             {
                 "frame": ref["frame"],
@@ -181,6 +186,13 @@ async def measure(
                 "observed": (observed @ centre)[:3],
                 "rotation": desired[:3, :3] @ observed[:3, :3].T,
             }
+        )
+        attempts[-1].update(
+            accepted=True,
+            reference_point=centre[:3].tolist(),
+            observation={
+                k: v.tolist() if isinstance(v, np.ndarray) else v for k, v in observations[-1].items()
+            },
         )
         result = consensus(observations, predicted_fix)
         # Sample different references and at least the normal hold view count;

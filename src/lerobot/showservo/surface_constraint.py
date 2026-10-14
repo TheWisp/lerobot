@@ -17,7 +17,7 @@ from .pose_verification import MASK_EROSION, _pose
 # 99.9% chance of an all-inlier sample. The fixed seed makes replay reproducible.
 PLANE_TRIALS = 64
 MAX_POINTS = 1600
-POLICY_VERSION = "rgbd-plane-axis-v2"
+POLICY_VERSION = "rgbd-visible-plane-axis-v3"
 
 
 def _sample(points):
@@ -157,8 +157,16 @@ def constrain(pose, reference, depth, mask, intr, *, noise_m, tol_m, tol_deg):
         return {**result, "reason": "pose or surface observation missing"}
     if np.asarray(depth).ndim != 2 or np.shape(mask) != np.shape(depth):
         return {**result, "reason": "depth and mask shapes differ"}
+    # A gripper can hide the reference's dominant face while a different face
+    # remains clear. Fit the reference only where the live image supplies depth
+    # on this object; comparing independent whole-cloud majority planes can
+    # mistake that visibility change for a large physical rotation.
+    visible, visibility = pose_verification.visible_reference(
+        raw, _sample(reference), depth, mask, intr, noise_m=noise_m
+    )
+    result["visibility"] = visibility
     ref_info, live_info = {}, {}
-    ref = _plane(reference, noise_m, ref_info)
+    ref = _plane(visible, noise_m, ref_info)
     live = _plane(depth_points(depth, mask, intr), noise_m, live_info)
     result["evidence"] = {"reference": ref_info, "live": live_info}
     result.update(reference_planar=ref is not None, live_planar=live is not None)
@@ -226,6 +234,7 @@ def constrain(pose, reference, depth, mask, intr, *, noise_m, tol_m, tol_deg):
         **result,
         "state": "corrected" if turn > 1e-8 or abs(offset) > 1e-9 else "consistent",
         "pose": updated.tolist(),
+        "reference_point": ref["centre"].tolist(),
         "observed_dof": 3,
         "reason": "measured plane constrains tilt and normal offset; tangent motion remains the proposal",
     }
@@ -317,6 +326,7 @@ def constrain_axis(pose, reference, depth, mask, intr, *, noise_m, tol_m, tol_de
         **out,
         "state": "corrected" if turn > 1e-8 else "consistent",
         "pose": updated.tolist(),
+        "reference_point": ref["centre"].tolist(),
         "observed_dof": 2,
         "rotation_deg": float(np.degrees(turn)),
         "unobserved_rotation": "about the principal axis",

@@ -123,6 +123,45 @@ def test_current_measurement_uses_held_reference_coordinates_and_geometry(monkey
         assert result is None, "a strong appearance match cannot bypass rejected geometry"
 
 
+def test_partial_rotation_does_not_extrapolate_position_to_hidden_reference_points(monkeypatch):
+    mask = np.ones((24, 24), bool)
+    rgb, depth = np.zeros((24, 24, 3), np.uint8), np.full((24, 24), 0.4)
+    intr = {"fx": 120, "fy": 120, "cx": 12, "cy": 12}
+    demo = SimpleNamespace(tips=np.stack([np.eye(4)] * 2), recording="saved")
+    anchor = np.array([0.035, 0.01, 0.4])
+    monkeypatch.setattr(
+        held_views,
+        "references",
+        lambda *a: [{"frame": f, "sample": i, "mask": mask} for i, f in enumerate([17, 31])],
+    )
+    monkeypatch.setattr(holds, "_recording_intr", lambda *a: intr)
+    monkeypatch.setattr(recording, "_stream_frame", lambda *a: (rgb, depth))
+
+    async def view(*a):
+        return rgb, depth, intr, np.eye(4), mask
+
+    async def locate(*args, reference, **kwargs):
+        delta = pose([0, 10 if reference["frame"] == 17 else 30, 0], [0, 0, 0])
+        delta[:3, 3] = anchor - delta[:3, :3] @ anchor
+        return {
+            "ok": True,
+            "delta": delta,
+            "inliers": 100,
+            "card_points": 120,
+            "surface_constraint": {"pose": delta.tolist(), "reference_point": anchor.tolist()},
+        }
+
+    monkeypatch.setattr(holds, "_held_view", view)
+    monkeypatch.setattr(acquisition, "_locate", locate)
+    result, problem, attempts = asyncio.run(
+        held_views.measure(demo, "arbitrary-held-object", np.eye(4), np.eye(4), lambda: False)
+    )
+    assert not problem and result["orientation"] == "predicted"
+    np.testing.assert_allclose(result["fix"], np.eye(4), atol=1e-12)
+    assert all(a["accepted"] for a in attempts)
+    np.testing.assert_allclose(attempts[0]["observation"]["desired"], anchor)
+
+
 @pytest.mark.usefixtures("act_simulation")
 @pytest.mark.parametrize("missing", ["carry", "both"])
 def test_runner_measures_after_lift_even_without_designation_based_demo_hold(tmp_path, monkeypatch, missing):
