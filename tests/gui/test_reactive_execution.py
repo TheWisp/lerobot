@@ -1,6 +1,7 @@
 """Live target/attachment corrections must reach the bus without replaying contact events."""
 
 import asyncio
+import time
 from collections import deque
 
 import numpy as np
@@ -19,11 +20,24 @@ def pose(x):
     return t
 
 
-@pytest.mark.parametrize("change", ["target", "attachment", "both"])
+@pytest.mark.parametrize("change", ["target", "attachment", "both", "during_solve"])
 def test_update_during_contact_retargets_remaining_phase_and_preserves_release(monkeypatch, change):
     kin = _TipKinematics()
-    state = {"q": np.array([0.0, 0, 0, 0, 0, 0, 80]), "motion": np.eye(4), "fix": np.eye(4)}
-    commands, phases = [], []
+    state = {"q": np.array([0.0, 0, 0, 0, 0, 0, 80]), "motion": np.eye(4), "fix": np.eye(4), "revision": 0}
+    commands, phases, evidence = [], [], []
+    original_step = reactive.checked_step
+
+    def checked_step(*args, **kwargs):
+        result = original_step(*args, **kwargs)
+        if change == "during_solve" and state["revision"] == 0:
+            state["fix"] = pose(-0.003)
+            state["revision"] = 1
+            # Make the first queued sample due immediately, so it is consumed
+            # before the producer can replace it with a second solve.
+            time.sleep(2 / jog.HZ)
+        return result
+
+    monkeypatch.setattr(reactive, "checked_step", checked_step)
 
     def send(q):
         state["q"] = np.array([q[m] for m in MOTOR_NAMES])
@@ -58,13 +72,20 @@ def test_update_during_contact_retargets_remaining_phase_and_preserves_release(m
         },
     }
 
-    def observed(phase, q, at, goal):
+    def observed(phase, q, at, goal, composition):
         phases.append(phase)
+        if composition is not None:
+            reconstructed = np.array(composition["motion"]) @ np.array(composition["local"])
+            if composition["held"]:
+                reconstructed = reconstructed @ np.array(composition["fix"])
+            np.testing.assert_allclose(reconstructed, goal, atol=1e-12)
+            evidence.append((composition, state["revision"]))
         if phase == 2:
             if change in ("target", "both"):
                 state["motion"] = pose(0.007)
             if change in ("attachment", "both"):
                 state["fix"] = pose(-0.003)
+                state["revision"] = 1
 
     async def reselect(*args):
         pytest.fail("reachable correction must not search an alternative")
@@ -80,6 +101,7 @@ def test_update_during_contact_retargets_remaining_phase_and_preserves_release(m
             reselect,
             (0.12, np.pi),
             1,
+            revision=lambda: state["revision"],
         )
     )
     assert not reason
@@ -90,6 +112,12 @@ def test_update_during_contact_retargets_remaining_phase_and_preserves_release(m
     assert kin.forward_kinematics(first_open)[0, 3] == pytest.approx(0.006 + offset, abs=core.ACT_SOLVE_TOL_M)
     assert commands[-1][-1] == 20, "release happens before withdrawal, even after inserted correction samples"
     assert max(np.linalg.norm(np.diff(np.array(commands)[:, :3], axis=0), axis=1)) <= 4.01
+    if change == "during_solve":
+        first, current_revision = evidence[0]
+        assert first["hold_revision"] == 0 and current_revision == 1
+        np.testing.assert_array_equal(first["fix"], np.eye(4))
+        assert evidence[-1][0]["hold_revision"] == 1
+        np.testing.assert_array_equal(evidence[-1][0]["fix"], pose(-0.003))
 
 
 def test_cas_replaces_only_unsent_command_and_preserves_lag_guard(monkeypatch):

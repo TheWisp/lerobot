@@ -14,7 +14,17 @@ from . import runtime
 
 
 async def stream(
-    plan, kin, motions, correction, interrupted, observed, reselect, limits, speed, settled=None
+    plan,
+    kin,
+    motions,
+    correction,
+    interrupted,
+    observed,
+    reselect,
+    limits,
+    speed,
+    settled=None,
+    revision=None,
 ):
     """Return (reason, last command). Phase advances only after its command is consumed.
 
@@ -28,6 +38,7 @@ async def stream(
     gi = MOTOR_NAMES.index("gripper")
     path = plan["live_path"]
     qs, phases, due, goals = [plan["q"][0].copy()], [0], [0.0], [None]
+    compositions = [None]
 
     def as_dict(q):
         return dict(zip(MOTOR_NAMES, map(float, q), strict=True))
@@ -45,7 +56,7 @@ async def stream(
             return why, qs[max(0, recorded)]
         done, stamps = jog.playback_state()
         for k in range(recorded + 1, done + 1):
-            observed(phases[k], qs[k], stamps[k], goals[k])
+            observed(phases[k], qs[k], stamps[k], goals[k], compositions[k])
         recorded = done
         if done < 0:
             continue
@@ -61,6 +72,19 @@ async def stream(
         i = min(phase + 1, len(plan["q"]) - 1)
         motion, fix = motions(), correction()
         goal = reactive.targets({k: v[i : i + 1] for k, v in path.items()}, motion, fix)[0]
+        # Snapshot before the asynchronous solve. A new observation may arrive
+        # while IK runs or while this command waits for the bus; logging current
+        # state at consumption would falsely attribute it to the newer estimate.
+        composition = {
+            "at": time.time(),
+            "phase": i,
+            "frame": path["frames"][i],
+            "motion": np.asarray(motion[path["frames"][i]]).tolist(),
+            "local": np.asarray(path["local"][i]).tolist(),
+            "held": bool(path["held"][i]),
+            "fix": np.asarray(fix).tolist(),
+            "hold_revision": None if revision is None else revision(),
+        }
         if phase == len(plan["q"]) - 1:
             error_m, error_deg = core.pose_residual(kin.forward_kinematics(qs[done]), goal)
             previous_goal = goals[done] if goals[done] is not None else kin.forward_kinematics(qs[done])
@@ -116,12 +140,12 @@ async def stream(
             if not jog.update_playback_next(done, as_dict(qs[done]), due[done] + dt):
                 continue
             slot = done + 1
-            entry = (qs[done].copy(), phase, due[done] + dt, None)
+            entry = (qs[done].copy(), phase, due[done] + dt, None, None)
             if slot == len(qs):
-                for array, value in zip((qs, phases, due, goals), entry, strict=True):
+                for array, value in zip((qs, phases, due, goals, compositions), entry, strict=True):
                     array.append(value)
             else:
-                qs[slot], phases[slot], due[slot], goals[slot] = entry
+                qs[slot], phases[slot], due[slot], goals[slot], compositions[slot] = entry
             changed = await reselect(plan, i, motion, fix, qs[done])
             if not changed:
                 jog.playback_stop()
@@ -132,9 +156,9 @@ async def stream(
         next_due = due[done] + dt
         if jog.update_playback_next(done, as_dict(result["q"]), next_due):
             slot = done + 1
-            entry = (result["q"], next_phase, next_due, goal)
+            entry = (result["q"], next_phase, next_due, goal, composition)
             if slot == len(qs):
-                for array, value in zip((qs, phases, due, goals), entry, strict=True):
+                for array, value in zip((qs, phases, due, goals, compositions), entry, strict=True):
                     array.append(value)
             else:
-                qs[slot], phases[slot], due[slot], goals[slot] = entry
+                qs[slot], phases[slot], due[slot], goals[slot], compositions[slot] = entry

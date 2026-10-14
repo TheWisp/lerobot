@@ -610,7 +610,7 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
             n = len(q)
             if "live_path" in planned:
 
-                def observed(phase, command, stamp, goal):
+                def observed(phase, command, stamp, goal, composition):
                     nonlocal sent, hold_live
                     sent = phase
                     act.step, act.progress = stage[phase], (phase + 1) / n
@@ -620,7 +620,8 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
                         pose=goal,
                         at=stamp,
                         phase=phase,
-                        hold_revision=len(run.meta.get("hold_selections", [])),
+                        hold_revision=None if composition is None else composition["hold_revision"],
+                        composition=composition,
                     )
                     if hold_live and (command[gi] - closing_cmd) * closing < -1e-6:
                         # The attachment ends when opening starts, before withdrawal.
@@ -651,6 +652,7 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
                     limits_before,
                     speed,
                     settled=settled,
+                    revision=lambda: len(run.meta.get("hold_selections", [])),
                 )
                 return why
             n = len(q)

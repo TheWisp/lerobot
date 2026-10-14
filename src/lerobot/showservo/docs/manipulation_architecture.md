@@ -290,6 +290,13 @@ per-command goals, and live landing-search attempts. More informative later
 views may still fail verification; live execution alone does not make a pose
 observable.
 
+Each reactive command also records the frame transform, relative goal, attachment
+correction and revision used before its IK solve. These inputs stay with the
+queued sample through replacement and consumption. A revision accepted while IK
+is running must not retrospectively label an older command as using the update.
+The recorded inputs reconstruct the desired goal; encoder FK remains the
+separate evidence for actual arm motion.
+
 The ring outline in replay is the saved controller pose, not proof of a fresh
 measurement. In run `20261014_075438`, the last accepted ring view was at +10.12 s.
 Later group records refused its own motion when visibility was below the
