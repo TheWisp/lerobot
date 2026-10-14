@@ -240,3 +240,35 @@ def test_moving_hold_uses_image_time_fk_and_drops_result_after_release(monkeypat
         )
     )
     assert not published
+
+
+def test_missing_encoder_bracket_is_logged_as_timing_failure_not_arm_disconnection(monkeypatch):
+    from lerobot.gui.api.manipulation import camera, held_views, runtime
+
+    state = {"done": False}
+    logs, published = [], []
+    monkeypatch.setattr(jog, "kinematics", _TipKinematics)
+    monkeypatch.setattr(jog, "joints_at", lambda *args: None)
+    monkeypatch.setattr(runtime, "HISTORY_MATCH_S", 0)
+    monkeypatch.setattr(held_views, "prepare_references", lambda *args: [object()])
+
+    async def frame(after):
+        return np.zeros((3, 3, 3)), np.ones((3, 3)), {}, 123.0
+
+    async def measure(*args, capture, **kwargs):
+        await capture("arbitrary")
+        pytest.fail("an unsynchronized frame must not reach registration")
+
+    def log(problem, attempts):
+        logs.append(problem)
+        state["done"] = True
+
+    monkeypatch.setattr(camera, "timed_frame", frame)
+    monkeypatch.setattr(held_views, "measure", measure)
+    asyncio.run(
+        held_views.watch(
+            None, "arbitrary", np.eye(4), lambda: np.eye(4), lambda: state["done"], published.append, log
+        )
+    )
+    assert len(logs) == 1 and "encoder samples bracket" in logs[0]
+    assert not published

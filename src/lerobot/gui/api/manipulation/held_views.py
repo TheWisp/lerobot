@@ -245,7 +245,7 @@ async def measure(
             break
         view = await (holds._held_view(obj) if capture is None else capture(obj))
         if view is None:
-            return None, "the arm went away", attempts
+            return None, "stopped" if stopped() else "the arm went away", attempts
         rgb, depth, intr, tip, mask = view
         observed_stamp = time.perf_counter() if observation_clock is None else observation_clock()
         observations[:] = [
@@ -425,7 +425,7 @@ async def watch(demo, obj, t_bc, prediction, stopped, publish, log):
         nonlocal last
         snapshot = await camera.timed_frame(last)
         if snapshot is None:
-            return None
+            raise RuntimeError("camera cannot supply timestamped frames for a moving held observation")
         rgb, depth, intr, stamp = snapshot
         last = stamp
         # Wait for a right bracket, at most the existing history matching budget.
@@ -435,7 +435,11 @@ async def watch(demo, obj, t_bc, prediction, stopped, publish, log):
             await asyncio.sleep(runtime.ACT_TICK_S)
             q = jog.joints_at(stamp, 2.0 / jog.HZ)
         if q is None:
-            return None
+            if stopped():
+                return None
+            raise TimeoutError(
+                "no encoder samples bracket the camera frame within the synchronization tolerance"
+            )
         from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
 
         tip = kin.forward_kinematics(np.array([q[m] for m in MOTOR_NAMES]))

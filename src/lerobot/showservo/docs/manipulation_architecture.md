@@ -511,3 +511,27 @@ image crops, timing plots, rim-feature diagnostics and
 `insertion_comparison.mp4`. The video aligns the beginning of the insertion
 sequence, preserves elapsed time, and labels when the held-position update was
 applied. This comparison issued no hardware commands.
+
+### Continuous-observer rollout and separate lift failure (October 14 evening)
+
+The reference-bank and scheduling change was deployed as `72fb49916`. After the
+operator reset the scene, physical act `insertion/acts/20261014_220340` started its
+held observer before carry, but stopped in key frame 4: the shoulder encoder
+remained near 15.8 degrees with a 10.8-degree command, reaching the existing
+five-degree transport guard. No fresh held correction was accepted or applied;
+this trial does not establish an accuracy or completion benefit for the change.
+
+A bounded gizmo probe of the same goal reproduced the stall. After releasing
+the peg, an empty-gripper retreat also failed and exceeded 70% shoulder load.
+These observations support a physical joint/load limitation, rather than an
+accepted estimator correction causing the failure. They do not identify its
+mechanical cause. Runtime register diagnostics showed the expected gains and
+position mode, enabled torque, no reported motor error flags and position limits
+well outside the current angle. The arm was re-anchored to its observed pose to
+remove the commanded strain; physical inspection was requested. No gains,
+transport tolerances or protection limits were relaxed.
+
+The observer logged a missing capture as “the arm went away”; this message did
+not establish a disconnect. Capture diagnostics now distinguish a missing
+encoder bracket, a camera lacking timestamps and intentional stopping. The
+synchronization checks remain unchanged.
