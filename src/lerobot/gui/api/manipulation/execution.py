@@ -543,6 +543,68 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
         def hold_stopped(generation):
             return generation != hold_generation or not hold_live or bool(interrupted())
 
+        def begin_hold_observation():
+            """One observer per attachment; late results cannot survive release/regrasp."""
+            nonlocal hold_watch
+            if hold_watch is not None:
+                return
+
+            def publish_hold(result, held_obj=held_obj, phase_index=phase_index, generation=hold_generation):
+                nonlocal live_fix
+                if hold_stopped(generation):
+                    return
+                partial = result["orientation"] == "predicted"
+                if partial and not act.allow_grasp_prediction:
+                    return
+                live_fix = np.asarray(result["fix"]).copy()
+                at = result["accepted_at"]
+                source = "held-view position; rotation predicted" if partial else "held-view registration"
+                evidence = "partly measured" if partial else "measured"
+                run.meta["hold_selections"][-1]["until"] = at
+                selection = {
+                    "object": held_obj,
+                    "interaction": phase_index,
+                    "at": at,
+                    "observed_at": result["observed_at"],
+                    "source": source,
+                    "evidence": evidence,
+                    "fix": live_fix.tolist(),
+                    "reason": result["reason"],
+                }
+                run.meta["hold_selection"] = selection
+                run.meta["hold_selections"].append(dict(selection))
+                act.place.update(
+                    hold_used=source,
+                    hold_evidence=evidence,
+                    fix=live_fix.tolist(),
+                    held_view_comparison={k: v for k, v in result.items() if k != "fix"},
+                )
+                if held_attachment:
+                    # F = H_demo @ inv(H_live), hence H_new = inv(F_new) @ F_old @ H_old.
+                    held_attachment["tip_obj"] = (
+                        np.linalg.inv(live_fix) @ held_attachment["grasp_fix"] @ held_attachment["tip_obj"]
+                    )
+                    held_attachment["grasp_fix"] = live_fix.copy()
+
+            def log_hold(problem, attempts, held_obj=held_obj):
+                run.meta.setdefault("live_held_attempts", []).append(
+                    {"at": time.time(), "object": held_obj, "problem": problem, "attempts": attempts}
+                )
+
+            if act.correct_hold:
+                hold_watch = asyncio.create_task(
+                    held_views.watch(
+                        demo,
+                        held_obj,
+                        t_bc,
+                        hold_prediction,
+                        functools.partial(hold_stopped, hold_generation),
+                        publish_hold,
+                        log_hold,
+                    )
+                )
+                beside.append(hold_watch)
+
         async def reselect_live(planned, i, snapshot, correction, previous):
             nonlocal landing_turn
             path = reactive.slice_plan(planned, i)
@@ -1107,22 +1169,67 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
             )
             await jog.joints_stop()  # the grasp's closing kept
             streaming = False
-            # Check the carry as one plan, but execute only to its first held line before measuring the hold.
-            # Later lines may already touch the support: correcting there can slide or rotate it underneath the
-            # object. Mark the first held line at a clear observation pose; preserve the grasp throughout correction.
+            continuous_hold = False
+            if act.correct_hold and act.allow_grasp_prediction:
+                live_grip, _ = grip.get("live", (None, "not yet measured"))
+                seed = (
+                    demo_grip["hold"] @ np.linalg.inv(live_grip["hold"])
+                    if demo_grip is not None and live_grip is not None
+                    else grip.get("fix")
+                )
+                if seed is not None:
+                    continuous_hold = True
+                    live_fix, hold_live = np.asarray(seed).copy(), True
+                    source = "grip prediction" if live_grip is not None else "grasp prediction"
+                    act.place = {
+                        **(act.place or {}),
+                        "hold_used": source,
+                        "hold_evidence": "predicted",
+                        "fallback_reason": "grasp attachment predicted until fresh held evidence arrives",
+                        "fix": live_fix.tolist(),
+                        "held_view_attempts": [],
+                        "held_observer_started_before_carry": True,
+                    }
+                    run.meta["hold_selection"] = {
+                        "object": held_obj,
+                        "interaction": phase_index,
+                        "at": time.time(),
+                        "source": source,
+                        "evidence": "predicted",
+                        "fix": live_fix.tolist(),
+                        "reason": act.place["fallback_reason"],
+                    }
+                    run.meta.setdefault("hold_selections", []).append(dict(run.meta["hold_selection"]))
+                    run.meta.setdefault("holds", []).append(
+                        {"interaction": phase_index, "object": held_obj, **act.place}
+                    )
+                    if held_attachment:
+                        held_attachment["tip_obj"] = (
+                            np.linalg.inv(live_fix)
+                            @ held_attachment["grasp_fix"]
+                            @ held_attachment["tip_obj"]
+                        )
+                        held_attachment["grasp_fix"] = live_fix.copy()
+                    begin_hold_observation()
+            # Check the carry as one plan, with the existing boundary before
+            # approach/contact. Prediction-enabled acts observe alongside this
+            # motion; strict acts still require verification at the boundary.
             held_follow = next(
                 (n for n in range(split, phase_stop) if made_held[n] and frames[n]["move"] == "follow"), None
             )
             end_lines = held_follow if held_follow is not None else phase_stop
             hold_line = min(n for n in range(split, end_lines) if frames[n]["move"] == "line")
             act.step = "planning the carry"
-            carry = await plan_span("carry", (split, phase_stop))
+            carry = await plan_span("carry", (split, phase_stop), live_fix if continuous_hold else None)
             if not carry["ok"] and landing_turn is not None:
                 # The turn the start took no longer plans from where the arm and the object are now, but any turn the
                 # demo's landing rule allows is the same place: rank them again.
                 saved, landing_turn = landing_turn, None
                 carry = await plan_span(
-                    "carry, the landing chosen again", (split, phase_stop), landing=demo.landing
+                    "carry, the landing chosen again",
+                    (split, phase_stop),
+                    live_fix if continuous_hold else None,
+                    landing=demo.landing,
                 )
                 landing_turn = (
                     (carry["landing_centre"], float(carry["landing"]["turn_deg"]))
@@ -1144,221 +1251,184 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
             if why:
                 fail(why)
                 return
-            await jog.joints_stop()  # stand still to measure the hold, the closing kept
-            streaming = False
-            # Re-check at the first held line, before later approach/contact lines. An earlier grip estimate cannot
-            # replace a missing current visual hold when correction is enabled.
-            live_place, live_place_problem = None, "designation-based demo carry reference unavailable"
-            if demo_carry is not None or act.correct_hold:
-                act.step = f"checking how {held_obj} sits in the gripper"
-                why = await still()
-                if why:
-                    fail(f"at {last_label}: {why}")
-                    return
-            if demo_carry is not None:
-                live_place, live_place_problem = await holds._live_hold(
-                    demo,
-                    held_obj,
-                    demo_carry["hold"],
-                    t_bc,
-                    lambda: act.stop_requested,
-                    method=demo_carry.get("method", "find"),
+            if continuous_hold:
+                # The observer already ran beside the carry. Preserve its newest
+                # accepted attachment; never overwrite it with an earlier seed.
+                fix = live_fix.copy()
+            else:
+                await jog.joints_stop()  # stand still to measure the hold, the closing kept
+                streaming = False
+                # Re-check at the first held line, before later approach/contact lines. An earlier grip estimate cannot
+                # replace a missing current visual hold when correction is enabled.
+                live_place, live_place_problem = None, "designation-based demo carry reference unavailable"
+                if demo_carry is not None or act.correct_hold:
+                    act.step = f"checking how {held_obj} sits in the gripper"
+                    why = await still()
+                    if why:
+                        fail(f"at {last_label}: {why}")
+                        return
+                if demo_carry is not None:
+                    live_place, live_place_problem = await holds._live_hold(
+                        demo,
+                        held_obj,
+                        demo_carry["hold"],
+                        t_bc,
+                        lambda: act.stop_requested,
+                        method=demo_carry.get("method", "find"),
+                    )
+                    if act.stop_requested:
+                        fail("stopped")
+                        return
+                if grip_watch is not None:
+                    await grip_watch
+                fix_grasp = grip.get("fix")
+                live_grip, live_grip_problem = grip.get(
+                    "live", (None, "not measured: the demo's grip shows too little of it")
                 )
-                if act.stop_requested:
-                    fail("stopped")
-                    return
-            if grip_watch is not None:
-                await grip_watch
-            fix_grasp = grip.get("fix")
-            live_grip, live_grip_problem = grip.get(
-                "live", (None, "not measured: the demo's grip shows too little of it")
-            )
-            fix_grip = (
-                demo_grip["hold"] @ np.linalg.inv(live_grip["hold"])
-                if demo_grip is not None and live_grip is not None
-                else None
-            )
-            fix_place = (
-                demo_carry["hold"] @ np.linalg.inv(live_place["hold"])
-                if demo_carry is not None and live_place is not None
-                else None
-            )
-            direct, direct_problem, direct_attempts = None, "", []
-            if act.correct_hold and fix_place is None:
-                act.step = f"matching {held_obj} against the demo's held views"
-                prediction = fix_grip if fix_grip is not None else fix_grasp
-                direct, direct_problem, direct_attempts = await held_views.measure(
-                    demo, held_obj, t_bc, prediction, lambda: act.stop_requested
+                fix_grip = (
+                    demo_grip["hold"] @ np.linalg.inv(live_grip["hold"])
+                    if demo_grip is not None and live_grip is not None
+                    else None
                 )
-                if act.stop_requested:
-                    fail("stopped")
-                    return
-                if (
-                    direct is not None
-                    and direct["orientation"] == "predicted"
-                    and not act.allow_grasp_prediction
-                ):
-                    direct_problem = "held position measured, but orientation still requires grasp prediction"
-                    direct = None
+                fix_place = (
+                    demo_carry["hold"] @ np.linalg.inv(live_place["hold"])
+                    if demo_carry is not None and live_place is not None
+                    else None
+                )
+                direct, direct_problem, direct_attempts = None, "", []
+                if act.correct_hold and fix_place is None:
+                    act.step = f"matching {held_obj} against the demo's held views"
+                    prediction = fix_grip if fix_grip is not None else fix_grasp
+                    direct, direct_problem, direct_attempts = await held_views.measure(
+                        demo, held_obj, t_bc, prediction, lambda: act.stop_requested
+                    )
+                    if act.stop_requested:
+                        fail("stopped")
+                        return
+                    if (
+                        direct is not None
+                        and direct["orientation"] == "predicted"
+                        and not act.allow_grasp_prediction
+                    ):
+                        direct_problem = (
+                            "held position measured, but orientation still requires grasp prediction"
+                        )
+                        direct = None
+                    if direct is not None:
+                        fix_place = direct["fix"]
+                    else:
+                        live_place_problem += f"; {direct_problem}"
+                fix, used, evidence = fix_place, "pre-place", "measured"
                 if direct is not None:
-                    fix_place = direct["fix"]
-                else:
-                    live_place_problem += f"; {direct_problem}"
-            fix, used, evidence = fix_place, "pre-place", "measured"
-            if direct is not None:
-                used = "held-view registration"
-                if direct["orientation"] == "predicted":
-                    used, evidence = "held-view position; rotation predicted", "partly measured"
-            if not act.correct_hold:
-                fix, used, evidence = np.eye(4), "off", "off"
-            elif fix is None and act.allow_grasp_prediction:
-                # Carry the best grasp-time attachment forward under an explicit
-                # no-slip assumption. A group pose driven by the same arm joints
-                # does not make this an independent post-lift measurement.
-                fix, used = (
-                    (fix_grip, "grip prediction") if fix_grip is not None else (fix_grasp, "grasp prediction")
-                )
-                evidence = "predicted"
-            if fix is None:
-                # A grasp-time estimate cannot observe slip or a wrong initial find. Keep the closing and
-                # refuse further approach/release when the held pose cannot be verified after the carry.
+                    used = "held-view registration"
+                    if direct["orientation"] == "predicted":
+                        used, evidence = "held-view position; rotation predicted", "partly measured"
+                if not act.correct_hold:
+                    fix, used, evidence = np.eye(4), "off", "off"
+                elif fix is None and act.allow_grasp_prediction:
+                    # Carry the best grasp-time attachment forward under an explicit
+                    # no-slip assumption. A group pose driven by the same arm joints
+                    # does not make this an independent post-lift measurement.
+                    fix, used = (
+                        (fix_grip, "grip prediction")
+                        if fix_grip is not None
+                        else (fix_grasp, "grasp prediction")
+                    )
+                    evidence = "predicted"
+                if fix is None:
+                    # A grasp-time estimate cannot observe slip or a wrong initial find. Keep the closing and
+                    # refuse further approach/release when the held pose cannot be verified after the carry.
+                    act.place = {
+                        **(act.place or {}),
+                        "hold_used": "unverified",
+                        "demo_carry_problem": carry_problem,
+                        "live_place": live_place_problem,
+                        "grasp_estimate_available": fix_grasp is not None,
+                        "grip_measurement_available": fix_grip is not None,
+                        "allow_grasp_prediction": act.allow_grasp_prediction,
+                        "held_view_attempts": direct_attempts,
+                    }
+                    fail(
+                        f"cannot verify {held_obj}'s current held pose: {carry_problem or live_place_problem}; "
+                        "placement stopped with the gripper closed"
+                    )
+                    return
+                i_last = index(frames[hold_line]["t"])
+                aimed = frame_now(frames[hold_line]["frame"]) @ demo.tips[i_last]
+                shift_m, shift_deg = core.pose_residual(aimed @ fix, aimed)
+
+                def summary(hold: dict | None, problem: str) -> dict[str, Any] | str:
+                    return (
+                        problem
+                        if hold is None
+                        else {
+                            **{k: hold[k] for k in ("n", "views", "spread_mm", "spread_deg")},
+                            "hold": np.asarray(hold["hold"]).tolist(),
+                        }
+                    )
+
                 act.place = {
                     **(act.place or {}),
-                    "hold_used": "unverified",
-                    "demo_carry_problem": carry_problem,
-                    "live_place": live_place_problem,
-                    "grasp_estimate_available": fix_grasp is not None,
-                    "grip_measurement_available": fix_grip is not None,
-                    "allow_grasp_prediction": act.allow_grasp_prediction,
+                    "hold_used": used,
+                    "hold_evidence": evidence,
+                    "fallback_reason": (carry_problem or live_place_problem)
+                    if evidence == "predicted"
+                    else "",
+                    "held_view_comparison": None
+                    if direct is None
+                    else {k: v for k, v in direct.items() if k != "fix"},
+                    "held_view_problem": direct_problem,
                     "held_view_attempts": direct_attempts,
+                    "demo_grip": summary(demo_grip, grip_problem),
+                    "live_grip": summary(live_grip, live_grip_problem),
+                    "demo_carry": summary(demo_carry, carry_problem),
+                    "live_place": summary(live_place, live_place_problem),
+                    "shift_mm": shift_m * 1000.0,
+                    "shift_deg": shift_deg,
+                    "fix": fix.tolist(),
                 }
-                fail(
-                    f"cannot verify {held_obj}'s current held pose: {carry_problem or live_place_problem}; "
-                    "placement stopped with the gripper closed"
-                )
-                return
-            i_last = index(frames[hold_line]["t"])
-            aimed = frame_now(frames[hold_line]["frame"]) @ demo.tips[i_last]
-            shift_m, shift_deg = core.pose_residual(aimed @ fix, aimed)
-
-            def summary(hold: dict | None, problem: str) -> dict[str, Any] | str:
-                return (
-                    problem
-                    if hold is None
-                    else {
-                        **{k: hold[k] for k in ("n", "views", "spread_mm", "spread_deg")},
-                        "hold": np.asarray(hold["hold"]).tolist(),
-                    }
-                )
-
-            act.place = {
-                **(act.place or {}),
-                "hold_used": used,
-                "hold_evidence": evidence,
-                "fallback_reason": (carry_problem or live_place_problem) if evidence == "predicted" else "",
-                "held_view_comparison": None
-                if direct is None
-                else {k: v for k, v in direct.items() if k != "fix"},
-                "held_view_problem": direct_problem,
-                "held_view_attempts": direct_attempts,
-                "demo_grip": summary(demo_grip, grip_problem),
-                "live_grip": summary(live_grip, live_grip_problem),
-                "demo_carry": summary(demo_carry, carry_problem),
-                "live_place": summary(live_place, live_place_problem),
-                "shift_mm": shift_m * 1000.0,
-                "shift_deg": shift_deg,
-                "fix": fix.tolist(),
-            }
-            run.meta["hold_selection"] = {
-                "object": held_obj,
-                "interaction": phase_index,
-                "at": time.time(),
-                "source": used,
-                "evidence": evidence,
-                "reason": direct["reason"] if evidence == "partly measured" else act.place["fallback_reason"],
-            }
-            run.meta.setdefault("hold_selections", []).append(dict(run.meta["hold_selection"]))
-            run.meta.setdefault("holds", []).append(
-                {"interaction": phase_index, "object": held_obj, **act.place}
-            )
-            if (
-                fix_grasp is not None
-            ):  # what the camera saw against the grasp pose: what the closing and the lift did
-                act.place["grasp_pose_mm"], act.place["grasp_pose_deg"] = (
-                    v * k
-                    for v, k in zip(core.pose_residual(aimed @ fix_grasp, aimed), (1000.0, 1.0), strict=True)
-                )
-                if evidence == "measured":
-                    seen_m, seen_deg = core.pose_residual(aimed @ fix, aimed @ fix_grasp)
-                    act.place.update(seen_vs_grasp_pose_mm=seen_m * 1000.0, seen_vs_grasp_pose_deg=seen_deg)
-            if (
-                fix_grip is not None and fix_place is not None
-            ):  # how far the lift and the carry moved the hold
-                moved_m, moved_deg = core.pose_residual(aimed @ fix_grip, aimed @ fix_place)
-                act.place.update(grip_vs_place_mm=moved_m * 1000.0, grip_vs_place_deg=moved_deg)
-            live_fix = np.asarray(fix).copy()
-            if held_attachment:
-                held_attachment["tip_obj"] = (
-                    np.linalg.inv(live_fix) @ held_attachment["grasp_fix"] @ held_attachment["tip_obj"]
-                )
-                held_attachment["grasp_fix"] = live_fix.copy()
-            hold_live = True
-
-            def publish_hold(result, held_obj=held_obj, phase_index=phase_index, generation=hold_generation):
-                nonlocal live_fix
-                if hold_stopped(generation):
-                    return
-                partial = result["orientation"] == "predicted"
-                if partial and not act.allow_grasp_prediction:
-                    return
-                live_fix = np.asarray(result["fix"]).copy()
-                at = result["accepted_at"]
-                source = "held-view position; rotation predicted" if partial else "held-view registration"
-                evidence = "partly measured" if partial else "measured"
-                run.meta["hold_selections"][-1]["until"] = at
-                selection = {
+                run.meta["hold_selection"] = {
                     "object": held_obj,
                     "interaction": phase_index,
-                    "at": at,
-                    "observed_at": result["observed_at"],
-                    "source": source,
+                    "at": time.time(),
+                    "source": used,
                     "evidence": evidence,
-                    "fix": live_fix.tolist(),
-                    "reason": result["reason"],
+                    "reason": direct["reason"]
+                    if evidence == "partly measured"
+                    else act.place["fallback_reason"],
                 }
-                run.meta["hold_selection"] = selection
-                run.meta["hold_selections"].append(dict(selection))
-                act.place.update(
-                    hold_used=source,
-                    hold_evidence=evidence,
-                    fix=live_fix.tolist(),
-                    held_view_comparison={k: v for k, v in result.items() if k != "fix"},
+                run.meta.setdefault("hold_selections", []).append(dict(run.meta["hold_selection"]))
+                run.meta.setdefault("holds", []).append(
+                    {"interaction": phase_index, "object": held_obj, **act.place}
                 )
+                if (
+                    fix_grasp is not None
+                ):  # what the camera saw against the grasp pose: what the closing and the lift did
+                    act.place["grasp_pose_mm"], act.place["grasp_pose_deg"] = (
+                        v * k
+                        for v, k in zip(
+                            core.pose_residual(aimed @ fix_grasp, aimed), (1000.0, 1.0), strict=True
+                        )
+                    )
+                    if evidence == "measured":
+                        seen_m, seen_deg = core.pose_residual(aimed @ fix, aimed @ fix_grasp)
+                        act.place.update(
+                            seen_vs_grasp_pose_mm=seen_m * 1000.0, seen_vs_grasp_pose_deg=seen_deg
+                        )
+                if (
+                    fix_grip is not None and fix_place is not None
+                ):  # how far the lift and the carry moved the hold
+                    moved_m, moved_deg = core.pose_residual(aimed @ fix_grip, aimed @ fix_place)
+                    act.place.update(grip_vs_place_mm=moved_m * 1000.0, grip_vs_place_deg=moved_deg)
+                live_fix = np.asarray(fix).copy()
                 if held_attachment:
-                    # F = H_demo @ inv(H_live), hence H_new = inv(F_new) @ F_old @ H_old.
                     held_attachment["tip_obj"] = (
                         np.linalg.inv(live_fix) @ held_attachment["grasp_fix"] @ held_attachment["tip_obj"]
                     )
                     held_attachment["grasp_fix"] = live_fix.copy()
+                hold_live = True
 
-            def log_hold(problem, attempts, held_obj=held_obj):
-                run.meta.setdefault("live_held_attempts", []).append(
-                    {"at": time.time(), "object": held_obj, "problem": problem, "attempts": attempts}
-                )
-
-            if act.correct_hold:
-                hold_watch = asyncio.create_task(
-                    held_views.watch(
-                        demo,
-                        held_obj,
-                        t_bc,
-                        hold_prediction,
-                        functools.partial(hold_stopped, hold_generation),
-                        publish_hold,
-                        log_hold,
-                    )
-                )
-                beside.append(hold_watch)
+            begin_hold_observation()
             # The hold changes the target after the carry has already been checked. Plan its correction together with
             # the remaining key frames before commanding it: a walk can otherwise stall at a wrist limit for 20 s.
             act.step = "planning the hold correction and place"

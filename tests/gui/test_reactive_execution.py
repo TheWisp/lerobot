@@ -217,7 +217,7 @@ def test_moving_hold_uses_image_time_fk_and_drops_result_after_release(monkeypat
     async def frame(after):
         return np.zeros((3, 3, 3)), np.ones((3, 3)), {}, stamp
 
-    async def measure(demo, obj, bc, prediction, stopped, *, capture, publish):
+    async def measure(demo, obj, bc, prediction, stopped, *, capture, publish, **kwargs):
         view = await capture(obj)
         assert view[3][0, 3] == pytest.approx(0.012)
         assert view[4] is None, "a stale mask may not be used on a new image"
@@ -226,6 +226,7 @@ def test_moving_hold_uses_image_time_fk_and_drops_result_after_release(monkeypat
         return None, "stopped", []
 
     monkeypatch.setattr(camera, "timed_frame", frame)
+    monkeypatch.setattr(held_views, "prepare_references", lambda *args: [object()])
     monkeypatch.setattr(held_views, "measure", measure)
     asyncio.run(
         held_views.watch(

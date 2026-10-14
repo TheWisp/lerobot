@@ -2468,10 +2468,10 @@ def test_explicit_grasp_prediction_places_without_claiming_a_carried_measurement
 
 
 @pytest.mark.usefixtures("act_simulation")
-def test_fresh_visual_hold_overrides_allowed_grasp_prediction_after_slip(tmp_path, monkeypatch):
+def test_strict_visual_hold_measures_after_slip(tmp_path, monkeypatch):
     try:
         _demo, _sim, _views, _m = _run_place_act(
-            tmp_path, monkeypatch, slip=True, allow_grasp_prediction=True
+            tmp_path, monkeypatch, slip=True, allow_grasp_prediction=False
         )
         act = manipulation.runtime._state.act
         assert act.ok, act.reason
