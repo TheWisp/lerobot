@@ -521,17 +521,49 @@ remained near 15.8 degrees with a 10.8-degree command, reaching the existing
 five-degree transport guard. No fresh held correction was accepted or applied;
 this trial does not establish an accuracy or completion benefit for the change.
 
-A bounded gizmo probe of the same goal reproduced the stall. After releasing
-the peg, an empty-gripper retreat also failed and exceeded 70% shoulder load.
-These observations support a physical joint/load limitation, rather than an
-accepted estimator correction causing the failure. They do not identify its
-mechanical cause. Runtime register diagnostics showed the expected gains and
-position mode, enabled torque, no reported motor error flags and position limits
-well outside the current angle. The arm was re-anchored to its observed pose to
-remove the commanded strain; physical inspection was requested. No gains,
-transport tolerances or protection limits were relaxed.
+A bounded probe through the gizmo target API reproduced the stall. After
+releasing the peg, an empty-gripper retreat also failed and exceeded 70% shoulder
+load. However, the probe helper itself imposed the same five-degree/half-second
+following-error stop as playback. This is not an independent demonstration that
+ordinary gizmo operation or the joint cannot move. The operator subsequently
+reported that Park worked, and the API confirmed it had disconnected. Park uses
+a different joint-space trajectory and a per-command twelve-degree clamp against
+the measured angle, without playback's five-degree/half-second stop. Its success
+does not isolate the effect of posture, path, or permitted command lead.
+
+No accepted held correction caused this failure: none had been applied. Runtime
+register diagnostics showed the expected gains and position mode, enabled
+torque, no reported motor error flags and position limits well outside the
+current angle. The arm was re-anchored to its observed pose to remove commanded
+strain before the operator parked it. The initial request for physical inspection
+was based on an overly strong interpretation of the guarded probes; a mechanical
+cause remains unproven. No gains, transport tolerances or protection limits were
+relaxed.
 
 The observer logged a missing capture as “the arm went away”; this message did
 not establish a disconnect. Capture diagnostics now distinguish a missing
 encoder bracket, a camera lacking timestamps and intentional stopping. The
 synchronization checks remain unchanged.
+
+The operator then requested retries after Park. Four Act attempts on the same
+deployed code produced two refusals before motion (pick reachability, then a
+target surface-validation failure) and two physical approaches. Acts
+`20261014_221606` and `20261014_221744` stopped during key frame 1, before grasp:
+wrist roll stopped following near 97.36 and 97.10 degrees respectively, with
+nominal commands of 127.05 and 124.85 degrees. The subsequent GUI state reported
+wrist-roll overload in both cases; recovery cleared that joint's latch, and Park
+completed after each. The shoulder followed during these approaches. No error
+injection was enabled and neither run reached held-pose observation.
+
+The first physical retry used 40 mm/s and 30 deg/s Cartesian limits, the second
+20 mm/s and 15 deg/s. Slowing the Cartesian walk did not avoid this posture's
+failure. This is not an isolated joint-speed experiment: the pose was reacquired
+between runs, and Cartesian speed limits do not directly bound joint speed.
+In particular, the first run's nominal wrist command accelerated to about
+180 deg/s immediately before freezing. The records establish a repeatable
+posture-specific approach failure, not a general inability to move the wrist or
+a proven mechanical cause. Further repetitions of this approach were stopped;
+the arm was parked, torque released and the original Cartesian limits restored.
+
+Retry images, polling traces, frozen-joint states and the comparison report are
+under `/home/feit/Documents/showservo-experiments/20261014/continuous-held/retry_after_park/`.
