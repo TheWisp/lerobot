@@ -388,9 +388,45 @@ common surface; no fresh attachment correction was installed. The successful
 insertion used grasp prediction throughout. Therefore this trial validates live
 target retargeting and execution, **not** measured in-hand pose recovery or general
 reliability. The later held-view matches that supported an older offline case
-remain insufficient in this configuration. The scene ends with the object
+were insufficient in that trial. The scene ended with the object
 inserted and needs separation before another ordinary trial.
 
 Durable local evidence: `/home/feit/Documents/showservo-experiments/20261014/reactive-trial/`
 contains the report, tests, deployment/commit logs, polling images and complete
 act record. It is separate from the source repository.
+
+### Fresh held-position correction on hardware (2026-10-14, 16:39)
+
+After autonomous separation of the objects, act `20261014_163916` ran commit
+`8a5897446` with the common-surface constraint and command provenance. It completed
+pickup, insertion, release and withdrawal without a servo freeze or injected
+error; raw final frame 149 shows the dowel standing in the ring. The reset left
+the ring in a different location from the previous run, and the existing allowed
+landing search supplied the carry plan. The reset itself used inspected,
+calibrated gizmo motions; it was not validation of a general collision planner.
+
+The initial stationary check still rejected weak appearance matches. During
+subsequent motion, five observations against demo references 350, 370 and 373
+established a held-position correction, with 1.217 mm inter-view position spread.
+Reference rotations disagreed by 90.37°, so rotation explicitly remained the
+permitted grasp prediction. This is partial measured recovery, not full pose
+observability or independent millimetre accuracy.
+
+The new attachment was accepted at Unix time 1791992385.086707. Its first consumed
+command followed 33.516 ms later; recomposition began 22.262 ms after acceptance.
+Holding the nominal sample and target motion fixed, replacing only the old
+attachment changes that command's desired position by 4.987 mm and leaves its
+orientation unchanged. The recorded arm sample 1.831 ms after consumption has
+exactly the same commanded joints. All 677 recorded compositions reconstruct
+their goals exactly; 135 held commands use the new attachment revision. This
+establishes that fresh in-hand position evidence affected the running action.
+
+The latest contributing camera publication preceded command consumption by
+745.724 ms. The 33.516 ms figure is acceptance-to-command latency, not camera-to-
+command latency; publication time is still not calibrated exposure time. One
+successful insertion does not establish reliability under arbitrary occlusion,
+slip, initial grasps or target motion. Full held orientation remains unresolved.
+
+Durable local evidence: `/home/feit/Documents/showservo-experiments/20261014/held-reset/`
+contains reset telemetry/images, the actual retest, acquisition attempts and the
+command reconstruction audit in `retest/report.json`.

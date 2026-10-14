@@ -261,3 +261,20 @@ accuracy, active inspection or physical placement. Raw drift can continue inside
 P2P; the frontend constraint does not change its map. Live states, geometry,
 rendered panels, acquisition evidence and the normal audit are archived alongside
 the offline results in `20261013/surface-constraints/live`.
+
+## October 14 held-position hardware validation
+
+Act `insertion/20261014_163916` used `rgbd-common-plane-axis-v4` after autonomous
+scene reset. Five moving held-view observations against three reference frames
+were accepted, with 1.217 mm position spread. Their rotations did not agree;
+the result retained predicted rotation and updated only held position. The
+initial stationary check had still rejected weak appearance matches.
+
+The new attachment changed a running command's desired position by 4.987 mm,
+isolating the attachment change from the nominal trajectory and target motion.
+The first consumed command used it 33.516 ms after acceptance, and the recorded
+servo command agrees exactly. The run completed insertion and withdrew. This
+closes the previously observed failure to use a visible held patch in this case;
+it does not establish full orientation recovery or independent pose accuracy.
+See [the architecture's physical evidence](manipulation_architecture.md#fresh-held-position-correction-on-hardware-2026-10-14-1639)
+for latency, provenance and limitations.
