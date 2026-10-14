@@ -341,3 +341,34 @@ poses, recorded follow samples, timing, gripper commands, joint hints and floor
 references directly. They no longer require a second implementation as an oracle.
 Persisted mark-to-key-frame conversion, old replay records and the HTTP routes
 retain their own compatibility checks.
+
+### Physical validation of reactive execution (2026-10-14)
+
+Commit `2d2f16b74` passed 307 targeted regression tests. Real insertion act
+`20261014_140613` completed pickup, insertion, release and withdrawal without a
+servo freeze; the final RGB frame shows the dowel in the ring. No error was
+injected. The first attempt had stopped before motion because a saved click now
+hit the tray; clicking the visible dowel restored a strong match without changing
+the demo or acceptance gates.
+
+During contact, a ring observation was accepted at +23.923 s. The next recorded
+command at +23.974 s had a goal displaced by 8.45 mm, with phase 42 retained while
+the controller inserted correction steps. That is goal displacement (including
+any nominal sample increment), not ground-truth ring motion. It demonstrates
+that the physical run consumed a new target observation during an active follow.
+The initial allowed landing was 355 degrees; no live landing reselection was
+needed. Median command spacing during the contact follow was 33.6 ms. The initial
+stationary held check still produced a roughly six-second command gap.
+
+The moving held observer made fresh matching attempts, so acquisition/timestamp
+plumbing ran on hardware. Every completed match was rejected for insufficient
+common surface; no fresh attachment correction was installed. The successful
+insertion used grasp prediction throughout. Therefore this trial validates live
+target retargeting and execution, **not** measured in-hand pose recovery or general
+reliability. The later held-view matches that supported an older offline case
+remain insufficient in this configuration. The scene ends with the object
+inserted and needs separation before another ordinary trial.
+
+Durable local evidence: `/home/feit/Documents/showservo-experiments/20261014/reactive-trial/`
+contains the report, tests, deployment/commit logs, polling images and complete
+act record. It is separate from the source repository.
