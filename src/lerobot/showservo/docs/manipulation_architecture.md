@@ -254,8 +254,11 @@ the explicit measurement wait and is not established by this trial.
 
 Some work already runs concurrently: the jog control loop owns the motor bus on
 its own thread, the planner has a dedicated executor, and perception runs in a
-separate worker process. The act coroutine nevertheless waits for a held estimate
-and its resulting plan. The perception worker consumes one queued job at a time,
+separate worker process. Normal demo grip/carry measurements already start beside
+the approach and cache completed results, including verified failures. Direct
+held-view reference preparation is still performed within its measurement call.
+The act coroutine nevertheless waits for a held estimate and its resulting plan.
+The perception worker consumes one queued job at a time,
 so launching more asynchronous jobs does not create more GPU capacity and can
 delay tracking. `holds._held_view` explicitly assumes a stationary arm: it reads
 the fingertip immediately before fetching the frame, without a capture-time joint
@@ -264,9 +267,9 @@ would introduce image/arm timing error.
 
 **Proposed concurrency contract, not implemented:**
 
-- Prepare reusable demo reference geometry before the hold checkpoint. Cache by
-  recording/reference, calibration and verification-policy identity, and
-  invalidate it when those inputs change.
+- Extend reference preparation and caching to the direct held-view masks and
+  geometry before the hold checkpoint. Cache by recording/reference, calibration
+  and verification-policy identity, and invalidate it when those inputs change.
 - Capture immutable RGB-D, mask/reference identity, capture time and synchronized
   joint/FK evidence during a checked free-space carry. Interpolate arm state at
   capture time, reject unsupported timestamp gaps, and never attach the arm pose
