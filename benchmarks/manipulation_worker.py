@@ -1643,7 +1643,9 @@ def _track(job, frame, cards, trackers, sam, tier, intr, models=None) -> bytes:
             # object has moved since the teach, that start is stale and the operator should teach again.
             scene.start(card.scene, intr, {concept: card.mask})
         tracker.p2p = SceneView(scene, concept) if concept in scene.order else None
+    t_step = time.perf_counter()
     out = tracker.step(frame, algo)
+    t_others = time.perf_counter()
     meta = {
         k: v for k, v in out.items() if k not in ("mask", "live_uv", "delta", "model_xyz", *P2P_FIT_ARRAYS)
     }
@@ -1657,6 +1659,7 @@ def _track(job, frame, cards, trackers, sam, tier, intr, models=None) -> bytes:
     if out.get("mask") is not None:
         arrays["mask"] = out["mask"]
     others = scene.others(concept) if scene is not None else []
+    t_prepare = time.perf_counter()
     meta["others"] = [
         {
             "name": name,
@@ -1676,6 +1679,12 @@ def _track(job, frame, cards, trackers, sam, tier, intr, models=None) -> bytes:
         # since) or Point2Pose's adopted key points. Drawn carried by the motion, so growth is visible.
         model = out.get("model_xyz")
         arrays["model_xyz"] = np.asarray(card.xyz if model is None else model, dtype=np.float32)
+    t_pack = time.perf_counter()
+    meta["worker_stages_ms"] = {
+        "track_step": round(1000 * (t_others - t_step), 1),
+        "other_objects": round(1000 * (t_prepare - t_others), 1),
+        "result_prepare": round(1000 * (t_pack - t_prepare), 1),
+    }
     return _npz(compress=False, meta=json.dumps(meta), **arrays)
 
 
