@@ -2140,6 +2140,14 @@ function deDrawOverlay() {
     ctx.setLineDash([]); ctx.font = '12px sans-serif';
     const ring = (p, col, label, dy = -6) => { if (!p) return; ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(p[0], p[1], 7, 0, 2 * Math.PI); ctx.stroke(); ctx.fillStyle = col; ctx.fillText(label, p[0] + 10, p[1] + dy); };
     keys.forEach((k, n) => k.move === 'lift' ? ring(at(n), deFrameColour(k.frame), `${k.label} \u2191${k.up_mm} mm`, 10) : ring(P(deIndexAt(k.t)), deFrameColour(k.frame), k.label));
+    for (const o of de.objects) {
+        const uv = o.shape_evidence?.axis_uv;
+        if (!uv || o.t == null || de.i !== deIndexAt(o.t)) continue;
+        const a = [uv[0][0] * sx, uv[0][1] * sy], b = [uv[1][0] * sx, uv[1][1] * sy];
+        ctx.setLineDash([5, 3]); ctx.strokeStyle = o.colour; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(...a); ctx.lineTo(...b); ctx.stroke(); ctx.setLineDash([]);
+        ctx.fillStyle = o.colour; ctx.fillText(`${o.name}: visible axis`, b[0] + 4, b[1] - 4);
+    }
     const q = P(de.i);
     if (q) { ctx.fillStyle = '#000'; ctx.beginPath(); ctx.arc(q[0], q[1], 5.5, 0, 2 * Math.PI); ctx.fill(); ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(q[0], q[1], 4, 0, 2 * Math.PI); ctx.fill(); }
     deBadges(ctx);
@@ -2307,7 +2315,10 @@ function deObjShow(objects) {
             const symCell = o.status !== 'done' ? '<td></td>' :
                 `<td style="padding:4px 8px 4px 0; color:#aaa; white-space:nowrap;" title="Appearance symmetry for pose finding. Choose the observed axis and whether turns are discrete or continuous. Grasp and placement freedom are separate task constraints.">pose symmetry ` +
                 `<select id="de-sym-kind-${row}" onchange="deObjSymmetry('${o.name}', ${row})">${[['none', 'none'], [2, 'order 2'], [3, 'order 3'], [4, 'order 4'], [6, 'order 6'], [8, 'order 8'], ['continuous', 'continuous']].map(([v, label]) => `<option value="${v}"${String(v) === symChoice ? ' selected' : ''}>${label}</option>`).join('')}</select> ` +
-                `<select id="de-sym-axis-${row}" onchange="deObjSymmetry('${o.name}', ${row})">${[['surface_normal', 'surface normal'], ['long_axis', 'long axis']].map(([v, label]) => `<option value="${v}"${v === sym.axis ? ' selected' : ''}>${label}</option>`).join('')}</select></td>`;
+                `<select id="de-sym-axis-${row}" onchange="deObjSymmetry('${o.name}', ${row})">${[['surface_normal', 'surface normal'], ['long_axis', 'long axis']].map(([v, label]) => `<option value="${v}"${v === sym.axis ? ' selected' : ''}>${label}</option>`).join('')}</select>` +
+                (o.shape_evidence?.kind === 'round_long_axis' ?
+                    `<div style="font-size:11px; color:#888;" title="A fit to the visible RGB-D points only. The hidden side, markings and allowed contact changes are unknown.">visible long round axis: ${o.shape_evidence.length_mm.toFixed(0)} mm long, ${o.shape_evidence.radial_error_mm.toFixed(1)} mm fit error</div>` : '') +
+                `</td>`;
             return `<tr style="border-top:1px solid #333;"><td style="padding:4px 8px 4px 0; color:${o.colour}; white-space:nowrap;">${o.name}</td>` +
                 `<td style="padding:4px 8px 4px 0; color:#888; white-space:nowrap;">clicked at ${o.t == null ? '?' : o.t.toFixed(2) + ' s'}</td>` +
                 `<td style="padding:4px 8px 4px 0; color:${o.status === 'failed' ? '#e55' : '#aaa'}; white-space:nowrap;">${state}</td>` + poseCell + symCell +

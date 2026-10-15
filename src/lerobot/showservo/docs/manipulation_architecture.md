@@ -252,6 +252,15 @@ account for that changed gripper-to-object relation. **Automatic candidate
 selection and physical validation are NOT IMPLEMENTED.** The appearance
 symmetry setting alone must not silently enable these contact changes.
 
+The editor reports a round long-axis suggestion when central cross-sections of
+the designated object's visible RGB-D surface fit within the sensor-noise and
+relative-radius criterion. It draws that measured line on the clicked demo
+frame and includes the length and fit residual,
+but does not turn on symmetry automatically. An unseen underside, markings or
+off-camera attachment could break the apparent equivalence. This measurement
+is useful for proposing grasp candidates; task permission and contact validity
+still have to be decided separately.
+
 Key-frame marks now declare `constraint: pose | orientation | best_effort` in the
 demo editor. Old marks keep `pose`; new lifts default to `best_effort`. `pose`
 keeps the recorded position and orientation. `orientation` rotates at the

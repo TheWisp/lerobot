@@ -811,10 +811,57 @@ def _objects_info(demo: runtime._Demo) -> dict[str, Any]:
                 "seen_fraction": float(np.mean(o["seen"])) if o.get("seen") is not None else None,
                 "reason": o.get("reason", ""),
                 "symmetry": symmetry.normalise(o.get("symmetry")),
+                "shape_evidence": _shape_evidence(demo, name) if o["status"] == "done" else None,
                 **(planning._object_pose_info(demo, name) if o["status"] == "done" else {}),
             }
         )
     return {"objects": out}
+
+
+def _shape_evidence(demo: runtime._Demo, name: str) -> dict[str, Any] | None:
+    """A cached, visible-surface suggestion, never a declaration of full symmetry.
+
+    A single RGB-D view can support a round long axis without showing the
+    underside, texture or grip contact. Keep the measured dimensions and fit
+    error visible to the operator; do not silently change the saved symmetry.
+    """
+    obj = demo.objects[name]
+    if "shape_evidence" in obj:
+        return obj["shape_evidence"]
+    if demo.recording is None:
+        return None
+    try:
+        points = planning._object_points(demo, name, np.eye(4))
+        fit = symmetry.round_long_axis(points)
+    except (OSError, ValueError, IndexError):
+        return None
+    axis_uv = None
+    if fit["ok"]:
+        try:
+            k = np.loadtxt(pathlib.Path(demo.recording) / "cam_K.txt")
+            ends = (
+                np.asarray(fit["point"])[None, :]
+                + np.array([-0.45, 0.45])[:, None] * fit["length_m"] * np.asarray(fit["axis"])[None, :]
+            )
+            if np.all(ends[:, 2] > 0):
+                pixels = ends[:, :2] / ends[:, 2, None] @ k[:2, :2].T + k[:2, 2]
+                axis_uv = pixels.tolist()
+        except (OSError, ValueError):
+            pass
+    evidence = (
+        {
+            "kind": "round_long_axis",
+            "length_mm": fit["length_m"] * 1000.0,
+            "radius_mm": fit["radius_m"] * 1000.0,
+            "radial_error_mm": fit["median_radial_error_m"] * 1000.0,
+            "axis_camera": np.asarray(fit["axis"], float).tolist(),
+            "axis_uv": axis_uv,
+        }
+        if fit["ok"]
+        else None
+    )
+    obj["shape_evidence"] = evidence
+    return evidence
 
 
 async def _apply_object_result(job: runtime._Job) -> None:
