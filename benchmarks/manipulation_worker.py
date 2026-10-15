@@ -54,12 +54,11 @@ from showservo_m0 import DinoTier, Sam3Concept  # noqa: E402
 from showservo_real import MIN_INLIERS, Card  # noqa: E402
 
 from lerobot.p2p_runtime import checkout_path  # noqa: E402
-from lerobot.showservo import motion as core  # noqa: E402
+from lerobot.showservo import motion as core, symmetry  # noqa: E402
 from lerobot.showservo.pose import (  # noqa: E402
     CameraIntrinsics,
     fit_surface,
     fold_turn,
-    main_plane_normal,
     ransac_fit_rigid,
     sample_depth,
 )
@@ -1260,7 +1259,7 @@ def _job_ref(job: dict, data) -> dict | None:
         "recording": job["ref_recording"],
         "frame": job["ref_frame"],
         "mask": data["ref_mask"],
-        "symmetry": int(job.get("ref_symmetry") or 1),
+        "symmetry": symmetry.normalise(job.get("ref_symmetry")),
         "refresh_mask": bool(job.get("ref_refresh_mask")),
     }
 
@@ -1456,11 +1455,15 @@ def _find_reference(
             residual = np.linalg.norm(moved - intr.deproject(matched_uv, z), axis=1)
             if np.count_nonzero(valid & (residual <= radius)) >= fit.n_inliers:
                 motion = refined
-        # An object declared rotationally symmetric reads the same turned by 360/order deg about the axis it rests
-        # on; of those equal motions the find reports the one that turns it least (fold_turn).
-        motion = fold_turn(
-            motion, main_plane_normal(live_surface), live_surface.mean(axis=0), int(ref.get("symmetry") or 1)
-        )
+        # Fold only an appearance equivalence the demo declared. Its axis is
+        # measured in this frame; a long cylinder is not symmetric about the
+        # table normal. The axis has a fitted centreline when only its upper
+        # surface is visible.
+        spec = symmetry.normalise(ref.get("symmetry"))
+        if spec["kind"] != "none":
+            axis, point = symmetry.observed_axis(live_surface, spec["axis"])
+            order = None if spec["kind"] == "continuous" else spec["order"]
+            motion = fold_turn(motion, axis, point, order)
     delta = np.eye(4)
     delta[:3, :3], delta[:3, 3] = motion.rot, motion.trans
     turn = float(np.degrees(np.arccos(np.clip((np.trace(delta[:3, :3]) - 1.0) / 2.0, -1.0, 1.0))))

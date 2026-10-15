@@ -1082,7 +1082,7 @@ def test_a_place_follows_its_own_object_found_and_tracked_apart_from_the_picked_
             "ref_recording": demo.recording,
             "ref_frame": 1,
             "ref_object": "box",
-            "ref_symmetry": 1,
+            "ref_symmetry": {"kind": "none", "axis": "surface_normal", "order": 1},
             "track": True,
             "scene": ["gamepad"],
         }, "the box joins the live session beside the gamepad"
@@ -2123,7 +2123,9 @@ def test_a_place_free_to_turn_about_the_box_lands_where_the_arm_stays_nearest_th
         assert abs(carried[-1][wf] - 80.0) < 40.0, (
             "at the pre-place, nearer the demo's wrist than as shown (120)"
         )
-        landed = core.landed(m["box"], np.asarray(target["landing_centre"]), turn)
+        landed = core.landed(
+            m["box"], np.asarray(target["landing_centre"]), turn, np.asarray(target["landing_axis"])
+        )
         fix = m["demo"] @ np.linalg.inv(m["now"])
         placing = [q for q, (_w, stops) in zip(sim["streamed"], sim["sent_at"], strict=True) if stops == 2]
         assert (
@@ -2181,7 +2183,12 @@ def test_a_changed_hold_is_planned_before_moving_and_can_choose_an_allowed_landi
             assert turn != record["target"]["landing"]["turn_deg"]
             assert all(abs(q[wf]) <= WRIST_HI[wf] for q in sim["streamed"])
             assert placed[0][gi] == 85.0 and placed[-1][gi] == 60.0
-            landed = core.landed(m["box"], np.asarray(record["target"]["landing_centre"]), turn)
+            landed = core.landed(
+                m["box"],
+                np.asarray(record["target"]["landing_centre"]),
+                turn,
+                np.asarray(record["target"]["landing_axis"]),
+            )
             actual = _TipYawKinematics().forward_kinematics(placed[-1]) @ m["now"]
             intended = landed @ demo.tips[PLACE_AT["place_end"]] @ m["demo"]
             metres, deg = core.pose_residual(actual, intended)
@@ -2224,7 +2231,8 @@ def test_a_landing_that_no_longer_plans_after_the_grasp_is_chosen_again(tmp_path
     found_at = np.array(
         [0.030, 0.010, 0.0]
     )  # where the harness's earlier find has the box: moved, not turned
-    turned = core.turn_about(manipulation.planning._landing_centre(probe, "box", np.eye(4)) + found_at, 40.0)
+    axis, centre = manipulation.planning._landing_axis(probe, "box", np.eye(4))
+    turned = core.turn_about(centre + found_at, 40.0, axis)
     try:
         demo, sim, _views, m = _run_place_act(
             tmp_path,
@@ -2249,7 +2257,12 @@ def test_a_landing_that_no_longer_plans_after_the_grasp_is_chosen_again(tmp_path
         again = carries[1]["landing"]["turn_deg"]
         assert again == (kept - 40.0) % 360.0, "turned back by the box's turn"
         assert all(abs(q[wf]) <= 93.3 for q in sim["streamed"]), "no joint asked past its servo"
-        landed = core.landed(turned @ m["box"], np.asarray(record["target"]["landing_centre"]), again)
+        landed = core.landed(
+            turned @ m["box"],
+            np.asarray(record["target"]["landing_centre"]),
+            again,
+            np.asarray(record["target"]["landing_axis"]),
+        )
         fix = m["demo"] @ np.linalg.inv(m["now"])
         end = _TipYawKinematics().forward_kinematics(sim["streamed"][-1])
         assert np.linalg.norm(end[:3, 3] - (landed @ demo.tips[PLACE_AT["place_end"]] @ fix)[:3, 3]) <= 0.0005
@@ -3435,19 +3448,29 @@ def test_an_objects_symmetry_is_kept_with_the_demo_and_sent_with_its_finds(clien
         with manipulation.runtime._state.lock:
             manipulation.runtime._state.demo = demo
             manipulation.runtime._state.worker.proc = _FakeProc()
-        assert (
-            next(o for o in client.get("/api/pregrasp/demo/objects").json()["objects"] if o["name"] == "box")[
-                "symmetry"
-            ]
-            == 1
-        ), "none until declared"
+        assert next(
+            o for o in client.get("/api/pregrasp/demo/objects").json()["objects"] if o["name"] == "box"
+        )["symmetry"] == {"kind": "none", "axis": "surface_normal", "order": 1}, "none until declared"
         r = client.post("/api/pregrasp/demo/objects/symmetry", json={"name": "box", "order": 4})
         assert r.status_code == 200
-        assert next(o for o in r.json()["objects"] if o["name"] == "box")["symmetry"] == 4
-        assert manipulation.demos._read_objects(pathlib.Path(demo.root))["box"]["symmetry"] == 4, (
+        face_four = {"kind": "discrete", "axis": "surface_normal", "order": 4}
+        assert next(o for o in r.json()["objects"] if o["name"] == "box")["symmetry"] == face_four
+        assert manipulation.demos._read_objects(pathlib.Path(demo.root))["box"]["symmetry"] == face_four, (
             "kept beside the demo"
         )
-        assert manipulation.demos._read_objects(pathlib.Path(demo.root))["gamepad"]["symmetry"] == 1
+        assert (
+            manipulation.demos._read_objects(pathlib.Path(demo.root))["gamepad"]["symmetry"]["kind"] == "none"
+        )
+        r = client.post(
+            "/api/pregrasp/demo/objects/symmetry",
+            json={"name": "box", "kind": "continuous", "axis": "long_axis"},
+        )
+        assert r.status_code == 200
+        assert manipulation.demos._read_objects(pathlib.Path(demo.root))["box"]["symmetry"] == {
+            "kind": "continuous",
+            "axis": "long_axis",
+            "order": 1,
+        }
         assert (
             client.post("/api/pregrasp/demo/objects/symmetry", json={"name": "nope", "order": 2}).status_code
             == 404
@@ -3462,7 +3485,9 @@ def test_an_objects_symmetry_is_kept_with_the_demo_and_sent_with_its_finds(clien
                 "box", rgb, depth, dict(INTR), [600, 350], lambda: False, track=False
             )
         )
-        assert queued[-1].extra["ref_symmetry"] == 4, "sent with the find"
+        assert queued[-1].extra["ref_symmetry"] == {"kind": "continuous", "axis": "long_axis", "order": 1}, (
+            "the axis and turn family are sent with the find"
+        )
     finally:
         with manipulation.runtime._state.lock:
             manipulation.runtime._state.demo = None
@@ -3515,7 +3540,11 @@ def test_a_demo_saved_before_symmetry_reads_as_none(tmp_path):
         o0_masks=np.zeros((3, H // 4, W // 4), bool),
         o0_mask=m,
     )
-    assert manipulation.demos._read_objects(root)["box"]["symmetry"] == 1
+    assert manipulation.demos._read_objects(root)["box"]["symmetry"] == {
+        "kind": "none",
+        "axis": "surface_normal",
+        "order": 1,
+    }
 
 
 def test_a_tracked_frame_moves_the_place_object_by_its_share(client, tmp_path, monkeypatch):

@@ -25,14 +25,14 @@ import json
 import pathlib
 import threading
 import time
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
-from lerobot.showservo import motion as core
+from lerobot.showservo import motion as core, symmetry
 
 from . import acquisition, camera, holds, planning, recording, runtime, tracking, worker
 
@@ -749,19 +749,32 @@ async def demo_object_remove(body: ObjectNameBody) -> dict:
 
 class ObjectSymmetryBody(BaseModel):
     name: str
-    order: int = Field(1, ge=1, le=12)  # turns of 360/order deg about its resting axis look and act the same
+    # An order alone was implicitly about the table normal. Keep old requests
+    # readable; new declarations name both the observed axis and turn family.
+    order: int = Field(1, ge=1, le=12)
+    kind: Literal["none", "discrete", "continuous"] | None = None
+    axis: Literal["surface_normal", "long_axis"] = "surface_normal"
 
 
 @router.post("/demo/objects/symmetry")
 async def demo_object_symmetry(body: ObjectSymmetryBody) -> dict:
-    """Declare an object's rotational symmetry about the axis it rests on: 1 for none, 2 for a shape that reads the
-    same turned end to end, 4 for a plain cube. Its finds then report, of the motions it cannot be told apart by,
-    the one that turns it least."""
+    """Declare appearance symmetry around an axis measured in the object's depth surface.
+
+    This resolves ambiguous object *poses*. It does not by itself grant freedom
+    to change a contact relation or to grasp a shape from another side.
+    """
+    spec = symmetry.normalise(
+        {
+            "kind": body.kind or ("discrete" if body.order > 1 else "none"),
+            "axis": body.axis,
+            "order": body.order,
+        }
+    )
     with runtime._state.lock:
         demo = runtime._state.demo
         if demo is None or body.name not in demo.objects:
             raise HTTPException(404, "no such object")
-        demo.objects[body.name]["symmetry"] = int(body.order)
+        demo.objects[body.name]["symmetry"] = spec
     if demo.root is not None:
         await asyncio.get_event_loop().run_in_executor(
             runtime._RENDER_EXECUTOR, _write_objects, pathlib.Path(demo.root), demo.objects
@@ -797,7 +810,7 @@ def _objects_info(demo: runtime._Demo) -> dict[str, Any]:
                 "progress": 1.0 if o["status"] != "tracking" else (job.progress if job else 0.0),
                 "seen_fraction": float(np.mean(o["seen"])) if o.get("seen") is not None else None,
                 "reason": o.get("reason", ""),
-                "symmetry": int(o.get("symmetry") or 1),
+                "symmetry": symmetry.normalise(o.get("symmetry")),
                 **(planning._object_pose_info(demo, name) if o["status"] == "done" else {}),
             }
         )
@@ -845,7 +858,10 @@ def _write_objects(root: pathlib.Path, objects: dict[str, dict[str, Any]]) -> No
         return
     arrays: dict[str, Any] = {
         "names": json.dumps(
-            [[n, int(o["frame"]), list(o["click"]), int(o.get("symmetry") or 1)] for n, o in done.items()]
+            [
+                [n, int(o["frame"]), list(o["click"]), symmetry.normalise(o.get("symmetry"))]
+                for n, o in done.items()
+            ]
         )
     }
     for n, o in enumerate(done.values()):
@@ -864,7 +880,7 @@ def _read_objects(root: pathlib.Path) -> dict[str, dict[str, Any]]:
         out[name] = {
             "frame": int(frame),
             "click": list(click),
-            "symmetry": int(rest[0]) if rest else 1,  # demos saved before it was declared have none
+            "symmetry": symmetry.normalise(rest[0] if rest else None),
             "status": "done",
             **{key: np.asarray(z[f"o{n}_{key}"]) for key in ("deltas", "seen", "masks", "mask")},
         }
@@ -1099,7 +1115,13 @@ async def demo_reach() -> dict:
     landing, aim, key, kept = demo.landing, motions, None, None
     if onto in motions and landing != "exact":
         found = acquisition._located(demo, onto) or {}
-        key = [demo.name, json.dumps(demo.keypoints, sort_keys=True), landing, found.get("at")]
+        key = [
+            demo.name,
+            json.dumps(demo.keypoints, sort_keys=True),
+            landing,
+            json.dumps(symmetry.normalise(demo.objects[onto].get("symmetry")), sort_keys=True),
+            found.get("at"),
+        ]
         with runtime._state.lock:
             kept = (
                 dict(runtime._state.reach_landing) if runtime._state.reach_landing.get("key") == key else None
@@ -1107,7 +1129,10 @@ async def demo_reach() -> dict:
         if kept is not None:  # searched for this find already: plan that turn alone
             landing = "exact"
             if kept["turn_deg"] is not None:
-                aim = {**motions, onto: core.landed(motions[onto], kept["centre"], kept["turn_deg"])}
+                aim = {
+                    **motions,
+                    onto: core.landed(motions[onto], kept["centre"], kept["turn_deg"], kept["axis"]),
+                }
     plan = await asyncio.get_event_loop().run_in_executor(
         runtime._ACT_EXECUTOR,
         functools.partial(planning._plan_act, landing=landing, ranges=jog.servo_ranges()),
@@ -1132,6 +1157,7 @@ async def demo_reach() -> dict:
                 "key": key,
                 "turn_deg": plan["landing"]["turn_deg"],
                 "centre": plan.get("landing_centre"),
+                "axis": plan.get("landing_axis"),
                 "landing": plan["landing"],
                 "reason": plan["reason"],
             }

@@ -417,19 +417,29 @@ SURFACE_START_TURNS = 12
 SURFACE_KEEP = 0.8  # the share of nearest pairs the coarse steps fit on: the rest is what one view sees and the other not
 
 
-def fold_turn(motion: Rigid3, axis: np.ndarray, centre: np.ndarray, order: int) -> Rigid3:
-    """Of the motions an object of rotational symmetry ``order`` cannot be told apart by, the one that turns it least.
+def fold_turn(motion: Rigid3, axis: np.ndarray, centre: np.ndarray, order: int | None) -> Rigid3:
+    """Of the motions a rotation-symmetric object cannot be told apart by, the one that turns it least.
 
     An object that looks and acts the same turned by 360/``order`` deg about its axis (a plain cube resting on the
     table: 4; a gamepad's outline: 2) has ``order`` equally true motions from one view of it to another: ``motion``
     followed by each such turn about ``axis`` through ``centre`` (both where the motion puts the object). The one
     nearest no turn at all is reported, so a find of a turned-round object agrees with a find of the same object.
 
-    Pre: ``axis`` is a unit vector, ``order`` >= 1. Post: ``motion`` itself when ``order`` is 1."""
-    if order <= 1:
+    ``order=None`` permits a continuous turn around the observed axis. The
+    minimizing angle follows directly from maximizing the rotated matrix's
+    trace, so it needs no angular grid. An order of 1 leaves the fit unchanged.
+
+    Pre: ``axis`` is a unit vector, ``order`` is None or >= 1."""
+    if order == 1:
         return motion
     axis = np.asarray(axis, dtype=np.float64)
     centre = np.asarray(centre, dtype=np.float64)
+    if order is None:
+        cross = np.array([[0.0, -axis[2], axis[1]], [axis[2], 0.0, -axis[0]], [-axis[1], axis[0], 0.0]])
+        a = float(np.trace(motion.rot) - axis @ motion.rot @ axis)
+        b = float(np.trace(cross @ motion.rot))
+        turn = rotation_matrix(axis * np.arctan2(b, a))
+        return Rigid3(turn @ motion.rot, turn @ (motion.trans - centre) + centre)
     best: tuple[Rigid3, float] | None = None
     for k in range(order):
         turn = rotation_matrix(axis * (2.0 * np.pi * k / order))

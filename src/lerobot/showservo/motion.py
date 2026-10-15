@@ -1307,7 +1307,7 @@ def plan_key_frames(
     the gripper's side (the identity when nothing is held), ``held``, whether the demo was holding something as it
     begins (:func:`held_at`), and for a follow ``since``, the moment of the key frame before it.
 
-    Every pose is ``motion . tip . fix``, the demo's fingertip pose then moved, but a lift's: where the step before
+    Every pose is ``motion . adjust . tip . fix`` (``adjust`` defaults to identity), the demo's fingertip pose then moved, but a lift's: where the step before
     left the arm, ``up_mm`` higher along the base's z, the gripper kept. A line runs from where the arm stands
     at the walk's speed; along it the gripper keeps its opening while held, else goes to the demo's command at the
     key frame, "first" with the arm standing, "along" with the arm. A follow replays the demo's samples after
@@ -1351,11 +1351,12 @@ def plan_key_frames(
     pose, grip = poses[0], grips[0]
     for s in steps:
         motion, fix, label = np.asarray(s["motion"], float), np.asarray(s["fix"], float), s["label"]
+        adjusted = motion @ np.asarray(s.get("adjust", np.eye(4)), float)
         constraint = s.get("constraint", "pose")
         if s["move"] == "follow":
             first = len(times)
             for i in range(index(s["since"]) + 1, index(s["t"]) + 1):
-                target = motion @ np.asarray(tips[i], float) @ fix
+                target = adjusted @ np.asarray(tips[i], float) @ fix
                 if constraint == "orientation":
                     target[:3, 3] = pose[:3, 3]
                 add(
@@ -1376,7 +1377,7 @@ def plan_key_frames(
             target[2, 3] += float(s["up_mm"]) / 1000.0
             g = grip
         else:
-            target = motion @ np.asarray(s.get("target_local", tips[i]), float) @ fix
+            target = adjusted @ np.asarray(s.get("target_local", tips[i]), float) @ fix
             if constraint == "orientation":
                 target[:3, 3] = pose[:3, 3]
             g = grip if s["held"] else float(grip_cmd[i])
@@ -1487,35 +1488,41 @@ LANDING_STEP_DEG = (
 LANDING_TRIES = 4  # the cheapest landings planned in full before the act gives up
 
 
-def landing_turns(landing: str, order: int) -> list[float]:
-    """The turns, degrees about the vertical through the middle of the object placed onto, that the landing rule
-    ``landing`` counts as the same place: only 0 for "exact", the object's own ``order`` turns for "symmetry", every
-    ``LANDING_STEP_DEG`` for "turn". Pre: ``landing`` in LANDINGS."""
+def landing_turns(landing: str, order: int | dict[str, Any]) -> list[float]:
+    """Permitted landing turns about the object's observed axis.
+
+    Exact permits zero, symmetry the declared discrete or continuous turns,
+    and turn samples all directions every ``LANDING_STEP_DEG``. The sampled
+    turns still need full-path reach and task clearance checks.
+    """
     assert landing in LANDINGS, f"a landing is one of {LANDINGS}"
-    if landing == "turn":
+    from lerobot.showservo import symmetry
+
+    spec = symmetry.normalise(order)
+    if landing == "turn" or (landing == "symmetry" and spec["kind"] == "continuous"):
         return [float(a) for a in np.arange(0.0, 360.0, LANDING_STEP_DEG)]
     if landing == "symmetry":
-        n = max(1, int(order))
+        n = spec["order"]
         return [360.0 * k / n for k in range(n)]
     return [0.0]
 
 
-def turn_about(centre: np.ndarray, deg: float) -> np.ndarray:
-    """The rigid turn by ``deg`` degrees about the vertical through ``centre`` (base frame): 4x4."""
-    a = np.radians(float(deg))
-    out = np.eye(4)
-    out[:2, :2] = [[np.cos(a), -np.sin(a)], [np.sin(a), np.cos(a)]]
-    p = np.asarray(centre, dtype=float)
-    out[:3, 3] = p - out[:3, :3] @ p
-    return out
+def turn_about(centre: np.ndarray, deg: float, axis: np.ndarray | None = None) -> np.ndarray:
+    """Rigid turn about an observed axis through ``centre``; old callers default to base vertical."""
+    from lerobot.showservo import symmetry
+
+    return symmetry.turn_about(np.array([0.0, 0.0, 1.0]) if axis is None else axis, centre, deg)
 
 
-def landed(motion: np.ndarray, centre: np.ndarray, deg: float) -> np.ndarray:
+def landed(motion: np.ndarray, centre: np.ndarray, deg: float, axis: np.ndarray | None = None) -> np.ndarray:
     """The motion that lands a place turned by ``deg`` about the object it goes onto: ``motion`` (that object's since
-    the demo, base frame) and then the turn about the vertical through where ``motion`` puts ``centre`` (the object's
-    middle in the demo), so the turn goes with the object wherever its track moves it."""
+    the demo, base frame) and then the turn about its observed axis through where ``motion`` puts ``centre`` (the
+    object's axis point in the demo), so the turn goes with the object wherever its track moves it."""
     motion = np.asarray(motion, dtype=float)
-    return turn_about(motion[:3, :3] @ np.asarray(centre, dtype=float) + motion[:3, 3], deg) @ motion
+    direction = np.array([0.0, 0.0, 1.0]) if axis is None else motion[:3, :3] @ np.asarray(axis, float)
+    return (
+        turn_about(motion[:3, :3] @ np.asarray(centre, dtype=float) + motion[:3, 3], deg, direction) @ motion
+    )
 
 
 def rank_landings(

@@ -157,6 +157,7 @@ def choose_turn(
     box: tuple,
     limits: tuple,
     hz: float,
+    axis: np.ndarray | None = None,
 ) -> dict:
     """Search permitted alternatives for the REMAINING phase, including its entry.
 
@@ -168,7 +169,7 @@ def choose_turn(
     def poses(turn):
         return targets(
             path,
-            {**motions, obj: core.turn_about(centre, turn) @ motions[obj]},
+            {**motions, obj: core.turn_about(centre, turn, axis) @ motions[obj]},
             fix,
             kin.forward_kinematics(previous),
         )

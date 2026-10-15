@@ -31,7 +31,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel
 
-from lerobot.showservo import motion as core
+from lerobot.showservo import motion as core, symmetry
 
 from . import camera, groups, planning, rendering, runtime, tracking, worker
 
@@ -117,7 +117,7 @@ async def _start_teach(
             "ref_recording": demo.recording,
             "ref_frame": int(ref["frame"]),
             "ref_object": ref_object,
-            "ref_symmetry": int(ref.get("symmetry") or 1),
+            "ref_symmetry": symmetry.normalise(ref.get("symmetry")),
             "scene": _session_names(demo, but=ref_object),
             "more": list(more or ()),
         }
@@ -292,7 +292,7 @@ async def _locate(
         "ref_recording": demo.recording,
         "ref_frame": int(ref["frame"]),
         "ref_object": obj,
-        "ref_symmetry": int(o.get("symmetry") or 1),
+        "ref_symmetry": symmetry.normalise(o.get("symmetry")),
     }
     if ref.get("refresh_mask"):
         job.extra["ref_refresh_mask"] = True

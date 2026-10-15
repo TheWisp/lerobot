@@ -129,8 +129,12 @@ in addition to quarter turns. These are appearance proposals only: pixels map
 back to the original RGB-D coordinates before the unchanged 3D consensus gate.
 Subsequent surface refinement is local and must preserve the matching-point
 consensus. A symmetric shape's slightly better surface fit cannot reverse the
-ends that the appearance match identified. Explicit user-declared symmetry
-continues to choose equivalent turns after registration.
+ends that the appearance match identified. Explicit user-declared appearance
+symmetry now names an observed axis (`surface_normal` or `long_axis`) and a
+finite order or continuous turn. The find folds only those turns after
+registration. Old integer orders still mean finite turns about the visible
+face normal. This declaration resolves pose ambiguity; it does not authorize a
+changed grasp or relax the placement task.
 
 The same surface policy checks acquisition, secondary targets, observations used
 for held-object correction, and the saved demo reference poses inverted during
@@ -163,15 +167,17 @@ architecture. Status describes the reactive implementation of October 14, 2026. 
 The target is inferred from the current attachment and the objects referenced by
 its held key frames. There are no object-name or category-specific exceptions.
 The operator's saved rule determines which turns are equivalent: `exact` allows
-only the demonstrated relation, `symmetry` uses the declared order, and `turn`
+only the demonstrated relation, `symmetry` uses the declared finite or
+continuous turns, and `turn`
 samples the full circle every 5 degrees (72 candidates). The latter is a sampling
 resolution, not a proof that the best feasible angle is within 2.5 degrees of the
 selected one.
 
-Each turn rotates about the **base-frame vertical** through the target's measured
-top-surface centre. It is not a declared object-local symmetry axis, a detected
-hole centre, or permission to change arbitrary position/orientation components.
-This distinction matters for tilted targets, asymmetric surfaces and other tasks.
+Each turn rotates about the target's selected observed axis, carried by that
+object's current pose. A face-normal turn uses its measured top-surface centre;
+a long-axis turn uses a centreline fitted to central RGB-D cross-sections.
+This is a partial-surface estimate, not a complete shape or a guarantee that
+the task permits a turn. The separate landing rule still grants that freedom.
 
 `motion.rank_landings` solves sampled target-relative poses within calibrated
 joint limits, starting from the demo's arm posture and using its joint changes
@@ -198,9 +204,8 @@ in `2c6953410` only avoids further solves after a candidate fails; it preserves
 the feasible ranking. The diagnosed-case profile fell from 11.64 to 1.22 seconds.
 
 **Proposed, not implemented:** represent required, preferred and free components
-on the existing interaction/key-frame constraints. Specify the axis, centre and
-allowed range of a symmetry, rather than assuming base vertical or inferring
-task freedom from one demonstration. Solve a feasible upcoming contact relation
+on the existing interaction/key-frame constraints. Specify the allowed range
+of _task_ freedom independently of an object's appearance symmetry. Solve a feasible upcoming contact relation
 and arm configuration, then plan a collision-checked free-space entry into it.
 Free transit position may change while the required contact relation remains
 fixed. Evaluate joint-limit margin, clearance and execution cost; retain demo
@@ -225,6 +230,27 @@ hint, not evidence that its exact Cartesian line is required. During an isolated
 rotation, orientation may matter while translation is free within a safe region;
 translation becomes required again at insertion. This distinction must be
 represented explicitly, not inferred from a single path or object name.
+
+The October 15 rotated-dowel case separates these freedoms concretely. The
+demo and live RGB-D surfaces each support a roughly 90 mm long round axis:
+central-section median radial residuals are about 0.4 and 0.45 mm. Rotating
+the exact recorded first approach by 30 degrees about the live axis changes
+an out-of-range forearm pose to a 0.2 mm IK match. That alone is **not** a
+valid grasp: at the second recorded frame the CAD jaw meshes would penetrate
+the measured tray. An offline object-relative transform that additionally
+raises the tool target about 33 mm and shifts it about 2.5 mm across the jaws
+produced a 154-sample pre-grasp/grasp plan under 0.5 mm IK residual, with no
+modeled self, dowel, tray or ring collision. At the contact configuration its
+open fixed jaw has about 1 mm clearance and its closing jaw reaches the other
+side of the observed cross-section. This is a _candidate from partial surface
+and CAD geometry_, not a certified collision-free scene path or a successful
+physical grasp. Unknown space and unmodeled accessories remain unresolved.
+
+The motion core can now compose a constant object-local `adjust` through a
+pre-grasp line and follow, and the later grasp attachment correction can
+account for that changed gripper-to-object relation. **Automatic candidate
+selection and physical validation are NOT IMPLEMENTED.** The appearance
+symmetry setting alone must not silently enable these contact changes.
 
 Key-frame marks now declare `constraint: pose | orientation | best_effort` in the
 demo editor. Old marks keep `pose`; new lifts default to `best_effort`. `pose`

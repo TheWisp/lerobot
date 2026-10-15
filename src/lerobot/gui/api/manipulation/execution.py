@@ -266,7 +266,7 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
         kin = copy.deepcopy(kin)  # planning FK/IK must not mutate the motor loop's model
         ranges = jog.servo_ranges()
         landing_obj = planning._landing_object(demo)
-        landing_turn: tuple[np.ndarray, float] | None = (
+        landing_turn: tuple[np.ndarray, float, np.ndarray] | None = (
             None  # the middle and the turn it lands at, once planned
         )
         if tracking:
@@ -399,7 +399,11 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
             return
         if (plan.get("landing") or {}).get("turn_deg") is not None:
             # It lands at this turn from here on: every later key frame on that object, and the hold's check, aims by it.
-            landing_turn = (plan["landing_centre"], float(plan["landing"]["turn_deg"]))
+            landing_turn = (
+                plan["landing_centre"],
+                float(plan["landing"]["turn_deg"]),
+                plan["landing_axis"],
+            )
         jog.set_walk_limits(limits_before[0] * speed, limits_before[1] * speed)
         moved = True
         run = recording._begin_run(demo, speed, delta, t_bc, plan)
@@ -564,11 +568,12 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
             path = reactive.slice_plan(planned, i)
             if landing_obj is None or landing_turn is None or landing_obj not in path["live_path"]["frames"]:
                 return False
-            turns = core.landing_turns(demo.landing, int(demo.objects[landing_obj].get("symmetry") or 1))
+            turns = core.landing_turns(demo.landing, demo.objects[landing_obj].get("symmetry"))
             if len(turns) == 1:
                 return False
-            centre, old_turn = landing_turn
+            centre, old_turn, axis = landing_turn
             current_centre = snapshot[landing_obj][:3, :3] @ centre + snapshot[landing_obj][:3, 3]
+            current_axis = snapshot[landing_obj][:3, :3] @ axis
             result = await asyncio.get_running_loop().run_in_executor(
                 runtime._ACT_EXECUTOR,
                 functools.partial(
@@ -587,6 +592,7 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
                     jog.workspace_box(),
                     (limits_before[0] * speed, limits_before[1] * speed),
                     jog.HZ,
+                    axis=current_axis,
                 ),
             )
             run.meta.setdefault("live_replans", []).append({"at": time.time(), "phase": i, **result})
@@ -601,7 +607,7 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
             if changed:
                 run.meta["live_replans"][-1]["discarded"] = "observation changed during search"
                 return True
-            landing_turn = (centre, (old_turn + result["turn_deg"]) % 360.0)
+            landing_turn = (centre, (old_turn + result["turn_deg"]) % 360.0, axis)
             return True
 
         async def stream(planned: dict[str, Any]) -> str:
@@ -836,6 +842,7 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
                     "pose_frame": planning._pose_frame(demo, landing_obj),
                     "landing": plan.get("landing"),
                     "landing_centre": None if landing_turn is None else landing_turn[0],
+                    "landing_axis": None if landing_turn is None else landing_turn[2],
                 }
             if hold_task is not None:
                 act.step = f"measuring how the demo holds {held_obj}"
@@ -1183,7 +1190,7 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
                     landing=demo.landing,
                 )
                 landing_turn = (
-                    (carry["landing_centre"], float(carry["landing"]["turn_deg"]))
+                    (carry["landing_centre"], float(carry["landing"]["turn_deg"]), carry["landing_axis"])
                     if carry["ok"] and (carry.get("landing") or {}).get("turn_deg") is not None
                     else saved
                 )
@@ -1396,7 +1403,11 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
                     landing=demo.landing,
                 )
                 landing_turn = (
-                    (placing["landing_centre"], float(placing["landing"]["turn_deg"]))
+                    (
+                        placing["landing_centre"],
+                        float(placing["landing"]["turn_deg"]),
+                        placing["landing_axis"],
+                    )
                     if placing["ok"] and (placing.get("landing") or {}).get("turn_deg") is not None
                     else saved
                 )

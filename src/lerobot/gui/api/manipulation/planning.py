@@ -26,7 +26,7 @@ from typing import Any
 import numpy as np
 from fastapi import HTTPException
 
-from lerobot.showservo import motion as core
+from lerobot.showservo import motion as core, symmetry
 
 from . import acquisition, holds, recording, runtime
 
@@ -419,6 +419,7 @@ def _plan_act(
     aim: np.ndarray | None = None,
     landing: str = "exact",
     ranges: tuple[np.ndarray, np.ndarray] | None = None,
+    grasp_adjust: np.ndarray | None = None,
 ) -> dict[str, Any]:
     """:func:`_plan_act_once`, landed at the turn its rule ``landing`` allows that the arm makes best.
 
@@ -448,6 +449,7 @@ def _plan_act(
         part=part,
         aim=aim,
         ranges=ranges,
+        grasp_adjust=grasp_adjust,
     )
     if isinstance(part, tuple):  # a span lands only when a key frame in it is held in the object landed on
         lands = any(k["frame"] == onto for k in core.key_frames(demo.keypoints)[part[0] : part[1]])
@@ -455,21 +457,21 @@ def _plan_act(
         lands = part in ("all", "place")
     if landing == "exact" or onto is None or target_base is None or not lands:
         return once(motions, hold_fix)
-    centre = _landing_centre(demo, onto, t_bc)
+    axis, centre = _landing_axis(demo, onto, t_bc)
     fix = np.eye(4) if hold_fix is None else np.asarray(hold_fix, dtype=float)
     samples = _landing_samples(demo, onto)
     idx = [i for i, _held in samples]
     lo, hi = ranges if ranges is not None else (None, None)
 
     def turned(deg: float) -> dict[str, np.ndarray]:
-        return {**(motions or {}), onto: core.landed(target_base, centre, deg)}
+        return {**(motions or {}), onto: core.landed(target_base, centre, deg, axis)}
 
     ranked = core.rank_landings(
         kin,
-        core.landing_turns(landing, int(demo.objects[onto].get("symmetry") or 1)),
+        core.landing_turns(landing, demo.objects[onto].get("symmetry")),
         lambda deg: np.stack(
             [
-                core.landed(target_base, centre, deg) @ demo.tips[i] @ (fix if held else np.eye(4))
+                core.landed(target_base, centre, deg, axis) @ demo.tips[i] @ (fix if held else np.eye(4))
                 for i, held in samples
             ]
         ),
@@ -483,7 +485,12 @@ def _plan_act(
     for cost, deg in ranked[: core.LANDING_TRIES]:
         plan = once(turned(deg), hold_fix)
         if plan["ok"]:
-            return {**plan, "landing": {**info, "turn_deg": deg, "cost": cost}, "landing_centre": centre}
+            return {
+                **plan,
+                "landing": {**info, "turn_deg": deg, "cost": cost},
+                "landing_centre": centre,
+                "landing_axis": axis,
+            }
         tried.append((deg, plan))
     if tried:
         deg, plan = tried[0]
@@ -496,10 +503,12 @@ def _plan_act(
     return {**plan, "ok": False, "reason": why, "landing": info}
 
 
-def _landing_centre(demo: runtime._Demo, obj: str, t_bc: np.ndarray) -> np.ndarray:
-    """The middle of the top of ``obj`` where the demo saw it on its pose frame, base frame: the turns a landing may
-    take are about the vertical through it. The top is its surface within LANDING_TOP_M of its highest points (by the
-    95th percentile, clear of depth noise). Pre: ``obj`` is a done object with a key frame in its frame."""
+def _landing_axis(demo: runtime._Demo, obj: str, t_bc: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Observed axis and a point on it, in the demo's pose frame in base coordinates.
+
+    The old top-surface centre is retained for a face normal. A long-axis turn
+    needs its fitted centreline instead of the visible upper-half centroid.
+    """
     f = _pose_frame(demo, obj)
     assert f is not None, "a done object with a key frame in its frame has a pose frame"
     reference, problem = holds._demo_control_pose(demo, obj, f)
@@ -507,7 +516,20 @@ def _landing_centre(demo: runtime._Demo, obj: str, t_bc: np.ndarray) -> np.ndarr
         raise ValueError(problem)
     move = t_bc @ reference @ np.linalg.inv(t_bc)
     pts = _object_points(demo, obj, t_bc) @ move[:3, :3].T + move[:3, 3]
-    return pts[pts[:, 2] >= np.percentile(pts[:, 2], 95) - runtime.LANDING_TOP_M].mean(axis=0)
+    spec = symmetry.normalise(demo.objects[obj].get("symmetry"))
+    axis, centre = symmetry.observed_axis(pts, spec["axis"])
+    if spec["axis"] == "surface_normal":
+        # A plane has two equally valid normals. Keep positive base z as the
+        # turn's sign convention for supported objects and old demos.
+        if axis[2] < 0:
+            axis = -axis
+        centre = pts[pts[:, 2] >= np.percentile(pts[:, 2], 95) - runtime.LANDING_TOP_M].mean(axis=0)
+    return axis, centre
+
+
+def _landing_centre(demo: runtime._Demo, obj: str, t_bc: np.ndarray) -> np.ndarray:
+    """Compatibility wrapper for the observed landing pivot."""
+    return _landing_axis(demo, obj, t_bc)[1]
 
 
 def _holding(demo: runtime._Demo) -> dict[str, Any] | None:
@@ -538,6 +560,7 @@ def _act_steps(
     skip: int,
     motion: Callable[[str], np.ndarray | None],
     hold_fix: np.ndarray | None,
+    grasp_adjust: np.ndarray | None = None,
 ) -> list[dict[str, Any]]:
     """The demo's key frames an act plans, resolved for where things are now (:func:`core.plan_key_frames`).
 
@@ -571,6 +594,14 @@ def _act_steps(
                 "since": frames[n - 1]["t"] if n else None,
                 "motion": m,
                 "fix": fix if attached is not None and attached == holding else np.eye(4),
+                "adjust": (
+                    np.asarray(grasp_adjust, float)
+                    if grasp_adjust is not None
+                    and holding is not None
+                    and n <= holding["begins"]
+                    and frames[n]["frame"] == holding["frame"]
+                    else np.eye(4)
+                ),
                 "held": held,
                 "held_object": None if attached is None else attached["frame"],
             }
@@ -614,6 +645,7 @@ def _plan_act_once(
     part: str | tuple[int, int] = "all",
     aim: np.ndarray | None = None,
     ranges: tuple[np.ndarray, np.ndarray] | None = None,
+    grasp_adjust: np.ndarray | None = None,
 ) -> dict[str, Any]:
     """What the act will do on the objects where they are now, judged before the arm moves.
 
@@ -637,7 +669,9 @@ def _plan_act_once(
 
     gi = MOTOR_NAMES.index("gripper")
     q_now = np.asarray(q_now, dtype=float)
-    steps = _act_steps(demo, part, skip, _frame_motion(demo, delta_cam, t_bc, motions, aim), hold_fix)
+    steps = _act_steps(
+        demo, part, skip, _frame_motion(demo, delta_cam, t_bc, motions, aim), hold_fix, grasp_adjust
+    )
     assert steps, "a key frame to plan"
     best_effort = [s for s in steps if s.get("constraint") == "best_effort"]
     online_candidate = len(steps) == 1 and len(best_effort) == 1 and steps[0]["move"] in ("line", "lift")
@@ -704,7 +738,9 @@ def _plan_act_once(
                 current_target = np.asarray(plan["poses"][samples[-1]], float)
                 if max(core.pose_residual(current_target, target)) < 1e-9:
                     continue
-                s["target_local"] = np.linalg.inv(s["motion"]) @ target @ np.linalg.inv(s["fix"])
+                s["target_local"] = (
+                    np.linalg.inv(s["adjust"]) @ np.linalg.inv(s["motion"]) @ target @ np.linalg.inv(s["fix"])
+                )
             s["best_effort_fraction"] = max(0.0, (safe - samples[0] + 1) / len(samples))
             shortened = True
             break
@@ -756,6 +792,9 @@ def _plan_act_once(
                 "moved_mm": float(np.linalg.norm(now - was) * 1000.0),
                 "out_mm": float((np.linalg.norm(now[:2]) - np.linalg.norm(was[:2])) * 1000.0),
                 "best_effort_fraction": s.get("best_effort_fraction"),
+                "target_pose": np.asarray(plan["poses"][idx], dtype=float).tolist(),
+                "solved_joints": np.asarray(sol["q"][idx], dtype=float).tolist(),
+                "held_joint": int(sol["held"][idx]),
             }
         )
     follows = [s for s in steps if s["move"] == "follow"]

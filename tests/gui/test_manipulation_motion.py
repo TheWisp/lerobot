@@ -24,7 +24,8 @@ from fastapi.testclient import TestClient
 from scipy.spatial.transform import Rotation
 
 from lerobot.gui.api import manipulation
-from lerobot.showservo import motion as core
+from lerobot.showservo import motion as core, symmetry
+from lerobot.showservo.pose import Rigid3, fold_turn
 
 INTR = {"fx": 600.0, "fy": 600.0, "cx": 424.0, "cy": 240.0, "width": 848, "height": 480}
 
@@ -1327,6 +1328,30 @@ def test_the_place_carries_the_held_object_onto_the_moved_target_however_it_sits
     assert np.allclose(whole["poses"][-1], poses[-1])
 
 
+def test_grasp_adjust_changes_only_the_selected_object_relative_approach():
+    """A model-free alternate grasp may recompose the pre-contact path without changing the later task relation."""
+    t, tips, grip, q = _demo_arrays()
+    move = np.eye(4)
+    move[:3, 3] = [0.02, -0.01, 0.0]
+    adjust = np.eye(4)
+    adjust[:3, :3] = Rotation.from_euler("x", 30, degrees=True).as_matrix()
+    adjust[:3, 3] = [0.0, 0.0, 0.03]
+    marks = [
+        {"t": float(t[20]), "kind": "pregrasp", "object": "item"},
+        {"t": float(t[40]), "kind": "grasp_end", "object": "item"},
+        {"t": float(t[60]), "kind": "preplace", "object": "target"},
+    ]
+    steps = _resolved_steps(marks[:2], move) + _resolved_steps(marks[2:], np.eye(4), held=True)
+    for step in steps[:2]:
+        step["adjust"] = adjust
+    plan = core.plan_key_frames(
+        steps, t, tips, grip, q, np.eye(4), 80.0, 0.04, np.radians(30), 80.0, 1.0, 30.0
+    )
+    assert np.allclose(plan["poses"][plan["arrive"][0]], move @ adjust @ tips[20])
+    assert np.allclose(plan["poses"][plan["spans"][0][1]], move @ adjust @ tips[40])
+    assert np.allclose(plan["poses"][plan["arrive"][1]], tips[60])
+
+
 def test_the_grasp_check_tells_a_held_object_from_a_closing_on_nothing():
     held = core.grasp_held
     # Measured on the rig's acts: held ones stopped 0.89 to 10.56 short of the closing command, misses -0.06 to 0.48.
@@ -1984,11 +2009,37 @@ def test_a_landing_rule_names_the_turns_that_count_as_the_same_place():
     assert core.landing_turns("exact", 4) == [0.0]
     assert core.landing_turns("symmetry", 4) == [0.0, 90.0, 180.0, 270.0]
     assert core.landing_turns("symmetry", 1) == [0.0], "an object without symmetry lands only as shown"
+    continuous = {"kind": "continuous", "axis": "long_axis", "order": 1}
+    assert core.landing_turns("symmetry", continuous) == core.landing_turns("turn", 1)
     turns = core.landing_turns("turn", 4)
     assert len(turns) == round(360.0 / core.LANDING_STEP_DEG) and turns[0] == 0.0
     assert np.allclose(np.diff(turns), core.LANDING_STEP_DEG)
     with pytest.raises(AssertionError):
         core.landing_turns("anyhow", 1)
+
+
+def test_a_visible_round_object_supplies_a_long_axis_without_a_cad_model():
+    rng = np.random.default_rng(4)
+    xx, aa = np.meshgrid(np.linspace(-0.05, 0.05, 100), np.linspace(0, np.pi, 25))
+    cylinder = np.column_stack((xx.ravel(), 0.01 * np.cos(aa).ravel(), 0.01 * np.sin(aa).ravel()))
+    cylinder += rng.normal(0, 0.0004, cylinder.shape)
+    seen = symmetry.round_long_axis(cylinder)
+    assert seen["ok"] and seen["radius_m"] == pytest.approx(0.01, abs=0.001)
+    assert abs(seen["axis"][0]) > 0.99 and np.linalg.norm(seen["point"][1:]) < 0.002
+    xx, yy = np.meshgrid(np.linspace(-0.05, 0.05, 100), np.linspace(-0.01, 0.01, 25))
+    flat_box_top = np.column_stack((xx.ravel(), yy.ravel(), np.full(xx.size, 0.01)))
+    flat_box_top += rng.normal(0, 0.0004, flat_box_top.shape)
+    assert not symmetry.round_long_axis(flat_box_top)["ok"], "a long box is not a cylinder"
+
+
+def test_continuous_pose_symmetry_folds_about_the_observed_axis():
+    axis = np.array([1.0, 0.0, 0.0])
+    point = np.array([0.02, -0.10, 0.03])
+    turn = symmetry.turn_about(axis, point, 73.0)
+    pose = Rigid3(turn[:3, :3], turn[:3, 3])
+    folded = fold_turn(pose, axis, point, None)
+    assert np.allclose(folded.rot, np.eye(3), atol=1e-8)
+    assert np.allclose(folded.trans, np.zeros(3), atol=1e-8)
 
 
 def test_a_landing_turns_about_the_object_where_its_motion_put_it():

@@ -2251,10 +2251,15 @@ async function deObjRemove(name) {
     try { deObjShow((await pgPost('/api/pregrasp/demo/objects/remove', {name})).objects); deSeek(de.i, true); } catch (e) { deStatus(e.message, true); }
 }
 
-async function deObjSymmetry(name, order) {
+async function deObjSymmetry(name, row) {
     try {
-        deObjShow((await pgPost('/api/pregrasp/demo/objects/symmetry', {name, order: Number(order)})).objects);
-        deStatus(Number(order) > 1 ? `"${name}" reads the same turned by ${(360 / Number(order)).toFixed(0)}°: its next find reports the turn nearest the demo's` : `"${name}" has no symmetry: its finds report the turn as fitted`);
+        const choice = document.getElementById(`de-sym-kind-${row}`).value;
+        const axis = document.getElementById(`de-sym-axis-${row}`).value;
+        const kind = choice === 'continuous' ? 'continuous' : choice === 'none' ? 'none' : 'discrete';
+        const order = kind === 'discrete' ? Number(choice) : 1;
+        deObjShow((await pgPost('/api/pregrasp/demo/objects/symmetry', {name, kind, axis, order})).objects);
+        deStatus(kind === 'none' ? `"${name}" has no declared pose symmetry` :
+            `"${name}" may read the same ${kind === 'continuous' ? 'at any turn' : 'at ' + order + ' turns'} about its observed ${axis === 'long_axis' ? 'long axis' : 'surface normal'}`);
     } catch (e) { deStatus(e.message, true); }
 }
 
@@ -2290,16 +2295,19 @@ function deObjShow(objects) {
     }
     const tbl = document.getElementById('de-obj-list');
     if (tbl) {
-        tbl.innerHTML = de.objects.length ? de.objects.map(o => {
+        tbl.innerHTML = de.objects.length ? de.objects.map((o, row) => {
             const state = o.status === 'tracking' ? `tracking ${(100 * o.progress).toFixed(0)}%` : o.status === 'done' ? `seen in ${(100 * o.seen_fraction).toFixed(0)}%` : `failed: ${o.reason}`;
             const pose = dePoseOf(o);
             const poseCell = o.status !== 'done' ? '<td></td>' :
                 `<td style="padding:4px 8px 4px 0; color:#aaa; white-space:nowrap;" title="the frame the act reads where this object was in the demo">pose read at ${pose.t == null ? '?' : pose.t.toFixed(2) + ' s'} <span style="color:#777;">(${pose.from})</span> ` +
                 `<button class="btn-small secondary" onclick="dePoseHere('${o.name}')" title="read this object's pose on the frame shown: one where it is in full view">pose here</button>` +
                 (pose.from === 'set' ? ` <button class="btn-small secondary" onclick="dePoseReset('${o.name}')" title="back to the frame it was clicked on">reset</button>` : '') + '</td>';
+            const sym = o.symmetry || {kind: 'none', axis: 'surface_normal', order: 1};
+            const symChoice = sym.kind === 'continuous' ? 'continuous' : sym.kind === 'discrete' ? String(sym.order) : 'none';
             const symCell = o.status !== 'done' ? '<td></td>' :
-                `<td style="padding:4px 8px 4px 0; color:#aaa; white-space:nowrap;" title="rotational symmetry about the axis it rests on: turned by 360/order degrees it looks and acts the same (2: a shape that reads the same turned end to end; 4: a plain cube). Its finds then report the turn nearest the demo's">symmetry ` +
-                `<select onchange="deObjSymmetry('${o.name}', this.value)">${[1, 2, 3, 4, 6, 8].map(n => `<option value="${n}"${n === (o.symmetry || 1) ? ' selected' : ''}>${n === 1 ? 'none' : 'order ' + n}</option>`).join('')}</select></td>`;
+                `<td style="padding:4px 8px 4px 0; color:#aaa; white-space:nowrap;" title="Appearance symmetry for pose finding. Choose the observed axis and whether turns are discrete or continuous. Grasp and placement freedom are separate task constraints.">pose symmetry ` +
+                `<select id="de-sym-kind-${row}" onchange="deObjSymmetry('${o.name}', ${row})">${[['none', 'none'], [2, 'order 2'], [3, 'order 3'], [4, 'order 4'], [6, 'order 6'], [8, 'order 8'], ['continuous', 'continuous']].map(([v, label]) => `<option value="${v}"${String(v) === symChoice ? ' selected' : ''}>${label}</option>`).join('')}</select> ` +
+                `<select id="de-sym-axis-${row}" onchange="deObjSymmetry('${o.name}', ${row})">${[['surface_normal', 'surface normal'], ['long_axis', 'long axis']].map(([v, label]) => `<option value="${v}"${v === sym.axis ? ' selected' : ''}>${label}</option>`).join('')}</select></td>`;
             return `<tr style="border-top:1px solid #333;"><td style="padding:4px 8px 4px 0; color:${o.colour}; white-space:nowrap;">${o.name}</td>` +
                 `<td style="padding:4px 8px 4px 0; color:#888; white-space:nowrap;">clicked at ${o.t == null ? '?' : o.t.toFixed(2) + ' s'}</td>` +
                 `<td style="padding:4px 8px 4px 0; color:${o.status === 'failed' ? '#e55' : '#aaa'}; white-space:nowrap;">${state}</td>` + poseCell + symCell +
