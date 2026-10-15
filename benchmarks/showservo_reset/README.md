@@ -512,3 +512,25 @@ the arm joints. An unexecuted gripper target is not resumed. A gripper whose
 own fault latch had to be cleared retains the previous re-anchor behavior.
 The regression checks actual first and later outgoing goals with and without
 a pending target; restoring the old re-anchor fails both cases.
+
+### Dowel/ring reset attempts before fixed-rate Act retest (2026-10-15)
+
+The fixed-rate recorder was deployed in a restarted GUI, but no new physical
+Act could run: the dowel was initially upright inside the ring. The existing
+reset policy is specialized for the gamepad/cube layout and has no validated
+dowel/ring separation path. Two camera-guided Cartesian grasp attempts used
+calibrated IK and checked intermediate poses. The first jaw closure reached
+97.53 without holding the dowel. After remeasuring the scene, incremental jaw
+closures at 75, 85, 90 and 94 likewise failed to secure it; at 94 the observed
+jaw was 93.76 and the ring shifted. These readings and images establish failed
+grasps, but do not identify whether the main error was grasp geometry, object
+pose, or contact dynamics.
+
+On each retreat the shoulder lagged the requested lift near the ring, with
+load readings around 660-680/1000. There was no hardware overload latch. The
+guard stopped motion, recovery cleared the motion stop, and the arm parked and
+disconnected. After the second attempt, the dowel and ring were still together
+and had tipped toward the front edge of the tray. Further use of the same
+grasp is not a validated reset. The fixed-rate recorder has passed its prior
+software and passive-camera checks; a new physical Act recording remains
+untested until the objects are separated and a new trial can start.
