@@ -1,6 +1,7 @@
 """Live target/attachment corrections must reach the bus without replaying contact events."""
 
 import asyncio
+import threading
 import time
 from collections import deque
 
@@ -150,6 +151,133 @@ def test_cas_replaces_only_unsent_command_and_preserves_lag_guard(monkeypatch):
     j.playback_sent = 1
     assert not jog.update_playback_next(0, {**q, "gripper": 20}, 0.1)
     assert j.playback[-1]["gripper"] == 70
+
+
+def test_checked_horizon_replaces_only_unsent_future_without_resetting_guards(monkeypatch):
+    q = dict.fromkeys(MOTOR_NAMES, 0.0)
+    j = jog._Jog(robot=object(), mode="joints", q_target=q.copy(), q_obs=q.copy())
+    monkeypatch.setattr(jog, "_jog", j)
+    jog.play_joints([q], [0.0])
+    j.playback_sent, j.playback_sent_at = 0, [10.0]
+    j.playback_blocked, j.playback_held = 12.0, 11.0
+    clock = j.playback_t0
+    assert jog.append_playback_next(0, {**q, "shoulder_pan": 1.0}, 0.1)
+    assert jog.append_playback_next(1, {**q, "shoulder_pan": 2.0, "gripper": 80.0}, 0.2)
+    assert not jog.append_playback_next(0, q, 0.3)
+    j.playback_sent = 1  # the first future sample, including its grip, has gone out
+    assert not jog.replace_playback_tail(0, [q], [0.3])
+    assert jog.replace_playback_tail(1, [{**q, "shoulder_pan": 1.5, "gripper": 20.0}], [0.2])
+    assert [sample["shoulder_pan"] for sample in j.playback] == [0.0, 1.0, 1.5]
+    assert j.playback[-1]["gripper"] == 20.0
+    assert (j.playback_t0, j.playback_blocked, j.playback_held) == (clock, 12.0, 11.0)
+
+
+def test_checked_horizon_keeps_motor_ticks_filled_while_solves_take_time(monkeypatch):
+    """A 20 ms IK solve must not create a hold after every 30 Hz action."""
+    kin = _TipKinematics()
+    initial = np.zeros(len(MOTOR_NAMES))
+    count = 24
+    lock, stop = threading.Lock(), threading.Event()
+    playback = {"samples": [], "due": [], "sent": -1, "at": [], "t0": 0.0, "q": initial.copy()}
+    motor_ticks = []
+
+    def motor():
+        tick = time.monotonic()
+        while not stop.is_set():
+            now = time.monotonic()
+            if now < tick:
+                time.sleep(tick - now)
+                continue
+            with lock:
+                k = playback["sent"] + 1
+                if k < len(playback["samples"]) and now - playback["t0"] >= playback["due"][k]:
+                    playback["sent"] = k
+                    playback["q"] = np.array([playback["samples"][k][m] for m in MOTOR_NAMES])
+                    playback["at"].append(time.time())
+                motor_ticks.append((now, playback["q"][0]))
+            tick += 1 / jog.HZ
+
+    def play(samples, due):
+        with lock:
+            playback.update(samples=list(samples), due=list(due), sent=-1, at=[], t0=time.monotonic())
+
+    def state():
+        with lock:
+            return playback["sent"], list(playback["at"])
+
+    def append(tail, sample, due):
+        with lock:
+            if tail != len(playback["samples"]) - 1:
+                return False
+            playback["samples"].append(sample)
+            playback["due"].append(due)
+            return True
+
+    def replace(sent, samples, due):
+        with lock:
+            if sent != playback["sent"]:
+                return False
+            playback["samples"][sent + 1 :] = list(samples)
+            playback["due"][sent + 1 :] = list(due)
+            return True
+
+    def current():
+        with lock:
+            q = playback["q"].copy()
+        return kin.forward_kinematics(q), np.eye(4), dict(zip(MOTOR_NAMES, q, strict=True))
+
+    def checked_step(_kin, previous, goal, *_args, **_kwargs):
+        time.sleep(0.02)
+        q = previous.copy()
+        q[0] = goal[0, 3] * 1000
+        return {"reason": "", "q": q, "complete": True}
+
+    monkeypatch.setattr(jog, "play_joints", play)
+    monkeypatch.setattr(jog, "playback_state", state)
+    monkeypatch.setattr(jog, "append_playback_next", append)
+    monkeypatch.setattr(jog, "replace_playback_tail", replace)
+    monkeypatch.setattr(jog, "playback_stop", lambda: stop.set())
+    monkeypatch.setattr(jog, "current_tip_and_anchor", current)
+    monkeypatch.setattr(jog, "servo_ranges", lambda: None)
+    monkeypatch.setattr(jog, "workspace_box", lambda: ((-1, -1, -1), (1, 1, 1)))
+    monkeypatch.setattr(reactive, "checked_step", checked_step)
+    local = np.stack([pose(i / 1000) for i in range(count + 1)])
+    plan = {
+        "q": np.tile(initial, (count + 1, 1)),
+        "times": np.arange(count + 1) / jog.HZ,
+        "stage": ["move"] * (count + 1),
+        "live_path": {
+            "local": local,
+            "frames": ["world"] * (count + 1),
+            "held": np.zeros(count + 1, bool),
+            "grips": np.zeros(count + 1),
+            "hints": np.zeros((count + 1, len(MOTOR_NAMES))),
+            "floor": np.full(count + 1, -1.0),
+        },
+    }
+    thread = threading.Thread(target=motor, daemon=True)
+    thread.start()
+    try:
+        reason, last = asyncio.run(
+            live_execution.stream(
+                plan,
+                kin,
+                lambda: {"world": np.eye(4)},
+                lambda: np.eye(4),
+                lambda: "test timeout" if time.monotonic() - playback["t0"] > 3 else "",
+                lambda *_: None,
+                lambda *_: pytest.fail("all goals are reachable"),
+                (0.12, np.pi),
+                1,
+            )
+        )
+    finally:
+        stop.set()
+        thread.join(timeout=1)
+    assert not reason and last[0] == pytest.approx(count)
+    active = np.array([q for _, q in motor_ticks if 2 <= q < count - 1])
+    assert len(active) >= count - 4
+    assert np.mean(np.diff(active) < 0.05) < 0.3, "the bus must not hold between most checked steps"
 
 
 def test_empty_live_queue_cannot_reset_hard_lag_timeout():

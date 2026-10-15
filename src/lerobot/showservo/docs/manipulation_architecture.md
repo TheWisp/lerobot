@@ -486,12 +486,19 @@ correction steps precede phase advancement and its gripper event. Terminal
 settling also reads updated targets and uses the existing reach and servo
 settling tolerances, rather than requiring numerical-zero IK error at a limit.
 
-The motor loop owns the bus and receives at most one pending sample. A compare
-and swap prevents a slow solve from replacing an already consumed command.
-Updating the pending command preserves the playback clock and lag guards;
-a temporary empty producer queue cannot clear a hard-lag timeout. Release and
-withdrawal remain ordered. Sliced paths start from current joints, because their
-old endpoints may have changed during live execution.
+The motor loop owns the bus and consumes one checked sample per 30 Hz tick from
+a short rolling horizon. The executor prepares up to three future samples from
+the latest object pose, independent of when the camera next reports one. A new
+accepted pose that differs beyond the existing solve tolerance atomically
+replaces unsent samples; a sample already consumed is
+never changed or replayed. Gripper-changing samples stay at the queue front so
+grasp and release cannot be prefetched past unfinished motion. The playback
+clock and lag guards survive each replacement; a temporary empty queue cannot
+clear a hard-lag timeout. Sliced paths start from current joints, because their
+old endpoints may have changed during live execution. **Physical smoothness
+with this rolling horizon has not yet been validated.** Each Act now records
+active-motion command-hold fraction, hold-then-move size and target timing for
+that comparison.
 
 Every new step passes IK, calibrated joint bounds, joint-step limits and
 workspace/floor checks. An infeasible step holds phase and gripper while the

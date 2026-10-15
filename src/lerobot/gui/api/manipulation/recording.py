@@ -444,6 +444,7 @@ def _finish_run(run: _Run, samples: list[dict[str, Any]], fk: Any, result: dict[
         with contextlib.suppress(Exception):  # the arm may have gone away; the joints are still the record
             arm["tip_obs"] = np.stack([fk(s["obs"]) for s in samples])
         np.savez_compressed(run.root / "arm.npz", **arm)
+        run.meta["control_cadence"] = _control_cadence(arm, run.targets)
     summary = {
         **run.meta,
         "ended": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -453,6 +454,47 @@ def _finish_run(run: _Run, samples: list[dict[str, Any]], fk: Any, result: dict[
     }
     (run.root / "act.json").write_text(json.dumps(summary, indent=1, default=_jsonable))
     return str(run.root)
+
+
+def _control_cadence(arm: dict[str, np.ndarray], targets: list[dict[str, Any]]) -> dict[str, Any]:
+    """Summarize motor-rate holds during motion, separating them from intentional stillness.
+
+    A 0.05° command change is below one SO-107 encoder count. Activity means
+    over 0.75° of arm motion across roughly five 30 Hz ticks; endpoints and
+    grasp pauses do not dominate the hold fraction. Raw traces stay in arm.npz.
+    """
+    q_cmd, q_obs = arm["q_cmd"][:, :-1], arm["q_obs"][:, :-1]
+    t = arm.get("t_mono", arm["t"])
+    if len(q_cmd) < 2:
+        return {"motor_ticks": len(q_cmd), "active_ticks": 0}
+    command_step = np.max(np.abs(np.diff(q_cmd, axis=0)), axis=1)
+    observed_step = np.max(np.abs(np.diff(q_obs, axis=0)), axis=1)
+    active = np.array(
+        [
+            np.max(np.abs(q_cmd[min(len(q_cmd) - 1, i + 3)] - q_cmd[max(0, i - 2)])) > 0.75
+            for i in range(len(command_step))
+        ],
+        dtype=bool,
+    )
+    steps = command_step[active]
+    preceding = np.r_[0.0, command_step[:-1]]
+    after_hold = active & (command_step > 0.5) & (preceding < 0.05)
+    stamps = np.array([target["t"] for target in targets if target.get("joints") is not None], dtype=float)
+    gaps_ms = np.diff(t) * 1000.0
+    gaps_ms = gaps_ms[np.isfinite(gaps_ms) & (gaps_ms >= 0)]
+    target_gaps_ms = np.diff(stamps) * 1000.0
+    return {
+        "motor_ticks": len(q_cmd),
+        "active_ticks": int(active.sum()),
+        "command_hold_fraction_active": float(np.mean(steps < 0.05)) if len(steps) else None,
+        "observed_hold_fraction_active": float(np.mean(observed_step[active] < 0.05)) if len(steps) else None,
+        "command_step_p95_deg_active": float(np.percentile(steps, 95)) if len(steps) else None,
+        "command_step_max_deg_active": float(np.max(steps)) if len(steps) else None,
+        "hold_then_move_count_active": int(after_hold.sum()),
+        "hold_then_move_median_deg": float(np.median(command_step[after_hold])) if after_hold.any() else None,
+        "target_gap_p95_ms": float(np.percentile(target_gaps_ms, 95)) if len(target_gaps_ms) else None,
+        "motor_gap_max_ms": float(np.max(gaps_ms)) if len(gaps_ms) else None,
+    }
 
 
 class VerdictBody(BaseModel):

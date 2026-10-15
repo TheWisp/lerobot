@@ -56,7 +56,23 @@ def fake_playback(monkeypatch, send) -> None:
             play["samples"][k], play["due"][k] = sample, due_s
         return True
 
+    def append_next(expected_tail, sample, due_s):
+        if expected_tail != len(play["samples"]) - 1:
+            return False
+        play["samples"].append(sample)
+        play["due"].append(due_s)
+        return True
+
+    def replace_tail(expected_sent, samples, due_s):
+        if play["sent"] != expected_sent:
+            return False
+        play["samples"][expected_sent + 1 :] = list(samples)
+        play["due"][expected_sent + 1 :] = list(due_s)
+        return True
+
     monkeypatch.setattr(jog, "update_playback_next", update_next)
+    monkeypatch.setattr(jog, "append_playback_next", append_next)
+    monkeypatch.setattr(jog, "replace_playback_tail", replace_tail)
     monkeypatch.setattr(jog, "play_joints", play_joints)
     monkeypatch.setattr(jog, "playback_state", playback_state)
     monkeypatch.setattr(jog, "playback_stop", lambda: play.update(samples=[]))

@@ -1,4 +1,4 @@
-"""One replaceable command ahead of the motor loop, recomposed from live poses."""
+"""A short, replaceable horizon of checked commands ahead of the motor loop."""
 
 from __future__ import annotations
 
@@ -29,8 +29,9 @@ async def stream(
 ):
     """Return (reason, last command). Phase advances only after its command is consumed.
 
-    Planning/IK never owns the motor bus. A stale solve cannot replace a command
-    already consumed, and the existing servo lag/release guards keep their state.
+    Planning/IK never owns the motor bus. A short checked horizon keeps the bus
+    moving while a solve or observation is late. New poses replace only unsent
+    samples; the existing servo lag/release guards keep their state.
     """
     from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
 
@@ -52,6 +53,21 @@ async def stream(
     orientation_stage = None
     arm = np.arange(len(qs[0])) != gi
     best_phase, best_seen, best_progress_at = None, None, time.monotonic()
+    horizon = 3  # 100 ms at 30 Hz; unsent samples are replaceable when perception changes.
+
+    def changed_pending(done, motion, fix):
+        for composition in compositions[done + 1 :]:
+            if composition is None:
+                continue
+            old_motion = np.asarray(composition["motion"])
+            distance, angle = core.pose_residual(old_motion, motion[composition["frame"]])
+            if distance > core.ACT_SOLVE_TOL_M or angle > core.ACT_SOLVE_TOL_DEG:
+                return True
+            if composition["held"]:
+                distance, angle = core.pose_residual(np.asarray(composition["fix"]), fix)
+                if distance > core.ACT_SOLVE_TOL_M or angle > core.ACT_SOLVE_TOL_DEG:
+                    return True
+        return False
 
     def stop_best_effort(reason):
         try:
@@ -63,7 +79,9 @@ async def stream(
         return "", np.array([held[name] for name in MOTOR_NAMES], dtype=float)
 
     while True:
-        await asyncio.sleep(min(runtime.ACT_TICK_S, 1.0 / jog.HZ))
+        # Poll faster than a motor tick so a consumed prefix can be replenished
+        # before the next tick, without coupling planning to camera cadence.
+        await asyncio.sleep(min(runtime.ACT_TICK_S, 0.25 / jog.HZ))
         why = interrupted()
         if why:
             jog.playback_stop()
@@ -83,8 +101,19 @@ async def stream(
                 f"{plan['stage'][min(phase + 1, len(plan['q']) - 1)]}: live target did not converge within the step timeout",
                 qs[done],
             )
-        i = min(phase + 1, len(plan["q"]) - 1)
         motion, fix = motions(), correction()
+        if changed_pending(done, motion, fix):
+            if not jog.replace_playback_tail(done, [], []):
+                continue
+            del qs[done + 1 :]
+            del phases[done + 1 :]
+            del due[done + 1 :]
+            del goals[done + 1 :]
+            del compositions[done + 1 :]
+            if orientation_stage is not None and plan["stage"][phases[done]] != orientation_stage:
+                orientation_stage = orientation_anchor = None
+        pending = len(qs) - done - 1
+        i = min(phase + 1, len(plan["q"]) - 1)
         goal = reactive.targets({k: v[i : i + 1] for k, v in path.items()}, motion, fix)[0]
         constraint = path.get("constraint", ["pose"] * len(plan["q"]))[i]
         free_terminal = (
@@ -123,26 +152,7 @@ async def stream(
             goal[:3, 3] = orientation_anchor
         else:
             orientation_stage = orientation_anchor = None
-        local = path["local"][i]
-        if constraint == "orientation":
-            attachment = fix if path["held"][i] else np.eye(4)
-            local = np.linalg.inv(motion[path["frames"][i]]) @ goal @ np.linalg.inv(attachment)
-        # Snapshot before the asynchronous solve. A new observation may arrive
-        # while IK runs or while this command waits for the bus; logging current
-        # state at consumption would falsely attribute it to the newer estimate.
-        composition = {
-            "at": time.time(),
-            "phase": i,
-            "frame": path["frames"][i],
-            "motion": np.asarray(motion[path["frames"][i]]).tolist(),
-            "local": np.asarray(local).tolist(),
-            "nominal_local": np.asarray(path["local"][i]).tolist(),
-            "constraint": constraint,
-            "held": bool(path["held"][i]),
-            "fix": np.asarray(fix).tolist(),
-            "hold_revision": None if revision is None else revision(),
-        }
-        if phase == len(plan["q"]) - 1:
+        if phase == len(plan["q"]) - 1 and pending == 0:
             error_m, error_deg = core.pose_residual(kin.forward_kinematics(qs[done]), goal)
             previous_goal = goals[done] if goals[done] is not None else kin.forward_kinematics(qs[done])
             changed_m, changed_deg = core.pose_residual(previous_goal, goal)
@@ -171,13 +181,57 @@ async def stream(
                     return f"the end: the arm stopped {lag:.0f} deg short of it", qs[done]
                 continue
             settling.clear()
+        if pending >= horizon or (pending and phases[-1] == len(plan["q"]) - 1):
+            continue
+        base = len(qs) - 1
+        phase = phases[base]
+        i = min(phase + 1, len(plan["q"]) - 1)
+        if pending and (
+            abs(float(path["grips"][i] - qs[base][gi])) > 1e-6
+            or any(abs(float(qs[k][gi] - qs[k - 1][gi])) > 1e-6 for k in range(done + 1, len(qs)))
+        ):
+            # Grasp/release decisions use the latest completed prefix. Keep
+            # those events at the front of the queue, never inside a horizon.
+            continue
+        if base != done:
+            goal = reactive.targets({k: v[i : i + 1] for k, v in path.items()}, motion, fix)[0]
+            constraint = path.get("constraint", ["pose"] * len(plan["q"]))[i]
+            free_terminal = (
+                constraint == "best_effort"
+                and i == len(plan["q"]) - 1
+                and abs(float(path["grips"][i] - path["grips"][phase])) < core.GRIP_STILL_UNITS
+            )
+            if constraint == "orientation":
+                if orientation_stage != plan["stage"][i]:
+                    orientation_stage = plan["stage"][i]
+                    orientation_anchor = kin.forward_kinematics(qs[base])[:3, 3].copy()
+                goal[:3, 3] = orientation_anchor
+        local = path["local"][i]
+        if constraint == "orientation":
+            attachment = fix if path["held"][i] else np.eye(4)
+            local = np.linalg.inv(motion[path["frames"][i]]) @ goal @ np.linalg.inv(attachment)
+        # Snapshot before the asynchronous solve. A new observation may arrive
+        # while IK runs or while this command waits for the bus; logging current
+        # state at consumption would falsely attribute it to the newer estimate.
+        composition = {
+            "at": time.time(),
+            "phase": i,
+            "frame": path["frames"][i],
+            "motion": np.asarray(motion[path["frames"][i]]).tolist(),
+            "local": np.asarray(local).tolist(),
+            "nominal_local": np.asarray(path["local"][i]).tolist(),
+            "constraint": constraint,
+            "held": bool(path["held"][i]),
+            "fix": np.asarray(fix).tolist(),
+            "hold_revision": None if revision is None else revision(),
+        }
         dt = max(float(plan["times"][i] - plan["times"][phase]), 1.0 / jog.HZ)
         result = await loop.run_in_executor(
             runtime._ACT_EXECUTOR,
             functools.partial(
                 reactive.checked_step,
                 kin,
-                qs[done],
+                qs[base],
                 goal,
                 float(path["grips"][i]),
                 path["hints"][i],
@@ -192,19 +246,22 @@ async def stream(
             ),
         )
         if result["reason"]:
+            # The earlier checked prefix may still be moving. Its last sample
+            # is the correct start for a reach search or best-effort stop;
+            # searching from the current read would skip those phases.
+            if base != done:
+                continue
             if free_terminal:
                 return stop_best_effort(result["reason"])
-            # Remove a pending command before an expensive alternative search.
-            # It may have been computed against an older accepted observation.
-            if not jog.update_playback_next(done, as_dict(qs[done]), due[done] + dt):
+            # An infeasible future step cannot leave a stale queue moving while
+            # the alternative search runs. Hold the last consumed command.
+            if not jog.replace_playback_tail(done, [as_dict(qs[done])], [due[done] + dt]):
                 continue
             slot = done + 1
-            entry = (qs[done].copy(), phase, due[done] + dt, None, None)
-            if slot == len(qs):
-                for array, value in zip((qs, phases, due, goals, compositions), entry, strict=True):
-                    array.append(value)
-            else:
-                qs[slot], phases[slot], due[slot], goals[slot], compositions[slot] = entry
+            entry = (qs[done].copy(), phases[done], due[done] + dt, None, None)
+            for array, value in zip((qs, phases, due, goals, compositions), entry, strict=True):
+                del array[slot:]
+                array.append(value)
             changed = await reselect(plan, i, motion, fix, qs[done])
             if not changed:
                 jog.playback_stop()
@@ -212,12 +269,9 @@ async def stream(
             continue
         # Gripper events follow the completed phase, never an intermediate correction.
         next_phase = i if result["complete"] else phase
-        next_due = due[done] + dt
-        if jog.update_playback_next(done, as_dict(result["q"]), next_due):
-            slot = done + 1
+        next_due = due[base] + dt
+        if jog.append_playback_next(base, as_dict(result["q"]), next_due):
+            slot = base + 1
             entry = (result["q"], next_phase, next_due, goal, composition)
-            if slot == len(qs):
-                for array, value in zip((qs, phases, due, goals, compositions), entry, strict=True):
-                    array.append(value)
-            else:
-                qs[slot], phases[slot], due[slot], goals[slot], compositions[slot] = entry
+            for array, value in zip((qs, phases, due, goals, compositions), entry, strict=True):
+                array.append(value)

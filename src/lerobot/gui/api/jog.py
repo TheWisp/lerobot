@@ -1389,6 +1389,53 @@ def update_playback_next(expected: int, sample: dict[str, float], due_s: float) 
         return True
 
 
+def append_playback_next(expected_tail: int, sample: dict[str, float], due_s: float) -> bool:
+    """Append a checked future sample while the motor loop consumes the existing prefix.
+
+    The caller plans from the tail sample, so a concurrently consumed prefix
+    does not invalidate the new sample. A retarget or stop *does* invalidate it
+    by changing the tail. The motor still sends at most one sample per tick.
+    """
+    j = _jog
+    with j.lock:
+        if not j.connected or j.halted or j.mode != "joints" or j.playback is None:
+            raise RuntimeError("the live joint stream is no longer active")
+        if expected_tail != len(j.playback) - 1:
+            return False
+        _ensure_working_target(sample, j.joint_ranges)
+        if due_s < j.playback_due[-1]:
+            raise ValueError("live playback time must not go backwards")
+        j.playback_live = True
+        j.playback.append(dict(sample))
+        j.playback_due.append(float(due_s))
+        return True
+
+
+def replace_playback_tail(expected_sent: int, samples: list[dict[str, float]], due_s: list[float]) -> bool:
+    """Atomically replace only unsent samples after a live pose correction.
+
+    A consumed sample is never changed or replayed, including gripper events.
+    The clock and lag guards survive the replacement.
+    """
+    if len(samples) != len(due_s):
+        raise ValueError("one due time per sample")
+    j = _jog
+    with j.lock:
+        if not j.connected or j.halted or j.mode != "joints" or j.playback is None:
+            raise RuntimeError("the live joint stream is no longer active")
+        if j.playback_sent != expected_sent:
+            return False
+        for sample in samples:
+            _ensure_working_target(sample, j.joint_ranges)
+        previous = j.playback_due[expected_sent] if expected_sent >= 0 else 0.0
+        if any(t < previous or (i and t < due_s[i - 1]) for i, t in enumerate(due_s)):
+            raise ValueError("live playback time must not go backwards")
+        j.playback_live = True
+        j.playback[expected_sent + 1 :] = [dict(sample) for sample in samples]
+        j.playback_due[expected_sent + 1 :] = [float(t) for t in due_s]
+        return True
+
+
 def joints_at(at: float, max_gap_s: float) -> dict[str, float] | None:
     """Interpolate checked encoder reads bracketing a camera's perf-counter timestamp.
 
