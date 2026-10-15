@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+import math
 import subprocess
 import sys
 import threading
@@ -194,6 +195,13 @@ async def worker_result(id: str, request: Request) -> dict:
     if job is None:
         raise HTTPException(404, "no such job")
     job.result_received_at = time.time()
+    for name, header in (("fetch", "X-Worker-Fetch-Ms"), ("compute", "X-Worker-Compute-Ms")):
+        try:
+            value = float(request.headers[header])
+            if math.isfinite(value) and value >= 0:
+                job.worker_timing_ms[name] = value
+        except (KeyError, ValueError):
+            pass
     data = np.load(io.BytesIO(body), allow_pickle=False)
     meta = json.loads(str(data["meta"]))
     result: dict[str, Any] = dict(meta)

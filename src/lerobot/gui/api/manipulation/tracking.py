@@ -811,6 +811,7 @@ async def _apply_track_result(job: runtime._Job) -> None:
             "decode": round(1000 * (job.result_decoded_at - job.result_received_at), 1),
             "verify": round(1000 * (job.verified_at - job.result_decoded_at), 1),
             "render": round(1000 * (job.rendered_at - job.verified_at), 1),
+            **job.worker_timing_ms,
         }
     with runtime._state.lock:
         held = runtime._state.test.result.get("delta_cam") if runtime._state.test is not None else None

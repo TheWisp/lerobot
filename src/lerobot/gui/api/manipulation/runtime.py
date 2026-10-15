@@ -84,6 +84,7 @@ class _Job:
     result_decoded_at: float | None = None  # NPZ and metadata decoded by the GUI
     verified_at: float | None = None  # geometry checks finished
     rendered_at: float | None = None  # live overlay finished
+    worker_timing_ms: dict[str, float] = field(default_factory=dict)
     taken: bool = False
     result: dict[str, Any] | None = None
     camera_check: dict[str, Any] | None = None  # marker drift on this frame; None without a calibration

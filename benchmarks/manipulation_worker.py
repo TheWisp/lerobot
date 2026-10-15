@@ -1115,6 +1115,7 @@ def run(server: str, models: Models) -> None:
         job = r.json()
         job_id, kind, concept = job["id"], job["kind"], job["concept"]
         t0 = time.perf_counter()
+        t_frame_ready = None
         try:
             fr = http.get(server + "api/pregrasp/worker/frame.npz", params={"id": job_id}, timeout=30)
             fr.raise_for_status()
@@ -1122,6 +1123,7 @@ def run(server: str, models: Models) -> None:
             intr_d = json.loads(str(data["intr"]))
             intr = CameraIntrinsics(fx=intr_d["fx"], fy=intr_d["fy"], cx=intr_d["cx"], cy=intr_d["cy"])
             frame = _Frame(data["rgb"], data["depth"], f"job_{job_id}")
+            t_frame_ready = time.perf_counter()
             sam, tier = models.ensure(concept)
             if kind == "track":
                 result = _track(job, frame, cards, trackers, sam, tier, intr, models=models)
@@ -1170,8 +1172,20 @@ def run(server: str, models: Models) -> None:
             traceback.print_exc()
             result = _npz(meta=json.dumps({"ok": False, "reason": f"worker error: {e}"}))
         dt = time.perf_counter() - t0
+        headers = {}
+        if t_frame_ready is not None:
+            headers = {
+                "X-Worker-Fetch-Ms": f"{1000 * (t_frame_ready - t0):.1f}",
+                "X-Worker-Compute-Ms": f"{1000 * (time.perf_counter() - t_frame_ready):.1f}",
+            }
         try:
-            http.post(server + "api/pregrasp/worker/result", params={"id": job_id}, data=result, timeout=30)
+            http.post(
+                server + "api/pregrasp/worker/result",
+                params={"id": job_id},
+                data=result,
+                headers=headers,
+                timeout=30,
+            )
         except requests.RequestException as e:
             print(f"could not post result for {job_id}: {e}", flush=True)
         if kind != "track":
