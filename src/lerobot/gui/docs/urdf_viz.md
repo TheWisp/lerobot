@@ -336,7 +336,17 @@ What it reads, and where it comes from:
 - **The mount transform** from this machine's
   `~/.config/lerobot/click_target_extrinsics.json`, not from the dataset.
   **NOT IMPLEMENTED** in the dataset yet: a dataset viewed elsewhere draws the
-  cloud in camera frame and the status line says so.
+  cloud in camera frame and the status line says so. That placeholder puts
+  the camera at the arm base looking along +x, which is wrong for any real
+  mount; on fc500t the ZED looks down at the desk, so from the side the
+  desk stands up as a wall in front of the arm, and from the camera the
+  cloud is the photograph while the model floats off by the missing
+  transform (issue #268).
+
+  ![Placeholder pose from the side: the desk as a wall in front of the arm](images/zed_cloud_placeholder.png)
+
+  ![Placeholder pose from the camera: the cloud is the photograph, the model is off](images/zed_cloud_placeholder_pov.png)
+
 - **Depth pixels** from `GET …/frame/{i}/depth?camera=`, raw uint16
   millimetres over gzip, with pixels at or below the quantizer's floor
   zeroed: a stored "no measurement" reads back as `depth_min`, so that is the

@@ -33,7 +33,15 @@ holes, so an episode with more than 1% of them starts at the quantizer's floor,
 0.01 m); `colour: fixed range` puts two
 thumbs on the palette strip, with a number box at each end for exact values,
 and the strip is the legend either way. The same mapping colours the Low
-Bandwidth chunks.
+Bandwidth chunks. The 3D view of the same frames is in
+[urdf_viz.md](urdf_viz.md#depth-point-cloud).
+The same tile for a ZED recorded through its SDK (`type: zed`, `use_depth`),
+and the arm's motion as the depth map sees it (left eye, depth, change against
+the first frame; the base joint swept a few degrees):
+
+![ZED depth tile, Auto](images/zed_depth_tile_auto.png)
+
+![Left eye, depth, and depth change against the first frame over a sweep](images/zed_depth_motion.png)
 
 | Auto                                        | Fixed, 0.40 to 0.55 m                         |
 | ------------------------------------------- | --------------------------------------------- |
