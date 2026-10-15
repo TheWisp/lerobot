@@ -26,6 +26,7 @@ async def stream(
     settled=None,
     revision=None,
     best_effort_stopped=None,
+    diagnostics=None,
 ):
     """Return (reason, last command). Phase advances only after its command is consumed.
 
@@ -53,7 +54,9 @@ async def stream(
     orientation_stage = None
     arm = np.arange(len(qs[0])) != gi
     best_phase, best_seen, best_progress_at = None, None, time.monotonic()
-    horizon = 6  # Up to 200 ms; every unsent sample is replaceable on a new observation.
+    horizon = int(jog.HZ)  # One motor-second ahead; every unsent sample stays replaceable.
+    if diagnostics is not None:
+        diagnostics.update(solve_ms=[], tail_replacements=0, starved_polls=0, max_queue_samples=0)
 
     def changed_pending(done, motion, fix):
         for composition in compositions[done + 1 :]:
@@ -87,6 +90,11 @@ async def stream(
             jog.playback_stop()
             return why, qs[max(0, recorded)]
         done, stamps = jog.playback_state()
+        if diagnostics is not None:
+            depth = len(qs) - done - 1
+            diagnostics["max_queue_samples"] = max(diagnostics["max_queue_samples"], depth)
+            if depth == 0 and done >= 0 and phases[done] < len(plan["q"]) - 1:
+                diagnostics["starved_polls"] += 1
         for k in range(recorded + 1, done + 1):
             observed(phases[k], qs[k], stamps[k], goals[k], compositions[k])
         recorded = done
@@ -102,17 +110,13 @@ async def stream(
                 qs[done],
             )
         motion, fix = motions(), correction()
-        if changed_pending(done, motion, fix):
-            if not jog.replace_playback_tail(done, [], []):
-                continue
-            del qs[done + 1 :]
-            del phases[done + 1 :]
-            del due[done + 1 :]
-            del goals[done + 1 :]
-            del compositions[done + 1 :]
-            if orientation_stage is not None and plan["stage"][phases[done]] != orientation_stage:
-                orientation_stage = orientation_anchor = None
-        pending = len(qs) - done - 1
+        replacing = changed_pending(done, motion, fix)
+        # Keep the old checked tail moving while the replacement is solved.
+        # The swap below is atomic and only succeeds if this head has not
+        # advanced; a changed head is replanned on the next producer turn.
+        if replacing and orientation_stage is not None and plan["stage"][phases[done]] != orientation_stage:
+            orientation_stage = orientation_anchor = None
+        pending = 0 if replacing else len(qs) - done - 1
         i = min(phase + 1, len(plan["q"]) - 1)
         goal = reactive.targets({k: v[i : i + 1] for k, v in path.items()}, motion, fix)[0]
         constraint = path.get("constraint", ["pose"] * len(plan["q"]))[i]
@@ -152,7 +156,7 @@ async def stream(
             goal[:3, 3] = orientation_anchor
         else:
             orientation_stage = orientation_anchor = None
-        if phase == len(plan["q"]) - 1 and pending == 0:
+        if phase == len(plan["q"]) - 1 and pending == 0 and not replacing:
             error_m, error_deg = core.pose_residual(kin.forward_kinematics(qs[done]), goal)
             previous_goal = goals[done] if goals[done] is not None else kin.forward_kinematics(qs[done])
             changed_m, changed_deg = core.pose_residual(previous_goal, goal)
@@ -183,7 +187,7 @@ async def stream(
             settling.clear()
         if pending and phases[-1] == len(plan["q"]) - 1:
             continue
-        base = len(qs) - 1
+        base = done if replacing else len(qs) - 1
         phase = phases[base]
         i = min(phase + 1, len(plan["q"]) - 1)
         if pending and (
@@ -228,8 +232,8 @@ async def stream(
         # One IK solve covers at least two motor ticks. The motor receives
         # interpolated, FK-checked samples; it does not wait for one solve per
         # tick when the solver is slower than 30 Hz.
-        ticks = max(2, min(4, int(np.ceil((plan["times"][i] - plan["times"][phase]) * jog.HZ))))
-        if pending + ticks > horizon:
+        nominal_ticks = max(2, min(6, int(np.ceil((plan["times"][i] - plan["times"][phase]) * jog.HZ))))
+        if pending + nominal_ticks > horizon:
             continue
         box, floor = jog.workspace_box(), float(path["floor"][i])
         solve_args = (
@@ -263,9 +267,27 @@ async def stream(
                 ),
             )
 
-        result = await solve(ticks)
-        samples = (
-            reactive.checked_joint_samples(
+        # Cartesian speed alone does not bound joint speed near a changing IK
+        # configuration. Give a checked step enough motor ticks to respect the
+        # same joint slew used by ready/park, scaled by the requested act speed.
+        joint_tick = min(jog.PLAYBACK_LAG_DEG, jog.RAMP_DEG_S * speed / jog.HZ)
+        step_ticks = nominal_ticks
+        ticks = nominal_ticks
+        room_needed = False
+        samples = None
+        for _ in range(4):
+            solve_started = time.perf_counter()
+            result = await solve(step_ticks)
+            if diagnostics is not None:
+                diagnostics["solve_ms"].append((time.perf_counter() - solve_started) * 1000.0)
+            if result["reason"]:
+                break
+            arm_delta = np.delete(np.asarray(result["q"]) - qs[base], gi)
+            ticks = max(nominal_ticks, int(np.ceil(np.max(np.abs(arm_delta)) / joint_tick)))
+            if pending + ticks > horizon:
+                room_needed = True
+                break
+            samples = reactive.checked_joint_samples(
                 kin,
                 qs[base],
                 result,
@@ -273,19 +295,19 @@ async def stream(
                 gi,
                 box,
                 floor,
-                jog.PLAYBACK_LAG_DEG,
+                joint_tick,
                 previous_sample=qs[max(0, base - 1)],
-                max_joint_accel_deg=jog.RAMP_DEG_S / jog.HZ,
+                max_joint_accel_deg=jog.RAMP_DEG_S * speed / jog.HZ,
             )
-            if not result["reason"]
-            else None
-        )
+            if samples is not None:
+                break
+            # A joint chord that misses the Cartesian corridor needs a
+            # smaller Cartesian target, never an unchecked single-tick jump.
+            step_ticks /= 2
+        if room_needed:
+            continue
         if not result["reason"] and samples is None:
-            # A joint chord may bow away from the checked Cartesian step.
-            # Fall back to one fresh Cartesian solve, never that chord.
-            ticks = 1
-            result = await solve(ticks)
-            samples = [result["q"]] if not result["reason"] else None
+            result = {**result, "reason": "updated pose has no checked smooth joint path"}
         dt = ticks / jog.HZ
         if result["reason"]:
             # The earlier checked prefix may still be moving. Its last sample
@@ -312,7 +334,21 @@ async def stream(
         # Gripper events follow the completed phase, never an intermediate correction.
         next_phase = i if result["complete"] else phase
         due_samples = [due[base] + (k + 1) / jog.HZ for k in range(ticks)]
-        if jog.append_playback_chunk(base, [as_dict(q) for q in samples], due_samples):
+        commands = [as_dict(q) for q in samples]
+        accepted = (
+            jog.replace_playback_tail(done, commands, due_samples)
+            if replacing
+            else jog.append_playback_chunk(base, commands, due_samples)
+        )
+        if accepted:
+            if replacing:
+                if diagnostics is not None:
+                    diagnostics["tail_replacements"] += 1
+                del qs[done + 1 :]
+                del phases[done + 1 :]
+                del due[done + 1 :]
+                del goals[done + 1 :]
+                del compositions[done + 1 :]
             for k, (q, at) in enumerate(zip(samples, due_samples, strict=True)):
                 entry = (q, next_phase if k == ticks - 1 else phase, at, goal, composition)
                 for array, value in zip((qs, phases, due, goals, compositions), entry, strict=True):

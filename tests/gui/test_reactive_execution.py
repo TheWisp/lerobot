@@ -73,6 +73,14 @@ def test_update_during_contact_retargets_remaining_phase_and_preserves_release(m
         commands.append(state["q"].copy())
 
     fake_playback(monkeypatch, send)
+    replacements = []
+    original_replace = jog.replace_playback_tail
+
+    def replace_with_evidence(head, samples, due):
+        replacements.append(len(samples))
+        return original_replace(head, samples, due)
+
+    monkeypatch.setattr(jog, "replace_playback_tail", replace_with_evidence)
     monkeypatch.setattr(runtime, "ACT_TICK_S", 0.001)
     monkeypatch.setattr(jog, "servo_ranges", lambda: None)
     monkeypatch.setattr(jog, "workspace_box", lambda: ((-1, -1, -1), (1, 1, 1)))
@@ -140,6 +148,9 @@ def test_update_during_contact_retargets_remaining_phase_and_preserves_release(m
     first_open = next(q for q in commands if q[-1] < 80)
     assert kin.forward_kinematics(first_open)[0, 3] == pytest.approx(0.006 + offset, abs=core.ACT_SOLVE_TOL_M)
     assert commands[-1][-1] == 20, "release happens before withdrawal, even after inserted correction samples"
+    assert (replacements or change == "during_solve") and all(replacements), (
+        "a pose update must replace queued motion atomically, without an empty interval"
+    )
     assert max(np.linalg.norm(np.diff(np.array(commands)[:, :3], axis=0), axis=1)) <= 4.01
     if change == "during_solve":
         first, current_revision = evidence[0]
