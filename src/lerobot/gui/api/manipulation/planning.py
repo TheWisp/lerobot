@@ -457,7 +457,7 @@ def _plan_act(
         lands = part in ("all", "place")
     if landing == "exact" or onto is None or target_base is None or not lands:
         return once(motions, hold_fix)
-    axis, centre = _landing_axis(demo, onto, t_bc)
+    axis, centre = _landing_axis(demo, onto, t_bc, landing=landing)
     fix = np.eye(4) if hold_fix is None else np.asarray(hold_fix, dtype=float)
     samples = _landing_samples(demo, onto)
     idx = [i for i, _held in samples]
@@ -503,7 +503,9 @@ def _plan_act(
     return {**plan, "ok": False, "reason": why, "landing": info}
 
 
-def _landing_axis(demo: runtime._Demo, obj: str, t_bc: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def _landing_axis(
+    demo: runtime._Demo, obj: str, t_bc: np.ndarray, *, landing: str | None = None
+) -> tuple[np.ndarray, np.ndarray]:
     """Observed axis and a point on it, in the demo's pose frame in base coordinates.
 
     The old top-surface centre is retained for a face normal. A long-axis turn
@@ -516,9 +518,15 @@ def _landing_axis(demo: runtime._Demo, obj: str, t_bc: np.ndarray) -> tuple[np.n
         raise ValueError(problem)
     move = t_bc @ reference @ np.linalg.inv(t_bc)
     pts = _object_points(demo, obj, t_bc) @ move[:3, :3].T + move[:3, 3]
-    spec = symmetry.normalise(demo.objects[obj].get("symmetry"))
-    axis, centre = symmetry.observed_axis(pts, spec["axis"])
-    if spec["axis"] == "surface_normal":
+    # "symmetry" explicitly uses appearance-equivalent turns. "turn" is a
+    # task-level freedom and must not change when pose-estimation symmetry does.
+    selector = (
+        symmetry.normalise(demo.objects[obj].get("symmetry"))["axis"]
+        if (landing or demo.landing) == "symmetry"
+        else demo.landing_axis
+    )
+    axis, centre = symmetry.observed_axis(pts, selector)
+    if selector == "surface_normal":
         # A plane has two equally valid normals. Keep positive base z as the
         # turn's sign convention for supported objects and old demos.
         if axis[2] < 0:

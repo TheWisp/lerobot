@@ -695,7 +695,8 @@
                             by <input id="de-lift-mm" type="number" value="30" min="1" max="150" step="5" style="width:56px;" title="how far up, mm"> mm from the key frame before
                         </div>
                         <div id="de-landing-row" style="display:none; color:#aaa; font-size:12px; margin-bottom:8px;">
-                            Landing on <span id="de-landing-object"></span>: <select id="de-landing" title="how the key frames made holding may land on the object they are in: exact, as shown; at any of that object's symmetric turns (its symmetry is set on its row); or turned any way about its middle. Each act takes, of those, a landing the arm reaches whose joints stay nearest the demo's" onchange="deLanding(this.value)"><option value="exact">exact</option><option value="symmetry">any of its symmetric turns</option><option value="turn">any turn about its middle</option></select>
+                            Landing on <span id="de-landing-object"></span>: <select id="de-landing" title="which turns preserve the task relation" onchange="deLanding(this.value)"><option value="exact">exact</option><option value="symmetry">any of its symmetric turns</option><option value="turn">any turn about its middle</option></select>
+                            <span id="de-landing-axis-row">about <select id="de-landing-axis" title="task turn axis, independent of the object's visual pose symmetry" onchange="deLanding(document.getElementById('de-landing').value)"><option value="surface_normal">surface normal</option><option value="long_axis">long axis</option></select></span>
                         </div>
                         <table id="de-list" style="font-size:12px; border-collapse:collapse; width:100%;"></table>
                         <div style="display:flex; gap:6px; align-items:center; margin-top:10px; flex-wrap:wrap;">

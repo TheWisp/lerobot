@@ -65,6 +65,7 @@ def _demo_info(demo: runtime._Demo) -> dict[str, Any]:
             demo
         ),  # the object whose find starts the session first, then the others
         "landing": demo.landing,
+        "landing_axis": demo.landing_axis,
         "hold": _demo_hold_info(demo),
         "reference_constraints": dict(demo.reference_constraints),
     }
@@ -378,7 +379,7 @@ def _write_demo(demo: runtime._Demo, teach: runtime._Teach | None) -> pathlib.Pa
         taught=demo.taught,
         **taught,
     )
-    _write_keypoints(root, demo.keypoints, demo.landing)
+    _write_keypoints(root, demo.keypoints, demo.landing, demo.landing_axis)
     _write_objects(root, demo.objects)
     if stream is not None and stream.exists():
         # safe-destruct: our own stream, moved into its demo
@@ -406,14 +407,24 @@ def _video_source(demo: runtime._Demo, stream: pathlib.Path | None) -> tuple[np.
     return None, None
 
 
-def _write_keypoints(root: pathlib.Path, keypoints: list[dict[str, Any]], landing: str = "exact") -> None:
+def _write_keypoints(
+    root: pathlib.Path,
+    keypoints: list[dict[str, Any]],
+    landing: str = "exact",
+    landing_axis: str = "surface_normal",
+) -> None:
     """The operator's marks and the place's landing rule as a sidecar the act reads back; nothing is written when
     there are no marks and the landing is the default."""
     f = pathlib.Path(root) / runtime.KEYPOINTS_FILE
-    if keypoints or landing != "exact":
+    if keypoints or landing != "exact" or landing_axis != "surface_normal":
         f.write_text(
             json.dumps(
-                {"keypoints": keypoints, **({"landing": landing} if landing != "exact" else {})}, indent=1
+                {
+                    "keypoints": keypoints,
+                    **({"landing": landing} if landing != "exact" else {}),
+                    **({"landing_axis": landing_axis} if landing_axis != "surface_normal" else {}),
+                },
+                indent=1,
             )
         )
     elif f.exists():
@@ -428,6 +439,20 @@ def _read_landing(root: pathlib.Path) -> str:
     except (OSError, ValueError, AttributeError):
         return "exact"
     return landing if landing in core.LANDINGS else "exact"
+
+
+def _read_landing_axis(root: pathlib.Path) -> str:
+    """Old demos turn around the measured face normal."""
+    f = pathlib.Path(root) / runtime.KEYPOINTS_FILE
+    try:
+        axis = (
+            json.loads(f.read_text()).get("landing_axis", "surface_normal")
+            if f.exists()
+            else "surface_normal"
+        )
+    except (OSError, ValueError, AttributeError):
+        return "surface_normal"
+    return axis if axis in symmetry.AXES else "surface_normal"
 
 
 def _read_keypoints(root: pathlib.Path) -> list[dict[str, Any]]:
@@ -505,6 +530,7 @@ async def demo_load(body: DemoLoadBody) -> dict:
         intr=json.loads(str(z["intr"])),
         keypoints=_read_keypoints(f.parent),
         landing=_read_landing(f.parent),
+        landing_axis=_read_landing_axis(f.parent),
         recording=str(f.parent / runtime.DEMO_RECORDING)
         if (f.parent / runtime.DEMO_RECORDING / "times.txt").exists()
         else None,
@@ -624,6 +650,7 @@ async def demo_curve() -> dict:
         "seen": _demo_seen(demo).astype(int).tolist(),
         "keypoints": list(demo.keypoints),
         "landing": demo.landing,
+        "landing_axis": demo.landing_axis,
         "has_frames": _demo_has_frames(demo),
         "recording": demo.recording is not None,
         "taught": demo.taught,
@@ -1040,7 +1067,12 @@ async def demo_keypoints(body: KeypointsBody) -> dict:
         demo.keypoints = kps
     if demo.root is not None:
         await asyncio.get_event_loop().run_in_executor(
-            runtime._RENDER_EXECUTOR, _write_keypoints, pathlib.Path(demo.root), kps, demo.landing
+            runtime._RENDER_EXECUTOR,
+            _write_keypoints,
+            pathlib.Path(demo.root),
+            kps,
+            demo.landing,
+            demo.landing_axis,
         )
     return _demo_info(demo)
 
@@ -1094,6 +1126,7 @@ async def demo_key_frames_check(body: KeypointsBody) -> dict:
 
 class LandingBody(BaseModel):
     landing: str
+    axis: str | None = None
 
 
 @router.post("/demo/landing")
@@ -1103,15 +1136,24 @@ async def demo_landing(body: LandingBody) -> dict:
     stay nearest the demo's. Kept beside a saved demo."""
     if body.landing not in core.LANDINGS:
         raise HTTPException(422, f"a landing is one of {', '.join(core.LANDINGS)}")
+    if body.axis is not None and body.axis not in symmetry.AXES:
+        raise HTTPException(422, f"a landing axis is one of {', '.join(symmetry.AXES)}")
     with runtime._state.lock:
         demo = runtime._state.demo
         if demo is None:
             raise HTTPException(409, "record or load a demo first")
         demo.landing = body.landing
+        if body.axis is not None:
+            demo.landing_axis = body.axis
         kps = list(demo.keypoints)
     if demo.root is not None:
         await asyncio.get_event_loop().run_in_executor(
-            runtime._RENDER_EXECUTOR, _write_keypoints, pathlib.Path(demo.root), kps, body.landing
+            runtime._RENDER_EXECUTOR,
+            _write_keypoints,
+            pathlib.Path(demo.root),
+            kps,
+            demo.landing,
+            demo.landing_axis,
         )
     return _demo_info(demo)
 
@@ -1166,6 +1208,7 @@ async def demo_reach() -> dict:
             demo.name,
             json.dumps(demo.keypoints, sort_keys=True),
             landing,
+            demo.landing_axis,
             json.dumps(symmetry.normalise(demo.objects[onto].get("symmetry")), sort_keys=True),
             found.get("at"),
         ]

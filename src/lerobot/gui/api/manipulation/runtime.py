@@ -229,6 +229,7 @@ class _Demo:
     landing: str = (
         "exact"  # the turns the place may land at on its object (core.LANDINGS); kept with the marks
     )
+    landing_axis: str = "surface_normal"  # task turn axis; independent of visual pose symmetry
     video: list[bytes] | None = None  # the saved video decoded once for the editor, one JPEG per sample
     taught: bool = False  # recorded with an object taught first; unnamed marks follow that object
     hold_index: int = 0  # transient execution context; each grasp has its own attachment correction

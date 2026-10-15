@@ -173,8 +173,12 @@ samples the full circle every 5 degrees (72 candidates). The latter is a samplin
 resolution, not a proof that the best feasible angle is within 2.5 degrees of the
 selected one.
 
-Each turn rotates about the target's selected observed axis, carried by that
-object's current pose. A face-normal turn uses its measured top-surface centre;
+For `turn`, the demo saves a task turn axis separately from pose-estimation
+symmetry; older demos default to the surface normal. For `symmetry`, the turns
+and axis both come from the target's declared visual symmetry. This keeps a
+task's allowed placement rotations independent of whether the pose estimator
+can distinguish an object's orientation. Each turn rotates about the selected
+observed axis, carried by that object's current pose. A face-normal turn uses its measured top-surface centre;
 a long-axis turn uses a centreline fitted to central RGB-D cross-sections.
 This is a partial-surface estimate, not a complete shape or a guarantee that
 the task permits a turn. The separate landing rule still grants that freedom.
@@ -703,3 +707,23 @@ the arm was parked, torque released and the original Cartesian limits restored.
 
 Retry images, polling traces, frozen-joint states and the comparison report are
 under `/home/feit/Documents/showservo-experiments/20261014/continuous-held/retry_after_park/`.
+
+### 2026-10-15: independent pose and task axes, live insertion retry
+
+The saved insertion demo now declares continuous pose symmetry about the
+dowel's observed long axis. Its existing `turn` placement rule rotates about
+the ring's measured surface normal. These are independent declarations: the
+first folds equivalent dowel poses during finding; the second selects a
+task-equivalent final relation with the ring. The prior object sidecar is
+backed up under `/home/feit/Documents/showservo-experiments/20261015/symmetry-axis/`.
+
+Act `20261015_104148` found the dowel (71 inliers), passed the reach check,
+grasped it, and reselected a feasible carry/landing path after the first carry
+plan failed. It stopped early in key frame 4, before insertion: shoulder lift
+remained at 13.1 degrees while the command reached 8.0 degrees, with 61.6%
+reported load. The 5-degree, 0.5-second transport guard froze the arm. The
+recorded fingertip stayed near 9 mm above the base frame while the planned
+carry had begun lifting it. The arm was recovered, the dowel released onto the
+tray and the arm parked. This run validates the symmetry declaration's live
+find and grasp, but not a successful placement; the physical cause of the
+stalled lift is not established by the log alone.

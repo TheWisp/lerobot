@@ -3507,6 +3507,7 @@ def test_a_places_landing_rule_is_kept_with_the_demo_and_read_back(client, tmp_p
         with manipulation.runtime._state.lock:
             manipulation.runtime._state.demo = demo
         assert manipulation.demos._demo_info(demo)["landing"] == "exact", "no symmetry unless asked"
+        assert manipulation.demos._demo_info(demo)["landing_axis"] == "surface_normal"
         r = client.post("/api/pregrasp/demo/landing", json={"landing": "turn"})
         assert r.status_code == 200 and r.json()["landing"] == "turn"
         assert (
@@ -3515,16 +3516,50 @@ def test_a_places_landing_rule_is_kept_with_the_demo_and_read_back(client, tmp_p
         )
         assert client.post("/api/pregrasp/demo/keypoints", json={"keypoints": []}).status_code == 200
         assert manipulation.demos._read_landing(root) == "turn", "kept when the marks are cleared"
+        r = client.post("/api/pregrasp/demo/landing", json={"landing": "turn", "axis": "long_axis"})
+        assert r.status_code == 200 and r.json()["landing_axis"] == "long_axis"
+        assert manipulation.demos._read_landing_axis(root) == "long_axis"
+        assert (
+            client.post(
+                "/api/pregrasp/demo/landing", json={"landing": "turn", "axis": "sideways"}
+            ).status_code
+            == 422
+        )
         assert client.post("/api/pregrasp/demo/landing", json={"landing": "anyhow"}).status_code == 422
         (root / manipulation.runtime.KEYPOINTS_FILE).write_text(
             json.dumps({"keypoints": [], "landing": "sideways"})
         )
         assert manipulation.demos._read_landing(root) == "exact"
+        assert manipulation.demos._read_landing_axis(root) == "surface_normal"
         (root / manipulation.runtime.KEYPOINTS_FILE).write_text(json.dumps({"keypoints": []}))
         assert manipulation.demos._read_landing(root) == "exact"
     finally:
         with manipulation.runtime._state.lock:
             manipulation.runtime._state.demo = None
+
+
+def test_task_turn_axis_is_independent_of_target_pose_symmetry(tmp_path, monkeypatch):
+    """A visual long-axis symmetry cannot silently change a face-normal placement turn."""
+    from lerobot.showservo import symmetry as pose_symmetry
+
+    demo, _kin, _box = _place_demo(tmp_path, time.time())
+    demo.objects["box"]["symmetry"] = {"kind": "discrete", "axis": "long_axis", "order": 2}
+    demo.landing, demo.landing_axis = "turn", "surface_normal"
+    seen = []
+    original = pose_symmetry.observed_axis
+
+    def axis(points, selector):
+        seen.append(selector)
+        return original(points, selector)
+
+    monkeypatch.setattr(pose_symmetry, "observed_axis", axis)
+    manipulation.planning._landing_axis(demo, "box", np.eye(4))
+    assert seen[-1] == "surface_normal"
+    assert len(core.landing_turns(demo.landing, demo.objects["box"]["symmetry"])) == 72
+    demo.landing = "symmetry"
+    manipulation.planning._landing_axis(demo, "box", np.eye(4))
+    assert seen[-1] == "long_axis"
+    assert len(core.landing_turns(demo.landing, demo.objects["box"]["symmetry"])) == 2
 
 
 def test_a_demo_saved_before_symmetry_reads_as_none(tmp_path):

@@ -1901,6 +1901,8 @@ async function deLoad(force = false) {
         de.curve = c; de.loadedFor = key; de.i = Math.min(de.i, c.n - 1); de.dirty = false; de.kps = kps; de.check = null;
         const landing = document.getElementById('de-landing');
         if (landing) landing.value = c.landing || 'exact';
+        const landingAxis = document.getElementById('de-landing-axis');
+        if (landingAxis) landingAxis.value = c.landing_axis || 'surface_normal';
         deStatus(c.keypoints.length ? 'saved with the demo' : 'nothing marked yet: scrub to a moment, choose what it is in, and add it');
         const sl = document.getElementById('de-slider'); sl.max = c.n - 1; sl.value = de.i;
         if (!c.has_frames) document.getElementById('de-frame').removeAttribute('src');
@@ -2190,12 +2192,14 @@ function deLandingShow() {
     const onto = deCheckFresh() ? de.check.landing_object : null;
     row.style.display = onto ? '' : 'none';
     document.getElementById('de-landing-object').textContent = onto || '';
+    document.getElementById('de-landing-axis-row').style.display = onto && document.getElementById('de-landing').value === 'turn' ? '' : 'none';
 }
 
 async function deLanding(value) {
     try {
-        const d = await pgPost('/api/pregrasp/demo/landing', {landing: value});
-        if (de.curve) de.curve.landing = d.landing;
+        const d = await pgPost('/api/pregrasp/demo/landing', {landing: value, axis: document.getElementById('de-landing-axis').value});
+        if (de.curve) { de.curve.landing = d.landing; de.curve.landing_axis = d.landing_axis; }
+        deLandingShow();
         const onto = (de.check && de.check.landing_object) || 'its object';
         deStatus(value === 'turn' ? `the key frames made holding may land turned any way about the middle of ${onto}: each act takes the turn the arm reaches with joints nearest the demo's`
             : value === 'symmetry' ? `the key frames made holding may land at any of ${onto}'s symmetric turns: each act takes the one the arm reaches with joints nearest the demo's`
