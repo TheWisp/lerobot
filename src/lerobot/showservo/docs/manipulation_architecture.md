@@ -237,9 +237,12 @@ count, selected cost and plan summaries, not the entire candidate search.
 **NOT IMPLEMENTED.** The remaining design gap is between a demonstrated tool path and a task constraint. For a
 rigid pick and insertion, the required relation is the held object's pose
 relative to the receiving object at contact, modulo only a declared task
-symmetry. The demonstration's grip point, jaw side, wrist angle and free-space
-route are preferences. They may change when another pose of the same object
-makes the recorded grip awkward. A line mark before contact is a useful hover
+symmetry. The demonstration's grip point, jaw side, wrist angle and closing
+sequence are evidence about a grasp that supported the subsequent manipulation.
+They are the default contact constraints, not interchangeable with any
+geometric pinch. Only an explicitly allowed symmetry or a separately validated
+grasp adaptation may change them. The free-space route may change when another
+pose of the same object makes the recorded approach awkward. A line mark before contact is a useful hover
 hint, not evidence that its exact Cartesian line is required. During an isolated
 rotation, orientation may matter while translation is free within a safe region;
 translation becomes required again at insertion. This distinction must be
@@ -299,6 +302,26 @@ validator accepts the new marks, and offline IK still reaches both end assignmen
 final low closing pose is unchanged. A best-effort hover changes the arrival
 requirement but, without collision planning, can still aim into the wall; this
 edit by itself does not authorize an act.
+
+A follow-up offline search held the original end assignment and varied the
+approach angle, contact location and gripper opening against the saved RGB-D
+scene. The recorded first hover cleared the observed obstacles, but a modeled
+jaw reached the wall-side tray space during descent. A roughly 30-degree
+rotated, narrower pose produced opposing side contacts at its endpoint and
+cleared observed obstacles. It would move the grasp about 15–20 mm toward the
+end relative to the demonstrated contact and close from about 90 to 92–94
+gripper units, rather than the demonstrated roughly 64 to 98. A sampled
+straight descent grazed the depth-derived object by about 0.5 mm; a two-leg
+search did not certify a contact-free open approach. The conservative scene
+also has unobserved arm-occluded space, and the box contact model lacks a
+validated demonstrated-grasp positive control. This is a possible _new grasp
+hypothesis_, not an executable trajectory or evidence that it will hold through
+rotation and insertion. No physical contact trial was sent. The current scene
+should be rejected with a message such as: "The demonstrated grasp reaches the
+tray or wall at this object pose. A different grasp may work, but its contact
+and approach are not validated by this demo or its symmetry rule. Reset the
+object to give the demonstrated grasp clearance, or provide a grasp-adaptation
+rule backed by a complete contact, approach and lift check."
 
 The candidate contact gate also needs a positive control before it decides
 physical reachability. With the measured demo rod represented by its observed
