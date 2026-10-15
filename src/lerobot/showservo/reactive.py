@@ -214,14 +214,14 @@ def checked_joint_samples(
     return linear if checked(linear) else None
 
 
-def unverified_object_shift(motion: np.ndarray, centre: np.ndarray, tolerance_m: float) -> float | None:
+def unverified_object_shift(motion: np.ndarray, points: np.ndarray, tolerance_m: float) -> float | None:
     """Measured object-centre motion too large to carry through an unverified pregrasp.
 
     A rotation about an origin away from the object may have a large transform
     translation while the object itself stays still. Compare its material
     centre, and allow the placement residual on each of the two observations.
     """
-    centre = np.asarray(centre, dtype=float)
+    centre = np.asarray(points, dtype=float).reshape(-1, 3).mean(axis=0)
     motion = np.asarray(motion, dtype=float)
     shift = float(np.linalg.norm(motion[:3, :3] @ centre + motion[:3, 3] - centre))
     return shift if shift > 2 * tolerance_m else None

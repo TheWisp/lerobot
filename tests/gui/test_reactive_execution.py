@@ -26,11 +26,12 @@ def test_unverified_pregrasp_shift_uses_object_centre():
     turn = np.eye(4)
     turn[:3, :3] = [[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]]
     turn[:3, 3] = centre - turn[:3, :3] @ centre
-    assert reactive.unverified_object_shift(turn, centre, 0.003) is None
+    points = np.stack([centre + [0.01, 0, 0], centre - [0.01, 0, 0]])
+    assert reactive.unverified_object_shift(turn, points, 0.003) is None
     turn[1, 3] += 0.007
-    assert reactive.unverified_object_shift(turn, centre, 0.003) == pytest.approx(0.007)
+    assert reactive.unverified_object_shift(turn, points, 0.003) == pytest.approx(0.007)
     turn[1, 3] -= 0.002
-    assert reactive.unverified_object_shift(turn, centre, 0.003) is None
+    assert reactive.unverified_object_shift(turn, points, 0.003) is None
 
 
 @pytest.mark.parametrize("closing", [1.0, -1.0])

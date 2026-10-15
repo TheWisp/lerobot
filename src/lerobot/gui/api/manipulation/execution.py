@@ -174,10 +174,8 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
                 current_teach = runtime._state.teach
             if state != "tracking" and current_teach is not None:
                 points = np.asarray(current_teach.keypoints["xyz"], dtype=float)
-                valid = np.asarray(current_teach.keypoints["valid"], dtype=bool)
-                centre = points[valid].mean(axis=0)
                 at = seen_at0 if refind is not None and not refind.done() else seen_at
-                shift = reactive.unverified_object_shift(carried(picked, at), centre, core.ACT_REACH_TOL_M)
+                shift = reactive.unverified_object_shift(carried(picked, at), points, core.ACT_REACH_TOL_M)
                 if shift is not None:
                     return (
                         f"{picked} moved {shift * 1000:.1f} mm while its pregrasp pose was unverified; "
