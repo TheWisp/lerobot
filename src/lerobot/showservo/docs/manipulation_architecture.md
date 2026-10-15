@@ -289,11 +289,13 @@ assignments. Their recorded low closing pose put a modeled jaw into the tray
 or the observed left wall. The conservative scene grid also marked space
 behind the parked arm unknown, so it did not certify any complete path.
 
-The first recorded approach mark at 6.001 s is now `best_effort`, and the
-second mark moved from 6.836 s to 7.64 s, just before the recorded firm grip
-at 7.772 s. The saved insertion demo's prior `keypoints.json` is backed up as
-`keypoints.pre-refined-grasp-20261015.json` beside it. The key-frame validator
-accepts the new marks, and offline IK still reaches both end assignments. The
+The first recorded hover mark at 6.001 s is now `best_effort`. The original
+6.836 s open-approach mark remains, and a new 7.64 s mark splits off a short
+closing segment just before the recorded firm grip at 7.772 s. Moving the
+open-approach mark itself caused the planner to close during the long descent;
+that edit was corrected. The saved insertion demo's prior `keypoints.json` is
+backed up as `keypoints.pre-refined-grasp-20261015.json` beside it. The key-frame
+validator accepts the new marks, and offline IK still reaches both end assignments. The
 final low closing pose is unchanged. A best-effort hover changes the arrival
 requirement but, without collision planning, can still aim into the wall; this
 edit by itself does not authorize an act.
