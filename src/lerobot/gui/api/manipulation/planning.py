@@ -698,7 +698,7 @@ def _plan_act_once(
             speed,
             jog.HZ,
         )
-        online_best_effort = online_candidate and np.ptp(plan["grips"]) < 1e-6
+        online_best_effort = online_candidate and np.ptp(plan["grips"]) < core.GRIP_STILL_UNITS
         sol = core.solve_plan_joints(
             kin,
             plan["poses"],
@@ -729,7 +729,7 @@ def _plan_act_once(
                 continue
             samples = np.flatnonzero(np.asarray(plan["stage"]) == s["label"])
             grip_here = plan["grips"][max(0, samples[0] - 1) : samples[-1] + 1]
-            if np.ptp(grip_here) > 1e-6:
+            if np.ptp(grip_here) >= core.GRIP_STILL_UNITS:
                 continue  # a closing/opening event must keep its planned contact position
             failed = next((int(i) for i in samples if invalid[i]), None)
             if failed is None:

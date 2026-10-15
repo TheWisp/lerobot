@@ -185,7 +185,8 @@ def test_best_effort_stop_clears_pending_command_and_holds_fresh_encoders(monkey
     assert j.playback is not None, "stale telemetry must not claim a safe soft stop"
 
 
-def test_live_best_effort_tries_incremental_steps_then_holds_observed_prefix(monkeypatch):
+@pytest.mark.parametrize("grip_drift", [0.0, 0.05])
+def test_live_best_effort_tries_incremental_steps_then_holds_observed_prefix(monkeypatch, grip_drift):
     kin = _TipKinematics()
     initial = np.array([0.0, 0, 0, 0, 0, 0, 80])
     state = {"q": initial.copy()}
@@ -230,7 +231,7 @@ def test_live_best_effort_tries_incremental_steps_then_holds_observed_prefix(mon
             "local": np.stack([pose(0), pose(0.08)]),
             "frames": ["world", "world"],
             "held": np.zeros(2, bool),
-            "grips": np.full(2, 80.0),
+            "grips": np.array([80.0, 80.0 + grip_drift]),
             "hints": np.zeros((2, 7)),
             "floor": np.full(2, -1.0),
             "constraint": ["pose", "best_effort"],

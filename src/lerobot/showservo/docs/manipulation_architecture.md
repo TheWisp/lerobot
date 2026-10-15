@@ -726,4 +726,39 @@ recorded fingertip stayed near 9 mm above the base frame while the planned
 carry had begun lifting it. The arm was recovered, the dowel released onto the
 tray and the arm parked. This run validates the symmetry declaration's live
 find and grasp, but not a successful placement; the physical cause of the
-stalled lift is not established by the log alone.
+stalled lift is not established by the log alone. In particular, the 61.6%
+load reading is below the reported overload threshold, temperature was normal,
+and no servo fault was reported. Playback freezes after 0.5 seconds beyond a
+fixed 5-degree following error; the Cartesian gizmo has a different controller
+and can keep driving toward its target. This guard is a software stop, not
+evidence that the arm could not lift the dowel. A comparison with the same
+grasp and lift through the gizmo remains needed.
+
+A follow-up reach check exposed a separate clearance bug. The robot's gripper
+read 63.9 units while the recorded hover asked for 63.948; planning treated
+that 0.048-unit difference as a contact event and refused to shorten a
+best-effort hover. Clearance now uses the existing 0.3-unit gripper-still
+threshold in planning and live execution. Actual opening and closing remain
+strict at their contact positions.
+
+The 2026-10-15 direct gizmo comparison reached the transformed grasp area with
+the arm and closed the fingers 2.2 units short of their command. A vertical
+lift then moved the fingertip from -6.7 to 40.7 mm, but camera frames showed
+the dowel still touching the tray and sliding toward its left wall. A further
+lift request to 90 mm stopped at 74.0 mm, 16.7 mm from target, with shoulder
+lag 4.6 degrees and load 56% of full scale; there was no servo fault or freeze.
+The gripper-gap check had reported “holding” throughout. It cannot establish
+that the object is airborne. The arm was released and parked, leaving the
+dowel against the wall. The evidence supports a grasp/contact-path failure,
+not an intrinsic inability of this arm to reach the grasp area. The next trial
+needs an inboard object, a checked grasp location and a lift whose progress is
+verified from the object's motion before sideways carry. The existing demo
+can express a vertical lift key frame, but a fixed 45 mm lift was not enough
+in this off-centre case.
+
+The reset helper also showed a stale camera frame while a second server was
+recording. It searched all recording directories by modification time, so the
+image could come from the wrong session. It now reads an aligned RGB-depth
+pair directly from its own server. Its `held_short` return is no longer marked
+`ok` when the observed fingertip has not reached its target; that distinction
+matters when a loaded lift stops centimetres short without a motor fault.

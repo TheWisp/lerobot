@@ -19,6 +19,8 @@
 from __future__ import annotations
 
 import asyncio
+import io
+import json
 import os
 import re
 import threading
@@ -198,6 +200,15 @@ async def frame_jpeg() -> Response:
     except Exception as e:
         raise HTTPException(500, f"camera read failed: {e}") from e
     return Response(content=data, media_type="image/jpeg")
+
+
+@router.get("/frame.npz")
+async def frame_npz() -> Response:
+    """One aligned RGB-depth frame from this server's camera, including its intrinsics."""
+    rgb, depth_m, intr = await _frame()
+    buf = io.BytesIO()
+    np.savez_compressed(buf, rgb=rgb, depth=depth_m, intr=np.array(json.dumps(intr)))
+    return Response(content=buf.getvalue(), media_type="application/octet-stream")
 
 
 @router.post("/camera/share/start")

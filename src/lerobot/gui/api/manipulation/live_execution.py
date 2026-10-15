@@ -90,7 +90,7 @@ async def stream(
         free_terminal = (
             constraint == "best_effort"
             and i == len(plan["q"]) - 1
-            and abs(float(path["grips"][i] - path["grips"][phase])) < 1e-6
+            and abs(float(path["grips"][i] - path["grips"][phase])) < core.GRIP_STILL_UNITS
         )
         if free_terminal:
             cur = jog.current_tip_and_anchor()

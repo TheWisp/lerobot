@@ -34,8 +34,8 @@ Moving (the arm is the LEFT SO-107; one call at a time; each blocks until done):
                                 yaw); turns over 50 deg go in steps. Returns {"ok", "position", "yaw", "err_mm"}; ok is
                                 False when it did not get within 4 mm / 4 deg in 20 s per step, unless it stopped with
                                 its joints commanded onto the target and each within 6 deg of its command: then
-                                "held_short" is True, as close as the servos get it (it stops a few mm short of some
-                                targets and sags more when lifting a load: check the returned position).
+                                "held_short" is True when the joints stop near their commands but the fingertip has
+                                not reached the target (it can still be centimetres away: check the returned error).
   rig.travel(x, y, z, yaw=None) move() along a straight line in steps of at most 95 mm (avoids nothing by itself)
   rig.grip(p) -> {"obs", "holding"}  gripper to p (about 60 open .. 98 closed); holding = it stopped over 0.7 short of p
   rig.state()                   fingertip position, yaw, gripper, freeze reason, motor loads (signed 0.1% drive),
@@ -50,6 +50,7 @@ Command line: ./rig look | where U V | pixel X Y Z | obj U V | objects | state |
 """
 
 import contextlib
+import io
 import json
 import pathlib
 import sys
@@ -140,29 +141,23 @@ def _wrap(a):
 def look():
     import cv2
 
-    code, out = _call("/api/pregrasp/camera/record/start", {})
-    if code == 409 and "start the camera" in str(out):
-        _call(
+    code, state = _call("/api/showservo/state")
+    if code != 200:
+        raise RuntimeError(f"camera state unavailable: {state}")
+    if not (state.get("session") or {}).get("live"):
+        code, out = _call(
             "/api/showservo/session/start", {"serial": CAMERA_SERIAL, "name": "approach_20261001"}, timeout=60
         )
+        if code != 200:
+            raise RuntimeError(f"camera start failed: {out}")
         time.sleep(2.0)
-        code, out = _call("/api/pregrasp/camera/record/start", {})
-    if code == 409 and "already being recorded" in str(out):
-        bgr, depth = (
-            _newest_recorded_frame()
-        )  # a long recording runs (a video of the session): read its newest
-    else:
-        time.sleep(0.6)
-        code, rec = _call("/api/pregrasp/camera/record/stop", {})
-        if code != 200 or not rec.get("frames"):
-            raise RuntimeError(f"no camera frame: {rec}")
-        d = pathlib.Path(rec["out"])
-        n = len(np.atleast_1d(np.loadtxt(d / "times.txt")))
-        bgr = cv2.imread(str(d / "rgb" / f"{n - 1:06d}.jpg"))
-        depth = (
-            cv2.imread(str(d / "depth" / f"{n - 1:06d}.png"), cv2.IMREAD_UNCHANGED).astype(np.float32)
-            / 1000.0
-        )
+    with (
+        urllib.request.urlopen(S + "/api/pregrasp/frame.npz", timeout=30) as response,
+        np.load(io.BytesIO(response.read()), allow_pickle=False) as frame,
+    ):
+        rgb = frame["rgb"]
+        depth = frame["depth"]
+    bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
     np.save(HERE / "look_depth.npy", depth)
     grid = bgr.copy()
     for u in range(0, grid.shape[1], 50):
@@ -173,30 +168,7 @@ def look():
         cv2.putText(grid, str(v), (2, v + 12), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 255), 1)
     cv2.imwrite(str(HERE / "look.jpg"), grid)
     cv2.imwrite(str(HERE / "look_raw.jpg"), bgr)
-    return cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB), depth
-
-
-RECORDINGS = pathlib.Path("~/.cache/huggingface/lerobot/demos/.recordings").expanduser()
-
-
-def _newest_recorded_frame():
-    """The newest complete colour and depth frame of the camera recording in progress (the newest camera_* folder,
-    written frame by frame), a second fresh at most."""
-    import cv2
-
-    rec = max(
-        (p for p in RECORDINGS.glob("camera_*") if (p / "depth").is_dir()), key=lambda p: p.stat().st_mtime
-    )
-    for _ in range(50):
-        depths = sorted((rec / "depth").glob("*.png"))
-        if len(depths) >= 3 and time.time() - depths[-1].stat().st_mtime < 1.0:
-            k = depths[-2].stem  # the newest may still be being written
-            bgr = cv2.imread(str(rec / "rgb" / f"{k}.jpg"))
-            depth = cv2.imread(str(depths[-2]), cv2.IMREAD_UNCHANGED)
-            if bgr is not None and depth is not None:
-                return bgr, depth.astype(np.float32) / 1000.0
-        time.sleep(0.1)
-    raise RuntimeError(f"the camera recording {rec.name} has no fresh frame")
+    return rgb, depth
 
 
 def _depth(depth=None):
@@ -529,7 +501,7 @@ def _move_once(target, yaw):
         )
         if stopped and commanded and s["lag_deg"] <= HELD_SHORT_DEG:
             return {
-                "ok": True,
+                "ok": False,
                 "held_short": True,
                 "position": s["position"],
                 "yaw": s["yaw"],
@@ -559,6 +531,8 @@ def move(x, y, z, yaw=None):
     result = None
     for k in range(1, steps + 1):  # big turns in steps: the jog caps how far one target turns
         result = _move_once(now + (target - now) * k / steps, s["yaw"] + turn * k / steps)
+        if not result["ok"]:
+            break
     return result
 
 
@@ -573,6 +547,8 @@ def travel(x, y, z, yaw=None):
     for k in range(1, n + 1):
         p = now + (target - now) * k / n
         result = move(*p, yaw)
+        if not result["ok"]:
+            break
     return result
 
 

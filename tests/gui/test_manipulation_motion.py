@@ -1776,6 +1776,21 @@ def test_best_effort_waypoint_stops_at_reachable_prefix_and_replans_next_exact_f
     assert online["ok"] and not online["marks"][0]["ok"], "the final hover may be unreachable"
     assert online["marks"][0]["best_effort_fraction"] is None, "do not shorten before trying the arm"
     np.testing.assert_allclose(online["live_path"]["local"][-1, 0, 3], 0.08, atol=1e-6)
+    nearly_set_grip = q_now.copy()
+    nearly_set_grip[-1] = demo.q_cmd[9, -1] - 0.05
+    near = manipulation.planning._plan_act_once(
+        demo,
+        None,
+        np.eye(4),
+        ShortArm(),
+        nearly_set_grip,
+        (0.04, np.radians(30)),
+        ((-1, -1, -1), (1, 1, 1)),
+        1.0,
+    )
+    assert near["ok"] and 0 < near["marks"][0]["best_effort_fraction"] < 1, (
+        "sub-resolution gripper settling is not a contact event"
+    )
     demo.q_cmd[9, -1] = 70.0
     contact = manipulation.planning._plan_act_once(
         demo,
