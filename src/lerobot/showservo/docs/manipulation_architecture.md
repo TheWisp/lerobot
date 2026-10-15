@@ -491,12 +491,13 @@ a short rolling horizon. One IK solve now covers at least two motor ticks: the
 executor checks each interpolated joint sample by forward kinematics against
 the corresponding Cartesian path and the workspace/floor. If a joint chord
 fails that check, it solves a shorter Cartesian step instead. It buffers up to
-six future samples from the latest object pose, independent of when the camera
-next reports one. A new
-accepted pose that differs beyond the existing solve tolerance atomically
-replaces unsent samples; a sample already consumed is
-never changed or replayed. Gripper-changing samples stay at the queue front so
-grasp and release cannot be prefetched past unfinished motion. The playback
+one second (30 samples) from the latest object pose, independent of when the
+camera next reports one. The producer solves a replacement tail before
+swapping it, so IK never clears the queue while it runs. A new accepted pose
+that differs beyond the existing solve tolerance atomically replaces unsent
+samples; a sample already consumed is never changed or replayed. Closing an
+unheld grasp can fill the queue, while a held-object release stays at the queue
+front so its approach can use the latest observation. The playback
 clock and lag guards survive each replacement; a temporary empty queue cannot
 clear a hard-lag timeout. Sliced paths start from current joints, because their
 old endpoints may have changed during live execution. Each Act records
@@ -513,9 +514,20 @@ remained unresolved at that point. A later speed-2 run,
 `insertion/acts/20261015_204519`, completed but repeated the prior command on
 31.9% of active ticks (402 checked targets across 564 motor ticks), versus 33.7%
 in the earlier speed-2 success. This exposed the steady underfeeding that led
-to the multi-tick checked solve above. **The multi-tick change still needs a
-physical retest**; the existing automatic reset is for the gamepad/cube layout,
-not an upright dowel in a ring.
+to the multi-tick checked solve above. Subsequent speed-2 physical retests with
+the one-second queue reached 25–29 pending samples. In
+`insertion/acts/20261015_221031`, 151 IK solves had a 2.36 ms median and
+16.1 ms 95th percentile; the motor trace had a 29.6 Hz median rate. Yet 18.2%
+of active ticks repeated an arm command, with 17 hold-then-move events and a
+3.12-degree 95th-percentile following error, just above the 3-degree lag-wait
+threshold. The queue was briefly empty at stage boundaries and during the
+gripper phase. Gripper-phase buffering and explicit per-tick lag-wait/queue-depth
+recording were added after this trial, so they are not included in these
+numbers. A longer queue alone cannot make a loaded motor follow a command
+faster; the next trial must separate lag waits from queue starvation using
+those recorded fields. This trial pushed the dowel before closing and then
+missed the grasp. That contact is a separate missing collision-aware approach
+problem, not evidence of a successful insertion.
 
 That speed-2 trial also moved the ring during the Act. The saved RGB frames put
 it near image x=345 after the move, while the Point2Pose mask stayed near
