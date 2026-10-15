@@ -286,6 +286,17 @@ def _long_axis(points, noise_m):
     }
 
 
+def _paired_extent_noise(noise_m):
+    """Budget for comparing extents from two independently noisy RGB-D views.
+
+    Each view already spends ``noise_m`` on its measured surface. Their
+    difference has the quadrature allowance, as does the whole-surface RMS
+    check below; requiring one view's allowance rejects matching full rods at
+    a quantile boundary.
+    """
+    return np.sqrt(2) * noise_m
+
+
 def constrain_axis(pose, reference, depth, mask, intr, *, noise_m, tol_m, tol_deg):
     """Constrain the two observed axis angles; keep proposed roll and translation.
 
@@ -317,10 +328,9 @@ def constrain_axis(pose, reference, depth, mask, intr, *, noise_m, tol_m, tol_de
     out["axis_evidence"] = evidence
     if ref["split_angle_deg"] + live["split_angle_deg"] > tol_deg:
         return {**out, "reason": "principal-axis split fits disagree"}
-    if (
-        abs(ref["extent"] - live["extent"]) > noise_m
-        or np.max(abs(ref["span"][1:] - live["span"][1:])) > noise_m
-    ):
+    if abs(ref["extent"] - live["extent"]) > _paired_extent_noise(noise_m) or np.max(
+        abs(ref["span"][1:] - live["span"][1:])
+    ) > _paired_extent_noise(noise_m):
         return {**out, "reason": "surface extents differ; axis may belong to a partial view"}
     a = raw[:3, :3] @ ref["axis"]
     b = live["axis"] * (1 if a @ live["axis"] >= 0 else -1)
@@ -378,7 +388,9 @@ def recover_full_axis(pose, reference, depth, mask, intr, *, noise_m, end_swap=F
         return {**out, "reason": "axis recovery has no resolved measured axis"}
     extent_difference = abs(ref["extent"] - live["extent"])
     out["extent_difference_mm"] = extent_difference * 1000
-    if extent_difference > noise_m or np.max(abs(ref["span"][1:] - live["span"][1:])) > noise_m:
+    if extent_difference > _paired_extent_noise(noise_m) or np.max(
+        abs(ref["span"][1:] - live["span"][1:])
+    ) > _paired_extent_noise(noise_m):
         return {**out, "reason": "axis recovery requires the same measured surface extent"}
     points, target = ref["points"], live["points"]
     tree = cKDTree(target)

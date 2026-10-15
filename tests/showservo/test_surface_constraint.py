@@ -251,6 +251,27 @@ def test_recorded_full_rod_recovers_end_choices_but_partial_view_does_not():
     assert unspecified["pose"] is None and "two ends" in unspecified["axis_recovery_reason"]
 
 
+def test_two_complete_depth_views_use_their_combined_extent_noise_budget():
+    # The same visible rod matched 61/167 feature points yet the old single-view
+    # 3 mm extent budget rejected this second view at a 3.2 mm quantile gap.
+    # Both RGB-D surfaces and the corrected registration must still agree.
+    with np.load(Path(__file__).parent / "fixtures/axis_paired_noise_20261015.npz") as z:
+        reference = z["reference"]
+        depth = z["depth"].astype(float) / 1000
+        mask = z["mask"]
+        intr = json.loads(str(z["intr"]))
+        pose = z["pose"]
+    ref = sc._long_axis(reference, LIMITS["noise_m"])
+    live = sc._long_axis(sc.depth_points(depth, mask, intr), LIMITS["noise_m"])
+    assert (
+        LIMITS["noise_m"] < abs(ref["extent"] - live["extent"]) < sc._paired_extent_noise(LIMITS["noise_m"])
+    )
+    result = sc.resolve(pose, reference, depth, mask, intr, **LIMITS, recover_axis=True, end_swap=True)
+    assert result["pose"] is not None and result["observed_dof"] == 2, result
+    assert result["axis_support_after"] > 0.7
+    assert result["axis_rms_after_mm"] < LIMITS["noise_m"] * 1000
+
+
 @pytest.mark.parametrize("name", ["latest", "earlier", "clear", "baseline"])
 def test_recorded_wrong_tilts_improve_on_held_out_geometry(name):
     with np.load(Path(__file__).parent / "fixtures/pose_disagreement_20261012.npz") as z:
