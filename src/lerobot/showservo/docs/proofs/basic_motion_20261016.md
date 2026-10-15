@@ -24,6 +24,17 @@ through the gizmo still left the shoulder at 25.85 degrees for 1.2 seconds.
 This rules out the held object as the sole cause in that configuration;
 contact elsewhere, effort and mechanics remain unresolved. Parking succeeded.
 
+The shoulder stop did not first appear with `1cb3f657b`. In the earlier
+successful Act `20261015_233027`, the shoulder stayed near 26.81 degrees
+while the key-frame-5 command dipped to 22.23 degrees. Its 4.58-degree
+maximum lag stayed inside the 5-degree transport limit; the command then
+rose and the stage completed. Act `20261015_234819`, before the free-waypoint
+interpolation, stopped in the same stage at 26.20 observed / 21.20 commanded.
+The new interpolation run stopped at 25.76 / 20.79 degrees. The latest pose
+and trajectory differed slightly across physical resets, so these runs show
+a pre-existing narrow margin, not a same-scene comparison of interpolation.
+The interpolation's contribution to that margin remains unmeasured.
+
 ## Consumer timing
 
 That act also recorded moving command intervals as short as approximately
