@@ -190,12 +190,18 @@ async def stream(
         base = done if replacing else len(qs) - 1
         phase = phases[base]
         i = min(phase + 1, len(plan["q"]) - 1)
-        if pending and (
-            abs(float(path["grips"][i] - qs[base][gi])) > 1e-6
-            or any(abs(float(qs[k][gi] - qs[k - 1][gi])) > 1e-6 for k in range(done + 1, len(qs)))
+        if (
+            pending
+            and path["held"][i]
+            and (
+                abs(float(path["grips"][i] - qs[base][gi])) > 1e-6
+                or any(abs(float(qs[k][gi] - qs[k - 1][gi])) > 1e-6 for k in range(done + 1, len(qs)))
+            )
         ):
-            # Grasp/release decisions use the latest completed prefix. Keep
-            # those events at the front of the queue, never inside a horizon.
+            # A held-object release must remain at the queue head so a new
+            # object/attachment observation can retarget the final approach
+            # before opening. An unheld grasp close may be queued: its samples
+            # are still consumed in order, and the grasp is verified afterward.
             continue
         if base != done:
             goal = reactive.targets({k: v[i : i + 1] for k, v in path.items()}, motion, fix)[0]

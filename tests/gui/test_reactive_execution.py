@@ -207,6 +207,64 @@ def test_checked_horizon_replaces_only_unsent_future_without_resetting_guards(mo
     assert (j.playback_t0, j.playback_blocked, j.playback_held) == (clock, 12.0, 11.0)
 
 
+def test_unheld_grasp_close_can_fill_the_checked_queue(monkeypatch):
+    kin = _TipKinematics()
+    gi = MOTOR_NAMES.index("gripper")
+    q = np.zeros(len(MOTOR_NAMES))
+    q[gi] = 80.0
+    sent: list[np.ndarray] = []
+    state = {"q": q.copy()}
+
+    def consume(command):
+        state["q"] = np.array([command[m] for m in MOTOR_NAMES])
+        sent.append(state["q"].copy())
+
+    fake_playback(monkeypatch, consume)
+    monkeypatch.setattr(runtime, "ACT_TICK_S", 0.001)
+    monkeypatch.setattr(jog, "servo_ranges", lambda: None)
+    monkeypatch.setattr(jog, "workspace_box", lambda: ((-1, -1, -1), (1, 1, 1)))
+    monkeypatch.setattr(
+        jog,
+        "current_tip_and_anchor",
+        lambda: (
+            kin.forward_kinematics(state["q"]),
+            np.eye(4),
+            dict(zip(MOTOR_NAMES, state["q"], strict=True)),
+        ),
+    )
+    plan = {
+        "q": np.tile(q, (2, 1)),
+        "times": np.array([0.0, 1.0]),
+        "stage": ["start", "grasp"],
+        "live_path": {
+            "local": np.stack([pose(0.0), pose(0.0)]),
+            "frames": ["world", "world"],
+            "held": np.zeros(2, bool),
+            "grips": np.array([80.0, 100.0]),
+            "hints": np.zeros((2, len(q))),
+            "floor": np.full(2, -1.0),
+        },
+    }
+    diagnostics: dict = {}
+    reason, last = asyncio.run(
+        live_execution.stream(
+            plan,
+            kin,
+            lambda: {"world": np.eye(4)},
+            lambda: np.eye(4),
+            lambda: "",
+            lambda *_: None,
+            lambda *_: pytest.fail("stationary grasp should not need another pose"),
+            (0.12, np.pi),
+            1,
+            diagnostics=diagnostics,
+        )
+    )
+    assert not reason and last[gi] == pytest.approx(100.0)
+    assert diagnostics["max_queue_samples"] > 2, "grasp samples should be buffered ahead of the bus"
+    assert np.all(np.diff(np.array(sent)[:, gi]) >= 0), "the queue still closes in order"
+
+
 @pytest.mark.parametrize("solve_s", [0.02, 0.055])
 def test_checked_horizon_keeps_motor_ticks_filled_while_solves_take_time(monkeypatch, solve_s):
     """Even a 55 ms IK solve should feed two interpolated 30 Hz commands."""
