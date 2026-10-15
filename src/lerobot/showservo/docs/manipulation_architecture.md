@@ -756,6 +756,16 @@ verified from the object's motion before sideways carry. The existing demo
 can express a vertical lift key frame, but a fixed 45 mm lift was not enough
 in this off-centre case.
 
+The original failed act's saved frames show the same pattern. Between frames
+40 and 59 of `20261015_104148`, the dowel shifted and tilted while the first
+carry commanded a sideways move and rotation. Aligned depth at its lower end
+in frame 59 puts the visible top about 19 mm above the local tray; the dowel's
+measured thickness is about 17–19 mm. Its underside was therefore at or near
+the tray, not cleared for transport. This agrees with the gizmo comparison,
+although the exact contact forces were not recorded. The 2.3-unit shortfall in
+the gripper reading was evidence that its fingers closed on _something_, not
+proof of a load-bearing grasp or an airborne object.
+
 The reset helper also showed a stale camera frame while a second server was
 recording. It searched all recording directories by modification time, so the
 image could come from the wrong session. It now reads an aligned RGB-depth

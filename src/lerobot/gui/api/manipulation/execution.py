@@ -742,7 +742,7 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
             return g_obs
 
         def grasp_missed(cmd: float, g_obs: float, i_demo: int, closing: float) -> str:
-            """Why the grasp missed, or "": closing on nothing reaches the command, an object stops it short."""
+            """Reject an unobstructed closure; a blocked gripper alone cannot verify object lift."""
             held, short = core.grasp_held(
                 cmd, g_obs, float(demo.q_cmd[i_demo, gi]), float(demo.q_obs[i_demo, gi]), closing
             )

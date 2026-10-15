@@ -915,12 +915,13 @@ GRASP_HELD_SHORT = 0.7
 def grasp_held(
     cmd: float, obs: float, demo_cmd: float, demo_obs: float, closing: float
 ) -> tuple[bool | None, float]:
-    """Did the gripper close on the object? ``(held, how far short of its command it stopped)``.
+    """Closure proxy for a grasp: ``(fingers blocked, shortfall from command)``.
 
     ``closing`` is the sign of the demo's closing: +1 when closing raises the gripper's
-    reading. Held when the gripper stopped more than :data:`GRASP_HELD_SHORT` short of its
-    command, as an object between the fingers stops it. None when the demo's own grasp
-    stopped no further short than that, so the reading cannot tell.
+    reading. A shortfall above :data:`GRASP_HELD_SHORT` says the fingers met an
+    obstruction; it cannot establish that the designated object is held or clear
+    of the tray. None when the demo's own grasp stopped no further short than
+    that, so this reading cannot distinguish contact from no contact.
     """
     short = float(closing * (cmd - obs))
     if closing * (demo_cmd - demo_obs) <= GRASP_HELD_SHORT:
