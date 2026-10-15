@@ -270,6 +270,9 @@ class _Act:
     )
     correct_hold: bool = True  # False replays the place uncorrected for the hold, as a baseline
     allow_grasp_prediction: bool = False  # explicitly allow an unchanged-grip prediction when vision fails
+    force_recovered_pose: bool = False  # operator confirmed the current ambiguous grasp assignment
+    recovered_pose_token: str | None = None
+    recovered_pose_object: str | None = None
     finds: list[str] = field(
         default_factory=list
     )  # the find log's rows of the finds it asked for (_log_find)

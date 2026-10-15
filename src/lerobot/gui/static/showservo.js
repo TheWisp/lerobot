@@ -943,7 +943,11 @@ function pgDrawBox() {
 async function pgPost(path, body) {
     const r = await fetch(path, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body || {})});
     const d = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(d.detail || `${path} failed`);
+    if (!r.ok) {
+        const e = new Error(typeof d.detail === 'string' ? d.detail : (d.detail?.message || `${path} failed`));
+        e.status = r.status; e.detail = d.detail;
+        throw e;
+    }
     return d;
 }
 
@@ -1282,14 +1286,40 @@ function demoOpenData(repoId) {
     } catch (e) { demoStatus(String(e), true); }
 }
 
-async function actGo() {
+let apActWarning = null;
+function actWarningShow(detail) {
+    apActWarning = detail;
+    const box = document.getElementById('ap-act-warning');
+    document.getElementById('ap-act-warning-text').textContent = detail.message;
+    const img = document.getElementById('ap-act-warning-preview');
+    img.src = `${detail.preview}?t=${Date.now()}`;
+    box.hidden = false;
+    box.scrollIntoView({block: 'nearest', behavior: 'smooth'});
+}
+
+function actWarningDismiss() {
+    apActWarning = null;
+    document.getElementById('ap-act-warning').hidden = true;
+}
+
+async function actForceRecovered() {
+    if (apActWarning?.confirmation) await actGo(apActWarning.confirmation);
+}
+
+async function actGo(confirmation = null) {
     try {
         const options = apInjectBody();
         await pgPost('/api/pregrasp/act', {speed: Number(document.getElementById('act-speed').value || 1), ...options,
-            allow_grasp_prediction: options.correct_hold && apAllowGraspPrediction});
+            allow_grasp_prediction: options.correct_hold && apAllowGraspPrediction,
+            confirm_recovered_pose: confirmation});
+        actWarningDismiss();
         const tile = document.getElementById('jog-tile');
         if (tile.contentWindow) tile.contentWindow.postMessage({type: 'jog-reanchor'}, '*');
-    } catch (e) { actStatus(e.message, true); }
+    } catch (e) {
+        actStatus(e.message, true);
+        if (e.detail?.code === 'recovered_pose_requires_confirmation') actWarningShow(e.detail);
+        else if (confirmation) actWarningDismiss();
+    }
     pgState();
 }
 
@@ -1791,7 +1821,9 @@ async function apGuideTick() {
     // marks in the editor.
     const weak = [[first, ref], ...apActObjects.slice(1).map(n => [n, (st.located || {})[n]])].find(([o, f]) => o && f && f.ok && f.strong === false);
     let text = 'ready', why = '';
-    if (act.ok === false && act.reason && !act.on) {
+    if (apActWarning) {
+        text = 'Act rejected: review the proposed grasp paths and warning below';
+    } else if (act.ok === false && act.reason && !act.on) {
         text = `last act stopped: ${act.reason.split(': ')[0]}`;
         why = act.reason;
     } else if (weak) {

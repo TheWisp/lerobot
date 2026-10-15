@@ -89,6 +89,7 @@ class ActBody(BaseModel):
     inject: InjectBody | None = None
     correct_hold: bool = True  # False: a place replays the demo against the target, uncorrected for the hold
     allow_grasp_prediction: bool = False  # use the grasp-time hold if post-carry vision cannot verify it
+    confirm_recovered_pose: str | None = None  # token from the warning for this find and demo
     model_config = ConfigDict(extra="forbid")
 
 
@@ -200,6 +201,11 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
         if demo is None:
             fail("record or load a demo first")
             return
+        if act.force_recovered_pose and (
+            teach is None or planning._recovered_pose_token(demo, teach) != act.recovered_pose_token
+        ):
+            fail("the proposed grasp changed; review its preview and confirm it again")
+            return
         frames = core.key_frames(demo.keypoints)
         if not frames:
             fail("mark a key frame first")
@@ -248,6 +254,11 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
                 return
             with runtime._state.lock:
                 test, teach, tracking = runtime._state.test, runtime._state.teach, runtime._state.track.on
+            if act.force_recovered_pose and (
+                teach is None or planning._recovered_pose_token(demo, teach) != act.recovered_pose_token
+            ):
+                fail("a new find changed the proposed grasp pose; review its preview and confirm it again")
+                return
         if test is None or not test.result.get("ok"):
             fail("find the object first")
             return
@@ -409,6 +420,7 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
         run = recording._begin_run(demo, speed, delta, t_bc, plan)
         run.meta["inject"], run.meta["correct_hold"] = inject, act.correct_hold
         run.meta["allow_grasp_prediction"] = act.allow_grasp_prediction
+        run.meta["recovered_pose_override"] = act.force_recovered_pose
         run.meta["runner"] = "key_frames"
 
         def replanned(stage: str, p: dict[str, Any]) -> None:
@@ -1578,8 +1590,21 @@ async def act_start(body: ActBody, request: Request) -> dict:
         if teach is None or runtime._state.teach_job is not None:
             raise HTTPException(409, "find the object first")
         reference = teach.keypoints.get("ref") or {}
-        if problem := planning._recovered_pose_problem(planning._session_object(demo) or "object", reference):
-            raise HTTPException(409, problem)
+        problem = planning._recovered_pose_problem(planning._session_object(demo) or "object", reference)
+        token = planning._recovered_pose_token(demo, teach) if problem else None
+        if problem and body.confirm_recovered_pose != token:
+            raise HTTPException(
+                409,
+                {
+                    "code": "recovered_pose_requires_confirmation",
+                    "message": f"{problem}. The displayed path is a projection, not a collision check; "
+                    "the selected end assignment could drive the gripper into the scene.",
+                    "confirmation": token,
+                    "preview": "/api/pregrasp/act/recovered-preview.jpg",
+                },
+            )
+        if body.confirm_recovered_pose is not None and not problem:
+            raise HTTPException(409, "the proposed pose changed; press Act to review it again")
         if test is not None and (test.result.get("camera_check") or {}).get("moved"):
             raise HTTPException(409, "the camera or the tray moved since the calibration; recalibrate first")
         runtime._state.track.follow = False  # the act owns the target now
@@ -1587,6 +1612,9 @@ async def act_start(body: ActBody, request: Request) -> dict:
         act.inject = body.inject.model_dump() if body.inject is not None and _injects(body.inject) else None
         act.correct_hold = body.correct_hold
         act.allow_grasp_prediction = body.allow_grasp_prediction
+        act.force_recovered_pose = bool(problem)
+        act.recovered_pose_token = token if problem else None
+        act.recovered_pose_object = planning._session_object(demo) if problem else None
         act.finds = []
         act.on, act.ok, act.reason, act.step, act.stop_requested, act.progress, act.speed = (
             True,

@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import functools
+import hashlib
 import pathlib
 from collections.abc import Callable
 from typing import Any
@@ -31,10 +32,39 @@ from lerobot.showservo import motion as core, symmetry
 from . import acquisition, holds, recording, runtime
 
 
-def _recovered_pose_problem(obj: str, found: dict[str, Any]) -> str:
+def _recovered_pose_token(demo: runtime._Demo, teach: runtime._Teach) -> str:
+    """Bind a force choice to exactly the find and key frames shown in its preview."""
+    ref = teach.keypoints.get("ref") or {}
+    digest = hashlib.sha256()
+    digest.update(f"{demo.name}:{demo.root}:{teach.stamp}:{demo.landing}".encode())
+    digest.update(repr(demo.keypoints).encode())
+    digest.update(repr(ref.get("surface_constraint")).encode())
+    digest.update(np.asarray(ref.get("delta"), dtype=np.float64).tobytes())
+    return digest.hexdigest()[:24]
+
+
+def _recovered_pose_problem(obj: str, found: dict[str, Any], *, preview: bool = False) -> str:
     """A recovered axis has alternatives but no collision-checked grasp choice yet."""
     if (found.get("surface_constraint") or {}).get("state") != "recovered":
         return ""
+    # One act at a time owns this state. A preview may draw the proposed path,
+    # while only an explicit operator confirmation lets the runner use it.
+    if preview:
+        return ""
+    state = runtime._state
+    act = state.act
+    teach, demo = state.teach, state.demo
+    if act.on and act.force_recovered_pose and obj == act.recovered_pose_object:
+        if (
+            demo is not None
+            and teach is not None
+            and found is teach.keypoints.get("ref")
+            and act.recovered_pose_token == _recovered_pose_token(demo, teach)
+        ):
+            return ""
+        return (
+            f"{obj}'s proposed grasp changed after confirmation; review its new preview and confirm it again"
+        )
     return (
         f"{obj}'s measured pose has equivalent end assignments; collision-checked grasp selection is required"
     )
@@ -194,7 +224,9 @@ def _landing_object(demo: runtime._Demo) -> str | None:
     )
 
 
-def _reference_motion(demo: runtime._Demo, teach: runtime._Teach | None) -> tuple[np.ndarray | None, str]:
+def _reference_motion(
+    demo: runtime._Demo, teach: runtime._Teach | None, *, preview_pose: np.ndarray | None = None
+) -> tuple[np.ndarray | None, str]:
     """``(R, problem)``: the live track's motion times ``R`` is the object's motion from the demo to now.
 
     The live track follows the object whose find started the session (:func:`_session_object`). For the object
@@ -216,7 +248,7 @@ def _reference_motion(demo: runtime._Demo, teach: runtime._Teach | None) -> tupl
         return None, f"click {obj} in the camera view to find it"
     if not ref.get("ok") or ref.get("delta") is None:
         return None, ref.get("reason") or f"{obj} was not found in the live view"
-    if problem := _recovered_pose_problem(obj, ref):
+    if problem := _recovered_pose_problem(obj, ref, preview=preview_pose is not None):
         return None, problem
     # A certified live track only follows motion since its find. It cannot
     # strengthen that find's registration to the demo. Apply the same gate as
@@ -232,7 +264,9 @@ def _reference_motion(demo: runtime._Demo, teach: runtime._Teach | None) -> tupl
     reference, problem = holds._demo_control_pose(demo, obj, f)
     if reference is None:
         return None, problem
-    return np.asarray(ref["delta"], dtype=float) @ np.linalg.inv(reference), ""
+    return np.asarray(ref["delta"] if preview_pose is None else preview_pose, dtype=float) @ np.linalg.inv(
+        reference
+    ), ""
 
 
 def _pose_frame(demo: runtime._Demo, obj: str | None) -> int | None:
@@ -313,20 +347,22 @@ def _object_pose_info(demo: runtime._Demo, name: str) -> dict[str, Any]:
     return {"pose_t": float(times[frame] - demo.t0) if len(times) > frame else None, "pose_from": where}
 
 
-def _delta_base(demo: runtime._Demo, delta_cam: np.ndarray, t_bc: np.ndarray) -> np.ndarray:
+def _delta_base(
+    demo: runtime._Demo, delta_cam: np.ndarray, t_bc: np.ndarray, *, preview_pose: np.ndarray | None = None
+) -> np.ndarray:
     """The object's motion from the demo to now, in the base frame: the tracker's fit as it is.
 
     Pre: :func:`_reference_motion` has no problem for the current teach.
     """
     with runtime._state.lock:
         teach = runtime._state.teach
-    ref, problem = _reference_motion(demo, teach)
+    ref, problem = _reference_motion(demo, teach, preview_pose=preview_pose)
     assert ref is not None, problem
     rel = np.asarray(delta_cam, dtype=float) @ ref
     with runtime._state.lock:
         wrong = (
-            runtime._state.act.find_error
-        )  # an injected error: the act believes the object is here instead
+            None if preview_pose is not None else runtime._state.act.find_error
+        )  # a review shows the measured pose, not a previous act's injected error
     base = t_bc @ rel @ np.linalg.inv(t_bc)
     return base if wrong is None else wrong @ base
 
@@ -349,6 +385,7 @@ def _frame_motion(
     t_bc: np.ndarray,
     motions: dict[str, np.ndarray] | None,
     aim: np.ndarray | None = None,
+    preview_pose: np.ndarray | None = None,
 ) -> Callable[[str], np.ndarray | None]:
     """Each key frame's frame's motion since the demo, base frame, read when asked: the world's none; the object the
     live track follows (:func:`_delta_base`, ``aim`` before it); another object's from ``motions`` (by name); None
@@ -359,7 +396,7 @@ def _frame_motion(
         if frame == core.WORLD_FRAME:
             return np.eye(4)
         if frame == picked:
-            base = _delta_base(demo, delta_cam, t_bc)
+            base = _delta_base(demo, delta_cam, t_bc, preview_pose=preview_pose)
             return base if aim is None else aim @ base
         return (motions or {}).get(frame)
 
@@ -381,7 +418,9 @@ def _found_motions(
     return out
 
 
-def _act_preview(demo: runtime._Demo, delta_cam: np.ndarray, t_bc: np.ndarray) -> np.ndarray | None:
+def _act_preview(
+    demo: runtime._Demo, delta_cam: np.ndarray, t_bc: np.ndarray, *, preview_pose: np.ndarray | None = None
+) -> np.ndarray | None:
     """The act's fingertip path from its first key frame on, for the camera view, through every key frame whose
     object has been found (as if held as in the demo); None until a key frame is marked."""
     from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
@@ -392,10 +431,16 @@ def _act_preview(demo: runtime._Demo, delta_cam: np.ndarray, t_bc: np.ndarray) -
         return None
     with runtime._state.lock:
         teach = runtime._state.teach
-    if _reference_motion(demo, teach)[0] is None:
+    if _reference_motion(demo, teach, preview_pose=preview_pose)[0] is None:
         return None
     gi = MOTOR_NAMES.index("gripper")
-    steps = _act_steps(demo, "all", 0, _frame_motion(demo, delta_cam, t_bc, _found_motions(demo, t_bc)), None)
+    steps = _act_steps(
+        demo,
+        "all",
+        0,
+        _frame_motion(demo, delta_cam, t_bc, _found_motions(demo, t_bc), preview_pose=preview_pose),
+        None,
+    )
     if not steps:
         return None
     i = int(np.argmin(np.abs(demo.t - steps[0]["t"])))

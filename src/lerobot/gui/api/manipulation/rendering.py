@@ -32,6 +32,78 @@ from . import acquisition, camera, groups, planning, replay, runtime, tracking
 router = APIRouter()
 
 
+@router.get("/act/recovered-preview.jpg")
+async def recovered_grasp_preview() -> Response:
+    """Show the proposed fingertip paths on the find's own RGB frame, including both measured end assignments.
+
+    This is a geometric projection for operator review, not a collision or reach certificate.
+    """
+    import cv2
+
+    with runtime._state.lock:
+        demo, teach = runtime._state.demo, runtime._state.teach
+    ref = {} if teach is None else (teach.keypoints.get("ref") or {})
+    constraint = ref.get("surface_constraint") or {}
+    if demo is None or teach is None or teach.rgb is None or constraint.get("state") != "recovered":
+        raise HTTPException(409, "no recovered grasp pose to preview; find the object again")
+    t_bc = camera._t_base_cam()
+    bgr = cv2.cvtColor(teach.rgb, cv2.COLOR_RGB2BGR)
+    bgr = cv2.copyMakeBorder(bgr, 88, 0, 0, 0, cv2.BORDER_CONSTANT, value=(20, 20, 20))
+    image = bgr[88:]
+    mask = teach.keypoints.get("mask")
+    if mask is not None:
+        _outline(image, np.asarray(mask, dtype=bool), (80, 220, 80))
+    chosen = np.asarray(ref["delta"], dtype=float)
+    poses = [chosen]
+    for item in constraint.get("equivalent_poses") or []:
+        pose = np.asarray(item.get("pose"), dtype=float)
+        if (
+            pose.shape == (4, 4)
+            and np.isfinite(pose).all()
+            and not any(np.allclose(pose, old, atol=1e-8) for old in poses)
+        ):
+            poses.append(pose)
+    colours = [(0, 215, 255), (255, 90, 210)]
+    shown = 0
+    obj = planning._session_object(demo)
+    frames = core.key_frames(demo.keypoints)
+    holding = next((h for h in planning._holdings(demo) if h["frame"] == obj), None)
+    for i, pose in enumerate(poses[:2]):
+        with contextlib.suppress(AssertionError, KeyError, ValueError):
+            path = planning._act_preview(demo, np.eye(4), t_bc, preview_pose=pose)
+            if path is not None:
+                _draw_path(image, t_bc, teach.intr, path, colour=colours[i])
+                shown += 1
+            if holding is not None and frames[holding["begins"]]["frame"] == obj:
+                grasp_t = frames[holding["begins"]]["t"]
+                sample = int(np.argmin(np.abs(demo.t - grasp_t)))
+                grasp = planning._delta_base(demo, np.eye(4), t_bc, preview_pose=pose) @ demo.tips[sample]
+                _draw_tool(
+                    image,
+                    t_bc,
+                    teach.intr,
+                    grasp,
+                    f"{'selected' if i == 0 else 'other'} jaws",
+                    colours[i],
+                    arrow_colour=colours[i],
+                )
+    cv2.putText(
+        bgr, "Saved find: green object outline", (8, 21), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (80, 220, 80), 2
+    )
+    legend = "Yellow: selected path + jaws" + (" | Pink: other end" if len(poses) > 1 else "")
+    cv2.putText(bgr, legend, (8, 47), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (230, 230, 230), 2)
+    cv2.putText(
+        bgr,
+        f"2D projection only ({shown} path(s)); reach and collisions unverified",
+        (8, 73),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.52,
+        (80, 160, 255),
+        2,
+    )
+    return Response(content=camera._jpeg(bgr), media_type="image/jpeg")
+
+
 def _outline(bgr: np.ndarray, mask: np.ndarray, colour: tuple[int, int, int]) -> None:
     import cv2
 
@@ -40,12 +112,19 @@ def _outline(bgr: np.ndarray, mask: np.ndarray, colour: tuple[int, int, int]) ->
 
 
 def _draw_tool(
-    bgr: np.ndarray, t_base_cam: np.ndarray, intr: dict[str, float], pose: np.ndarray, label: str
+    bgr: np.ndarray,
+    t_base_cam: np.ndarray,
+    intr: dict[str, float],
+    pose: np.ndarray,
+    label: str,
+    colour: tuple[int, int, int] = (255, 255, 255),
+    *,
+    arrow_colour: tuple[int, int, int] = (0, 220, 255),
 ) -> None:
     """The fingertip pose on the image: a cross at the tip, the jaw line through it, the approach as an arrow.
 
     The tip frame is the wrist link's: the jaws close along its x axis and the
-    fingers point along -y, so the white line is the jaw direction and the
+    fingers point along -y, so the line is the jaw direction and the
     arrow points the way the fingers do. Seen from above, a vertical approach
     collapses the arrow to the cross; a leaning one shows it.
     """
@@ -62,11 +141,11 @@ def _draw_tool(
     )
     back = camera._project(t_base_cam, intr, p + runtime.APPROACH_M * y)
     if a is not None and b is not None:
-        cv2.line(bgr, a, b, (255, 255, 255), 3)
+        cv2.line(bgr, a, b, colour, 3)
     if back is not None:
-        cv2.arrowedLine(bgr, back, tip, (0, 220, 255), 2, tipLength=0.3)
-    cv2.drawMarker(bgr, tip, (255, 255, 255), cv2.MARKER_CROSS, 24, 2)
-    cv2.putText(bgr, label, (tip[0] + 10, tip[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        cv2.arrowedLine(bgr, back, tip, arrow_colour, 2, tipLength=0.3)
+    cv2.drawMarker(bgr, tip, colour, cv2.MARKER_CROSS, 24, 2)
+    cv2.putText(bgr, label, (tip[0] + 10, tip[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, colour, 2)
 
 
 @router.get("/test.jpg")
@@ -374,15 +453,22 @@ def _find_badge(ref: dict[str, Any], label: str = "find") -> tuple[str, tuple[in
     return f"{label}: weak, {counts}; turn it closer to how it lay in the demo", (0, 165, 255)
 
 
-def _draw_path(bgr: np.ndarray, t_bc: np.ndarray, intr: dict[str, float], tips: np.ndarray) -> None:
+def _draw_path(
+    bgr: np.ndarray,
+    t_bc: np.ndarray,
+    intr: dict[str, float],
+    tips: np.ndarray,
+    *,
+    colour: tuple[int, int, int] = (255, 200, 0),
+) -> None:
     """The fingertip path on the image, start as a dot, end as a square."""
     import cv2
 
     stride = max(1, len(tips) // 200)
     pts = [p for p in (camera._project(t_bc, intr, tip[:3, 3]) for tip in tips[::stride]) if p is not None]
     for a, b in zip(pts, pts[1:], strict=False):
-        cv2.line(bgr, a, b, (255, 200, 0), 2)
+        cv2.line(bgr, a, b, colour, 2)
     if pts:
-        cv2.circle(bgr, pts[0], 5, (255, 200, 0), -1)
+        cv2.circle(bgr, pts[0], 5, colour, -1)
         x, y = pts[-1]
-        cv2.rectangle(bgr, (x - 4, y - 4), (x + 4, y + 4), (255, 200, 0), -1)
+        cv2.rectangle(bgr, (x - 4, y - 4), (x + 4, y + 4), colour, -1)

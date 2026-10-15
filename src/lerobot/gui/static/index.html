@@ -534,6 +534,16 @@
                 <button class="btn-small" id="ap-guide-btn" onclick="apGuideAction()" style="display:none; min-width:150px;"></button>
                 <button class="btn-small" id="demo-new-btn" onclick="demoNew()" style="display:none;">New demo</button>
             </div>
+            <div id="ap-act-warning" hidden role="alert" style="margin:8px 0; padding:12px; border:1px solid #bd7750; border-radius:5px; background:#30251e; color:#eee;">
+                <b>Act rejected: grasp assignment is unverified</b>
+                <p id="ap-act-warning-text" style="margin:8px 0;"></p>
+                <img id="ap-act-warning-preview" alt="Saved find with selected and alternative fingertip paths and grasp jaw directions" style="display:block; max-width:100%; max-height:480px; margin:8px 0; border:1px solid #665;" />
+                <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                    <button class="btn-small" onclick="actForceRecovered()">Force the selected pose</button>
+                    <button class="btn-small" onclick="actWarningDismiss()">Dismiss</button>
+                    <span style="font-size:12px; color:#d6b8a3;">Forcing keeps the arm's reach, workspace and stop checks; it does not check gripper or tray collisions.</span>
+                </div>
+            </div>
             <div style="margin-top:6px; padding:0 14px; font-size:12px; color:#aaa;">
                 <label><input id="ap-hold-prediction" type="checkbox" checked onchange="apHoldPredictionSave()"> Allow grasp-pose fallback</label>
                 <span id="ap-hold-prediction-note">Uses the grasp-time pose if vision cannot verify the held object; assumes no slip.</span>
@@ -1270,7 +1280,7 @@ nebius iam auth-public-key generate \
     <script src="/static/bug_report.js?v=1"></script>
     <script src="/static/bridge.js?v=1"></script>
     <script src="/static/bridge_consumers.js?v=1"></script>
-    <script src="/static/showservo.js?v=95"></script>
+    <script src="/static/showservo.js?v=96"></script>
     <script src="/static/live_video.js?v=4"></script>
 </body>
 </html>

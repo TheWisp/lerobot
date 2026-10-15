@@ -1224,21 +1224,32 @@ def _place_demo(tmp_path, t0, wrist_deg=0.0):
     return demo, kin, box
 
 
-def test_act_refuses_recovered_axis_pose_without_a_checked_grasp_choice(client, tmp_path):
+def test_act_refuses_recovered_axis_pose_without_a_checked_grasp_choice(client, tmp_path, monkeypatch):
+    from lerobot.gui.api import jog
+
     demo, _, _ = _place_demo(tmp_path, time.time())
+    alternate = np.eye(4)
+    alternate[0, 3] = 0.01
     teach = manipulation.runtime._Teach(
         at="t",
         box=(0, 0, 0, 0),
-        rgb=None,
+        rgb=np.zeros((H, W, 3), dtype=np.uint8),
         depth_m=None,
-        intr={},
+        intr=INTR,
         keypoints={
+            "mask": np.zeros((H, W), dtype=bool),
             "ref": {
                 "object": "gamepad",
                 "ok": True,
                 "delta": np.eye(4),
-                "surface_constraint": {"state": "recovered"},
-            }
+                "surface_constraint": {
+                    "state": "recovered",
+                    "equivalent_poses": [
+                        {"pose": np.eye(4).tolist(), "support": 0.9},
+                        {"pose": alternate.tolist(), "support": 0.88},
+                    ],
+                },
+            },
         },
     )
     try:
@@ -1249,12 +1260,49 @@ def test_act_refuses_recovered_axis_pose_without_a_checked_grasp_choice(client, 
         response = client.post("/api/pregrasp/act", json={})
         assert response.status_code == 409
         assert "collision-checked grasp selection" in response.text
+        detail = response.json()["detail"]
+        assert detail["code"] == "recovered_pose_requires_confirmation"
+        assert detail["confirmation"]
         assert manipulation.runtime._state.act.on is False
         _, problem = manipulation.planning._reference_motion(demo, teach)
         assert "collision-checked grasp selection" in problem
+        assert client.post("/api/pregrasp/act", json={"confirm_recovered_pose": "stale"}).status_code == 409
+
+        previews = []
+        real_preview = manipulation.planning._act_preview
+
+        def preview(_demo, _delta, _t_bc, *, preview_pose=None):
+            previews.append(np.asarray(preview_pose))
+            return real_preview(_demo, _delta, _t_bc, preview_pose=preview_pose)
+
+        monkeypatch.setattr(manipulation.planning, "_act_preview", preview)
+        monkeypatch.setattr(manipulation.camera, "_t_base_cam", lambda: np.eye(4))
+        image = client.get(detail["preview"])
+        assert image.status_code == 200
+        assert image.headers["content-type"] == "image/jpeg"
+        assert len(previews) == 2
+        np.testing.assert_allclose(previews[1], alternate)
+
+        async def no_motion(_speed, _server=None):
+            return None
+
+        monkeypatch.setattr(jog, "current_robot_id", lambda: "test-arm")
+        monkeypatch.setattr(manipulation.execution, "_act_task", no_motion)
+        forced = client.post("/api/pregrasp/act", json={"confirm_recovered_pose": detail["confirmation"]})
+        assert forced.status_code == 200
+        assert manipulation.runtime._state.act.force_recovered_pose is True
+        assert manipulation.planning._recovered_pose_problem("gamepad", teach.keypoints["ref"]) == ""
+        assert "collision-checked" in manipulation.planning._recovered_pose_problem(
+            "box", {"surface_constraint": {"state": "recovered"}}
+        )
+        teach.keypoints["ref"]["delta"] = alternate
+        assert "changed after confirmation" in manipulation.planning._recovered_pose_problem(
+            "gamepad", teach.keypoints["ref"]
+        )
     finally:
         with manipulation.runtime._state.lock:
             manipulation.runtime._state.demo = manipulation.runtime._state.teach = None
+            manipulation.runtime._state.act = manipulation.runtime._Act()
 
 
 def _run_place_act(
