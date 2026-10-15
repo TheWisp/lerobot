@@ -134,6 +134,8 @@ class Models:
 FACE_INLIER_M = 0.0025  # a depth point this close to the plane lies on it (the sensor's own noise band)
 FACE_TRIALS = 200
 FACE_MIN_INLIERS = 30
+FACE_SCORE_POINTS = 8192  # bound work when a bad designation covers much of the image
+FACE_VERIFY_TOP = 16  # score the best sampled hypotheses against every point before choosing the face
 
 
 def _consensus_plane(pts: np.ndarray, rng: np.random.Generator, trials: int) -> np.ndarray | None:
@@ -150,12 +152,31 @@ def _consensus_plane(pts: np.ndarray, rng: np.random.Generator, trials: int) -> 
         return None
     normals = normals[good] / lengths[good, None]
     p0 = p0[good]
-    dist = np.abs(np.einsum("tj,tnj->tn", normals, pts[None, :, :] - p0[:, None, :]))
-    counts = (dist < FACE_INLIER_M).sum(axis=1)
-    best = int(np.argmax(counts))
-    if counts[best] < FACE_MIN_INLIERS:
+    if n_pts <= FACE_SCORE_POINTS:
+        # Keep the established answer exactly for normal-sized designations.
+        dist = np.abs(np.einsum("tj,tnj->tn", normals, pts[None, :, :] - p0[:, None, :]))
+        counts = (dist < FACE_INLIER_M).sum(axis=1)
+        best = int(np.argmax(counts))
+        best_dist = dist[best]
+        best_count = counts[best]
+    else:
+        # A false mask can contain hundreds of thousands of pixels. A sample ranks
+        # hypotheses; the finalists are still counted on the full cloud, so the
+        # accepted plane and its two refits use all observed points.
+        sample = pts[rng.choice(n_pts, FACE_SCORE_POINTS, replace=False)]
+        offsets = np.einsum("ij,ij->i", normals, p0)
+        sample_dist = np.abs(normals @ sample.T - offsets[:, None])
+        counts = (sample_dist < FACE_INLIER_M).sum(axis=1)
+        n_final = min(FACE_VERIFY_TOP, len(counts))
+        finalists = np.sort(np.argpartition(counts, -n_final)[-n_final:])
+        full_dist = np.abs(normals[finalists] @ pts.T - offsets[finalists, None])
+        full_counts = (full_dist < FACE_INLIER_M).sum(axis=1)
+        best_local = int(np.argmax(full_counts))
+        best_dist = full_dist[best_local]
+        best_count = full_counts[best_local]
+    if best_count < FACE_MIN_INLIERS:
         return None
-    inl = dist[best] < FACE_INLIER_M
+    inl = best_dist < FACE_INLIER_M
     # Two least-squares refits on the consensus set tighten the normal and recount.
     for _ in range(2):
         c = pts[inl].mean(axis=0)
@@ -479,18 +500,29 @@ def _geometry(
     dict with ``surface`` and ``blob`` (worker-side) and the result keys
     ``table_find``, ``face_find`` and the ``footprint_*`` turn, plus ``face_pts``.
     """
+    t0 = time.perf_counter()
     surface = _table_fit(depth, region, intr)
+    t_table = time.perf_counter()
     out: dict = {"surface": surface, "blob": None, "face_find": None, "face_pts": None}
     out["table_find"] = None if surface is None else [float(v) for v in surface[0]]
     if surface is None:
         return out
     blob = _footprint(depth, region, surface, intr)
+    t_footprint = time.perf_counter()
     out["blob"] = blob
     face_region = blob["mask"] if blob is not None else region
     face_info, face_pts = _face_fit(depth, face_region, intr)
+    t_face = time.perf_counter()
     out["face_find"], out["face_pts"] = face_info, face_pts
     if card is not None:
         out.update(_turn_from_footprint(card, depth, region, intr, surface, face_pts, prefer_deg, blob))
+    t_turn = time.perf_counter()
+    out["geometry_stages_ms"] = {
+        "table": round(1000 * (t_table - t0), 1),
+        "footprint": round(1000 * (t_footprint - t_table), 1),
+        "face": round(1000 * (t_face - t_footprint), 1),
+        "turn": round(1000 * (t_turn - t_face), 1),
+    }
     return out
 
 

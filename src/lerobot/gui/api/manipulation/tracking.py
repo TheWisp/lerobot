@@ -693,6 +693,7 @@ async def _apply_track_result(job: runtime._Job) -> None:
             "n_tracks",  # the session's tracks of the object, which only grow, and the model points it adopted
             "n_model_points",
             "worker_stages_ms",
+            "geometry_stages_ms",
         )
     }
     result: dict[str, Any] | None = None

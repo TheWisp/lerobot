@@ -12,8 +12,7 @@ The successful `insertion` Act `20261015_165734` was run with `speed=2`. Its
 
 P2P's reported model time was 0.096 s median. The time from a queued frame to
 an applied result was 0.288 s median and 0.864 s at the 90th percentile. Pose
-verification accounted for about 0.041 s median. The remaining transport,
-rendering, and scheduling delay is not yet individually timed. The pump feeds
+verification accounted for about 0.041 s median. The pump feeds
 only one frame to the worker at a time, waiting for the complete result and
 render before requesting the next. The new camera timeline did not change the
 motor control algorithm. A pre-timeline Act (`20261015_141339`, different
@@ -44,7 +43,33 @@ sequence, passed through this new motion check offline, would reject ten
 corrected ring candidates, seven of which the original Act accepted, including
 the 4-degree change at +10.44 s. This is an
 offline counterfactual, not a hardware demonstration that all jitter is gone.
-The next Act record now stamps worker-result arrival, NPZ decode, verification
-and rendering separately, so the unaccounted latency can be attributed rather
-than guessed at. The arm remained connected while the code was changed, so the
-running GUI has not been restarted and still serves the previous build.
+The next Act record stamps worker-result arrival, NPZ decode, verification
+and rendering separately. Live tracking status also reports worker frame fetch,
+compute, depth-geometry stages and these server stages. The GUI was restarted
+with these changes after folding and disconnecting the arm. The `m1_left`
+profile lacked a rest pose; its same-port `white` left-arm profile already had
+one, so that recorded pose was copied to `m1_left` before parking.
+
+A passive measurement after the successful placement, with the arm disconnected,
+reproduced a 1.3–1.9 Hz pose-update rate. The tracker then designated about
+211,000 pixels—much larger than the 1,400–4,500-pixel masks in the successful
+Act. Its worker step took about 636 ms median, split into 72 ms for P2P, 4 ms
+for the table, 53 ms for the footprint, **430 ms for the visible-face fit**,
+and 70 ms for footprint rotation. Frame transfer took about 4 ms, server
+verification 48 ms and rendering under 15 ms. The face fit evaluates 200 plane
+hypotheses against this large designation; the cost rises with mask size.
+This identifies the current slow passive case but does **not** prove the same
+cost dominated the successful Act, whose saved masks were small. In that Act,
+pose results were roughly 0.2–0.3 s apart in key frames 8–9 but roughly
+0.8–0.9 s apart in key frames 5 and 7, despite similarly small masks and
+similar reported P2P times. The next physical Act's stage stamps are needed to
+attribute those phase-dependent pauses.
+
+For masks larger than 8,192 depth points, the worker now ranks its 200 plane
+hypotheses on a reproducible 8,192-point sample and verifies the best 16 on
+the entire cloud before the existing full-cloud refits. Normal-sized masks
+follow the original calculation exactly. On the saved large-mask frame, the
+face fit fell from 642–665 ms to 57–98 ms across repeated measurements, with
+the same face normal and inlier count. Six normal-sized views from the Act
+produced identical face metadata. This bounds the cost of a broad or incorrect
+designation; it does not certify that such a designation is correct.

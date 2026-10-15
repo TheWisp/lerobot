@@ -98,6 +98,20 @@ def worker():
         sys.path.remove(str(bench))
 
 
+def test_face_consensus_on_large_two_plane_cloud(worker):
+    """A large designation still selects the dominant face using full-cloud verification."""
+    rng = np.random.default_rng(12)
+    xy_main = rng.uniform(-0.05, 0.05, (30_000, 2))
+    xy_other = rng.uniform(-0.05, 0.05, (20_000, 2))
+    main = np.column_stack((xy_main, 0.4 + rng.normal(0, 0.0003, len(xy_main))))
+    other = np.column_stack((xy_other, 0.45 + rng.normal(0, 0.0003, len(xy_other))))
+    pts = np.concatenate((main, other))
+    inliers = worker._consensus_plane(pts, np.random.default_rng(0), worker.FACE_TRIALS)
+    assert inliers is not None
+    assert inliers.sum() > 29_000
+    assert abs(float(np.median(pts[inliers, 2])) - 0.4) < 0.001
+
+
 class _FakeBridge:
     """Answers each step with a motion that names the frame it was given: x translation = the frame's pixel value in mm."""
 
