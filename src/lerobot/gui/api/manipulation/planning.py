@@ -640,7 +640,8 @@ def _plan_act_once(
     steps = _act_steps(demo, part, skip, _frame_motion(demo, delta_cam, t_bc, motions, aim), hold_fix)
     assert steps, "a key frame to plan"
     best_effort = [s for s in steps if s.get("constraint") == "best_effort"]
-    for _ in range(1 + len(best_effort)):
+    online_candidate = len(steps) == 1 and len(best_effort) == 1 and steps[0]["move"] in ("line", "lift")
+    for _ in range(1 + (0 if online_candidate else len(best_effort))):
         plan = core.plan_key_frames(
             steps,
             demo.t,
@@ -655,6 +656,7 @@ def _plan_act_once(
             speed,
             jog.HZ,
         )
+        online_best_effort = online_candidate and np.ptp(plan["grips"]) < 1e-6
         sol = core.solve_plan_joints(
             kin,
             plan["poses"],
@@ -664,10 +666,10 @@ def _plan_act_once(
             gi,
             *(ranges if ranges is not None else (None, None)),
         )
-        # A best-effort waypoint is a guide along the recorded route. If the
-        # remaining suffix cannot be solved, keep the longest prefix that
-        # passes the existing IK, range, floor and workspace checks. Replan
-        # everything after it from that endpoint; never send an unchecked jump.
+        # A plan containing later strict stages still needs a modeled feasible
+        # prefix. A standalone best-effort stage can instead be tried online:
+        # checked_step guards each incremental command and stops at the measured
+        # prefix. The next key frame is planned from those observed joints.
         p = plan["poses"][:, :3, 3]
         low_box, high_box = np.asarray(box[0], float), np.asarray(box[1], float)
         floor_limit = np.minimum(np.minimum(low_box[2], plan["floor_ref"]), p[0, 2])
@@ -680,7 +682,7 @@ def _plan_act_once(
             | np.any(p > high_box + core.ACT_REACH_TOL_M, axis=1)
         )
         shortened = False
-        for s in best_effort:
+        for s in [] if online_best_effort else best_effort:
             if "best_effort_fraction" in s:
                 continue
             samples = np.flatnonzero(np.asarray(plan["stage"]) == s["label"])
@@ -733,6 +735,9 @@ def _plan_act_once(
     outside = np.any(pos[:, :2] < lo[:2] - core.ACT_REACH_TOL_M, axis=1) | np.any(
         pos > hi + core.ACT_REACH_TOL_M, axis=1
     )
+    required = (
+        np.asarray(plan["constraint"]) != "best_effort" if online_best_effort else np.ones(len(pos), bool)
+    )
     marks = []
     lines = [s for s in steps if s["move"] in ("line", "lift")]
     for s, idx in zip(lines, plan["arrive"], strict=True):
@@ -767,10 +772,12 @@ def _plan_act_once(
             }
         )
     reason = ""
-    bad = [m for m in marks if not m["ok"]]
-    far = np.flatnonzero(~fine)
-    held = np.flatnonzero(~fine & (sol["held"] >= 0))
-    jumps = np.flatnonzero(sol["step_deg"] > core.ACT_MAX_JOINT_STEP_DEG)
+    bad = [m for m in marks if not m["ok"] and (not online_best_effort or m["label"] != steps[0]["label"])]
+    far = np.flatnonzero(~fine & required)
+    held = np.flatnonzero(~fine & (sol["held"] >= 0) & required)
+    jumps = np.flatnonzero((sol["step_deg"] > core.ACT_MAX_JOINT_STEP_DEG) & required)
+    low &= required
+    outside &= required
     # Out of reach for a joint held at its servo's range: say which, and how far the stage would need it.
     if len(held) and ranges is not None:
         n = max(  # the farthest that stage needs the joint, not just where it first leaves the range

@@ -163,6 +163,99 @@ def test_empty_live_queue_cannot_reset_hard_lag_timeout():
     assert j.playback_sent == 0
 
 
+def test_best_effort_stop_clears_pending_command_and_holds_fresh_encoders(monkeypatch):
+    target = dict.fromkeys(MOTOR_NAMES, 0.0)
+    target["shoulder_pan"] = 5.0
+    observed = {**target, "shoulder_pan": 2.0}
+    j = jog._Jog(
+        robot=object(),
+        mode="joints",
+        q_target=target,
+        q_obs=observed,
+        last_read_at=time.monotonic(),
+        playback=[target, {**target, "shoulder_pan": 6.0}],
+    )
+    monkeypatch.setattr(jog, "_jog", j)
+    assert jog.playback_stop_at_observed() == observed
+    assert j.playback is None and j.q_target == observed and j.goal_prev is None
+    j.playback = [target]
+    j.last_read_at -= 1.0
+    with pytest.raises(RuntimeError, match="fresh checked joint read"):
+        jog.playback_stop_at_observed()
+    assert j.playback is not None, "stale telemetry must not claim a safe soft stop"
+
+
+def test_live_best_effort_tries_incremental_steps_then_holds_observed_prefix(monkeypatch):
+    kin = _TipKinematics()
+    initial = np.array([0.0, 0, 0, 0, 0, 0, 80])
+    state = {"q": initial.copy()}
+    sent, stops = [], []
+
+    def send(q):
+        state["q"] = np.array([q[m] for m in MOTOR_NAMES])
+        sent.append(state["q"].copy())
+
+    def checked_step(_kin, previous, *_args, **_kwargs):
+        if previous[0] >= 2:
+            return {"reason": "updated pose is outside this arm configuration's reach"}
+        q = previous.copy()
+        q[0] += 1.0
+        return {"reason": "", "q": q, "complete": False}
+
+    fake_playback(monkeypatch, send)
+    monkeypatch.setattr(reactive, "checked_step", checked_step)
+    monkeypatch.setattr(runtime, "ACT_TICK_S", 0.001)
+    monkeypatch.setattr(jog, "servo_ranges", lambda: None)
+    monkeypatch.setattr(jog, "workspace_box", lambda: ((-1, -1, -1), (1, 1, 1)))
+    monkeypatch.setattr(
+        jog,
+        "current_tip_and_anchor",
+        lambda: (
+            kin.forward_kinematics(state["q"]),
+            np.eye(4),
+            dict(zip(MOTOR_NAMES, state["q"], strict=True)),
+        ),
+    )
+
+    def stop_at_observed():
+        stops.append(state["q"].copy())
+        return dict(zip(MOTOR_NAMES, state["q"], strict=True))
+
+    monkeypatch.setattr(jog, "playback_stop_at_observed", stop_at_observed)
+    plan = {
+        "q": np.stack([initial, initial]),
+        "times": np.array([0.0, 0.03]),
+        "stage": ["start", "hover"],
+        "live_path": {
+            "local": np.stack([pose(0), pose(0.08)]),
+            "frames": ["world", "world"],
+            "held": np.zeros(2, bool),
+            "grips": np.full(2, 80.0),
+            "hints": np.zeros((2, 7)),
+            "floor": np.full(2, -1.0),
+            "constraint": ["pose", "best_effort"],
+        },
+    }
+    reported = []
+    reason, last = asyncio.run(
+        live_execution.stream(
+            plan,
+            kin,
+            lambda: {"world": np.eye(4)},
+            lambda: np.eye(4),
+            lambda: "",
+            lambda *_: None,
+            lambda *_: pytest.fail("best effort must not search a landing turn"),
+            (0.12, np.pi),
+            1,
+            best_effort_stopped=lambda *event: reported.append(event),
+        )
+    )
+    assert not reason and stops and sent[-1][0] >= 2
+    np.testing.assert_array_equal(last, stops[-1])
+    assert reported[0][0] == "hover" and "reach" in reported[0][1]
+
+
 def test_camera_fk_requires_bracketed_encoder_samples_and_rejects_serial_stall(monkeypatch):
     j = jog._Jog(pose_history=deque([(1.0, {"joint": 0.0}), (1.04, {"joint": 8.0}), (1.5, {"joint": 20.0})]))
     monkeypatch.setattr(jog, "_jog", j)

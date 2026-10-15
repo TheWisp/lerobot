@@ -57,6 +57,10 @@ class GuardedPath:
     endpoint_joint_deg: float = ARRIVAL_DEG
     endpoint_orientation_deg: float = ARRIVAL_ANGLE_DEG
     constraint: str = "pose"
+    stopped_early: bool = False
+    stop_q: np.ndarray | None = None
+    best_error: float = float("inf")
+    last_progress_at: float = 0.0
 
     @classmethod
     def prepare(
@@ -151,8 +155,14 @@ class GuardedPath:
     def fail(self, reason: str) -> None:
         self.status, self.reason = "failed", reason
 
+    def stop_best_effort(self, observed: np.ndarray, reason: str) -> dict[str, float]:
+        """Stop pushing a missed free-space waypoint and hold the measured configuration."""
+        self.status, self.reason = "done", reason
+        self.stopped_early, self.stop_q = True, observed.copy()
+        return dict(zip(self.names, map(float, observed), strict=True))
+
     def tick(self, now: float, observed: dict, pose: np.ndarray, load: dict, temps: dict) -> dict | None:
-        """Send every sample in order; always require observed arrival at the phase endpoint.
+        """Send every sample in order; best effort may stop at the last observed safe prefix.
 
         Streaming is explicit: fine collision samples are not physical stops. A
         stiction-bound joint may need more than one sample of lead to move. Even
@@ -183,10 +193,28 @@ class GuardedPath:
         if np.max(np.abs(loads[arm])) >= 700:
             self.fail("arm motor load reached 70 percent")
             return None
+        if self.stopped_early:
+            assert self.stop_q is not None
+            if np.max(np.abs(q_now[arm] - self.stop_q[arm])) > ARRIVAL_DEG:
+                self.fail("arm moved after best-effort stop")
+                return None
+            return dict(zip(self.names, map(float, self.stop_q), strict=True))
         error, angle = residual(pose, self.poses[self.index])
         lag = float(np.max(np.abs(q_now[arm] - self.q[self.index, arm])))
         self.error_mm, self.error_deg = error * 1000, lag
         if not np.isfinite([error, angle, lag]).all() or error > MAX_ERROR_M or lag > MAX_ERROR_DEG:
+            # A small following-bound overrun can mean static friction at a
+            # free-space endpoint. A large one is unexpected motion/contact,
+            # not evidence that we safely reached a useful prefix.
+            if (
+                self.constraint == "best_effort"
+                and np.isfinite([error, angle, lag]).all()
+                and error <= 2 * MAX_ERROR_M
+                and lag <= 2 * MAX_ERROR_DEG
+            ):
+                return self.stop_best_effort(
+                    q_now, f"best effort stopped at sample {self.index}; following bound reached"
+                )
             self.fail(f"path following error: {error * 1000:.1f} mm, {lag:.1f} joint degrees")
             return None
         grip_moves = bool(np.any(np.diff(self.q[:, self.grip_index])))
@@ -209,7 +237,21 @@ class GuardedPath:
             advance = next_error <= MAX_ERROR_M and next_lag <= MAX_ERROR_DEG
         if not arrived:
             self.status = "running"
-        if not (arrived if last else advance) and now - self.sent_at > ARRIVAL_TIMEOUT_S:
+        if self.constraint == "best_effort" and not (arrived if last else advance):
+            score = max(error / MAX_ERROR_M, lag / MAX_ERROR_DEG)
+            # Roughly 0.2 mm or 0.1 joint degree, above the encoder/depth
+            # jitter; tiny oscillations must not keep resetting the timer.
+            if score < self.best_error - 0.03:
+                self.best_error, self.last_progress_at = score, now
+            if now - self.last_progress_at > ARRIVAL_TIMEOUT_S:
+                return self.stop_best_effort(
+                    q_now, f"best effort stopped at sample {self.index}; no observed progress"
+                )
+        if (
+            self.constraint != "best_effort"
+            and not (arrived if last else advance)
+            and now - self.sent_at > ARRIVAL_TIMEOUT_S
+        ):
             self.fail(
                 f"path sample {self.index} did not arrive: {error * 1000:.1f} mm, {lag:.1f} joint degrees"
             )
@@ -219,6 +261,7 @@ class GuardedPath:
         elif not last and advance and now - self.sent_at >= self.intervals[self.index + 1]:
             self.index += 1
             self.sent_at = now
+            self.best_error, self.last_progress_at = float("inf"), now
         return dict(zip(self.names, map(float, self.q[self.index]), strict=True))
 
     def info(self) -> dict:
@@ -234,4 +277,5 @@ class GuardedPath:
             "constraint": self.constraint,
             "endpoint_tolerance_mm": self.endpoint_position_m * 1000,
             "endpoint_tolerance_deg": self.endpoint_joint_deg,
+            "stopped_early": self.stopped_early,
         }

@@ -657,6 +657,11 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
                 def settled(lag):
                     act.place = {**(act.place or {}), "settled_short_deg": lag}
 
+                def best_effort_stopped(label, reason, joints):
+                    event = {"at": time.time(), "stage": label, "reason": reason, "joints": joints}
+                    run.meta.setdefault("best_effort_stops", []).append(event)
+                    act.place = {**(act.place or {}), "best_effort_stop": event}
+
                 why, _last = await live_execution.stream(
                     planned,
                     kin,
@@ -669,6 +674,7 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
                     speed,
                     settled=settled,
                     revision=lambda: len(run.meta.get("hold_selections", [])),
+                    best_effort_stopped=best_effort_stopped,
                 )
                 return why
             n = len(q)

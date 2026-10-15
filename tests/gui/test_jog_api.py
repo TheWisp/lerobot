@@ -805,6 +805,28 @@ def test_guarded_path_corrects_static_friction_only_at_its_arm_endpoint(client, 
     assert client.post("/api/jog/path/finish", json={"id": identity}).status_code == 200
 
 
+def test_best_effort_stop_drops_endpoint_trim(path_arm):
+    j, body = path_arm
+    path = jog.GuardedPath.prepare(
+        "stop",
+        tuple(MOTOR_NAMES),
+        body["samples"],
+        body["tip_poses"],
+        j.kin,
+        jog._servo_ranges_of(j.robot.bus),
+        ((-1, -1, -1), (1, 1, 1)),
+        MOTOR_NAMES.index("gripper"),
+        False,
+        0.0,
+    )
+    path.index = len(path.q) - 1
+    path.stopped_early = True
+    j.path_settle = jog._Settle({"shoulder_pan": 2.0}, 20)
+    command = dict(zip(MOTOR_NAMES, path.q[-1], strict=True))
+    assert jog._path_endpoint_action(j, path, command, command, {}) == command
+    assert not j.path_settle.trim
+
+
 def test_the_loop_sends_a_still_goal_trimmed_and_the_joint_reaches_it():
     q = dict.fromkeys(MOTOR_NAMES, 0.0)
     goal = {**q, "elbow_flex": 30.0, "gripper": 40.0}

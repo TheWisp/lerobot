@@ -1737,6 +1737,20 @@ def test_best_effort_waypoint_stops_at_reachable_prefix_and_replans_next_exact_f
     assert 0 < result["marks"][0]["best_effort_fraction"] < 1
     assert result["marks"][1]["best_effort_fraction"] is None
     np.testing.assert_allclose(result["live_path"]["local"][-1, 0, 3], 0.02, atol=1e-6)
+    online = manipulation.planning._plan_act_once(
+        demo,
+        None,
+        np.eye(4),
+        ShortArm(),
+        q_now,
+        (0.04, np.radians(30)),
+        ((-1, -1, -1), (1, 1, 1)),
+        1.0,
+        part=(0, 1),
+    )
+    assert online["ok"] and not online["marks"][0]["ok"], "the final hover may be unreachable"
+    assert online["marks"][0]["best_effort_fraction"] is None, "do not shorten before trying the arm"
+    np.testing.assert_allclose(online["live_path"]["local"][-1, 0, 3], 0.08, atol=1e-6)
     demo.q_cmd[9, -1] = 70.0
     contact = manipulation.planning._plan_act_once(
         demo,
@@ -2306,7 +2320,9 @@ def test_the_act_plan_names_what_it_cannot_do():
     plan = manipulation.planning._plan_act(
         demo, delta, np.eye(4), kin, q_now, (0.04, np.radians(30)), box, 1.0
     )
-    assert not plan["ok"] and plan["reason"].startswith("pre-grasp 1 is out of reach")
+    assert not plan["ok"] and plan["reason"].startswith(
+        "the planned approach to pre-grasp 1 has no solved joint path"
+    )
     delta[0, 3] = 0.02
     floor = ((-1.0, -1.0, 0.01), (1.0, 1.0, 1.0))  # a table 10 mm above where the demo's fingertip went
     plan = manipulation.planning._plan_act(

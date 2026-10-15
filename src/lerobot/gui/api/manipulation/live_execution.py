@@ -25,6 +25,7 @@ async def stream(
     speed,
     settled=None,
     revision=None,
+    best_effort_stopped=None,
 ):
     """Return (reason, last command). Phase advances only after its command is consumed.
 
@@ -50,6 +51,17 @@ async def stream(
     orientation_anchor = None
     orientation_stage = None
     arm = np.arange(len(qs[0])) != gi
+    best_phase, best_seen, best_progress_at = None, None, time.monotonic()
+
+    def stop_best_effort(reason):
+        try:
+            held = jog.playback_stop_at_observed()
+        except RuntimeError as error:
+            return str(error), qs[max(0, recorded)]
+        if best_effort_stopped is not None:
+            best_effort_stopped(plan["stage"][-1], reason, held)
+        return "", np.array([held[name] for name in MOTOR_NAMES], dtype=float)
+
     while True:
         await asyncio.sleep(min(runtime.ACT_TICK_S, 1.0 / jog.HZ))
         why = interrupted()
@@ -75,6 +87,32 @@ async def stream(
         motion, fix = motions(), correction()
         goal = reactive.targets({k: v[i : i + 1] for k, v in path.items()}, motion, fix)[0]
         constraint = path.get("constraint", ["pose"] * len(plan["q"]))[i]
+        free_terminal = (
+            constraint == "best_effort"
+            and i == len(plan["q"]) - 1
+            and abs(float(path["grips"][i] - path["grips"][phase])) < 1e-6
+        )
+        if free_terminal:
+            cur = jog.current_tip_and_anchor()
+            if cur is None:
+                return "the arm went away", qs[done]
+            actual = np.array([cur[2][m] for m in MOTOR_NAMES], dtype=float)
+            now = time.monotonic()
+            if best_phase != i or best_seen is None:
+                best_phase, best_seen, best_progress_at = i, actual, now
+            elif np.max(np.abs(actual[arm] - best_seen[arm])) >= runtime.ACT_STILL_DEG:
+                best_seen, best_progress_at = actual, now
+            lag = float(np.max(np.abs(actual[arm] - qs[done][arm])))
+            remaining_m, remaining_deg = core.pose_residual(kin.forward_kinematics(actual), goal)
+            still_aiming = remaining_m > core.ACT_REACH_TOL_M or remaining_deg > core.ACT_REACH_TOL_DEG
+            if (
+                done > 0
+                and (lag > jog.PLAYBACK_LAG_DEG or still_aiming)
+                and now - best_progress_at >= 0.8 * jog.PLAYBACK_HOLD_MAX_S
+            ):
+                return stop_best_effort("no observed joint progress")
+        else:
+            best_phase, best_seen = None, None
         if constraint == "orientation":
             # A rotation/carry frame constrains attitude, not the recorded XY/Z.
             # Capture position once on entry; taking each new command as the
@@ -154,6 +192,8 @@ async def stream(
             ),
         )
         if result["reason"]:
+            if free_terminal:
+                return stop_best_effort(result["reason"])
             # Remove a pending command before an expensive alternative search.
             # It may have been computed against an older accepted observation.
             if not jog.update_playback_next(done, as_dict(qs[done]), due[done] + dt):

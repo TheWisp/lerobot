@@ -232,14 +232,22 @@ keeps the recorded position and orientation. `orientation` rotates at the
 position where that stage begins, including during a follow segment, and the
 live controller re-anchors it once on stage entry as the reference moves. The
 next `pose` stage restores positional control. `best_effort` aims at the
-recorded waypoint without making exact arrival a task condition. If its line
-or lift becomes unsolvable, the planner keeps the longest prefix passing its
-IK, joint-step, workspace and floor checks, then replans later frames from
-there. This is deliberately limited to the demonstrated route; **automatic
-collision avoidance and alternative waypoint search are NOT IMPLEMENTED.** A
-separately collision-checked guarded path uses a relaxed endpoint tolerance
-within its following-error bounds, then replans from the observed pose. Safety
-stops still apply. The October 15 live
+recorded waypoint without making exact arrival a task condition. For a
+standalone line or lift, the live controller tries incremental commands until
+the arm arrives, stops making encoder progress, or the next increment fails an
+IK, joint-step, calibrated workspace or floor check. It holds the observed
+joints and replans the next frame from there. The modeled final waypoint is
+not a precondition for the attempt. A plan containing later strict stages
+still uses a modeled feasible prefix; it must be split at the best-effort
+stage to gain the online behavior. Neither a floor-height estimate nor a
+workspace box can prove that the waypoint was reached as far as physically
+possible; they only reject individual commands outside the calibration. This
+is limited to the demonstrated route; **automatic collision avoidance and
+alternative waypoint search are NOT IMPLEMENTED.** A separately
+collision-checked guarded path uses a relaxed endpoint tolerance within its
+following-error bounds. It also stops at the observed safe prefix when its
+encoders stop progressing or following error reaches the bounded soft-stop
+range. Large unexpected deviations still freeze. Safety stops still apply. The October 15 live
 hover reached a collision-checked pose, then
 froze 3.9 mm and 1.9 joint degrees from an exact target that had no contact
 significance; bounded endpoint settling and tolerance support address that

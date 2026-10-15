@@ -74,6 +74,39 @@ def test_a_stuck_arm_times_out_without_advancing_to_the_end_or_skipping_the_wait
     assert p.index < len(p.q) - 1 and t >= ARRIVAL_TIMEOUT_S
 
 
+def test_best_effort_stops_without_freezing_when_observed_motion_stalls_inside_guard_bounds():
+    p = make_path()
+    p.constraint = "best_effort"
+    p.index = 4
+    observed = np.array([0.0, 0.0, 0.0, 80.0])
+    assert tick(p, 0.0, observed) is not None
+    held = tick(p, ARRIVAL_TIMEOUT_S + 0.1, observed)
+    assert p.status == "done" and p.stopped_early and "no observed progress" in p.reason
+    assert held == dict(zip(NAMES, observed, strict=True)), "hold the measured joints, not the blocked target"
+    assert tick(p, ARRIVAL_TIMEOUT_S + 0.2, observed) == held, "handoff can verify the stopped pose"
+
+
+def test_best_effort_holds_observed_joints_at_the_following_bound():
+    p = make_path()
+    p.constraint = "best_effort"
+    p.index = 8
+    observed = np.array([-1.5, 0.0, 0.0, 80.0])
+    held = tick(p, 0.0, observed)
+    assert p.status == "done" and p.stopped_early
+    assert "following bound" in p.reason and held["x"] == observed[0]
+    strict = make_path()
+    strict.index = 8
+    assert tick(strict, 0.0, observed) is None and strict.status == "failed"
+
+
+def test_best_effort_does_not_accept_a_large_unexpected_deviation_as_progress():
+    p = make_path()
+    p.constraint = "best_effort"
+    p.index = 8
+    assert tick(p, 0.0, np.array([-12.0, 0.0, 0.0, 80.0])) is None
+    assert p.status == "failed" and "following error" in p.reason
+
+
 def test_a_lost_client_cannot_leave_a_path_running():
     p = make_path()
     q = dict(zip(NAMES, p.q[0], strict=True))

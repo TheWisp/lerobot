@@ -392,7 +392,12 @@ def _path_endpoint_action(
     exactly as planned. The existing trim bound and load gate prevent an
     endpoint correction from pushing against a heavily loaded joint.
     """
-    if path.index != len(path.q) - 1 or path.grip_contact or np.any(np.diff(path.q[:, path.grip_index])):
+    if (
+        path.stopped_early
+        or path.index != len(path.q) - 1
+        or path.grip_contact
+        or np.any(np.diff(path.q[:, path.grip_index]))
+    ):
         j.path_settle, j.path_goal_prev = _Settle(), None
         return command
     goal = {name: value for name, value in command.items() if name != "gripper"}
@@ -534,13 +539,23 @@ def _loop(j: _Jog) -> None:
                 q_cmd, holding, grip = {m: sent[f"{m}.pos"] for m in MOTOR_NAMES}, False, q_lead["gripper"]
                 j.settle, j.goal_prev = _Settle(), None  # the human closes the loop
             elif mode == "joints" and q_target is not None:
-                # An act replays the demo's own joints, corrected: they go straight to the follower, gripper included.
-                robot.send_action(
-                    _clamped(
-                        _trimmed(j, {f"{m}.pos": q_target[m] for m in MOTOR_NAMES}), q_obs, j.joint_ranges
-                    )
-                )
-                q_cmd, holding, grip = dict(q_target), False, q_target["gripper"]
+                # Re-read under the same lock that cancels a best-effort
+                # playback. Otherwise a target snapped before the bus read
+                # could be sent once more after the stop returned.
+                with j.lock:
+                    active = j.mode == "joints" and j.q_target is not None and not j.halted
+                    if active:
+                        q_target = dict(j.q_target)
+                        robot.send_action(
+                            _clamped(
+                                _trimmed(j, {f"{m}.pos": q_target[m] for m in MOTOR_NAMES}),
+                                q_obs,
+                                j.joint_ranges,
+                            )
+                        )
+                q_cmd, holding = (q_target if active else None), False
+                if active:
+                    grip = q_target["gripper"]
             elif not halted and target is not None and ref is not None:
                 ref_prev = ref
                 ref = _step_pose(ref, target, v_lin, v_ang)
@@ -1362,6 +1377,27 @@ def playback_stop() -> None:
     j = _jog
     with j.lock:
         j.playback = None
+
+
+def playback_stop_at_observed() -> dict[str, float]:
+    """End a free-space live waypoint at the last checked encoder read.
+
+    Stop the queue and replace its target under one lock, so a missed waypoint
+    cannot keep loading the arm while the next frame is being planned.
+    """
+    j = _jog
+    with j.lock:
+        if not j.connected or j.halted or j.mode != "joints" or j.playback is None:
+            raise RuntimeError("the live joint stream is no longer active")
+        if not j.q_obs or time.monotonic() - j.last_read_at > 2 * SLOW_TICK_S:
+            raise RuntimeError("no fresh checked joint read for a best-effort stop")
+        observed = {name: float(j.q_obs[name]) for name in j.q_target}
+        _ensure_working_target(observed, j.joint_ranges)
+        j.playback = None
+        j.playback_live = False
+        j.q_target = observed
+        j.settle, j.goal_prev = _Settle(), None
+        return dict(observed)
 
 
 def walk_limits() -> tuple[float, float]:
