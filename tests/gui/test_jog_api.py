@@ -771,6 +771,26 @@ class _StickyRobot(_FakeRobot):
         return action
 
 
+def test_guarded_path_corrects_static_friction_only_at_its_arm_endpoint(client, path_arm):
+    j, body = path_arm
+    j.robot = _StickyRobot(j.q_obs)
+    body["stream_samples"] = True
+    response = client.post("/api/jog/path/start", json=body)
+    assert response.status_code == 200, response.text
+    identity = response.json()["path"]["id"]
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline:
+        result = client.post("/api/jog/path/heartbeat", json={"id": identity})
+        assert result.status_code == 200, result.text
+        if result.json()["path"]["status"] != "running":
+            break
+        time.sleep(0.02)
+    assert result.json()["path"]["status"] == "done", result.json()
+    assert any(goal["shoulder_pan.pos"] > body["samples"][-1][0] for goal in j.robot.sent)
+    assert j.q_cmd["shoulder_pan"] == pytest.approx(body["samples"][-1][0])
+    assert client.post("/api/jog/path/finish", json={"id": identity}).status_code == 200
+
+
 def test_the_loop_sends_a_still_goal_trimmed_and_the_joint_reaches_it():
     q = dict.fromkeys(MOTOR_NAMES, 0.0)
     goal = {**q, "elbow_flex": 30.0, "gripper": 40.0}

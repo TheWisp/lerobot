@@ -232,6 +232,8 @@ class _Jog:
     playback_hold_spent: bool = False  # the soft wait expired; reset once all arm joints catch up
     playback_blocked: float | None = None  # since exceeding the hard bound, or delaying a release
     guarded_path: GuardedPath | None = None
+    path_settle: _Settle = field(default_factory=_Settle)
+    path_goal_prev: dict[str, float] | None = None
     path_busy: bool = False  # reservation while a path is validated or handed back
     last_read_at: float = 0.0  # monotonic: the last complete, checked motor read
     playback_live: bool = False  # a bounded producer can temporarily have no pending sample
@@ -381,6 +383,28 @@ def _trimmed(j: _Jog, action: dict[str, float]) -> dict[str, float]:
     return {**action, **{f"{m}.pos": g + j.settle.trim.get(m, 0.0) for m, g in goal.items()}}
 
 
+def _path_endpoint_action(
+    j: _Jog, path: GuardedPath, command: dict[str, float], observed: dict[str, float], load: dict[str, int]
+) -> dict[str, float]:
+    """Correct static friction only after an arm path reaches its final commanded sample.
+
+    Intermediate collision samples, gripper moves and contact phases are sent
+    exactly as planned. The existing trim bound and load gate prevent an
+    endpoint correction from pushing against a heavily loaded joint.
+    """
+    if path.index != len(path.q) - 1 or path.grip_contact or np.any(np.diff(path.q[:, path.grip_index])):
+        j.path_settle, j.path_goal_prev = _Settle(), None
+        return command
+    goal = {name: value for name, value in command.items() if name != "gripper"}
+    share = {
+        name: value / (10.0 * j.protection.get(name, {}).get("Overload_Torque", OVERLOAD_PCT_DEFAULT))
+        for name, value in load.items()
+    }
+    j.path_settle = _trim_step(j.path_settle, goal, j.path_goal_prev, observed, share)
+    j.path_goal_prev = goal
+    return {**command, **{name: value + j.path_settle.trim.get(name, 0.0) for name, value in goal.items()}}
+
+
 def _advance_playback(j: _Jog, now: float) -> None:
     """Send the playback's next sample once its time has come, unless a joint is further than PLAYBACK_LAG_DEG behind
     the sample already sent: then the playback's clock waits for it, so the arm keeps to the planned path and arrives
@@ -492,9 +516,12 @@ def _loop(j: _Jog) -> None:
                         j.halted, j.reason = True, path.reason
                         q_cmd, holding = None, False
                     else:
-                        # The plan checked these joints. Do not add the Cartesian settle trim to them.
+                        # Keep transit on the checked samples. Only a stationary arm endpoint
+                        # may use a bounded correction for static friction; the path still
+                        # judges arrival against the original, untrimmed joint goal.
+                        sent = _path_endpoint_action(j, path, command, q_obs, state.load)
                         robot.send_action(
-                            _clamped({f"{m}.pos": command[m] for m in MOTOR_NAMES}, q_obs, j.joint_ranges)
+                            _clamped({f"{m}.pos": sent[m] for m in MOTOR_NAMES}, q_obs, j.joint_ranges)
                         )
                         q_cmd, holding, grip = command, False, command["gripper"]
                         j.q_target = command
@@ -1781,6 +1808,8 @@ class PathBody(BaseModel):
     grip_contact: bool = False
     previous_id: str | None = None
     stream_samples: bool = False
+    endpoint_tolerance_mm: float | None = None
+    endpoint_tolerance_deg: float | None = None
 
 
 class PathToken(BaseModel):
@@ -1845,6 +1874,8 @@ def _start_guarded_path(j: _Jog, body: PathBody) -> dict:
             body.grip_contact,
             time.monotonic(),
             stream_samples=body.stream_samples,
+            endpoint_tolerance_mm=body.endpoint_tolerance_mm,
+            endpoint_tolerance_deg=body.endpoint_tolerance_deg,
         )
         with j.lock:
             if _jog is not j or not j.connected or j.halted:
@@ -1863,6 +1894,7 @@ def _start_guarded_path(j: _Jog, body: PathBody) -> dict:
             path.check_start(current.q, j.q_cmd, kin)
             path.started = path.heartbeat_at = path.sent_at = time.monotonic()
             j.guarded_path, j.mode = path, "path"
+            j.path_settle, j.path_goal_prev = _Settle(), None
             j.q_obs, j.temps, j.load, j.good = current.q, current.temps, current.load, current
             j.last_read_at = time.monotonic()
             j.q_target = dict(zip(MOTOR_NAMES, map(float, path.q[0]), strict=True))
@@ -1893,7 +1925,9 @@ async def path_start(body: PathBody) -> dict:
     This endpoint does not certify collision clearance. The client must retain a current scene, check the arm and
     payload, and heartbeat while monitoring observed geometry. Other motion writers are excluded until finish/stop.
     stream_samples opts into continuous arm transit between collision samples, with observed arrival still required
-    at the segment endpoint. It retains speed/following-error bounds and does not change gripper contact semantics.
+    at the segment endpoint. A caller may widen a free-space waypoint's endpoint tolerance only within the
+    following-error bounds; it must collision-check the observed endpoint and replan the next phase from there.
+    Gripper contact and opening keep strict arrival. Speed and following-error bounds are unchanged.
     """
     j = _jog
     with j.lock:

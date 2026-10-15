@@ -53,6 +53,9 @@ class GuardedPath:
     kin: Any = None  # private FK data, never shared with the jog/GUI's mutable Pinocchio state
     stream_samples: bool = False  # collision samples may be streamed; phase endpoints must still arrive
     high_temp_streak: dict[str, int] = field(default_factory=dict)
+    endpoint_position_m: float = ARRIVAL_M
+    endpoint_joint_deg: float = ARRIVAL_DEG
+    endpoint_orientation_deg: float = ARRIVAL_ANGLE_DEG
 
     @classmethod
     def prepare(
@@ -69,6 +72,8 @@ class GuardedPath:
         now: float,
         *,
         stream_samples: bool = False,
+        endpoint_tolerance_mm: float | None = None,
+        endpoint_tolerance_deg: float | None = None,
     ) -> "GuardedPath":
         q = np.asarray(samples, dtype=float)
         expected = np.asarray(expected_poses, dtype=float)
@@ -86,6 +91,16 @@ class GuardedPath:
             raise ValueError("path samples must be at most 0.5 arm degrees / 1 gripper unit apart")
         moving_arm = bool(np.any(delta[:, arm] > 1e-8))
         moving_grip = bool(np.any(delta[:, grip_index] > 1e-8))
+        position_m = ARRIVAL_M if endpoint_tolerance_mm is None else endpoint_tolerance_mm / 1000
+        joint_deg = ARRIVAL_DEG if endpoint_tolerance_deg is None else endpoint_tolerance_deg
+        if (
+            not np.isfinite([position_m, joint_deg]).all()
+            or not ARRIVAL_M <= position_m <= MAX_ERROR_M
+            or not ARRIVAL_DEG <= joint_deg <= MAX_ERROR_DEG
+        ):
+            raise ValueError("endpoint tolerance must stay within the guarded following bounds")
+        if (moving_grip or grip_contact) and (position_m > ARRIVAL_M or joint_deg > ARRIVAL_DEG):
+            raise ValueError("gripper contact and opening require the strict endpoint tolerance")
         if moving_arm and moving_grip:
             raise ValueError("arm transit and gripper changes must be separate segments")
         if grip_contact and (moving_arm or np.any(np.diff(q[:, grip_index]) < -1e-8)):
@@ -116,6 +131,9 @@ class GuardedPath:
         )
         path.kin = kin
         path.stream_samples = stream_samples
+        path.endpoint_position_m = position_m
+        path.endpoint_joint_deg = joint_deg
+        path.endpoint_orientation_deg = max(ARRIVAL_ANGLE_DEG, joint_deg)
         return path
 
     def check_start(self, observed: dict[str, float], commanded: dict[str, float], kin: Any) -> None:
@@ -176,8 +194,13 @@ class GuardedPath:
             or self.grip_contact
             or abs(q_now[self.grip_index] - self.q[self.index, self.grip_index]) <= 1.0
         )
-        arrived = lag <= ARRIVAL_DEG and error <= ARRIVAL_M and angle <= ARRIVAL_ANGLE_DEG and grip_arrived
         last = self.index == len(self.q) - 1
+        arrived = (
+            lag <= (self.endpoint_joint_deg if last else ARRIVAL_DEG)
+            and error <= (self.endpoint_position_m if last else ARRIVAL_M)
+            and angle <= (self.endpoint_orientation_deg if last else ARRIVAL_ANGLE_DEG)
+            and grip_arrived
+        )
         advance = arrived
         if self.stream_samples and not grip_moves and not last:
             next_error, _ = residual(pose, self.poses[self.index + 1])

@@ -18,7 +18,7 @@ class Kin:
         return pose
 
 
-def make_path(q=None, contact=False):
+def make_path(q=None, contact=False, **kwargs):
     q = np.array(q if q is not None else [[k * 0.5, 0, 0, 80] for k in range(9)], float)
     kin = Kin()
     poses = np.stack([kin.forward_kinematics(row) for row in q])
@@ -33,6 +33,7 @@ def make_path(q=None, contact=False):
         3,
         contact,
         0.0,
+        **kwargs,
     )
 
 
@@ -125,6 +126,21 @@ def test_temperature_spike_does_not_freeze_path_but_sustained_heat_does():
         assert p.status != "failed"
     assert tick(p, 0.03 + (HOT_READS_TO_STOP - 1) * 0.01, p.q[0], temps=hot) is None
     assert p.status == "failed" and "temperature" in p.reason
+
+
+def test_free_space_endpoint_can_accept_a_checked_region_while_contact_stays_strict():
+    q = [[0, 0, 0, 80], [0.5, 0, 0, 80], [1, 0, 0, 80]]
+    strict = make_path(q)
+    relaxed = make_path(q, endpoint_tolerance_mm=5, endpoint_tolerance_deg=2.5)
+    for path in (strict, relaxed):
+        path.index = 2
+        tick(path, 0.1, [0.2, 0, 0, 80])
+    assert strict.status == "running"
+    assert relaxed.status == "done"
+    with pytest.raises(ValueError, match="strict endpoint"):
+        make_path([[0, 0, 0, 80], [0, 0, 0, 81]], endpoint_tolerance_mm=5)
+    with pytest.raises(ValueError, match="following bounds"):
+        make_path(q, endpoint_tolerance_mm=8)
 
 
 def test_contact_closing_can_stop_on_the_object_but_opening_must_reach_its_target():
