@@ -231,6 +231,9 @@ class _Jog:
     playback_held: float | None = None  # since when the playback waits for a joint behind its target
     playback_hold_spent: bool = False  # the soft wait expired; reset once all arm joints catch up
     playback_blocked: float | None = None  # since exceeding the hard bound, or delaying a release
+    playback_slew_at: float = (
+        0.0  # last live-playback command tick; a delayed tick cannot spend its missed steps
+    )
     guarded_path: GuardedPath | None = None
     path_settle: _Settle = field(default_factory=_Settle)
     path_goal_prev: dict[str, float] | None = None
@@ -458,6 +461,25 @@ def _advance_playback(j: _Jog, now: float) -> None:
     j.playback_tick = now
 
 
+def _live_joint_command(
+    previous: dict[str, float], target: dict[str, float], elapsed: float
+) -> dict[str, float]:
+    """Bound each live arm command by the playback's existing following budget.
+
+    Replanning can replace an object pose between motor ticks. Sending the
+    resulting joint correction in one packet makes the motor goal a staircase
+    even while the bus runs at 30 Hz. A delayed tick does not accumulate a
+    larger step. The gripper keeps its checked phase timing.
+    """
+    step = PLAYBACK_LAG_DEG * HZ * min(1.0 / HZ, max(0.0, elapsed))
+    return {
+        name: value
+        if name == "gripper" or name not in previous
+        else previous[name] + float(np.clip(value - previous[name], -step, step))
+        for name, value in target.items()
+    }
+
+
 def _bad_read(j: _Jog, e: _BadReadError) -> None:
     """A tick whose read cannot be the arm sends nothing, so the motors hold their last goal; the replies are logged,
     and BAD_READS_FREEZE in a row freeze the arm."""
@@ -546,6 +568,11 @@ def _loop(j: _Jog) -> None:
                     active = j.mode == "joints" and j.q_target is not None and not j.halted
                     if active:
                         q_target = dict(j.q_target)
+                        if j.playback_live:
+                            now = time.monotonic()
+                            elapsed = 1.0 / HZ if not j.playback_slew_at else now - j.playback_slew_at
+                            q_target = _live_joint_command(j.q_cmd, q_target, elapsed)
+                            j.playback_slew_at = now
                         robot.send_action(
                             _clamped(
                                 _trimmed(j, {f"{m}.pos": q_target[m] for m in MOTOR_NAMES}),
@@ -1322,6 +1349,7 @@ def play_joints(samples: list[dict[str, float]], due_s: list[float]) -> None:
         j.playback = [dict(s) for s in samples]
         j.playback_due = [float(t) for t in due_s]
         j.playback_t0 = j.playback_tick = time.monotonic()
+        j.playback_slew_at = 0.0
         j.playback_sent, j.playback_sent_at = -1, []
         j.playback_held, j.playback_blocked, j.playback_hold_spent = None, None, False
 

@@ -706,6 +706,37 @@ def test_a_playback_sends_every_sample_in_order_and_a_slow_tick_delays_the_rest(
         jog._stop_loop(j)
 
 
+def test_live_playback_slews_replanned_arm_target_without_delaying_gripper():
+    """A fresh object pose can move a wrist goal by 6 deg between 30 Hz motor ticks."""
+    q = {**dict.fromkeys(MOTOR_NAMES, 0.0), "gripper": 78.0}
+    robot = _FakeRobot(q)
+    j = jog._Jog(robot=robot, kin=_FakeKin(), arm="left", workspace_min=(-1.0, -1.0, -1.0))
+    j.mode, j.q_target, j.q_cmd, j.q_obs = (
+        "joints",
+        {**q, "wrist_roll": 6.0, "gripper": 80.0},
+        dict(q),
+        dict(q),
+    )
+    j.playback_live = True
+    j.settle_on = False
+    j.thread = threading.Thread(target=jog._loop, args=(j,), daemon=True)
+    try:
+        j.thread.start()
+        deadline = time.monotonic() + 2.0
+        while (not robot.sent or robot.sent[-1]["wrist_roll.pos"] < 6.0) and time.monotonic() < deadline:
+            time.sleep(0.005)
+        goals = [action["wrist_roll.pos"] for action in robot.sent]
+        assert len(goals) >= 2 and goals[-1] == pytest.approx(6.0)
+        assert max(np.diff([0.0, *goals])) <= jog.PLAYBACK_LAG_DEG + 1e-6
+        assert all(action["gripper.pos"] == 80.0 for action in robot.sent)
+        assert j.q_target["wrist_roll"] == 6.0  # the full checked goal remains available to the lag guard
+        assert jog._live_joint_command({"wrist_roll": 0.0}, {"wrist_roll": 9.0}, 0.5)[
+            "wrist_roll"
+        ] == pytest.approx(jog.PLAYBACK_LAG_DEG)  # a delayed tick cannot catch up in one jump
+    finally:
+        jog._stop_loop(j)
+
+
 def test_an_overloaded_joint_or_any_other_gripper_fault_still_stops_the_arm():
     lift_id, gripper_id = MOTOR_NAMES.index("shoulder_lift") + 1, MOTOR_NAMES.index("gripper") + 1
     q = dict.fromkeys(MOTOR_NAMES, 0.0)

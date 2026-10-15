@@ -670,7 +670,12 @@ def view_places(
 placement_error = placement.placement_error
 
 
-def carried_motion(frames: list[tuple[float, np.ndarray]], since: float) -> np.ndarray:
+def carried_motion(
+    frames: list[tuple[float, np.ndarray]],
+    since: float,
+    symmetry_line: tuple[np.ndarray, np.ndarray] | None = None,
+    end_swap: bool = False,
+) -> np.ndarray:
     """How the point groups moved an object from frame time ``since`` to their newest frame, camera frame (4x4).
 
     ``frames`` are their pose of the object frame by frame, ``(frame time, camera <- object)``, oldest first: its own
@@ -682,7 +687,44 @@ def carried_motion(frames: list[tuple[float, np.ndarray]], since: float) -> np.n
     """
     if not frames:
         return np.eye(4)
-    return np.asarray(frames[-1][1], dtype=float) @ np.linalg.inv(_groups_pose_at(frames, since))
+    start, end = _groups_pose_at(frames, since), np.asarray(frames[-1][1], dtype=float)
+    if symmetry_line is None:
+        return end @ np.linalg.inv(start)
+    # The group fit may spin an appearance-symmetric object around its axis
+    # while its visible surface and centreline stay still. Keep the measured
+    # centreline motion and the shortest rotation that aligns its direction;
+    # the unobserved axial roll cannot retarget a grasp.
+    from scipy.spatial.transform import Rotation
+
+    reference = np.asarray(frames[0][1], dtype=float)
+    axis, point = (np.array(v, dtype=float, copy=True) for v in symmetry_line)
+    axis /= np.linalg.norm(axis)
+    local_axis = reference[:3, :3].T @ axis
+    local_point = reference[:3, :3].T @ (point - reference[:3, 3])
+    a = start[:3, :3] @ local_axis
+    b = end[:3, :3] @ local_axis
+    if end_swap and np.dot(a, b) < 0:
+        b = -b
+    cross, dot = np.cross(a, b), float(np.clip(np.dot(a, b), -1.0, 1.0))
+    if np.linalg.norm(cross) < 1e-9:
+        if dot > 0:
+            rotate = np.eye(3)
+        else:
+            # A reversal without end-swap permission is observable. Its
+            # shortest turn is not unique; choose a stable orthogonal axis.
+            basis = np.eye(3)[int(np.argmin(np.abs(a)))]
+            normal = np.cross(a, basis)
+            rotate = Rotation.from_rotvec(np.pi * normal / np.linalg.norm(normal)).as_matrix()
+    else:
+        rotate = Rotation.from_rotvec(
+            cross / np.linalg.norm(cross) * np.arctan2(np.linalg.norm(cross), dot)
+        ).as_matrix()
+    p0 = start[:3, :3] @ local_point + start[:3, 3]
+    p1 = end[:3, :3] @ local_point + end[:3, 3]
+    out = np.eye(4)
+    out[:3, :3] = rotate
+    out[:3, 3] = p1 - rotate @ p0
+    return out
 
 
 def carried_between(frames: list[tuple[float, np.ndarray]], since: float, until: float) -> np.ndarray:

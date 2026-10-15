@@ -31,7 +31,7 @@ import numpy as np
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
-from lerobot.showservo import motion as core, reactive
+from lerobot.showservo import motion as core, reactive, symmetry
 
 from . import acquisition, camera, groups, held_views, holds, live_execution, planning, recording, runtime
 
@@ -352,10 +352,21 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
 
             beside.append(asyncio.create_task(watch_groups()))
 
+        symmetry_lines: dict[str, tuple[np.ndarray, np.ndarray, bool]] = {}
+        hold_live = False
+        held_obj = None
+
         def carried(name: str, since: float) -> np.ndarray:
             """How the point groups moved ``name`` since the frame read at ``since``, camera frame; none without
             them."""
-            return groups._carried(name, since) if with_groups else np.eye(4)
+            if not with_groups:
+                return np.eye(4)
+            line = symmetry_lines.get(name) if not (hold_live and name == held_obj) else None
+            return (
+                groups._carried(name, since, (line[0], line[1]), line[2])
+                if line is not None
+                else groups._carried(name, since)
+            )
 
         def index(tk: float) -> int:
             return int(np.argmin(np.abs(demo.t - tk)))
@@ -432,6 +443,29 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
         # The walk starts on the track the act began with; its find is started over beside the arm, and until the
         # fresh track certifies a view the old one's last motion stands (its views are against the old teach).
         motion0, seen_at0 = planning._delta_base(demo, delta, t_bc), seen_at
+        # Use the declared appearance equivalence only while the object rests
+        # in the scene. Its visible RGB-D reference supplies an axis and point;
+        # a held object instead follows the gripper's full rotation.
+        if with_groups:
+            inv_bc = np.linalg.inv(t_bc)
+            for name, motion in {**motions, picked: motion0}.items():
+                if name not in demo.objects:
+                    continue
+                spec = symmetry.normalise(demo.objects[name].get("symmetry"))
+                if spec["kind"] != "continuous":
+                    continue
+                try:
+                    points = planning._object_points(demo, name, np.eye(4))
+                    cam_motion = inv_bc @ motion @ t_bc
+                    live_points = points @ cam_motion[:3, :3].T + cam_motion[:3, 3]
+                    axis, centre = symmetry.observed_axis(live_points, spec["axis"])
+                    symmetry_lines[name] = (axis, centre, bool(spec.get("end_swap")))
+                except (OSError, ValueError, IndexError) as exc:
+                    logger.warning("cannot measure %s's declared symmetry axis: %s", name, exc)
+            run.meta["symmetry_carry"] = {
+                name: {"axis_cam": axis.tolist(), "point_cam": point.tolist(), "end_swap": swap}
+                for name, (axis, point, swap) in symmetry_lines.items()
+            }
 
         async def refind_with_others() -> str:
             """The session started over from a fresh find of its own object, the others (found just before, where
@@ -503,7 +537,6 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
 
         live_fix = np.eye(4)
         hold_watch = None
-        hold_live = False
         hold_generation = 0
         held_attachment = {}
 

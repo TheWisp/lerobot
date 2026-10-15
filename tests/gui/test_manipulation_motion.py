@@ -2478,6 +2478,29 @@ def test_the_point_groups_carry_a_view_from_its_frame_to_their_newest():
     assert np.allclose(core.carried_motion([], 10.0), np.eye(4)), "without them the view is held"
 
 
+def test_group_carry_does_not_turn_a_continuously_symmetric_object_about_its_axis():
+    """A cylinder's group fit can roll 9 deg while its visible line stays put."""
+    axis = np.array([1.0, 0.0, 0.0])
+    centre = np.array([0.1, 0.2, 0.4])
+    rolled = symmetry.turn_about(axis, centre, 9.0)
+    shifted = np.eye(4)
+    shifted[:3, 3] = [0.004, -0.002, 0.001]
+    frames = [(0.0, np.eye(4)), (0.1, shifted @ rolled)]
+
+    ordinary = core.carried_motion(frames, 0.0)
+    equivalent = core.carried_motion(frames, 0.0, (axis, centre))
+    assert np.degrees(np.linalg.norm(Rotation.from_matrix(ordinary[:3, :3]).as_rotvec())) == pytest.approx(
+        9.0
+    )
+    assert np.allclose(equivalent[:3, :3], np.eye(3))
+    assert np.allclose(equivalent[:3, 3], shifted[:3, 3])
+
+    tilted = symmetry.turn_about([0, 1, 0], centre, 5.0) @ shifted @ rolled
+    frame = core.carried_motion([(0.0, np.eye(4)), (0.1, tilted)], 0.0, (axis, centre))
+    assert np.allclose(frame[:3, :3] @ axis, tilted[:3, :3] @ axis)
+    assert np.allclose(frame[:3, :3] @ centre + frame[:3, 3], tilted[:3, :3] @ centre + tilted[:3, 3])
+
+
 def _turned_about(middle, rotvec_deg, shift=(0.0, 0.0, 0.0)) -> np.ndarray:
     """A motion that turns by ``rotvec_deg`` about ``middle`` and then shifts, camera frame."""
     m = np.eye(4)

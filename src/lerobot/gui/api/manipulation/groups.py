@@ -281,14 +281,19 @@ async def _groups_feed_pump() -> None:
                 feed.task = None
 
 
-def _carried(name: str, since: float) -> np.ndarray:
+def _carried(
+    name: str,
+    since: float,
+    symmetry_line: tuple[np.ndarray, np.ndarray] | None = None,
+    end_swap: bool = False,
+) -> np.ndarray:
     """How the point groups moved ``name`` since the frame read at ``since``, camera frame (:func:`core.carried_motion`);
     no motion without them."""
     with runtime._state.lock:
         frames = (
             list(runtime._state.groups_feed.frames.get(name, ())) if runtime._state.groups_with_acts else []
         )
-    return core.carried_motion(frames, since)
+    return core.carried_motion(frames, since, symmetry_line, end_swap)
 
 
 def _paint_picture(bgr: np.ndarray, d: dict) -> np.ndarray:
