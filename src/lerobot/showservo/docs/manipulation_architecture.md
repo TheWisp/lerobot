@@ -279,6 +279,40 @@ was not proof of holding the dowel. The arm was opened and parked without a
 motor fault. The fixed-arm image comparison localizes the shift to the tray;
 it does not certify camera calibration or the arm path.
 
+A further live-view trial on October 15 kept the dowel at the tray's left wall
+and the arm parked. A fresh aligned RGB-D find recovered both declared end
+assignments from the complete rod surface (about 0.966 support for either
+assignment, 1.35 mm surface RMS); a fresh ring click gave 192/400 feature
+inliers after a stale automatic click on other clutter gave only 9/400. Offline
+IK planning found several joint-range-feasible grasp trajectories for both end
+assignments. Their recorded low closing pose put a modeled jaw into the tray
+or the observed left wall. The conservative scene grid also marked space
+behind the parked arm unknown, so it did not certify any complete path.
+
+The first recorded approach mark at 6.001 s is now `best_effort`, and the
+second mark moved from 6.836 s to 7.64 s, just before the recorded firm grip
+at 7.772 s. The saved insertion demo's prior `keypoints.json` is backed up as
+`keypoints.pre-refined-grasp-20261015.json` beside it. The key-frame validator
+accepts the new marks, and offline IK still reaches both end assignments. The
+final low closing pose is unchanged. A best-effort hover changes the arrival
+requirement but, without collision planning, can still aim into the wall; this
+edit by itself does not authorize an act.
+
+The candidate contact gate also needs a positive control before it decides
+physical reachability. With the measured demo rod represented by its observed
+box, `opposing_jaw_contacts` rejects the actual demonstrated grip: its first
+jaw remains about 7 mm from that box at the recorded firm-grip moment. The
+recorded rod may have moved before that moment, and a depth-fitted box need not
+represent the cylindrical contact patches or calibrated finger surfaces.
+Therefore the coarse alternative search's lack of an opposing-box pinch is a
+_model-validation failure_, not proof that a safe physical pinch is impossible.
+No physical pick or insertion was attempted in this trial; the arm was parked
+and disconnected without a motor fault. Validate the contact model against
+the time-aligned demo grip, then search approach, finger-closing sweep and lift
+as separate stages with observed-scene clearance. The contact location may
+move along the measured rod axis; the required dowel-to-ring relation belongs
+at insertion, after an airborne hold has been verified.
+
 The required next control step is to search both declared end assignments,
 allowed axial rolls and contact locations, checking finger, wrist and transit
 clearance against a fresh measured scene before touching the object. If no
