@@ -662,6 +662,7 @@ async def _apply_track_result(job: runtime._Job) -> None:
     checks = await asyncio.get_running_loop().run_in_executor(
         runtime._RENDER_EXECUTOR, _verify_track_poses, job, r, teach, False, False
     )
+    job.verified_at = time.time()
     # Teach/track can be replaced while the executor is measuring this frame.
     with runtime._state.lock:
         if runtime._state.track is not tr or tr.job != job.id or runtime._state.teach is not teach:
@@ -799,6 +800,7 @@ async def _apply_track_result(job: runtime._Job) -> None:
     overlay = await asyncio.get_event_loop().run_in_executor(
         runtime._RENDER_EXECUTOR, rendering._render_live, job.rgb, r, result, transported, teach, status
     )
+    job.rendered_at = time.time()
     with runtime._state.lock:
         held = runtime._state.test.result.get("delta_cam") if runtime._state.test is not None else None
         tr.model = {

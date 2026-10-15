@@ -70,6 +70,7 @@ def test_worker_result_corrects_bad_pose_before_control_and_records_both(monkeyp
     asyncio.run(p.tracking._apply_track_result(job))
     p.runtime._RUN_EXECUTOR.submit(lambda: None).result(timeout=5)
     check = run.frames[0]["pose_verification"][0]
+    assert run.frames[0]["t_verified"] <= run.frames[0]["t_rendered"] <= run.frames[0]["t_result"]
     assert shown == [check]
     assert check["accepted"] and check["surface"]["state"] == "disagreement"
     assert run.meta["pose_disagreements"][0]["frame"] == 0

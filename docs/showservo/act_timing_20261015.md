@@ -44,5 +44,7 @@ sequence, passed through this new motion check offline, would reject ten
 corrected ring candidates, seven of which the original Act accepted, including
 the 4-degree change at +10.44 s. This is an
 offline counterfactual, not a hardware demonstration that all jitter is gone.
-The arm remained connected while the code was changed, so the running GUI has
-not been restarted and still serves the previous build.
+The next Act record now stamps worker-result arrival, NPZ decode, verification
+and rendering separately, so the unaccounted latency can be attributed rather
+than guessed at. The arm remained connected while the code was changed, so the
+running GUI has not been restarted and still serves the previous build.

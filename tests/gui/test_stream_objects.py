@@ -4556,6 +4556,7 @@ def test_the_live_sessions_model_is_served_with_the_frame_and_motions_that_place
             client.post("/api/pregrasp/worker/result", params={"id": job.id}, content=payload).status_code
             == 200
         )
+        assert job.result_received_at <= job.result_decoded_at <= job.verified_at <= job.rendered_at
         r = client.get("/api/pregrasp/track/model.npz")
         assert r.status_code == 200
         z = np.load(io.BytesIO(r.content))

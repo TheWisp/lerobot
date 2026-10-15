@@ -225,6 +225,16 @@ class _Run:
                     else {}
                 ),
                 "t_result": time.time(),
+                **{
+                    key: stamp
+                    for key, stamp in (
+                        ("t_result_received", job.result_received_at),
+                        ("t_result_decoded", job.result_decoded_at),
+                        ("t_verified", job.verified_at),
+                        ("t_rendered", job.rendered_at),
+                    )
+                    if stamp is not None
+                },
                 "step": step,
                 "used": bool(status.get("ok")),  # the act follows only a frame the server trusted
                 **{k: r.get(k) for k in runtime.RUN_FRAME_FIELDS},

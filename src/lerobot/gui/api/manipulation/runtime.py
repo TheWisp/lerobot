@@ -80,6 +80,10 @@ class _Job:
     intr: dict[str, float]
     created: float
     camera_stamp_mono: float | None = None  # host publication time of the source RGB-D frame
+    result_received_at: float | None = None  # request body arrived from the worker
+    result_decoded_at: float | None = None  # NPZ and metadata decoded by the GUI
+    verified_at: float | None = None  # geometry checks finished
+    rendered_at: float | None = None  # live overlay finished
     taken: bool = False
     result: dict[str, Any] | None = None
     camera_check: dict[str, Any] | None = None  # marker drift on this frame; None without a calibration

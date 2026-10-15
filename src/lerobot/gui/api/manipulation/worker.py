@@ -189,12 +189,13 @@ async def worker_frame(id: str) -> Response:
 async def worker_result(id: str, request: Request) -> dict:
     """The worker's answer for a job: NPZ with ``meta`` JSON plus mask, points and, for a find, the delta."""
     body = await request.body()
-    data = np.load(io.BytesIO(body), allow_pickle=False)
-    meta = json.loads(str(data["meta"]))
     with runtime._state.lock:
         job = runtime._state.worker.jobs.get(id)
     if job is None:
         raise HTTPException(404, "no such job")
+    job.result_received_at = time.time()
+    data = np.load(io.BytesIO(body), allow_pickle=False)
+    meta = json.loads(str(data["meta"]))
     result: dict[str, Any] = dict(meta)
     for key in (
         "mask",
@@ -218,6 +219,7 @@ async def worker_result(id: str, request: Request) -> dict:
     ):
         if key in data.files:
             result[key] = np.asarray(data[key])
+    job.result_decoded_at = time.time()
     if job.kind in ("teach", "locate", "find"):
         result = await asyncio.get_running_loop().run_in_executor(
             runtime._RENDER_EXECUTOR, tracking._constrain_find_result, job, result
