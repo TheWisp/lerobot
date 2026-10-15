@@ -1895,7 +1895,7 @@ def _start_guarded_path(j: _Jog, body: PathBody) -> dict:
     from lerobot.robots.so107_description.cartesian_ik import SO107_WORKSPACE_MAX
     from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
 
-    from ._guarded_path import ARRIVAL_ANGLE_DEG, MAX_ERROR_DEG, MAX_ERROR_M
+    from ._guarded_path import ARRIVAL_ANGLE_DEG, MAX_ERROR_M
 
     stopped = False
     try:
@@ -1917,16 +1917,10 @@ def _start_guarded_path(j: _Jog, body: PathBody) -> dict:
                 body.endpoint_tolerance_mm
                 if body.endpoint_tolerance_mm is not None
                 else MAX_ERROR_M * 1000
-                if body.constraint != "pose"
+                if body.constraint == "orientation"
                 else None
             ),
-            endpoint_tolerance_deg=(
-                body.endpoint_tolerance_deg
-                if body.endpoint_tolerance_deg is not None
-                else MAX_ERROR_DEG
-                if body.constraint == "best_effort"
-                else None
-            ),
+            endpoint_tolerance_deg=body.endpoint_tolerance_deg,
         )
         path.constraint = body.constraint
         if body.constraint == "orientation":
