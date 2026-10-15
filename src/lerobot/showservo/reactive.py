@@ -153,16 +153,18 @@ def checked_joint_samples(
     max_joint_tick_deg: float,
     previous_sample: np.ndarray | None = None,
     max_joint_accel_deg: float | None = None,
+    continuous: bool = False,
 ) -> list[np.ndarray] | None:
     """Interpolate a solved step at motor rate only when its whole joint path is checked.
 
     FK of each intermediate joint command must stay near the corresponding
     Cartesian interpolation and inside the same workspace/floor as the solve.
-    When the last command is known, prefer a constant-acceleration joint walk
-    from its incoming velocity. This avoids a velocity jump at each IK chunk
-    boundary. If that walk leaves the checked Cartesian corridor or exceeds
-    the joint-rate/acceleration budget, retain the original checked linear
-    interpolation. Returning None asks for a shorter checked Cartesian step.
+    Free moves use a cubic matching incoming velocity and braking at the real
+    waypoint. Their path check permits eased progress along the Cartesian
+    corridor, and rejects velocity/acceleration violations without a linear
+    fallback. Recorded follow samples retain their timing: prefer the existing
+    constant-acceleration walk, with checked linear interpolation as fallback.
+    Returning None asks for a shorter checked Cartesian step.
     """
     if ticks < 1 or result["reason"]:
         return None
@@ -178,6 +180,13 @@ def checked_joint_samples(
         steps = np.diff(np.stack([previous, *samples]), axis=0)
         if np.max(np.abs(steps[:, arm])) > max_joint_tick_deg:
             return False
+        if continuous and previous_sample is not None and max_joint_accel_deg is not None:
+            incoming = previous - np.asarray(previous_sample, dtype=float)
+            if (
+                np.max(np.abs(np.diff(np.vstack([incoming, steps]), axis=0)[:, arm]))
+                > max_joint_accel_deg + 1e-9
+            ):
+                return False
         if (
             acceleration is not None
             and max_joint_accel_deg is not None
@@ -186,6 +195,11 @@ def checked_joint_samples(
             return False
         for k, q in enumerate(samples, start=1):
             u = k / ticks
+            if continuous:
+                chord = endpoint[arm] - previous[arm]
+                u = float(
+                    np.clip(np.dot(q[arm] - previous[arm], chord) / max(np.dot(chord, chord), 1e-12), 0, 1)
+                )
             actual = kin.forward_kinematics(q)
             expected = core.interp_rigid(start_pose, end_pose, u)
             distance, angle = core.pose_residual(actual, expected)
@@ -199,6 +213,27 @@ def checked_joint_samples(
             ):
                 return False
         return True
+
+    if continuous and previous_sample is not None and ticks > 1:
+        # A free waypoint is a trajectory endpoint, not a row of independent
+        # motor goals. Match incoming velocity, and brake at the real endpoint.
+        # Interior chunks retain a through velocity; no linear fallback may
+        # silently discard continuity when this curve fails its path checks.
+        incoming = previous - np.asarray(previous_sample, dtype=float)
+        outgoing = np.zeros_like(incoming) if result["complete"] else (endpoint - previous) / ticks
+        samples = []
+        for k in range(1, ticks + 1):
+            u = k / ticks
+            q = (
+                (2 * u**3 - 3 * u**2 + 1) * previous
+                + (u**3 - 2 * u**2 + u) * ticks * incoming
+                + (-2 * u**3 + 3 * u**2) * endpoint
+                + (u**3 - u**2) * ticks * outgoing
+            )
+            q[grip_index] = previous[grip_index] + u * (endpoint[grip_index] - previous[grip_index])
+            samples.append(q)
+        samples[-1] = endpoint.copy()
+        return samples if checked(samples) else None
 
     if previous_sample is not None and ticks > 1:
         incoming = previous - np.asarray(previous_sample, dtype=float)

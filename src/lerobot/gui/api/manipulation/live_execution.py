@@ -43,11 +43,35 @@ async def stream(
 
     gi = MOTOR_NAMES.index("gripper")
     path = plan["live_path"]
+    constraints = path.get("constraint", ["pose"] * len(plan["q"]))
     qs, phases, due, goals = [plan["q"][0].copy()], [0], [0.0], [None]
     compositions = [None]
 
     def as_dict(q):
         return dict(zip(MOTOR_NAMES, map(float, q), strict=True))
+
+    def next_target_phase(phase, current):
+        i = min(phase + 1, len(plan["q"]) - 1)
+        moves = path.get("move")
+        if moves is None or moves[i] not in {"line", "lift"}:
+            return i
+        # Generated samples along a free line are validation points, not
+        # independent stop targets. Preserve real stage/gripper boundaries.
+        if abs(float(path["grips"][i] - current[gi])) > 1e-6:
+            return i
+        while i + 1 < len(plan["q"]):
+            k = i + 1
+            if (
+                plan["stage"][k] != plan["stage"][i]
+                or moves[k] != moves[i]
+                or path["frames"][k] != path["frames"][i]
+                or path["held"][k] != path["held"][i]
+                or abs(float(path["grips"][k] - current[gi])) > 1e-6
+                or constraints[k] != constraints[i]
+            ):
+                break
+            i = k
+        return i
 
     jog.play_joints([as_dict(qs[0])], [0.0])
     recorded, last_phase, progressing = -1, 0, time.monotonic()
@@ -144,7 +168,7 @@ async def stream(
         if replacing and orientation_stage is not None and plan["stage"][phases[done]] != orientation_stage:
             orientation_stage = orientation_anchor = None
         pending = 0 if replacing else len(qs) - done - 1
-        i = min(phase + 1, len(plan["q"]) - 1)
+        i = next_target_phase(phase, qs[done])
         goal = reactive.targets({k: v[i : i + 1] for k, v in path.items()}, motion, fix)[0]
         constraint = path.get("constraint", ["pose"] * len(plan["q"]))[i]
         free_terminal = (
@@ -216,7 +240,7 @@ async def stream(
             continue
         base = done if replacing else len(qs) - 1
         phase = phases[base]
-        i = min(phase + 1, len(plan["q"]) - 1)
+        i = next_target_phase(phase, qs[base])
         if (
             pending
             and path["held"][i]
@@ -273,6 +297,12 @@ async def stream(
                 6, max(compute_ticks, int(np.ceil((plan["times"][i] - plan["times"][phase]) * jog.HZ - 1e-8)))
             ),
         )
+        continuous = (
+            path.get("move", ["follow"] * len(plan["q"]))[i] in {"line", "lift"}
+            and abs(float(path["grips"][i] - qs[base][gi])) < 1e-6
+        )
+        if continuous:
+            nominal_ticks = min(horizon, max(nominal_ticks, 6))
         if (
             replacing
             and blend_ticks >= 2
@@ -328,10 +358,23 @@ async def stream(
             solve_seconds.append(time.perf_counter() - solve_started)
             if diagnostics is not None:
                 diagnostics["solve_ms"].append((time.perf_counter() - solve_started) * 1000.0)
+            if (
+                continuous
+                and np.max(np.abs(np.delete(np.asarray(result["q"]) - qs[base], gi)))
+                > core.ACT_MAX_JOINT_STEP_DEG
+            ):
+                step_ticks /= 2
+                continue
             if result["reason"]:
                 break
             arm_delta = np.delete(np.asarray(result["q"]) - qs[base], gi)
-            ticks = max(nominal_ticks, int(np.ceil(np.max(np.abs(arm_delta)) / joint_tick)))
+            # A cubic easing from rest peaks at 1.5 times its mean speed.
+            # Reserve that room before checking the complete joint curve.
+            peak = 1.5 if continuous else 1.0
+            ticks = max(nominal_ticks, int(np.ceil(peak * np.max(np.abs(arm_delta)) / joint_tick)))
+            if ticks > horizon:
+                step_ticks *= min(0.5, horizon / ticks)
+                continue
             if pending + ticks > horizon:
                 room_needed = True
                 break
@@ -349,6 +392,7 @@ async def stream(
                     joint_tick,
                     previous_sample=qs[max(0, base - 1)],
                     max_joint_accel_deg=jog.RAMP_DEG_S * speed / jog.HZ,
+                    continuous=continuous,
                 ),
             )
             if samples is not None:

@@ -512,6 +512,18 @@ waits, empty queues and holds with queued commands. A queued hold can be part
 of the demo; it is not automatically classified as a planning stall. Replay
 shows these durations and can derive them from older saved motor traces.
 
+Generated samples within a free line or lift serve as planning checks. Live
+execution aims at that stage's actual waypoint and solves bounded Cartesian
+steps toward it. A cubic joint curve starts with the preceding command's
+velocity, retains motion through intermediate solve chunks, and brakes at the
+waypoint. Every interpolated command must pass the joint-rate, acceleration,
+FK corridor and workspace/floor checks. Failure shortens the Cartesian step;
+it cannot silently replace the free-move curve with a velocity discontinuity.
+Recorded follow samples and gripper changes remain separate phases, and a
+moving object still replaces unsent commands using the existing queue blend.
+This is trajectory interpolation, with the existing controller and motor rate;
+it does not predict object motion or guarantee bounded jerk.
+
 The former two-tick minimum stretched every small contact sample even when
 IK was fast. One-tick phases now keep their timing; sustained solves slower
 than a motor tick use longer checked interpolation. The former default

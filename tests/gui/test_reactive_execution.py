@@ -408,7 +408,8 @@ def test_checked_horizon_keeps_motor_ticks_filled_while_solves_take_time(monkeyp
     assert np.mean(np.diff(active) < 0.05) < 0.2, "slow IK must not make the bus hold every other tick"
 
 
-def test_interpolated_joint_chord_must_follow_checked_cartesian_step():
+@pytest.mark.parametrize("continuous", [False, True])
+def test_interpolated_joint_chord_must_follow_checked_cartesian_step(continuous):
     class BentKinematics(_TipKinematics):
         def forward_kinematics(self, q):
             out = super().forward_kinematics(q)
@@ -422,24 +423,28 @@ def test_interpolated_joint_chord_must_follow_checked_cartesian_step():
         reactive.checked_joint_samples(
             BentKinematics(),
             start,
-            {"q": end, "pose": pose(0.01), "reason": ""},
+            {"q": end, "pose": pose(0.01), "reason": "", "complete": True},
             2,
             MOTOR_NAMES.index("gripper"),
             ((-1, -1, -1), (1, 1, 1)),
             -1,
             10,
+            previous_sample=start if continuous else None,
+            continuous=continuous,
         )
         is None
     )
     samples = reactive.checked_joint_samples(
         _TipKinematics(),
         start,
-        {"q": end, "pose": pose(0.01), "reason": ""},
+        {"q": end, "pose": pose(0.01), "reason": "", "complete": True},
         2,
         MOTOR_NAMES.index("gripper"),
         ((-1, -1, -1), (1, 1, 1)),
         -1,
         10,
+        previous_sample=start if continuous else None,
+        continuous=continuous,
     )
     assert [q[0] for q in samples] == [5, 10]
 
@@ -719,3 +724,107 @@ def test_missing_encoder_bracket_is_logged_as_timing_failure_not_arm_disconnecti
     )
     assert len(logs) == 1 and "encoder samples bracket" in logs[0]
     assert not published
+
+
+def test_free_waypoint_curve_brakes_at_endpoint_and_checks_incoming_velocity():
+    kin = _TipKinematics()
+    start = np.array([0.0, 0, 0, 0, 0, 0, 80])
+    end = start.copy()
+    end[0] = 12
+    result = {"q": end, "pose": pose(0.012), "reason": "", "complete": True}
+    kwargs = {"previous_sample": start, "max_joint_accel_deg": 0.8, "continuous": True}
+    samples = reactive.checked_joint_samples(
+        kin, start, result, 12, 6, ((-1, -1, -1), (1, 1, 1)), -1, 2, **kwargs
+    )
+    assert samples is not None
+    steps = np.diff(np.array([start, *samples])[:, 0])
+    assert steps[0] < 0.3 and steps[-1] < 0.3, (
+        "accelerate and brake rather than jump straight to cruising speed"
+    )
+    assert np.all(steps > 0) and np.max(np.abs(np.diff(steps))) < 0.5
+    np.testing.assert_array_equal(samples[-1], end)
+    stale = start.copy()
+    stale[0] = -10
+    kwargs["previous_sample"] = stale
+    assert (
+        reactive.checked_joint_samples(kin, start, result, 12, 6, ((-1, -1, -1), (1, 1, 1)), -1, 2, **kwargs)
+        is None
+    ), "a failed curve cannot silently fall back to a velocity jump"
+
+
+@pytest.mark.parametrize("move_target", [False, True])
+def test_free_line_aims_at_real_waypoint_but_does_not_skip_release(monkeypatch, move_target):
+    kin = _TipKinematics()
+    initial = np.array([0.0, 0, 0, 0, 0, 0, 80])
+    state = {"q": initial.copy(), "motion": np.eye(4), "moved": False}
+    sent = []
+    phases = []
+    goals = []
+
+    def send(q):
+        state["q"] = np.array([q[m] for m in MOTOR_NAMES])
+        sent.append(state["q"].copy())
+
+    fake_playback(monkeypatch, send)
+    monkeypatch.setattr(jog, "servo_ranges", lambda: None)
+    monkeypatch.setattr(jog, "workspace_box", lambda: ((-1, -1, -1), (1, 1, 1)))
+    monkeypatch.setattr(
+        jog,
+        "current_tip_and_anchor",
+        lambda: (
+            kin.forward_kinematics(state["q"]),
+            np.eye(4),
+            dict(zip(MOTOR_NAMES, state["q"], strict=True)),
+        ),
+    )
+    original = reactive.checked_step
+
+    def solve(*args, **kwargs):
+        goals.append(float(args[2][0, 3]))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(reactive, "checked_step", solve)
+    positions = [0, 0.003, 0.006, 0.009, 0.012, 0.012, 0.015, 0.018]
+    grips = np.array([80] * 5 + [20] * 3)
+    plan = {
+        "q": np.tile(initial, (8, 1)),
+        "times": np.arange(8) / jog.HZ,
+        "stage": ["start"] + ["travel"] * 4 + ["release"] + ["withdraw"] * 2,
+        "live_path": {
+            "local": np.stack([pose(x) for x in positions]),
+            "frames": ["world"] * 8,
+            "held": np.ones(8, bool),
+            "grips": grips,
+            "hints": np.zeros((8, 7)),
+            "floor": np.full(8, -1.0),
+            "move": ["start"] + ["line"] * 4 + ["follow"] + ["line"] * 2,
+        },
+    }
+    start = time.monotonic()
+
+    def observe(phase, q, *_):
+        phases.append(phase)
+        if move_target and not state["moved"] and q[0] > 2:
+            state["motion"] = pose(0.004)
+            state["moved"] = True
+
+    reason, last = asyncio.run(
+        live_execution.stream(
+            plan,
+            kin,
+            lambda: {"world": state["motion"]},
+            lambda: np.eye(4),
+            lambda: "test timeout" if time.monotonic() - start > 3 else "",
+            observe,
+            lambda *_: pytest.fail("reachable line"),
+            (0.12, np.pi),
+            1,
+        )
+    )
+    assert not reason
+    assert all(any(abs(g - x) < 1e-9 for x in [0.012, 0.018, 0.016, 0.022]) for g in goals), (
+        "generated line samples are not separate control targets"
+    )
+    assert set(phases) == {0, 4, 5, 7}, "only generated samples may be coalesced"
+    assert next(q for q in sent if q[-1] < 80)[0] == pytest.approx(16 if move_target else 12, abs=0.5)
+    assert last[0] == pytest.approx(22 if move_target else 18, abs=0.5) and last[-1] == 20
