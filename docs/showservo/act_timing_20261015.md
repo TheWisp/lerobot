@@ -64,6 +64,9 @@ pose results were roughly 0.2–0.3 s apart in key frames 8–9 but roughly
 0.8–0.9 s apart in key frames 5 and 7, despite similarly small masks and
 similar reported P2P times. The next physical Act's stage stamps are needed to
 attribute those phase-dependent pauses.
+Re-evaluating twelve of the Act's saved depth/mask pairs found face-fit times
+of about 5–18 ms in both fast and slow phases. The large-mask face-fit cost
+therefore does not explain those pauses.
 
 For masks larger than 8,192 depth points, the worker now ranks its 200 plane
 hypotheses on a reproducible 8,192-point sample and verifies the best 16 on
