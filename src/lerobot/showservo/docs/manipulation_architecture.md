@@ -524,6 +524,14 @@ moving object still replaces unsent commands using the existing queue blend.
 This is trajectory interpolation, with the existing controller and motor rate;
 it does not predict object motion or guarantee bounded jerk.
 
+The motor consumer reads and validates the encoders before deciding whether
+to advance. Its following-error check therefore uses the current read, and
+a failed read cannot consume an unsent command or gripper event. Motor writes
+are separated by at least one nominal tick: a delayed bus read cannot cause
+an immediate catch-up packet. Read/write latency adds to this interval, so
+the observed motor rate can be below the nominal 30 Hz. Camera recording
+retains its independent fixed-rate schedule.
+
 The former two-tick minimum stretched every small contact sample even when
 IK was fast. One-tick phases now keep their timing; sustained solves slower
 than a motor tick use longer checked interpolation. The former default

@@ -414,7 +414,7 @@ def _path_endpoint_action(
     return {**command, **{name: value + j.path_settle.trim.get(name, 0.0) for name, value in goal.items()}}
 
 
-def _advance_playback(j: _Jog, now: float) -> None:
+def _advance_playback(j: _Jog, now: float, observed: dict[str, float] | None = None) -> None:
     """Consume one checked sample within the transport following budget.
 
     Do not stop at the tighter release tolerance on every transport step: this
@@ -424,9 +424,10 @@ def _advance_playback(j: _Jog, now: float) -> None:
     other joints indefinitely. Pre: j.lock held, joints playback under way.
     """
     assert j.playback is not None
+    observed = j.q_obs if observed is None else observed
     j.playback_waiting = False
     k = j.playback_sent + 1
-    errors = {m: abs(j.q_target[m] - j.q_obs[m]) for m in j.q_target if m != "gripper" and m in j.q_obs}
+    errors = {m: abs(j.q_target[m] - observed[m]) for m in j.q_target if m != "gripper" and m in observed}
     lagging = max(errors, key=errors.__getitem__, default="joint")
     behind = errors.get(lagging, 0.0)
     pending = k < len(j.playback) and j.playback_sent >= 0
@@ -434,7 +435,7 @@ def _advance_playback(j: _Jog, now: float) -> None:
     # A sample can move a different joint or reverse direction; compare its
     # actual error, rather than treating all motion as increasing the lag.
     next_errors = (
-        {m: abs(j.playback[k].get(m, j.q_target[m]) - j.q_obs[m]) for m in errors} if pending else {}
+        {m: abs(j.playback[k].get(m, j.q_target[m]) - observed[m]) for m in errors} if pending else {}
     )
     advancing_past_budget = behind > PLAYBACK_LAG_DEG and any(
         error > PLAYBACK_STOP_LAG_DEG and error > errors[m] for m, error in next_errors.items()
@@ -449,7 +450,7 @@ def _advance_playback(j: _Jog, now: float) -> None:
         context = "before gripper opening" if opening else "at transport tolerance"
         j.reason = (
             f"playback {lagging} still {behind:.1f} deg behind {context} after {PLAYBACK_HOLD_MAX_S:.1f} s"
-            f" (observed {j.q_obs[lagging]:.1f}, commanded {j.q_target[lagging]:.1f} deg) — frozen"
+            f" (observed {observed[lagging]:.1f}, commanded {j.q_target[lagging]:.1f} deg) — frozen"
         )
         return
     waiting = blocked
@@ -509,9 +510,7 @@ def _loop(j: _Jog) -> None:
         t0 = time.perf_counter()
         try:
             with j.lock:
-                if j.mode == "joints" and j.playback is not None and not j.halted:
-                    _advance_playback(j, time.monotonic())
-                else:
+                if j.mode != "joints" or j.playback is None or j.halted:
                     j.playback_waiting = False
                     j.playback_queue_depth = 0
                 target, ref, halted = j.target, j.ref, j.halted
@@ -574,6 +573,11 @@ def _loop(j: _Jog) -> None:
                 # playback. Otherwise a target snapped before the bus read
                 # could be sent once more after the stop returned.
                 with j.lock:
+                    # Judge following error with this tick's checked read.
+                    # Reading may fail or be interrupted by stop; neither may
+                    # consume a command that never reached the motor bus.
+                    if j.mode == "joints" and j.playback is not None and not j.halted:
+                        _advance_playback(j, time.monotonic(), q_obs)
                     active = j.mode == "joints" and j.q_target is not None and not j.halted
                     if active:
                         q_target = dict(j.q_target)
@@ -678,7 +682,10 @@ def _loop(j: _Jog) -> None:
             with j.lock:
                 j.halted, j.reason = True, f"loop error: {e}"
             return
-        time.sleep(max(0.0, period - (time.perf_counter() - t0)))
+        # Space motor writes, not just loop starts. A 60 ms encoder read used
+        # to leave no sleep and put the next command on the bus only 2–5 ms
+        # later. Keep the whole checked sample interval after a delayed write.
+        time.sleep(max(0.0, period - (time.perf_counter() - t_sent)))
 
 
 def _connect(body: ConnectBody) -> dict:

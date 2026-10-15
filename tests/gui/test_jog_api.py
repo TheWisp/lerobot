@@ -567,6 +567,90 @@ def test_a_slow_tick_is_kept_with_where_its_time_went():
         jog._stop_loop(j)
 
 
+def test_a_slow_read_does_not_bunch_the_next_motor_commands(monkeypatch):
+    q = dict.fromkeys(MOTOR_NAMES, 0.0)
+    robot = _FakeRobot(q)
+    j = jog._Jog(robot=robot, kin=_FakeKin(), mode="joints", q_target=q, q_cmd=q, q_obs=q)
+    clock = [10.0]
+    sent_at = []
+    reads = []
+
+    def pause(dt):
+        clock[0] += dt
+
+    def read():
+        reads.append(1)
+        pause(0.065 if len(reads) == 2 else 0.002)
+
+    original = robot.send_action
+
+    def send(action):
+        sent_at.append(clock[0])
+        if len(sent_at) == 5:
+            j.stop.set()
+        return original(action)
+
+    robot.bus.on_request = read
+    robot.send_action = send
+    monkeypatch.setattr(jog.time, "perf_counter", lambda: clock[0])
+    monkeypatch.setattr(jog.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(jog.time, "sleep", pause)
+    jog._loop(j)
+    assert len(sent_at) == 5
+    assert np.min(np.diff(sent_at)) >= 1 / jog.HZ - 1e-9, "no catch-up packet burst after the slow read"
+
+
+@pytest.mark.parametrize("fresh_lift,should_advance", [(4.0, True), (-2.0, False)])
+def test_playback_uses_the_current_checked_read_before_advancing(fresh_lift, should_advance):
+    q = dict.fromkeys(MOTOR_NAMES, 0.0)
+    current, following = {**q, "shoulder_lift": 4.0}, {**q, "shoulder_lift": 6.0}
+    robot = _FakeRobot({**q, "shoulder_lift": fresh_lift})
+    j = jog._Jog(
+        robot=robot,
+        kin=_FakeKin(),
+        mode="joints",
+        q_target=current,
+        q_cmd=current,
+        q_obs={**q, "shoulder_lift": 0.0 if should_advance else 4.0},
+        playback=[current, following],
+        playback_due=[0.0, 0.0],
+        playback_sent=0,
+        playback_t0=time.monotonic(),
+        playback_tick=time.monotonic(),
+    )
+    robot.bus.on_request = j.stop.set  # exactly one checked tick
+    jog._loop(j)
+    assert j.playback_sent == (1 if should_advance else 0)
+    assert robot.sent[0]["shoulder_lift.pos"] == (6.0 if should_advance else 4.0)
+
+
+def test_a_bad_read_cannot_consume_an_unsent_gripper_event():
+    q = {**dict.fromkeys(MOTOR_NAMES, 0.0), "gripper": 80.0}
+    robot = _FakeRobot(q)
+    j = jog._Jog(
+        robot=robot,
+        kin=_FakeKin(),
+        mode="joints",
+        q_target=q,
+        q_cmd=q,
+        q_obs=q,
+        playback=[q, {**q, "gripper": 20.0}],
+        playback_due=[0.0, 0.0],
+        playback_sent=0,
+        playback_t0=time.monotonic(),
+        playback_tick=time.monotonic(),
+    )
+
+    def bad_read():
+        robot.bus.fake_replies.append(_late_load_reply(0))
+        j.stop.set()
+
+    robot.bus.on_request = bad_read
+    jog._loop(j)
+    assert j.bad_reads == 1 and not robot.sent
+    assert j.playback_sent == 0 and j.q_target["gripper"] == 80.0
+
+
 def _play(robot, samples, due, timeout_s=10.0):
     """Play ``samples`` back on a jog loop driving ``robot``, record what each joint was sent and read on every tick,
     and return (sent_at, the commands, the readings). Pre: the samples start where the robot is."""
