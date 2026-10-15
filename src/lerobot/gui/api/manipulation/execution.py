@@ -130,10 +130,10 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
     the demo, the hold read from the demo's gripper (:func:`core.demo_holding`) the one exception. ``server`` is the
     GUI server's own address, for a point groups view the act starts.
 
-    The act's objects are those its key frames are held in (:func:`_act_objects`): each is found where it was last
-    seen, the first one's find restarting the live session with the others joining it, and the act's pose of each is
-    the last view that placed it (:func:`_view_places`), moved on with what it rests on (the point groups, when acts
-    use them). The whole act is planned and judged from the arm's present joints before anything moves.
+    The act's objects are those its key frames are held in (:func:`_act_objects`): each is found before motion,
+    the first one's find restarting the live session with the others joining it. The act's pose of each is the last
+    view that placed it (:func:`_view_places`), moved on with what it rests on (the point groups, when acts use
+    them). The whole act is planned and judged from the arm's present joints before anything moves.
 
     Before the grasp check (:func:`_grasp_split`) each line and lift is planned from the observed joints and streamed
     through the same live, checked path as a follow. Object-frame goals are re-aimed every cycle. During the follow
@@ -174,8 +174,9 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
                 current_teach = runtime._state.teach
             if state != "tracking" and current_teach is not None:
                 points = np.asarray(current_teach.keypoints["xyz"], dtype=float)
-                at = seen_at0 if refind is not None and not refind.done() else seen_at
-                shift = reactive.unverified_object_shift(carried(picked, at), points, core.ACT_REACH_TOL_M)
+                shift = reactive.unverified_object_shift(
+                    carried(picked, seen_at), points, core.ACT_REACH_TOL_M
+                )
                 if shift is not None:
                     return (
                         f"{picked} moved {shift * 1000:.1f} mm while its pregrasp pose was unverified; "
@@ -242,32 +243,38 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
                     return
         with runtime._state.lock:
             act.find_error = None
-            live = bool(
-                tracking
-                and (runtime._state.track.last or {}).get("state") == "tracking"
-                and test is not None
-                and test.result.get("ok")
-            )
-        live = (
-            live and not planning._reference_motion(demo, teach)[1]
-        )  # a track to start from, against the demo's view
-        # With the session's own object to follow, the others join its session there, not on their own: one restart
-        # of the session for all.
+        # Find every object before the arm enters the scene. An in-flight
+        # restart sees only the fragment exposed beside the gripper and can
+        # reject an otherwise well-observed grasp midway through motion.
         relocate = {
-            name: asyncio.create_task(
-                acquisition._locate_afresh(name, stopped, track=not (obj is not None and live))
-            )
+            name: asyncio.create_task(acquisition._locate_afresh(name, stopped, track=obj is None))
             for name in others
         }
         beside.extend(relocate.values())
-        if obj is not None and not live:  # nothing to start from: the find comes first
+        if obj is not None:
+            founds = {}
+            for name in others:
+                act.step = f"finding {name}"
+                why = await relocate[name]
+                if why:
+                    fail(why)
+                    return
+                founds[name] = acquisition._located(demo, name)
+            more = {
+                name: found["mask"]
+                for name, found in founds.items()
+                if found and found["ok"] and found.get("mask") is not None
+            }
             act.step = f"finding {obj}"
-            why = await acquisition._find_afresh(obj, stopped)
+            why = await acquisition._find_afresh(obj, stopped, more or None)
             if why:
                 fail(why)
                 return
             with runtime._state.lock:
                 test, teach, tracking = runtime._state.test, runtime._state.teach, runtime._state.track.on
+            for name in more:
+                if founds[name].get("delta") is not None:
+                    acquisition._store_located(name, {**founds[name], "tracking": True})
             if act.force_recovered_pose and (
                 teach is None or planning._recovered_pose_token(demo, teach) != act.recovered_pose_token
             ):
@@ -411,7 +418,10 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
 
         # The view the act holds of the session's object: ``delta``, of the frame read at ``seen_at``; views of frames
         # read after ``newer_than`` replace it.
-        seen_at = max((w for w, _ in planning._certified_since(None)), default=0.0)
+        seen_at = max(
+            (w for w, _ in planning._certified_since(None)),
+            default=teach.stamp if teach is not None and teach.stamp else time.time(),
+        )
         newer_than = seen_at
         limits_before = jog.walk_limits()
         act.step = "planning"
@@ -454,9 +464,7 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
             act.plan = {k: p[k] for k in ("ok", "reason", "marks", "summary", "landing") if k in p}
             run.meta.setdefault("plans", []).append({"stage": stage, **act.plan})
 
-        # The walk starts on the track the act began with; its find is started over beside the arm, and until the
-        # fresh track certifies a view the old one's last motion stands (its views are against the old teach).
-        motion0, seen_at0 = planning._delta_base(demo, delta, t_bc), seen_at
+        motion0 = planning._delta_base(demo, delta, t_bc)
         # Use the declared appearance equivalence only while the object rests
         # in the scene. Its visible RGB-D reference supplies an axis and point;
         # a held object instead follows the gripper's full rotation.
@@ -481,35 +489,6 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
                 for name, (axis, point, swap) in symmetry_lines.items()
             }
 
-        async def refind_with_others() -> str:
-            """The session started over from a fresh find of its own object, the others (found just before, where
-            their tracks last had them) joining it from the start."""
-            for name in others:
-                why = await relocate[name]
-                if why:
-                    return why
-            nonlocal delta, seen_at, newer_than
-            founds = {name: acquisition._located(demo, name) for name in others}
-            more = {
-                n: f["mask"] for n, f in founds.items() if f and f["ok"] and f.get("mask") is not None
-            } or None
-            # The arm is on its way by now and may cover the object from the camera, so the restarted track is not
-            # waited for: the find's own view is where the object is (no motion since it, against the new teach)
-            # until the track sees it again.
-            why = await acquisition._find_afresh(obj, stopped, more, need_track=False)
-            if not why:  # views from before the new teach was applied are against the old one
-                with runtime._state.lock:
-                    fresh = runtime._state.teach
-                delta, newer_than = np.eye(4), time.time()
-                seen_at = fresh.stamp if fresh is not None and fresh.stamp else newer_than
-                for name in more or ():
-                    acquisition._store_located(name, {**founds[name], "tracking": True})
-            return why
-
-        refind = asyncio.create_task(refind_with_others()) if obj is not None and live else None
-        if refind is not None:
-            beside.append(refind)
-
         def follow() -> np.ndarray:
             """The session object's motion as the act holds it, camera frame: the newest view that placed it, moved on
             with what it rests on since that view's frame was read."""
@@ -522,10 +501,7 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
             return carried(picked, seen_at) @ delta
 
         def approach() -> np.ndarray:
-            """The session object's motion for a walk, base frame: the track the act began with until its fresh find
-            is in, then the fresh one's newest view; each moved on with what the object rests on."""
-            if refind is not None and not refind.done():
-                return t_bc @ carried(picked, seen_at0) @ np.linalg.inv(t_bc) @ motion0
+            """The current measured motion, carried by its point group between certified views."""
             return planning._delta_base(demo, follow(), t_bc)
 
         def other_now(name: str) -> np.ndarray:
@@ -881,16 +857,11 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
             return p
 
         async def caught_up() -> str:
-            """What ran beside the arm is needed from here: the fresh track, the others' finds and the demo's holds,
-            each waited for only if it is not in yet."""
+            """Use the pre-motion finds and finish reading the demo's hold reference if it is still running."""
             nonlocal demo_grip, grip_problem, demo_carry, carry_problem, hold_task
-            if refind is not None:
-                act.step = f"finding {obj}"
-                why = await refind
-                if why:
-                    return why
             for name in others:
-                act.step = f"finding {name}"
+                if not relocate[name].done():
+                    act.step = f"finding {name}"
                 why = await relocate[name]
                 if why:
                     return why

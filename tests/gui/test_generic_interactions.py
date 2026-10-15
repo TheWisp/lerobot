@@ -152,13 +152,16 @@ def test_runner_repeats_grasp_checks_and_keeps_a_tool_held_through_interaction(
         at="now", rgb=None, result={"ok": True, "delta_cam": np.eye(4), "live_mask": np.ones((4, 4), bool)}
     )
     # Supply measured object/reference poses directly; exercise the actual runner and planner.
-    monkeypatch.setattr(manipulation.planning, "_reference_motion", lambda *_: (np.eye(4), ""))
+    monkeypatch.setattr(manipulation.planning, "_reference_motion", lambda *_args, **_kwargs: (np.eye(4), ""))
     monkeypatch.setattr(manipulation.planning, "_object_motion", lambda *_args, **_kw: (np.eye(4), ""))
     monkeypatch.setattr(
         manipulation.acquisition, "_located", lambda *_: {"ok": True, "mask": np.ones((4, 4), bool)}
     )
 
+    find_before_motion = []
+
     async def found(*_args, **_kwargs):
+        find_before_motion.append(len(sent))
         return ""
 
     monkeypatch.setattr(manipulation.acquisition, "_find_afresh", found)
@@ -234,6 +237,7 @@ def test_runner_repeats_grasp_checks_and_keeps_a_tool_held_through_interaction(
     class Run:
         meta = {}
         arm_recording = False
+        timeline = None
 
         def target(self, *_args, **_kwargs):
             pass
@@ -243,6 +247,7 @@ def test_runner_repeats_grasp_checks_and_keeps_a_tool_held_through_interaction(
     monkeypatch.setattr(manipulation.recording, "_finish_run", lambda *_: None)
     monkeypatch.setattr(manipulation.recording, "_record_trial", lambda *_: None)
     asyncio.run(asyncio.wait_for(manipulation.execution._act_task(3.0), 20))
+    assert find_before_motion and all(n == 0 for n in find_before_motion)
     if empty_second:
         assert not state.act.ok and "grasp missed" in state.act.reason
         assert len(run.meta["hold_selections"]) == 1, "no reuse of the first grasp's prediction"
