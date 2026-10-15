@@ -44,8 +44,9 @@ corrected ring candidates, seven of which the original Act accepted, including
 the 4-degree change at +10.44 s. This is an
 offline counterfactual, not a hardware demonstration that all jitter is gone.
 The next Act record stamps worker-result arrival, NPZ decode, verification
-and rendering separately. Live tracking status also reports worker frame fetch,
-compute, depth-geometry stages and these server stages. The GUI was restarted
+and rendering separately, and saves worker fetch, compute and depth-geometry
+stage durations with each tracked frame. Live tracking status reports the same
+durations. The GUI was restarted
 with these changes after folding and disconnecting the arm. The `m1_left`
 profile lacked a rest pose; its same-port `white` left-arm profile already had
 one, so that recorded pose was copied to `m1_left` before parking.

@@ -238,6 +238,15 @@ class _Run:
                 "step": step,
                 "used": bool(status.get("ok")),  # the act follows only a frame the server trusted
                 **{k: r.get(k) for k in runtime.RUN_FRAME_FIELDS},
+                **{
+                    key: value
+                    for key, value in (
+                        ("timing_ms", status.get("timing_ms")),
+                        ("worker_stages_ms", r.get("worker_stages_ms")),
+                        ("geometry_stages_ms", r.get("geometry_stages_ms")),
+                    )
+                    if value is not None
+                },
                 **({"depth_seen": status["depth_seen"]} if "depth_seen" in status else {}),
                 **(
                     {"pose_verification": status["pose_verification"]}
