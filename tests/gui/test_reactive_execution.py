@@ -21,6 +21,22 @@ def pose(x):
     return t
 
 
+def test_checked_queue_blend_keeps_old_prefix_and_new_endpoint_without_blending_grip():
+    kin = _TipKinematics()
+    start = np.array([0.0, 0, 0, 0, 0, 0, 80])
+    old = [np.array([x, 0, 0, 0, 0, 0, 80.0]) for x in (1, 2, 3, 4)]
+    new = [np.array([x, 0, 0, 0, 0, 0, 80.0]) for x in (0.5, 1, 1.5, 2)]
+    box = ((-1, -1, -1), (1, 1, 1))
+    blended = reactive.checked_queue_blend(kin, start, old, new, 6, box, -1.0, 2.0, 4)
+    assert blended is not None
+    assert blended[0][0] == pytest.approx(0.875)
+    np.testing.assert_array_equal(blended[-1], new[-1])
+    assert reactive.checked_queue_blend(kin, start, old, new, 6, box, -1.0, 0.5, 4) is None
+    releasing = [q.copy() for q in old]
+    releasing[1][6] = 20.0
+    assert reactive.checked_queue_blend(kin, start, releasing, new, 6, box, -1.0, 2.0, 4) is None
+
+
 def test_unverified_pregrasp_shift_uses_object_centre():
     centre = np.array([0.2, 0.0, 0.0])
     turn = np.eye(4)
@@ -136,6 +152,7 @@ def test_update_during_contact_retargets_remaining_phase_and_preserves_release(m
     async def reselect(*args):
         pytest.fail("reachable correction must not search an alternative")
 
+    diagnostics = {}
     reason, last = asyncio.run(
         live_execution.stream(
             plan,
@@ -148,8 +165,12 @@ def test_update_during_contact_retargets_remaining_phase_and_preserves_release(m
             (0.12, np.pi),
             1,
             revision=lambda: state["revision"],
+            diagnostics=diagnostics,
         )
     )
+    if change == "attachment":
+        assert diagnostics["blended_replacements"] >= 1
+        assert diagnostics["blended_samples"] >= 2
     assert not reason
     offset = state["motion"][0, 3] + state["fix"][0, 3]
     assert kin.forward_kinematics(last)[0, 3] == pytest.approx(0.008 + offset, abs=core.ACT_SOLVE_TOL_M)

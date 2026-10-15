@@ -165,6 +165,8 @@ def _record_trial(run_dir: str | None = None) -> dict[str, Any]:
         "arm_lean_deg": r.get("arm_lean_deg"),
         "demo": None if demo is None else demo.name,
         "speed": act.speed,
+        "queue_horizon_s": act.queue_horizon_s,
+        "queue_blend_ms": act.queue_blend_ms,
         "result": "done" if act.ok else act.step,
         "reason": act.reason,
         "progress": act.progress,

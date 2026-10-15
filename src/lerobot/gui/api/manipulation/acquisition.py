@@ -568,6 +568,11 @@ def _session_names(demo: runtime._Demo, but: str | None = None) -> list[str]:
 def _store_located(obj: str, found: dict[str, Any]) -> None:
     """Keep ``found`` as the last find of ``obj``; when it joined the live session, follow it from now on
     (:func:`_apply_others`), and stop following an earlier find of it. Called on the event loop."""
+    if not found.get("ok"):
+        # A failed reference match can still have a SAM mask (including the
+        # whole tray when a stale click lands on background). It is evidence
+        # in the find log, never a live object outline or a future click seed.
+        found = {**found, "mask": None, "tracking": False}
     if found.get("ok") and found.get("mask") is not None:
         _remember_seen(obj, found["mask"], found["mask"].shape, f"find {found.get('find_id')}")
         groups._groups_follow({obj: found["mask"]})
@@ -657,6 +662,8 @@ async def _locate_afresh(obj: str, stopped: Callable[[], bool], track: bool = Tr
     otherwise why not."""
     with runtime._state.lock:
         last = runtime._state.located.get(obj)
+    if last is not None and not last.get("ok"):
+        return f"click {obj} in the camera view; its previous find did not match the demo"
     mask = None if last is None else last.get("mask")
     click = None if mask is None else _deepest_pixel(mask, mask.shape)
     if click is None:

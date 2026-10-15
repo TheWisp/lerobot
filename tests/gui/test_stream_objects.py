@@ -3916,6 +3916,10 @@ def test_each_find_is_logged_beside_the_demo_with_its_click_where_it_came_from_a
             manipulation.runtime._state.act = manipulation.runtime._Act(on=True)
         why = asyncio.run(manipulation.acquisition._locate_afresh("box", lambda: False, track=False))
         assert why == "the live view does not match"
+        assert manipulation.runtime._state.located["box"]["mask"] is None
+        assert "click box" in asyncio.run(
+            manipulation.acquisition._locate_afresh("box", lambda: False, track=False)
+        ), "a failed background mask must not seed another automatic find"
         log = {"why": "measuring how the demo held it", "came_from": {"demo_frame": 7}}
         asyncio.run(
             manipulation.acquisition._locate(

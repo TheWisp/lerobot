@@ -89,6 +89,8 @@ class ActBody(BaseModel):
     inject: InjectBody | None = None
     correct_hold: bool = True  # False: a place replays the demo against the target, uncorrected for the hold
     allow_grasp_prediction: bool = False  # use the grasp-time hold if post-carry vision cannot verify it
+    queue_horizon_s: float = Field(3.0, ge=0.5, le=5.0)  # checked, replaceable motor lookahead
+    queue_blend_ms: float = Field(200.0, ge=0.0, le=500.0)  # 0 disables RTC-style overlap
     confirm_recovered_pose: str | None = None  # token from the warning for this find and demo
     model_config = ConfigDict(extra="forbid")
 
@@ -747,6 +749,8 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
                     revision=lambda: len(run.meta.get("hold_selections", [])),
                     best_effort_stopped=best_effort_stopped,
                     diagnostics=stream_diagnostics,
+                    queue_horizon_s=act.queue_horizon_s,
+                    queue_blend_ms=act.queue_blend_ms,
                 )
                 return why
             n = len(q)
@@ -1671,6 +1675,8 @@ async def act_start(body: ActBody, request: Request) -> dict:
         act.inject = body.inject.model_dump() if body.inject is not None and _injects(body.inject) else None
         act.correct_hold = body.correct_hold
         act.allow_grasp_prediction = body.allow_grasp_prediction
+        act.queue_horizon_s = body.queue_horizon_s
+        act.queue_blend_ms = body.queue_blend_ms
         act.force_recovered_pose = bool(problem)
         act.recovered_pose_token = token if problem else None
         act.recovered_pose_object = planning._session_object(demo) if problem else None

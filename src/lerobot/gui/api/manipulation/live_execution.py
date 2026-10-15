@@ -27,6 +27,8 @@ async def stream(
     revision=None,
     best_effort_stopped=None,
     diagnostics=None,
+    queue_horizon_s=3.0,
+    queue_blend_ms=200.0,
 ):
     """Return (reason, last command). Phase advances only after its command is consumed.
 
@@ -54,9 +56,20 @@ async def stream(
     orientation_stage = None
     arm = np.arange(len(qs[0])) != gi
     best_phase, best_seen, best_progress_at = None, None, time.monotonic()
-    horizon = int(jog.HZ)  # One motor-second ahead; every unsent sample stays replaceable.
+    horizon = max(2, int(round(queue_horizon_s * jog.HZ)))
+    blend_ticks = max(0, int(round(queue_blend_ms * jog.HZ / 1000.0)))
     if diagnostics is not None:
-        diagnostics.update(solve_ms=[], tail_replacements=0, starved_polls=0, max_queue_samples=0)
+        diagnostics.update(
+            solve_ms=[],
+            tail_replacements=0,
+            starved_polls=0,
+            max_queue_samples=0,
+            blended_replacements=0,
+            blended_samples=0,
+            blend_rejected=0,
+            queue_horizon_s=queue_horizon_s,
+            queue_blend_ms=queue_blend_ms,
+        )
 
     def changed_pending(done, motion, fix):
         for composition in compositions[done + 1 :]:
@@ -239,6 +252,13 @@ async def stream(
         # interpolated, FK-checked samples; it does not wait for one solve per
         # tick when the solver is slower than 30 Hz.
         nominal_ticks = max(2, min(6, int(np.ceil((plan["times"][i] - plan["times"][phase]) * jog.HZ))))
+        if (
+            replacing
+            and blend_ticks >= 2
+            and len(qs) - done - 1 >= 2
+            and abs(float(path["grips"][i] - qs[done][gi])) < 1e-6
+        ):
+            nominal_ticks = max(nominal_ticks, min(blend_ticks, horizon))
         if pending + nominal_ticks > horizon:
             continue
         box, floor = jog.workspace_box(), float(path["floor"][i])
@@ -339,6 +359,36 @@ async def stream(
             continue
         # Gripper events follow the completed phase, never an intermediate correction.
         next_phase = i if result["complete"] else phase
+        blended_count = 0
+        if replacing and blend_ticks >= 2 and len(qs) - done - 1 >= 2:
+            old = []
+            for k in range(min(blend_ticks, len(samples), len(qs) - done - 1)):
+                index = done + k + 1
+                if phases[index] not in (phase, i) or abs(qs[index][gi] - samples[k][gi]) > 1e-6:
+                    break
+                old.append(qs[index])
+            if len(old) >= 2:
+                blended = reactive.checked_queue_blend(
+                    kin,
+                    qs[done],
+                    old,
+                    samples,
+                    gi,
+                    box,
+                    floor,
+                    joint_tick,
+                    blend_ticks,
+                    previous_sample=qs[max(0, done - 1)],
+                    max_joint_accel_deg=jog.RAMP_DEG_S * speed / jog.HZ,
+                )
+                if blended is not None:
+                    blended_count = min(blend_ticks, len(old), len(samples))
+                    samples = blended
+                    if diagnostics is not None:
+                        diagnostics["blended_replacements"] += 1
+                        diagnostics["blended_samples"] += blended_count
+                elif diagnostics is not None:
+                    diagnostics["blend_rejected"] += 1
         due_samples = [due[base] + (k + 1) / jog.HZ for k in range(ticks)]
         commands = [as_dict(q) for q in samples]
         accepted = (
@@ -356,6 +406,11 @@ async def stream(
                 del goals[done + 1 :]
                 del compositions[done + 1 :]
             for k, (q, at) in enumerate(zip(samples, due_samples, strict=True)):
-                entry = (q, next_phase if k == ticks - 1 else phase, at, goal, composition)
+                sample_composition = (
+                    {**composition, "queue_blend_weight_new": (k + 1) / blended_count}
+                    if k < blended_count
+                    else composition
+                )
+                entry = (q, next_phase if k == ticks - 1 else phase, at, goal, sample_composition)
                 for array, value in zip((qs, phases, due, goals, compositions), entry, strict=True):
                     array.append(value)

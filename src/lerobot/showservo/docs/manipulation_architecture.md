@@ -491,11 +491,15 @@ a short rolling horizon. One IK solve now covers at least two motor ticks: the
 executor checks each interpolated joint sample by forward kinematics against
 the corresponding Cartesian path and the workspace/floor. If a joint chord
 fails that check, it solves a shorter Cartesian step instead. It buffers up to
-one second (30 samples) from the latest object pose, independent of when the
+three seconds by default (90 samples, configurable per Act) from the latest object pose, independent of when the
 camera next reports one. The producer solves a replacement tail before
 swapping it, so IK never clears the queue while it runs. A new accepted pose
 that differs beyond the existing solve tolerance atomically replaces unsent
-samples; a sample already consumed is never changed or replayed. Closing an
+samples; a sample already consumed is never changed or replayed. A configurable
+200 ms overlap (0 disables it) blends a checked replacement with old unsent
+commands, like RTC's old-chunk prefix. The blend never crosses a gripper event
+and is used only if every command passes the joint-rate, Cartesian-corridor,
+workspace and floor checks; otherwise the original checked replacement is used. Closing an
 unheld grasp can fill the queue, while a held-object release stays at the queue
 front so its approach can use the latest observation. The playback
 clock and lag guards survive each replacement; a temporary empty queue cannot
@@ -528,6 +532,18 @@ faster; the next trial must separate lag waits from queue starvation using
 those recorded fields. This trial pushed the dowel before closing and then
 missed the grasp. That contact is a separate missing collision-aware approach
 problem, not evidence of a successful insertion.
+
+Act `insertion/acts/20261015_223044` used the original one-second queue at
+speed 2. A fresh clicked ring find matched 250/400 reference points after a
+stale click had segmented the tray. The dowel appears upright in the ring in
+the saved final frames, but the action reported failure in key frame 8 during
+withdrawal: shoulder lift stopped at 38.3 degrees while its command reached
+32.7 degrees, and load rose to 720/1000. At that instant 29 commands were
+queued, so this was not queue starvation. Across active motion the command was
+held on 14.6% of ticks, 10.0% were motor following-error waits, and 8.7% had
+an empty queue. The loop averaged 27.7 Hz over the run. The new longer horizon
+and overlap have not yet been physically tested, and they do not resolve the
+contact or high-load cause of the withdrawal fault.
 
 That speed-2 trial also moved the ring during the Act. The saved RGB frames put
 it near image x=345 after the move, while the Point2Pose mask stayed near
@@ -909,3 +925,41 @@ image could come from the wrong session. It now reads an aligned RGB-depth
 pair directly from its own server. Its `held_short` return is no longer marked
 `ok` when the observed fingertip has not reached its target; that distinction
 matters when a loaded lift stops centimetres short without a motor fault.
+
+### Proposed key-frame recovery and task outcome contract
+
+This is a design proposal, not current behavior. Today phase indices only move
+forward. An accepted target update changes the current and future commands,
+but cannot make the arm revisit an approach or clearance frame already passed.
+That is insufficient if the target moves during insertion: the remaining
+suffix may be reachable in joint space yet no longer be a safe way to make
+contact. The recent act `20261015_223044` also shows why action completion and
+task success must be separate: saved images show the dowel upright in the ring,
+while a high-load shoulder fault aborted the withdrawal.
+
+Treat demonstration frames as constraints and recovery checkpoints, with
+gripper closure, first contact, release and clearance as state transitions.
+The controller should retain the current physical state (observed joints,
+gripper and attachment, object/target poses with uncertainty, contact and load)
+alongside the logical phase. On each accepted target change it should first ask
+whether the current checked suffix can still satisfy the goal and its approach
+constraints. If not, stop unsent commands and choose the latest earlier
+checkpoint whose preconditions still hold. While holding an object, a safe
+retreat to clearance followed by a newly checked approach can revisit frames
+without re-closing the gripper. Once contact begins, retreat needs a checked
+reverse path or contact-aware planner; reversing the demo blindly is not a
+clearance proof. After release, recovery requires confirming where the object
+actually went before any regrasp. A stale or conflicting target observation
+must not trigger a rewind.
+
+Each interaction should declare or infer a goal relation from the demo and
+report it independently of controller completion: `verified_success`,
+`verified_failure`, or `unknown` with the supporting RGB-D/track/contact
+evidence. Object-relative pose and stability after release are generic signals;
+they do not by themselves prove seating or force closure. A task needing that
+distinction may require an explicit observable goal check. A motor fault can
+therefore produce `execution=aborted` with `task=verified_success` or `unknown`,
+instead of conflating the two. Retry only a reversible phase after its cause is
+measured, within a configured attempt limit; never loop through a motor fault,
+unverified pose or unknown collision. Log target revisions, checkpoints,
+selected recovery paths, retries and both terminal statuses in the replay.
