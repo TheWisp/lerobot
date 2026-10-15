@@ -73,3 +73,9 @@ face fit fell from 642–665 ms to 57–98 ms across repeated measurements, with
 the same face normal and inlier count. Six normal-sized views from the Act
 produced identical face metadata. This bounds the cost of a broad or incorrect
 designation; it does not certify that such a designation is correct.
+After restarting the worker, a second passive sample on the same broad
+designation rose from about 1.3–1.4 to about 2.8–2.9 pose updates per second.
+The arm was disconnected for both samples. The remaining median worker step
+was about 284 ms: P2P about 72 ms, table 4 ms, footprint 54 ms, face 59 ms,
+and footprint turn 92 ms. Server pose verification added about 50 ms. These
+numbers describe this post-Act scene, not the earlier moving Act.
