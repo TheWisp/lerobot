@@ -130,6 +130,24 @@ class CollisionTests(unittest.TestCase):
         self.assertIn("unobserved scene space", scene.reason)
         self.assertIn("mm", scene.reason)
 
+    def test_prior_static_view_fills_arm_occlusion_but_retains_measured_clutter(self):
+        missing = np.full((9, 9, 3), np.nan)
+        frame = {"pts": missing, "plane": [0, 0, 0]}
+        prior = missing.copy()
+        for row in range(9):
+            for col in range(9):
+                prior[row, col] = [(col - 4) * 5, -200 + (row - 4) * 5, 0]
+        frame["background_frames"] = [{"pts": prior}]
+        with patch("rig.pixel", return_value=(0, 0)):
+            scene = CollisionScene.from_observation(BoxRobot(), {}, frame)
+        self.assertTrue(scene.check(np.array([0, -0.2, 0.1])), scene.reason)
+
+        prior[4, 4, 2] = 100
+        with patch("rig.pixel", return_value=(0, 0)):
+            scene = CollisionScene.from_observation(BoxRobot(), {}, frame)
+        self.assertFalse(scene.check(np.array([0, -0.2, 0.1])))
+        self.assertIn("scene collision", scene.reason)
+
     def test_oblique_self_occlusion_applies_at_the_hidden_tray_cell(self):
         # The self return and the hidden tray are in different XY cells.
         frame = {

@@ -3,7 +3,9 @@
 Metres for geometry, motor degrees for configurations. A flat tray is assumed;
 objects and other observed clutter occupy columns down to it. Missing cells
 are blocked, except for the explicit flat-tray assumption under masked robot
-and object pixels. The fixed base region is outside this model's coverage.
+and object pixels. Verified static observations from the same camera may fill
+cells hidden by the arm in the current frame. The fixed base region is outside
+this model's coverage.
 """
 
 import json
@@ -309,10 +311,31 @@ class CollisionScene:
         # the recognized objects and measured arm silhouette. These columns are
         # NOT observed free space. Unknown columns elsewhere remain blocked.
         seen = np.zeros(tuple(dims), bool)
-        seen[ix[..., 0][valid], ix[..., 1][valid]] = True
         tops = np.full(tuple(dims), -np.inf)
-        clutter = valid & ~own & ~robot_mask
-        np.maximum.at(tops, (ix[..., 0][clutter], ix[..., 1][clutter]), points[..., 2][clutter])
+
+        def accumulate(observation):
+            observed = np.asarray(observation["pts"], float) / 1000
+            if observed.shape != points.shape:
+                raise ValueError("background observation must share the aligned camera grid")
+            cell = np.floor(
+                np.nan_to_num(
+                    (observed[..., :2] - bounds[0]) / resolution,
+                    nan=-1e6,
+                    posinf=-1e6,
+                    neginf=-1e6,
+                )
+            ).astype(int)
+            measured = np.isfinite(observed).all(axis=2) & (cell >= 0).all(axis=2) & (cell < dims).all(axis=2)
+            seen[cell[..., 0][measured], cell[..., 1][measured]] = True
+            masked_robot = np.asarray(observation.get("self_mask", np.zeros(valid.shape, bool)), bool)
+            if masked_robot.shape != valid.shape:
+                raise ValueError("robot mask must share the aligned camera grid")
+            clutter = measured & ~own & ~masked_robot
+            np.maximum.at(tops, (cell[..., 0][clutter], cell[..., 1][clutter]), observed[..., 2][clutter])
+
+        accumulate(frame)
+        for background in frame.get("background_frames", ()):
+            accumulate(background)
         obstacles, floor, unknown = [], [], []
         for i in range(dims[0]):
             for j in range(dims[1]):
