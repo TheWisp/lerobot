@@ -120,6 +120,34 @@ def test_group_conflict_with_partial_surface_cannot_publish_a_control_pose(monke
     assert not check["accepted"] and p.runtime._state.test is None
 
 
+def test_surface_correction_is_checked_against_group_motion_before_control(monkeypatch, tmp_path):
+    job, teach, _, track = setup_case(monkeypatch, tmp_path)
+    job.result["delta"] = np.eye(4)
+    p.runtime._state.groups_feed.frames["cube"] = [(1.0, np.eye(4)), (1.5, np.eye(4))]
+    angles = iter((5.0, 10.0))
+
+    def correction(*_args):
+        from scipy.spatial.transform import Rotation
+
+        angle = next(angles)
+        pose = np.eye(4)
+        pose[:3, :3] = Rotation.from_euler("x", angle, degrees=True).as_matrix()
+        return {"state": "corrected", "pose": pose.tolist(), "observed_dof": 3}
+
+    monkeypatch.setattr(p.tracking, "_surface_decision", correction)
+    first = p.tracking._verify_track_poses(job, job.result, teach, False)[0]
+    track.corrected_verification["cube"].accept()
+    job.created = 1.5
+    second = p.tracking._verify_track_poses(job, job.result, teach, False)[0]
+    assert first["groups"]["state"] == first["corrected_groups"]["state"] == "baseline"
+    assert first["constraint"]["state"] == "corrected"
+    assert second["groups"]["state"] == "consistent"
+    assert second["corrected_groups"]["state"] == "disagreement"
+    assert second["constraint"]["state"] == "rejected" and second["constraint"]["pose"] is None
+    assert second["disagreement"]
+    assert track.corrected_verification["cube"].stamp == 1.0
+
+
 def test_secondary_object_compares_raw_pose_in_its_original_designation_frame(monkeypatch, tmp_path):
     job, teach, _, _ = setup_case(monkeypatch, tmp_path)
     anchor = np.eye(4)

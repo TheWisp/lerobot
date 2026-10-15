@@ -75,6 +75,61 @@ def test_surface_plane_cannot_certify_tangent_drift_against_a_stationary_group()
     assert pv.with_group_consistency(partial, group, CENTRE, held=True, **LIMITS) is partial
 
 
+def test_stationary_group_rejects_new_surface_tilt_even_when_raw_p2p_agrees():
+    raw, corrected = pv.GroupReference(), pv.GroupReference()
+    first = turn(5)
+    changed = turn(10)
+    first_raw = raw.compare(np.eye(4), np.eye(4), CENTRE, 0, "session", **LIMITS)
+    first_corrected = corrected.compare(first, np.eye(4), CENTRE, 0, "session", **LIMITS)
+    assert first_raw["state"] == first_corrected["state"] == "baseline"
+    decision = {"state": "corrected", "pose": first.tolist(), "observed_dof": 3}
+    assert (
+        pv.with_group_consistency(
+            decision, first_raw, CENTRE, corrected_group_check=first_corrected, **LIMITS
+        )["state"]
+        == "corrected"
+    )
+    still_raw = raw.compare(np.eye(4), np.eye(4), CENTRE, 1, "session", **LIMITS)
+    changed_corrected = corrected.compare(changed, np.eye(4), CENTRE, 1, "session", **LIMITS)
+    assert still_raw["state"] == "consistent"
+    assert changed_corrected["rotation_deg"] == pytest.approx(5)
+    withheld = pv.with_group_consistency(
+        {**decision, "pose": changed.tolist()},
+        still_raw,
+        CENTRE,
+        corrected_group_check=changed_corrected,
+        **LIMITS,
+    )
+    assert withheld["state"] == "rejected" and withheld["pose"] is None
+    assert withheld["group_residual"] is changed_corrected
+    # An arm-driven group is not independent evidence against a held-object update.
+    held = pv.with_group_consistency(
+        {**decision, "pose": changed.tolist()},
+        still_raw,
+        CENTRE,
+        corrected_group_check=changed_corrected,
+        held=True,
+        **LIMITS,
+    )
+    assert held["state"] == "corrected"
+
+
+def test_group_motion_check_catches_a_jump_back_inside_the_fixed_baseline():
+    check = pv.GroupMotionReference()
+    assert check.compare(turn(5), np.eye(4), CENTRE, 0, "one", **LIMITS)["state"] == "baseline"
+    check.accept()
+    # Both poses remain within 3 degrees of the fixed reference, but the
+    # change between accepted views is larger than the planner's tolerance.
+    assert check.compare(turn(7.5), np.eye(4), CENTRE, 1, "one", **LIMITS)["state"] == "consistent"
+    check.accept()
+    jump = check.compare(turn(2.5), np.eye(4), CENTRE, 2, "one", **LIMITS)
+    assert jump["state"] == "disagreement" and jump["mode"] == "recent"
+    assert jump["fixed"]["state"] == "consistent"
+    check.accept()  # a rejected candidate must not become the next reference
+    assert check.stamp == 0
+    assert check.compare(turn(7.6), np.eye(4), CENTRE, 3, "one", **LIMITS)["state"] == "consistent"
+
+
 def scene(degrees=0):
     """A measured plane truly rotated, with no world-up assumption in the check."""
     intr = {"fx": 600.0, "fy": 600.0, "cx": 80.0, "cy": 72.0}

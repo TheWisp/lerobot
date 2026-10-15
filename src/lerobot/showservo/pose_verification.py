@@ -66,7 +66,14 @@ def difference(a: np.ndarray, b: np.ndarray, centre: np.ndarray, tol_m: float, t
 
 
 def with_group_consistency(
-    decision: dict, group_check: dict, centre: np.ndarray, *, tol_m: float, tol_deg: float, held: bool = False
+    decision: dict,
+    group_check: dict,
+    centre: np.ndarray,
+    *,
+    tol_m: float,
+    tol_deg: float,
+    held: bool = False,
+    corrected_group_check: dict | None = None,
 ) -> dict:
     """Withhold a partly constrained pose that still contradicts synchronized group motion.
 
@@ -76,7 +83,20 @@ def with_group_consistency(
     driven by the same arm attachment being measured, so it is not independent
     evidence against a visible slip correction.
     """
-    if held or group_check.get("state") != "disagreement" or decision.get("pose") is None:
+    if held or decision.get("pose") is None:
+        return decision
+    # The raw P2P fit can agree with the group while a depth correction changes
+    # its tilt. Compare the *control* pose's motion from its own fixed baseline,
+    # so a stable initial correction is not mistaken for a new object motion.
+    if corrected_group_check is not None and corrected_group_check.get("state") == "disagreement":
+        return {
+            **decision,
+            "state": "rejected",
+            "pose": None,
+            "group_residual": corrected_group_check,
+            "reason": "surface-constrained pose contradicts synchronized point-group motion",
+        }
+    if group_check.get("state") != "disagreement":
         return decision
     proposed = _pose(decision["pose"])
     predicted = _pose(group_check.get("predicted_pose"))
@@ -124,6 +144,65 @@ class GroupReference:
             "predicted_pose": expected.tolist(),
             "group_pose": group.tolist(),
         }
+
+
+@dataclass
+class GroupMotionReference:
+    """Check a control pose against group motion from both the first and last accepted views.
+
+    Comparing only with the first view misses a large back-and-forth correction
+    that happens to return near the baseline. An unaccepted view must not become
+    the next frame's reference. The caller commits only after all pose and
+    visibility checks have accepted the same frame.
+    """
+
+    epoch: Any = None
+    first_pose: np.ndarray | None = None
+    first_group: np.ndarray | None = None
+    last_pose: np.ndarray | None = None
+    last_group: np.ndarray | None = None
+    stamp: float | None = None
+    pending: tuple[Any, np.ndarray, np.ndarray, float] | None = None
+
+    def compare(self, pose, group, centre, stamp, epoch, *, tol_m, tol_deg) -> dict:
+        pose, group = _pose(pose), _pose(group)
+        self.pending = None
+        if pose is None or group is None:
+            return {"state": "unavailable", "reason": "no synchronized pair of control and group poses"}
+        if epoch != self.epoch or self.first_pose is None:
+            self.pending = epoch, pose.copy(), group.copy(), float(stamp)
+            return {"state": "baseline", "group_pose": group.tolist()}
+        centre = np.asarray(centre, dtype=float)
+        fixed_pose = group @ np.linalg.inv(self.first_group) @ self.first_pose
+        recent_pose = group @ np.linalg.inv(self.last_group) @ self.last_pose
+        fixed = difference(pose, fixed_pose, centre, tol_m, tol_deg)
+        recent = difference(pose, recent_pose, centre, tol_m, tol_deg)
+        selected = recent if recent["state"] == "disagreement" else fixed
+        if selected["state"] != "disagreement":
+            self.pending = epoch, pose.copy(), group.copy(), float(stamp)
+        return {
+            **selected,
+            "reference_t": self.stamp,
+            "mode": "recent" if selected is recent else "fixed",
+            "fixed": fixed,
+            "recent": recent,
+            "group_pose": group.tolist(),
+        }
+
+    def accept(self) -> None:
+        """Advance only with a view the controller actually accepted."""
+        if self.pending is None:
+            return
+        epoch, pose, group, stamp = self.pending
+        if epoch != self.epoch or self.first_pose is None:
+            self.epoch, self.first_pose, self.first_group, self.stamp = (
+                epoch,
+                pose.copy(),
+                group.copy(),
+                stamp,
+            )
+        self.last_pose, self.last_group = pose, group
+        self.pending = None
 
 
 def visible_reference(pose, reference, depth, mask, intr, *, noise_m):

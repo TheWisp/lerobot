@@ -484,6 +484,7 @@ def _verify_track_poses(
                 "disagreement": False,
                 "groups": missing,
                 "surface": missing,
+                "corrected_groups": missing,
                 "constraint": {"state": "rejected", "pose": None, "reason": missing["reason"]},
             }
         ]
@@ -593,6 +594,20 @@ def _compare_track_poses(
         }
         check["disagreement"] = any(check[k]["state"] == "disagreement" for k in ("groups", "surface"))
         surface_decision = _surface_decision(pose, geometry, job.depth_m, mask, job.intr, check["surface"])
+        corrected_tracker = tr.corrected_verification.setdefault(
+            name, pose_verification.GroupMotionReference()
+        )
+        corrected_group = corrected_tracker.compare(
+            surface_decision.get("pose"),
+            group if len(ref) else None,
+            ref.mean(axis=0) if len(ref) else np.zeros(3),
+            job.created,
+            (session, floors.get(name)),
+            tol_m=core.ACT_REACH_TOL_M,
+            tol_deg=core.ACT_REACH_TOL_DEG,
+        )
+        check["corrected_groups"] = corrected_group
+        check["disagreement"] |= corrected_group["state"] == "disagreement"
         check["constraint"] = pose_verification.with_group_consistency(
             surface_decision,
             check["groups"],
@@ -600,6 +615,7 @@ def _compare_track_poses(
             tol_m=core.ACT_REACH_TOL_M,
             tol_deg=core.ACT_REACH_TOL_DEG,
             held=context.get("why") == "held",
+            corrected_group_check=corrected_group,
         )
         check["elapsed_ms"] = (time.perf_counter() - started) * 1000
         checks.append(check)
@@ -612,17 +628,18 @@ def _log_pose_conflicts(checks: list[dict], tr: runtime._Track) -> None:
     conflicts = {
         (c["object"], key)
         for c in checks
-        for key in ("groups", "surface")
+        for key in ("groups", "surface", "corrected_groups")
         if c[key]["state"] == "disagreement"
     }
     for check in checks:
-        for key in ("groups", "surface"):
+        for key in ("groups", "surface", "corrected_groups"):
             if (check["object"], key) in conflicts - tr.verification_conflicts:
                 logger.warning(
-                    "Pose disagreement at %.6f: %s P2P vs %s; accepted=%s; control=%s; %s",
+                    "Pose disagreement at %.6f: %s %s vs %s; accepted=%s; control=%s; %s",
                     check["t_frame"],
                     check["object"],
-                    key,
+                    "surface-constrained pose" if key == "corrected_groups" else "P2P",
+                    "groups" if key == "corrected_groups" else key,
                     check["accepted"],
                     check.get("constraint", {}).get("state", "diagnostic only"),
                     check[key],
@@ -773,6 +790,10 @@ async def _apply_track_result(job: runtime._Job) -> None:
         check["raw_p2p_used"] = bool(
             check["accepted"] and check.get("constraint", {}).get("state") == "unchanged"
         )
+        if check["accepted"] and (check.get("groups") or {}).get("context", {}).get("why") != "held":
+            tracker = tr.corrected_verification.get(check["object"])
+            if tracker is not None:
+                tracker.accept()
     _log_pose_conflicts(checks, tr)
     status["pose_verification"] = checks
     overlay = await asyncio.get_event_loop().run_in_executor(

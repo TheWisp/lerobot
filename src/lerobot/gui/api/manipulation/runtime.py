@@ -183,6 +183,7 @@ class _Track:
     # session adopted) with what places it: GET /track/model.npz, to inspect what the model took in
     model: dict[str, Any] | None = None
     verification: dict[str, pose_verification.GroupReference] = field(default_factory=dict)
+    corrected_verification: dict[str, pose_verification.GroupMotionReference] = field(default_factory=dict)
     verification_conflicts: set[tuple[str, str]] = field(default_factory=set)
 
 
