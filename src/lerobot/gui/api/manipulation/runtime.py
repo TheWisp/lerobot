@@ -164,7 +164,7 @@ class _PointDepths:
 
 @dataclass
 class _Track:
-    """The live tracker: one frame at a time goes to the worker, the newest answer is the object's pose."""
+    """The live tracker: one worker frame may overlap one ordered server-side application."""
 
     on: bool = False
     algo: str = "p2p"  # the one tracker; the DINO modes stay as a comparison
@@ -175,8 +175,11 @@ class _Track:
     overlay: bytes | None = None
     fps: float = 0.0
     t_prev: float = 0.0
-    done: asyncio.Event | None = None  # set when the in-flight job's result has been applied
+    done: asyncio.Event | None = None  # set when the in-flight worker result arrives
     task: asyncio.Task | None = None
+    apply_task: asyncio.Task | None = None  # serialize verification, control updates, and recording
+    slots: asyncio.Semaphore | None = None  # bound queued/processing frames to two
+    epoch: int = 0  # stop/restart invalidates late results
     # (when the frame was read, certified, delta_cam) per frame, bounded. The frame's time, not the answer's: the
     # point groups' poses are stamped the same way, and the act carries a view by them from when it was seen.
     history: list = field(default_factory=list)

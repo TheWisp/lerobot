@@ -150,7 +150,17 @@ def test_visible_tracks_with_no_segmentation_remain_explainable_in_the_act_recor
     monkeypatch.setattr(manipulation.runtime._state, "demo", None)
     monkeypatch.setattr(manipulation.runtime._state, "groups_with_acts", False)
     run = manipulation.recording._Run(tmp_path, {})
-    run.frame(SimpleNamespace(rgb=rgb, depth_m=depth, created=1.0), answer, {"ok": False}, "hold", None, None)
+    job = SimpleNamespace(
+        rgb=rgb,
+        depth_m=depth,
+        created=1.0,
+        camera_stamp_mono=None,
+        result_received_at=None,
+        result_decoded_at=None,
+        verified_at=None,
+        rendered_at=None,
+    )
+    run.frame(job, answer, {"ok": False}, "hold", None, None)
     manipulation.runtime._RUN_EXECUTOR.submit(lambda: None).result()
     recorded = run.frames[0]
     arrays = np.load(tmp_path / "frames" / "000000.npz")

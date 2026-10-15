@@ -654,9 +654,11 @@ async def _apply_track_result(job: runtime._Job) -> None:
 
     r = job.result or {}
     tr = runtime._state.track
+    epoch = job.extra.get("track_epoch")
     with runtime._state.lock:
-        stale = tr.job != job.id
-        teach, flat = runtime._state.teach, runtime._state.flat
+        stale = tr.job != job.id if epoch is None else tr.epoch != epoch or not tr.on
+        teach = runtime._state.teach
+        flat = bool(job.extra.get("geometry", runtime._state.flat))
     if stale or teach is None:
         return
     checks = await asyncio.get_running_loop().run_in_executor(
@@ -665,7 +667,8 @@ async def _apply_track_result(job: runtime._Job) -> None:
     job.verified_at = time.time()
     # Teach/track can be replaced while the executor is measuring this frame.
     with runtime._state.lock:
-        if runtime._state.track is not tr or tr.job != job.id or runtime._state.teach is not teach:
+        stale = tr.job != job.id if epoch is None else tr.epoch != epoch or not tr.on
+        if runtime._state.track is not tr or stale or runtime._state.teach is not teach:
             return
     missing = {"state": "rejected", "pose": None, "reason": "surface decision unavailable"}
     decisions = (
@@ -816,6 +819,9 @@ async def _apply_track_result(job: runtime._Job) -> None:
             **job.worker_timing_ms,
         }
     with runtime._state.lock:
+        stale = tr.job != job.id if epoch is None else tr.epoch != epoch or not tr.on
+        if runtime._state.track is not tr or stale or runtime._state.teach is not teach:
+            return
         held = runtime._state.test.result.get("delta_cam") if runtime._state.test is not None else None
         tr.model = {
             "t": job.created,
@@ -830,7 +836,9 @@ async def _apply_track_result(job: runtime._Job) -> None:
             "depth_m": job.depth_m,
             "intr": job.intr,
         }
-        tr.last, tr.overlay, tr.job = status, overlay, None
+        tr.last, tr.overlay = status, overlay
+        if tr.job == job.id:
+            tr.job = None
         tr.history.append((job.created, result is not None, None if result is None else result["delta_cam"]))
         if result is not None:
             tr.hold_views.append((job.created, np.asarray(result["delta_cam"], dtype=float).copy()))
@@ -844,18 +852,26 @@ async def _apply_track_result(job: runtime._Job) -> None:
         run, step = runtime._state.run, runtime._state.act.step
     if run is not None:
         run.frame(job, r, status, step, None if result is None else result["delta_cam"], transported)
-    if tr.done is not None:
+    if epoch is None and tr.done is not None:
         tr.done.set()
 
 
 async def _track_pump() -> None:
-    """Feed the worker one frame at a time while tracking is on: the newest frame, never a backlog."""
+    """Feed fresh frames; overlap one worker inference with one ordered server result, never build a backlog."""
     tr = runtime._state.track
+    slots = tr.slots
+    assert slots is not None
+    session_epoch = tr.epoch
     last_camera_stamp = None
     try:
         while True:
             with runtime._state.lock:
-                on, teach, running = tr.on, runtime._state.teach, runtime._state.worker.running
+                on, teach, running, flat = (
+                    tr.on and tr.epoch == session_epoch,
+                    runtime._state.teach,
+                    runtime._state.worker.running,
+                    runtime._state.flat,
+                )
             if not on:
                 return
             if teach is None or teach.keypoints.get("mode") != "features":
@@ -864,6 +880,11 @@ async def _track_pump() -> None:
             if not running:
                 tr.last = {"state": "stopped", "reason": "the worker is not running"}
                 return
+            await slots.acquire()
+            with runtime._state.lock:
+                if not tr.on or tr.epoch != session_epoch:
+                    slots.release()
+                    return
             try:
                 timed = await camera.timed_frame(last_camera_stamp)
                 if timed is None:
@@ -873,11 +894,17 @@ async def _track_pump() -> None:
                     rgb, depth_m, intr, camera_stamp = timed
                     last_camera_stamp = camera_stamp
             except (HTTPException, TimeoutError) as e:
+                slots.release()
                 # A frame that cannot be read now is waited out: a track that stopped here stayed stopped once the
                 # camera was back, while the live view went on showing its last frame as tracking.
                 tr.last = {"state": "waiting", "reason": e.detail if isinstance(e, HTTPException) else str(e)}
                 await asyncio.sleep(runtime.TRACK_FRAME_RETRY_S)
                 continue
+            with runtime._state.lock:
+                if not tr.on or tr.epoch != session_epoch:
+                    slots.release()
+                    return
+                epoch = tr.epoch
             assert tr.done is not None
             tr.done.clear()
             job = worker._queue_job(
@@ -889,18 +916,23 @@ async def _track_pump() -> None:
                 algo=tr.algo,
                 compress=False,
                 camera_stamp_mono=camera_stamp,
+                # P2P supplies the pose. Its surface authority is checked by _verify_track_poses on the
+                # server; the worker's full footprint/face diagnostic is only needed for flat control.
+                extra={"geometry": flat, "pipeline": True, "track_epoch": epoch},
             )
             with runtime._state.lock:
                 tr.job = job.id
             try:
                 await asyncio.wait_for(tr.done.wait(), timeout=runtime.TRACK_JOB_TIMEOUT_S)
             except TimeoutError:
-                with runtime._state.lock:
-                    tr.job = None
                 tr.last = {"state": "waiting", "reason": "the worker did not answer"}
+                # Keep this one request in flight. Retrying would queue more frames behind a hung worker;
+                # a late answer still resumes the stream, while stop cancels the wait.
+                await tr.done.wait()
     finally:
         with runtime._state.lock:
-            tr.on, tr.job, tr.task = False, None, None
+            if tr.epoch == session_epoch:
+                tr.on, tr.job, tr.task = False, None, None
 
 
 @router.post("/track/start")
@@ -935,6 +967,8 @@ def _begin_track() -> bool:
         if not already:
             tr.on, tr.last, tr.fps, tr.t_prev, tr.overlay = True, {"state": "starting"}, 0.0, 0.0, None
             tr.done = asyncio.Event()
+            tr.slots = asyncio.Semaphore(2)
+            tr.epoch += 1
     if not already:
         tr.task = asyncio.create_task(_track_pump())
     return True
@@ -945,9 +979,12 @@ async def track_stop() -> dict:
     tr = runtime._state.track
     with runtime._state.lock:
         tr.on = False
-        done = tr.done
+        tr.epoch += 1
+        done, task = tr.done, tr.task
     if done is not None:
         done.set()
+    if task is not None:
+        task.cancel()
     return {"status": "stopped"}
 
 

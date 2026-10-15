@@ -83,3 +83,34 @@ The arm was disconnected for both samples. The remaining median worker step
 was about 284 ms: P2P about 72 ms, table 4 ms, footprint 54 ms, face 59 ms,
 and footprint turn 92 ms. Server pose verification added about 50 ms. These
 numbers describe this post-Act scene, not the earlier moving Act.
+
+## Default live tracking throughput change
+
+For a normal P2P act, the worker's additional table, face, and footprint pass
+was not a control input. The server independently checks the proposed pose
+against the aligned RGB-D surface before accepting it. The worker now skips
+that additional pass for P2P unless the opt-in `flat` prior needs its table
+normal. Other tracking modes and one-off teach/find calls keep their geometry.
+This removes the worker's `face_tilt_deg` diagnostic from ordinary P2P live
+frames; the surface constraint and disagreement diagnostics remain.
+
+The worker previously waited for the server to verify and render a result
+before fetching the next frame. The live path now permits one worker inference
+to overlap one ordered server application. A two-frame bound prevents backlog;
+stop/restart invalidates late results. Camera, pose, motor, and target rates
+remain separate measurements. In the disconnected-arm passive scene, skipping
+worker geometry alone raised live pose results from about 3 to 7.7 Hz. With
+the bounded overlap, a 12-second poll observed 149 distinct results in 11.97
+seconds: **12.36 Hz**. A separate 12-second sample of 142 queue timestamps
+measured **11.77 Hz**, 84.5 ms median and 91.6 ms 95th-percentile intervals
+(100.2 ms maximum). The first sample's status-poll reception intervals are
+quantized by its 25 ms poll and are not used as frame spacing evidence. The
+median worker round trip was 78 ms and server verification about 51 ms.
+The camera and motor loops were already about 30 Hz; this change addresses the
+slower pose-result path, not motor interpolation or variation in accepted poses.
+
+This passive scene still has the dowel inserted in the ring. Many P2P frames
+were rejected as untrusted, so it is a throughput test rather than evidence
+of smooth goal updates during a successful moving Act. A new physical Act is
+needed to compare actual target intervals and the phase-dependent pauses in
+`20261015_165734` after this change.

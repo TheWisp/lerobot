@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+import logging
 import math
 import subprocess
 import sys
@@ -37,6 +38,7 @@ from pydantic import BaseModel
 from . import acquisition, demos, runtime, tracking
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 # ── the worker: SAM3 designation + DINO features, in its own process ────────
@@ -52,6 +54,7 @@ def _queue_job(
     compress: bool = True,
     click: list[int] | None = None,
     camera_stamp_mono: float | None = None,
+    extra: dict[str, Any] | None = None,
 ) -> runtime._Job:
     job = runtime._Job(
         id=uuid.uuid4().hex[:8],
@@ -65,6 +68,7 @@ def _queue_job(
         algo=algo,
         compress=compress,
         click=click,
+        extra={} if extra is None else extra,
     )
     w = runtime._state.worker
     with runtime._state.lock:
@@ -123,6 +127,7 @@ async def worker_start(body: WorkerStartBody, request: Request) -> dict:
 
 @router.post("/worker/stop")
 async def worker_stop() -> dict:
+    await tracking.track_stop()
     w = runtime._state.worker
     with runtime._state.lock:
         proc = w.proc
@@ -236,7 +241,31 @@ async def worker_result(id: str, request: Request) -> dict:
     if job.kind == "teach":
         acquisition._apply_teach_result(job)
     elif job.kind == "track":
-        await tracking._apply_track_result(job)
+        if job.extra.get("pipeline"):
+            tr = runtime._state.track
+            with runtime._state.lock:
+                current = tr.on and tr.epoch == job.extra["track_epoch"] and tr.job == job.id
+                if current:
+                    tr.job = None
+                    previous, slots = tr.apply_task, tr.slots
+            if current:
+                assert slots is not None
+
+                async def apply_in_order() -> None:
+                    try:
+                        if previous is not None:
+                            await previous
+                        await tracking._apply_track_result(job)
+                    except Exception:
+                        logger.exception("Could not apply track result %s", job.id)
+                    finally:
+                        slots.release()
+
+                tr.apply_task = asyncio.create_task(apply_in_order())
+                if tr.done is not None:
+                    tr.done.set()
+        else:
+            await tracking._apply_track_result(job)
     elif job.kind == "stream_object":
         await demos._apply_object_result(job)
     elif job.kind == "locate":

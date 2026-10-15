@@ -112,6 +112,40 @@ def test_face_consensus_on_large_two_plane_cloud(worker):
     assert abs(float(np.median(pts[inliers, 2])) - 0.4) < 0.001
 
 
+def test_p2p_tracking_skips_unused_worker_geometry_but_keeps_flat_mode(worker, monkeypatch):
+    """The normal live fit still has a mask and pose without running the expensive footprint pass."""
+    from types import SimpleNamespace
+
+    class P2P:
+        def step(self, rgb, depth):
+            return {
+                "ok": True,
+                "lost": False,
+                "delta": np.eye(4),
+                "mask": np.ones(depth.shape, bool),
+                "live_uv": np.zeros((0, 2)),
+                "n_visible": 50,
+                "mean_residual_m": 0.001,
+            }
+
+    calls = []
+
+    def geometry(*args):
+        calls.append(1)
+        return {"surface": None, "blob": None, "face_pts": None, "table_find": [0, 0, 1]}
+
+    monkeypatch.setattr(worker, "_geometry", geometry)
+    intr = worker.CameraIntrinsics(fx=600, fy=600, cx=4, cy=4)
+    card = SimpleNamespace(xyz=np.array([[0.0, 0.0, 0.45]]))
+    tracker = worker.Tracker(card, None, None, intr, p2p=P2P())
+    frame = worker._Frame(np.zeros((8, 8, 3), np.uint8), np.full((8, 8), 0.45), "live")
+    normal = tracker.step(frame, "p2p", geometry=False)
+    assert normal["ok"] and normal["card_points"] == 1 and normal["mask"].all()
+    assert "table_find" not in normal and calls == []
+    flat = tracker.step(frame, "p2p", geometry=True)
+    assert flat["table_find"] == [0, 0, 1] and calls == [1]
+
+
 class _FakeBridge:
     """Answers each step with a motion that names the frame it was given: x translation = the frame's pixel value in mm."""
 

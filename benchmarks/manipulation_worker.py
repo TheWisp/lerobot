@@ -953,7 +953,7 @@ class Tracker:
         self.klt.init(frame.rgb, live[inl])
         self.klt_idx = idx[inl]
 
-    def step(self, frame: _Frame, algo: str) -> dict:
+    def step(self, frame: _Frame, algo: str, *, geometry: bool = True) -> dict:
         if algo != self.algo:
             self._reset(algo)
         t0 = time.perf_counter()
@@ -1065,22 +1065,24 @@ class Tracker:
             out.update(
                 delta=_delta(fit), n_inliers=int(fit.n_inliers), rms_m=float(fit.rms), scale=float(fit.scale)
             )
-            face_region = (
-                mask
-                if (mask is not None and algo != "depth")
-                else _hull_mask(
-                    self.intr.project(fit.transform.apply(self.card.xyz)), frame.depth.shape, FACE_PAD_PX
+            surface = None
+            if geometry or algo not in P2P_CONFIGS:
+                face_region = (
+                    mask
+                    if (mask is not None and algo != "depth")
+                    else _hull_mask(
+                        self.intr.project(fit.transform.apply(self.card.xyz)), frame.depth.shape, FACE_PAD_PX
+                    )
                 )
-            )
-            geo = _geometry(self.card, frame.depth, face_region, self.intr, self.last_yaw)
-            surface = geo.pop("surface")
-            geo.pop("blob")
-            geo.pop("face_pts")
-            if algo == "depth":
-                geo["face_find"] = None
-            out.update(geo)
-            if out.get("footprint_yaw_deg") is not None:
-                self.last_yaw = float(out["footprint_yaw_deg"])
+                geo = _geometry(self.card, frame.depth, face_region, self.intr, self.last_yaw)
+                surface = geo.pop("surface")
+                geo.pop("blob")
+                geo.pop("face_pts")
+                if algo == "depth":
+                    geo["face_find"] = None
+                out.update(geo)
+                if out.get("footprint_yaw_deg") is not None:
+                    self.last_yaw = float(out["footprint_yaw_deg"])
             if (
                 algo in ("refind", "dino")
                 and self.patches is not None
@@ -1676,7 +1678,7 @@ def _track(job, frame, cards, trackers, sam, tier, intr, models=None) -> bytes:
             scene.start(card.scene, intr, {concept: card.mask})
         tracker.p2p = SceneView(scene, concept) if concept in scene.order else None
     t_step = time.perf_counter()
-    out = tracker.step(frame, algo)
+    out = tracker.step(frame, algo, geometry=bool(job.get("geometry", True)))
     t_others = time.perf_counter()
     meta = {
         k: v for k, v in out.items() if k not in ("mask", "live_uv", "delta", "model_xyz", *P2P_FIT_ARRAYS)
