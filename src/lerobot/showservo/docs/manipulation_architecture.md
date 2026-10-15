@@ -536,8 +536,10 @@ problem, not evidence of a successful insertion.
 Act `insertion/acts/20261015_223044` used the original one-second queue at
 speed 2. A fresh clicked ring find matched 250/400 reference points after a
 stale click had segmented the tray. The dowel appears upright in the ring in
-the saved final frames, but the action reported failure in key frame 8 during
-withdrawal: shoulder lift stopped at 38.3 degrees while its command reached
+the saved final frames while the arm was beside it. After the fault and park,
+the live view showed the dowel lying outside the ring; insertion was not
+verified. The action reported failure in key frame 8 during withdrawal:
+shoulder lift stopped at 38.3 degrees while its command reached
 32.7 degrees, and load rose to 720/1000. At that instant 29 commands were
 queued, so this was not queue starvation. Across active motion the command was
 held on 14.6% of ticks, 10.0% were motor following-error waits, and 8.7% had
@@ -934,8 +936,10 @@ but cannot make the arm revisit an approach or clearance frame already passed.
 That is insufficient if the target moves during insertion: the remaining
 suffix may be reachable in joint space yet no longer be a safe way to make
 contact. The recent act `20261015_223044` also shows why action completion and
-task success must be separate: saved images show the dowel upright in the ring,
-while a high-load shoulder fault aborted the withdrawal.
+task success must be separate: saved images show the dowel upright at the ring
+before a high-load shoulder fault aborted withdrawal, but the post-park image
+shows it outside the ring. The available images do not isolate whether the
+faulting withdrawal, the subsequent park, or an unstable placement displaced it.
 
 Treat demonstration frames as constraints and recovery checkpoints, with
 gripper closure, first contact, release and clearance as state transitions.
