@@ -68,7 +68,7 @@ ANGULAR_RAD_S_RANGE = (math.radians(5.0), math.radians(180.0))
 MAX_ROT_DELTA_RAD = math.radians(60.0)
 ROT_DELTA_RAD_RANGE = (math.radians(10.0), math.radians(150.0))
 DIVERGE_DEG = 25.0  # a joint this far behind its command is stalled or blocked: freeze
-# A playback waits for a joint this far behind the sample sent (:func:`_advance_playback`). On 2026-10-11 06:50 the
+# A release waits for a joint this far behind the sample sent (:func:`_advance_playback`). On 2026-10-11 06:50 the
 # lift after the release ran its schedule while the loaded shoulder fell behind: 3.2-3.9 deg behind put the fingertip
 # 7-9 mm off the planned path, 8.4 deg (its first 0.3 s, from rest) 26 mm, 20 mm down into the stack; through the
 # rest of that act the joints stayed within 4.2 deg and the fingertip within 7 mm.
@@ -229,7 +229,6 @@ class _Jog:
     playback_sent_at: list[float] = field(default_factory=list)  # when each sample was sent, wall clock
     playback_tick: float = 0.0  # the monotonic time of the playback's last tick
     playback_held: float | None = None  # since when the playback waits for a joint behind its target
-    playback_hold_spent: bool = False  # the soft wait expired; reset once all arm joints catch up
     playback_blocked: float | None = None  # since exceeding the hard bound, or delaying a release
     playback_waiting: bool = False  # this motor tick held its queue head for following error
     playback_queue_depth: int = 0  # unsent samples after this motor tick
@@ -416,11 +415,13 @@ def _path_endpoint_action(
 
 
 def _advance_playback(j: _Jog, now: float) -> None:
-    """Send the playback's next sample once its time has come, unless a joint is further than PLAYBACK_LAG_DEG behind
-    the sample already sent: then the playback's clock waits for it, so the arm keeps to the planned path and arrives
-    later. The soft wait expires so normal static friction can be overcome, but error above the measured transport
-    budget, or an opening gripper while the arm lags, must catch up within the wait or freeze. A genuinely blocked
-    joint cannot let the rest of the plan run ahead indefinitely. Pre: j.lock is held, joints mode, playback under way.
+    """Consume one checked sample within the transport following budget.
+
+    Do not stop at the tighter release tolerance on every transport step: this
+    repeatedly deadlocks normal breakaway friction for half a second. Check
+    the next sample against the transport budget before sending it instead.
+    Opening still requires the tighter tolerance. A blocked arm cannot advance
+    other joints indefinitely. Pre: j.lock held, joints playback under way.
     """
     assert j.playback is not None
     j.playback_waiting = False
@@ -430,29 +431,28 @@ def _advance_playback(j: _Jog, now: float) -> None:
     behind = errors.get(lagging, 0.0)
     pending = k < len(j.playback) and j.playback_sent >= 0
     opening = pending and j.playback[k].get("gripper", 0.0) < j.q_target.get("gripper", 0.0) - 1e-6
+    # A sample can move a different joint or reverse direction; compare its
+    # actual error, rather than treating all motion as increasing the lag.
+    next_errors = (
+        {m: abs(j.playback[k].get(m, j.q_target[m]) - j.q_obs[m]) for m in errors} if pending else {}
+    )
+    advancing_past_budget = behind > PLAYBACK_LAG_DEG and any(
+        error > PLAYBACK_STOP_LAG_DEG and error > errors[m] for m, error in next_errors.items()
+    )
     blocked = (pending or (j.playback_live and j.playback_sent >= 0)) and (
-        behind > PLAYBACK_STOP_LAG_DEG or (opening and behind > PLAYBACK_LAG_DEG)
+        behind > PLAYBACK_STOP_LAG_DEG or advancing_past_budget or (opening and behind > PLAYBACK_LAG_DEG)
     )
     j.playback_blocked = (j.playback_blocked if j.playback_blocked is not None else now) if blocked else None
     if blocked and now - j.playback_blocked >= PLAYBACK_HOLD_MAX_S:
         j.playback_waiting = True
         j.halted = True
-        context = "before gripper opening" if opening else "beyond transport tolerance"
+        context = "before gripper opening" if opening else "at transport tolerance"
         j.reason = (
             f"playback {lagging} still {behind:.1f} deg behind {context} after {PLAYBACK_HOLD_MAX_S:.1f} s"
             f" (observed {j.q_obs[lagging]:.1f}, commanded {j.q_target[lagging]:.1f} deg) — frozen"
         )
         return
-    if behind <= PLAYBACK_LAG_DEG:
-        j.playback_hold_spent = False
-    waiting = pending and behind > PLAYBACK_LAG_DEG and (blocked or not j.playback_hold_spent)
-    if (
-        waiting
-        and not blocked
-        and j.playback_held is not None
-        and now - j.playback_held >= PLAYBACK_HOLD_MAX_S
-    ):
-        j.playback_hold_spent, waiting = True, False
+    waiting = blocked
     if waiting:
         j.playback_waiting = True
         j.playback_held = j.playback_held if j.playback_held is not None else now
@@ -659,6 +659,7 @@ def _loop(j: _Jog) -> None:
                             "cmd": dict(j.q_cmd),
                             "playback_waiting": j.playback_waiting,
                             "playback_queue_depth": j.playback_queue_depth,
+                            "playback_active": j.mode == "joints" and j.playback is not None,
                             "load": dict(loads),
                             "temps": dict(temps),
                         }
@@ -1362,7 +1363,7 @@ def play_joints(samples: list[dict[str, float]], due_s: list[float]) -> None:
         j.playback_t0 = j.playback_tick = time.monotonic()
         j.playback_slew_at = 0.0
         j.playback_sent, j.playback_sent_at = -1, []
-        j.playback_held, j.playback_blocked, j.playback_hold_spent = None, None, False
+        j.playback_held, j.playback_blocked = None, None
 
 
 def playback_state() -> tuple[int, list[float]]:

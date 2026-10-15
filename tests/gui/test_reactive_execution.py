@@ -122,7 +122,7 @@ def test_update_during_contact_retargets_remaining_phase_and_preserves_release(m
     grips = np.array([80, 80, 80, 80, 20, 20])
     plan = {
         "q": np.tile(state["q"], (6, 1)),
-        "times": np.arange(6) / jog.HZ,
+        "times": np.arange(6) * 2 / jog.HZ,
         "stage": ["contact"] * 5 + ["withdraw"],
         "live_path": {
             "local": local,
@@ -401,6 +401,8 @@ def test_checked_horizon_keeps_motor_ticks_filled_while_solves_take_time(monkeyp
         stop.set()
         thread.join(timeout=1)
     assert not reason and last[0] == pytest.approx(count)
+    if solve_s < 1 / jog.HZ:
+        assert playback["due"][-1] <= count / jog.HZ + 1e-6, "fast IK must not double the demo clock"
     active = np.array([q for _, q in motor_ticks if 2 <= q < count - 1])
     assert len(active) >= count - 4
     assert np.mean(np.diff(active) < 0.05) < 0.2, "slow IK must not make the bus hold every other tick"

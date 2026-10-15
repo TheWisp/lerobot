@@ -625,9 +625,10 @@ def test_playback_can_overcome_static_friction_after_its_catchup_wait():
     q = {**dict.fromkeys(MOTOR_NAMES, 0.0), "gripper": 80.0}
     robot = FrictionRobot(q)
     samples = [{**q, "shoulder_lift": 0.5 * k, "elbow_flex": 0.5 * k} for k in range(28)]
-    (sent, _at), _seen = _play(robot, samples, [k / jog.HZ for k in range(len(samples))])
+    (sent, at), _seen = _play(robot, samples, [k / jog.HZ for k in range(len(samples))])
     assert sent == len(samples) - 1, "a bounded static following offset must not deadlock transport"
     assert robot.q["shoulder_lift"] > 10.0
+    assert at[-1] - at[0] < 1.5, "normal breakaway friction must not add repeated half-second stops"
 
 
 def test_a_blocked_playback_freezes_before_other_joints_and_release_run_ahead():
@@ -653,7 +654,6 @@ def test_playback_lag_timeout_freezes_without_advancing_or_changing_goals(openin
     target = {**q, "shoulder_lift": 4.0 if opening else 6.0}
     j = jog._Jog(q_obs=q, q_target=target.copy(), q_cmd=target.copy())
     j.playback = [target, {**target, "elbow_flex": 10.0, "gripper": 20.0 if opening else 80.0}]
-    j.playback_hold_spent = True  # a previous soft wait cannot disable either hard condition
     j.playback_due, j.playback_sent, j.playback_tick = [0.0, 0.1], 0, 10.0
     jog._advance_playback(j, 10.0)
     assert j.playback_waiting and j.playback_queue_depth == 1

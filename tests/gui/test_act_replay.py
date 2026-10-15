@@ -377,6 +377,7 @@ def test_the_replay_of_a_trial_lists_its_frames_and_serves_each_drawn(client, tm
         "n": 1,
         "frames": [{"i": 0, "t": 1.0, "step": "place"}],
         "result": None,
+        "control_cadence": None,
         "held_recorded": True,
         "pose_verification_recorded": False,
         "pose_disagreement_frames": [],

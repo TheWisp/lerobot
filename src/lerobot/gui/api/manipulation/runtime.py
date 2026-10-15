@@ -280,7 +280,7 @@ class _Act:
     )
     correct_hold: bool = True  # False replays the place uncorrected for the hold, as a baseline
     allow_grasp_prediction: bool = False  # explicitly allow an unchanged-grip prediction when vision fails
-    queue_horizon_s: float = 3.0
+    queue_horizon_s: float = 1.0
     queue_blend_ms: float = 200.0
     force_recovered_pose: bool = False  # operator confirmed the current ambiguous grasp assignment
     recovered_pose_token: str | None = None

@@ -1132,6 +1132,13 @@ async function pgReplay(trial) {
         (pgReplayAt.pose_verification_recorded
             ? ` · ${(pgReplayAt.pose_disagreement_frames || []).length} frames with pose disagreements`
             : ' · pose verification not recorded');
+    const pauses = pgReplayAt.control_cadence?.pauses;
+    if (pauses) {
+        document.getElementById('pg-replay-title').textContent +=
+            ` · lag waits ${pauses.lag_wait.total_s.toFixed(1)} s` +
+            ` · empty queue ${pauses.queue_empty.total_s.toFixed(1)} s` +
+            ` · longest stationary command ${pauses.command_stationary.longest_s.toFixed(1)} s (includes demo holds)`;
+    }
     document.getElementById('pg-replay-disagreement').disabled = !(pgReplayAt.pose_disagreement_frames || []).length;
     pgReplayShow(0);
 }

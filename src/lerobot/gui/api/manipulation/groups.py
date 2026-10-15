@@ -296,6 +296,29 @@ def _carried(
     return core.carried_motion(frames, since, symmetry_line, end_swap)
 
 
+def _motion_supported(name: str) -> bool:
+    """Whether the carried pose has fresh object or supporting-group evidence.
+
+    Occlusion of the object's own points does not invalidate a measured support
+    group's motion. An unsupported/stale group, or an arm prediction for a held
+    object, is not independent evidence for following a moving pick target.
+    """
+    with runtime._state.lock:
+        feed = runtime._state.groups_feed
+        drawing = feed.drawing or {}
+        context = (drawing.get("objects") or {}).get(name) or {}
+        group = (drawing.get("groups") or {}).get(str(context.get("group"))) or {}
+        frames = feed.frames.get(name)
+        if not runtime._state.groups_with_acts or not frames:
+            return False
+        fresh = time.time() - min(float(drawing.get("stamp") or 0), frames[-1][0])
+        return (
+            fresh <= runtime.GROUPS_DRAW_MAX_AGE_S
+            and context.get("why") != "held"
+            and (bool(context.get("own")) or bool(group.get("supported")))
+        )
+
+
 def _paint_picture(bgr: np.ndarray, d: dict) -> np.ndarray:
     """A point groups' picture on a camera frame as the act's views paint it, live (:func:`_paint_groups`) and in a
     replay (:func:`_replay_draw`) alike (lerobot.showservo.groups_scene.paint_groups): the surfaces that move

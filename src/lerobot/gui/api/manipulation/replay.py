@@ -49,6 +49,15 @@ def _replay_run(trial: int) -> tuple[pathlib.Path, dict[str, Any]]:
     kept = runtime._replay_meta.get(str(run))
     if kept is None or kept[0] != mtime:
         kept = runtime._replay_meta[str(run)] = (mtime, json.loads(f.read_text()))
+        # Durations are derivable from old motor traces too. Cache the summary
+        # in memory; never rewrite the original experimental evidence.
+        motor_file = pathlib.Path(run) / "arm.npz"
+        if "pauses" not in (kept[1].get("control_cadence") or {}) and motor_file.exists():
+            with np.load(motor_file, allow_pickle=False) as motor:
+                if all(key in motor for key in ("t", "q_cmd", "q_obs")):
+                    kept[1]["control_cadence"] = recording._control_cadence(
+                        dict(motor), kept[1].get("targets", [])
+                    )
     return pathlib.Path(run), kept[1]
 
 
@@ -537,6 +546,7 @@ async def replay(trial: int) -> dict:
         "frames": listed,
         **({"fps": timeline["fps"]} if timeline is not None else {}),
         "result": meta.get("result"),
+        "control_cadence": meta.get("control_cadence"),
         "held_recorded": any(
             "onto_held_from" in f or any(len(h) > 1 for h in f.get("held") or []) for f in frames
         ),

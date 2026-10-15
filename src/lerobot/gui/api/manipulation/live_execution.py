@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import functools
 import time
+from collections import deque
 
 import numpy as np
 
@@ -27,7 +28,7 @@ async def stream(
     revision=None,
     best_effort_stopped=None,
     diagnostics=None,
-    queue_horizon_s=3.0,
+    queue_horizon_s=1.0,
     queue_blend_ms=200.0,
 ):
     """Return (reason, last command). Phase advances only after its command is consumed.
@@ -58,6 +59,8 @@ async def stream(
     best_phase, best_seen, best_progress_at = None, None, time.monotonic()
     horizon = max(2, int(round(queue_horizon_s * jog.HZ)))
     blend_ticks = max(0, int(round(queue_blend_ms * jog.HZ / 1000.0)))
+    unchanged_snapshot = None
+    solve_seconds = deque(maxlen=10)
     if diagnostics is not None:
         diagnostics.update(
             solve_ms=[],
@@ -67,11 +70,19 @@ async def stream(
             blended_replacements=0,
             blended_samples=0,
             blend_rejected=0,
+            stale_replacements=0,
             queue_horizon_s=queue_horizon_s,
             queue_blend_ms=queue_blend_ms,
         )
 
     def changed_pending(done, motion, fix):
+        nonlocal unchanged_snapshot
+        snapshot = (tuple((name, value.tobytes()) for name, value in motion.items()), fix.tobytes())
+        # The producer polls faster than perception. Once the pending queue
+        # agrees, consuming it or appending samples using the same snapshot
+        # cannot create a disagreement. Avoid rescanning it every 8 ms.
+        if snapshot == unchanged_snapshot:
+            return False
         for composition in compositions[done + 1 :]:
             if composition is None:
                 continue
@@ -83,6 +94,7 @@ async def stream(
                 distance, angle = core.pose_residual(np.asarray(composition["fix"]), fix)
                 if distance > core.ACT_SOLVE_TOL_M or angle > core.ACT_SOLVE_TOL_DEG:
                     return True
+        unchanged_snapshot = snapshot
         return False
 
     def stop_best_effort(reason):
@@ -248,10 +260,17 @@ async def stream(
             "fix": np.asarray(fix).tolist(),
             "hold_revision": None if revision is None else revision(),
         }
-        # One IK solve covers at least two motor ticks. The motor receives
-        # interpolated, FK-checked samples; it does not wait for one solve per
-        # tick when the solver is slower than 30 Hz.
-        nominal_ticks = max(2, min(6, int(np.ceil((plan["times"][i] - plan["times"][phase]) * jog.HZ))))
+        # Preserve one-tick demo phases when IK keeps up. A two-tick minimum
+        # doubled every small contact/hold sample even with 2 ms solves.
+        # Sustained slower IK can still use a longer checked interpolation;
+        # isolated spikes are absorbed by the queue, not baked into its speed.
+        compute_ticks = 1 if not solve_seconds else int(np.ceil(np.median(solve_seconds) * jog.HZ))
+        nominal_ticks = max(
+            1,
+            min(
+                6, max(compute_ticks, int(np.ceil((plan["times"][i] - plan["times"][phase]) * jog.HZ - 1e-8)))
+            ),
+        )
         if (
             replacing
             and blend_ticks >= 2
@@ -304,6 +323,7 @@ async def stream(
         for _ in range(4):
             solve_started = time.perf_counter()
             result = await solve(step_ticks)
+            solve_seconds.append(time.perf_counter() - solve_started)
             if diagnostics is not None:
                 diagnostics["solve_ms"].append((time.perf_counter() - solve_started) * 1000.0)
             if result["reason"]:
@@ -313,17 +333,21 @@ async def stream(
             if pending + ticks > horizon:
                 room_needed = True
                 break
-            samples = reactive.checked_joint_samples(
-                kin,
-                qs[base],
-                result,
-                ticks,
-                gi,
-                box,
-                floor,
-                joint_tick,
-                previous_sample=qs[max(0, base - 1)],
-                max_joint_accel_deg=jog.RAMP_DEG_S * speed / jog.HZ,
+            samples = await loop.run_in_executor(
+                runtime._ACT_EXECUTOR,
+                functools.partial(
+                    reactive.checked_joint_samples,
+                    kin,
+                    qs[base],
+                    result,
+                    ticks,
+                    gi,
+                    box,
+                    floor,
+                    joint_tick,
+                    previous_sample=qs[max(0, base - 1)],
+                    max_joint_accel_deg=jog.RAMP_DEG_S * speed / jog.HZ,
+                ),
             )
             if samples is not None:
                 break
@@ -384,9 +408,6 @@ async def stream(
                 if blended is not None:
                     blended_count = min(blend_ticks, len(old), len(samples))
                     samples = blended
-                    if diagnostics is not None:
-                        diagnostics["blended_replacements"] += 1
-                        diagnostics["blended_samples"] += blended_count
                 elif diagnostics is not None:
                     diagnostics["blend_rejected"] += 1
         due_samples = [due[base] + (k + 1) / jog.HZ for k in range(ticks)]
@@ -398,8 +419,12 @@ async def stream(
         )
         if accepted:
             if replacing:
+                unchanged_snapshot = None
                 if diagnostics is not None:
                     diagnostics["tail_replacements"] += 1
+                    if blended_count:
+                        diagnostics["blended_replacements"] += 1
+                        diagnostics["blended_samples"] += blended_count
                 del qs[done + 1 :]
                 del phases[done + 1 :]
                 del due[done + 1 :]
@@ -414,3 +439,5 @@ async def stream(
                 entry = (q, next_phase if k == ticks - 1 else phase, at, goal, sample_composition)
                 for array, value in zip((qs, phases, due, goals, compositions), entry, strict=True):
                     array.append(value)
+        elif replacing and diagnostics is not None:
+            diagnostics["stale_replacements"] += 1

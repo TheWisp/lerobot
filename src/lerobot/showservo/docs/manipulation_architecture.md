@@ -487,11 +487,11 @@ settling also reads updated targets and uses the existing reach and servo
 settling tolerances, rather than requiring numerical-zero IK error at a limit.
 
 The motor loop owns the bus and consumes one checked sample per 30 Hz tick from
-a short rolling horizon. One IK solve now covers at least two motor ticks: the
+a short rolling horizon. One IK solve can cover multiple motor ticks: the
 executor checks each interpolated joint sample by forward kinematics against
 the corresponding Cartesian path and the workspace/floor. If a joint chord
 fails that check, it solves a shorter Cartesian step instead. It buffers up to
-three seconds by default (90 samples, configurable per Act) from the latest object pose, independent of when the
+one second by default (30 samples, configurable per Act) from the latest object pose, independent of when the
 camera next reports one. The producer solves a replacement tail before
 swapping it, so IK never clears the queue while it runs. A new accepted pose
 that differs beyond the existing solve tolerance atomically replaces unsent
@@ -506,7 +506,25 @@ clock and lag guards survive each replacement; a temporary empty queue cannot
 clear a hard-lag timeout. Sliced paths start from current joints, because their
 old endpoints may have changed during live execution. Each Act records
 active-motion command-hold fraction, hold-then-move size and target timing for
-comparison. The first physical insertion retest with this horizon,
+comparison. Duration metrics also retain long stationary intervals omitted by
+the local active-motion mask: total and longest command/observed holds, lag
+waits, empty queues and holds with queued commands. A queued hold can be part
+of the demo; it is not automatically classified as a planning stall. Replay
+shows these durations and can derive them from older saved motor traces.
+
+The former two-tick minimum stretched every small contact sample even when
+IK was fast. One-tick phases now keep their timing; sustained solves slower
+than a motor tick use longer checked interpolation. The former default
+three-second horizon is shortened to one second. Transport also no longer
+pauses for half a second each time following error passes the 3-degree release
+tolerance. It advances within the existing 5-degree transport budget, checks
+the next command before letting lag grow past that budget, and retains the
+bounded stall timeout and tighter release condition. A free pick object with
+a current accepted pose or supported group motion can retarget the queue just
+like a placement target; movement itself does not trigger an abort. Unverified
+motion without fresh supporting evidence still stops before stale following.
+
+The first physical insertion retest with this horizon,
 `insertion/acts/20261015_195738` at speed 1, completed with the dowel upright
 in the ring and no arm halt. Its active-motion command-hold fraction was 10.7%
 (31 hold-then-move events), compared with 16.6–24.0% (42–85 events) in three

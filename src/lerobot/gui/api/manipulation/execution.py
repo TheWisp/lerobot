@@ -89,7 +89,7 @@ class ActBody(BaseModel):
     inject: InjectBody | None = None
     correct_hold: bool = True  # False: a place replays the demo against the target, uncorrected for the hold
     allow_grasp_prediction: bool = False  # use the grasp-time hold if post-carry vision cannot verify it
-    queue_horizon_s: float = Field(3.0, ge=0.5, le=5.0)  # checked, replaceable motor lookahead
+    queue_horizon_s: float = Field(1.0, ge=0.5, le=5.0)  # checked, replaceable motor lookahead
     queue_blend_ms: float = Field(200.0, ge=0.0, le=500.0)  # 0 disables RTC-style overlap
     confirm_recovered_pose: str | None = None  # token from the warning for this find and demo
     model_config = ConfigDict(extra="forbid")
@@ -173,7 +173,11 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
         if pregrasp_streaming and (tracking or with_groups):
             with runtime._state.lock:
                 state = (runtime._state.track.last or {}).get("state")
-            if state != "tracking" and not with_groups:
+            # A free object uses the same carried observation whether it is
+            # about to be picked or is a placement target. Motion itself is
+            # not failure: the live queue already retargets it each update.
+            supported = state == "tracking" or (with_groups and groups._motion_supported(picked))
+            if not supported and not with_groups:
                 pose = jog.current_tip_and_anchor()
                 if pose is not None:
                     relative = follow() @ inv_start_delta
@@ -184,27 +188,15 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
                             f"{picked}'s pose is unverified as the gripper enters its measured extent; "
                             "stopped before an unobserved pregrasp contact"
                         )
-            if state == "tracking" or with_groups:
+            if not supported and with_groups:
                 current = follow()
                 relative = current @ inv_start_delta
                 shift = reactive.unverified_object_shift(relative, start_points, core.ACT_REACH_TOL_M)
                 if shift is not None:
-                    if state != "tracking":
-                        return (
-                            f"{picked} moved {shift * 1000:.1f} mm while its pregrasp pose was unverified; "
-                            "stopped before following a stale target"
-                        )
-                    pose = jog.current_tip_and_anchor()
-                    if pose is not None:
-                        tip_cam = np.linalg.inv(t_bc) @ pose[0]
-                        contact_shift = reactive.nearby_pregrasp_shift(
-                            relative, start_points, tip_cam[:3, 3], core.ACT_REACH_TOL_M
-                        )
-                        if contact_shift is not None:
-                            return (
-                                f"{picked} moved {shift * 1000:.1f} mm before the planned grasp while "
-                                "the gripper was nearby; stopped to avoid chasing contact"
-                            )
+                    return (
+                        f"{picked} moved {shift * 1000:.1f} mm while its pregrasp pose was unverified; "
+                        "stopped before following a stale target"
+                    )
         if not st.get("connected"):
             return "the arm went away"
         if st.get("halted"):

@@ -385,6 +385,8 @@ def _begin_run(
         "keypoints": list(demo.keypoints),
         "demo_reference_constraints": dict(demo.reference_constraints),
         "speed": speed,
+        "queue_horizon_s": runtime._state.act.queue_horizon_s,
+        "queue_blend_ms": runtime._state.act.queue_blend_ms,
         "started": time.strftime("%Y-%m-%d %H:%M:%S"),
         "t_started": time.time(),
         "t_bc": np.asarray(t_bc, dtype=float).tolist(),
@@ -442,7 +444,7 @@ def _finish_run(run: _Run, samples: list[dict[str, Any]], fk: Any, result: dict[
         for key in ("tick_ms", "lock_ms", "read_ms", "command_ms", "commit_ms"):
             if all(key in s for s in samples):
                 arm[key] = np.array([s[key] for s in samples], dtype=float)
-        for key in ("playback_waiting", "playback_queue_depth"):
+        for key in ("playback_waiting", "playback_queue_depth", "playback_active"):
             if all(key in s for s in samples):
                 arm[key] = np.array([s[key] for s in samples], dtype=int)
         for key in ("load", "temps"):  # each motor's load and temperature at every tick, as the jog read them
@@ -535,7 +537,48 @@ def _control_cadence(arm: dict[str, np.ndarray], targets: list[dict[str, Any]]) 
         cadence["lag_wait_fraction_active"] = float(np.mean(arm["playback_waiting"][:-1][active]))
     if "playback_queue_depth" in arm and len(steps):
         cadence["queue_empty_fraction_active"] = float(np.mean(arm["playback_queue_depth"][:-1][active] == 0))
+    cadence["pauses"] = _pause_durations(arm, command_step, observed_step, dt)
     return cadence
+
+
+def _pause_durations(arm, command_step, observed_step, dt):
+    """Wall-time measures: long stops must not disappear from a local-motion mask.
+
+    A stationary command can be intentional. Report queue state alongside it,
+    without calling every demo hold a planning stall. Old recordings lack the
+    playback-active flag; their empty-queue time includes planning boundaries.
+    """
+    from .. import jog
+
+    dt = np.where(np.isfinite(dt) & (dt > 0), dt, 0.0)
+    waiting = np.asarray(arm.get("playback_waiting", np.zeros(len(dt) + 1)), dtype=bool)[:-1]
+    depth = np.asarray(arm.get("playback_queue_depth", np.zeros(len(dt) + 1)))[:-1]
+    running = np.asarray(arm.get("playback_active", np.ones(len(dt) + 1)), dtype=bool)[:-1]
+    command_hold, observed_hold = command_step < 0.05, observed_step < 0.05
+    masks = {
+        "command_stationary": command_hold,
+        "observed_stationary": observed_hold,
+        "lag_wait": waiting,
+        "queue_empty": running & (depth == 0),
+        "queued_command_hold": command_hold & running & (depth > 0) & ~waiting,
+        "between_streams_hold": command_hold & ~running,
+    }
+    out = {"duration_s": float(dt.sum()), "playback_state_recorded": "playback_active" in arm}
+    for name, mask in masks.items():
+        edges = np.flatnonzero(np.diff(np.r_[False, mask, False]))
+        spans = [(int(a), int(b), float(dt[a:b].sum())) for a, b in edges.reshape(-1, 2)]
+        out[name] = {
+            "total_s": float(dt[mask].sum()),
+            "longest_s": max((duration for _, _, duration in spans), default=0.0),
+            "episodes_over_100ms": sum(duration >= 0.1 for _, _, duration in spans),
+        }
+    # Excess wall time beyond two nominal ticks exposes serial/scheduling gaps
+    # independently of whether the previous command happened to be stationary.
+    out["motor_gaps"] = {
+        "count_over_two_ticks": int(np.count_nonzero(dt > 2.0 / jog.HZ)),
+        "excess_s": float(np.maximum(dt - 1.0 / jog.HZ, 0)[dt > 2.0 / jog.HZ].sum()),
+    }
+    return out
 
 
 class VerdictBody(BaseModel):
