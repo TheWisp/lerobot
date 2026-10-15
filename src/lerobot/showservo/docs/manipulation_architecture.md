@@ -742,11 +742,14 @@ under `/home/feit/Documents/showservo-experiments/20261014/continuous-held/retry
 ### 2026-10-15: independent pose and task axes, live insertion retry
 
 The saved insertion demo now declares continuous pose symmetry about the
-dowel's observed long axis. Its existing `turn` placement rule rotates about
-the ring's measured surface normal. These are independent declarations: the
-first folds equivalent dowel poses during finding; the second selects a
-task-equivalent final relation with the ring. The prior object sidecar is
-backed up under `/home/feit/Documents/showservo-experiments/20261015/symmetry-axis/`.
+dowel's observed long axis and, after the later complete-view trial, that its
+two ends are interchangeable. The prior object sidecar is backed up as
+`objects.pre-end-swap-20261015.npz` beside the demo; the earlier axis-setting
+backup is under `/home/feit/Documents/showservo-experiments/20261015/symmetry-axis/`.
+Its existing `turn` placement rule rotates about the ring's measured surface
+normal. These are independent declarations: the first folds equivalent dowel
+poses during finding; the second selects a task-equivalent final relation with
+the ring.
 
 Act `20261015_104148` found the dowel (71 inliers), passed the reach check,
 grasped it, and reselected a feasible carry/landing path after the first carry
