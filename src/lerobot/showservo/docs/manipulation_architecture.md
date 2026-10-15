@@ -495,10 +495,18 @@ never changed or replayed. Gripper-changing samples stay at the queue front so
 grasp and release cannot be prefetched past unfinished motion. The playback
 clock and lag guards survive each replacement; a temporary empty queue cannot
 clear a hard-lag timeout. Sliced paths start from current joints, because their
-old endpoints may have changed during live execution. **Physical smoothness
-with this rolling horizon has not yet been validated.** Each Act now records
+old endpoints may have changed during live execution. Each Act records
 active-motion command-hold fraction, hold-then-move size and target timing for
-that comparison.
+comparison. The first physical insertion retest with this horizon,
+`insertion/acts/20261015_195738` at speed 1, completed with the dowel upright
+in the ring and no arm halt. Its active-motion command-hold fraction was 10.7%
+(31 hold-then-move events), compared with 16.6–24.0% (42–85 events) in three
+earlier successful speed-1 runs. These are separate scene trials, not a paired
+same-scene A/B test. A 394 ms motor-loop gap remains: the recorded bus read
+for that tick took 359 ms, while median read time was 1.9 ms. Buffered targets
+cannot keep sending through a blocked motor read. Smoothness at speeds 2 and 3
+still needs a physical reset and retest; the existing automatic reset is for
+the gamepad/cube layout, not an upright dowel in a ring.
 
 Every new step passes IK, calibrated joint bounds, joint-step limits and
 workspace/floor checks. An infeasible step holds phase and gripper while the
