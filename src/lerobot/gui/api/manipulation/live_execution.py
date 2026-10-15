@@ -53,7 +53,7 @@ async def stream(
     orientation_stage = None
     arm = np.arange(len(qs[0])) != gi
     best_phase, best_seen, best_progress_at = None, None, time.monotonic()
-    horizon = 3  # 100 ms at 30 Hz; unsent samples are replaceable when perception changes.
+    horizon = 6  # Up to 200 ms; every unsent sample is replaceable on a new observation.
 
     def changed_pending(done, motion, fix):
         for composition in compositions[done + 1 :]:
@@ -181,7 +181,7 @@ async def stream(
                     return f"the end: the arm stopped {lag:.0f} deg short of it", qs[done]
                 continue
             settling.clear()
-        if pending >= horizon or (pending and phases[-1] == len(plan["q"]) - 1):
+        if pending and phases[-1] == len(plan["q"]) - 1:
             continue
         base = len(qs) - 1
         phase = phases[base]
@@ -225,26 +225,57 @@ async def stream(
             "fix": np.asarray(fix).tolist(),
             "hold_revision": None if revision is None else revision(),
         }
-        dt = max(float(plan["times"][i] - plan["times"][phase]), 1.0 / jog.HZ)
-        result = await loop.run_in_executor(
-            runtime._ACT_EXECUTOR,
-            functools.partial(
-                reactive.checked_step,
-                kin,
-                qs[base],
-                goal,
-                float(path["grips"][i]),
-                path["hints"][i],
-                gi,
-                jog.servo_ranges(),
-                jog.workspace_box(),
-                float(path["floor"][i]),
-                dt,
-                (limits[0] * speed, limits[1] * speed),
-                jog.GRIP_UNITS_S * speed,
-                preferred=plan["q"][i],
-            ),
+        # One IK solve covers at least two motor ticks. The motor receives
+        # interpolated, FK-checked samples; it does not wait for one solve per
+        # tick when the solver is slower than 30 Hz.
+        ticks = max(2, min(4, int(np.ceil((plan["times"][i] - plan["times"][phase]) * jog.HZ))))
+        if pending + ticks > horizon:
+            continue
+        box, floor = jog.workspace_box(), float(path["floor"][i])
+        solve_args = (
+            kin,
+            qs[base],
+            goal,
+            float(path["grips"][i]),
+            path["hints"][i],
+            gi,
+            jog.servo_ranges(),
+            box,
+            floor,
         )
+
+        async def solve(
+            step_ticks,
+            args=solve_args,
+            move_limits=(limits[0] * speed, limits[1] * speed),
+            grip_rate=jog.GRIP_UNITS_S * speed,
+            preferred=plan["q"][i],
+        ):
+            return await loop.run_in_executor(
+                runtime._ACT_EXECUTOR,
+                functools.partial(
+                    reactive.checked_step,
+                    *args,
+                    step_ticks / jog.HZ,
+                    move_limits,
+                    grip_rate,
+                    preferred=preferred,
+                ),
+            )
+
+        result = await solve(ticks)
+        samples = (
+            reactive.checked_joint_samples(kin, qs[base], result, ticks, gi, box, floor, jog.PLAYBACK_LAG_DEG)
+            if not result["reason"]
+            else None
+        )
+        if not result["reason"] and samples is None:
+            # A joint chord may bow away from the checked Cartesian step.
+            # Fall back to one fresh Cartesian solve, never that chord.
+            ticks = 1
+            result = await solve(ticks)
+            samples = [result["q"]] if not result["reason"] else None
+        dt = ticks / jog.HZ
         if result["reason"]:
             # The earlier checked prefix may still be moving. Its last sample
             # is the correct start for a reach search or best-effort stop;
@@ -269,9 +300,9 @@ async def stream(
             continue
         # Gripper events follow the completed phase, never an intermediate correction.
         next_phase = i if result["complete"] else phase
-        next_due = due[base] + dt
-        if jog.append_playback_next(base, as_dict(result["q"]), next_due):
-            slot = base + 1
-            entry = (result["q"], next_phase, next_due, goal, composition)
-            for array, value in zip((qs, phases, due, goals, compositions), entry, strict=True):
-                array.append(value)
+        due_samples = [due[base] + (k + 1) / jog.HZ for k in range(ticks)]
+        if jog.append_playback_chunk(base, [as_dict(q) for q in samples], due_samples):
+            for k, (q, at) in enumerate(zip(samples, due_samples, strict=True)):
+                entry = (q, next_phase if k == ticks - 1 else phase, at, goal, composition)
+                for array, value in zip((qs, phases, due, goals, compositions), entry, strict=True):
+                    array.append(value)

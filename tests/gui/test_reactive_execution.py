@@ -162,7 +162,11 @@ def test_checked_horizon_replaces_only_unsent_future_without_resetting_guards(mo
     j.playback_blocked, j.playback_held = 12.0, 11.0
     clock = j.playback_t0
     assert jog.append_playback_next(0, {**q, "shoulder_pan": 1.0}, 0.1)
-    assert jog.append_playback_next(1, {**q, "shoulder_pan": 2.0, "gripper": 80.0}, 0.2)
+    assert jog.append_playback_chunk(
+        1,
+        [{**q, "shoulder_pan": 1.5}, {**q, "shoulder_pan": 2.0, "gripper": 80.0}],
+        [0.15, 0.2],
+    )
     assert not jog.append_playback_next(0, q, 0.3)
     j.playback_sent = 1  # the first future sample, including its grip, has gone out
     assert not jog.replace_playback_tail(0, [q], [0.3])
@@ -172,8 +176,9 @@ def test_checked_horizon_replaces_only_unsent_future_without_resetting_guards(mo
     assert (j.playback_t0, j.playback_blocked, j.playback_held) == (clock, 12.0, 11.0)
 
 
-def test_checked_horizon_keeps_motor_ticks_filled_while_solves_take_time(monkeypatch):
-    """A 20 ms IK solve must not create a hold after every 30 Hz action."""
+@pytest.mark.parametrize("solve_s", [0.02, 0.055])
+def test_checked_horizon_keeps_motor_ticks_filled_while_solves_take_time(monkeypatch, solve_s):
+    """Even a 55 ms IK solve should feed two interpolated 30 Hz commands."""
     kin = _TipKinematics()
     initial = np.zeros(len(MOTOR_NAMES))
     count = 24
@@ -213,6 +218,14 @@ def test_checked_horizon_keeps_motor_ticks_filled_while_solves_take_time(monkeyp
             playback["due"].append(due)
             return True
 
+    def append_chunk(tail, samples, due):
+        with lock:
+            if tail != len(playback["samples"]) - 1:
+                return False
+            playback["samples"].extend(samples)
+            playback["due"].extend(due)
+            return True
+
     def replace(sent, samples, due):
         with lock:
             if sent != playback["sent"]:
@@ -227,14 +240,15 @@ def test_checked_horizon_keeps_motor_ticks_filled_while_solves_take_time(monkeyp
         return kin.forward_kinematics(q), np.eye(4), dict(zip(MOTOR_NAMES, q, strict=True))
 
     def checked_step(_kin, previous, goal, *_args, **_kwargs):
-        time.sleep(0.02)
+        time.sleep(solve_s)
         q = previous.copy()
         q[0] = goal[0, 3] * 1000
-        return {"reason": "", "q": q, "complete": True}
+        return {"reason": "", "q": q, "pose": goal, "complete": True}
 
     monkeypatch.setattr(jog, "play_joints", play)
     monkeypatch.setattr(jog, "playback_state", state)
     monkeypatch.setattr(jog, "append_playback_next", append)
+    monkeypatch.setattr(jog, "append_playback_chunk", append_chunk)
     monkeypatch.setattr(jog, "replace_playback_tail", replace)
     monkeypatch.setattr(jog, "playback_stop", lambda: stop.set())
     monkeypatch.setattr(jog, "current_tip_and_anchor", current)
@@ -277,7 +291,43 @@ def test_checked_horizon_keeps_motor_ticks_filled_while_solves_take_time(monkeyp
     assert not reason and last[0] == pytest.approx(count)
     active = np.array([q for _, q in motor_ticks if 2 <= q < count - 1])
     assert len(active) >= count - 4
-    assert np.mean(np.diff(active) < 0.05) < 0.3, "the bus must not hold between most checked steps"
+    assert np.mean(np.diff(active) < 0.05) < 0.2, "slow IK must not make the bus hold every other tick"
+
+
+def test_interpolated_joint_chord_must_follow_checked_cartesian_step():
+    class BentKinematics(_TipKinematics):
+        def forward_kinematics(self, q):
+            out = super().forward_kinematics(q)
+            out[2, 3] = 0.01 * np.sin(np.pi * q[0] / 10)
+            return out
+
+    start = np.zeros(len(MOTOR_NAMES))
+    end = start.copy()
+    end[0] = 10
+    assert (
+        reactive.checked_joint_samples(
+            BentKinematics(),
+            start,
+            {"q": end, "pose": pose(0.01), "reason": ""},
+            2,
+            MOTOR_NAMES.index("gripper"),
+            ((-1, -1, -1), (1, 1, 1)),
+            -1,
+            10,
+        )
+        is None
+    )
+    samples = reactive.checked_joint_samples(
+        _TipKinematics(),
+        start,
+        {"q": end, "pose": pose(0.01), "reason": ""},
+        2,
+        MOTOR_NAMES.index("gripper"),
+        ((-1, -1, -1), (1, 1, 1)),
+        -1,
+        10,
+    )
+    assert [q[0] for q in samples] == [5, 10]
 
 
 def test_empty_live_queue_cannot_reset_hard_lag_timeout():

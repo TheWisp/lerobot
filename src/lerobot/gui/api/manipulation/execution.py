@@ -681,8 +681,13 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
                     nonlocal sent, hold_live
                     sent = phase
                     act.step, act.progress = stage[phase], (phase + 1) / n
+                    # Intermediate motor samples move toward the next phase
+                    # without completing it. Label the command by its intended
+                    # target, while progress and gripper gating keep the last
+                    # completed phase until the chunk's final sample.
+                    target_phase = phase if composition is None else composition["phase"]
                     run.target(
-                        stage[phase],
+                        stage[target_phase],
                         joints=command,
                         pose=goal,
                         at=stamp,

@@ -487,8 +487,12 @@ settling also reads updated targets and uses the existing reach and servo
 settling tolerances, rather than requiring numerical-zero IK error at a limit.
 
 The motor loop owns the bus and consumes one checked sample per 30 Hz tick from
-a short rolling horizon. The executor prepares up to three future samples from
-the latest object pose, independent of when the camera next reports one. A new
+a short rolling horizon. One IK solve now covers at least two motor ticks: the
+executor checks each interpolated joint sample by forward kinematics against
+the corresponding Cartesian path and the workspace/floor. If a joint chord
+fails that check, it solves a shorter Cartesian step instead. It buffers up to
+six future samples from the latest object pose, independent of when the camera
+next reports one. A new
 accepted pose that differs beyond the existing solve tolerance atomically
 replaces unsent samples; a sample already consumed is
 never changed or replayed. Gripper-changing samples stay at the queue front so
@@ -505,8 +509,21 @@ earlier successful speed-1 runs. These are separate scene trials, not a paired
 same-scene A/B test. A 394 ms motor-loop gap remains: the recorded bus read
 for that tick took 359 ms, while median read time was 1.9 ms. Buffered targets
 cannot keep sending through a blocked motor read. Smoothness at speeds 2 and 3
-still needs a physical reset and retest; the existing automatic reset is for
-the gamepad/cube layout, not an upright dowel in a ring.
+remained unresolved at that point. A later speed-2 run,
+`insertion/acts/20261015_204519`, completed but repeated the prior command on
+31.9% of active ticks (402 checked targets across 564 motor ticks), versus 33.7%
+in the earlier speed-2 success. This exposed the steady underfeeding that led
+to the multi-tick checked solve above. **The multi-tick change still needs a
+physical retest**; the existing automatic reset is for the gamepad/cube layout,
+not an upright dowel in a ring.
+
+That speed-2 trial also moved the ring during the Act. The saved RGB frames put
+it near image x=345 after the move, while the Point2Pose mask stayed near
+x=270–315 on the dowel/hand and the point group stayed at the ring's former
+position. Verification rejected the conflicting pose beginning at tracker
+frame 33, so the target motion did not enter control. This is a separate
+tracking/reacquisition failure, not evidence that the executor ignored an
+accepted moved-target pose.
 
 Every new step passes IK, calibrated joint bounds, joint-step limits and
 workspace/floor checks. An infeasible step holds phase and gripper while the

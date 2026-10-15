@@ -63,6 +63,13 @@ def fake_playback(monkeypatch, send) -> None:
         play["due"].append(due_s)
         return True
 
+    def append_chunk(expected_tail, samples, due_s):
+        if expected_tail != len(play["samples"]) - 1:
+            return False
+        play["samples"].extend(samples)
+        play["due"].extend(due_s)
+        return True
+
     def replace_tail(expected_sent, samples, due_s):
         if play["sent"] != expected_sent:
             return False
@@ -72,6 +79,7 @@ def fake_playback(monkeypatch, send) -> None:
 
     monkeypatch.setattr(jog, "update_playback_next", update_next)
     monkeypatch.setattr(jog, "append_playback_next", append_next)
+    monkeypatch.setattr(jog, "append_playback_chunk", append_chunk)
     monkeypatch.setattr(jog, "replace_playback_tail", replace_tail)
     monkeypatch.setattr(jog, "play_joints", play_joints)
     monkeypatch.setattr(jog, "playback_state", playback_state)

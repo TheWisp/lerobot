@@ -1396,18 +1396,31 @@ def append_playback_next(expected_tail: int, sample: dict[str, float], due_s: fl
     does not invalidate the new sample. A retarget or stop *does* invalidate it
     by changing the tail. The motor still sends at most one sample per tick.
     """
+    return append_playback_chunk(expected_tail, [sample], [due_s])
+
+
+def append_playback_chunk(expected_tail: int, samples: list[dict[str, float]], due_s: list[float]) -> bool:
+    """Atomically append a checked motor-rate chunk after the producer's tail.
+
+    The consumer can advance while a chunk is solved, but a new pose or stop
+    changes the tail and rejects that stale chunk. Every sample is checked
+    before any of it becomes available to the motor loop.
+    """
+    if len(samples) != len(due_s) or not samples:
+        raise ValueError("one due time per sample")
     j = _jog
     with j.lock:
         if not j.connected or j.halted or j.mode != "joints" or j.playback is None:
             raise RuntimeError("the live joint stream is no longer active")
         if expected_tail != len(j.playback) - 1:
             return False
-        _ensure_working_target(sample, j.joint_ranges)
-        if due_s < j.playback_due[-1]:
+        for sample in samples:
+            _ensure_working_target(sample, j.joint_ranges)
+        if any(t < (j.playback_due[-1] if i == 0 else due_s[i - 1]) for i, t in enumerate(due_s)):
             raise ValueError("live playback time must not go backwards")
         j.playback_live = True
-        j.playback.append(dict(sample))
-        j.playback_due.append(float(due_s))
+        j.playback.extend(dict(sample) for sample in samples)
+        j.playback_due.extend(float(t) for t in due_s)
         return True
 
 
