@@ -614,6 +614,11 @@ def _loop(j: _Jog) -> None:
                         {
                             "t": time.time() - j.record_t0,
                             "mono": observed_at,
+                            "tick_ms": 1000.0 * (t_end - t0),
+                            "lock_ms": 1000.0 * (t_locked - t0),
+                            "read_ms": 1000.0 * (t_read - t_locked),
+                            "command_ms": 1000.0 * (t_sent - t_read),
+                            "commit_ms": 1000.0 * (t_end - t_sent),
                             "obs": dict(q_obs),
                             "cmd": dict(j.q_cmd),
                             "load": dict(loads),

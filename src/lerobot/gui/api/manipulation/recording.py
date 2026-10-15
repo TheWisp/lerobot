@@ -433,6 +433,9 @@ def _finish_run(run: _Run, samples: list[dict[str, Any]], fk: Any, result: dict[
             ),
             "motors": np.array(MOTOR_NAMES),
         }
+        for key in ("tick_ms", "lock_ms", "read_ms", "command_ms", "commit_ms"):
+            if all(key in s for s in samples):
+                arm[key] = np.array([s[key] for s in samples], dtype=float)
         for key in ("load", "temps"):  # each motor's load and temperature at every tick, as the jog read them
             if all(key in s for s in samples):
                 arm[key] = np.array(

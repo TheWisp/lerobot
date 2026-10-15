@@ -114,3 +114,12 @@ were rejected as untrusted, so it is a throughput test rather than evidence
 of smooth goal updates during a successful moving Act. A new physical Act is
 needed to compare actual target intervals and the phase-dependent pauses in
 `20261015_165734` after this change.
+
+That Act's `arm.npz` also has a 303 ms gap between two motor observations during
+key frame 5, while the target stream has a 330 ms gap with just two motor
+samples. There is no bad-read warning at that time. The old record cannot
+distinguish a long bus read, command/IK work, or lock contention. Future Acts
+write each motor tick's total, initial lock, read, command, and final lock
+durations to `arm.npz` as `tick_ms`, `lock_ms`, `read_ms`, `command_ms`, and
+`commit_ms`. These observe the existing 30 Hz loop; a moving retest must check
+that the long gap is gone or attribute it from these phases.

@@ -542,6 +542,7 @@ def test_a_slow_tick_is_kept_with_where_its_time_went():
     j.ctrl = lambda _keys: {f"{m}.pos": 0.0 for m in MOTOR_NAMES}
     j.ctrl.is_holding = False
     j.q_cmd = dict(q)
+    j.record, j.record_t0 = [], time.time()
     old, jog._jog = jog._jog, j
     j.thread = threading.Thread(target=jog._loop, args=(j,), daemon=True)
     try:
@@ -556,6 +557,11 @@ def test_a_slow_tick_is_kept_with_where_its_time_went():
         state = jog._state_locked(j)
         assert state["ticks_ms"]["slow"] == 1 and state["ticks_ms"]["max"] >= 150.0
         assert state["slow_ticks"][-1]["phases_ms"]["read_state"] >= 150.0
+        assert j.record[0]["read_ms"] >= 150.0
+        for sample in j.record:
+            assert sample["tick_ms"] == pytest.approx(
+                sum(sample[k] for k in ("lock_ms", "read_ms", "command_ms", "commit_ms"))
+            )
     finally:
         jog._jog = old
         jog._stop_loop(j)

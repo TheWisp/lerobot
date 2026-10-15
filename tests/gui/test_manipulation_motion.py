@@ -741,7 +741,20 @@ def test_an_act_recording_keeps_every_tracker_frame_with_the_points_its_pose_was
         temps = dict.fromkeys(q, 31) | {"wrist_flex": 69}
         root = manipulation.recording._finish_run(
             run,
-            [{"t": 0.5, "obs": q, "cmd": q, "load": dict.fromkeys(q, -16), "temps": temps}],
+            [
+                {
+                    "t": 0.5,
+                    "obs": q,
+                    "cmd": q,
+                    "load": dict.fromkeys(q, -16),
+                    "temps": temps,
+                    "tick_ms": 153.0,
+                    "lock_ms": 1.0,
+                    "read_ms": 151.0,
+                    "command_ms": 0.5,
+                    "commit_ms": 0.5,
+                }
+            ],
             lambda q: np.eye(4),
             {"ok": True},
         )
@@ -764,6 +777,7 @@ def test_an_act_recording_keeps_every_tracker_frame_with_the_points_its_pose_was
         assert arm["temps"][0].tolist() == [31, 31, 31, 31, 69, 31, 31] and arm["load"][0, 0] == -16, (
             "every tick's temperatures and loads, as the jog read them"
         )
+        assert arm["tick_ms"].tolist() == [153.0] and arm["read_ms"].tolist() == [151.0]
         assert root == str(tmp_path / "act")
     finally:
         manipulation.runtime._state.worker.proc = None
