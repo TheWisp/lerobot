@@ -2267,11 +2267,13 @@ async function deObjSymmetry(name, row) {
     try {
         const choice = document.getElementById(`de-sym-kind-${row}`).value;
         const axis = document.getElementById(`de-sym-axis-${row}`).value;
+        const end_swap = axis === 'long_axis' && document.getElementById(`de-sym-ends-${row}`).checked;
         const kind = choice === 'continuous' ? 'continuous' : choice === 'none' ? 'none' : 'discrete';
         const order = kind === 'discrete' ? Number(choice) : 1;
-        deObjShow((await pgPost('/api/pregrasp/demo/objects/symmetry', {name, kind, axis, order})).objects);
-        deStatus(kind === 'none' ? `"${name}" has no declared pose symmetry` :
-            `"${name}" may read the same ${kind === 'continuous' ? 'at any turn' : 'at ' + order + ' turns'} about its observed ${axis === 'long_axis' ? 'long axis' : 'surface normal'}`);
+        deObjShow((await pgPost('/api/pregrasp/demo/objects/symmetry', {name, kind, axis, order, end_swap})).objects);
+        deStatus((kind === 'none' ? `"${name}" has no declared axial turn symmetry` :
+            `"${name}" may read the same ${kind === 'continuous' ? 'at any turn' : 'at ' + order + ' turns'} about its observed ${axis === 'long_axis' ? 'long axis' : 'surface normal'}`) +
+            (end_swap ? '; its two ends are also equivalent for pose finding' : ''));
     } catch (e) { deStatus(e.message, true); }
 }
 
@@ -2319,7 +2321,8 @@ function deObjShow(objects) {
             const symCell = o.status !== 'done' ? '<td></td>' :
                 `<td style="padding:4px 8px 4px 0; color:#aaa; white-space:nowrap;" title="Appearance symmetry for pose finding. Choose the observed axis and whether turns are discrete or continuous. Grasp and placement freedom are separate task constraints.">pose symmetry ` +
                 `<select id="de-sym-kind-${row}" onchange="deObjSymmetry('${o.name}', ${row})">${[['none', 'none'], [2, 'order 2'], [3, 'order 3'], [4, 'order 4'], [6, 'order 6'], [8, 'order 8'], ['continuous', 'continuous']].map(([v, label]) => `<option value="${v}"${String(v) === symChoice ? ' selected' : ''}>${label}</option>`).join('')}</select> ` +
-                `<select id="de-sym-axis-${row}" onchange="deObjSymmetry('${o.name}', ${row})">${[['surface_normal', 'surface normal'], ['long_axis', 'long axis']].map(([v, label]) => `<option value="${v}"${v === sym.axis ? ' selected' : ''}>${label}</option>`).join('')}</select>` +
+                `<select id="de-sym-axis-${row}" onchange="deObjSymmetry('${o.name}', ${row})">${[['surface_normal', 'surface normal'], ['long_axis', 'long axis']].map(([v, label]) => `<option value="${v}"${v === sym.axis ? ' selected' : ''}>${label}</option>`).join('')}</select> ` +
+                `<label title="The two ends look alike for pose finding; grasp choice still needs a checked contact path"><input id="de-sym-ends-${row}" type="checkbox" onchange="deObjSymmetry('${o.name}', ${row})" ${sym.end_swap ? 'checked' : ''}> ends interchangeable (pose only)</label>` +
                 (o.shape_evidence?.kind === 'round_long_axis' ?
                     `<div style="font-size:11px; color:#888;" title="A fit to the visible RGB-D points only. The hidden side, markings and allowed contact changes are unknown.">visible long round axis: ${o.shape_evidence.length_mm.toFixed(0)} mm long, ${o.shape_evidence.radial_error_mm.toFixed(1)} mm fit error</div>` : '') +
                 `</td>`;

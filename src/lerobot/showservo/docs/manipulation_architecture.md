@@ -131,10 +131,20 @@ Subsequent surface refinement is local and must preserve the matching-point
 consensus. A symmetric shape's slightly better surface fit cannot reverse the
 ends that the appearance match identified. Explicit user-declared appearance
 symmetry now names an observed axis (`surface_normal` or `long_axis`) and a
-finite order or continuous turn. The find folds only those turns after
-registration. Old integer orders still mean finite turns about the visible
-face normal. This declaration resolves pose ambiguity; it does not authorize a
-changed grasp or relax the placement task.
+finite order or continuous turn. A separate `end_swap` declaration says that
+the two ends of a long object are interchangeable; continuous turning about
+its long axis alone does **not** reverse them. Old integer orders still mean
+finite turns about the visible face normal. This declaration resolves pose
+ambiguity; it does not authorize a changed grasp or relax the placement task.
+
+At reference acquisition, a complete elongated RGB-D surface can recover a
+direction that contradicts P2P's feature fit. It compares the demo and live
+surfaces in both end assignments, reports their bidirectional support and
+retains both poses when `end_swap` is declared. A shortened view fails the
+measured extent check. This is an acquisition fallback; it does not treat a
+partly observed held object as fully resolved. A recovered pose is currently
+**not permitted to start an act**, because the controller does not yet choose
+a grasp site and approach with collision checks for each end assignment.
 
 The same surface policy checks acquisition, secondary targets, observations used
 for held-object correction, and the saved demo reference poses inverted during
@@ -255,6 +265,27 @@ pre-grasp line and follow, and the later grasp attachment correction can
 account for that changed gripper-to-object relation. **Automatic candidate
 selection and physical validation are NOT IMPLEMENTED.** The appearance
 symmetry setting alone must not silently enable these contact changes.
+
+The later October 15 live trial showed why an IK-feasible alternative is not
+enough. The parked arm initially hid part of the dowel: the masked live length
+was about 66 mm versus about 94 mm in the complete demo. After moving the arm
+clear, the complete live length was about 92 mm, yet P2P proposed a tilted
+pose and the previous covariance-span comparison rejected it. Robust axial
+extent plus whole-surface support recovered two end assignments. The upper-end
+grasp with 30 degrees of axial roll had feasible IK, but a direct gizmo
+approach put a jaw against the tray wall. Closing the gripper shifted the tray
+about 31 image pixels relative to the fixed right arm; the gripper-gap reading
+was not proof of holding the dowel. The arm was opened and parked without a
+motor fault. The fixed-arm image comparison localizes the shift to the tray;
+it does not certify camera calibration or the arm path.
+
+The required next control step is to search both declared end assignments,
+allowed axial rolls and contact locations, checking finger, wrist and transit
+clearance against a fresh measured scene before touching the object. If no
+clear grasp exists at its current location, the system needs a separately
+validated repositioning action or an explicit blocked result. It must then
+verify an airborne held object before carrying it sideways. A reachable wrist
+pose or a stopped gripper alone cannot establish those conditions.
 
 The editor reports a round long-axis suggestion when central cross-sections of
 the designated object's visible RGB-D surface fit within the sensor-noise and

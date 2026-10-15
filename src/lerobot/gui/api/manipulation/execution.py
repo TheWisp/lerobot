@@ -1577,6 +1577,9 @@ async def act_start(body: ActBody, request: Request) -> dict:
         # has added the points it saw while carried, more than a view of the object at rest can show.
         if teach is None or runtime._state.teach_job is not None:
             raise HTTPException(409, "find the object first")
+        reference = teach.keypoints.get("ref") or {}
+        if problem := planning._recovered_pose_problem(planning._session_object(demo) or "object", reference):
+            raise HTTPException(409, problem)
         if test is not None and (test.result.get("camera_check") or {}).get("moved"):
             raise HTTPException(409, "the camera or the tray moved since the calibration; recalibrate first")
         runtime._state.track.follow = False  # the act owns the target now

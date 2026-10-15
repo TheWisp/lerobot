@@ -31,7 +31,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel
 
-from lerobot.showservo import motion as core, pose_verification, surface_constraint
+from lerobot.showservo import motion as core, pose_verification, surface_constraint, symmetry
 
 from . import acquisition, camera, planning, recording, rendering, runtime, worker
 
@@ -337,7 +337,9 @@ def _teach_surface(teach: runtime._Teach) -> np.ndarray:
     return surface_constraint.depth_points(teach.depth_m, teach.keypoints["mask"], teach.intr)
 
 
-def _surface_decision(pose, reference, depth, mask, intr, check=None) -> dict:
+def _surface_decision(
+    pose, reference, depth, mask, intr, check=None, recover_axis=False, end_swap=False
+) -> dict:
     """A failed measurement is an explicit rejection, including unexpected errors."""
     try:
         return surface_constraint.resolve(
@@ -350,6 +352,8 @@ def _surface_decision(pose, reference, depth, mask, intr, check=None) -> dict:
             tol_m=core.ACT_REACH_TOL_M,
             tol_deg=core.ACT_REACH_TOL_DEG,
             surface=check,
+            recover_axis=recover_axis,
+            end_swap=end_swap,
         )
     except Exception as exc:
         logger.exception("Surface pose constraint failed")
@@ -379,7 +383,16 @@ def _constrain_find_result(job: runtime._Job, result: dict) -> dict:
                 key, reference = "delta", _teach_surface(teach)
         if key is None:
             return result
-        decision = _surface_decision(result[key], reference, job.depth_m, result.get("mask"), job.intr)
+        spec = symmetry.normalise((getattr(job, "extra", None) or {}).get("ref_symmetry"))
+        decision = _surface_decision(
+            result[key],
+            reference,
+            job.depth_m,
+            result.get("mask"),
+            job.intr,
+            recover_axis=key == "ref_delta" and spec["kind"] == "continuous" and spec["axis"] == "long_axis",
+            end_swap=bool(spec.get("end_swap")),
+        )
     except (OSError, KeyError, ValueError, AssertionError) as exc:
         decision = {"state": "rejected", "pose": None, "reason": f"reference surface unavailable: {exc}"}
     if key is None:

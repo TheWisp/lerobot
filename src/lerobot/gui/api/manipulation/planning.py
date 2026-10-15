@@ -31,6 +31,15 @@ from lerobot.showservo import motion as core, symmetry
 from . import acquisition, holds, recording, runtime
 
 
+def _recovered_pose_problem(obj: str, found: dict[str, Any]) -> str:
+    """A recovered axis has alternatives but no collision-checked grasp choice yet."""
+    if (found.get("surface_constraint") or {}).get("state") != "recovered":
+        return ""
+    return (
+        f"{obj}'s measured pose has equivalent end assignments; collision-checked grasp selection is required"
+    )
+
+
 def _object_motion(
     demo: runtime._Demo, obj: str, t_bc: np.ndarray, carry: Callable[[float], np.ndarray] | None = None
 ) -> tuple[np.ndarray | None, str]:
@@ -46,6 +55,8 @@ def _object_motion(
         return None, f"click {obj} in the camera view to find it"
     if not found["ok"]:
         return None, found["reason"]
+    if problem := _recovered_pose_problem(obj, found):
+        return None, problem
     if acquisition._weak(found):
         return None, acquisition._weak(found)
     f = _pose_frame(demo, obj)
@@ -205,6 +216,8 @@ def _reference_motion(demo: runtime._Demo, teach: runtime._Teach | None) -> tupl
         return None, f"click {obj} in the camera view to find it"
     if not ref.get("ok") or ref.get("delta") is None:
         return None, ref.get("reason") or f"{obj} was not found in the live view"
+    if problem := _recovered_pose_problem(obj, ref):
+        return None, problem
     # A certified live track only follows motion since its find. It cannot
     # strengthen that find's registration to the demo. Apply the same gate as
     # _find_afresh before either runner reuses an already-running session.

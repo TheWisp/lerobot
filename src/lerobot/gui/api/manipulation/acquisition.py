@@ -232,6 +232,8 @@ async def _find_afresh(
             return f"finding {obj} took over {runtime.ACT_STEP_TIMEOUT_S:.0f} s"
     else:
         return "; ".join(dict.fromkeys(failures))
+    if problem := planning._recovered_pose_problem(obj, ref):
+        return problem
     if core.find_strength(ref.get("inliers"), ref.get("card_points"))[0] is False:
         return (
             f"a weak find: {obj} matched {ref['inliers']} of the demo view's {ref['card_points']} points; "
@@ -672,6 +674,8 @@ async def _locate_afresh(obj: str, stopped: Callable[[], bool], track: bool = Tr
     _store_located(obj, found)
     if not found["ok"]:
         return found["reason"] or f"{obj} is not where it was last seen: click it in the camera view"
+    if problem := planning._recovered_pose_problem(obj, found):
+        return problem
     return _weak(found) + (", then press Act" if _weak(found) else "")
 
 

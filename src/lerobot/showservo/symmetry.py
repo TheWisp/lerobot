@@ -17,18 +17,30 @@ KINDS = ("none", "discrete", "continuous")
 
 
 def normalise(spec: dict[str, Any] | int | None) -> dict[str, Any]:
-    """A saved symmetry declaration. Old integer orders mean discrete turns about the visible face normal."""
+    """A saved symmetry declaration. Old integer orders mean discrete turns about the visible face normal.
+
+    ``end_swap`` is a second, independent equivalence for a long object whose
+    ends are interchangeable. It reverses the measured long-axis direction;
+    rolling about that axis does not do so. The flag describes appearance, not
+    permission to change the demo's grasp contact.
+    """
     if not isinstance(spec, dict):
         order = max(1, int(spec or 1))
         return {"kind": "discrete" if order > 1 else "none", "axis": "surface_normal", "order": order}
     kind = str(spec.get("kind", "none"))
     axis = str(spec.get("axis", "surface_normal"))
     order = int(spec.get("order", 1))
-    if kind not in KINDS or axis not in AXES or order < 1 or order > 12:
+    end_swap = spec.get("end_swap", False)
+    if kind not in KINDS or axis not in AXES or order < 1 or order > 12 or not isinstance(end_swap, bool):
         raise ValueError("symmetry needs a valid kind, observed axis and order from 1 to 12")
+    if end_swap and axis != "long_axis":
+        raise ValueError("end interchangeability needs an observed long axis")
     if kind == "discrete" and order == 1:
         kind = "none"
-    return {"kind": kind, "axis": axis, "order": order if kind == "discrete" else 1}
+    out = {"kind": kind, "axis": axis, "order": order if kind == "discrete" else 1}
+    if end_swap:
+        out["end_swap"] = True
+    return out
 
 
 def observed_axis(points: np.ndarray, axis: str) -> tuple[np.ndarray, np.ndarray]:

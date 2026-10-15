@@ -17,7 +17,7 @@ from .pose_verification import MASK_EROSION, _pose
 # 99.9% chance of an all-inlier sample. The fixed seed makes replay reproducible.
 PLANE_TRIALS = 64
 MAX_POINTS = 1600
-POLICY_VERSION = "rgbd-common-plane-axis-v4"
+POLICY_VERSION = "rgbd-common-plane-axis-v5"
 
 
 def _sample(points):
@@ -270,10 +270,17 @@ def _long_axis(points, noise_m):
     full, train, test = fit(points), fit(points[::2]), fit(points[1::2])
     if full is None or train is None or test is None:
         return None
+    axial = (points - full[0]) @ full[1]
+    ends = np.percentile(axial, [1, 99])
     return {
         "centre": full[0],
         "axis": full[1],
         "span": full[2],
+        # Covariance span changes with the distribution of visible/sampled
+        # pixels even when both physical ends are present. Quantile extent is
+        # the evidence that the same length of material was observed.
+        "extent": float(ends[1] - ends[0]),
+        "midpoint": full[0] + float(ends.mean()) * full[1],
         "points": points,
         "split_angle_deg": _angle(train[1], test[1]),
     }
@@ -300,13 +307,20 @@ def constrain_axis(pose, reference, depth, mask, intr, *, noise_m, tol_m, tol_de
     if ref is None or live is None:
         return {**out, "reason": "no separated principal surface axis"}
     evidence = {
-        name: {"span_mm": (item["span"] * 1000).tolist(), "split_angle_deg": item["split_angle_deg"]}
+        name: {
+            "span_mm": (item["span"] * 1000).tolist(),
+            "extent_mm": item["extent"] * 1000,
+            "split_angle_deg": item["split_angle_deg"],
+        }
         for name, item in [("reference", ref), ("live", live)]
     }
     out["axis_evidence"] = evidence
     if ref["split_angle_deg"] + live["split_angle_deg"] > tol_deg:
         return {**out, "reason": "principal-axis split fits disagree"}
-    if np.max(abs(ref["span"] - live["span"])) > noise_m:
+    if (
+        abs(ref["extent"] - live["extent"]) > noise_m
+        or np.max(abs(ref["span"][1:] - live["span"][1:])) > noise_m
+    ):
         return {**out, "reason": "surface extents differ; axis may belong to a partial view"}
     a = raw[:3, :3] @ ref["axis"]
     b = live["axis"] * (1 if a @ live["axis"] >= 0 else -1)
@@ -341,7 +355,108 @@ def constrain_axis(pose, reference, depth, mask, intr, *, noise_m, tol_m, tol_de
     }
 
 
-def resolve(pose, reference, depth, mask, intr, *, noise_m, tol_m, tol_deg, surface=None):
+def recover_full_axis(pose, reference, depth, mask, intr, *, noise_m, end_swap=False):
+    """Recover a rejected elongated-object find from two complete RGB-D surfaces.
+
+    The principal axis and robust end-to-end extent come from measured points,
+    not the feature fit. Both axis signs and axial rolls are checked against the
+    *whole* surfaces. A winner needs bidirectional support. If the two signs
+    remain ambiguous, both are retained only when end interchangeability was
+    explicitly declared; neither result authorizes a grasp by itself.
+    This is deliberately an acquisition fallback, not a per-frame tracker loop.
+    """
+    from scipy.spatial import cKDTree
+    from scipy.spatial.transform import Rotation
+
+    raw = _pose(pose)
+    out = {"state": "inconclusive", "pose": None, "observed_dof": 0, "policy": POLICY_VERSION}
+    if raw is None or reference is None or depth is None or mask is None or intr is None:
+        return {**out, "reason": "axis recovery observation missing"}
+    ref = _long_axis(reference, noise_m)
+    live = _long_axis(depth_points(depth, mask, intr), noise_m)
+    if ref is None or live is None:
+        return {**out, "reason": "axis recovery has no resolved measured axis"}
+    extent_difference = abs(ref["extent"] - live["extent"])
+    out["extent_difference_mm"] = extent_difference * 1000
+    if extent_difference > noise_m or np.max(abs(ref["span"][1:] - live["span"][1:])) > noise_m:
+        return {**out, "reason": "axis recovery requires the same measured surface extent"}
+    points, target = ref["points"], live["points"]
+    tree = cKDTree(target)
+    candidates = []
+    for sign in (1, -1):
+        direction = sign * live["axis"]
+        align = Rotation.align_vectors(direction[None], ref["axis"][None])[0].as_matrix()
+        best = None
+        for turn in range(0, 360, 30):
+            roll = Rotation.from_rotvec(direction * np.deg2rad(turn)).as_matrix()
+            rotation = roll @ align
+            translation = live["midpoint"] - rotation @ ref["midpoint"]
+            moved = points @ rotation.T + translation
+            one = tree.query(moved)[0]
+            two = cKDTree(moved).query(target)[0]
+            support = min(float(np.mean(one <= noise_m)), float(np.mean(two <= noise_m)))
+            rms = max(float(np.sqrt(np.mean(np.minimum(d, 2 * noise_m) ** 2))) for d in (one, two))
+            candidate = (support, -rms, rotation, translation, turn, sign)
+            if best is None or candidate[:2] > best[:2]:
+                best = candidate
+        candidates.append(best)
+    candidates.sort(key=lambda item: item[:2], reverse=True)
+    support, neg_rms, rotation, translation, turn, sign = candidates[0]
+    other_support = candidates[1][0]
+    out.update(
+        axis_support=support,
+        other_end_support=other_support,
+        axis_rms_mm=-neg_rms * 1000,
+        axial_turn_deg=turn,
+    )
+    if support < 0.65 or -neg_rms > np.sqrt(2) * noise_m:
+        return {**out, "reason": "axis recovery lacks whole-surface support"}
+    if support - other_support < 0.1 and not end_swap:
+        return {**out, "reason": "axis recovery cannot distinguish the object's two ends"}
+    updated = np.eye(4)
+    updated[:3, :3], updated[:3, 3] = rotation, translation
+    equivalents = []
+    if end_swap:
+        for (
+            candidate_support,
+            candidate_neg_rms,
+            candidate_rotation,
+            candidate_translation,
+            _,
+            _,
+        ) in candidates:
+            if candidate_support < 0.65 or -candidate_neg_rms > np.sqrt(2) * noise_m:
+                continue
+            equivalent = np.eye(4)
+            equivalent[:3, :3], equivalent[:3, 3] = candidate_rotation, candidate_translation
+            equivalents.append({"pose": equivalent.tolist(), "support": candidate_support})
+    return {
+        **out,
+        "state": "recovered",
+        "pose": updated.tolist(),
+        "observed_dof": 5,
+        "end_reversed_from_proposal": bool((raw[:3, :3] @ ref["axis"]) @ live["axis"] * sign < 0),
+        "unobserved_rotation": "about the principal axis; selected by visible surface, not material identity",
+        "equivalent_poses": equivalents,
+        "reason": "complete measured surfaces recovered the axis after the point fit disagreed; "
+        "end assignments retained when declared equivalent",
+    }
+
+
+def resolve(
+    pose,
+    reference,
+    depth,
+    mask,
+    intr,
+    *,
+    noise_m,
+    tol_m,
+    tol_deg,
+    surface=None,
+    recover_axis=False,
+    end_swap=False,
+):
     """Select the measured correction, retain agreement, or withhold the proposal.
 
     Non-planar surfaces keep the existing pose if the general surface check agrees.
@@ -359,6 +474,13 @@ def resolve(pose, reference, depth, mask, intr, *, noise_m, tol_m, tol_deg, surf
         if axis["pose"] is not None:
             return {**constraint, **axis}
         constraint["axis_reason"] = axis["reason"]
+        if recover_axis:
+            recovered = recover_full_axis(
+                pose, reference, depth, mask, intr, noise_m=noise_m, end_swap=end_swap
+            )
+            if recovered["pose"] is not None:
+                return {**constraint, **recovered, "axis_reason": axis["reason"]}
+            constraint["axis_recovery_reason"] = recovered["reason"]
     if surface is None:
         surface = pose_verification.surface(
             pose, reference, depth, mask, intr, noise_m=noise_m, tol_m=tol_m, tol_deg=tol_deg

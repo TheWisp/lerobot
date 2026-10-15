@@ -1224,6 +1224,39 @@ def _place_demo(tmp_path, t0, wrist_deg=0.0):
     return demo, kin, box
 
 
+def test_act_refuses_recovered_axis_pose_without_a_checked_grasp_choice(client, tmp_path):
+    demo, _, _ = _place_demo(tmp_path, time.time())
+    teach = manipulation.runtime._Teach(
+        at="t",
+        box=(0, 0, 0, 0),
+        rgb=None,
+        depth_m=None,
+        intr={},
+        keypoints={
+            "ref": {
+                "object": "gamepad",
+                "ok": True,
+                "delta": np.eye(4),
+                "surface_constraint": {"state": "recovered"},
+            }
+        },
+    )
+    try:
+        with manipulation.runtime._state.lock:
+            manipulation.runtime._state.demo = demo
+            manipulation.runtime._state.teach = teach
+            manipulation.runtime._state.teach_job = None
+        response = client.post("/api/pregrasp/act", json={})
+        assert response.status_code == 409
+        assert "collision-checked grasp selection" in response.text
+        assert manipulation.runtime._state.act.on is False
+        _, problem = manipulation.planning._reference_motion(demo, teach)
+        assert "collision-checked grasp selection" in problem
+    finally:
+        with manipulation.runtime._state.lock:
+            manipulation.runtime._state.demo = manipulation.runtime._state.teach = None
+
+
 def _run_place_act(
     tmp_path,
     monkeypatch,
@@ -3471,6 +3504,21 @@ def test_an_objects_symmetry_is_kept_with_the_demo_and_sent_with_its_finds(clien
             "axis": "long_axis",
             "order": 1,
         }
+        r = client.post(
+            "/api/pregrasp/demo/objects/symmetry",
+            json={"name": "box", "kind": "continuous", "axis": "long_axis", "end_swap": True},
+        )
+        assert r.status_code == 200
+        assert (
+            manipulation.demos._read_objects(pathlib.Path(demo.root))["box"]["symmetry"]["end_swap"] is True
+        )
+        assert (
+            client.post(
+                "/api/pregrasp/demo/objects/symmetry",
+                json={"name": "box", "kind": "continuous", "axis": "surface_normal", "end_swap": True},
+            ).status_code
+            == 422
+        )
         assert (
             client.post("/api/pregrasp/demo/objects/symmetry", json={"name": "nope", "order": 2}).status_code
             == 404
@@ -3485,9 +3533,12 @@ def test_an_objects_symmetry_is_kept_with_the_demo_and_sent_with_its_finds(clien
                 "box", rgb, depth, dict(INTR), [600, 350], lambda: False, track=False
             )
         )
-        assert queued[-1].extra["ref_symmetry"] == {"kind": "continuous", "axis": "long_axis", "order": 1}, (
-            "the axis and turn family are sent with the find"
-        )
+        assert queued[-1].extra["ref_symmetry"] == {
+            "kind": "continuous",
+            "axis": "long_axis",
+            "order": 1,
+            "end_swap": True,
+        }, "the axis, turn family and end equivalence are sent with the find"
     finally:
         with manipulation.runtime._state.lock:
             manipulation.runtime._state.demo = None

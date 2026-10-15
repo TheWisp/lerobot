@@ -781,6 +781,7 @@ class ObjectSymmetryBody(BaseModel):
     order: int = Field(1, ge=1, le=12)
     kind: Literal["none", "discrete", "continuous"] | None = None
     axis: Literal["surface_normal", "long_axis"] = "surface_normal"
+    end_swap: bool = False
 
 
 @router.post("/demo/objects/symmetry")
@@ -790,13 +791,17 @@ async def demo_object_symmetry(body: ObjectSymmetryBody) -> dict:
     This resolves ambiguous object *poses*. It does not by itself grant freedom
     to change a contact relation or to grasp a shape from another side.
     """
-    spec = symmetry.normalise(
-        {
-            "kind": body.kind or ("discrete" if body.order > 1 else "none"),
-            "axis": body.axis,
-            "order": body.order,
-        }
-    )
+    try:
+        spec = symmetry.normalise(
+            {
+                "kind": body.kind or ("discrete" if body.order > 1 else "none"),
+                "axis": body.axis,
+                "order": body.order,
+                "end_swap": body.end_swap,
+            }
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
     with runtime._state.lock:
         demo = runtime._state.demo
         if demo is None or body.name not in demo.objects:

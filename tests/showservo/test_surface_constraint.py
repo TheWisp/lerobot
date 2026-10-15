@@ -205,6 +205,52 @@ def test_recorded_elongated_surface_has_supported_direction_despite_icp_roll_dis
     assert r["axis_support_after"] > 0.9
 
 
+def test_recorded_full_rod_recovers_end_choices_but_partial_view_does_not():
+    # The live grasp trial exposed two distinct observations of the same rod:
+    # first partly hidden by the parked arm, then fully visible. Pixel density
+    # changes the covariance span even in the complete view, while the robust
+    # physical end-to-end extent agrees with the demo.
+    with np.load(Path(__file__).parent / "fixtures/axis_end_choice_20261015.npz") as z:
+        intr = json.loads(str(z["intr"]))
+        ref_axis = sc._long_axis(z["reference"], LIMITS["noise_m"])["axis"]
+        full = sc.resolve(
+            z["full_pose"],
+            z["reference"],
+            z["full_depth"].astype(float) / 1000,
+            z["full_mask"],
+            intr,
+            **LIMITS,
+            recover_axis=True,
+            end_swap=True,
+        )
+        partial = sc.resolve(
+            z["partial_pose"],
+            z["reference"],
+            z["partial_depth"].astype(float) / 1000,
+            z["partial_mask"],
+            intr,
+            **LIMITS,
+            recover_axis=True,
+            end_swap=True,
+        )
+        unspecified = sc.resolve(
+            z["full_pose"],
+            z["reference"],
+            z["full_depth"].astype(float) / 1000,
+            z["full_mask"],
+            intr,
+            **LIMITS,
+            recover_axis=True,
+        )
+    assert full["state"] == "recovered" and full["axis_support"] > 0.9
+    assert len(full["equivalent_poses"]) == 2
+    first, second = (np.asarray(item["pose"]) for item in full["equivalent_poses"])
+    assert (first[:3, :3] @ ref_axis) @ (second[:3, :3] @ ref_axis) < -0.99
+    assert full["extent_difference_mm"] < LIMITS["noise_m"] * 1000
+    assert partial["pose"] is None and "same measured surface extent" in partial["axis_recovery_reason"]
+    assert unspecified["pose"] is None and "two ends" in unspecified["axis_recovery_reason"]
+
+
 @pytest.mark.parametrize("name", ["latest", "earlier", "clear", "baseline"])
 def test_recorded_wrong_tilts_improve_on_held_out_geometry(name):
     with np.load(Path(__file__).parent / "fixtures/pose_disagreement_20261012.npz") as z:
