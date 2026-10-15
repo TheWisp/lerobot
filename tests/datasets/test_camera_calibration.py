@@ -104,3 +104,23 @@ def test_existing_block_is_kept_unless_overwriting(tmp_path):
     assert ds.meta.features["observation.images.top"]["info"]["camera"]["intrinsics"]["fx"] == 100.0
     attach_camera_intrinsics(ds.meta, {"top": second}, overwrite=True)
     assert ds.meta.features["observation.images.top"]["info"]["camera"]["intrinsics"]["fx"] == 200.0
+
+
+def test_feature_names_route_a_per_arm_camera_to_its_prefixed_features(tmp_path):
+    """A bimanual robot keeps per-arm cameras under bare names but publishes
+    them prefixed; the map says which feature the block belongs to."""
+    wrist = SimpleNamespace(intrinsics=CameraIntrinsics(W, H, 300.0, 300.0, 64.0, 48.0), serial_number="s")
+    features = {
+        "observation.images.right_wrist": {"shape": [H, W, 3], "info": {}},
+        "observation.images.right_wrist_depth": {"shape": [H, W, 1], "info": {"is_depth_map": True}},
+    }
+    meta = SimpleNamespace(
+        features=features, info=SimpleNamespace(to_dict=lambda: {"features": features}), root=tmp_path
+    )
+    assert attach_camera_intrinsics(meta, {"wrist": wrist}) == []  # the bare name matches nothing
+    written = attach_camera_intrinsics(meta, {"wrist": wrist}, feature_names={"wrist": "right_wrist"})
+    assert written == ["observation.images.right_wrist", "observation.images.right_wrist_depth"]
+    assert (
+        features["observation.images.right_wrist_depth"]["info"]["camera"]["aligned_to"]
+        == "observation.images.right_wrist"
+    )

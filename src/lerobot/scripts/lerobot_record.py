@@ -110,6 +110,7 @@ from lerobot.cameras import CameraConfig  # noqa: F401
 from lerobot.cameras.opencv import OpenCVCameraConfig  # noqa: F401
 from lerobot.cameras.reachy2_camera import Reachy2CameraConfig  # noqa: F401
 from lerobot.cameras.realsense import RealSenseCameraConfig  # noqa: F401
+from lerobot.cameras.zed import ZEDCameraConfig  # noqa: F401
 from lerobot.cameras.zmq import ZMQCameraConfig  # noqa: F401
 from lerobot.common.control_utils import (
     predict_action,
@@ -1126,7 +1127,11 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
         # metadata here rather than into the initial features.
         for ds in (dataset, intervention_dataset):
             if ds is not None:
-                attach_camera_intrinsics(ds.meta, getattr(robot, "cameras", {}))
+                attach_camera_intrinsics(
+                    ds.meta,
+                    getattr(robot, "cameras", {}),
+                    feature_names=getattr(robot, "camera_feature_names", None),
+                )
         if teleop is not None:
             teleop.connect()
             # Predictive / chunk-aware robots can poll teleop.get_action()
