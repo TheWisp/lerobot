@@ -146,7 +146,7 @@ def test_runner_repeats_grasp_checks_and_keeps_a_tool_held_through_interaction(
         rgb=np.zeros((4, 4, 3), np.uint8),
         depth_m=np.ones((4, 4)),
         intr=INTR,
-        keypoints={"concept": names[0], "mask": np.ones((4, 4), bool)},
+        keypoints={"concept": names[0], "mask": np.ones((4, 4), bool), "xyz": np.zeros((4, 3))},
     )
     state.test = manipulation.runtime._Test(
         at="now", rgb=None, result={"ok": True, "delta_cam": np.eye(4), "live_mask": np.ones((4, 4), bool)}
