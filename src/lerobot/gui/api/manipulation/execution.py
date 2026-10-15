@@ -171,6 +171,17 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
         if pregrasp_streaming and (tracking or with_groups):
             with runtime._state.lock:
                 state = (runtime._state.track.last or {}).get("state")
+            if state != "tracking" and not with_groups:
+                pose = jog.current_tip_and_anchor()
+                if pose is not None:
+                    relative = follow() @ inv_start_delta
+                    observed_points = start_points @ relative[:3, :3].T + relative[:3, 3]
+                    tip_cam = np.linalg.inv(t_bc) @ pose[0]
+                    if reactive.nearby_object_extent(observed_points, tip_cam[:3, 3], core.ACT_REACH_TOL_M):
+                        return (
+                            f"{picked}'s pose is unverified as the gripper enters its measured extent; "
+                            "stopped before an unobserved pregrasp contact"
+                        )
             if state == "tracking" or with_groups:
                 current = follow()
                 relative = current @ inv_start_delta

@@ -39,6 +39,8 @@ def test_pregrasp_motion_stops_only_near_the_observed_object():
     moved = pose(0.007)
     assert reactive.nearby_pregrasp_shift(moved, points, [0.21, 0, 0], 0.003) == pytest.approx(0.007)
     assert reactive.nearby_pregrasp_shift(moved, points, [0.5, 0, 0], 0.003) is None
+    assert reactive.nearby_object_extent(points, [0.21, 0, 0], 0.003)
+    assert not reactive.nearby_object_extent(points, [0.5, 0, 0], 0.003)
 
 
 @pytest.mark.parametrize("closing", [1.0, -1.0])

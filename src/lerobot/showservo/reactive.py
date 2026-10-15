@@ -234,12 +234,21 @@ def nearby_pregrasp_shift(
     shift = unverified_object_shift(motion, points, tolerance_m)
     if shift is None:
         return None
+    motion = np.asarray(motion, dtype=float)
+    current = np.asarray(points, dtype=float).reshape(-1, 3) @ motion[:3, :3].T + motion[:3, 3]
+    return shift if nearby_object_extent(current, fingertip, tolerance_m) else None
+
+
+def nearby_object_extent(points: np.ndarray, fingertip: np.ndarray, tolerance_m: float) -> bool:
+    """Whether the tip enters the observed object's bounding sphere.
+
+    This deliberately conservative proximity check is used only to stop an
+    unverified pregrasp; a successful check does not certify gripper clearance.
+    """
     points = np.asarray(points, dtype=float).reshape(-1, 3)
     centre = points.mean(axis=0)
     radius = float(np.linalg.norm(points - centre, axis=1).max())
-    motion = np.asarray(motion, dtype=float)
-    current = motion[:3, :3] @ centre + motion[:3, 3]
-    return shift if np.linalg.norm(np.asarray(fingertip) - current) <= radius + tolerance_m else None
+    return bool(np.linalg.norm(np.asarray(fingertip) - centre) <= radius + tolerance_m)
 
 
 def choose_turn(
