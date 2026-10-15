@@ -529,6 +529,43 @@ a current accepted pose or supported group motion can retarget the queue just
 like a placement target; movement itself does not trigger an abort. Unverified
 motion without fresh supporting evidence still stops before stale following.
 
+Two speed-2 physical insertions on 2026-10-15 separate these changes. Act
+`233027` (commit `1c78dae3c`, one-second horizon, 200 ms blend) completed all
+nine key frames and left the dowel upright in the ring. Act `234052` (commit
+`ca5ec67ea`, fractional consumption and no producer idle after successful
+solves) inserted and released it, then stopped in key frame 8 on withdrawal.
+Comparing only the common interval through release:
+
+| Measurement                                           |  233027 |  234052 |
+| ----------------------------------------------------- | ------: | ------: |
+| Elapsed time                                          | 16.66 s | 13.87 s |
+| Motor-lag waiting                                     |  1.34 s |  0.00 s |
+| Command-stationary time (under 0.05 degrees per tick) |  5.55 s |  3.67 s |
+| Longest command-stationary interval                   |  0.37 s |  0.44 s |
+| Active-motion command-hold fraction                   |   20.2% |   11.2% |
+
+These were separate physical resets, not identical-scene A/B trials. Holds
+include demonstrated pauses and small commanded motion under the metric's
+threshold. The longer maximum hold shows why average speed alone does not
+establish smoothness. Across the latest recording the motor loop averaged
+27.6 Hz (median interval 29.8 Hz); IK was 1.47 ms median, 12.48 ms p95 and
+36.60 ms maximum. Seven accepted blended replacements covered 31 samples;
+three other replacements needed no blend, and eight stale replacement
+attempts were discarded. There was no paired physical blend-on/off trial.
+
+The withdrawal stop is unresolved. The shoulder remained at 28.22 degrees
+for 0.5 seconds while the untrimmed command reached 23.22 degrees, exhausting
+the existing 5-degree transport budget. Servo register readback confirmed
+the actual feed-forward-adjusted goal at 21.27 degrees, zero velocity, 63.2%
+reported drive, torque enabled and no servo error flag. Recovery followed by
+the same Cartesian goal through the gizmo also failed to move that joint.
+A shorter alternate gizmo retraction increased load without freeing it;
+parking subsequently succeeded. This distinguishes this instance from queue
+starvation but does not establish whether contact, mechanics or insufficient
+effort caused the resistance. The physical scene still contained the inserted
+dowel after parking. Both runs used the grasp attachment prediction; they do
+not validate a newly observed held pose.
+
 The first physical insertion retest with this horizon,
 `insertion/acts/20261015_195738` at speed 1, completed with the dowel upright
 in the ring and no arm halt. Its active-motion command-hold fraction was 10.7%
