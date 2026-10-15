@@ -34,6 +34,13 @@ def test_unverified_pregrasp_shift_uses_object_centre():
     assert reactive.unverified_object_shift(turn, points, 0.003) is None
 
 
+def test_pregrasp_motion_stops_only_near_the_observed_object():
+    points = np.array([[0.19, 0, 0], [0.21, 0, 0]])
+    moved = pose(0.007)
+    assert reactive.nearby_pregrasp_shift(moved, points, [0.21, 0, 0], 0.003) == pytest.approx(0.007)
+    assert reactive.nearby_pregrasp_shift(moved, points, [0.5, 0, 0], 0.003) is None
+
+
 @pytest.mark.parametrize("closing", [1.0, -1.0])
 def test_withdrawal_does_not_reclose_on_the_just_released_object(closing):
     gi = MOTOR_NAMES.index("gripper")

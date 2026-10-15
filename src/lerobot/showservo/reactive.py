@@ -227,6 +227,21 @@ def unverified_object_shift(motion: np.ndarray, points: np.ndarray, tolerance_m:
     return shift if shift > 2 * tolerance_m else None
 
 
+def nearby_pregrasp_shift(
+    motion: np.ndarray, points: np.ndarray, fingertip: np.ndarray, tolerance_m: float
+) -> float | None:
+    """An object moved before grasp while the gripper was within its measured extent."""
+    shift = unverified_object_shift(motion, points, tolerance_m)
+    if shift is None:
+        return None
+    points = np.asarray(points, dtype=float).reshape(-1, 3)
+    centre = points.mean(axis=0)
+    radius = float(np.linalg.norm(points - centre, axis=1).max())
+    motion = np.asarray(motion, dtype=float)
+    current = motion[:3, :3] @ centre + motion[:3, 3]
+    return shift if np.linalg.norm(np.asarray(fingertip) - current) <= radius + tolerance_m else None
+
+
 def choose_turn(
     kin: Any,
     path: dict,

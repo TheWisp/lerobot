@@ -168,20 +168,30 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
             return "stopped"
         if halt:
             return halt
-        if pregrasp_streaming and with_groups and tracking:
+        if pregrasp_streaming and (tracking or with_groups):
             with runtime._state.lock:
                 state = (runtime._state.track.last or {}).get("state")
-                current_teach = runtime._state.teach
-            if state != "tracking" and current_teach is not None:
-                points = np.asarray(current_teach.keypoints["xyz"], dtype=float)
-                shift = reactive.unverified_object_shift(
-                    carried(picked, seen_at), points, core.ACT_REACH_TOL_M
-                )
+            if state == "tracking" or with_groups:
+                current = follow()
+                relative = current @ inv_start_delta
+                shift = reactive.unverified_object_shift(relative, start_points, core.ACT_REACH_TOL_M)
                 if shift is not None:
-                    return (
-                        f"{picked} moved {shift * 1000:.1f} mm while its pregrasp pose was unverified; "
-                        "stopped before following a stale target"
-                    )
+                    if state != "tracking":
+                        return (
+                            f"{picked} moved {shift * 1000:.1f} mm while its pregrasp pose was unverified; "
+                            "stopped before following a stale target"
+                        )
+                    pose = jog.current_tip_and_anchor()
+                    if pose is not None:
+                        tip_cam = np.linalg.inv(t_bc) @ pose[0]
+                        contact_shift = reactive.nearby_pregrasp_shift(
+                            relative, start_points, tip_cam[:3, 3], core.ACT_REACH_TOL_M
+                        )
+                        if contact_shift is not None:
+                            return (
+                                f"{picked} moved {shift * 1000:.1f} mm before the planned grasp while "
+                                "the gripper was nearby; stopped to avoid chasing contact"
+                            )
         if not st.get("connected"):
             return "the arm went away"
         if st.get("halted"):
@@ -394,6 +404,8 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
 
         gi = MOTOR_NAMES.index("gripper")
         delta = np.asarray(test.result["delta_cam"], dtype=float)
+        start_points = np.asarray(teach.keypoints["xyz"], dtype=float)
+        inv_start_delta = np.linalg.inv(delta)
         inject = act.inject
         if inject and inject.get("at") == "find":
             # The act believes the object turned about its centre and moved: everything it does follows that belief.
@@ -964,9 +976,9 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
             closing, i_grasp_end = 1.0, None
             last_follow: dict[str, Any] | None = None
             waited = False
-            pregrasp_streaming = True
             for n in range(phase_start, split):
                 k = frames[n]
+                pregrasp_streaming = k["move"] in ("line", "lift")
                 i = index(k["t"])
                 if k["move"] in ("line", "lift"):
                     # Preflight and execution must take the same IK branch. A free-running Cartesian walk could
