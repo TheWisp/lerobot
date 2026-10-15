@@ -1639,6 +1639,118 @@ def test_key_frame_rules():
     assert "straight line between them" in p([line, lift, dict(follow, t=2.5, frame="world")], 0.0, 10.0), (
         "a follow replays the demo from where its arm was, which a lift has left"
     )
+    assert "constraint is one of" in p([dict(line, constraint="anything")], 0.0, 10.0)
+    assert "pose or orientation" in p([line, dict(follow, constraint="best_effort")], 0.0, 10.0)
+
+
+def test_orientation_key_frame_rotates_in_place_then_strict_pose_moves_to_target():
+    t = np.array([0.0, 1.0, 2.0])
+    tips = np.repeat(np.eye(4)[None], 3, axis=0)
+    tips[:, 0, 3] = [0.4, 0.5, 0.6]
+    tips[1, :3, :3] = Rotation.from_euler("z", 45, degrees=True).as_matrix()
+    tips[2, :3, :3] = Rotation.from_euler("z", 90, degrees=True).as_matrix()
+    start = tips[0].copy()
+    marks = [
+        {"t": 0.0, "kind": "key", "frame": "world", "move": "line", "grip": "first"},
+        {
+            "t": 1.0,
+            "kind": "key",
+            "frame": "world",
+            "move": "follow",
+            "grip": "first",
+            "constraint": "orientation",
+        },
+        {"t": 2.0, "kind": "key", "frame": "world", "move": "line", "grip": "first"},
+    ]
+    assert core.keypoints_problem(marks, 0.0, 2.0) == ""
+    plan = core.plan_key_frames(
+        _resolved_steps(marks, np.eye(4)),
+        t,
+        tips,
+        np.full(3, 65.0),
+        np.zeros((3, 7)),
+        start,
+        65.0,
+        0.05,
+        np.radians(30),
+        80.0,
+        1.0,
+        30.0,
+    )
+    rotating = np.array(plan["constraint"]) == "orientation"
+    assert np.allclose(plan["poses"][rotating, 0, 3], 0.4)
+    assert np.allclose(plan["poses"][rotating][-1, :3, :3], tips[1, :3, :3])
+    assert np.allclose(plan["poses"][-1], tips[2]), "the next strict frame restores position and orientation"
+
+
+def test_best_effort_waypoint_stops_at_reachable_prefix_and_replans_next_exact_frame():
+    from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
+
+    class ShortArm(_StepKinematics):
+        def inverse_kinematics(self, seed, pose):
+            q = super().inverse_kinematics(seed, pose)
+            q[:3] = np.clip(q[:3], -50.0, 50.0)
+            return q
+
+    samples, history = _samples_and_history(n=30)
+
+    def fk(q):
+        pose = np.eye(4)
+        pose[0, 3] = q["shoulder_pan"] / 1000
+        return pose
+
+    demo = manipulation.demos._demo_from_samples("d", "object", samples, history, fk, t0=1000.0)
+    demo.taught = True
+    demo.tips[9, 0, 3] = 0.08
+    demo.tips[18, 0, 3] = 0.02
+    demo.keypoints = [
+        {
+            "t": float(demo.t[9]),
+            "kind": "key",
+            "frame": "world",
+            "move": "line",
+            "grip": "first",
+            "constraint": "best_effort",
+        },
+        {
+            "t": float(demo.t[18]),
+            "kind": "key",
+            "frame": "world",
+            "move": "line",
+            "grip": "first",
+            "constraint": "pose",
+        },
+    ]
+    q_now = np.zeros(len(MOTOR_NAMES))
+    q_now[-1] = 10
+    result = manipulation.planning._plan_act_once(
+        demo,
+        None,
+        np.eye(4),
+        ShortArm(),
+        q_now,
+        (0.04, np.radians(30)),
+        ((-1, -1, -1), (1, 1, 1)),
+        1.0,
+    )
+    assert result["ok"], result["reason"]
+    assert 0 < result["marks"][0]["best_effort_fraction"] < 1
+    assert result["marks"][1]["best_effort_fraction"] is None
+    np.testing.assert_allclose(result["live_path"]["local"][-1, 0, 3], 0.02, atol=1e-6)
+    demo.q_cmd[9, -1] = 70.0
+    contact = manipulation.planning._plan_act_once(
+        demo,
+        None,
+        np.eye(4),
+        ShortArm(),
+        q_now,
+        (0.04, np.radians(30)),
+        ((-1, -1, -1), (1, 1, 1)),
+        1.0,
+    )
+    assert not contact["ok"] and contact["marks"][0]["best_effort_fraction"] is None, (
+        "a gripper change cannot be moved to an arbitrary shortened waypoint"
+    )
 
 
 def _with_lift(marks, t_lift, up_mm):

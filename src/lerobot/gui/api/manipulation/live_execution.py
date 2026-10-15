@@ -47,6 +47,8 @@ async def stream(
     recorded, last_phase, progressing = -1, 0, time.monotonic()
     loop = asyncio.get_running_loop()
     settling = []
+    orientation_anchor = None
+    orientation_stage = None
     arm = np.arange(len(qs[0])) != gi
     while True:
         await asyncio.sleep(min(runtime.ACT_TICK_S, 1.0 / jog.HZ))
@@ -72,6 +74,21 @@ async def stream(
         i = min(phase + 1, len(plan["q"]) - 1)
         motion, fix = motions(), correction()
         goal = reactive.targets({k: v[i : i + 1] for k, v in path.items()}, motion, fix)[0]
+        constraint = path.get("constraint", ["pose"] * len(plan["q"]))[i]
+        if constraint == "orientation":
+            # A rotation/carry frame constrains attitude, not the recorded XY/Z.
+            # Capture position once on entry; taking each new command as the
+            # anchor would turn small IK errors into translational drift.
+            if orientation_stage != plan["stage"][i]:
+                orientation_stage = plan["stage"][i]
+                orientation_anchor = kin.forward_kinematics(qs[done])[:3, 3].copy()
+            goal[:3, 3] = orientation_anchor
+        else:
+            orientation_stage = orientation_anchor = None
+        local = path["local"][i]
+        if constraint == "orientation":
+            attachment = fix if path["held"][i] else np.eye(4)
+            local = np.linalg.inv(motion[path["frames"][i]]) @ goal @ np.linalg.inv(attachment)
         # Snapshot before the asynchronous solve. A new observation may arrive
         # while IK runs or while this command waits for the bus; logging current
         # state at consumption would falsely attribute it to the newer estimate.
@@ -80,7 +97,9 @@ async def stream(
             "phase": i,
             "frame": path["frames"][i],
             "motion": np.asarray(motion[path["frames"][i]]).tolist(),
-            "local": np.asarray(path["local"][i]).tolist(),
+            "local": np.asarray(local).tolist(),
+            "nominal_local": np.asarray(path["local"][i]).tolist(),
+            "constraint": constraint,
             "held": bool(path["held"][i]),
             "fix": np.asarray(fix).tolist(),
             "hold_revision": None if revision is None else revision(),

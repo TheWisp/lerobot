@@ -39,7 +39,7 @@ import threading
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 from fastapi import APIRouter, HTTPException
@@ -1808,6 +1808,7 @@ class PathBody(BaseModel):
     grip_contact: bool = False
     previous_id: str | None = None
     stream_samples: bool = False
+    constraint: Literal["pose", "orientation", "best_effort"] = "pose"
     endpoint_tolerance_mm: float | None = None
     endpoint_tolerance_deg: float | None = None
 
@@ -1858,6 +1859,8 @@ def _start_guarded_path(j: _Jog, body: PathBody) -> dict:
     from lerobot.robots.so107_description.cartesian_ik import SO107_WORKSPACE_MAX
     from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
 
+    from ._guarded_path import ARRIVAL_ANGLE_DEG, MAX_ERROR_DEG, MAX_ERROR_M
+
     stopped = False
     try:
         # FK mutates Pinocchio's data: validation must not share the live controller's copy.
@@ -1874,9 +1877,24 @@ def _start_guarded_path(j: _Jog, body: PathBody) -> dict:
             body.grip_contact,
             time.monotonic(),
             stream_samples=body.stream_samples,
-            endpoint_tolerance_mm=body.endpoint_tolerance_mm,
-            endpoint_tolerance_deg=body.endpoint_tolerance_deg,
+            endpoint_tolerance_mm=(
+                body.endpoint_tolerance_mm
+                if body.endpoint_tolerance_mm is not None
+                else MAX_ERROR_M * 1000
+                if body.constraint != "pose"
+                else None
+            ),
+            endpoint_tolerance_deg=(
+                body.endpoint_tolerance_deg
+                if body.endpoint_tolerance_deg is not None
+                else MAX_ERROR_DEG
+                if body.constraint == "best_effort"
+                else None
+            ),
         )
+        path.constraint = body.constraint
+        if body.constraint == "orientation":
+            path.endpoint_orientation_deg = ARRIVAL_ANGLE_DEG
         with j.lock:
             if _jog is not j or not j.connected or j.halted:
                 raise RuntimeError("arm changed or froze during path validation")
@@ -1925,9 +1943,10 @@ async def path_start(body: PathBody) -> dict:
     This endpoint does not certify collision clearance. The client must retain a current scene, check the arm and
     payload, and heartbeat while monitoring observed geometry. Other motion writers are excluded until finish/stop.
     stream_samples opts into continuous arm transit between collision samples, with observed arrival still required
-    at the segment endpoint. A caller may widen a free-space waypoint's endpoint tolerance only within the
-    following-error bounds; it must collision-check the observed endpoint and replan the next phase from there.
-    Gripper contact and opening keep strict arrival. Speed and following-error bounds are unchanged.
+    at the segment endpoint. A best-effort waypoint aims at its recorded pose but uses the guarded following-error
+    bounds as its arrival condition; orientation keeps the strict angular condition. The caller must collision-check
+    the observed endpoint and replan the next phase from there. Gripper contact and opening keep strict arrival.
+    Speed and following-error bounds are unchanged.
     """
     j = _jog
     with j.lock:

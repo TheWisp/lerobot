@@ -25,6 +25,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from lerobot.gui.api import jog
+from lerobot.gui.api._guarded_path import MAX_ERROR_DEG, MAX_ERROR_M
 from lerobot.robots.so107_description.joint_alignment import LEFT_ARM_ALIGNMENT, MOTOR_NAMES
 
 
@@ -390,6 +391,19 @@ def test_guarded_path_api_refuses_stale_start_without_ramping_the_arm(client, pa
     response = client.post("/api/jog/path/start", json=body)
     assert response.status_code == 409 and "moved since planning" in response.text
     assert not j.path_busy and not j.robot.sent and j.mode == "cartesian"
+
+
+def test_best_effort_waypoint_relaxes_only_the_checked_endpoint(client, path_arm):
+    j, body = path_arm
+    body["constraint"] = "best_effort"
+    response = client.post("/api/jog/path/start", json=body)
+    assert response.status_code == 200, response.text
+    path = j.guarded_path
+    assert path.constraint == "best_effort"
+    assert path.endpoint_position_m == pytest.approx(MAX_ERROR_M)
+    assert path.endpoint_joint_deg == pytest.approx(MAX_ERROR_DEG)
+    assert response.json()["path"]["endpoint_tolerance_mm"] == pytest.approx(MAX_ERROR_M * 1000)
+    assert client.post("/api/jog/path/stop", json={"id": path.identity}).status_code == 200
 
 
 def test_guarded_path_api_refuses_a_start_that_changes_during_handoff(client, path_arm, monkeypatch):

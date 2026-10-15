@@ -56,6 +56,7 @@ class GuardedPath:
     endpoint_position_m: float = ARRIVAL_M
     endpoint_joint_deg: float = ARRIVAL_DEG
     endpoint_orientation_deg: float = ARRIVAL_ANGLE_DEG
+    constraint: str = "pose"
 
     @classmethod
     def prepare(
@@ -230,4 +231,7 @@ class GuardedPath:
             "error_mm": self.error_mm,
             "error_deg": self.error_deg,
             "stream_samples": self.stream_samples,
+            "constraint": self.constraint,
+            "endpoint_tolerance_mm": self.endpoint_position_m * 1000,
+            "endpoint_tolerance_deg": self.endpoint_joint_deg,
         }

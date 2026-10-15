@@ -226,6 +226,25 @@ rotation, orientation may matter while translation is free within a safe region;
 translation becomes required again at insertion. This distinction must be
 represented explicitly, not inferred from a single path or object name.
 
+Key-frame marks now declare `constraint: pose | orientation | best_effort` in the
+demo editor. Old marks keep `pose`; new lifts default to `best_effort`. `pose`
+keeps the recorded position and orientation. `orientation` rotates at the
+position where that stage begins, including during a follow segment, and the
+live controller re-anchors it once on stage entry as the reference moves. The
+next `pose` stage restores positional control. `best_effort` aims at the
+recorded waypoint without making exact arrival a task condition. If its line
+or lift becomes unsolvable, the planner keeps the longest prefix passing its
+IK, joint-step, workspace and floor checks, then replans later frames from
+there. This is deliberately limited to the demonstrated route; **automatic
+collision avoidance and alternative waypoint search are NOT IMPLEMENTED.** A
+separately collision-checked guarded path uses a relaxed endpoint tolerance
+within its following-error bounds, then replans from the observed pose. Safety
+stops still apply. The October 15 live
+hover reached a collision-checked pose, then
+froze 3.9 mm and 1.9 joint degrees from an exact target that had no contact
+significance; bounded endpoint settling and tolerance support address that
+failure mode while the region planner is built.
+
 A generic planner should sample candidate gripper-to-object attachments from
 the observed rigid surface and calibrated jaw geometry. It must verify that
 both jaws can close on opposing interior surface patches, that the open and

@@ -973,7 +973,10 @@ def firm_grip(
 # object sits in the gripper now against the demo, so that the held object, not the gripper, goes where the demo put it.
 MOVES = ("line", "follow", "lift")
 GRIPS = ("first", "along")
-KEY_KIND = "key"  # a mark that is a key frame as it is: t, frame, move, grip (and up_mm on a lift)
+CONSTRAINTS = ("pose", "orientation", "best_effort")
+KEY_KIND = (
+    "key"  # a mark that is a key frame as it is: t, frame, move, grip, constraint (and up_mm on a lift)
+)
 LIFT_MAX_MM = 150.0  # a lift is a clearance over the scene, not a way to send the arm elsewhere
 # The operator's marks as key frames: (move, grip, label). Pre-grasps and pre-places are lines in their object's frame;
 # a grasp end or a place end follows the demo in it; a waypoint is a line in the world frame, the gripper moving along.
@@ -1006,6 +1009,7 @@ def key_frames(marks: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     "move": "lift",
                     "grip": "first",
                     "up_mm": float(k.get("up_mm") or 0.0),
+                    "constraint": k.get("constraint", "best_effort"),
                     "label": f"lift {seen['lift']}",
                 }
             )
@@ -1018,6 +1022,7 @@ def key_frames(marks: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     "frame": k.get("frame") or "",
                     "move": k["move"],
                     "grip": k.get("grip", "first"),
+                    "constraint": k.get("constraint", "pose"),
                     "label": f"key frame {seen[KEY_KIND]}",
                 }
             )
@@ -1031,6 +1036,7 @@ def key_frames(marks: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "frame": frame or "",
                 "move": move,
                 "grip": grip,
+                "constraint": k.get("constraint", "pose"),
                 "label": label.format(n=seen[k["kind"]]),
             }
         )
@@ -1046,6 +1052,10 @@ def key_frames_problem(frames: list[dict[str, Any]], t_start: float, t_end: floa
             return f"a key frame's move is one of {MOVES}"
         if k.get("grip") not in GRIPS:
             return f"a key frame's gripper is one of {GRIPS}"
+        if k.get("constraint", "pose") not in CONSTRAINTS:
+            return f"a key frame's constraint is one of {CONSTRAINTS}"
+        if k["move"] == "follow" and k.get("constraint") == "best_effort":
+            return "a follow replays the demo path: use a pose or orientation constraint"
         tk = k.get("t")
         if not isinstance(tk, (int, float)) or not (t_start <= float(tk) <= t_end):
             return f"a key frame's time must lie within the demo ({t_start:.1f} to {t_end:.1f} s)"
@@ -1081,6 +1091,8 @@ def _key_marks_problem(marks: list[dict[str, Any]], t_start: float, t_end: float
             return "a key frame names its frame: an object clicked on the recording, or the world"
         if k["kind"] == KEY_KIND and k.get("move") not in MOVES:
             return f"a key frame's move is one of {MOVES}"
+        if k["kind"] == KEY_KIND and k.get("constraint", "pose") not in CONSTRAINTS:
+            return f"a key frame's constraint is one of {CONSTRAINTS}"
     poses = [k for k in marks if k["kind"] == "pose"]
     if any(not k.get("object") for k in poses):
         return "a pose mark names its object"
@@ -1310,24 +1322,28 @@ def plan_key_frames(
     t = np.asarray(t, dtype=float)
     dt = 1.0 / hz
     nj = np.asarray(q_demo).shape[1]
-    times, poses, grips, hints, floor_ref, stage = (
+    times, poses, grips, hints, floor_ref, stage, constraints = (
         [0.0],
         [np.asarray(start_pose, float)],
         [float(start_grip)],
         [np.zeros(nj)],
         [np.inf],
         ["start"],
+        ["pose"],
     )
     arrive: list[int] = []
     spans: list[tuple[int, int] | None] = []
 
-    def add(dt_s: float, pose: np.ndarray, grip: float, hint: np.ndarray, ref: float, label: str) -> None:
+    def add(
+        dt_s: float, pose: np.ndarray, grip: float, hint: np.ndarray, ref: float, label: str, constraint: str
+    ) -> None:
         times.append(times[-1] + dt_s)
         poses.append(pose)
         grips.append(float(grip))
         hints.append(hint)
         floor_ref.append(ref)
         stage.append(label)
+        constraints.append(constraint)
 
     def index(tk: float) -> int:
         return int(np.argmin(np.abs(t - tk)))
@@ -1335,16 +1351,21 @@ def plan_key_frames(
     pose, grip = poses[0], grips[0]
     for s in steps:
         motion, fix, label = np.asarray(s["motion"], float), np.asarray(s["fix"], float), s["label"]
+        constraint = s.get("constraint", "pose")
         if s["move"] == "follow":
             first = len(times)
             for i in range(index(s["since"]) + 1, index(s["t"]) + 1):
+                target = motion @ np.asarray(tips[i], float) @ fix
+                if constraint == "orientation":
+                    target[:3, 3] = pose[:3, 3]
                 add(
                     float(t[i] - t[i - 1]) / speed,
-                    motion @ np.asarray(tips[i], float) @ fix,
+                    target,
                     float(grip_cmd[i]),
                     np.asarray(q_demo[i], float) - np.asarray(q_demo[i - 1], float),
                     float(tips[i][2, 3]),
                     label,
+                    constraint,
                 )
             spans.append((first, len(times) - 1) if len(times) > first else None)
             pose, grip = poses[-1], grips[-1]
@@ -1355,18 +1376,28 @@ def plan_key_frames(
             target[2, 3] += float(s["up_mm"]) / 1000.0
             g = grip
         else:
-            target = motion @ np.asarray(tips[i], float) @ fix
+            target = motion @ np.asarray(s.get("target_local", tips[i]), float) @ fix
+            if constraint == "orientation":
+                target[:3, 3] = pose[:3, 3]
             g = grip if s["held"] else float(grip_cmd[i])
         if s["grip"] == "first":
             n = int(np.ceil(abs(g - grip) / (grip_units_s * speed) * hz))
             for k in range(1, n + 1):
-                add(dt, pose, grip + (g - grip) * k / n, np.zeros(nj), np.inf, label)
+                add(dt, pose, grip + (g - grip) * k / n, np.zeros(nj), np.inf, label, constraint)
             grip = g
         dist_m, ang_deg = pose_residual(pose, target)
         dur = max(dist_m / (lin_m_s * speed), np.radians(ang_deg) / (ang_rad_s * speed))
         n = max(1, int(np.ceil(dur * hz)))
         for k in range(1, n + 1):
-            add(dt, interp_rigid(pose, target, k / n), grip + (g - grip) * k / n, np.zeros(nj), np.inf, label)
+            add(
+                dt,
+                interp_rigid(pose, target, k / n),
+                grip + (g - grip) * k / n,
+                np.zeros(nj),
+                np.inf,
+                label,
+                constraint,
+            )
         arrive.append(len(times) - 1)
         pose, grip = target, g
     return {
@@ -1376,6 +1407,7 @@ def plan_key_frames(
         "hints": np.stack(hints),
         "floor_ref": np.array(floor_ref),
         "stage": stage,
+        "constraint": constraints,
         "arrive": arrive,
         "spans": spans,
     }

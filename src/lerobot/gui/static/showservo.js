@@ -1843,7 +1843,7 @@ function deFrameColour(frame) {
     return o ? o.colour : DE_TAUGHT;
 }
 function deMarksBody() {
-    return de.kps.map(k => ({t: k.t, kind: k.kind, ...(k.object ? {object: k.object} : {}), ...(k.kind === 'key' ? {frame: k.frame || '', move: k.move, grip: k.grip || 'first', ...(k.move === 'lift' ? {up_mm: k.up_mm} : {})} : {})}));
+    return de.kps.map(k => ({t: k.t, kind: k.kind, ...(k.object ? {object: k.object} : {}), ...(k.kind === 'key' ? {frame: k.frame || '', move: k.move, grip: k.grip || 'first', constraint: k.constraint || (k.move === 'lift' ? 'best_effort' : 'pose'), ...(k.move === 'lift' ? {up_mm: k.up_mm} : {})} : {})}));
 }
 function deCheckFresh() { return !!de.check && de.check.key === JSON.stringify(deMarksBody()); }
 function deChecked() {
@@ -1891,7 +1891,7 @@ async function deLoad(force = false) {
             // Marked before the key frames: the key frames those marks make, saved in that form at the next Save.
             const d = await pgPost('/api/pregrasp/demo/key_frames/check', {keypoints: kps});
             if (seq !== de.loadSeq) return;
-            kps = [...kps.filter(k => k.kind === 'pose'), ...d.key_frames.map(k => ({t: k.t, kind: 'key', frame: k.frame, move: k.move, grip: k.grip}))];
+            kps = [...kps.filter(k => k.kind === 'pose'), ...d.key_frames.map(k => ({t: k.t, kind: 'key', frame: k.frame, move: k.move, grip: k.grip, constraint: k.constraint}))];
             kps.sort((a, b) => a.t - b.t);
         }
         const changed = !de.curve || de.curve.name !== c.name;
@@ -1989,7 +1989,7 @@ function deAddKey(move) {
         if (!before) return deStatus('a lift rises from where the key frame before it left the arm: add one before it', true);
         const mm = Number(document.getElementById('de-lift-mm').value);
         if (!(mm > 0 && mm <= 150)) return deStatus('a lift rises by more than 0 and at most 150 mm', true);
-        de.kps.push({t, kind: 'key', frame: 'world', move: 'lift', grip: 'first', up_mm: mm});
+        de.kps.push({t, kind: 'key', frame: 'world', move: 'lift', grip: 'first', constraint: 'best_effort', up_mm: mm});
         de.kps.sort((a, b) => a.t - b.t);
         return deEdited();
     }
@@ -1997,7 +1997,7 @@ function deAddKey(move) {
         if (!before) return deStatus('a follow replays the demo from the key frame before it: add a straight line first', true);
         if ((before.frame || '') !== frame) return deStatus(`a follow is held in the frame of the key frame before it, ${deFrameName(before.frame)}, where the arm stands as it begins`, true);
     }
-    de.kps.push({t, kind: 'key', frame, move, grip: frame === 'world' ? 'along' : 'first'});
+    de.kps.push({t, kind: 'key', frame, move, grip: frame === 'world' ? 'along' : 'first', constraint: 'pose'});
     de.kps.sort((a, b) => a.t - b.t);
     deEdited();
 }
@@ -2006,6 +2006,11 @@ function deToggleGrip(i) {
     // On a straight line the gripper goes to the demo's opening there: set first with the arm standing, or along the way.
     const k = de.kps[i];
     k.grip = k.grip === 'along' ? 'first' : 'along';
+    deEdited();
+}
+
+function deConstraint(i, value) {
+    de.kps[i].constraint = value;
     deEdited();
 }
 
@@ -2043,17 +2048,21 @@ function deRenderList() {
     const keys = deChecked();
     if (!keys.length) { tbl.innerHTML = '<tr><td style="color:#666; padding:4px 0;">no key frames yet</td></tr>'; return; }
     const cell = 'padding:4px 8px 4px 0; vertical-align:top; white-space:nowrap;';
-    const head = `<tr style="color:#777;"><td style="${cell}">time</td><td style="${cell}">in</td><td style="${cell}">how</td><td style="${cell}">gripper</td><td></td></tr>`;
+    const head = `<tr style="color:#777;"><td style="${cell}">time</td><td style="${cell}">in</td><td style="${cell}">how</td><td style="${cell}">need</td><td style="${cell}">gripper</td><td></td></tr>`;
     const rows = keys.map(k => {
         const i = de.kps.findIndex(m => m.kind === 'key' && m.t === k.t), col = deFrameColour(k.frame);
         const grip = k.move === 'lift' ? '<span style="color:#888;" title="a lift keeps the gripper as the key frame before left it">kept</span>'
             : k.move === 'follow' ? '<span style="color:#888;" title="the demo\'s own gripper command, replayed">as recorded</span>'
             : k.held ? `<span style="color:${DE_HELD};" title="the demo holds something here: the gripper keeps its grip, and the pose is corrected for how the object sits in it">held</span>`
             : `<a href="#" onclick="deToggleGrip(${i}); return false;" style="color:#aaa;" title="the gripper goes to the demo's opening here: set first, with the arm standing, or moving along the line; click to change">${k.grip === 'along' ? 'moves along' : 'set first'}</a>`;
+        const need = k.constraint || (k.move === 'lift' ? 'best_effort' : 'pose');
+        const constraints = [['pose', 'exact pose'], ['orientation', 'orientation'], ['best_effort', 'best effort']];
+        const choice = `<select aria-label="constraint for ${k.label}" title="exact pose: position and orientation; orientation: rotate at the stage's entry position; best effort: aim for the waypoint without requiring exact arrival (safety limits still apply; no collision avoidance)" onchange="deConstraint(${i}, this.value)">${constraints.filter(([v]) => v !== 'best_effort' || k.move !== 'follow').map(([v, label]) => `<option value="${v}"${v === need ? ' selected' : ''}>${label}</option>`).join('')}</select>`;
         return '<tr style="border-top:1px solid #333;">' +
             `<td style="${cell}"><a href="#" onclick="deGo(${i}); return false;" style="color:${col}; text-decoration:none;" title="show this moment">${k.t.toFixed(2)} s</a></td>` +
             `<td style="${cell} color:${col};">${deKeyIn(k)}</td>` +
             `<td style="${cell}">${k.move === 'lift' ? `lift ${k.up_mm} mm` : k.move === 'follow' ? 'follow the demo' : 'straight line'}</td>` +
+            `<td style="${cell}">${choice}</td>` +
             `<td style="${cell}">${grip}</td>` +
             `<td style="padding:4px 0; text-align:right; vertical-align:top;"><button class="btn-small secondary" onclick="deRemove(${i})" title="remove">&#x2715;</button></td></tr>`;
     });

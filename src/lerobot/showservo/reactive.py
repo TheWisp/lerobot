@@ -46,13 +46,22 @@ def keep_released(plan: dict, grip_index: int, closing: float) -> dict:
     return out
 
 
-def targets(path: dict, motions: dict[str, np.ndarray], fix: np.ndarray) -> np.ndarray:
-    return np.stack(
-        [
-            motions[name] @ local @ (fix if held else np.eye(4))
-            for name, local, held in zip(path["frames"], path["local"], path["held"], strict=True)
-        ]
-    )
+def targets(
+    path: dict, motions: dict[str, np.ndarray], fix: np.ndarray, start_pose: np.ndarray | None = None
+) -> np.ndarray:
+    out = []
+    anchor = None if start_pose is None else np.asarray(start_pose)[:3, 3].copy()
+    constraints = path.get("constraint", ["pose"] * len(path["frames"]))
+    for name, local, held, constraint in zip(
+        path["frames"], path["local"], path["held"], constraints, strict=True
+    ):
+        pose = motions[name] @ local @ (fix if held else np.eye(4))
+        if constraint == "orientation" and anchor is not None:
+            pose[:3, 3] = anchor
+        else:
+            anchor = pose[:3, 3].copy()
+        out.append(pose)
+    return np.stack(out)
 
 
 def checked_step(
@@ -157,7 +166,12 @@ def choose_turn(
     selected = np.unique(np.linspace(0, len(q_demo) - 1, min(24, len(q_demo)), dtype=int))
 
     def poses(turn):
-        return targets(path, {**motions, obj: core.turn_about(centre, turn) @ motions[obj]}, fix)
+        return targets(
+            path,
+            {**motions, obj: core.turn_about(centre, turn) @ motions[obj]},
+            fix,
+            kin.forward_kinematics(previous),
+        )
 
     ranked = core.rank_landings(
         kin, turns, lambda a: poses(a)[selected], q_demo[selected], *(ranges or (None, None)), grip_index

@@ -90,7 +90,7 @@ def _normal_marks(marks: list[dict[str, Any]]) -> list[dict[str, Any]]:
                         if k["kind"] == core.KEY_KIND or k.get("frame")
                         else {}
                     ),
-                    **{key: str(k[key]) for key in ("move", "grip") if k.get(key)},
+                    **{key: str(k[key]) for key in ("move", "grip", "constraint") if k.get(key)},
                     **({"up_mm": float(k["up_mm"])} if k.get("up_mm") is not None else {}),
                 }
                 for k in marks
@@ -639,29 +639,75 @@ def _plan_act_once(
     q_now = np.asarray(q_now, dtype=float)
     steps = _act_steps(demo, part, skip, _frame_motion(demo, delta_cam, t_bc, motions, aim), hold_fix)
     assert steps, "a key frame to plan"
-    plan = core.plan_key_frames(
-        steps,
-        demo.t,
-        demo.tips,
-        demo.q_cmd[:, gi],
-        demo.q_obs,
-        kin.forward_kinematics(q_now),
-        float(q_now[gi]),
-        limits[0],
-        limits[1],
-        jog.GRIP_UNITS_S,
-        speed,
-        jog.HZ,
-    )
-    sol = core.solve_plan_joints(
-        kin,
-        plan["poses"],
-        plan["grips"],
-        plan["hints"],
-        q_now,
-        gi,
-        *(ranges if ranges is not None else (None, None)),
-    )
+    best_effort = [s for s in steps if s.get("constraint") == "best_effort"]
+    for _ in range(1 + len(best_effort)):
+        plan = core.plan_key_frames(
+            steps,
+            demo.t,
+            demo.tips,
+            demo.q_cmd[:, gi],
+            demo.q_obs,
+            kin.forward_kinematics(q_now),
+            float(q_now[gi]),
+            limits[0],
+            limits[1],
+            jog.GRIP_UNITS_S,
+            speed,
+            jog.HZ,
+        )
+        sol = core.solve_plan_joints(
+            kin,
+            plan["poses"],
+            plan["grips"],
+            plan["hints"],
+            q_now,
+            gi,
+            *(ranges if ranges is not None else (None, None)),
+        )
+        # A best-effort waypoint is a guide along the recorded route. If the
+        # remaining suffix cannot be solved, keep the longest prefix that
+        # passes the existing IK, range, floor and workspace checks. Replan
+        # everything after it from that endpoint; never send an unchecked jump.
+        p = plan["poses"][:, :3, 3]
+        low_box, high_box = np.asarray(box[0], float), np.asarray(box[1], float)
+        floor_limit = np.minimum(np.minimum(low_box[2], plan["floor_ref"]), p[0, 2])
+        invalid = (
+            (sol["residual_m"] > core.ACT_REACH_TOL_M)
+            | (sol["residual_deg"] > core.ACT_REACH_TOL_DEG)
+            | (sol["step_deg"] > core.ACT_MAX_JOINT_STEP_DEG)
+            | (p[:, 2] < floor_limit - core.ACT_REACH_TOL_M)
+            | np.any(p[:, :2] < low_box[:2] - core.ACT_REACH_TOL_M, axis=1)
+            | np.any(p > high_box + core.ACT_REACH_TOL_M, axis=1)
+        )
+        shortened = False
+        for s in best_effort:
+            if "best_effort_fraction" in s:
+                continue
+            samples = np.flatnonzero(np.asarray(plan["stage"]) == s["label"])
+            grip_here = plan["grips"][max(0, samples[0] - 1) : samples[-1] + 1]
+            if np.ptp(grip_here) > 1e-6:
+                continue  # a closing/opening event must keep its planned contact position
+            failed = next((int(i) for i in samples if invalid[i]), None)
+            if failed is None:
+                continue
+            safe = max(0, failed - 1)
+            target = np.asarray(plan["poses"][safe], float)
+            if s["move"] == "lift":
+                before = np.asarray(plan["poses"][samples[0] - 1], float)
+                rise = max(0.0, float((target[2, 3] - before[2, 3]) * 1000))
+                if abs(rise - s["up_mm"]) < 1e-6:
+                    continue
+                s["up_mm"] = rise
+            else:
+                current_target = np.asarray(plan["poses"][samples[-1]], float)
+                if max(core.pose_residual(current_target, target)) < 1e-9:
+                    continue
+                s["target_local"] = np.linalg.inv(s["motion"]) @ target @ np.linalg.inv(s["fix"])
+            s["best_effort_fraction"] = max(0.0, (safe - samples[0] + 1) / len(samples))
+            shortened = True
+            break
+        if not shortened:
+            break
     # Retain the reference relation for every sample. Recomposition can update
     # either side (receiving object and held attachment) without replaying an
     # earlier phase or confusing a new live pose with the old planned world pose.
@@ -704,6 +750,7 @@ def _plan_act_once(
                 "object": s["frame"] if s["frame"] not in ("", core.WORLD_FRAME) else None,
                 "moved_mm": float(np.linalg.norm(now - was) * 1000.0),
                 "out_mm": float((np.linalg.norm(now[:2]) - np.linalg.norm(was[:2])) * 1000.0),
+                "best_effort_fraction": s.get("best_effort_fraction"),
             }
         )
     follows = [s for s in steps if s["move"] == "follow"]
@@ -787,6 +834,7 @@ def _plan_act_once(
             "grips": plan["grips"],
             "hints": plan["hints"],
             "floor": plan["floor_ref"],
+            "constraint": plan["constraint"],
         },
         "marks": marks,
         "summary": {
