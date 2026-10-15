@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from lerobot.gui.api._guarded_path import ARRIVAL_TIMEOUT_S, LEASE_S, GuardedPath
+from lerobot.gui.api._guarded_path import ARRIVAL_TIMEOUT_S, HOT_READS_TO_STOP, LEASE_S, GuardedPath
 
 NAMES = ("x", "y", "z", "gripper")
 
@@ -89,7 +89,7 @@ def test_a_lost_client_cannot_leave_a_path_running():
     assert p.status == "failed" and "heartbeat" in p.reason and p.index == 0
 
 
-@pytest.mark.parametrize("fault", ["temperature", "load", "missing", "nan", "joint_drift", "tip_drift"])
+@pytest.mark.parametrize("fault", ["load", "missing", "nan", "joint_drift", "tip_drift"])
 @pytest.mark.parametrize("stream_samples", [False, True])
 def test_faults_stop_before_another_path_sample(fault, stream_samples):
     p = make_path()
@@ -97,8 +97,6 @@ def test_faults_stop_before_another_path_sample(fault, stream_samples):
     q = p.q[0].copy()
     pose = Kin().forward_kinematics(q)
     temps, load = dict.fromkeys(NAMES, 30), dict.fromkeys(NAMES, 0)
-    if fault == "temperature":
-        temps["x"] = 51
     if fault == "load":
         load["y"] = -700
     if fault == "missing":
@@ -112,6 +110,21 @@ def test_faults_stop_before_another_path_sample(fault, stream_samples):
     assert p.tick(0.5, dict(zip(NAMES, q, strict=True)), pose, load, temps) is None
     assert p.status == "failed" and p.index == 0
     assert tick(p, 0.6, p.q[0]) is None, "a later cool/good reading cannot restart a failed trajectory"
+
+
+def test_temperature_spike_does_not_freeze_path_but_sustained_heat_does():
+    p = make_path([[0, 0, 0, 80], [0, 0, 0, 80]])
+    hot = dict.fromkeys(NAMES, 30)
+    hot["x"] = 88
+    assert tick(p, 0.01, p.q[0], temps=hot) is not None
+    assert p.status != "failed"
+    assert tick(p, 0.02, p.q[0]) is not None
+    assert p.high_temp_streak["x"] == 0
+    for i in range(HOT_READS_TO_STOP - 1):
+        assert tick(p, 0.03 + i * 0.01, p.q[0], temps=hot) is not None
+        assert p.status != "failed"
+    assert tick(p, 0.03 + (HOT_READS_TO_STOP - 1) * 0.01, p.q[0], temps=hot) is None
+    assert p.status == "failed" and "temperature" in p.reason
 
 
 def test_contact_closing_can_stop_on_the_object_but_opening_must_reach_its_target():

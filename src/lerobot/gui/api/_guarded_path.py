@@ -5,7 +5,7 @@ The caller must plan/check the arm and payload against its current scene first.
 Only the jog's hardware loop may tick this state machine, with a fresh checked read.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
@@ -22,6 +22,10 @@ GRIP_UNITS_S = 10.0
 LINEAR_M_S = 0.020
 ANGULAR_DEG_S = 20.0
 MAX_SAMPLES = 6000
+# The Feetech temperature register occasionally returns one implausibly high
+# value in an otherwise valid packet. A real hot motor remains hot on the next
+# reads; its firmware overheat fault is checked separately by the jog loop.
+HOT_READS_TO_STOP = 3
 
 
 def residual(a: np.ndarray, b: np.ndarray) -> tuple[float, float]:
@@ -48,6 +52,7 @@ class GuardedPath:
     error_deg: float = 0.0
     kin: Any = None  # private FK data, never shared with the jog/GUI's mutable Pinocchio state
     stream_samples: bool = False  # collision samples may be streamed; phase endpoints must still arrive
+    high_temp_streak: dict[str, int] = field(default_factory=dict)
 
     @classmethod
     def prepare(
@@ -150,7 +155,9 @@ class GuardedPath:
         if not np.isfinite([q_now, temperatures, loads]).all() or np.any(temperatures <= 0):
             self.fail("invalid path telemetry")
             return None
-        if np.max(temperatures) > 50:
+        for name, temperature in zip(self.names, temperatures, strict=True):
+            self.high_temp_streak[name] = self.high_temp_streak.get(name, 0) + 1 if temperature > 50 else 0
+        if any(count >= HOT_READS_TO_STOP for count in self.high_temp_streak.values()):
             self.fail("motor temperature above 50 C; stopped for recheck")
             return None
         arm = np.arange(len(self.names)) != self.grip_index
