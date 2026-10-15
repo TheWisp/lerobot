@@ -531,6 +531,8 @@ are separated by at least one nominal tick: a delayed bus read cannot cause
 an immediate catch-up packet. Read/write latency adds to this interval, so
 the observed motor rate can be below the nominal 30 Hz. Camera recording
 retains its independent fixed-rate schedule.
+The [2026-10-16 checks](proofs/basic_motion_20261016.md) record the physical
+limits of this verification, including the unresolved shoulder stop.
 
 The former two-tick minimum stretched every small contact sample even when
 IK was fast. One-tick phases now keep their timing; sustained solves slower
