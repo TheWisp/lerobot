@@ -160,6 +160,7 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
         return act.stop_requested
 
     halt = ""  # why the act stops, found on the fly by something running beside the stream
+    pregrasp_streaming = False
 
     def interrupted() -> str:
         st = jog.current_status()
@@ -167,6 +168,21 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
             return "stopped"
         if halt:
             return halt
+        if pregrasp_streaming and with_groups and tracking:
+            with runtime._state.lock:
+                state = (runtime._state.track.last or {}).get("state")
+                current_teach = runtime._state.teach
+            if state != "tracking" and current_teach is not None:
+                points = np.asarray(current_teach.keypoints["xyz"], dtype=float)
+                valid = np.asarray(current_teach.keypoints["valid"], dtype=bool)
+                centre = points[valid].mean(axis=0)
+                at = seen_at0 if refind is not None and not refind.done() else seen_at
+                shift = reactive.unverified_object_shift(carried(picked, at), centre, core.ACT_REACH_TOL_M)
+                if shift is not None:
+                    return (
+                        f"{picked} moved {shift * 1000:.1f} mm while its pregrasp pose was unverified; "
+                        "stopped before following a stale target"
+                    )
         if not st.get("connected"):
             return "the arm went away"
         if st.get("halted"):
@@ -976,6 +992,7 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
             closing, i_grasp_end = 1.0, None
             last_follow: dict[str, Any] | None = None
             waited = False
+            pregrasp_streaming = True
             for n in range(phase_start, split):
                 k = frames[n]
                 i = index(k["t"])
@@ -1139,6 +1156,7 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
                 if why:
                     fail(why)
                     return
+            pregrasp_streaming = False
             if split == phase_stop:
                 act.step, act.ok = "done", True
                 continue

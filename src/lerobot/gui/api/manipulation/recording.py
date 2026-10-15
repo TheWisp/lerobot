@@ -376,6 +376,7 @@ def _begin_run(
         ref = dict((teach.keypoints.get("ref") or {}) if teach is not None else {})
         algo, fps, last = track.algo, track.fps, dict(track.last or {})
     base = pathlib.Path(demo.root) / runtime.ACTS_DIR if demo.root else demos._demos_root() / ".acts"
+    controller = jog._state_locked(jog._jog)
     meta: dict[str, Any] = {
         "demo": demo.name,
         "demo_root": demo.root,
@@ -395,6 +396,9 @@ def _begin_run(
         ],
         "find": ref,
         "tracker_at_start": {"algo": algo, "fps": fps, **{k: last.get(k) for k in runtime.RUN_FRAME_FIELDS}},
+        "controller_at_start": {
+            k: controller.get(k) for k in ("robot_id", "gains", "limits", "settle_on", "mode")
+        },
         "plan": {k: plan.get(k) for k in ("ok", "reason", "marks", "summary")},
         "finds": runtime._state.act.finds,  # the same list: what it finds from here on is added
     }
