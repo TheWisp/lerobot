@@ -517,9 +517,14 @@ IK was fast. One-tick phases now keep their timing; sustained solves slower
 than a motor tick use longer checked interpolation. The former default
 three-second horizon is shortened to one second. Transport also no longer
 pauses for half a second each time following error passes the 3-degree release
-tolerance. It advances within the existing 5-degree transport budget, checks
-the next command before letting lag grow past that budget, and retains the
-bounded stall timeout and tighter release condition. A free pick object with
+tolerance. It advances within the existing 5-degree transport budget, shortening
+the next step to the remaining budget instead of alternating whole steps and
+stationary ticks. All arm joints share that fraction of the checked segment;
+gripper events wait until its endpoint is consumed. A partly consumed segment
+also defers tail replacement until its endpoint, so a replacement anchored at
+the last full sample cannot rewind the arm. The producer fills available queue
+capacity without an extra idle poll after each solve. The bounded stall timeout
+and tighter release condition remain. A free pick object with
 a current accepted pose or supported group motion can retarget the queue just
 like a placement target; movement itself does not trigger an abort. Unverified
 motion without fresh supporting evidence still stops before stale following.

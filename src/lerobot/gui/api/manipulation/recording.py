@@ -444,7 +444,7 @@ def _finish_run(run: _Run, samples: list[dict[str, Any]], fk: Any, result: dict[
         for key in ("tick_ms", "lock_ms", "read_ms", "command_ms", "commit_ms"):
             if all(key in s for s in samples):
                 arm[key] = np.array([s[key] for s in samples], dtype=float)
-        for key in ("playback_waiting", "playback_queue_depth", "playback_active"):
+        for key in ("playback_waiting", "playback_queue_depth", "playback_active", "playback_limited"):
             if all(key in s for s in samples):
                 arm[key] = np.array([s[key] for s in samples], dtype=int)
         for key in ("load", "temps"):  # each motor's load and temperature at every tick, as the jog read them
@@ -563,6 +563,8 @@ def _pause_durations(arm, command_step, observed_step, dt):
         "queued_command_hold": command_hold & running & (depth > 0) & ~waiting,
         "between_streams_hold": command_hold & ~running,
     }
+    if "playback_limited" in arm:
+        masks["following_limited"] = np.asarray(arm["playback_limited"], dtype=bool)[:-1] & running
     out = {"duration_s": float(dt.sum()), "playback_state_recorded": "playback_active" in arm}
     for name, mask in masks.items():
         edges = np.flatnonzero(np.diff(np.r_[False, mask, False]))

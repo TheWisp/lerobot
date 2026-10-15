@@ -631,6 +631,42 @@ def test_playback_can_overcome_static_friction_after_its_catchup_wait():
     assert at[-1] - at[0] < 1.5, "normal breakaway friction must not add repeated half-second stops"
 
 
+def test_playback_fills_lag_limited_ticks_with_a_shared_path_fraction():
+    q = {**dict.fromkeys(MOTOR_NAMES, 0.0), "gripper": 80.0}
+    robot = _LaggingRobot(q, deg_per_tick=1.0)
+    samples = [{**q, "shoulder_lift": -2.0 * k, "elbow_flex": 2.0 * k} for k in range(30)]
+    (sent, _at), seen = _play(robot, samples, [k / jog.HZ for k in range(len(samples))])
+    assert sent == len(samples) - 1
+    commands = np.array([cmd["shoulder_lift"] for cmd, _ in seen])
+    moving = commands[(commands < -10) & (commands > -50)]
+    assert len(moving) > 30, "the slower motor must get intermediate commands"
+    assert np.all(np.abs(np.diff(moving)) > 0.05), "do not alternate full steps with stationary ticks"
+    assert np.max(np.abs(np.diff(moving))) <= 1.0 + 360 / 4096, "allow one physical encoder count"
+    assert all(abs(cmd["elbow_flex"] + cmd["shoulder_lift"]) < 1e-8 for cmd, _ in seen)
+    assert max(abs(cmd["shoulder_lift"] - obs["shoulder_lift"]) for cmd, obs in seen) <= 5.0
+
+
+def test_retarget_cannot_rewind_a_partly_consumed_segment_or_open_early(monkeypatch):
+    q = {**dict.fromkeys(MOTOR_NAMES, 0.0), "gripper": 80.0}
+    current = {**q, "shoulder_lift": 4.0}
+    next_q = {**q, "shoulder_lift": 6.0, "elbow_flex": 2.0}
+    j = jog._Jog(robot=object(), mode="joints", q_obs=q, q_target=current, q_cmd=current)
+    j.playback = [current, next_q, {**next_q, "gripper": 20.0}]
+    j.playback_due, j.playback_sent, j.playback_tick = [0.0, 0.1, 0.2], 0, 1.0
+    monkeypatch.setattr(jog, "_jog", j)
+    jog._advance_playback(j, 1.1)
+    assert j.playback_partial and j.playback_sent == 0
+    assert j.q_target["shoulder_lift"] == 5.0 and j.q_target["elbow_flex"] == 1.0
+    assert j.q_target["gripper"] == 80.0
+    assert not jog.replace_playback_tail(0, [q], [0.2]), "the last full sample is no longer the command head"
+    j.q_obs = {**q, "shoulder_lift": 1.0}
+    jog._advance_playback(j, 1.2)
+    assert j.playback_sent == 1 and not j.playback_partial
+    assert jog.replace_playback_tail(1, [{**next_q, "gripper": 20.0}], [0.2])
+    jog._advance_playback(j, 1.3)
+    assert j.playback_waiting and j.q_target["gripper"] == 80.0
+
+
 def test_a_blocked_playback_freezes_before_other_joints_and_release_run_ahead():
     """The 2026-10-12 retreat continued after its lag wait expired, reaching a 68 mm tool error and shoulder
     overload. Keep the remaining arm and release samples unsent when the shoulder cannot catch up."""
@@ -645,7 +681,12 @@ def test_a_blocked_playback_freezes_before_other_joints_and_release_run_ahead():
     assert sent < 15, "the blocked arm must stop before the release"
     assert max(action["elbow_flex.pos"] for action in robot.sent) <= 1.0 + jog.PLAYBACK_STOP_LAG_DEG + 0.5
     assert all(action["gripper.pos"] == 80.0 for action in robot.sent), "retain the last closing command"
-    assert seen[-1][0] == samples[sent], "the pending arm target must not run ahead either"
+    command, observed = seen[-1]
+    assert command["shoulder_lift"] - observed["shoulder_lift"] <= jog.PLAYBACK_STOP_LAG_DEG + 1e-9
+    assert command["elbow_flex"] == command["shoulder_lift"], (
+        "a partial segment still preserves the joint path"
+    )
+    assert command["shoulder_lift"] <= samples[sent + 1]["shoulder_lift"]
 
 
 @pytest.mark.parametrize("opening", [True, False])

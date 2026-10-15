@@ -106,10 +106,12 @@ async def stream(
             best_effort_stopped(plan["stage"][-1], reason, held)
         return "", np.array([held[name] for name in MOTOR_NAMES], dtype=float)
 
+    poll_delay = 0.0
     while True:
         # Poll faster than a motor tick so a consumed prefix can be replenished
         # before the next tick, without coupling planning to camera cadence.
-        await asyncio.sleep(min(runtime.ACT_TICK_S, 0.25 / jog.HZ))
+        await asyncio.sleep(poll_delay)
+        poll_delay = min(runtime.ACT_TICK_S, 0.25 / jog.HZ)
         why = interrupted()
         if why:
             jog.playback_stop()
@@ -418,6 +420,10 @@ async def stream(
             else jog.append_playback_chunk(base, commands, due_samples)
         )
         if accepted:
+            # Fill available capacity immediately. The executor already
+            # yields; adding an idle poll after every solve wastes production
+            # time precisely when the queue needs its reserve rebuilt.
+            poll_delay = 0.0
             if replacing:
                 unchanged_snapshot = None
                 if diagnostics is not None:
