@@ -231,6 +231,8 @@ class _Jog:
     playback_held: float | None = None  # since when the playback waits for a joint behind its target
     playback_hold_spent: bool = False  # the soft wait expired; reset once all arm joints catch up
     playback_blocked: float | None = None  # since exceeding the hard bound, or delaying a release
+    playback_waiting: bool = False  # this motor tick held its queue head for following error
+    playback_queue_depth: int = 0  # unsent samples after this motor tick
     playback_slew_at: float = (
         0.0  # last live-playback command tick; a delayed tick cannot spend its missed steps
     )
@@ -421,6 +423,7 @@ def _advance_playback(j: _Jog, now: float) -> None:
     joint cannot let the rest of the plan run ahead indefinitely. Pre: j.lock is held, joints mode, playback under way.
     """
     assert j.playback is not None
+    j.playback_waiting = False
     k = j.playback_sent + 1
     errors = {m: abs(j.q_target[m] - j.q_obs[m]) for m in j.q_target if m != "gripper" and m in j.q_obs}
     lagging = max(errors, key=errors.__getitem__, default="joint")
@@ -432,6 +435,7 @@ def _advance_playback(j: _Jog, now: float) -> None:
     )
     j.playback_blocked = (j.playback_blocked if j.playback_blocked is not None else now) if blocked else None
     if blocked and now - j.playback_blocked >= PLAYBACK_HOLD_MAX_S:
+        j.playback_waiting = True
         j.halted = True
         context = "before gripper opening" if opening else "beyond transport tolerance"
         j.reason = (
@@ -450,6 +454,7 @@ def _advance_playback(j: _Jog, now: float) -> None:
     ):
         j.playback_hold_spent, waiting = True, False
     if waiting:
+        j.playback_waiting = True
         j.playback_held = j.playback_held if j.playback_held is not None else now
         j.playback_t0 += now - j.playback_tick  # the samples still to come wait as long
     else:
@@ -459,6 +464,7 @@ def _advance_playback(j: _Jog, now: float) -> None:
             j.playback_sent = k
             j.playback_sent_at.append(time.time())
     j.playback_tick = now
+    j.playback_queue_depth = len(j.playback) - j.playback_sent - 1
 
 
 def _live_joint_command(
@@ -505,6 +511,9 @@ def _loop(j: _Jog) -> None:
             with j.lock:
                 if j.mode == "joints" and j.playback is not None and not j.halted:
                     _advance_playback(j, time.monotonic())
+                else:
+                    j.playback_waiting = False
+                    j.playback_queue_depth = 0
                 target, ref, halted = j.target, j.ref, j.halted
                 v_lin, v_ang = j.max_linear_m_s, j.max_angular_rad_s
                 grip_target = j.grip_target
@@ -648,6 +657,8 @@ def _loop(j: _Jog) -> None:
                             "commit_ms": 1000.0 * (t_end - t_sent),
                             "obs": dict(q_obs),
                             "cmd": dict(j.q_cmd),
+                            "playback_waiting": j.playback_waiting,
+                            "playback_queue_depth": j.playback_queue_depth,
                             "load": dict(loads),
                             "temps": dict(temps),
                         }

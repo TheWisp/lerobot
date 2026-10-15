@@ -440,6 +440,9 @@ def _finish_run(run: _Run, samples: list[dict[str, Any]], fk: Any, result: dict[
         for key in ("tick_ms", "lock_ms", "read_ms", "command_ms", "commit_ms"):
             if all(key in s for s in samples):
                 arm[key] = np.array([s[key] for s in samples], dtype=float)
+        for key in ("playback_waiting", "playback_queue_depth"):
+            if all(key in s for s in samples):
+                arm[key] = np.array([s[key] for s in samples], dtype=int)
         for key in ("load", "temps"):  # each motor's load and temperature at every tick, as the jog read them
             if all(key in s for s in samples):
                 arm[key] = np.array(
@@ -500,7 +503,7 @@ def _control_cadence(arm: dict[str, np.ndarray], targets: list[dict[str, Any]]) 
     gaps_ms = np.diff(t) * 1000.0
     gaps_ms = gaps_ms[np.isfinite(gaps_ms) & (gaps_ms >= 0)]
     target_gaps_ms = np.diff(stamps) * 1000.0
-    return {
+    cadence = {
         "motor_ticks": len(q_cmd),
         "active_ticks": int(active.sum()),
         "command_hold_fraction_active": float(np.mean(steps < 0.05)) if len(steps) else None,
@@ -526,6 +529,11 @@ def _control_cadence(arm: dict[str, np.ndarray], targets: list[dict[str, Any]]) 
         "target_gap_p95_ms": float(np.percentile(target_gaps_ms, 95)) if len(target_gaps_ms) else None,
         "motor_gap_max_ms": float(np.max(gaps_ms)) if len(gaps_ms) else None,
     }
+    if "playback_waiting" in arm and len(steps):
+        cadence["lag_wait_fraction_active"] = float(np.mean(arm["playback_waiting"][:-1][active]))
+    if "playback_queue_depth" in arm and len(steps):
+        cadence["queue_empty_fraction_active"] = float(np.mean(arm["playback_queue_depth"][:-1][active] == 0))
+    return cadence
 
 
 class VerdictBody(BaseModel):

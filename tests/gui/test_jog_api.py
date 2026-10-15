@@ -656,6 +656,7 @@ def test_playback_lag_timeout_freezes_without_advancing_or_changing_goals(openin
     j.playback_hold_spent = True  # a previous soft wait cannot disable either hard condition
     j.playback_due, j.playback_sent, j.playback_tick = [0.0, 0.1], 0, 10.0
     jog._advance_playback(j, 10.0)
+    assert j.playback_waiting and j.playback_queue_depth == 1
     jog._advance_playback(j, 10.0 + jog.PLAYBACK_HOLD_MAX_S - 0.01)
     assert not j.halted
     jog._advance_playback(j, 10.0 + jog.PLAYBACK_HOLD_MAX_S)
