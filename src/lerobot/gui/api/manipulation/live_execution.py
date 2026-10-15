@@ -265,7 +265,18 @@ async def stream(
 
         result = await solve(ticks)
         samples = (
-            reactive.checked_joint_samples(kin, qs[base], result, ticks, gi, box, floor, jog.PLAYBACK_LAG_DEG)
+            reactive.checked_joint_samples(
+                kin,
+                qs[base],
+                result,
+                ticks,
+                gi,
+                box,
+                floor,
+                jog.PLAYBACK_LAG_DEG,
+                previous_sample=qs[max(0, base - 1)],
+                max_joint_accel_deg=jog.RAMP_DEG_S / jog.HZ,
+            )
             if not result["reason"]
             else None
         )

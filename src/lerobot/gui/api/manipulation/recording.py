@@ -457,7 +457,7 @@ def _finish_run(run: _Run, samples: list[dict[str, Any]], fk: Any, result: dict[
 
 
 def _control_cadence(arm: dict[str, np.ndarray], targets: list[dict[str, Any]]) -> dict[str, Any]:
-    """Summarize motor-rate holds during motion, separating them from intentional stillness.
+    """Summarize motor-rate holds and velocity changes during active motion.
 
     A 0.05° command change is below one SO-107 encoder count. Activity means
     over 0.75° of arm motion across roughly five 30 Hz ticks; endpoints and
@@ -477,6 +477,19 @@ def _control_cadence(arm: dict[str, np.ndarray], targets: list[dict[str, Any]]) 
         dtype=bool,
     )
     steps = command_step[active]
+    dt = np.diff(t)
+    valid_dt = np.isfinite(dt) & (dt > 0)
+    velocity = np.divide(
+        np.diff(q_cmd, axis=0),
+        dt[:, None],
+        out=np.zeros_like(np.diff(q_cmd, axis=0)),
+        where=valid_dt[:, None],
+    )
+    dv = np.diff(velocity, axis=0)
+    between = (dt[1:] + dt[:-1]) / 2
+    acceleration = np.divide(dv, between[:, None], out=np.zeros_like(dv), where=(between > 0)[:, None])
+    acceleration_active = active[1:] & active[:-1] & valid_dt[1:] & valid_dt[:-1]
+    active_accel = np.max(np.abs(acceleration[acceleration_active]), axis=1)
     preceding = np.r_[0.0, command_step[:-1]]
     after_hold = active & (command_step > 0.5) & (preceding < 0.05)
     stamps = np.array([target["t"] for target in targets if target.get("joints") is not None], dtype=float)
@@ -490,6 +503,20 @@ def _control_cadence(arm: dict[str, np.ndarray], targets: list[dict[str, Any]]) 
         "observed_hold_fraction_active": float(np.mean(observed_step[active] < 0.05)) if len(steps) else None,
         "command_step_p95_deg_active": float(np.percentile(steps, 95)) if len(steps) else None,
         "command_step_max_deg_active": float(np.max(steps)) if len(steps) else None,
+        "command_speed_p95_deg_s_active": (
+            float(np.percentile(np.max(np.abs(velocity[active & valid_dt]), axis=1), 95))
+            if np.any(active & valid_dt)
+            else None
+        ),
+        "command_accel_p95_deg_s2_active": float(np.percentile(active_accel, 95))
+        if len(active_accel)
+        else None,
+        "command_accel_max_deg_s2_active": float(np.max(active_accel)) if len(active_accel) else None,
+        "following_error_p95_deg_active": (
+            float(np.percentile(np.max(np.abs(q_cmd[:-1][active] - q_obs[:-1][active]), axis=1), 95))
+            if len(steps)
+            else None
+        ),
         "hold_then_move_count_active": int(after_hold.sum()),
         "hold_then_move_median_deg": float(np.median(command_step[after_hold])) if after_hold.any() else None,
         "target_gap_p95_ms": float(np.percentile(target_gaps_ms, 95)) if len(target_gaps_ms) else None,

@@ -151,43 +151,67 @@ def checked_joint_samples(
     box: tuple,
     floor: float,
     max_joint_tick_deg: float,
+    previous_sample: np.ndarray | None = None,
+    max_joint_accel_deg: float | None = None,
 ) -> list[np.ndarray] | None:
     """Interpolate a solved step at motor rate only when its whole joint path is checked.
 
     FK of each intermediate joint command must stay near the corresponding
     Cartesian interpolation and inside the same workspace/floor as the solve.
-    Returning None asks the caller for a shorter checked Cartesian step; it
-    never silently substitutes unchecked joint motion near contact.
+    When the last command is known, prefer a constant-acceleration joint walk
+    from its incoming velocity. This avoids a velocity jump at each IK chunk
+    boundary. If that walk leaves the checked Cartesian corridor or exceeds
+    the joint-rate/acceleration budget, retain the original checked linear
+    interpolation. Returning None asks for a shorter checked Cartesian step.
     """
     if ticks < 1 or result["reason"]:
         return None
     endpoint = np.asarray(result["q"], dtype=float)
     previous = np.asarray(previous, dtype=float)
     arm = np.arange(len(endpoint)) != grip_index
-    if np.max(np.abs(endpoint[arm] - previous[arm])) / ticks > max_joint_tick_deg:
-        return None
     start_pose = kin.forward_kinematics(previous)
     end_pose = np.asarray(result.get("pose", kin.forward_kinematics(endpoint)))
     lo, hi = np.asarray(box[0]), np.asarray(box[1])
     bottom = min(lo[2], floor, start_pose[2, 3])
-    samples = []
-    for k in range(1, ticks + 1):
-        u = k / ticks
-        q = previous + u * (endpoint - previous)
-        actual = kin.forward_kinematics(q)
-        expected = core.interp_rigid(start_pose, end_pose, u)
-        distance, angle = core.pose_residual(actual, expected)
-        p = actual[:3, 3]
+
+    def checked(samples: list[np.ndarray], *, acceleration: np.ndarray | None = None) -> bool:
+        steps = np.diff(np.stack([previous, *samples]), axis=0)
+        if np.max(np.abs(steps[:, arm])) > max_joint_tick_deg:
+            return False
         if (
-            distance > core.ACT_REACH_TOL_M
-            or angle > core.ACT_REACH_TOL_DEG
-            or p[2] < bottom - core.ACT_REACH_TOL_M
-            or np.any(p[:2] < lo[:2] - core.ACT_REACH_TOL_M)
-            or np.any(p > hi + core.ACT_REACH_TOL_M)
+            acceleration is not None
+            and max_joint_accel_deg is not None
+            and np.max(np.abs(acceleration[arm])) > max_joint_accel_deg
         ):
-            return None
-        samples.append(q)
-    return samples
+            return False
+        for k, q in enumerate(samples, start=1):
+            u = k / ticks
+            actual = kin.forward_kinematics(q)
+            expected = core.interp_rigid(start_pose, end_pose, u)
+            distance, angle = core.pose_residual(actual, expected)
+            p = actual[:3, 3]
+            if (
+                distance > core.ACT_REACH_TOL_M
+                or angle > core.ACT_REACH_TOL_DEG
+                or p[2] < bottom - core.ACT_REACH_TOL_M
+                or np.any(p[:2] < lo[:2] - core.ACT_REACH_TOL_M)
+                or np.any(p > hi + core.ACT_REACH_TOL_M)
+            ):
+                return False
+        return True
+
+    if previous_sample is not None and ticks > 1:
+        incoming = previous - np.asarray(previous_sample, dtype=float)
+        acceleration = 2 * (endpoint - previous - ticks * incoming) / (ticks * (ticks + 1))
+        velocities = np.stack([incoming + k * acceleration for k in range(1, ticks + 1)])
+        velocities[:, grip_index] = (endpoint[grip_index] - previous[grip_index]) / ticks
+        smoothed = [q.copy() for q in previous + np.cumsum(velocities, axis=0)]
+        smoothed[-1] = endpoint.copy()  # exact phase/gripper endpoint, despite roundoff
+        if checked(smoothed, acceleration=acceleration):
+            return smoothed
+
+    linear = [previous + (k / ticks) * (endpoint - previous) for k in range(1, ticks + 1)]
+    return linear if checked(linear) else None
 
 
 def choose_turn(

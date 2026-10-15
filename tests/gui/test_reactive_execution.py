@@ -330,6 +330,52 @@ def test_interpolated_joint_chord_must_follow_checked_cartesian_step():
     assert [q[0] for q in samples] == [5, 10]
 
 
+def test_checked_motor_samples_keep_velocity_continuous_across_solve_chunks():
+    kin = _TipKinematics()
+    gi = MOTOR_NAMES.index("gripper")
+    start = np.zeros(len(MOTOR_NAMES))
+    first_end = start.copy()
+    first_end[0] = 4
+    args = (kin, 4, gi, ((-1, -1, -1), (1, 1, 1)), -1, 3)
+    first = reactive.checked_joint_samples(
+        kin,
+        start,
+        {"q": first_end, "pose": pose(0.004), "reason": ""},
+        *args[1:],
+        previous_sample=start,
+        max_joint_accel_deg=1,
+    )
+    assert first is not None
+    first_steps = np.diff(np.array([start, *first])[:, 0])
+    np.testing.assert_allclose(first_steps, [0.4, 0.8, 1.2, 1.6], atol=1e-10)
+    second_end = first_end.copy()
+    second_end[0] = 8
+    second = reactive.checked_joint_samples(
+        kin,
+        first_end,
+        {"q": second_end, "pose": pose(0.008), "reason": ""},
+        *args[1:],
+        previous_sample=first[-2],
+        max_joint_accel_deg=1,
+    )
+    assert second is not None
+    steps = np.diff(np.array([first[-2], first[-1], *second])[:, 0])
+    assert np.max(np.abs(np.diff(steps))) < 1
+    assert second[-1][0] == pytest.approx(8)
+    # A stale incoming velocity is not a reason to leave the checked path.
+    stale = start.copy()
+    stale[0] = -10
+    fallback = reactive.checked_joint_samples(
+        kin,
+        start,
+        {"q": first_end, "pose": pose(0.004), "reason": ""},
+        *args[1:],
+        previous_sample=stale,
+        max_joint_accel_deg=1,
+    )
+    assert [q[0] for q in fallback] == [1, 2, 3, 4]
+
+
 def test_empty_live_queue_cannot_reset_hard_lag_timeout():
     q = dict.fromkeys(MOTOR_NAMES, 0.0)
     target = {**q, "shoulder_lift": jog.PLAYBACK_STOP_LAG_DEG + 1}
