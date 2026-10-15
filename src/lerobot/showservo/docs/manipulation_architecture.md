@@ -517,12 +517,8 @@ IK was fast. One-tick phases now keep their timing; sustained solves slower
 than a motor tick use longer checked interpolation. The former default
 three-second horizon is shortened to one second. Transport also no longer
 pauses for half a second each time following error passes the 3-degree release
-tolerance. It advances within the existing 5-degree transport budget, shortening
-the next step to the remaining budget instead of alternating whole steps and
-stationary ticks. All arm joints share that fraction of the checked segment;
-gripper events wait until its endpoint is consumed. A partly consumed segment
-also defers tail replacement until its endpoint, so a replacement anchored at
-the last full sample cannot rewind the arm. The producer fills available queue
+tolerance. It advances within the existing 5-degree transport budget and checks
+the next command before letting lag grow past that budget. The producer fills available queue
 capacity without an extra idle poll after each solve. The bounded stall timeout
 and tighter release condition remain. A free pick object with
 a current accepted pose or supported group motion can retarget the queue just
@@ -565,6 +561,20 @@ starvation but does not establish whether contact, mechanics or insufficient
 effort caused the resistance. The physical scene still contained the inserted
 dowel after parking. Both runs used the grasp attachment prediction; they do
 not validate a newly observed held pose.
+
+**ROLLED BACK:** Fractional motor-step limiting from `ca5ec67ea` is no longer
+enabled. A further physical repeat, `234819`, stopped during key frame 5 with
+the shoulder at 26.20 degrees and its command at 21.20 degrees. The operator
+reported more visible jitter, and none of these runs met the requested
+smoothness. Its active-motion hold fraction was only 8.3%, yet command
+acceleration was 2046 degrees/s² p95 and 5148 maximum. Fewer holds is therefore
+not a sufficient acceptance criterion. The queue, one-second horizon, checked
+blending and immediate producer refill remain; the consumer is restored to
+the version used by the successful `233027` run. This rollback does not claim
+that the preceding controller is sufficiently smooth or that it fixes the
+shoulder resistance. A producer publishing after a motor freeze must preserve
+the motor's reason instead of replacing it with a generic inactive-stream
+exception.
 
 The first physical insertion retest with this horizon,
 `insertion/acts/20261015_195738` at speed 1, completed with the dowel upright

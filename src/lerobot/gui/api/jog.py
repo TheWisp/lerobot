@@ -231,8 +231,6 @@ class _Jog:
     playback_held: float | None = None  # since when the playback waits for a joint behind its target
     playback_blocked: float | None = None  # since exceeding the hard bound, or delaying a release
     playback_waiting: bool = False  # this motor tick held its queue head for following error
-    playback_partial: bool = False  # advancing along the next checked segment without consuming its event
-    playback_limited: bool = False  # this tick slowed the path to stay within the following budget
     playback_queue_depth: int = 0  # unsent samples after this motor tick
     playback_slew_at: float = (
         0.0  # last live-playback command tick; a delayed tick cannot spend its missed steps
@@ -438,16 +436,11 @@ def _advance_playback(j: _Jog, now: float) -> None:
     next_errors = (
         {m: abs(j.playback[k].get(m, j.q_target[m]) - j.q_obs[m]) for m in errors} if pending else {}
     )
-    fraction = 1.0
-    if pending:
-        for m, error in next_errors.items():
-            change = j.playback[k].get(m, j.q_target[m]) - j.q_target[m]
-            if error > PLAYBACK_STOP_LAG_DEG and error > errors[m] and abs(change) > 1e-9:
-                boundary = j.q_obs[m] + math.copysign(PLAYBACK_STOP_LAG_DEG, change)
-                fraction = min(fraction, max(0.0, (boundary - j.q_target[m]) / change))
-    j.playback_limited = pending and fraction < 1.0 - 1e-9
+    advancing_past_budget = behind > PLAYBACK_LAG_DEG and any(
+        error > PLAYBACK_STOP_LAG_DEG and error > errors[m] for m, error in next_errors.items()
+    )
     blocked = (pending or (j.playback_live and j.playback_sent >= 0)) and (
-        behind > PLAYBACK_STOP_LAG_DEG + 1e-9 or fraction < 1e-9 or (opening and behind > PLAYBACK_LAG_DEG)
+        behind > PLAYBACK_STOP_LAG_DEG or advancing_past_budget or (opening and behind > PLAYBACK_LAG_DEG)
     )
     j.playback_blocked = (j.playback_blocked if j.playback_blocked is not None else now) if blocked else None
     if blocked and now - j.playback_blocked >= PLAYBACK_HOLD_MAX_S:
@@ -467,21 +460,9 @@ def _advance_playback(j: _Jog, now: float) -> None:
     else:
         j.playback_held = None
         if k < len(j.playback) and now - j.playback_t0 >= j.playback_due[k]:
-            if fraction < 1.0 - 1e-9:
-                # All arm joints share one path fraction. Independently
-                # clipping joints lets the elbow outrun a loaded shoulder.
-                # Keep the gripper event pending until this sample completes.
-                j.q_target = {
-                    m: j.q_target[m] + fraction * (value - j.q_target[m]) if m != "gripper" else j.q_target[m]
-                    for m, value in j.playback[k].items()
-                }
-                j.playback_partial = True
-                j.playback_t0 += (1.0 - fraction) * (now - j.playback_tick)
-            else:
-                j.q_target = j.playback[k]
-                j.playback_sent = k
-                j.playback_sent_at.append(time.time())
-                j.playback_partial = False
+            j.q_target = j.playback[k]
+            j.playback_sent = k
+            j.playback_sent_at.append(time.time())
     j.playback_tick = now
     j.playback_queue_depth = len(j.playback) - j.playback_sent - 1
 
@@ -532,7 +513,6 @@ def _loop(j: _Jog) -> None:
                     _advance_playback(j, time.monotonic())
                 else:
                     j.playback_waiting = False
-                    j.playback_limited = False
                     j.playback_queue_depth = 0
                 target, ref, halted = j.target, j.ref, j.halted
                 v_lin, v_ang = j.max_linear_m_s, j.max_angular_rad_s
@@ -680,7 +660,6 @@ def _loop(j: _Jog) -> None:
                             "playback_waiting": j.playback_waiting,
                             "playback_queue_depth": j.playback_queue_depth,
                             "playback_active": j.mode == "joints" and j.playback is not None,
-                            "playback_limited": j.playback_limited,
                             "load": dict(loads),
                             "temps": dict(temps),
                         }
@@ -1383,7 +1362,6 @@ def play_joints(samples: list[dict[str, float]], due_s: list[float]) -> None:
         j.playback_due = [float(t) for t in due_s]
         j.playback_t0 = j.playback_tick = time.monotonic()
         j.playback_slew_at = 0.0
-        j.playback_partial = j.playback_limited = False
         j.playback_sent, j.playback_sent_at = -1, []
         j.playback_held, j.playback_blocked = None, None
 
@@ -1395,6 +1373,14 @@ def playback_state() -> tuple[int, list[float]]:
         return j.playback_sent, list(j.playback_sent_at)
 
 
+def _require_live_playback(j: _Jog) -> None:
+    """Preserve a motor fault that arrived while the producer was solving IK."""
+    if j.halted:
+        raise RuntimeError(f"arm frozen: {j.reason or 'motor loop stopped'}")
+    if not j.connected or j.mode != "joints" or j.playback is None:
+        raise RuntimeError("the live joint stream is no longer active")
+
+
 def update_playback_next(expected: int, sample: dict[str, float], due_s: float) -> bool:
     """Replace/append ONLY the next unsent sample, without resetting lag guards or the clock.
 
@@ -1404,9 +1390,8 @@ def update_playback_next(expected: int, sample: dict[str, float], due_s: float) 
     """
     j = _jog
     with j.lock:
-        if not j.connected or j.halted or j.mode != "joints" or j.playback is None:
-            raise RuntimeError("the live joint stream is no longer active")
-        if j.playback_sent != expected or j.playback_partial:
+        _require_live_playback(j)
+        if j.playback_sent != expected:
             return False
         _ensure_working_target(sample, j.joint_ranges)
         j.playback_live = True
@@ -1444,8 +1429,7 @@ def append_playback_chunk(expected_tail: int, samples: list[dict[str, float]], d
         raise ValueError("one due time per sample")
     j = _jog
     with j.lock:
-        if not j.connected or j.halted or j.mode != "joints" or j.playback is None:
-            raise RuntimeError("the live joint stream is no longer active")
+        _require_live_playback(j)
         if expected_tail != len(j.playback) - 1:
             return False
         for sample in samples:
@@ -1468,9 +1452,8 @@ def replace_playback_tail(expected_sent: int, samples: list[dict[str, float]], d
         raise ValueError("one due time per sample")
     j = _jog
     with j.lock:
-        if not j.connected or j.halted or j.mode != "joints" or j.playback is None:
-            raise RuntimeError("the live joint stream is no longer active")
-        if j.playback_sent != expected_sent or j.playback_partial:
+        _require_live_playback(j)
+        if j.playback_sent != expected_sent:
             return False
         for sample in samples:
             _ensure_working_target(sample, j.joint_ranges)
@@ -1515,8 +1498,7 @@ def playback_stop_at_observed() -> dict[str, float]:
     """
     j = _jog
     with j.lock:
-        if not j.connected or j.halted or j.mode != "joints" or j.playback is None:
-            raise RuntimeError("the live joint stream is no longer active")
+        _require_live_playback(j)
         if not j.q_obs or time.monotonic() - j.last_read_at > 2 * SLOW_TICK_S:
             raise RuntimeError("no fresh checked joint read for a best-effort stop")
         observed = {name: float(j.q_obs[name]) for name in j.q_target}
