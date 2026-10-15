@@ -314,9 +314,29 @@ def constrain_axis(pose, reference, depth, mask, intr, *, noise_m, tol_m, tol_de
         return {**out, "reason": "axis observation missing"}
     if np.asarray(depth).ndim != 2 or np.shape(mask) != np.shape(depth):
         return {**out, "reason": "depth and mask shapes differ"}
-    ref, live = _long_axis(reference, noise_m), _long_axis(depth_points(depth, mask, intr), noise_m)
+    ref_points = _sample(reference)
+    live_points = depth_points(depth, mask, intr)
+    ref, live = _long_axis(ref_points, noise_m), _long_axis(live_points, noise_m)
     if ref is None or live is None:
         return {**out, "reason": "no separated principal surface axis"}
+    # A tracker's mask may grow beyond the segmentation that started its
+    # session. Before treating the different extents as a partial object,
+    # distinguish unsupported extra live pixels from missing reference
+    # material. The latter must still fail: all but 2% of the original surface
+    # needs a measured neighbour, and at least three quarters of the live mask
+    # must be common surface. Use the sensor's point-noise radius, not a shape
+    # or object-specific pixel margin.
+    moved = ref_points @ raw[:3, :3].T + raw[:3, 3]
+    from_reference = cKDTree(live_points).query(moved)[0]
+    from_live = cKDTree(moved).query(live_points)[0]
+    reference_support = float(np.mean(from_reference <= noise_m))
+    live_support = float(np.mean(from_live <= noise_m))
+    out.update(axis_reference_support=reference_support, axis_live_support=live_support)
+    if reference_support >= 0.98 and live_support >= 0.75:
+        common = _long_axis(live_points[from_live <= noise_m], noise_m)
+        if common is not None:
+            live = common
+            out["axis_common_surface"] = True
     evidence = {
         name: {
             "span_mm": (item["span"] * 1000).tolist(),
@@ -328,9 +348,11 @@ def constrain_axis(pose, reference, depth, mask, intr, *, noise_m, tol_m, tol_de
     out["axis_evidence"] = evidence
     if ref["split_angle_deg"] + live["split_angle_deg"] > tol_deg:
         return {**out, "reason": "principal-axis split fits disagree"}
-    if abs(ref["extent"] - live["extent"]) > _paired_extent_noise(noise_m) or np.max(
-        abs(ref["span"][1:] - live["span"][1:])
-    ) > _paired_extent_noise(noise_m):
+    extent_budget = 2 * noise_m if out.get("axis_common_surface") else _paired_extent_noise(noise_m)
+    if (
+        abs(ref["extent"] - live["extent"]) > extent_budget
+        or np.max(abs(ref["span"][1:] - live["span"][1:])) > extent_budget
+    ):
         return {**out, "reason": "surface extents differ; axis may belong to a partial view"}
     a = raw[:3, :3] @ ref["axis"]
     b = live["axis"] * (1 if a @ live["axis"] >= 0 else -1)
@@ -486,6 +508,8 @@ def resolve(
         if axis["pose"] is not None:
             return {**constraint, **axis}
         constraint["axis_reason"] = axis["reason"]
+        constraint["axis_reference_support"] = axis.get("axis_reference_support")
+        constraint["axis_live_support"] = axis.get("axis_live_support")
         if recover_axis:
             recovered = recover_full_axis(
                 pose, reference, depth, mask, intr, noise_m=noise_m, end_swap=end_swap
@@ -493,6 +517,18 @@ def resolve(
             if recovered["pose"] is not None:
                 return {**constraint, **recovered, "axis_reason": axis["reason"]}
             constraint["axis_recovery_reason"] = recovered["reason"]
+        # A nearest-surface ICP fit may agree on the visible fragment of a rod
+        # after an end disappears. It cannot overrule explicit evidence that
+        # the acquisition surface is missing from the current depth view.
+        if axis.get("axis_reference_support", 1.0) < 0.98 and axis["reason"].startswith(
+            "surface extents differ"
+        ):
+            return {
+                **constraint,
+                "state": "rejected",
+                "pose": None,
+                "reason": "measured axis is incomplete; reference surface is not fully visible",
+            }
     if surface is None:
         surface = pose_verification.surface(
             pose, reference, depth, mask, intr, noise_m=noise_m, tol_m=tol_m, tol_deg=tol_deg

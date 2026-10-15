@@ -272,6 +272,26 @@ def test_two_complete_depth_views_use_their_combined_extent_noise_budget():
     assert result["axis_rms_after_mm"] < LIMITS["noise_m"] * 1000
 
 
+def test_grown_track_mask_uses_common_surface_but_missing_rod_stays_unverified():
+    # The live P2P mask extended about five pixels beyond the SAM acquisition
+    # mask on every side. Whole-mask extents differed by 6.7 mm, although all
+    # acquisition points had matching depth and the rod was fully visible.
+    with np.load(Path(__file__).parent / "fixtures/axis_mask_growth_20261015.npz") as z:
+        intr = dict(zip(("fx", "fy", "cx", "cy"), z["intr"], strict=True))
+        reference = sc.depth_points(z["reference_depth"].astype(float) / 1000, z["reference_mask"], intr)
+        depth = z["live_depth"].astype(float) / 1000
+        mask = z["live_mask"].copy()
+        pose = z["pose"]
+    full = sc.resolve(pose, reference, depth, mask, intr, **LIMITS)
+    assert full["pose"] is not None and full["axis_common_surface"]
+    assert full["axis_reference_support"] >= 0.98
+    assert full["axis_live_support"] >= 0.75
+    assert full["observed_dof"] == 2
+    mask[:, 195:] = False  # an actual missing end, not an expanded boundary
+    partial = sc.resolve(pose, reference, depth, mask, intr, **LIMITS)
+    assert partial["pose"] is None
+
+
 @pytest.mark.parametrize("name", ["latest", "earlier", "clear", "baseline"])
 def test_recorded_wrong_tilts_improve_on_held_out_geometry(name):
     with np.load(Path(__file__).parent / "fixtures/pose_disagreement_20261012.npz") as z:
