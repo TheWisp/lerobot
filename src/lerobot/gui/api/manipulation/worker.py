@@ -50,6 +50,7 @@ def _queue_job(
     algo: str | None = None,
     compress: bool = True,
     click: list[int] | None = None,
+    camera_stamp_mono: float | None = None,
 ) -> runtime._Job:
     job = runtime._Job(
         id=uuid.uuid4().hex[:8],
@@ -59,6 +60,7 @@ def _queue_job(
         depth_m=depth_m,
         intr=intr,
         created=time.time(),
+        camera_stamp_mono=camera_stamp_mono,
         algo=algo,
         compress=compress,
         click=click,

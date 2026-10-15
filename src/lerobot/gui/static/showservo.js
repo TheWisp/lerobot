@@ -1116,7 +1116,7 @@ async function pgTrialsRefresh(force = false) {
 
 // The replay: an act's recorded frames, each beside the server's drawing of it from the act's own record.
 let pgReplayAt = null; // {trial, n, frames: [{i, t, step}], held_recorded}
-let pgReplayPlay = null; // while playing: {timer, shownAt}
+let pgReplayPlay = null; // while playing: {timer, startWall, startT}
 async function pgReplay(trial) {
     pgReplayStop();
     const r = await fetch(`/api/pregrasp/replay?trial=${trial}`);
@@ -1127,6 +1127,7 @@ async function pgReplay(trial) {
     const slider = document.getElementById('pg-replay-i');
     slider.max = Math.max(0, pgReplayAt.n - 1);
     document.getElementById('pg-replay-title').textContent = `trial ${trial}: ${pgReplayAt.n} frames` +
+        (pgReplayAt.fps ? ` at ${pgReplayAt.fps} Hz` : '') +
         (pgReplayAt.held_recorded ? '' : ' · this act did not record where it held the place object') +
         (pgReplayAt.pose_verification_recorded
             ? ` · ${(pgReplayAt.pose_disagreement_frames || []).length} frames with pose disagreements`
@@ -1141,25 +1142,28 @@ function pgReplayShow(i, playing = false) {
     document.getElementById('pg-replay-i').value = i;
     const f = pgReplayAt.frames[i];
     document.getElementById('pg-replay-at').textContent = `frame ${i} · +${f.t.toFixed(1)} s · ${f.step}`;
-    if (pgReplayPlay) pgReplayPlay.shownAt = performance.now();
     document.getElementById('pg-replay-img').src = `/api/pregrasp/replay/frame.jpg?trial=${pgReplayAt.trial}&i=${i}&pair=1`;
 }
 function pgReplayTogglePlay() {
     if (!pgReplayAt || !pgReplayAt.n) return;
     if (pgReplayPlay) return pgReplayStop();
     const i = Number(document.getElementById('pg-replay-i').value);
-    pgReplayPlay = {timer: null, shownAt: 0};
+    const start = i >= pgReplayAt.n - 1 ? 0 : i;
+    pgReplayPlay = {timer: null, startWall: performance.now(), startT: pgReplayAt.frames[start].t};
     document.getElementById('pg-replay-play').textContent = 'Pause';
-    pgReplayShow(i >= pgReplayAt.n - 1 ? 0 : i, true); // from the start again once at the end
+    pgReplayShow(start, true); // from the start again once at the end
 }
 function pgReplayLoaded() {
-    // Playing: the next frame once this one has been up for its own share of the act's time, and has loaded, so a
-    // slow frame holds the play back rather than being skipped.
+    // Keep Act time even when a drawn JPEG takes longer than a 30 Hz slot to arrive.
     if (!pgReplayPlay || !pgReplayAt) return;
     const i = Number(document.getElementById('pg-replay-i').value);
+    const at = pgReplayPlay.startT + (performance.now() - pgReplayPlay.startWall) / 1000;
     if (i >= pgReplayAt.n - 1) return pgReplayStop();
-    const due = (pgReplayAt.frames[i + 1].t - pgReplayAt.frames[i].t) * 1000 - (performance.now() - pgReplayPlay.shownAt);
-    pgReplayPlay.timer = setTimeout(() => { if (pgReplayPlay) pgReplayShow(i + 1, true); }, Math.max(0, due));
+    if (at >= pgReplayAt.frames[pgReplayAt.n - 1].t) return pgReplayShow(pgReplayAt.n - 1, true);
+    let next = i + 1;
+    while (next + 1 < pgReplayAt.n && pgReplayAt.frames[next + 1].t <= at) next++;
+    const due = (pgReplayAt.frames[next].t - at) * 1000;
+    pgReplayPlay.timer = setTimeout(() => { if (pgReplayPlay) pgReplayShow(next, true); }, Math.max(0, due));
 }
 function pgReplayStop() {
     if (pgReplayPlay && pgReplayPlay.timer) clearTimeout(pgReplayPlay.timer);

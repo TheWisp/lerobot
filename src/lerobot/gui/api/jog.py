@@ -613,6 +613,7 @@ def _loop(j: _Jog) -> None:
                     j.record.append(
                         {
                             "t": time.time() - j.record_t0,
+                            "mono": observed_at,
                             "obs": dict(q_obs),
                             "cmd": dict(j.q_cmd),
                             "load": dict(loads),

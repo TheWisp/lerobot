@@ -31,6 +31,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from . import acquisition, demos, groups, planning, runtime
+from .act_timeline import ActTimeline
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -49,11 +50,13 @@ def _share_frames(camera: Any, share: runtime._FrameShare) -> None:
             try:
                 if newer is not None:
                     rgb, depth_mm, last = newer(last)
+                    stamp = time.time() - (time.perf_counter() - last)
                 else:
                     rgb, depth_mm = showservo._EXECUTOR.submit(camera.read_color_and_aligned_depth).result()
+                    stamp = time.time()
             except TimeoutError:
                 continue  # no new frame yet, or another reader took it
-            share.ring.write(rgb, depth_mm.astype(np.uint16), time.time())
+            share.ring.write(rgb, depth_mm.astype(np.uint16), stamp)
             share.n += 1
     except Exception as e:  # the stop endpoint reports it
         logger.exception("camera frame sharing failed")
@@ -196,6 +199,7 @@ class _Run:
     frames: list[dict[str, Any]] = field(default_factory=list)
     targets: list[dict[str, Any]] = field(default_factory=list)
     arm_recording: bool = False
+    timeline: ActTimeline | None = None
 
     def frame(
         self,
@@ -212,6 +216,14 @@ class _Run:
             {
                 "i": i,
                 "t_frame": job.created,
+                **(
+                    {
+                        "t_capture_mono": job.camera_stamp_mono,
+                        "t_capture": time.time() - (time.perf_counter() - job.camera_stamp_mono),
+                    }
+                    if job.camera_stamp_mono is not None
+                    else {}
+                ),
                 "t_result": time.time(),
                 "step": step,
                 "used": bool(status.get("ok")),  # the act follows only a frame the server trusted
@@ -338,7 +350,7 @@ def _begin_run(
     demo: runtime._Demo, speed: float, delta: np.ndarray, t_bc: np.ndarray, plan: dict[str, Any]
 ) -> _Run:
     """Start recording the act, beside its demo when it is saved. Post: ``_state.run`` is the recording."""
-    from .. import jog
+    from .. import jog, showservo
 
     with runtime._state.lock:
         teach, track = runtime._state.teach, runtime._state.track
@@ -373,6 +385,15 @@ def _begin_run(
         run.arm_recording = True
     except RuntimeError as e:
         meta["arm_error"] = str(e)
+    camera = showservo.live_camera()
+    if camera is not None:
+        try:
+            timeline = ActTimeline(run.root / "camera", camera, jog.HZ)
+            timeline.start()
+            run.timeline = timeline
+        except Exception as e:
+            logger.exception("Act camera timeline could not start")
+            meta["timeline_error"] = f"{type(e).__name__}: {e}"
     with runtime._state.lock:
         runtime._state.run = run
     return run
@@ -386,6 +407,7 @@ def _finish_run(run: _Run, samples: list[dict[str, Any]], fk: Any, result: dict[
     if samples:
         arm: dict[str, np.ndarray] = {
             "t": np.array([s["t"] for s in samples], dtype=float) + float(run.meta.get("arm_t0", 0.0)),
+            "t_mono": np.array([s.get("mono", np.nan) for s in samples], dtype=float),
             "q_obs": np.array([[s["obs"][m] for m in MOTOR_NAMES] for s in samples], dtype=float),
             "q_cmd": np.array(
                 [[s["cmd"].get(m, s["obs"][m]) for m in MOTOR_NAMES] for s in samples], dtype=float

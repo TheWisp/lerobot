@@ -3,6 +3,7 @@ import json
 import pathlib
 import shutil
 import sys
+import time
 
 import cv2
 import numpy as np
@@ -11,6 +12,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from lerobot.gui.api import manipulation
+from lerobot.gui.api.manipulation.act_timeline import ActTimeline
 from lerobot.showservo import groups_scene
 
 INTR = {"fx": 600.0, "fy": 600.0, "cx": 424.0, "cy": 240.0}
@@ -485,6 +487,109 @@ def test_an_act_replay_exports_outside_the_gui_too(overlay, tmp_path):
     act = _act(tmp_path)
     video = overlay.render(act)
     assert video == act / "replay.mp4" and _frame_count(video) == 1
+
+
+def test_act_timeline_samples_a_fixed_clock_without_waiting_for_inference(tmp_path):
+    class Camera:
+        def read_newer_color_and_depth(self, _after):
+            # A slower asynchronous camera may repeat an image across timeline
+            # ticks; each row still belongs to the fixed main clock.
+            frame = int(time.perf_counter() * 12)
+            return (
+                np.full((24, 32, 3), frame % 255, np.uint8),
+                np.full((24, 32), 400 + frame % 10, np.uint16),
+                frame / 12,
+            )
+
+    timeline = ActTimeline(tmp_path / "camera", Camera(), 30)
+    timeline.start()
+    time.sleep(0.24)
+    summary = timeline.close()
+    rows = json.loads((tmp_path / "camera" / "timeline.json").read_text())["rows"]
+    assert 5 <= len(rows) <= 12
+    assert [r["slot"] for r in rows] == list(range(len(rows)))
+    assert np.allclose(np.diff([r["t_mono"] for r in rows]), 1 / 30)
+    assert 1 < summary["saved"] < len(rows), "camera frames are asynchronous to the main clock"
+    assert not summary["errors"]
+    assert len(list((tmp_path / "camera" / "rgb").glob("*.jpg"))) == summary["saved"]
+
+
+def test_timeline_draws_the_arm_at_the_camera_publication_time(tmp_path, monkeypatch):
+    act = _act(tmp_path, groups=False)
+    meta = json.loads((act / "act.json").read_text())
+    meta["frames"][0]["t_result"] = 10.0
+    early, late = np.eye(4), np.eye(4)
+    late[0, 3] = 0.04
+    np.savez(
+        act / "arm.npz",
+        t=np.array([10.0, 10.04]),
+        t_mono=np.array([0.03, 0.07]),
+        tip_obs=np.stack([early, late]),
+    )
+    tips = []
+    monkeypatch.setattr(
+        manipulation.rendering, "_draw_tool", lambda _img, _bc, _intr, tip, _label: tips.append(tip)
+    )
+    row = {
+        "slot": 0,
+        "t_mono": 0.05,
+        "t_wall": 10.02,
+        "camera_mono": 0.04,
+        "image": None,
+        "status": "held_camera_frame",
+    }
+    manipulation.replay._timeline_pair(act, meta, row, {})
+    assert len(tips) == 1
+    assert tips[0][0, 3] == pytest.approx(0.01), "the arm follows the image timestamp, not the later slot"
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="needs ffmpeg")
+def test_act_export_uses_each_fixed_timeline_camera_frame(overlay, client, tmp_path, monkeypatch):
+    act = _act(tmp_path)
+    camera = act / "camera" / "rgb"
+    camera.mkdir(parents=True)
+    for i in range(6):
+        cv2.imwrite(str(camera / f"{i:06d}.jpg"), np.full((H, W, 3), 20 + 20 * i, np.uint8))
+    (act / "camera" / "timeline.json").write_text(
+        json.dumps(
+            {
+                "fps": 30,
+                "saved": 6,
+                "rows": [
+                    {
+                        "slot": i,
+                        "t_mono": i / 30,
+                        "t_wall": 10 + i / 30,
+                        "image": i,
+                        "camera_mono": i / 30,
+                        "status": "captured",
+                    }
+                    for i in range(6)
+                ],
+            }
+        )
+    )
+    monkeypatch.setattr(manipulation.runtime, "_trials", [{"run": str(act)}])
+    listing = client.get("/api/pregrasp/replay", params={"trial": 0})
+    assert listing.status_code == 200
+    assert listing.json()["n"] == 6 and listing.json()["fps"] == 30
+    assert listing.json()["frames"][-1]["t"] == pytest.approx(5 / 30, abs=0.001)
+    frame = client.get("/api/pregrasp/replay/frame.jpg", params={"trial": 0, "i": 5, "pair": 1})
+    assert frame.status_code == 200
+    pair = cv2.imdecode(np.frombuffer(frame.content, np.uint8), cv2.IMREAD_COLOR)
+    assert abs(int(pair[100, 100, 0]) - 120) <= 3
+    video = overlay.render(act)
+    assert _frame_count(video) == 6, "the video follows the fixed clock, not the single P2P frame"
+    cap = cv2.VideoCapture(str(video))
+    first, last = None, None
+    while True:
+        ok, frame = cap.read()
+        if not ok:
+            break
+        first = frame if first is None else first
+        last = frame
+    assert first is not None and last is not None
+    assert int(last[100, 100, 0]) - int(first[100, 100, 0]) > 80, "real camera motion survives the export"
 
 
 @pytest.mark.parametrize("selected_at, expected", [(9.0, True), (11.0, False)])

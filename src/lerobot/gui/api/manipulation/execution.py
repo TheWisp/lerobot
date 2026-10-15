@@ -1516,6 +1516,14 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
         if run is not None:
             with runtime._state.lock:
                 runtime._state.run = None
+            if run.timeline is not None:
+                try:
+                    run.meta["timeline"] = await asyncio.get_running_loop().run_in_executor(
+                        runtime._RUN_EXECUTOR, run.timeline.close
+                    )
+                except Exception as e:
+                    logger.exception("closing the Act camera timeline failed")
+                    run.meta["timeline_error"] = f"{type(e).__name__}: {e}"
             with (
                 runtime._state.lock
             ):  # what carried the objects: each one's pose in the point groups, per frame

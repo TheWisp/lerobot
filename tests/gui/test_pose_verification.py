@@ -275,7 +275,7 @@ def test_held_reference_geometry_uses_the_same_refreshed_mask_as_matching(monkey
         return np.zeros((12, 3))
 
     monkeypatch.setattr(p.tracking, "_reference_surface", surface)
-    monkeypatch.setattr(p.tracking, "_surface_decision", lambda *a: {"pose": np.eye(4).tolist()})
+    monkeypatch.setattr(p.tracking, "_surface_decision", lambda *a, **kw: {"pose": np.eye(4).tolist()})
     p.tracking._constrain_find_result(
         job,
         {

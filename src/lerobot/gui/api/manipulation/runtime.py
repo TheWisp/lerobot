@@ -79,6 +79,7 @@ class _Job:
     depth_m: np.ndarray
     intr: dict[str, float]
     created: float
+    camera_stamp_mono: float | None = None  # host publication time of the source RGB-D frame
     taken: bool = False
     result: dict[str, Any] | None = None
     camera_check: dict[str, Any] | None = None  # marker drift on this frame; None without a calibration

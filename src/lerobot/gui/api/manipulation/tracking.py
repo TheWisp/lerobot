@@ -814,6 +814,7 @@ async def _apply_track_result(job: runtime._Job) -> None:
 async def _track_pump() -> None:
     """Feed the worker one frame at a time while tracking is on: the newest frame, never a backlog."""
     tr = runtime._state.track
+    last_camera_stamp = None
     try:
         while True:
             with runtime._state.lock:
@@ -827,17 +828,30 @@ async def _track_pump() -> None:
                 tr.last = {"state": "stopped", "reason": "the worker is not running"}
                 return
             try:
-                rgb, depth_m, intr = await camera._frame()
-            except HTTPException as e:
+                timed = await camera.timed_frame(last_camera_stamp)
+                if timed is None:
+                    rgb, depth_m, intr = await camera._frame()
+                    camera_stamp = None
+                else:
+                    rgb, depth_m, intr, camera_stamp = timed
+                    last_camera_stamp = camera_stamp
+            except (HTTPException, TimeoutError) as e:
                 # A frame that cannot be read now is waited out: a track that stopped here stayed stopped once the
                 # camera was back, while the live view went on showing its last frame as tracking.
-                tr.last = {"state": "waiting", "reason": e.detail}
+                tr.last = {"state": "waiting", "reason": e.detail if isinstance(e, HTTPException) else str(e)}
                 await asyncio.sleep(runtime.TRACK_FRAME_RETRY_S)
                 continue
             assert tr.done is not None
             tr.done.clear()
             job = worker._queue_job(
-                "track", teach.keypoints["concept"], rgb, depth_m, intr, algo=tr.algo, compress=False
+                "track",
+                teach.keypoints["concept"],
+                rgb,
+                depth_m,
+                intr,
+                algo=tr.algo,
+                compress=False,
+                camera_stamp_mono=camera_stamp,
             )
             with runtime._state.lock:
                 tr.job = job.id

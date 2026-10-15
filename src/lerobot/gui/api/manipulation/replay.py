@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import asyncio
+import bisect
 import contextlib
 import json
 import pathlib
@@ -51,6 +52,14 @@ def _replay_run(trial: int) -> tuple[pathlib.Path, dict[str, Any]]:
     return pathlib.Path(run), kept[1]
 
 
+def _replay_timeline(run: pathlib.Path) -> dict | None:
+    path = run / "camera" / "timeline.json"
+    if not path.exists():
+        return None
+    timeline = json.loads(path.read_text())
+    return timeline if timeline.get("rows") and timeline.get("saved") else None
+
+
 def _replay_text(
     bgr: np.ndarray, s: str, org: tuple[int, int], colour=(255, 255, 255), scale: float = 0.45
 ) -> None:
@@ -72,7 +81,14 @@ def _replay_objects(meta: dict[str, Any]) -> list[str]:
 
 
 def _replay_draw(
-    run: pathlib.Path, meta: dict[str, Any], i: int, points: dict[str, np.ndarray | None]
+    run: pathlib.Path,
+    meta: dict[str, Any],
+    i: int,
+    points: dict[str, np.ndarray | None],
+    *,
+    camera_bgr: np.ndarray | None = None,
+    at: float | None = None,
+    mono_at: float | None = None,
 ) -> np.ndarray:
     """Frame ``i`` of the act recorded in ``run`` (``meta`` its act.json) with what the act had then, every value as the
     run recorded it, each of the act's objects (:func:`_replay_objects`) in its colour of REPLAY_COLOURS: its mask
@@ -89,9 +105,10 @@ def _replay_draw(
     if not 0 <= i < len(frames):
         raise HTTPException(404, "no such frame")
     f, d = frames[i], run / "frames"
-    bgr = cv2.imread(str(d / f"{i:06d}.jpg"))
+    bgr = camera_bgr.copy() if camera_bgr is not None else cv2.imread(str(d / f"{i:06d}.jpg"))
     if bgr is None:
         raise HTTPException(404, "the frame's image is missing")
+    at = float(f["t_frame"] if at is None else at)
     intr, t0 = meta["intr"], float(meta.get("t_started") or f["t_frame"])
     t_bc = np.asarray(meta["t_bc"], dtype=float) if meta.get("t_bc") else None
     z: Any = np.load(d / f"{i:06d}.npz", allow_pickle=False) if (d / f"{i:06d}.npz").exists() else {}
@@ -165,18 +182,40 @@ def _replay_draw(
     if t_bc is not None and (run / "arm.npz").exists():
         arm = np.load(run / "arm.npz")
         if len(arm["t"]):
-            tip = arm["tip_obs"][int(np.argmin(np.abs(arm["t"] - f["t_frame"])))]
-            rendering._draw_tool(bgr, t_bc, intr, tip, "")
-        told = [x for x in meta.get("targets") or [] if "pose" in x and x["t"] <= f["t_frame"]]
-        if told and f["t_frame"] - told[-1]["t"] < 1.0:
+            tip = None
+            if mono_at is not None and "t_mono" in arm:
+                times = arm["t_mono"]
+                j = int(np.searchsorted(times, mono_at, side="left"))
+                if 0 < j < len(times) and 0 < times[j] - times[j - 1] <= 2.0 / 30.0:
+                    from lerobot.showservo import motion as core
+
+                    alpha = float((mono_at - times[j - 1]) / (times[j] - times[j - 1]))
+                    tip = core.interp_rigid(arm["tip_obs"][j - 1], arm["tip_obs"][j], alpha)
+            else:
+                nearest = int(np.argmin(np.abs(arm["t"] - at)))
+                if camera_bgr is None or abs(float(arm["t"][nearest]) - at) <= 2.0 / 30.0:
+                    tip = arm["tip_obs"][nearest]
+            if tip is not None:
+                rendering._draw_tool(bgr, t_bc, intr, tip, "")
+        told = [x for x in meta.get("targets") or [] if "pose" in x and x["t"] <= at]
+        if told and at - told[-1]["t"] < 1.0:
             p = camera._project(t_bc, intr, np.asarray(told[-1]["pose"], dtype=float)[:3, 3])
             if p is not None:
                 cv2.circle(bgr, p, 10, runtime.REPLAY_TOLD, 2, cv2.LINE_AA)
+    if camera_bgr is not None:
+        _draw_timeline_groups(bgr, meta, at, intr)
     lines = [
-        f"+{f['t_frame'] - t0:.1f} s  frame {i} of {len(frames)}  {f['step']}",
+        f"+{at - t0:.1f} s  frame {i} of {len(frames)}  {f['step']}",
         f"{first}: {f.get('state')}, following {'accepted' if f.get('used') else 'rejected'}  "
         f"{f.get('n_matches')} of {f.get('n_tracks')} points seen  depth agrees {f.get('depth_seen')}",
     ]
+    if camera_bgr is not None:
+        lines.insert(
+            0,
+            f"CAMERA timeline; last P2P source age "
+            f"{max(0.0, at - float(f.get('t_capture', f['t_frame']))):.2f} s "
+            f"(result available {max(0.0, at - float(f.get('t_result', f['t_frame']))):.2f} s ago)",
+        )
     for name in (
         others
     ):  # each object's own track entries; an earlier act's carry no name and are the one place object's
@@ -235,6 +274,34 @@ def _replay_draw(
     return bgr
 
 
+def _draw_timeline_groups(bgr: np.ndarray, meta: dict[str, Any], at: float, intr: dict) -> None:
+    """Show each group's newest measured centre, independently of the slower P2P overlay."""
+    import cv2
+
+    frames = (meta.get("groups") or {}).get("frames") or {}
+    for k, name in enumerate(_replay_objects(meta)):
+        samples = frames.get(name) or []
+        i = bisect.bisect_right([row[0] for row in samples], at) - 1
+        if i < 0:
+            continue
+        row = samples[i]
+        age = at - float(row[0])
+        if age > runtime.GROUPS_DRAW_MAX_AGE_S:
+            continue
+        xyz = np.asarray(row[1:], dtype=float).reshape(4, 4)[:3, 3]
+        if xyz[2] <= 0:
+            continue
+        u = int(round(intr["fx"] * xyz[0] / xyz[2] + intr["cx"]))
+        v = int(round(intr["fy"] * xyz[1] / xyz[2] + intr["cy"]))
+        if not (0 <= u < bgr.shape[1] and 0 <= v < bgr.shape[0]):
+            continue
+        colour = runtime.REPLAY_COLOURS[k % len(runtime.REPLAY_COLOURS)]
+        cv2.drawMarker(bgr, (u, v), colour, cv2.MARKER_CROSS, 18, 2, cv2.LINE_AA)
+        _replay_text(
+            bgr, f"group {name} ({age:.2f}s)", (min(u + 11, bgr.shape[1] - 160), max(v - 8, 16)), colour, 0.4
+        )
+
+
 def _replay_points(meta: dict[str, Any], demo: runtime._Demo | None) -> dict[str, np.ndarray | None]:
     """Each object joining the act's session, by name: its surface from the demo's view, for drawing where the act
     held it, when the act's demo is the one loaded; otherwise none."""
@@ -256,8 +323,18 @@ def _replay_jpeg(trial: int, i: int, demo: runtime._Demo | None, pair: bool = Fa
     import cv2
 
     run, meta = _replay_run(trial)
-    draw = _replay_pair if pair else _replay_draw
-    ok, buf = cv2.imencode(".jpg", draw(run, meta, i, _replay_points(meta, demo)))
+    points = _replay_points(meta, demo)
+    timeline = _replay_timeline(run)
+    if timeline is not None:
+        rows = timeline["rows"]
+        if not 0 <= i < len(rows):
+            raise HTTPException(404, "no such frame")
+        picture = _timeline_pair(run, meta, rows[i], points)
+        drawn = picture if pair else picture[:, picture.shape[1] // 2 :]
+    else:
+        draw = _replay_pair if pair else _replay_draw
+        drawn = draw(run, meta, i, points)
+    ok, buf = cv2.imencode(".jpg", drawn)
     assert ok, "a drawn frame encodes"
     return buf.tobytes()
 
@@ -275,14 +352,103 @@ def _replay_pair(
     return np.hstack([raw, drawn])
 
 
+def _timeline_pair(
+    run: pathlib.Path, meta: dict[str, Any], row: dict, points: dict[str, np.ndarray | None]
+) -> np.ndarray:
+    """One fixed-clock replay slot: its actual camera image and the asynchronous estimates known by then."""
+    import cv2
+
+    image = row.get("image")
+    raw = None if image is None else cv2.imread(str(run / "camera" / "rgb" / f"{image:06d}.jpg"))
+    if raw is None:
+        images = sorted((run / "camera" / "rgb").glob("*.jpg"))
+        first = cv2.imread(str(images[0])) if images else cv2.imread(str(run / "frames" / "000000.jpg"))
+        if first is None:
+            raise HTTPException(404, "the Act has no camera image")
+        raw = np.zeros_like(first)
+    at = float(row["t_wall"])
+    frames = meta.get("frames") or []
+    i = bisect.bisect_right([float(f.get("t_result", f["t_frame"])) for f in frames], at) - 1
+    if i >= 0:
+        # Project the arm at the image's host publication time, not the later
+        # replay slot. The slot still determines which async results were known.
+        image_mono = row.get("camera_mono") or row["t_mono"]
+        drawn = _replay_draw(run, meta, i, points, camera_bgr=raw, at=at, mono_at=float(image_mono))
+    else:
+        drawn = raw.copy()
+        _draw_timeline_groups(drawn, meta, at, meta["intr"])
+        _replay_text(drawn, "P2P result pending", (8, 18))
+        if any("pose_verification" in f for f in frames):
+            slots = max(
+                len(_replay_objects(meta)), max(len(f.get("pose_verification") or []) for f in frames)
+            )
+            drawn = rendering._pose_verification_panel(drawn, None, slots)
+    if row.get("status") not in ("captured", "held_camera_frame"):
+        _replay_text(drawn, f"timeline: {row['status']}", (8, 35), (0, 150, 255))
+    if row.get("camera_mono") is not None:
+        age = max(0.0, float(row["t_mono"]) - float(row["camera_mono"]))
+        _replay_text(drawn, f"camera age {age:.2f}s", (8, 52), (200, 200, 200))
+    raw = cv2.copyMakeBorder(raw, 0, drawn.shape[0] - raw.shape[0], 0, 0, cv2.BORDER_CONSTANT)
+    return np.hstack([raw, drawn])
+
+
+def _timeline_video_file(
+    run: pathlib.Path, meta: dict[str, Any], points: dict[str, np.ndarray | None], timeline: dict
+) -> pathlib.Path:
+    """Encode the fixed-rate observation timeline, never substituting P2P's variable result cadence."""
+    rows = timeline["rows"]
+    fps = float(timeline["fps"])
+    picture = _timeline_pair(run, meta, rows[0], points)
+    h, w = picture.shape[:2]
+    out = run / "replay.mp4"
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-loglevel",
+        "error",
+        "-f",
+        "rawvideo",
+        "-pix_fmt",
+        "bgr24",
+        "-s",
+        f"{w}x{h}",
+        "-r",
+        str(fps),
+        "-i",
+        "-",
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        "-movflags",
+        "+faststart",
+        str(out),
+    ]
+    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        assert proc.stdin is not None
+        for row in rows:
+            picture = _timeline_pair(run, meta, row, points)
+            proc.stdin.write(np.ascontiguousarray(picture).tobytes())
+        _out, err = proc.communicate(timeout=runtime.REPLAY_VIDEO_TIMEOUT_S)
+    except BaseException:
+        proc.kill()
+        proc.wait()
+        raise
+    if proc.returncode != 0:
+        raise HTTPException(500, f"the video encoder failed: {err.decode(errors='replace')[-300:]}")
+    return out
+
+
 def _replay_video_file(
     run: pathlib.Path, meta: dict[str, Any], points: dict[str, np.ndarray | None]
 ) -> pathlib.Path:
     """The act recorded in ``run`` as ``run/replay.mp4`` (H.264): every recorded frame as the camera saw it beside it
     drawn (:func:`_replay_pair`), shown from its own time until the next one's, at :data:`REPLAY_VIDEO_FPS`, so it
     plays at the act's own pace. Raises HTTPException when the act recorded no frame or the encoder fails."""
-    import bisect
-
+    timeline = _replay_timeline(run)
+    if timeline is not None:
+        return _timeline_video_file(run, meta, points, timeline)
     frames = meta.get("frames") or []
     if not frames:
         raise HTTPException(404, "this act recorded no frames")
@@ -333,23 +499,49 @@ def _replay_video(trial: int, demo: runtime._Demo | None) -> pathlib.Path:
 async def replay(trial: int) -> dict:
     """An act's recording for its replay: each frame's time and step, and whether the act recorded where it held the
     objects joining its session."""
-    _run, meta = await asyncio.get_running_loop().run_in_executor(
-        runtime._REPLAY_EXECUTOR, _replay_run, trial
-    )
+    run, meta = await asyncio.get_running_loop().run_in_executor(runtime._REPLAY_EXECUTOR, _replay_run, trial)
     frames = meta.get("frames") or []
     t0 = float(meta.get("t_started") or (frames[0]["t_frame"] if frames else 0.0))
+    timeline = await asyncio.get_running_loop().run_in_executor(
+        runtime._REPLAY_EXECUTOR, _replay_timeline, run
+    )
+    if timeline is not None:
+        rows = timeline["rows"]
+        times = [float(row["t_wall"]) for row in rows]
+        results = [float(f.get("t_result", f["t_frame"])) for f in frames]
+        listed = []
+        for i in range(len(rows)):
+            j = bisect.bisect_right(results, times[i]) - 1
+            listed.append(
+                {
+                    "i": i,
+                    "t": round(i / float(timeline["fps"]), 3),
+                    "step": frames[j]["step"] if j >= 0 else "camera",
+                }
+            )
+        disagreements = sorted(
+            {
+                min(len(rows) - 1, bisect.bisect_left(times, results[k]))
+                for k, f in enumerate(frames)
+                if any(c.get("disagreement") for c in f.get("pose_verification") or ())
+            }
+        )
+    else:
+        listed = [{"i": f["i"], "t": round(f["t_frame"] - t0, 2), "step": f["step"]} for f in frames]
+        disagreements = [
+            f["i"] for f in frames if any(c.get("disagreement") for c in f.get("pose_verification") or ())
+        ]
     return {
         "trial": trial,
-        "n": len(frames),
-        "frames": [{"i": f["i"], "t": round(f["t_frame"] - t0, 2), "step": f["step"]} for f in frames],
+        "n": len(listed),
+        "frames": listed,
+        **({"fps": timeline["fps"]} if timeline is not None else {}),
         "result": meta.get("result"),
         "held_recorded": any(
             "onto_held_from" in f or any(len(h) > 1 for h in f.get("held") or []) for f in frames
         ),
         "pose_verification_recorded": any("pose_verification" in f for f in frames),
-        "pose_disagreement_frames": [
-            f["i"] for f in frames if any(c.get("disagreement") for c in f.get("pose_verification") or ())
-        ],
+        "pose_disagreement_frames": disagreements,
     }
 
 
