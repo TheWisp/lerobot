@@ -116,6 +116,7 @@ class CollisionTests(unittest.TestCase):
     def test_floor_checks_arm_and_target_contact_cannot_disable_it(self):
         s = self.scene(floor=[box([0.5, 0.5, 0.05], pose(0, 0, -0.025))])
         self.assertFalse(s.check(np.array([0, 0, 0.001]), contact="cube", support=True))
+        self.assertEqual(s.reason, "tray collision L6_jaw")
         self.assertTrue(s.check(np.array([0, 0, 0.03])))
 
     def test_nonfinite_configuration_is_rejected_before_geometry(self):
@@ -127,6 +128,7 @@ class CollisionTests(unittest.TestCase):
             scene = CollisionScene.from_observation(BoxRobot(), {}, frame)
         self.assertFalse(scene.check(np.array([0, -0.2, 0.1])))
         self.assertIn("unobserved scene space", scene.reason)
+        self.assertIn("mm", scene.reason)
 
     def test_oblique_self_occlusion_applies_at_the_hidden_tray_cell(self):
         # The self return and the hidden tray are in different XY cells.

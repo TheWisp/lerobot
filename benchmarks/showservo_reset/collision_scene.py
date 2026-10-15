@@ -376,11 +376,17 @@ class CollisionScene:
                 return False
         for i, link in enumerate(links):
             name = self.robot.geom.geometryObjects[i].name
-            if self._manager_hit(self.manager, link) or self._manager_hit(self.floor_manager, link):
+            if self._manager_hit(self.manager, link):
                 self.reason = f"scene collision {name}"
                 return False
+            if self._manager_hit(self.floor_manager, link):
+                self.reason = f"tray collision {name}"
+                return False
             if self._manager_hit(self.unknown_manager, link):
-                self.reason = f"unobserved scene space at {name}"
+                at = self.contact_point * 1000
+                self.reason = (
+                    f"unobserved scene space at {name} near ({at[0]:.0f}, {at[1]:.0f}, {at[2]:.0f}) mm"
+                )
                 return False
             for key, body in self.bodies.items():
                 if attached and key == attached[0]:

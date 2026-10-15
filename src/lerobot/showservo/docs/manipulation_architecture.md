@@ -215,8 +215,7 @@ count, selected cost and plan summaries, not the entire candidate search.
 
 ### Grasp and transit freedom at an interaction
 
-**NOT IMPLEMENTED.** [Issue #267](https://github.com/TheWisp/lerobot/issues/267)
-tracks the gap between a demonstrated tool path and a task constraint. For a
+**NOT IMPLEMENTED.** The remaining design gap is between a demonstrated tool path and a task constraint. For a
 rigid pick and insertion, the required relation is the held object's pose
 relative to the receiving object at contact, modulo only a declared task
 symmetry. The demonstration's grip point, jaw side, wrist angle and free-space
@@ -267,7 +266,18 @@ It does not justify discarding the measured rotation to make the wrist easier
 to reach. A coarse offline search of rotations about the object's own long
 axis found 102 near-jaw poses with a low IK residual, but none had a verified
 opposing pinch; two cleared only the _observed_ obstacles after unknown mount
-space was excluded. Those are exploratory samples, not a safe act plan. The
+space was excluded. A subsequent search with finer vertical sampling found
+opposing side contacts whose jaw meshes stay above the tray. Of its first 60
+ranked contact candidates, 35 matched IK within 2 mm and 2 degrees. Two also
+cleared observed obstacles at their final joint configurations. Neither cleared
+the full unknown-space model: an upper-arm link enters a region near
+(-7, -86, 235) mm outside the overhead camera's image. The already-parked arm
+also intersects an unknown volume. Thus the refusal is an observation/collision
+model limit, **not** evidence that the dowel is physically out of reach. Final
+pose clearance alone does not certify an approach or closing sweep, so no
+physical act was sent. A sampled top-down search found six geometric side
+pinches, but none met the joint limits; this does not rule out other approaches.
+These are exploratory samples, not a safe act plan. The
 saved frame, tracker state, point-cloud plot and search scripts are under
 `/home/feit/Documents/showservo-experiments/20261015/grasp-freedom/`.
 
