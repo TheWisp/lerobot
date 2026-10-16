@@ -368,35 +368,40 @@ def act_frames(demo, overlay):
 
 def title_frames(summary=False):
     if summary:
-        background = Image.new("RGB", (W, H), BG)
-        card = background.copy()
-        draw = ImageDraw.Draw(card)
-        text(card, (80, 65), "FLASH", 92, ACCENT, bold=True)
-        text(card, (80, 175), "A Spatial-Action Model", 41, MUTED)
-        draw.line((80, 240, W - 80, 240), fill=(42, 65, 75), width=2)
+        cap = cv2.VideoCapture(str(OUT / "stacking_grid_raw.mp4"))
+        cap.set(cv2.CAP_PROP_POS_FRAMES, STACKING_GRID_SECONDS * FPS - 150)
         properties = (
-            "One demo",
+            "One demo, no learning",
             "Model-free",
+            "Placement generalization",
             "Viewpoint generalization",
             "Occlusion robustness",
-            "Perturbation robustness",
             "Real time",
         )
-        for i, label in enumerate(properties):
-            x = 80 + (i % 2) * 915
-            y = 270 + (i // 2) * 245
-            draw.rounded_rectangle(
-                (x, y, x + 845, y + 215),
-                radius=22,
-                fill=(18, 30, 42),
-                outline=(43, 67, 77),
-                width=2,
-            )
-            draw.rounded_rectangle((x + 40, y + 42, x + 112, y + 51), radius=4, fill=ACCENT)
-            text(card, (x + 40, y + 90), label, 52, bold=True)
-        for n in range(150):
-            frame = Image.blend(background, card, min(1.0, (n + 1) / 10))
+        for _n in range(150):
+            ok, bgr = cap.read()
+            assert ok
+            bgr = cv2.resize(bgr[84:1056, 24:1896], (W, H))
+            bgr = cv2.GaussianBlur(bgr, (0, 0), 20)
+            background = Image.fromarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))
+            background = Image.blend(background, Image.new("RGB", (W, H), BG), 0.65)
+            cards = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+            draw = ImageDraw.Draw(cards)
+            for i, label in enumerate(properties):
+                x = 80 + (i % 2) * 915
+                y = 140 + (i // 2) * 290
+                draw.rounded_rectangle(
+                    (x, y, x + 845, y + 225),
+                    radius=22,
+                    fill=(8, 18, 28, 195),
+                    outline=(112, 234, 207, 100),
+                    width=2,
+                )
+                draw.rounded_rectangle((x + 40, y + 48, x + 112, y + 57), radius=4, fill=(*ACCENT, 255))
+                draw.text((x + 40, y + 95), label, font=font(51, True), fill=(*WHITE, 255))
+            frame = Image.alpha_composite(background.convert("RGBA"), cards).convert("RGB")
             yield cv2.cvtColor(np.asarray(frame), cv2.COLOR_RGB2BGR)
+        cap.release()
         return
 
     cap = cv2.VideoCapture(str(OUT / "stacking_grid_raw.mp4"))
@@ -453,14 +458,14 @@ def main():
             OVERLAY_START_S,
             TIMELINE["rows"][-1]["t_wall"] - META["t_started"],
         ],
-        "edit_revision": 9,
+        "edit_revision": 10,
         "grid_seconds": STACKING_GRID_SECONDS,
         "insertion_grid_seconds": INSERTION_GRID_SECONDS,
         "grid_layout": [3, 3],
         "grid_crop_size": GRID_CROP_SIZE,
         "grid_overlay_fade_seconds": None,
         "summary_real_time_claim": "Real time",
-        "claim_scope": "No pre-scanned object mesh or task-specific weight fine-tuning is used in these rigid-object runs. The demo supplies object-relative goals; live vision updates object poses; reachability/IK plans arm motion. Deformable surfaces may contain trackable visual features, but deformable 6-DoF action transfer has not been demonstrated and is not claimed in the video.",
+        "claim_scope": "'No learning' means no task-specific training or fine-tuning; the perception backbones are pretrained. No pre-scanned object mesh is used in these rigid-object runs. The demo supplies object-relative goals; live vision updates object poses; reachability/IK plans arm motion. Deformable surfaces may contain trackable visual features, but deformable 6-DoF action transfer has not been demonstrated and is not claimed in the video.",
         "title_seconds": 1.5,
         "transitions": [
             {
@@ -474,13 +479,14 @@ def main():
         ],
         "summary_seconds": 5.0,
         "summary_properties": [
-            "One demo",
+            "One demo, no learning",
             "Model-free",
+            "Placement generalization",
             "Viewpoint generalization",
             "Occlusion robustness",
-            "Perturbation robustness",
             "Real time",
         ],
+        "summary_background": "Darkened, blurred, moving raw stacking grid footage",
         "grid_sources": [
             {
                 "run": str(s.run),

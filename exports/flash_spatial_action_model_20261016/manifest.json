@@ -17,7 +17,7 @@
     5.5,
     16.333541870117188
   ],
-  "edit_revision": 9,
+  "edit_revision": 10,
   "grid_seconds": 12,
   "insertion_grid_seconds": 9,
   "grid_layout": [
@@ -30,7 +30,7 @@
   ],
   "grid_overlay_fade_seconds": null,
   "summary_real_time_claim": "Real time",
-  "claim_scope": "No pre-scanned object mesh or task-specific weight fine-tuning is used in these rigid-object runs. The demo supplies object-relative goals; live vision updates object poses; reachability/IK plans arm motion. Deformable surfaces may contain trackable visual features, but deformable 6-DoF action transfer has not been demonstrated and is not claimed in the video.",
+  "claim_scope": "'No learning' means no task-specific training or fine-tuning; the perception backbones are pretrained. No pre-scanned object mesh is used in these rigid-object runs. The demo supplies object-relative goals; live vision updates object poses; reachability/IK plans arm motion. Deformable surfaces may contain trackable visual features, but deformable 6-DoF action transfer has not been demonstrated and is not claimed in the video.",
   "title_seconds": 1.5,
   "transitions": [
     {
@@ -71,13 +71,14 @@
   ],
   "summary_seconds": 5.0,
   "summary_properties": [
-    "One demo",
+    "One demo, no learning",
     "Model-free",
+    "Placement generalization",
     "Viewpoint generalization",
     "Occlusion robustness",
-    "Perturbation robustness",
     "Real time"
   ],
+  "summary_background": "Darkened, blurred, moving raw stacking grid footage",
   "grid_sources": [
     {
       "run": "/home/feit/.cache/huggingface/lerobot/demos/pick_place/acts/20261011_080249",
