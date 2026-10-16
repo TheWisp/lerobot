@@ -17,7 +17,7 @@
     5.5,
     24.5
   ],
-  "edit_revision": 3,
+  "edit_revision": 4,
   "grid_seconds": 9,
   "grid_layout": [
     3,
@@ -27,10 +27,8 @@
     320,
     164
   ],
-  "grid_overlay_fade_seconds": [
-    5,
-    6
-  ],
+  "grid_overlay_fade_seconds": null,
+  "summary_real_time_claim": "Real time",
   "title_seconds": 1.5,
   "summary_seconds": 3.5,
   "grid_sources": [
@@ -201,7 +199,7 @@
   ],
   "insertion_grid_selection": "Nine camera-timeline runs visually checked for a seated dowel and visible retreat. All use the same crop dimensions as the placement grid, centred on insertion. Completed runs with a missed ring were excluded.",
   "timing": "Camera timeline at 30 Hz; latest available recorded async result. Older grid clips use recorded t_frame timestamps and hold frames, with no optical-flow interpolation. Last frame held where a source ends.",
-  "overlay": "Main insertion replay uses existing drawing without diagnostic prose/panel. Grids show only the recorded target silhouette, fading to raw footage during retreat. Target pose is a recorded accepted/predicted estimate, not ground truth.",
+  "overlay": "Main insertion replay uses existing drawing without diagnostic prose/panel. Both grids retain every available recorded segmentation outline, raw-model silhouette, accepted/predicted target silhouette and scene wireframe through the last frame, without fading. Missing recorded geometry is not fabricated. Poses are estimates, not ground truth.",
   "audit": {
     "completed": true,
     "visually_observed_insertion": true,

@@ -156,24 +156,65 @@ def encode(name, frames, count):
     print(f"Complete: {name}", flush=True)
 
 
-def target_outline(raw, run, meta, i, points, name):
-    """Draw only the target silhouette from the recorded pose, without labels."""
+def mask_outline(drawn, mask, colour):
+    if mask is not None:
+        contours, _ = cv2.findContours(
+            np.asarray(mask, dtype=np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+        )
+        cv2.drawContours(drawn, contours, -1, colour, 1, cv2.LINE_AA)
+
+
+def pose_outline(drawn, intr, points, pose, _label, colour=rendering.runtime.FOUND_COLOUR):
+    mask_outline(drawn, rendering._found_mask(intr, points, pose, drawn.shape), colour)
+
+
+def object_outlines(raw, run, meta, i, points):
+    """Retain all recorded object silhouettes and scene wireframes, without point dots or labels."""
+    from lerobot.showservo import groups_scene
+
     drawn = raw.copy()
     if i < 0:
         return drawn
     frame = meta["frames"][i]
+    names = replay._replay_objects(meta)
+    colours = {
+        n: rendering.runtime.REPLAY_COLOURS[k % len(rendering.runtime.REPLAY_COLOURS)]
+        for k, n in enumerate(names)
+    }
     with np.load(run / "frames" / f"{i:06d}.npz") as z:
-        pose = z.get("onto_held")
+        recorded_groups = frame.get("groups") or {}
+        if "groups_links" in z and "groups_points" in z:
+            picture = {"depth_range": recorded_groups.get("depth_range")}
+            picture.update(
+                points=z["groups_points"],
+                links=z["groups_links"],
+                depth=z.get("groups_depth"),
+                joins=z.get("groups_joins"),
+            )
+            drawn = groups_scene.paint_wire(drawn, picture, bar=False)
+        mask = cv2.imread(str(run / "frames" / f"{i:06d}_mask.png"), cv2.IMREAD_GRAYSCALE)
+        mask_outline(drawn, None if mask is None else mask > 0, colours[names[0]])
+        others = frame.get("others") if frame.get("others") is not None else names[1:2]
+        for k, name in enumerate(others):
+            mask_outline(
+                drawn, z.get(f"other_mask_{k}"), colours.get(name, rendering.runtime.REPLAY_COLOURS[-1])
+            )
+        # Reuse the replay's recorded-model validity rules, drawing only its
+        # silhouette in this presentation. Restore the live renderer immediately.
+        original = rendering._draw_found
+        try:
+            rendering._draw_found = pose_outline
+            rendering._draw_track_estimate(drawn, meta["intr"], frame, z, names[0])
+        finally:
+            rendering._draw_found = original
+        held_poses = {}
+        if "onto_held" in z and len(names) > 1:
+            held_poses[names[1]] = z["onto_held"]
         for k, held in enumerate(frame.get("held") or []):
-            if held["object"] == name:
-                pose = z.get(f"held_{k}")
-        if pose is not None:
-            mask = rendering._found_mask(meta["intr"], points[name], pose, raw.shape)
-            if mask is not None:
-                contours, _ = cv2.findContours(
-                    mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-                )
-                cv2.drawContours(drawn, contours, -1, rendering.runtime.FOUND_COLOUR, 1, cv2.LINE_AA)
+            held_poses[held["object"]] = z.get(f"held_{k}")
+        for name, pose in held_poses.items():
+            if pose is not None and points.get(name) is not None:
+                pose_outline(drawn, meta["intr"], points[name], pose, name)
     return drawn
 
 
@@ -200,12 +241,11 @@ class Stack:
         i = min(i, len(self.times) - 1)
         if i != self.last:
             raw = cv2.imread(str(self.run / "frames" / f"{i:06d}.jpg"))
-            drawn = target_outline(raw, self.run, self.meta, i, self.points, "cube")
+            drawn = object_outlines(raw, self.run, self.meta, i, self.points)
             self.raw = tile_crop(raw, self.centre)
             self.drawn = tile_crop(drawn, self.centre)
             self.last = i
-        alpha = float(np.clip(6.0 - t, 0, 1)) if overlay else 0.0
-        return cv2.addWeighted(self.drawn, alpha, self.raw, 1 - alpha, 0)
+        return self.drawn if overlay else self.raw
 
 
 class Insertion:
@@ -230,12 +270,11 @@ class Insertion:
         if key != self.last:
             raw = cv2.imread(str(self.run / "camera/rgb" / f"{row['image']:06d}.jpg"))
             assert raw is not None
-            drawn = target_outline(raw, self.run, self.meta, source, self.points, "ring")
+            drawn = object_outlines(raw, self.run, self.meta, source, self.points)
             self.raw = tile_crop(raw, self.centre)
             self.drawn = tile_crop(drawn, self.centre)
             self.last = key
-        alpha = float(np.clip(6.0 - t, 0, 1)) if overlay else 0.0
-        return cv2.addWeighted(self.drawn, alpha, self.raw, 1 - alpha, 0)
+        return self.drawn if overlay else self.raw
 
 
 def grid(stacks, overlay, subject="pick and place"):
@@ -333,9 +372,10 @@ def title_frames(summary=False):
         bgr = (bgr.astype(float) * 0.32 + np.asarray(BG[::-1]) * 0.35).clip(0, 255).astype(np.uint8)
         im = Image.fromarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))
         if summary:
-            text(im, (160, 330), "Single-demo generalization", 68, bold=True)
-            text(im, (160, 425), "Object poses · Camera viewpoints", 52, ACCENT)
-            text(im, (160, 620), "Robust to occlusion & perturbations", 64, bold=True)
+            text(im, (160, 245), "Single-demo generalization", 68, bold=True)
+            text(im, (160, 340), "Object poses · Camera viewpoints", 52, ACCENT)
+            text(im, (160, 520), "Robust to occlusion & perturbations", 64, bold=True)
+            text(im, (160, 700), "Real time", 64, bold=True)
         else:
             text(im, (W // 2, 350), "Preview: FLASH", 128, bold=True, anchor="ma")
             text(im, (W // 2, 550), "A Spatial-Action Model", 70, anchor="ma")
@@ -357,11 +397,12 @@ def main():
         "controller_speed_during_recording": 2.0,
         "demo_cut_seconds": [4.5, 17.5],
         "overlay_cut_seconds": [5.5, 24.5],
-        "edit_revision": 3,
+        "edit_revision": 4,
         "grid_seconds": GRID_SECONDS,
         "grid_layout": [3, 3],
         "grid_crop_size": GRID_CROP_SIZE,
-        "grid_overlay_fade_seconds": [5, 6],
+        "grid_overlay_fade_seconds": None,
+        "summary_real_time_claim": "Real time",
         "title_seconds": 1.5,
         "summary_seconds": 3.5,
         "grid_sources": [
@@ -384,7 +425,7 @@ def main():
         ],
         "insertion_grid_selection": "Nine camera-timeline runs visually checked for a seated dowel and visible retreat. All use the same crop dimensions as the placement grid, centred on insertion. Completed runs with a missed ring were excluded.",
         "timing": "Camera timeline at 30 Hz; latest available recorded async result. Older grid clips use recorded t_frame timestamps and hold frames, with no optical-flow interpolation. Last frame held where a source ends.",
-        "overlay": "Main insertion replay uses existing drawing without diagnostic prose/panel. Grids show only the recorded target silhouette, fading to raw footage during retreat. Target pose is a recorded accepted/predicted estimate, not ground truth.",
+        "overlay": "Main insertion replay uses existing drawing without diagnostic prose/panel. Both grids retain every available recorded segmentation outline, raw-model silhouette, accepted/predicted target silhouette and scene wireframe through the last frame, without fading. Missing recorded geometry is not fabricated. Poses are estimates, not ground truth.",
         "audit": {
             "completed": True,
             "visually_observed_insertion": True,
