@@ -752,6 +752,32 @@ def test_free_waypoint_curve_brakes_at_endpoint_and_checks_incoming_velocity():
     ), "a failed curve cannot silently fall back to a velocity jump"
 
 
+def test_free_waypoint_curve_cannot_overshoot_a_joint_limit():
+    kin = _TipKinematics()
+    start = np.zeros(len(MOTOR_NAMES))
+    previous = start.copy()
+    previous[0] = 1.0  # incoming motion toward the lower bound
+    end = start.copy()
+    end[0] = -1.0
+    result = {"q": end, "pose": pose(-0.001), "reason": "", "complete": True}
+    args = (kin, start, result, 6, MOTOR_NAMES.index("gripper"), ((-1, -1, -1), (1, 1, 1)), -1, 2)
+    unbounded = reactive.checked_joint_samples(
+        *args, previous_sample=previous, max_joint_accel_deg=3, continuous=True
+    )
+    assert unbounded is not None and min(q[0] for q in unbounded) < -1.0
+    bound = np.full(len(MOTOR_NAMES), 1.0)
+    assert (
+        reactive.checked_joint_samples(
+            *args,
+            previous_sample=previous,
+            max_joint_accel_deg=3,
+            continuous=True,
+            joint_ranges=(-bound, bound),
+        )
+        is None
+    )
+
+
 @pytest.mark.parametrize("move_target", [False, True])
 def test_free_line_aims_at_real_waypoint_but_does_not_skip_release(monkeypatch, move_target):
     kin = _TipKinematics()

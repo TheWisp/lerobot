@@ -154,6 +154,7 @@ def checked_joint_samples(
     previous_sample: np.ndarray | None = None,
     max_joint_accel_deg: float | None = None,
     continuous: bool = False,
+    joint_ranges: tuple[np.ndarray, np.ndarray] | None = None,
 ) -> list[np.ndarray] | None:
     """Interpolate a solved step at motor rate only when its whole joint path is checked.
 
@@ -175,11 +176,17 @@ def checked_joint_samples(
     end_pose = np.asarray(result.get("pose", kin.forward_kinematics(endpoint)))
     lo, hi = np.asarray(box[0]), np.asarray(box[1])
     bottom = min(lo[2], floor, start_pose[2, 3])
+    if joint_ranges is not None:
+        joint_lo, joint_hi = (np.asarray(bound, dtype=float) for bound in joint_ranges)
 
     def checked(samples: list[np.ndarray], *, acceleration: np.ndarray | None = None) -> bool:
         steps = np.diff(np.stack([previous, *samples]), axis=0)
         if np.max(np.abs(steps[:, arm])) > max_joint_tick_deg:
             return False
+        if joint_ranges is not None:
+            commands = np.asarray(samples)[:, arm]
+            if np.any(commands < joint_lo[arm] - 1e-6) or np.any(commands > joint_hi[arm] + 1e-6):
+                return False
         if continuous and previous_sample is not None and max_joint_accel_deg is not None:
             incoming = previous - np.asarray(previous_sample, dtype=float)
             if (

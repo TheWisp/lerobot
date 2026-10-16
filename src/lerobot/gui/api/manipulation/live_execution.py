@@ -393,6 +393,7 @@ async def stream(
                     previous_sample=qs[max(0, base - 1)],
                     max_joint_accel_deg=jog.RAMP_DEG_S * speed / jog.HZ,
                     continuous=continuous,
+                    joint_ranges=solve_args[6],
                 ),
             )
             if samples is not None:
