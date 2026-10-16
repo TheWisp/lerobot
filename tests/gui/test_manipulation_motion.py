@@ -1823,6 +1823,46 @@ def test_best_effort_waypoint_stops_at_reachable_prefix_and_replans_next_exact_f
     )
 
 
+def test_unreachable_follow_reports_pose_residual_instead_of_crashing():
+    from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
+
+    class ShortArm(_StepKinematics):
+        def inverse_kinematics(self, seed, pose):
+            q = super().inverse_kinematics(seed, pose)
+            q[:3] = np.clip(q[:3], -50.0, 50.0)
+            return q
+
+    samples, history = _samples_and_history(n=30)
+
+    def fk(q):
+        pose = np.eye(4)
+        pose[0, 3] = q["shoulder_pan"] / 1000
+        return pose
+
+    demo = manipulation.demos._demo_from_samples("d", "object", samples, history, fk, t0=1000.0)
+    demo.taught = True
+    demo.tips[9:19, 0, 3] = np.linspace(0.01, 0.08, 10)
+    demo.keypoints = [
+        {"t": float(demo.t[9]), "kind": "key", "frame": "world", "move": "line", "grip": "first"},
+        {"t": float(demo.t[18]), "kind": "key", "frame": "world", "move": "follow", "grip": "first"},
+    ]
+    q_now = np.zeros(len(MOTOR_NAMES))
+    q_now[-1] = 10
+    result = manipulation.planning._plan_act_once(
+        demo,
+        None,
+        np.eye(4),
+        ShortArm(),
+        q_now,
+        (0.04, np.radians(30)),
+        ((-1, -1, -1), (1, 1, 1)),
+        1.0,
+    )
+    assert not result["ok"]
+    assert "pose residual" in result["reason"]
+    assert all("residual_deg" in mark for mark in result["marks"])
+
+
 def _with_lift(marks, t_lift, up_mm):
     """``marks`` as the key frames they make ("key" marks), with a lift at ``t_lift``."""
     keys = [

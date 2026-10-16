@@ -873,6 +873,7 @@ def _plan_act_once(
                 "label": s["label"],
                 "t": s["t"],
                 "residual_mm": float(sol["residual_m"][a : b + 1].max() * 1000.0),
+                "residual_deg": float(sol["residual_deg"][a : b + 1].max()),
                 "ok": bool(fine[a : b + 1].all()),
             }
         )
