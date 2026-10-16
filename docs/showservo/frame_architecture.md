@@ -153,6 +153,34 @@ reference bank is still chosen from demo held views. The common observation
 interface and downstream gripper adapter are implemented; a universal bank
 and automatic re-detection policy for every object are not.
 
+## Decision: retain the current paths for now (16 October)
+
+Keep regular tracking and asynchronous reference matching as currently
+implemented. Defer further pipeline unification; this decision changes no
+runtime behavior or defaults.
+
+The useful distinction is the operation, not whether the object is held.
+Regular tracking reuses temporal correspondences cheaply. Fresh registration
+can recover after those correspondences fail through rotation, occlusion or
+object displacement, by matching another reference view. Both operations are
+useful for any object. Restricting the latter to held-object demo views is a
+current implementation limitation, not a desired architectural boundary.
+
+The intended design is one pose-update system per object, with inexpensive
+tracking and asynchronous reference matching feeding common validation and
+pose publication. Reference selection can use earlier observations of the same
+instance in the current run or suitable demo views, preserving their different
+geometry assumptions. The gripper-to-object attachment update remains a
+separate consumer: it combines accepted object evidence with capture-time
+encoder poses and preserves unobserved degrees of freedom. Attachment
+prediction is not independent visual evidence.
+
+The three-replay comparison below supports retaining the fallback and its
+computational behavior. It does not establish fast-path correction accuracy,
+or justify a permanently held-specific perception pipeline. The common
+interface and attachment adapter are implemented; universal reference selection
+and recovery scheduling remain **NOT IMPLEMENTED**.
+
 ## Intended common reference-selection policy
 
 ```mermaid
