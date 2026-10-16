@@ -541,21 +541,23 @@ def _loop(j: _Jog) -> None:
     grip = float(j.q_cmd["gripper"])
     period = 1.0 / HZ
     last_tick_at = 0.0
-    read_durations = deque(maxlen=max(1, int(HZ / 3)))
+    next_tick = time.perf_counter()
     gc_seen = _gc_ms
     while not j.stop.is_set():
-        # Begin the next checked read just before the next write is due.
-        # A recent fast read predicts its duration; a rare long read must not
-        # make subsequent reads stale by a whole motor period.
+        # Each tick reads and then writes at once, on a fixed 30 Hz schedule, as LeRobot's predictive controller paces
+        # its bus thread. Timing each period from the previous write lost the tick's own work every period (28.5
+        # ticks/s with nothing else running), and a second sleep between read and write was one more wake that waits
+        # for the GIL in a busy process. A late tick is followed on schedule, so the commands keep their rate; one that
+        # overran the next slot restarts the schedule a period after its write, so a stall is never followed by
+        # commands back to back.
         pre_read_wait_start = time.perf_counter()
-        read_budget = 0.0
-        read_due = pre_read_wait_start
-        if last_tick_at:
-            read_budget = min(read_durations) if read_durations else 0.0
-            read_due = last_tick_at + period - read_budget
-            time.sleep(max(0.0, read_due - pre_read_wait_start))
+        if next_tick <= pre_read_wait_start:
+            next_tick = max(pre_read_wait_start, last_tick_at + period)
+        if next_tick > pre_read_wait_start:
+            time.sleep(next_tick - pre_read_wait_start)
             if j.stop.is_set():
                 break
+        read_due, next_tick = next_tick, next_tick + period
         t0 = time.perf_counter()
         try:
             with j.lock:
@@ -590,14 +592,6 @@ def _loop(j: _Jog) -> None:
             observed_at = time.perf_counter()
             t_read = time.perf_counter()
             read_cpu_ms = 1000.0 * (time.thread_time() - read_cpu_start)
-            read_durations.append(t_read - t_locked)
-            if last_tick_at:
-                # Count the read as part of the 33 ms motor period, as LeRobot's
-                # record loop does. Still never write earlier than one period
-                # after the previous tick, even if this read was unexpectedly
-                # fast after a slow one.
-                time.sleep(max(0.0, last_tick_at + period - t_read))
-            t_paced = time.perf_counter()
             send_action_ms = send_action_cpu_ms = np.nan
             if grip_target is not None:
                 step = GRIP_UNITS_S / HZ
@@ -701,8 +695,8 @@ def _loop(j: _Jog) -> None:
                 t_end = time.perf_counter()
                 j.tick_s.append(t_end - t0)
                 if t_end - t0 > SLOW_TICK_S:
-                    marks = (t0, t_locked, t_read, t_paced, t_sent, t_end)
-                    phases = ("lock", "read_state", "pace", "command", "lock_again")
+                    marks = (t0, t_locked, t_read, t_sent, t_end)
+                    phases = ("lock", "read_state", "command", "lock_again")
                     j.slow_ticks.append(
                         {
                             "at": time.time(),
@@ -746,16 +740,15 @@ def _loop(j: _Jog) -> None:
                             "bus_tx_ms": bus_timing.tx_ms if bus_timing is not None else np.nan,
                             "bus_rx_ms": bus_timing.rx_ms if bus_timing is not None else np.nan,
                             "bus_decode_ms": bus_timing.decode_ms if bus_timing is not None else np.nan,
+                            "bus_rx_wait_ms": bus_timing.rx_wait_ms if bus_timing is not None else np.nan,
                             "bus_rx_motor_ms": bus_timing.rx_packet_ms if bus_timing is not None else {},
                             "bus_rx_motor_cpu_ms": bus_timing.rx_packet_cpu_ms
                             if bus_timing is not None
                             else {},
-                            "read_budget_ms": 1000.0 * read_budget,
                             "pre_read_wait_ms": 1000.0 * (t0 - pre_read_wait_start),
                             "pre_read_late_ms": 1000.0 * max(0.0, t0 - read_due),
                             "tick_gap_ms": tick_gap_ms,
-                            "pace_ms": 1000.0 * (t_paced - t_read),
-                            "command_ms": 1000.0 * (t_sent - t_paced),
+                            "command_ms": 1000.0 * (t_sent - t_read),
                             "send_action_ms": send_action_ms,
                             "send_action_cpu_ms": send_action_cpu_ms,
                             "commit_ms": 1000.0 * (t_end - t_sent),

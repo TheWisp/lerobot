@@ -566,7 +566,7 @@ def test_a_slow_tick_is_kept_with_where_its_time_went():
         assert all(sample["send_action_ms"] >= 0.0 for sample in j.record)
         for sample in j.record:
             assert sample["tick_ms"] == pytest.approx(
-                sum(sample[k] for k in ("lock_ms", "read_ms", "pace_ms", "command_ms", "commit_ms"))
+                sum(sample[k] for k in ("lock_ms", "read_ms", "command_ms", "commit_ms"))
             )
     finally:
         jog._jog = old
@@ -630,6 +630,36 @@ def test_a_slow_read_does_not_bunch_the_next_motor_commands(monkeypatch):
     assert np.sum(np.isclose(intervals, 1 / jog.HZ, atol=0.003)) >= 3, (
         "normal encoder reads must fit inside the 30 Hz period, not be added after it"
     )
+
+
+def test_the_motor_loop_keeps_30_hz_when_its_reads_and_writes_take_time(monkeypatch):
+    """Timing each period from the previous write added the tick's own read and write to every period: 28.5 ticks/s
+    on the idle arm (2026-10-16). The schedule is fixed, so the commands keep the loop's rate."""
+    q = dict.fromkeys(MOTOR_NAMES, 0.0)
+    robot = _FakeRobot(q)
+    j = jog._Jog(robot=robot, kin=_FakeKin(), mode="joints", q_target=q, q_cmd=q, q_obs=q)
+    clock = [10.0]
+    sent_at = []
+
+    def pause(dt):
+        clock[0] += dt
+
+    original = robot.send_action
+
+    def send(action):
+        pause(0.0015)
+        sent_at.append(clock[0])
+        if len(sent_at) == 31:
+            j.stop.set()
+        return original(action)
+
+    robot.bus.on_request = lambda: pause(0.002)
+    robot.send_action = send
+    monkeypatch.setattr(jog.time, "perf_counter", lambda: clock[0])
+    monkeypatch.setattr(jog.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(jog.time, "sleep", pause)
+    jog._loop(j)
+    assert np.mean(np.diff(sent_at)) == pytest.approx(1 / jog.HZ, abs=1e-6)
 
 
 @pytest.mark.parametrize("fresh_lift,should_advance", [(4.0, True), (-2.0, False)])

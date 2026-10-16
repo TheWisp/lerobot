@@ -13,13 +13,15 @@
 # limitations under the License.
 
 import logging
+import os
+import select
 import time
 from collections.abc import Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from enum import Enum
 from pprint import pformat
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from lerobot.utils.import_utils import _feetech_sdk_available, require_package
 
@@ -73,7 +75,9 @@ class BusReplyError(ConnectionError):
 
 @dataclass
 class BlockReadTiming:
-    """Wall/CPU time for one checked request; reply times follow motor order."""
+    """Wall/CPU time for one checked request. ``rx_ms`` is ``rx_wait_ms``, waiting for the replies to arrive, plus
+    taking each reply apart, per motor in ``rx_packet_ms``; a reply that had not all arrived by the end of the wait is
+    read on in its motor's time."""
 
     setup_ms: float
     tx_ms: float
@@ -83,6 +87,7 @@ class BlockReadTiming:
     thread_cpu_ms: float
     rx_packet_ms: dict[str, float]
     rx_packet_cpu_ms: dict[str, float]
+    rx_wait_ms: float = 0.0
 
 
 @dataclass
@@ -94,6 +99,55 @@ class BlockRead:
     errors: dict[str, int]
     raw: dict[str, list[int]]
     timing: BlockReadTiming | None = None
+
+
+class _ReceivedFirst:
+    """A port handler as the SDK's ``rxPacket`` reads it: ``received`` first, then the port itself.
+
+    Every other attribute, including the ``is_using`` flag ``rxPacket`` clears, is the port's own.
+    """
+
+    def __init__(self, port: Any, received: bytes):
+        object.__setattr__(self, "_port", port)
+        object.__setattr__(self, "_received", bytearray(received))
+
+    def readPort(self, length: int) -> bytes:  # noqa: N802
+        if not self._received:
+            return self._port.readPort(length)
+        out = bytes(self._received[:length])
+        del self._received[:length]
+        return out
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._port, name)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        setattr(self._port, name, value)
+
+
+def _receive(port: Any, n: int) -> bytes:
+    """Up to ``n`` bytes from ``port``, waiting in the kernel until all have arrived or its packet timeout has passed.
+
+    The SDK's ``rxPacket`` polls the nonblocking port a few bytes at a time, and every poll releases and retakes the
+    GIL. Alone that costs nothing, but while another thread of the process runs Python each retake can wait out a
+    whole switch interval (5 ms): against a fake bus beside two busy Python threads, a read of seven servos took
+    25 ms at p50 on 0.2 ms of its own CPU. Waiting here retakes the GIL about once per request (10 ms there), and the
+    thread no longer spins on the CPU while the replies arrive. Returns nothing where the port gives no file
+    descriptor to wait on; the SDK then reads it as it always has.
+    """
+    fd = getattr(port.ser, "fd", None)
+    if fd is None:
+        return b""
+    received = bytearray()
+    while len(received) < n:
+        left_ms = port.packet_start_time + port.packet_timeout - port.getCurrentTime()
+        if left_ms <= 0 or not select.select([fd], [], [], left_ms / 1000.0)[0]:
+            break
+        chunk = os.read(fd, n - len(received))
+        if not chunk:  # a port that went away reads as ready and empty; the SDK's own read reports it
+            break
+        received += chunk
+    return bytes(received)
 
 
 class OperatingMode(Enum):
@@ -422,12 +476,15 @@ class FeetechMotorsBus(SerialMotorsBus):
         if not self._is_comm_success(comm):
             self.clear_input(REPLY_SETTLE_S)
             raise BusReplyError(f"the request did not go out: {self.packet_handler.getTxRxResult(comm)}", raw)
+        # Each reply is the motor's header, id, length, status, the span and a checksum.
+        port = _ReceivedFirst(self.port_handler, _receive(self.port_handler, len(ids) * (6 + length)))
+        t_waited = time.perf_counter_ns()
         rx_packet_ms: dict[str, float] = {}
         rx_packet_cpu_ms: dict[str, float] = {}
         for id_, name in zip(ids, names, strict=True):
             t_rx_start = time.perf_counter_ns()
             cpu_rx_start = time.thread_time_ns()
-            packet, comm = self.packet_handler.rxPacket(self.port_handler)
+            packet, comm = self.packet_handler.rxPacket(port)
             rx_packet_ms[name] = (time.perf_counter_ns() - t_rx_start) / 1e6
             rx_packet_cpu_ms[name] = (time.thread_time_ns() - cpu_rx_start) / 1e6
             if not self._is_comm_success(comm):
@@ -468,6 +525,7 @@ class FeetechMotorsBus(SerialMotorsBus):
             thread_cpu_ms=(time.thread_time_ns() - cpu_start) / 1e6,
             rx_packet_ms=rx_packet_ms,
             rx_packet_cpu_ms=rx_packet_cpu_ms,
+            rx_wait_ms=(t_waited - t_tx) / 1e6,
         )
         return BlockRead(values=values, errors=errors, raw=raw, timing=timing)
 

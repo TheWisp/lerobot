@@ -755,7 +755,6 @@ def test_an_act_recording_keeps_every_tracker_frame_with_the_points_its_pose_was
                     "bus_tx_ms": 150.0,
                     "bus_rx_motor_ms": {m: float(i) for i, m in enumerate(q)},
                     "pre_read_wait_ms": 31.0,
-                    "pace_ms": 0.0,
                     "gc_ms": 0.0,
                     "command_ms": 0.5,
                     "send_action_ms": 0.2,
@@ -789,7 +788,6 @@ def test_an_act_recording_keeps_every_tracker_frame_with_the_points_its_pose_was
         assert arm["bus_rx_motor_ms"][0].tolist() == list(map(float, range(len(q))))
         assert arm["pre_read_wait_ms"].tolist() == [31.0]
         assert arm["send_action_ms"].tolist() == [0.2]
-        assert arm["pace_ms"].tolist() == [0.0]
         assert arm["gc_ms"].tolist() == [0.0]
         assert root == str(tmp_path / "act")
     finally:

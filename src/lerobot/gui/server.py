@@ -20,6 +20,7 @@ import contextlib
 import logging
 import logging.config
 import os
+import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -435,6 +436,9 @@ def _mount_mcp(host: str, port: int) -> None:
     logger.info("MCP HTTP transport mounted at /mcp (token store: %s)", token_store_path)
 
 
+GIL_SWITCH_INTERVAL_S = 0.0005
+
+
 def run_server(
     host: str = "127.0.0.1",
     port: int = 8000,
@@ -482,6 +486,11 @@ def run_server(
     for line in lines:
         logger.info(line)
 
+    # The arm's 30 Hz loop shares this process's GIL with every other Python thread. A thread back from a wait (a
+    # serial reply, a sleep) runs again only once a busy holder lets the GIL go, which it does when its switch interval
+    # runs out: 5 ms by default, at each of a tick's waits. Half a millisecond bounds those waits tenfold tighter and
+    # cost CPU-bound threads no measurable throughput (src/lerobot/gui/docs/action_queue_timing.md).
+    sys.setswitchinterval(GIL_SWITCH_INTERVAL_S)
     # log_config=None: keep the uvicorn handlers we attached in setup_logging.
     # Without this, uvicorn calls dictConfig at startup and replaces them.
     uvicorn.run(

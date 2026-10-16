@@ -361,6 +361,45 @@ def test_sync_read_block_reads_several_registers_in_one_request(mock_motors, dum
     assert timing.thread_cpu_ms >= 0.0
 
 
+def test_sync_read_block_waits_for_late_replies_without_polling(mock_motors, dummy_motors):
+    """The SDK's rxPacket polls the nonblocking port, and each poll gives up the GIL and takes it back, which beside
+    busy Python threads can cost a whole switch interval (5 ms) per poll. The replies are waited for in the kernel
+    instead, so a read whose replies come late spends little of that time on the CPU."""
+    late_s = 0.02
+    replies = _state_reply(1, 1500) + _state_reply(2, 2048) + _state_reply(3, 2600)
+
+    def late(_n):
+        time.sleep(late_s)
+        return replies
+
+    mock_motors.stub(
+        name="late", receive_bytes=MockInstructionPacket.sync_read([1, 2, 3], 56, 8), send_fn=late
+    )
+    bus = FeetechMotorsBus(port=mock_motors.port, motors=dummy_motors)
+    bus.connect(handshake=False)
+
+    block = bus.sync_read_block(STATE, normalize=False)
+
+    assert block.values["Present_Position"] == {"dummy_1": 1500, "dummy_2": 2048, "dummy_3": 2600}
+    assert block.timing.wall_ms >= 1000 * late_s * 0.9
+    assert block.timing.thread_cpu_ms < 0.25 * block.timing.wall_ms, "waited, not polled"
+    assert block.timing.rx_wait_ms >= 1000 * late_s * 0.9, "the wait is for the whole block"
+
+
+def test_sync_read_block_reports_a_missing_reply_after_the_packet_timeout(mock_motors, dummy_motors):
+    """Replies that never come end the wait at the SDK's packet timeout, and the read fails as the SDK's own would."""
+    _stub_state_replies(mock_motors, [1, 2, 3], [_state_reply(1, 1500) + _state_reply(2, 2048)])
+    bus = FeetechMotorsBus(port=mock_motors.port, motors=dummy_motors)
+    bus.connect(handshake=False)
+
+    started = time.monotonic()
+    with pytest.raises(
+        BusReplyError, match=re.escape("no reply from dummy_3: [TxRxResult] There is no status")
+    ):
+        bus.sync_read_block(STATE, normalize=False)
+    assert time.monotonic() - started < 1.0, "bounded by the packet timeout"
+
+
 def test_sync_read_block_refuses_a_bad_reply_and_clears_what_came_after_it(mock_motors, dummy_motors):
     """2026-10-11: a corrupted reply in the middle of a request, the port "cleared" with the SDK's clearPort (which
     keeps what was received), and the next request read the last motor's leftover reply for the first's. The bad
