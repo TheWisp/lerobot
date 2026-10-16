@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -44,6 +45,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections import OrderedDict
 from typing import Any
 
 import numpy as np
@@ -1121,18 +1123,21 @@ def _npz(compress: bool = True, **arrays) -> bytes:
     return buf.getvalue()
 
 
-def run(server: str, models: Models) -> None:
+def run(server: str, models: Models, lane: str = "main") -> None:
     import requests
 
     http = requests.Session()
     cards: dict[str, Card] = {}
     trackers: dict[str, Tracker] = {}
-    models.p2p_bridge()  # Point2Pose loads its models now, once, not on the first find an act waits for
+    if lane == "main":
+        models.p2p_bridge()  # the recovery lane never owns/mutates a tracking session
+    else:
+        models.ensure("object")  # warm independent SAM/DINO state before accepting recovery work
     print("worker ready", flush=True)
     idle_errors = 0
     while True:
         try:
-            r = http.get(server + "api/pregrasp/worker/job", params={"wait": 20}, timeout=30)
+            r = http.get(server + "api/pregrasp/worker/job", params={"wait": 20, "lane": lane}, timeout=30)
         except requests.RequestException as e:
             idle_errors += 1
             print(f"server unreachable ({e}); retry {idle_errors}", flush=True)
@@ -1334,6 +1339,8 @@ def _locate(
         return _npz(meta=json.dumps({"ok": False, "reason": "a locate needs the demo's view of the object"}))
     if click is None:
         return _npz(meta=json.dumps({"ok": False, "reason": "a locate needs a click on the object"}))
+    stages = {}
+    started = time.perf_counter()
     reference_arrays = {}
     if ref.get("refresh_mask"):
         import cv2
@@ -1352,10 +1359,14 @@ def _locate(
             return _npz(meta=json.dumps({"ok": False, "reason": "held reference could not be segmented"}))
         ref = {**ref, "mask": refreshed}
         reference_arrays["ref_mask"] = refreshed
+    stages["reference_segmentation"] = 1000 * (time.perf_counter() - started)
+    started = time.perf_counter()
     mask = sam.mask_at(frame.rgb, click[0], click[1])
+    stages["live_segmentation"] = 1000 * (time.perf_counter() - started)
     if mask is None:
         return _npz(meta=json.dumps({"ok": False, "reason": "SAM3 found no object under the click"}))
-    found = _find_reference(ref, frame, mask, tier, intr)
+    found = _find_reference(ref, frame, mask, tier, intr, timing=stages)
+    found["recovery_stages_ms"] = stages
     arrays = {"ref_delta": found.pop("ref_delta")} if "ref_delta" in found else {}
     if track is not None and found.get("ref_ok"):
         name, scene, keep = track
@@ -1444,8 +1455,61 @@ def _outline_angle(mask: np.ndarray) -> float | None:
     return float(np.degrees(np.arctan2(axes[0, 1], axes[0, 0])))
 
 
+def _reference_card(ref, tier, intr):
+    """Bounded immutable-reference cache, invalidated by files, mask or intrinsics.
+
+    Cards here are only read by _bind; they never enter a growing live tracker.
+    Model identity is implicit in the owning tier. Missing files never reuse a
+    cached card. Sixteen entries bound memory while covering several view banks.
+    Set LEROBOT_REFERENCE_CACHE=0 to compare the uncached acquisition path.
+    """
+    import cv2
+
+    rec = pathlib.Path(ref["recording"]).resolve()
+    rgb_path = rec / "rgb" / f"{int(ref['frame']):06d}.jpg"
+    depth_path = rec / "depth" / f"{int(ref['frame']):06d}.png"
+    mask = np.asarray(ref["mask"], dtype=bool)
+    try:
+        signatures = tuple((p.stat().st_mtime_ns, p.stat().st_size) for p in (rgb_path, depth_path))
+    except OSError:
+        return None
+    key = (
+        str(rgb_path),
+        signatures,
+        mask.shape,
+        hashlib.sha256(mask.tobytes()).digest(),
+        intr.fx,
+        intr.fy,
+        intr.cx,
+        intr.cy,
+    )
+    cache = getattr(tier, "_reference_cards", None)
+    enabled = os.environ.get("LEROBOT_REFERENCE_CACHE", "1") != "0" and hasattr(tier, "__dict__")
+    if enabled and cache is None:
+        cache = tier._reference_cards = OrderedDict()
+    if enabled and key in cache:
+        cache.move_to_end(key)
+        return cache[key]
+    bgr = cv2.imread(str(rgb_path), cv2.IMREAD_COLOR)
+    depth = cv2.imread(str(depth_path), cv2.IMREAD_UNCHANGED)
+    if bgr is None or depth is None:
+        return None
+    view = _Frame(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB), depth.astype(np.float32) / 1000.0, "reference")
+    value = (view, mask.copy(), Card(view, mask, tier, intr))
+    if enabled:
+        cache[key] = value
+        while len(cache) > 16:
+            cache.popitem(last=False)
+    return value
+
+
 def _find_reference(
-    ref: dict, frame: _Frame, mask: np.ndarray, tier: DinoTier, intr: CameraIntrinsics
+    ref: dict,
+    frame: _Frame,
+    mask: np.ndarray,
+    tier: DinoTier,
+    intr: CameraIntrinsics,
+    timing: dict | None = None,
 ) -> dict:
     """Register the live view of an object against the demo's view of it: the motion from that view to this one.
 
@@ -1455,17 +1519,15 @@ def _find_reference(
     camera coordinates), ``ref_inliers``, ``ref_turn_deg`` and ``ref_card_points``; or ``ref_ok``
     False with ``ref_reason``.
     """
-    import cv2
 
-    rec = pathlib.Path(ref["recording"])
-    k = int(ref["frame"])
-    bgr = cv2.imread(str(rec / "rgb" / f"{k:06d}.jpg"), cv2.IMREAD_COLOR)
-    depth = cv2.imread(str(rec / "depth" / f"{k:06d}.png"), cv2.IMREAD_UNCHANGED)
-    if bgr is None or depth is None:
-        return {"ref_ok": False, "ref_reason": f"the demo's frame {k} is missing from {rec}"}
-    view = _Frame(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB), depth.astype(np.float32) / 1000.0, "reference")
-    view_mask = np.asarray(ref["mask"], dtype=bool)
-    card = Card(view, view_mask, tier, intr)
+    timing = {} if timing is None else timing
+    started = time.perf_counter()
+    reference = _reference_card(ref, tier, intr)
+    if reference is None:
+        return {"ref_ok": False, "ref_reason": "the demo reference image or depth is missing"}
+    view, view_mask, card = reference
+    timing["reference_card"] = 1000 * (time.perf_counter() - started)
+    started = time.perf_counter()
     # Acquisition has no previous pose to disambiguate an upside-down match on
     # a nearly planar object. Score independent appearance orientations by
     # their certified 3D consensus; continuous tracking keeps its normal cost.
@@ -1484,6 +1546,8 @@ def _find_reference(
             fit is None or (candidate.n_inliers, -candidate.rms) > (fit.n_inliers, -fit.rms)
         ):
             fit, matched_uv, matched_idx = candidate, uv, idx
+    timing["appearance_search"] = 1000 * (time.perf_counter() - started)
+    started = time.perf_counter()
     if fit is None:
         return {"ref_ok": False, "ref_reason": "the live view does not match the demo's view of the object"}
     # The pose is the demo view's surface laid on the live one (fit_surface): the matches place the object and grade
@@ -1512,6 +1576,7 @@ def _find_reference(
             axis, point = symmetry.observed_axis(live_surface, spec["axis"])
             order = None if spec["kind"] == "continuous" else spec["order"]
             motion = fold_turn(motion, axis, point, order)
+    timing["surface_refine"] = 1000 * (time.perf_counter() - started)
     delta = np.eye(4)
     delta[:3, :3], delta[:3, 3] = motion.rot, motion.trans
     turn = float(np.degrees(np.arccos(np.clip((np.trace(delta[:3, :3]) - 1.0) / 2.0, -1.0, 1.0))))
@@ -1724,13 +1789,14 @@ def _track(job, frame, cards, trackers, sam, tier, intr, models=None) -> bytes:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--lane", choices=["main", "recovery"], default="main")
     ap.add_argument("--server", required=True, help="GUI base URL, e.g. http://127.0.0.1:9100/")
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--dino-model", default="facebook/dinov3-vits16-pretrain-lvd1689m")
     ap.add_argument("--resolution", type=int, default=1008, help="SAM3 inference resolution")
     args = ap.parse_args()
     server = args.server if args.server.endswith("/") else args.server + "/"
-    run(server, Models(args.device, args.dino_model, args.resolution))
+    run(server, Models(args.device, args.dino_model, args.resolution), args.lane)
 
 
 if __name__ == "__main__":

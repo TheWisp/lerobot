@@ -853,6 +853,8 @@ async def _apply_track_result(job: runtime._Job) -> None:
         held = runtime._state.test.result.get("delta_cam") if runtime._state.test is not None else None
         tr.model = {
             "t": job.created,
+            "capture_mono": job.camera_stamp_mono,
+            "surface_constraint": None if result is None else result.get("surface_constraint"),
             "model_xyz": r.get("model_xyz"),
             "model_valid": r.get("model_valid"),
             "raw_delta_cam": r.get("delta"),  # the worker's fit, even when the view rejects it

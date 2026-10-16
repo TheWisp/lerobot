@@ -8,6 +8,8 @@ camera-frame transforms together or install them in the designation's tracker.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import os
 import time
 from collections.abc import Callable
 
@@ -15,7 +17,7 @@ import numpy as np
 
 from lerobot.showservo import motion as core, surface_constraint
 
-from . import acquisition, holds, planning, recording, runtime
+from . import acquisition, holds, planning, pose_updates, recording, runtime
 
 
 def references(demo: runtime._Demo, obj: str) -> list[dict]:
@@ -345,20 +347,20 @@ async def measure(
         points = surface_constraint.depth_points(ref["depth"], ref["mask"], intr_demo)
         if not len(points):
             continue
-        desired = np.linalg.inv(ref.get("tip", demo.tips[ref["sample"]])) @ t_bc
-        observed = np.linalg.inv(tip) @ t_bc @ np.asarray(found["delta"])
-        # Use the material patch that actually passed verification. Extrapolating
-        # a partial-view rotation to the whole reference cloud's centre can move
-        # the inferred attachment even when the visible patch did not move.
+        # Both regular tracking and reference matching publish the same pose
+        # observation. Only this downstream adapter knows about a gripper.
         centre = np.r_[check.get("reference_point", points.mean(axis=0)), 1.0]
+        observation = pose_updates.PoseObservation(
+            obj, ref["frame"], observed_stamp, np.asarray(found["delta"]), "reference matching"
+        )
         observations.append(
-            {
-                "stamp": observed_stamp,
-                "frame": ref["frame"],
-                "desired": (desired @ centre)[:3],
-                "observed": (observed @ centre)[:3],
-                "rotation": desired[:3, :3] @ observed[:3, :3].T,
-            }
+            pose_updates.attachment_sample(
+                observation,
+                tip,
+                t_bc,
+                np.linalg.inv(ref.get("tip", demo.tips[ref["sample"]])),
+                (t_bc @ centre)[:3],
+            )
         )
         added += 1
         del observations[: -core.HOLD_VIEWS]
@@ -391,7 +393,9 @@ async def measure(
     return result, "stopped" if stopped() else problem, attempts
 
 
-async def watch(demo, obj, t_bc, prediction, stopped, publish, log, prepared_references=None):
+async def watch(
+    demo, obj, t_bc, prediction, stopped, publish, log, prepared_references=None, demo_attachment=None
+):
     """Keep measuring during motion; one job at a time, using capture-time FK.
 
     Camera publication and encoder times share the host perf-counter clock.
@@ -418,10 +422,11 @@ async def watch(demo, obj, t_bc, prediction, stopped, publish, log, prepared_ref
         )
     except Exception as exc:
         log(f"held reference preparation: {type(exc).__name__}: {exc}", [])
-        return
+        bank = []
     if not bank:
         log("no segmented held views in this demo attachment", [])
-        return
+        if demo_attachment is None:
+            return
     failed_views = {}
     observations = []
 
@@ -459,29 +464,87 @@ async def watch(demo, obj, t_bc, prediction, stopped, publish, log, prepared_ref
         # depth-supported attachment prediction to propose the click instead.
         return rgb, depth, intr, tip, None
 
+    delivered_stamp = float("-inf")
+    regular_stamp = float("-inf")
+
     def deliver(result):
-        if not stopped():
+        nonlocal delivered_stamp
+        if not stopped() and result["observed_stamp"] > delivered_stamp:
+            delivered_stamp = result["observed_stamp"]
             measured_at = time.time() - (time.perf_counter() - result["observed_stamp"])
             publish({**result, "observed_at": measured_at, "accepted_at": time.time()})
 
-    while not stopped():
-        try:
-            _result, problem, attempts = await measure(
-                demo,
-                obj,
-                t_bc,
-                prediction(),
-                stopped,
-                capture=capture,
-                publish=deliver,
-                reference_bank=bank,
-                failed_views=failed_views,
-                observation_window=observations,
-                observation_clock=lambda: last,
-            )
-            log(problem, attempts)
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            log(f"live held measurement: {type(exc).__name__}: {exc}", [])
-        await asyncio.sleep(runtime.HOLD_VIEW_GAP_S)
+    async def regular_updates():
+        nonlocal regular_stamp
+        from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
+
+        samples = []
+        started = time.perf_counter()
+        seen = started
+        while not stopped():
+            observation = pose_updates.latest_verified(demo, obj)
+            if (
+                observation is not None
+                and observation.reference_point_cam is not None
+                and observation.capture_mono > seen
+            ):
+                stamp = observation.capture_mono
+                q = jog.joints_at(stamp, 2.0 / jog.HZ)
+                if q is not None and 0 <= time.perf_counter() - stamp <= runtime.HISTORY_MATCH_S:
+                    seen = stamp
+                    tip = kin.forward_kinematics(np.array([q[m] for m in MOTOR_NAMES]))
+                    centre = (t_bc @ np.r_[observation.reference_point_cam, 1.0])[:3]
+                    samples.append(
+                        pose_updates.attachment_sample(observation, tip, t_bc, demo_attachment, centre)
+                    )
+                    samples[:] = [s for s in samples if stamp - s["stamp"] <= runtime.HOLD_TRACK_WAIT_S]
+                    del samples[: -core.HOLD_VIEWS]
+                    result = consensus(samples, prediction())
+                    if result is not None:
+                        regular_stamp = result["observed_stamp"]
+                        deliver({**result, "source": "verified tracking"})
+            await asyncio.sleep(runtime.ACT_TICK_S)
+
+    regular = None
+    if demo_attachment is not None and os.environ.get("LEROBOT_TRACKED_HOLD_UPDATES", "1") != "0":
+        regular = asyncio.create_task(regular_updates())
+
+    def regular_is_fresh():
+        return time.perf_counter() - regular_stamp <= runtime.HISTORY_MATCH_S
+
+    try:
+        while not stopped():
+            if regular is not None and regular.done():
+                try:
+                    regular.result()
+                except Exception as exc:
+                    log(f"regular pose attachment adapter: {type(exc).__name__}: {exc}", [])
+                regular = None  # retain the existing reference-matching fallback
+            if regular_is_fresh() or not bank:
+                await asyncio.sleep(runtime.ACT_TICK_S)
+                continue
+            try:
+                _result, problem, attempts = await measure(
+                    demo,
+                    obj,
+                    t_bc,
+                    prediction(),
+                    lambda: stopped() or regular_is_fresh(),
+                    capture=capture,
+                    publish=deliver,
+                    reference_bank=bank,
+                    failed_views=failed_views,
+                    observation_window=observations,
+                    observation_clock=lambda: last,
+                )
+                log(problem, attempts)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                log(f"live held measurement: {type(exc).__name__}: {exc}", [])
+            await asyncio.sleep(runtime.HOLD_VIEW_GAP_S)
+    finally:
+        if regular is not None:
+            regular.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await regular

@@ -106,6 +106,8 @@ class _Worker:
     """The SAM3 + DINO process: spawned here, fed by long-polled jobs, results posted back."""
 
     proc: subprocess.Popen | None = None
+    recovery_proc: subprocess.Popen | None = None
+    recovery_log: list[str] = field(default_factory=list)
     log: list[str] = field(default_factory=list)
     jobs: dict[str, _Job] = field(default_factory=dict)
     pending: list[str] = field(default_factory=list)  # job ids not yet taken, in order

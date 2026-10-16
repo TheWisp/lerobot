@@ -568,7 +568,11 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
                     return
                 live_fix = np.asarray(result["fix"]).copy()
                 at = result["accepted_at"]
-                source = "held-view position; rotation predicted" if partial else "held-view registration"
+                source = (
+                    ("tracked position; rotation predicted" if partial else "verified tracking")
+                    if result.get("source") == "verified tracking"
+                    else ("held-view position; rotation predicted" if partial else "held-view registration")
+                )
                 evidence = "partly measured" if partial else "measured"
                 run.meta["hold_selections"][-1]["until"] = at
                 selection = {
@@ -612,6 +616,7 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
                         publish_hold,
                         log_hold,
                         prepared_references=held_bank_task,
+                        demo_attachment=None if demo_carry is None else np.asarray(demo_carry["hold"]),
                     )
                 )
                 beside.append(hold_watch)

@@ -48,6 +48,9 @@ async def state() -> dict:
         "arm_connected": jog.current_robot_id() is not None,
         "worker": {
             "running": w.running,
+            "recovery_running": w.recovery_proc is not None and w.recovery_proc.poll() is None,
+            "recovery_ready": any("worker ready" in line for line in w.recovery_log),
+            "recovery_log": "\n".join(w.recovery_log[-12:]),
             "ready": any("worker ready" in line for line in w.log),
             "log": "\n".join(log_tail),
         },

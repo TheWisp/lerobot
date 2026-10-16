@@ -171,7 +171,7 @@ def test_runner_measures_after_lift_even_without_designation_based_demo_hold(tmp
     correction = np.eye(4)
     correction[0, 3] = -0.012  # synthetic lift changed the held position by another 6 mm
 
-    async def watch(demo, obj, bc, prediction, stopped, publish, log):
+    async def watch(demo, obj, bc, prediction, stopped, publish, log, **kwargs):
         import time
 
         from lerobot.gui.api import jog
@@ -238,7 +238,7 @@ def test_runner_applies_measurement_that_arrives_during_contact_and_rejects_afte
     correction[0, 3] = -0.012
     published = []
 
-    async def watch(demo, obj, bc, prediction, stopped, publish, log):
+    async def watch(demo, obj, bc, prediction, stopped, publish, log, **kwargs):
         lifted = False
         while not stopped():
             height = jog.current_tip_and_anchor()[0][2, 3]

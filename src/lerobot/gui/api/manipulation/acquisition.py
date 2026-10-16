@@ -332,6 +332,8 @@ async def _locate(
         **_find_info(out),
         "tracking": out["tracking"],
         "view": out["view"],
+        "timing_ms": dict(job.worker_timing_ms),
+        "recovery_stages_ms": r.get("recovery_stages_ms"),
         "surface_constraint": out["surface_constraint"],
         "raw_delta": None if out["raw_delta"] is None else np.asarray(out["raw_delta"]).tolist(),
         "delta": None if out["delta"] is None else out["delta"].tolist(),
@@ -627,6 +629,7 @@ def _weak(found: dict[str, Any]) -> str:
 class LocateBody(BaseModel):
     click: list[int]
     object: str
+    track: bool = True  # False measures without replacing any live designation or pose
 
 
 @router.post("/locate")
@@ -649,11 +652,12 @@ async def locate(body: LocateBody) -> dict:
         intr,
         body.click,
         lambda: False,
-        track=True,
-        log={"why": "clicked on the page"},
+        track=body.track,
+        log={"why": "clicked on the page" if body.track else "read-only pose measurement"},
     )
-    _store_located(body.object, found)
-    return _located_info(found)
+    if body.track:
+        _store_located(body.object, found)
+    return {**_located_info(found), "find_id": found.get("find_id")}
 
 
 async def _locate_afresh(obj: str, stopped: Callable[[], bool], track: bool = True) -> str:

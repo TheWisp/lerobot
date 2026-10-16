@@ -142,3 +142,60 @@ async def test_worker_records_time_waiting_for_dispatch():
         assert job.worker_timing_ms["queue"] >= 500
     finally:
         runtime._state.worker = old
+
+
+@pytest.mark.asyncio
+async def test_recovery_lane_cannot_consume_or_block_stateful_jobs():
+    old = runtime._state.worker
+    proc = SimpleNamespace(poll=lambda: None)
+    runtime._state.worker = runtime._Worker(proc=proc, recovery_proc=proc)
+    try:
+
+        def queue(kind, **extra):
+            return worker._queue_job(
+                kind, "object", np.zeros((2, 2, 3), np.uint8), np.ones((2, 2)), {}, extra=extra
+            )
+
+        recovery = queue("locate")
+        tracked = queue("track")
+        designation = queue("locate", track=True)
+        # An older recovery job never holds up the main worker.
+        assert json.loads((await worker.worker_job(wait=0)).body)["id"] == tracked.id
+        assert json.loads((await worker.worker_job(wait=0, lane="recovery")).body)["id"] == recovery.id
+        assert (await worker.worker_job(wait=0, lane="recovery")).status_code == 204
+        assert json.loads((await worker.worker_job(wait=0)).body)["id"] == designation.id
+        # If the optional recovery process exits, its pending work remains usable.
+        late = queue("locate")
+        runtime._state.worker.recovery_proc = SimpleNamespace(poll=lambda: 1)
+        assert (await worker.worker_job(wait=0, lane="recovery")).status_code == 410
+        assert json.loads((await worker.worker_job(wait=0)).body)["id"] == late.id
+    finally:
+        runtime._state.worker = old
+
+
+@pytest.mark.asyncio
+async def test_read_only_locate_does_not_replace_live_pose(monkeypatch):
+    from lerobot.gui.api.manipulation import acquisition
+
+    state = runtime._state
+    old = state.demo, state.worker
+    state.demo = SimpleNamespace(objects={"object": {"status": "done"}})
+    state.worker = runtime._Worker(proc=SimpleNamespace(poll=lambda: None))
+    calls = []
+
+    async def frame():
+        return np.zeros((2, 2, 3)), np.ones((2, 2)), {}
+
+    async def locate(*args, **kwargs):
+        calls.append(kwargs["track"])
+        return {"object": "object", "ok": False, "reason": "no match"}
+
+    monkeypatch.setattr(acquisition.camera, "_frame", frame)
+    monkeypatch.setattr(acquisition, "_locate", locate)
+    monkeypatch.setattr(acquisition, "_store_located", lambda *args: pytest.fail("must not replace pose"))
+    try:
+        result = await acquisition.locate(acquisition.LocateBody(object="object", click=[0, 0], track=False))
+        assert calls == [False]
+        assert not result["ok"]
+    finally:
+        state.demo, state.worker = old

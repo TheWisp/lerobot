@@ -28,7 +28,7 @@ import sys
 import threading
 import time
 import uuid
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 from fastapi import APIRouter, HTTPException, Request
@@ -84,6 +84,7 @@ def _queue_job(
 
 
 class WorkerStartBody(BaseModel):
+    parallel_recovery: bool = True
     device: str = "cuda"
     dino_model: str = "facebook/dinov3-vits16-pretrain-lvd1689m"
 
@@ -112,16 +113,36 @@ async def worker_start(body: WorkerStartBody, request: Request) -> dict:
             cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env, cwd=str(runtime._REPO)
         )
         w.proc, w.log, w.started_at = proc, [], time.time()
+        w.recovery_log = []
+        try:
+            w.recovery_proc = (
+                subprocess.Popen(
+                    [*cmd, "--lane", "recovery"],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    env=env,
+                    cwd=str(runtime._REPO),
+                )
+                if body.parallel_recovery
+                else None
+            )
+        except Exception:
+            proc.terminate()
+            w.proc = None
+            raise
         runtime._state.server_url = str(request.base_url).rstrip("/")
 
-    def pump() -> None:
-        assert proc.stdout is not None
-        for line in proc.stdout:
+    def pump(process, log) -> None:
+        assert process.stdout is not None
+        for line in process.stdout:
             with runtime._state.lock:
-                w.log.append(line.rstrip("\n"))
-                del w.log[:-200]
+                log.append(line.rstrip("\n"))
+                del log[:-200]
 
-    threading.Thread(target=pump, daemon=True, name="pregrasp-worker").start()
+    for process, log in ((proc, w.log), (w.recovery_proc, w.recovery_log)):
+        if process is not None:
+            threading.Thread(target=pump, args=(process, log), daemon=True, name="pregrasp-worker").start()
     return {"status": "started"}
 
 
@@ -130,19 +151,20 @@ async def worker_stop() -> dict:
     await tracking.track_stop()
     w = runtime._state.worker
     with runtime._state.lock:
-        proc = w.proc
-        w.proc = None
+        procs = (w.proc, w.recovery_proc)
+        w.proc = w.recovery_proc = None
         w.pending.clear()
         wake = w.wake
     if wake is not None:
         wake.set()  # a waiting poll returns and sees no worker
-    if proc is not None and proc.poll() is None:
-        proc.terminate()
+    for proc in procs:
+        if proc is not None and proc.poll() is None:
+            proc.terminate()
     return {"status": "stopped"}
 
 
 @router.get("/worker/job")
-async def worker_job(wait: float = 20.0) -> Response:
+async def worker_job(wait: float = 20.0, lane: Literal["main", "recovery"] = "main") -> Response:
     """The worker's long-poll: the next job, 204 when none within ``wait`` seconds, 410 when stopped."""
     w = runtime._state.worker
     if w.wake is None:
@@ -152,8 +174,23 @@ async def worker_job(wait: float = 20.0) -> Response:
         with runtime._state.lock:
             if not w.running:
                 return Response(status_code=410)
-            if w.pending:
-                job_id = w.pending.pop(0)
+            recovery_running = w.recovery_proc is not None and w.recovery_proc.poll() is None
+            if lane == "recovery" and not recovery_running:
+                return Response(status_code=410)
+            # Only read-only locates may leave the main lane. Teach, find and
+            # track=True locates mutate the P2P session and remain serialized.
+            eligible = [
+                i
+                for i in w.pending
+                if (
+                    (w.jobs[i].kind == "locate" and not w.jobs[i].extra.get("track"))
+                    if lane == "recovery"
+                    else (not recovery_running or w.jobs[i].kind != "locate" or w.jobs[i].extra.get("track"))
+                )
+            ]
+            if eligible:
+                job_id = eligible[0]
+                w.pending.remove(job_id)
                 job = w.jobs[job_id]
                 job.taken = True
                 job.worker_timing_ms["queue"] = 1000 * (time.time() - job.created)
