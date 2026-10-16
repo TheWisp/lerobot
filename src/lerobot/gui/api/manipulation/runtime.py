@@ -376,6 +376,14 @@ _RENDER_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
 )
 
 
+# Pose verification and its overlay are ordered with respect to other track
+# frames. One-off finds, demo IO and reference preparation may take much longer;
+# they must not occupy the track's only executor while the arm is moving.
+_TRACK_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
+    max_workers=1, thread_name_prefix="manipulation-track"
+)
+
+
 _ACT_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="manipulation-act")
 
 

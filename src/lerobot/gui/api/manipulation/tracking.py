@@ -662,7 +662,7 @@ async def _apply_track_result(job: runtime._Job) -> None:
     if stale or teach is None:
         return
     checks = await asyncio.get_running_loop().run_in_executor(
-        runtime._RENDER_EXECUTOR, _verify_track_poses, job, r, teach, False, False
+        runtime._TRACK_EXECUTOR, _verify_track_poses, job, r, teach, False, False
     )
     job.verified_at = time.time()
     # Teach/track can be replaced while the executor is measuring this frame.
@@ -803,7 +803,7 @@ async def _apply_track_result(job: runtime._Job) -> None:
     _log_pose_conflicts(checks, tr)
     status["pose_verification"] = checks
     overlay = await asyncio.get_event_loop().run_in_executor(
-        runtime._RENDER_EXECUTOR, rendering._render_live, job.rgb, r, result, transported, teach, status
+        runtime._TRACK_EXECUTOR, rendering._render_live, job.rgb, r, result, transported, teach, status
     )
     job.rendered_at = time.time()
     if (

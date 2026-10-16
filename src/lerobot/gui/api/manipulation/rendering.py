@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import contextlib
+import time
 from typing import Any
 
 import numpy as np
@@ -295,7 +296,9 @@ def _render_live(rgb, r, result, transported, teach, status) -> bytes:
     outline also shows the current raw pose's model, independently of the stricter following acceptance."""
     import cv2
 
+    started = time.perf_counter()
     bgr = groups._paint_groups(cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
+    painted = time.perf_counter()
     belief = None  # the object's motion the view draws, and where it comes from
     if result is not None and result.get("ok"):
         belief = (result["delta_cam"], "")
@@ -345,6 +348,7 @@ def _render_live(rgb, r, result, transported, teach, status) -> bytes:
                 path = planning._act_preview(demo, d, t_bc)
                 if path is not None:
                     _draw_path(bgr, t_bc, teach.intr, path)
+    path_drawn = time.perf_counter()
     with runtime._state.lock:
         demo = runtime._state.demo
     estimate = "unavailable"
@@ -368,6 +372,7 @@ def _render_live(rgb, r, result, transported, teach, status) -> bytes:
             OSError, KeyError, ValueError
         ):  # a demo recording that went away: no outline
             _draw_found(bgr, teach.intr, tracking._view_points(demo, onto), aim, onto)
+    objects_drawn = time.perf_counter()
     state = status.get("state") or ""
     strip = (
         f"[{status.get('algo')}] {state} | {status.get('fps') or 0:.0f} fps | {status.get('ms') or 0:.0f} ms"
@@ -416,7 +421,15 @@ def _render_live(rgb, r, result, transported, teach, status) -> bytes:
         runtime.POSE_ESTIMATE_COLOUR,
     )
     checks = status.get("pose_verification")
-    return camera._jpeg(_pose_verification_panel(bgr, checks, len(checks)) if checks else bgr)
+    encoded = camera._jpeg(_pose_verification_panel(bgr, checks, len(checks)) if checks else bgr)
+    finished = time.perf_counter()
+    status["render_stages_ms"] = {
+        "groups": round((painted - started) * 1000, 1),
+        "held_and_path": round((path_drawn - painted) * 1000, 1),
+        "other_objects": round((objects_drawn - path_drawn) * 1000, 1),
+        "text_and_jpeg": round((finished - objects_drawn) * 1000, 1),
+    }
+    return encoded
 
 
 def _pose_verification_panel(bgr: np.ndarray, checks: list[dict] | None, slots: int) -> np.ndarray:

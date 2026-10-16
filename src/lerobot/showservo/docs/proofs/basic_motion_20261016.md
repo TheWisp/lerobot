@@ -62,3 +62,39 @@ before another insertion.
 Raw local records, images, probe scripts and mutation logs are archived at
 `/home/feit/Documents/showservo-experiments/20261016/basic-motion/`.
 The original Act retains its RGB-D recording and motor trace in the demo store.
+
+## Later insertion trials
+
+Act `20261016_005114` completed insertion. Its shoulder passed through
+6.9 to 6.0 degrees during withdrawal while following a monotone decreasing
+command, with load near 400/1000. Act `20261016_010345` stopped earlier,
+during carry, at 20.4 observed / 15.5 commanded degrees and load 584/1000.
+Act `20261016_010735` inserted the dowel (confirmed in the camera timeline)
+but stopped on withdrawal at 6.8 observed / 2.7 commanded degrees and load
+504/1000. The actuator read the same 6.8-degree encoder position for over
+0.8 seconds while the other joints followed their commands. Its temperature
+was normal. All three used speed 2, P32/I0/D32, gravity feed-forward 3.2,
+and the same 80 mm/s and 60 degrees/s limits.
+
+The calibrated rigid-arm mesh reported no self-collision in the two stops.
+Against the static RGB-D scene, the nearest modeled link was approximately
+46 mm from observed obstacles at the carry stop and 37 mm at the withdrawal
+stop. These checks exclude neither a cable snag nor geometry hidden from the
+overhead camera. They make a visible tray collision an unsupported explanation
+for the later stops. In `010735`, the command briefly reversed from 5.5 to
+6.6 degrees at the end of the post-release key frame, then headed toward the
+world-frame withdrawal target. The shoulder was already at 6.8 degrees when
+the command reversed; the trace does not establish whether this caused the
+sticking. The IK solves are seeded from the previous solution, and the saved
+joint commands show no branch jump at the stop.
+
+The tracker's on-screen FPS was 7.45 at the start of the successful Act and
+7.05 at the start of `010735`. This is the pose-result rate, not the camera
+or motor rate. The latter Act's 30 Hz camera timeline saved 590 distinct
+RGB-D frames in 21.5 seconds; the motor trace recorded 499 ticks in 21.35
+seconds and a largest inter-tick gap of 315 ms. For `010735`, median P2P
+compute, server pose verification and overlay times were 88, 58 and 92 ms,
+respectively. One-off find/reference work currently shares the track's
+single render executor; its queueing contribution requires a retest after
+executor isolation. A disconnected-arm live check after server restart showed
+about 10 FPS, with median verification and render times of 47 and 26 ms.

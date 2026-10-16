@@ -244,6 +244,7 @@ class _Run:
                     key: value
                     for key, value in (
                         ("timing_ms", status.get("timing_ms")),
+                        ("render_stages_ms", status.get("render_stages_ms")),
                         ("worker_stages_ms", r.get("worker_stages_ms")),
                         ("geometry_stages_ms", r.get("geometry_stages_ms")),
                     )
