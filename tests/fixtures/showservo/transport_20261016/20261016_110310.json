@@ -1,0 +1,2723 @@
+{
+  "source_act": "20261016_110310",
+  "source_act_sha256": "09e6665fe7f52bb51bf067775b0be23696d77398b0a9c5882115abca05e23fb7",
+  "frame": 50,
+  "later_frame": 52,
+  "intr": {
+    "fx": 604.2015380859375,
+    "fy": 604.19140625,
+    "cx": 419.22674560546875,
+    "cy": 250.64512634277344,
+    "width": 848.0,
+    "height": 480.0
+  },
+  "baseline_commit": "73812a7d4",
+  "expected_surface_state": "corrected",
+  "expect_transport_blocked": false,
+  "check": {
+    "object": "ring",
+    "t_frame": 1792145000.5951223,
+    "accepted": true,
+    "p2p_pose": [
+      [
+        0.9988847394065868,
+        -0.04543260525070845,
+        0.012851294128186433,
+        0.04591234682538022
+      ],
+      [
+        0.04623013735892163,
+        0.9964274179793516,
+        -0.07067655268038027,
+        0.11698257612282686
+      ],
+      [
+        -0.009594361907432774,
+        0.0711918469990839,
+        0.9974164973271947,
+        -0.030169524674008505
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "groups": {
+      "state": "disagreement",
+      "centre_mm": 1.3250318386312627,
+      "rotation_deg": 3.681460144498664,
+      "limit_mm": 3.0,
+      "limit_deg": 3.0,
+      "reference_t": 1792144991.0545287,
+      "predicted_pose": [
+        [
+          0.9973780598234588,
+          -0.06442010545291021,
+          -0.032975807014098926,
+          0.06386836819722196
+        ],
+        [
+          0.0634348227238627,
+          0.9975321319097675,
+          -0.03009708275812046,
+          0.10085084140808626
+        ],
+        [
+          0.03483318966936301,
+          0.027926211364050074,
+          0.9990030657577126,
+          -0.027208377360904788
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "group_pose": [
+        [
+          1.0,
+          -0.000286,
+          0.000516,
+          -0.066609
+        ],
+        [
+          0.000286,
+          1.0,
+          -0.000289,
+          0.046109
+        ],
+        [
+          -0.000516,
+          0.000289,
+          1.0,
+          0.404064
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "nearest_frame_t": 1792145000.4873428,
+      "time_skew_s": 0.10777950286865234,
+      "context": {
+        "group": 0,
+        "own": true,
+        "why": "",
+        "n_seen": 49,
+        "n_grouped": 49
+      }
+    },
+    "surface": {
+      "state": "disagreement",
+      "centre_mm": 0.9037133051032722,
+      "rotation_deg": 4.183770531432239,
+      "limit_mm": 3.0,
+      "limit_deg": 3.0,
+      "reference_points": 400,
+      "visible_reference_points": 374,
+      "occluded_reference_points": 0,
+      "live_points": 400,
+      "noise_mm": 3.0,
+      "fit_radius_mm": 6.0,
+      "raw_rms_mm": 1.7394325419616965,
+      "refit_rms_mm": 1.507673533762035,
+      "supported_points": 368,
+      "refit_pose": [
+        [
+          0.9983393191269305,
+          -0.05010677233061552,
+          -0.028423850052110657,
+          0.06387436630122313
+        ],
+        [
+          0.04981971818938498,
+          0.9987007015399966,
+          -0.01071934807022146,
+          0.09219583887473207
+        ],
+        [
+          0.028924030920797865,
+          0.009285478454456021,
+          0.9995384836639184,
+          -0.028502862660824912
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "centre_uncertainty_mm": 0.27095796683603696
+    },
+    "disagreement": true,
+    "corrected_groups": {
+      "state": "consistent",
+      "centre_mm": 1.3103904429727105,
+      "rotation_deg": 0.16846068820591054,
+      "limit_mm": 3.0,
+      "limit_deg": 3.0,
+      "reference_t": 1792144991.0545287,
+      "mode": "fixed",
+      "fixed": {
+        "state": "consistent",
+        "centre_mm": 1.3103904429727105,
+        "rotation_deg": 0.16846068820591054,
+        "limit_mm": 3.0,
+        "limit_deg": 3.0
+      },
+      "recent": {
+        "state": "consistent",
+        "centre_mm": 1.3256504768703206,
+        "rotation_deg": 1.1461294710943706,
+        "limit_mm": 3.0,
+        "limit_deg": 3.0
+      },
+      "predicted_pose": [
+        [
+          0.9988334180222184,
+          -0.04683792865778169,
+          0.011762632915416195,
+          0.04520372139936034
+        ],
+        [
+          0.04735549579619696,
+          0.9977015278650054,
+          -0.04846940922616173,
+          0.10699248263321033
+        ],
+        [
+          -0.009465478871879927,
+          0.04896974362947583,
+          0.9987555850635276,
+          -0.03146276183974994
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "group_pose": [
+        [
+          1.0,
+          -0.000286,
+          0.000516,
+          -0.066609
+        ],
+        [
+          0.000286,
+          1.0,
+          -0.000289,
+          0.046109
+        ],
+        [
+          -0.000516,
+          0.000289,
+          1.0,
+          0.404064
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ]
+    },
+    "constraint": {
+      "state": "corrected",
+      "pose": [
+        [
+          0.9988742878776297,
+          -0.04616539366528158,
+          0.010904744136784718,
+          0.046730072818797874
+        ],
+        [
+          0.04661749990351951,
+          0.9978681462846595,
+          -0.045672435156969046,
+          0.10631995919726618
+        ],
+        [
+          -0.008773010868807662,
+          0.04612937305179949,
+          0.9988969492505949,
+          -0.03130125894660235
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "observed_dof": 3,
+      "policy": "rgbd-common-plane-axis-v5",
+      "visibility": {
+        "reference_points": 1600,
+        "visible_reference_points": 1579,
+        "occluded_reference_points": 0,
+        "live_points": 1600,
+        "common_live_points": 1506
+      },
+      "evidence": {
+        "reference": {
+          "points": 1579,
+          "bend_m": 0.0005429800221123686,
+          "quadratic_validation_rms_m": 0.0007404881926043186,
+          "state": "supported",
+          "reason": "majority plane passes split and curvature checks",
+          "support": 0.5636478784040532,
+          "split_angle_deg": 0.22683684844359972,
+          "split_offset_m": 2.9306193740220094e-06,
+          "rms_m": 0.0007557493841971114,
+          "span_m": 0.01158563319935847
+        },
+        "live": {
+          "points": 1506,
+          "bend_m": 0.0012014113768300493,
+          "quadratic_validation_rms_m": 0.0006894126269696933,
+          "state": "supported",
+          "reason": "majority plane passes split and curvature checks",
+          "support": 0.5338645418326693,
+          "split_angle_deg": 0.20587873127100706,
+          "split_offset_m": 3.788038818688163e-05,
+          "rms_m": 0.0007296562815994811,
+          "span_m": 0.011281608441285505
+        }
+      },
+      "reference_planar": true,
+      "live_planar": true,
+      "rotation_deg": 1.4397200355574937,
+      "normal_shift_mm": -0.3048817769299944,
+      "validation_normal_before_deg": 1.5449432669572123,
+      "validation_normal_after_deg": 0.24001936804553092,
+      "raw_plane_rms_mm": 0.8632145884390291,
+      "corrected_plane_rms_mm": 0.7557472541097725,
+      "local_support_before": 1.0,
+      "local_support_after": 1.0,
+      "reference_point": [
+        -0.12087740403068736,
+        -0.03494925757854794,
+        0.434332579981148
+      ],
+      "reason": "measured plane constrains tilt and normal offset; tangent motion remains the proposal"
+    },
+    "elapsed_ms": 107.7131163328886,
+    "raw_p2p_used": false
+  },
+  "group_frames": [
+    [
+      1792145000.5951223,
+      [
+        [
+          1.0,
+          -0.000286,
+          0.000516,
+          -0.066609
+        ],
+        [
+          0.000286,
+          1.0,
+          -0.000289,
+          0.046109
+        ],
+        [
+          -0.000516,
+          0.000289,
+          1.0,
+          0.404064
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ]
+    ],
+    [
+      1792145001.2712142,
+      [
+        [
+          0.9956686643798693,
+          -0.07019837860887536,
+          0.060959809815090665,
+          -0.05404491572184429
+        ],
+        [
+          0.0674099242511788,
+          0.9966338994135768,
+          0.04665589622050679,
+          0.04783529138321995
+        ],
+        [
+          -0.06402978123074737,
+          -0.04234451771331626,
+          0.997049210889397,
+          0.4042000124716553
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ]
+    ]
+  ],
+  "recorded_control_pose": [
+    [
+      0.9981224490818067,
+      -0.058087001224684506,
+      0.019452660374866055,
+      0.048361591542218745
+    ],
+    [
+      0.05935411343622762,
+      0.9955967935446677,
+      -0.07255217553443703,
+      0.11986919428143893
+    ],
+    [
+      -0.015152524552868741,
+      0.07357014433074721,
+      0.9971748601227516,
+      -0.03026200002633612
+    ],
+    [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "recorded_timings": [
+    {
+      "frame": 0,
+      "t_capture": 1792144989.6132052,
+      "timing_ms": {
+        "worker_round_trip": 100.9,
+        "decode": 22.8,
+        "verify": 1273.3,
+        "queue": 0.49233436584472656,
+        "fetch": 4.7,
+        "compute": 88.1,
+        "dispatch_and_result_io": 7.602116775512698,
+        "apply_wait": 2.865314483642578,
+        "verify_executor_wait": 3.8013458251953125,
+        "verify_work": 1266.502857208252,
+        "verify_thread_cpu": 61.88686199993754,
+        "verify_resume_wait": 0.10323524475097656,
+        "render": 164.2
+      }
+    },
+    {
+      "frame": 1,
+      "t_capture": 1792144989.7486353,
+      "timing_ms": {
+        "worker_round_trip": 336.3,
+        "decode": 544.7,
+        "verify": 613.0,
+        "queue": 9.282112121582031,
+        "fetch": 7.0,
+        "compute": 91.5,
+        "dispatch_and_result_io": 228.48988914489746,
+        "apply_wait": 399.9159336090088,
+        "verify_executor_wait": 0.24890899658203125,
+        "verify_work": 212.72754669189453,
+        "verify_thread_cpu": 52.92580899993027,
+        "verify_resume_wait": 0.06270408630371094,
+        "render": 157.8
+      }
+    },
+    {
+      "frame": 2,
+      "t_capture": 1792144991.0482802,
+      "timing_ms": {
+        "worker_round_trip": 111.4,
+        "decode": 1.4,
+        "verify": 352.6,
+        "queue": 0.10466575622558594,
+        "fetch": 5.5,
+        "compute": 89.5,
+        "dispatch_and_result_io": 16.317873001098633,
+        "apply_wait": 115.22245407104492,
+        "verify_executor_wait": 0.10752677917480469,
+        "verify_work": 237.17665672302246,
+        "verify_thread_cpu": 53.7514940000392,
+        "verify_resume_wait": 0.08916854858398438,
+        "render": 140.4
+      }
+    },
+    {
+      "frame": 3,
+      "t_capture": 1792144991.2803664,
+      "timing_ms": {
+        "worker_round_trip": 111.9,
+        "decode": 1.7,
+        "verify": 350.6,
+        "queue": 0.2040863037109375,
+        "fetch": 8.1,
+        "compute": 84.9,
+        "dispatch_and_result_io": 18.71245574951172,
+        "apply_wait": 126.9688606262207,
+        "verify_executor_wait": 0.022411346435546875,
+        "verify_work": 223.52147102355957,
+        "verify_thread_cpu": 48.63636200002475,
+        "verify_resume_wait": 0.06866455078125,
+        "render": 117.2
+      }
+    },
+    {
+      "frame": 4,
+      "t_capture": 1792144991.5141287,
+      "timing_ms": {
+        "worker_round_trip": 121.7,
+        "decode": 3.1,
+        "verify": 264.2,
+        "queue": 0.1857280731201172,
+        "fetch": 16.8,
+        "compute": 90.2,
+        "dispatch_and_result_io": 14.520519256591797,
+        "apply_wait": 98.4811782836914,
+        "verify_executor_wait": 0.7097721099853516,
+        "verify_work": 164.9622917175293,
+        "verify_thread_cpu": 49.17728099997021,
+        "verify_resume_wait": 0.045299530029296875,
+        "render": 144.3
+      }
+    },
+    {
+      "frame": 5,
+      "t_capture": 1792144991.7473612,
+      "timing_ms": {
+        "worker_round_trip": 94.9,
+        "decode": 1.2,
+        "verify": 247.1,
+        "queue": 0.10061264038085938,
+        "fetch": 5.9,
+        "compute": 87.0,
+        "dispatch_and_result_io": 1.949348068237299,
+        "apply_wait": 72.42345809936523,
+        "verify_executor_wait": 0.6844997406005859,
+        "verify_work": 171.85664176940918,
+        "verify_thread_cpu": 45.92888499996661,
+        "verify_resume_wait": 2.1800994873046875,
+        "render": 154.0
+      }
+    },
+    {
+      "frame": 6,
+      "t_capture": 1792144991.9167356,
+      "timing_ms": {
+        "worker_round_trip": 116.2,
+        "decode": 1.7,
+        "verify": 260.3,
+        "queue": 0.10943412780761719,
+        "fetch": 17.8,
+        "compute": 91.3,
+        "dispatch_and_result_io": 6.945713424682623,
+        "apply_wait": 71.11859321594238,
+        "verify_executor_wait": 0.09584426879882812,
+        "verify_work": 182.3711395263672,
+        "verify_thread_cpu": 47.367279000013696,
+        "verify_resume_wait": 6.734132766723633,
+        "render": 146.1
+      }
+    },
+    {
+      "frame": 7,
+      "t_capture": 1792144992.1145287,
+      "timing_ms": {
+        "worker_round_trip": 103.0,
+        "decode": 1.1,
+        "verify": 268.2,
+        "queue": 0.5085468292236328,
+        "fetch": 6.7,
+        "compute": 92.0,
+        "dispatch_and_result_io": 3.7773120880126925,
+        "apply_wait": 91.20941162109375,
+        "verify_executor_wait": 0.05650520324707031,
+        "verify_work": 176.82433128356934,
+        "verify_thread_cpu": 48.11426000003394,
+        "verify_resume_wait": 0.10657310485839844,
+        "render": 182.5
+      }
+    },
+    {
+      "frame": 8,
+      "t_capture": 1792144992.3145843,
+      "timing_ms": {
+        "worker_round_trip": 104.2,
+        "decode": 1.5,
+        "verify": 287.7,
+        "queue": 0.12993812561035156,
+        "fetch": 8.9,
+        "compute": 87.4,
+        "dispatch_and_result_io": 7.766848754882801,
+        "apply_wait": 83.9228630065918,
+        "verify_executor_wait": 0.0247955322265625,
+        "verify_work": 203.7055492401123,
+        "verify_thread_cpu": 48.03358899994237,
+        "verify_resume_wait": 0.06961822509765625,
+        "render": 149.4
+      }
+    },
+    {
+      "frame": 9,
+      "t_capture": 1792144992.5153375,
+      "timing_ms": {
+        "worker_round_trip": 108.7,
+        "decode": 3.9,
+        "verify": 300.0,
+        "queue": 0.23674964904785156,
+        "fetch": 7.9,
+        "compute": 92.8,
+        "dispatch_and_result_io": 7.784745025634763,
+        "apply_wait": 93.60098838806152,
+        "verify_executor_wait": 0.024557113647460938,
+        "verify_work": 206.29119873046875,
+        "verify_thread_cpu": 52.90883800000756,
+        "verify_resume_wait": 0.09846687316894531,
+        "render": 121.3
+      }
+    },
+    {
+      "frame": 10,
+      "t_capture": 1792144992.7151556,
+      "timing_ms": {
+        "worker_round_trip": 117.3,
+        "decode": 1.4,
+        "verify": 247.9,
+        "queue": 0.22268295288085938,
+        "fetch": 17.4,
+        "compute": 94.0,
+        "dispatch_and_result_io": 5.655892944335932,
+        "apply_wait": 99.47490692138672,
+        "verify_executor_wait": 0.09012222290039062,
+        "verify_work": 148.2717990875244,
+        "verify_thread_cpu": 47.12764500004596,
+        "verify_resume_wait": 0.07224082946777344,
+        "render": 134.6
+      }
+    },
+    {
+      "frame": 11,
+      "t_capture": 1792144992.9485638,
+      "timing_ms": {
+        "worker_round_trip": 101.5,
+        "decode": 1.0,
+        "verify": 225.9,
+        "queue": 0.20694732666015625,
+        "fetch": 6.5,
+        "compute": 92.1,
+        "dispatch_and_result_io": 2.694755935668951,
+        "apply_wait": 57.77859687805176,
+        "verify_executor_wait": 0.02193450927734375,
+        "verify_work": 168.0750846862793,
+        "verify_thread_cpu": 46.38867300002403,
+        "verify_resume_wait": 0.05793571472167969,
+        "render": 130.0
+      }
+    },
+    {
+      "frame": 12,
+      "t_capture": 1792144993.1156766,
+      "timing_ms": {
+        "worker_round_trip": 102.6,
+        "decode": 1.3,
+        "verify": 228.8,
+        "queue": 0.21028518676757812,
+        "fetch": 9.5,
+        "compute": 90.4,
+        "dispatch_and_result_io": 2.442605590820307,
+        "apply_wait": 67.42119789123535,
+        "verify_executor_wait": 0.5466938018798828,
+        "verify_work": 160.75944900512695,
+        "verify_thread_cpu": 46.074470999997175,
+        "verify_resume_wait": 0.07390975952148438,
+        "render": 105.4
+      }
+    },
+    {
+      "frame": 13,
+      "t_capture": 1792144993.2820315,
+      "timing_ms": {
+        "worker_round_trip": 98.0,
+        "decode": 1.5,
+        "verify": 199.7,
+        "queue": 0.12636184692382812,
+        "fetch": 5.5,
+        "compute": 88.6,
+        "dispatch_and_result_io": 3.818272018432623,
+        "apply_wait": 64.79454040527344,
+        "verify_executor_wait": 0.133514404296875,
+        "verify_work": 134.66119766235352,
+        "verify_thread_cpu": 42.7965830000403,
+        "verify_resume_wait": 0.08463859558105469,
+        "render": 133.6
+      }
+    },
+    {
+      "frame": 14,
+      "t_capture": 1792144993.4488788,
+      "timing_ms": {
+        "worker_round_trip": 95.0,
+        "decode": 1.0,
+        "verify": 202.3,
+        "queue": 0.20694732666015625,
+        "fetch": 6.2,
+        "compute": 85.8,
+        "dispatch_and_result_io": 2.7954654693603516,
+        "apply_wait": 44.41499710083008,
+        "verify_executor_wait": 0.4680156707763672,
+        "verify_work": 157.30571746826172,
+        "verify_thread_cpu": 39.959384999974645,
+        "verify_resume_wait": 0.07343292236328125,
+        "render": 106.1
+      }
+    },
+    {
+      "frame": 15,
+      "t_capture": 1792144993.58224,
+      "timing_ms": {
+        "worker_round_trip": 105.7,
+        "decode": 2.0,
+        "verify": 179.7,
+        "queue": 0.3211498260498047,
+        "fetch": 4.9,
+        "compute": 87.2,
+        "dispatch_and_result_io": 13.294601821899406,
+        "apply_wait": 45.58372497558594,
+        "verify_executor_wait": 0.24247169494628906,
+        "verify_work": 133.74757766723633,
+        "verify_thread_cpu": 41.22322000000622,
+        "verify_resume_wait": 0.09226799011230469,
+        "render": 124.9
+      }
+    },
+    {
+      "frame": 16,
+      "t_capture": 1792144993.7489033,
+      "timing_ms": {
+        "worker_round_trip": 97.6,
+        "decode": 1.1,
+        "verify": 190.1,
+        "queue": 0.1285076141357422,
+        "fetch": 5.7,
+        "compute": 89.8,
+        "dispatch_and_result_io": 2.006999969482422,
+        "apply_wait": 48.64072799682617,
+        "verify_executor_wait": 0.12683868408203125,
+        "verify_work": 141.2508487701416,
+        "verify_thread_cpu": 40.15302300001622,
+        "verify_resume_wait": 0.054836273193359375,
+        "render": 132.4
+      }
+    },
+    {
+      "frame": 17,
+      "t_capture": 1792144993.9169588,
+      "timing_ms": {
+        "worker_round_trip": 94.9,
+        "decode": 1.2,
+        "verify": 210.3,
+        "queue": 0.1480579376220703,
+        "fetch": 5.2,
+        "compute": 87.0,
+        "dispatch_and_result_io": 2.5301387786865206,
+        "apply_wait": 45.018672943115234,
+        "verify_executor_wait": 0.10919570922851562,
+        "verify_work": 165.0528907775879,
+        "verify_thread_cpu": 43.04385300008562,
+        "verify_resume_wait": 0.09822845458984375,
+        "render": 111.4
+      }
+    },
+    {
+      "frame": 18,
+      "t_capture": 1792144994.0499492,
+      "timing_ms": {
+        "worker_round_trip": 102.9,
+        "decode": 1.4,
+        "verify": 203.9,
+        "queue": 0.10037422180175781,
+        "fetch": 5.8,
+        "compute": 85.0,
+        "dispatch_and_result_io": 12.01014442443848,
+        "apply_wait": 63.933610916137695,
+        "verify_executor_wait": 0.15783309936523438,
+        "verify_work": 139.69826698303223,
+        "verify_thread_cpu": 45.72188899999219,
+        "verify_resume_wait": 0.06723403930664062,
+        "render": 115.7
+      }
+    },
+    {
+      "frame": 19,
+      "t_capture": 1792144994.2157307,
+      "timing_ms": {
+        "worker_round_trip": 102.0,
+        "decode": 1.5,
+        "verify": 183.4,
+        "queue": 0.152587890625,
+        "fetch": 7.5,
+        "compute": 92.0,
+        "dispatch_and_result_io": 2.3657684326171875,
+        "apply_wait": 48.06995391845703,
+        "verify_executor_wait": 0.6012916564941406,
+        "verify_work": 134.54318046569824,
+        "verify_thread_cpu": 40.35337300001629,
+        "verify_resume_wait": 0.1475811004638672,
+        "render": 108.9
+      }
+    },
+    {
+      "frame": 20,
+      "t_capture": 1792144994.3839126,
+      "timing_ms": {
+        "worker_round_trip": 96.2,
+        "decode": 1.4,
+        "verify": 173.6,
+        "queue": 0.1659393310546875,
+        "fetch": 4.6,
+        "compute": 86.4,
+        "dispatch_and_result_io": 5.035242080688477,
+        "apply_wait": 39.01243209838867,
+        "verify_executor_wait": 0.9312629699707031,
+        "verify_work": 133.52179527282715,
+        "verify_thread_cpu": 39.78730000005726,
+        "verify_resume_wait": 0.11229515075683594,
+        "render": 107.3
+      }
+    },
+    {
+      "frame": 21,
+      "t_capture": 1792144994.5165234,
+      "timing_ms": {
+        "worker_round_trip": 94.6,
+        "decode": 1.2,
+        "verify": 172.8,
+        "queue": 0.6308555603027344,
+        "fetch": 5.6,
+        "compute": 85.3,
+        "dispatch_and_result_io": 3.0505100250244226,
+        "apply_wait": 41.92948341369629,
+        "verify_executor_wait": 0.03886222839355469,
+        "verify_work": 130.77402114868164,
+        "verify_thread_cpu": 39.56337599993276,
+        "verify_resume_wait": 0.10180473327636719,
+        "render": 106.3
+      }
+    },
+    {
+      "frame": 22,
+      "t_capture": 1792144994.6513808,
+      "timing_ms": {
+        "worker_round_trip": 98.1,
+        "decode": 1.5,
+        "verify": 170.9,
+        "queue": 0.3135204315185547,
+        "fetch": 5.7,
+        "compute": 89.0,
+        "dispatch_and_result_io": 3.119805145263669,
+        "apply_wait": 35.779714584350586,
+        "verify_executor_wait": 0.04458427429199219,
+        "verify_work": 134.93824005126953,
+        "verify_thread_cpu": 42.13976100004402,
+        "verify_resume_wait": 0.12350082397460938,
+        "render": 145.7
+      }
+    },
+    {
+      "frame": 23,
+      "t_capture": 1792144994.7835562,
+      "timing_ms": {
+        "worker_round_trip": 119.8,
+        "decode": 1.4,
+        "verify": 195.4,
+        "queue": 0.8547306060791016,
+        "fetch": 13.5,
+        "compute": 89.6,
+        "dispatch_and_result_io": 15.895189666748053,
+        "apply_wait": 25.157690048217773,
+        "verify_executor_wait": 0.19478797912597656,
+        "verify_work": 169.9388027191162,
+        "verify_thread_cpu": 43.760137999925064,
+        "verify_resume_wait": 0.06914138793945312,
+        "render": 105.1
+      }
+    },
+    {
+      "frame": 24,
+      "t_capture": 1792144994.9499,
+      "timing_ms": {
+        "worker_round_trip": 104.5,
+        "decode": 1.8,
+        "verify": 199.4,
+        "queue": 0.37789344787597656,
+        "fetch": 5.0,
+        "compute": 89.1,
+        "dispatch_and_result_io": 9.977577590942388,
+        "apply_wait": 67.21687316894531,
+        "verify_executor_wait": 0.016689300537109375,
+        "verify_work": 132.10058212280273,
+        "verify_thread_cpu": 38.84043899995504,
+        "verify_resume_wait": 0.11157989501953125,
+        "render": 110.1
+      }
+    },
+    {
+      "frame": 25,
+      "t_capture": 1792144995.1168926,
+      "timing_ms": {
+        "worker_round_trip": 98.8,
+        "decode": 1.0,
+        "verify": 170.5,
+        "queue": 0.09632110595703125,
+        "fetch": 5.8,
+        "compute": 90.7,
+        "dispatch_and_result_io": 2.179065704345703,
+        "apply_wait": 33.5845947265625,
+        "verify_executor_wait": 0.4093647003173828,
+        "verify_work": 136.45339012145996,
+        "verify_thread_cpu": 40.27760300004957,
+        "verify_resume_wait": 0.08702278137207031,
+        "render": 126.2
+      }
+    },
+    {
+      "frame": 26,
+      "t_capture": 1792144995.250392,
+      "timing_ms": {
+        "worker_round_trip": 121.0,
+        "decode": 2.1,
+        "verify": 165.4,
+        "queue": 0.23984909057617188,
+        "fetch": 5.2,
+        "compute": 103.9,
+        "dispatch_and_result_io": 11.701210403442374,
+        "apply_wait": 15.247344970703125,
+        "verify_executor_wait": 0.5397796630859375,
+        "verify_work": 149.4894027709961,
+        "verify_thread_cpu": 40.82322800002203,
+        "verify_resume_wait": 0.07772445678710938,
+        "render": 104.7
+      }
+    },
+    {
+      "frame": 27,
+      "t_capture": 1792144995.3844647,
+      "timing_ms": {
+        "worker_round_trip": 101.7,
+        "decode": 9.0,
+        "verify": 172.7,
+        "queue": 0.14138221740722656,
+        "fetch": 13.8,
+        "compute": 84.8,
+        "dispatch_and_result_io": 2.9887260437011776,
+        "apply_wait": 44.54946517944336,
+        "verify_executor_wait": 0.08273124694824219,
+        "verify_work": 127.9594898223877,
+        "verify_thread_cpu": 42.098178000060216,
+        "verify_resume_wait": 0.07104873657226562,
+        "render": 100.1
+      }
+    },
+    {
+      "frame": 28,
+      "t_capture": 1792144995.551585,
+      "timing_ms": {
+        "worker_round_trip": 122.0,
+        "decode": 1.2,
+        "verify": 152.0,
+        "queue": 0.1399517059326172,
+        "fetch": 6.0,
+        "compute": 105.0,
+        "dispatch_and_result_io": 10.826648712158203,
+        "apply_wait": 11.008739471435547,
+        "verify_executor_wait": 0.08893013000488281,
+        "verify_work": 140.05064964294434,
+        "verify_thread_cpu": 41.08680899992123,
+        "verify_resume_wait": 0.8218288421630859,
+        "render": 181.6
+      }
+    },
+    {
+      "frame": 29,
+      "t_capture": 1792144995.6846287,
+      "timing_ms": {
+        "worker_round_trip": 122.5,
+        "decode": 17.4,
+        "verify": 201.3,
+        "queue": 0.125885009765625,
+        "fetch": 5.4,
+        "compute": 108.7,
+        "dispatch_and_result_io": 8.278587722778312,
+        "apply_wait": 21.317720413208008,
+        "verify_executor_wait": 0.9150505065917969,
+        "verify_work": 179.0008544921875,
+        "verify_thread_cpu": 41.850179999983084,
+        "verify_resume_wait": 0.09274482727050781,
+        "render": 113.1
+      }
+    },
+    {
+      "frame": 30,
+      "t_capture": 1792144995.8549428,
+      "timing_ms": {
+        "worker_round_trip": 132.9,
+        "decode": 1.5,
+        "verify": 226.7,
+        "queue": 0.11038780212402344,
+        "fetch": 6.9,
+        "compute": 108.2,
+        "dispatch_and_result_io": 17.728950881958,
+        "apply_wait": 56.435585021972656,
+        "verify_executor_wait": 0.7665157318115234,
+        "verify_work": 161.0403060913086,
+        "verify_thread_cpu": 41.71119099999032,
+        "verify_resume_wait": 8.453369140625,
+        "render": 142.0
+      }
+    },
+    {
+      "frame": 31,
+      "t_capture": 1792144996.0510721,
+      "timing_ms": {
+        "worker_round_trip": 149.3,
+        "decode": 15.2,
+        "verify": 177.7,
+        "queue": 0.5750656127929688,
+        "fetch": 5.1,
+        "compute": 111.6,
+        "dispatch_and_result_io": 32.05507354736329,
+        "apply_wait": 11.82103157043457,
+        "verify_executor_wait": 1.39617919921875,
+        "verify_work": 164.41798210144043,
+        "verify_thread_cpu": 40.57292199991025,
+        "verify_resume_wait": 0.0762939453125,
+        "render": 195.8
+      }
+    },
+    {
+      "frame": 32,
+      "t_capture": 1792144996.2304897,
+      "timing_ms": {
+        "worker_round_trip": 113.3,
+        "decode": 1.8,
+        "verify": 311.4,
+        "queue": 0.05793571472167969,
+        "fetch": 4.8,
+        "compute": 87.2,
+        "dispatch_and_result_io": 21.28721046447754,
+        "apply_wait": 54.17799949645996,
+        "verify_executor_wait": 0.47016143798828125,
+        "verify_work": 256.65998458862305,
+        "verify_thread_cpu": 43.06213600000319,
+        "verify_resume_wait": 0.10752677917480469,
+        "render": 108.7
+      }
+    },
+    {
+      "frame": 33,
+      "t_capture": 1792144996.3877256,
+      "timing_ms": {
+        "worker_round_trip": 180.0,
+        "decode": 1.1,
+        "verify": 203.1,
+        "queue": 0.20837783813476562,
+        "fetch": 7.7,
+        "compute": 143.2,
+        "dispatch_and_result_io": 28.871661758422874,
+        "apply_wait": 70.40548324584961,
+        "verify_executor_wait": 0.5474090576171875,
+        "verify_work": 132.08317756652832,
+        "verify_thread_cpu": 38.076670999998896,
+        "verify_resume_wait": 0.0705718994140625,
+        "render": 126.7
+      }
+    },
+    {
+      "frame": 34,
+      "t_capture": 1792144996.6511054,
+      "timing_ms": {
+        "worker_round_trip": 95.6,
+        "decode": 1.0,
+        "verify": 173.5,
+        "queue": 0.09059906005859375,
+        "fetch": 5.8,
+        "compute": 87.8,
+        "dispatch_and_result_io": 1.8704284667968807,
+        "apply_wait": 39.121389389038086,
+        "verify_executor_wait": 0.24652481079101562,
+        "verify_work": 133.6371898651123,
+        "verify_thread_cpu": 38.01608799994938,
+        "verify_resume_wait": 0.49114227294921875,
+        "render": 123.6
+      }
+    },
+    {
+      "frame": 35,
+      "t_capture": 1792144996.7849562,
+      "timing_ms": {
+        "worker_round_trip": 114.2,
+        "decode": 2.5,
+        "verify": 168.5,
+        "queue": 0.2071857452392578,
+        "fetch": 14.9,
+        "compute": 88.4,
+        "dispatch_and_result_io": 10.707949829101551,
+        "apply_wait": 29.80661392211914,
+        "verify_executor_wait": 1.4138221740722656,
+        "verify_work": 137.14241981506348,
+        "verify_thread_cpu": 39.210956999909286,
+        "verify_resume_wait": 0.11801719665527344,
+        "render": 142.1
+      }
+    },
+    {
+      "frame": 36,
+      "t_capture": 1792144996.9514759,
+      "timing_ms": {
+        "worker_round_trip": 99.2,
+        "decode": 1.2,
+        "verify": 203.3,
+        "queue": 0.16760826110839844,
+        "fetch": 4.6,
+        "compute": 92.7,
+        "dispatch_and_result_io": 1.6840030670166044,
+        "apply_wait": 40.22526741027832,
+        "verify_executor_wait": 0.024318695068359375,
+        "verify_work": 162.90044784545898,
+        "verify_thread_cpu": 40.55105099996581,
+        "verify_resume_wait": 0.09870529174804688,
+        "render": 138.2
+      }
+    },
+    {
+      "frame": 37,
+      "t_capture": 1792144997.0854094,
+      "timing_ms": {
+        "worker_round_trip": 120.3,
+        "decode": 2.0,
+        "verify": 198.6,
+        "queue": 0.1461505889892578,
+        "fetch": 7.1,
+        "compute": 87.9,
+        "dispatch_and_result_io": 25.14007568359375,
+        "apply_wait": 40.44747352600098,
+        "verify_executor_wait": 0.5614757537841797,
+        "verify_work": 157.5450897216797,
+        "verify_thread_cpu": 36.27018100007717,
+        "verify_resume_wait": 0.05364418029785156,
+        "render": 112.9
+      }
+    },
+    {
+      "frame": 38,
+      "t_capture": 1792144997.2525177,
+      "timing_ms": {
+        "worker_round_trip": 120.9,
+        "decode": 1.7,
+        "verify": 177.6,
+        "queue": 0.0782012939453125,
+        "fetch": 5.7,
+        "compute": 95.7,
+        "dispatch_and_result_io": 19.436019515991205,
+        "apply_wait": 38.854122161865234,
+        "verify_executor_wait": 0.16355514526367188,
+        "verify_work": 138.49878311157227,
+        "verify_thread_cpu": 38.07764500004396,
+        "verify_resume_wait": 0.10824203491210938,
+        "render": 121.1
+      }
+    },
+    {
+      "frame": 39,
+      "t_capture": 1792144997.418852,
+      "timing_ms": {
+        "worker_round_trip": 101.4,
+        "decode": 1.0,
+        "verify": 172.6,
+        "queue": 2.3992061614990234,
+        "fetch": 9.5,
+        "compute": 87.1,
+        "dispatch_and_result_io": 2.365644836425787,
+        "apply_wait": 38.35248947143555,
+        "verify_executor_wait": 0.6480216979980469,
+        "verify_work": 133.51774215698242,
+        "verify_thread_cpu": 36.990232000107426,
+        "verify_resume_wait": 0.055789947509765625,
+        "render": 98.1
+      }
+    },
+    {
+      "frame": 40,
+      "t_capture": 1792144997.5527422,
+      "timing_ms": {
+        "worker_round_trip": 103.8,
+        "decode": 1.8,
+        "verify": 145.6,
+        "queue": 0.39696693420410156,
+        "fetch": 5.7,
+        "compute": 93.0,
+        "dispatch_and_result_io": 4.711197662353513,
+        "apply_wait": 30.838489532470703,
+        "verify_executor_wait": 0.024557113647460938,
+        "verify_work": 114.59898948669434,
+        "verify_thread_cpu": 37.66576299994995,
+        "verify_resume_wait": 0.11897087097167969,
+        "render": 339.9
+      }
+    },
+    {
+      "frame": 41,
+      "t_capture": 1792144997.7187054,
+      "timing_ms": {
+        "worker_round_trip": 98.5,
+        "decode": 1.2,
+        "verify": 352.1,
+        "queue": 0.10395050048828125,
+        "fetch": 6.1,
+        "compute": 88.8,
+        "dispatch_and_result_io": 3.537547683715829,
+        "apply_wait": 16.967296600341797,
+        "verify_executor_wait": 0.33593177795410156,
+        "verify_work": 331.6190242767334,
+        "verify_thread_cpu": 46.360814999957256,
+        "verify_resume_wait": 3.1583309173583984,
+        "render": 607.4
+      }
+    },
+    {
+      "frame": 42,
+      "t_capture": 1792144997.820054,
+      "timing_ms": {
+        "worker_round_trip": 355.2,
+        "decode": 1.3,
+        "verify": 643.4,
+        "queue": 0.12278556823730469,
+        "fetch": 7.4,
+        "compute": 93.3,
+        "dispatch_and_result_io": 254.38894920349122,
+        "apply_wait": 0.1552104949951172,
+        "verify_executor_wait": 0.055789947509765625,
+        "verify_work": 631.9718360900879,
+        "verify_thread_cpu": 48.279519000061555,
+        "verify_resume_wait": 11.222362518310547,
+        "render": 185.6
+      }
+    },
+    {
+      "frame": 43,
+      "t_capture": 1792144998.185798,
+      "timing_ms": {
+        "worker_round_trip": 570.7,
+        "decode": 2.9,
+        "verify": 337.9,
+        "queue": 0.3638267517089844,
+        "fetch": 7.6,
+        "compute": 151.0,
+        "dispatch_and_result_io": 411.7041553497314,
+        "apply_wait": 87.4168872833252,
+        "verify_executor_wait": 0.08535385131835938,
+        "verify_work": 250.24724006652832,
+        "verify_thread_cpu": 49.57787000000735,
+        "verify_resume_wait": 0.1971721649169922,
+        "render": 452.4
+      }
+    },
+    {
+      "frame": 44,
+      "t_capture": 1792144998.8551831,
+      "timing_ms": {
+        "worker_round_trip": 170.4,
+        "decode": 1.3,
+        "verify": 515.8,
+        "queue": 0.6241798400878906,
+        "fetch": 17.9,
+        "compute": 143.7,
+        "dispatch_and_result_io": 8.173578643798834,
+        "apply_wait": 119.03762817382812,
+        "verify_executor_wait": 0.44608116149902344,
+        "verify_work": 393.07212829589844,
+        "verify_thread_cpu": 46.04757499998868,
+        "verify_resume_wait": 3.1943321228027344
+      }
+    },
+    {
+      "frame": 45,
+      "t_capture": 1792144999.156722,
+      "timing_ms": {
+        "worker_round_trip": 341.6,
+        "decode": 1.2,
+        "verify": 162.2,
+        "queue": 67.13533401489258,
+        "fetch": 57.8,
+        "compute": 190.1,
+        "dispatch_and_result_io": 26.568898773193354,
+        "apply_wait": 29.842615127563477,
+        "verify_executor_wait": 0.5214214324951172,
+        "verify_work": 107.63859748840332,
+        "verify_thread_cpu": 40.56221700000151,
+        "verify_resume_wait": 24.199247360229492,
+        "render": 126.8
+      }
+    },
+    {
+      "frame": 46,
+      "t_capture": 1792144999.5540085,
+      "timing_ms": {
+        "worker_round_trip": 138.7,
+        "decode": 1.1,
+        "verify": 144.9,
+        "queue": 0.17714500427246094,
+        "fetch": 9.0,
+        "compute": 116.9,
+        "dispatch_and_result_io": 12.668639755249018,
+        "apply_wait": 0.3285408020019531,
+        "verify_executor_wait": 0.1499652862548828,
+        "verify_work": 144.32311058044434,
+        "verify_thread_cpu": 40.43458199998895,
+        "verify_resume_wait": 0.0514984130859375,
+        "render": 274.1
+      }
+    },
+    {
+      "frame": 47,
+      "t_capture": 1792144999.6870728,
+      "timing_ms": {
+        "worker_round_trip": 209.2,
+        "decode": 3.0,
+        "verify": 408.0,
+        "queue": 0.9238719940185547,
+        "fetch": 7.4,
+        "compute": 164.9,
+        "dispatch_and_result_io": 35.954337310791004,
+        "apply_wait": 10.821104049682617,
+        "verify_executor_wait": 3.0374526977539062,
+        "verify_work": 394.0243721008301,
+        "verify_thread_cpu": 50.57207099991956,
+        "verify_resume_wait": 0.10395050048828125,
+        "render": 188.7
+      }
+    },
+    {
+      "frame": 48,
+      "t_capture": 1792144999.9690437,
+      "timing_ms": {
+        "worker_round_trip": 348.7,
+        "decode": 1.6,
+        "verify": 202.0,
+        "queue": 47.196149826049805,
+        "fetch": 74.9,
+        "compute": 166.1,
+        "dispatch_and_result_io": 60.4674186706543,
+        "apply_wait": 29.970169067382812,
+        "verify_executor_wait": 0.49233436584472656,
+        "verify_work": 151.78537368774414,
+        "verify_thread_cpu": 46.67859599999247,
+        "verify_resume_wait": 19.785404205322266,
+        "render": 142.0
+      }
+    },
+    {
+      "frame": 49,
+      "t_capture": 1792145000.3539753,
+      "timing_ms": {
+        "worker_round_trip": 228.0,
+        "decode": 1.1,
+        "verify": 108.6,
+        "queue": 2.5720596313476562,
+        "fetch": 9.9,
+        "compute": 148.3,
+        "dispatch_and_result_io": 67.19806365966795,
+        "apply_wait": 0.6937980651855469,
+        "verify_executor_wait": 0.14591217041015625,
+        "verify_work": 107.69438743591309,
+        "verify_thread_cpu": 37.657659999922544,
+        "verify_resume_wait": 0.06413459777832031,
+        "render": 192.4
+      }
+    },
+    {
+      "frame": 50,
+      "t_capture": 1792145000.5881093,
+      "timing_ms": {
+        "worker_round_trip": 246.0,
+        "decode": 1.2,
+        "verify": 169.9,
+        "queue": 0.537872314453125,
+        "fetch": 4.9,
+        "compute": 214.2,
+        "dispatch_and_result_io": 26.31711807250977,
+        "apply_wait": 0.18477439880371094,
+        "verify_executor_wait": 0.4267692565917969,
+        "verify_work": 169.23236846923828,
+        "verify_thread_cpu": 46.49983199999497,
+        "verify_resume_wait": 0.08845329284667969,
+        "render": 156.5
+      }
+    },
+    {
+      "frame": 51,
+      "t_capture": 1792145000.8228576,
+      "timing_ms": {
+        "worker_round_trip": 422.5,
+        "decode": 1.0,
+        "verify": 768.3,
+        "queue": 2.8657913208007812,
+        "fetch": 15.5,
+        "compute": 383.6,
+        "dispatch_and_result_io": 20.504539871215798,
+        "apply_wait": 0.11992454528808594,
+        "verify_executor_wait": 0.062465667724609375,
+        "verify_work": 754.0023326873779,
+        "verify_thread_cpu": 45.335130000012214,
+        "verify_resume_wait": 14.140605926513672,
+        "render": 136.6
+      }
+    },
+    {
+      "frame": 52,
+      "t_capture": 1792145001.2619116,
+      "timing_ms": {
+        "worker_round_trip": 787.3,
+        "decode": 1.7,
+        "verify": 118.5,
+        "queue": 0.6096363067626953,
+        "fetch": 4.6,
+        "compute": 91.8,
+        "dispatch_and_result_io": 690.2630554199219,
+        "apply_wait": 0.6377696990966797,
+        "verify_executor_wait": 0.07653236389160156,
+        "verify_work": 117.72680282592773,
+        "verify_thread_cpu": 27.22155300000395,
+        "verify_resume_wait": 0.06508827209472656,
+        "render": 230.3
+      }
+    },
+    {
+      "frame": 53,
+      "t_capture": 1792145002.0574825,
+      "timing_ms": {
+        "worker_round_trip": 240.8,
+        "decode": 1.2,
+        "verify": 133.9,
+        "queue": 0.6494522094726562,
+        "fetch": 7.4,
+        "compute": 162.5,
+        "dispatch_and_result_io": 70.27095565795898,
+        "apply_wait": 0.14543533325195312,
+        "verify_executor_wait": 5.1898956298828125,
+        "verify_work": 113.1277084350586,
+        "verify_thread_cpu": 25.664014999961182,
+        "verify_resume_wait": 15.457630157470703,
+        "render": 392.2
+      }
+    },
+    {
+      "frame": 54,
+      "t_capture": 1792145002.3039367,
+      "timing_ms": {
+        "worker_round_trip": 164.7,
+        "decode": 1.1,
+        "verify": 358.3,
+        "queue": 1.4579296112060547,
+        "fetch": 61.3,
+        "compute": 96.8,
+        "dispatch_and_result_io": 5.142578506469732,
+        "apply_wait": 0.1437664031982422,
+        "verify_executor_wait": 17.781972885131836,
+        "verify_work": 340.1975631713867,
+        "verify_thread_cpu": 44.12508300003992,
+        "verify_resume_wait": 0.1239776611328125,
+        "render": 95.8
+      }
+    },
+    {
+      "frame": 55,
+      "t_capture": 1792145002.4969835,
+      "timing_ms": {
+        "worker_round_trip": 284.1,
+        "decode": 1.7,
+        "verify": 146.3,
+        "queue": 4.210233688354492,
+        "fetch": 42.8,
+        "compute": 109.2,
+        "dispatch_and_result_io": 127.88243103027342,
+        "apply_wait": 63.2627010345459,
+        "verify_executor_wait": 0.080108642578125,
+        "verify_work": 82.96012878417969,
+        "verify_thread_cpu": 23.296074999962002,
+        "verify_resume_wait": 0.03743171691894531,
+        "render": 84.8
+      }
+    },
+    {
+      "frame": 56,
+      "t_capture": 1792145002.8890069,
+      "timing_ms": {
+        "worker_round_trip": 139.3,
+        "decode": 1.1,
+        "verify": 69.1,
+        "queue": 0.194549560546875,
+        "fetch": 7.0,
+        "compute": 107.8,
+        "dispatch_and_result_io": 24.351096343994143,
+        "apply_wait": 0.21505355834960938,
+        "verify_executor_wait": 0.06127357482910156,
+        "verify_work": 63.35020065307617,
+        "verify_thread_cpu": 34.97910999999476,
+        "verify_resume_wait": 5.467414855957031,
+        "render": 65.9
+      }
+    },
+    {
+      "frame": 57,
+      "t_capture": 1792145003.023825,
+      "timing_ms": {
+        "worker_round_trip": 230.2,
+        "decode": 1.3,
+        "verify": 145.2,
+        "queue": 0.2789497375488281,
+        "fetch": 5.8,
+        "compute": 220.8,
+        "dispatch_and_result_io": 3.368547821044899,
+        "apply_wait": 0.17380714416503906,
+        "verify_executor_wait": 1.0123252868652344,
+        "verify_work": 139.68706130981445,
+        "verify_thread_cpu": 42.102133999947,
+        "verify_resume_wait": 4.364728927612305,
+        "render": 299.0
+      }
+    },
+    {
+      "frame": 58,
+      "t_capture": 1792145003.2640734,
+      "timing_ms": {
+        "worker_round_trip": 306.8,
+        "decode": 27.6,
+        "verify": 294.4,
+        "queue": 0.4897117614746094,
+        "fetch": 26.0,
+        "compute": 256.0,
+        "dispatch_and_result_io": 24.30970001220703,
+        "apply_wait": 0.30803680419921875,
+        "verify_executor_wait": 0.23555755615234375,
+        "verify_work": 293.75457763671875,
+        "verify_thread_cpu": 42.90981199994803,
+        "verify_resume_wait": 0.14734268188476562,
+        "render": 130.9
+      }
+    },
+    {
+      "frame": 59,
+      "t_capture": 1792145003.6317787,
+      "timing_ms": {
+        "worker_round_trip": 207.4,
+        "decode": 1.3,
+        "verify": 155.4,
+        "queue": 2.001523971557617,
+        "fetch": 20.2,
+        "compute": 120.6,
+        "dispatch_and_result_io": 64.55731315612795,
+        "apply_wait": 26.5045166015625,
+        "verify_executor_wait": 0.05364418029785156,
+        "verify_work": 105.77797889709473,
+        "verify_thread_cpu": 36.167118999969716,
+        "verify_resume_wait": 23.07868003845215,
+        "render": 167.7
+      }
+    },
+    {
+      "frame": 60,
+      "t_capture": 1792145003.8909857,
+      "timing_ms": {
+        "worker_round_trip": 133.6,
+        "decode": 1.8,
+        "verify": 277.7,
+        "queue": 0.07700920104980469,
+        "fetch": 5.6,
+        "compute": 93.8,
+        "dispatch_and_result_io": 34.11202011108399,
+        "apply_wait": 2.5327205657958984,
+        "verify_executor_wait": 0.3612041473388672,
+        "verify_work": 270.5729007720947,
+        "verify_thread_cpu": 45.00829500000236,
+        "verify_resume_wait": 4.204750061035156,
+        "render": 263.6
+      }
+    },
+    {
+      "frame": 61,
+      "t_capture": 1792145004.0231018,
+      "timing_ms": {
+        "worker_round_trip": 292.4,
+        "decode": 24.4,
+        "verify": 306.2,
+        "queue": 1.1513233184814453,
+        "fetch": 6.1,
+        "compute": 170.1,
+        "dispatch_and_result_io": 115.03020172119139,
+        "apply_wait": 10.803937911987305,
+        "verify_executor_wait": 5.813121795654297,
+        "verify_work": 256.11138343811035,
+        "verify_thread_cpu": 44.915758000001915,
+        "verify_resume_wait": 33.47468376159668,
+        "render": 211.5
+      }
+    },
+    {
+      "frame": 62,
+      "t_capture": 1792145004.3780448,
+      "timing_ms": {
+        "worker_round_trip": 193.0,
+        "decode": 2.5,
+        "verify": 351.0,
+        "queue": 1.1208057403564453,
+        "fetch": 26.0,
+        "compute": 153.0,
+        "dispatch_and_result_io": 12.843748092651367,
+        "apply_wait": 79.06866073608398,
+        "verify_executor_wait": 1.264333724975586,
+        "verify_work": 270.343542098999,
+        "verify_thread_cpu": 50.297339999929136,
+        "verify_resume_wait": 0.2586841583251953,
+        "render": 385.4
+      }
+    },
+    {
+      "frame": 63,
+      "t_capture": 1792145004.6566505,
+      "timing_ms": {
+        "worker_round_trip": 248.1,
+        "decode": 1.4,
+        "verify": 633.8,
+        "queue": 0.29587745666503906,
+        "fetch": 9.1,
+        "compute": 202.2,
+        "dispatch_and_result_io": 36.48032302856447,
+        "apply_wait": 34.10792350769043,
+        "verify_executor_wait": 5.710363388061523,
+        "verify_work": 592.5238132476807,
+        "verify_thread_cpu": 51.18740799991883,
+        "verify_resume_wait": 1.443624496459961,
+        "render": 222.5
+      }
+    },
+    {
+      "frame": 64,
+      "t_capture": 1792145004.9792533,
+      "timing_ms": {
+        "worker_round_trip": 329.6,
+        "decode": 1.3,
+        "verify": 363.5,
+        "queue": 47.153472900390625,
+        "fetch": 59.4,
+        "compute": 184.5,
+        "dispatch_and_result_io": 38.58524665832519,
+        "apply_wait": 145.9481716156006,
+        "verify_executor_wait": 0.5199909210205078,
+        "verify_work": 211.69781684875488,
+        "verify_thread_cpu": 45.863423000014336,
+        "verify_resume_wait": 5.324125289916992,
+        "render": 241.4
+      }
+    },
+    {
+      "frame": 65,
+      "t_capture": 1792145005.5577605,
+      "timing_ms": {
+        "worker_round_trip": 229.6,
+        "decode": 2.1,
+        "verify": 374.6,
+        "queue": 0.34737586975097656,
+        "fetch": 16.1,
+        "compute": 113.3,
+        "dispatch_and_result_io": 99.80393943786622,
+        "apply_wait": 0.2808570861816406,
+        "verify_executor_wait": 0.08797645568847656,
+        "verify_work": 374.18603897094727,
+        "verify_thread_cpu": 47.684558000014476,
+        "verify_resume_wait": 0.08749961853027344,
+        "render": 231.5
+      }
+    },
+    {
+      "frame": 66,
+      "t_capture": 1792145005.7907436,
+      "timing_ms": {
+        "worker_round_trip": 252.2,
+        "decode": 26.6,
+        "verify": 466.1,
+        "queue": 0.8695125579833984,
+        "fetch": 6.8,
+        "compute": 198.7,
+        "dispatch_and_result_io": 45.841819763183594,
+        "apply_wait": 85.74342727661133,
+        "verify_executor_wait": 0.08273124694824219,
+        "verify_work": 380.19323348999023,
+        "verify_thread_cpu": 50.58795699994789,
+        "verify_resume_wait": 0.060558319091796875,
+        "render": 129.5
+      }
+    },
+    {
+      "frame": 67,
+      "t_capture": 1792145006.1742206,
+      "timing_ms": {
+        "worker_round_trip": 240.8,
+        "decode": 2.3,
+        "verify": 264.5,
+        "queue": 1.0881423950195312,
+        "fetch": 13.1,
+        "compute": 184.9,
+        "dispatch_and_result_io": 41.72034454345703,
+        "apply_wait": 139.64128494262695,
+        "verify_executor_wait": 0.08034706115722656,
+        "verify_work": 119.29988861083984,
+        "verify_thread_cpu": 39.55030600002374,
+        "verify_resume_wait": 5.483150482177734,
+        "render": 163.2
+      }
+    },
+    {
+      "frame": 68,
+      "t_capture": 1792145006.5601957,
+      "timing_ms": {
+        "worker_round_trip": 208.4,
+        "decode": 7.9,
+        "verify": 188.9,
+        "queue": 19.298791885375977,
+        "fetch": 36.2,
+        "compute": 136.2,
+        "dispatch_and_result_io": 16.73078308105471,
+        "apply_wait": 0.18215179443359375,
+        "verify_executor_wait": 11.287927627563477,
+        "verify_work": 177.42586135864258,
+        "verify_thread_cpu": 45.43327800001862,
+        "verify_resume_wait": 0.04673004150390625,
+        "render": 265.3
+      }
+    },
+    {
+      "frame": 69,
+      "t_capture": 1792145006.801334,
+      "timing_ms": {
+        "worker_round_trip": 372.4,
+        "decode": 3.5,
+        "verify": 112.6,
+        "queue": 0.4096031188964844,
+        "fetch": 15.7,
+        "compute": 209.1,
+        "dispatch_and_result_io": 147.22763557434084,
+        "apply_wait": 11.15274429321289,
+        "verify_executor_wait": 0.46324729919433594,
+        "verify_work": 100.9056568145752,
+        "verify_thread_cpu": 37.86559800005307,
+        "verify_resume_wait": 0.04839897155761719,
+        "render": 106.2
+      }
+    },
+    {
+      "frame": 70,
+      "t_capture": 1792145007.2268622,
+      "timing_ms": {
+        "worker_round_trip": 204.9,
+        "decode": 1.0,
+        "verify": 74.1,
+        "queue": 1.749277114868164,
+        "fetch": 6.0,
+        "compute": 107.3,
+        "dispatch_and_result_io": 89.8559944152832,
+        "apply_wait": 0.26869773864746094,
+        "verify_executor_wait": 0.08893013000488281,
+        "verify_work": 73.64821434020996,
+        "verify_thread_cpu": 34.01206399996681,
+        "verify_resume_wait": 0.06699562072753906,
+        "render": 84.9
+      }
+    },
+    {
+      "frame": 71,
+      "t_capture": 1792145007.425925,
+      "timing_ms": {
+        "worker_round_trip": 203.9,
+        "decode": 1.6,
+        "verify": 166.1,
+        "queue": 0.6067752838134766,
+        "fetch": 17.9,
+        "compute": 179.9,
+        "dispatch_and_result_io": 5.480687332153309,
+        "apply_wait": 0.274658203125,
+        "verify_executor_wait": 0.2753734588623047,
+        "verify_work": 165.24934768676758,
+        "verify_thread_cpu": 43.098366999970494,
+        "verify_resume_wait": 0.118255615234375,
+        "render": 191.5
+      }
+    },
+    {
+      "frame": 72,
+      "t_capture": 1792145007.6614096,
+      "timing_ms": {
+        "worker_round_trip": 201.3,
+        "decode": 1.2,
+        "verify": 169.8,
+        "queue": 18.07856559753418,
+        "fetch": 14.4,
+        "compute": 164.4,
+        "dispatch_and_result_io": 4.410372924804676,
+        "apply_wait": 0.16307830810546875,
+        "verify_executor_wait": 0.5822181701660156,
+        "verify_work": 153.07188034057617,
+        "verify_thread_cpu": 41.6237329999376,
+        "verify_resume_wait": 15.934944152832031,
+        "render": 304.6
+      }
+    },
+    {
+      "frame": 73,
+      "t_capture": 1792145007.865323,
+      "timing_ms": {
+        "worker_round_trip": 175.6,
+        "decode": 1.3,
+        "verify": 422.0,
+        "queue": 2.9087066650390625,
+        "fetch": 13.4,
+        "compute": 105.2,
+        "dispatch_and_result_io": 54.11137237548827,
+        "apply_wait": 0.2741813659667969,
+        "verify_executor_wait": 0.02956390380859375,
+        "verify_work": 407.7954292297363,
+        "verify_thread_cpu": 49.50725000003331,
+        "verify_resume_wait": 13.85045051574707,
+        "render": 218.3
+      }
+    },
+    {
+      "frame": 74,
+      "t_capture": 1792145008.0599546,
+      "timing_ms": {
+        "worker_round_trip": 257.9,
+        "decode": 1.6,
+        "verify": 379.6,
+        "queue": 1.5442371368408203,
+        "fetch": 17.6,
+        "compute": 227.7,
+        "dispatch_and_result_io": 11.030966949462908,
+        "apply_wait": 191.74861907958984,
+        "verify_executor_wait": 0.7450580596923828,
+        "verify_work": 177.05154418945312,
+        "verify_thread_cpu": 42.01782400002685,
+        "verify_resume_wait": 10.0555419921875,
+        "render": 417.5
+      }
+    },
+    {
+      "frame": 75,
+      "t_capture": 1792145008.5265744,
+      "timing_ms": {
+        "worker_round_trip": 207.9,
+        "decode": 1.3,
+        "verify": 391.5,
+        "queue": 0.15854835510253906,
+        "fetch": 8.6,
+        "compute": 127.1,
+        "dispatch_and_result_io": 72.0763080596924,
+        "apply_wait": 0.38886070251464844,
+        "verify_executor_wait": 0.8158683776855469,
+        "verify_work": 380.13601303100586,
+        "verify_thread_cpu": 45.72180400009529,
+        "verify_resume_wait": 10.132312774658203,
+        "render": 217.3
+      }
+    },
+    {
+      "frame": 76,
+      "t_capture": 1792145008.726754,
+      "timing_ms": {
+        "worker_round_trip": 275.2,
+        "decode": 1.3,
+        "verify": 394.0,
+        "queue": 0.4723072052001953,
+        "fetch": 7.7,
+        "compute": 225.8,
+        "dispatch_and_result_io": 41.210893630981445,
+        "apply_wait": 152.30822563171387,
+        "verify_executor_wait": 0.2014636993408203,
+        "verify_work": 240.67330360412598,
+        "verify_thread_cpu": 43.442306999963876,
+        "verify_resume_wait": 0.8320808410644531,
+        "render": 119.3
+      }
+    },
+    {
+      "frame": 77,
+      "t_capture": 1792145009.1708007,
+      "timing_ms": {
+        "worker_round_trip": 160.7,
+        "decode": 10.0,
+        "verify": 171.2,
+        "queue": 16.34836196899414,
+        "fetch": 34.7,
+        "compute": 103.1,
+        "dispatch_and_result_io": 6.509997558593753,
+        "apply_wait": 33.99848937988281,
+        "verify_executor_wait": 0.17189979553222656,
+        "verify_work": 136.8999481201172,
+        "verify_thread_cpu": 38.687608000032014,
+        "verify_resume_wait": 0.10967254638671875,
+        "render": 105.9
+      }
+    },
+    {
+      "frame": 78,
+      "t_capture": 1792145009.4267619,
+      "timing_ms": {
+        "worker_round_trip": 343.0,
+        "decode": 1.6,
+        "verify": 244.4,
+        "queue": 0.3573894500732422,
+        "fetch": 64.8,
+        "compute": 264.7,
+        "dispatch_and_result_io": 13.189037322998047,
+        "apply_wait": 0.15306472778320312,
+        "verify_executor_wait": 0.1742839813232422,
+        "verify_work": 231.61840438842773,
+        "verify_thread_cpu": 39.80844199998046,
+        "verify_resume_wait": 12.488365173339844,
+        "render": 176.8
+      }
+    },
+    {
+      "frame": 79,
+      "t_capture": 1792145009.7778907,
+      "timing_ms": {
+        "worker_round_trip": 276.8,
+        "decode": 9.9,
+        "verify": 215.5,
+        "queue": 2.1276473999023438,
+        "fetch": 35.3,
+        "compute": 163.5,
+        "dispatch_and_result_io": 75.86225624084472,
+        "apply_wait": 0.37169456481933594,
+        "verify_executor_wait": 0.03790855407714844,
+        "verify_work": 184.67211723327637,
+        "verify_thread_cpu": 46.00071599998046,
+        "verify_resume_wait": 30.460357666015625,
+        "render": 102.6
+      }
+    },
+    {
+      "frame": 80,
+      "t_capture": 1792145010.0940309,
+      "timing_ms": {
+        "worker_round_trip": 110.9,
+        "decode": 1.2,
+        "verify": 361.8,
+        "queue": 1.1076927185058594,
+        "fetch": 8.1,
+        "compute": 96.8,
+        "dispatch_and_result_io": 4.882934188842782,
+        "apply_wait": 107.07879066467285,
+        "verify_executor_wait": 0.41675567626953125,
+        "verify_work": 254.27579879760742,
+        "verify_thread_cpu": 46.042452000051526,
+        "verify_resume_wait": 0.06890296936035156,
+        "render": 293.0
+      }
+    },
+    {
+      "frame": 81,
+      "t_capture": 1792145010.2944903,
+      "timing_ms": {
+        "worker_round_trip": 231.6,
+        "decode": 1.3,
+        "verify": 321.3,
+        "queue": 0.43392181396484375,
+        "fetch": 16.2,
+        "compute": 186.1,
+        "dispatch_and_result_io": 28.853726577758806,
+        "apply_wait": 36.1781120300293,
+        "verify_executor_wait": 24.715900421142578,
+        "verify_work": 260.24794578552246,
+        "verify_thread_cpu": 42.16812200002096,
+        "verify_resume_wait": 0.13947486877441406,
+        "render": 136.3
+      }
+    },
+    {
+      "frame": 82,
+      "t_capture": 1792145010.562571,
+      "timing_ms": {
+        "worker_round_trip": 254.8,
+        "decode": 1.8,
+        "verify": 110.1,
+        "queue": 30.09796142578125,
+        "fetch": 57.9,
+        "compute": 152.4,
+        "dispatch_and_result_io": 14.395205688476551,
+        "apply_wait": 0.4730224609375,
+        "verify_executor_wait": 0.09512901306152344,
+        "verify_work": 101.41634941101074,
+        "verify_thread_cpu": 40.33280199996625,
+        "verify_resume_wait": 8.150339126586914,
+        "render": 100.8
+      }
+    },
+    {
+      "frame": 83,
+      "t_capture": 1792145010.8947077,
+      "timing_ms": {
+        "worker_round_trip": 118.3,
+        "decode": 10.1,
+        "verify": 126.2,
+        "queue": 0.1354217529296875,
+        "fetch": 6.0,
+        "compute": 93.6,
+        "dispatch_and_result_io": 18.609600448608404,
+        "apply_wait": 0.3418922424316406,
+        "verify_executor_wait": 0.09393692016601562,
+        "verify_work": 125.72407722473145,
+        "verify_thread_cpu": 41.389040000012756,
+        "verify_resume_wait": 0.050067901611328125,
+        "render": 192.1
+      }
+    },
+    {
+      "frame": 84,
+      "t_capture": 1792145011.0291598,
+      "timing_ms": {
+        "worker_round_trip": 260.3,
+        "decode": 40.3,
+        "verify": 208.3,
+        "queue": 0.732421875,
+        "fetch": 4.9,
+        "compute": 246.3,
+        "dispatch_and_result_io": 8.408983993530256,
+        "apply_wait": 0.33354759216308594,
+        "verify_executor_wait": 0.07295608520507812,
+        "verify_work": 206.79473876953125,
+        "verify_thread_cpu": 42.144192000023395,
+        "verify_resume_wait": 1.0745525360107422,
+        "render": 131.2
+      }
+    },
+    {
+      "frame": 85,
+      "t_capture": 1792145011.332953,
+      "timing_ms": {
+        "worker_round_trip": 160.2,
+        "decode": 1.3,
+        "verify": 194.4,
+        "queue": 0.45299530029296875,
+        "fetch": 46.9,
+        "compute": 100.6,
+        "dispatch_and_result_io": 12.272872924804688,
+        "apply_wait": 43.87998580932617,
+        "verify_executor_wait": 0.6275177001953125,
+        "verify_work": 149.810791015625,
+        "verify_thread_cpu": 41.20480099993529,
+        "verify_resume_wait": 0.09655952453613281,
+        "render": 101.2
+      }
+    },
+    {
+      "frame": 86,
+      "t_capture": 1792145011.5648627,
+      "timing_ms": {
+        "worker_round_trip": 104.4,
+        "decode": 1.1,
+        "verify": 167.2,
+        "queue": 1.6849040985107422,
+        "fetch": 5.4,
+        "compute": 95.0,
+        "dispatch_and_result_io": 2.330989456176752,
+        "apply_wait": 36.68999671936035,
+        "verify_executor_wait": 0.13637542724609375,
+        "verify_work": 130.31721115112305,
+        "verify_thread_cpu": 37.14307899997493,
+        "verify_resume_wait": 0.06937980651855469,
+        "render": 100.0
+      }
+    },
+    {
+      "frame": 87,
+      "t_capture": 1792145011.695286,
+      "timing_ms": {
+        "worker_round_trip": 121.6,
+        "decode": 1.2,
+        "verify": 137.6,
+        "queue": 0.1342296600341797,
+        "fetch": 6.0,
+        "compute": 109.1,
+        "dispatch_and_result_io": 6.3687824249267635,
+        "apply_wait": 10.410070419311523,
+        "verify_executor_wait": 0.12993812561035156,
+        "verify_work": 127.01296806335449,
+        "verify_thread_cpu": 40.01103100006276,
+        "verify_resume_wait": 0.04458427429199219,
+        "render": 97.3
+      }
+    },
+    {
+      "frame": 88,
+      "t_capture": 1792145011.8301241,
+      "timing_ms": {
+        "worker_round_trip": 119.4,
+        "decode": 1.1,
+        "verify": 141.1,
+        "queue": 0.06961822509765625,
+        "fetch": 5.8,
+        "compute": 106.4,
+        "dispatch_and_result_io": 7.099173355102536,
+        "apply_wait": 10.595321655273438,
+        "verify_executor_wait": 0.08678436279296875,
+        "verify_work": 130.29217720031738,
+        "verify_thread_cpu": 38.710632000061196,
+        "verify_resume_wait": 0.10061264038085938,
+        "render": 96.2
+      }
+    },
+    {
+      "frame": 89,
+      "t_capture": 1792145011.9632928,
+      "timing_ms": {
+        "worker_round_trip": 104.9,
+        "decode": 1.2,
+        "verify": 149.6,
+        "queue": 0.11873245239257812,
+        "fetch": 5.1,
+        "compute": 94.7,
+        "dispatch_and_result_io": 5.014052581787112,
+        "apply_wait": 29.409170150756836,
+        "verify_executor_wait": 0.0171661376953125,
+        "verify_work": 120.08380889892578,
+        "verify_thread_cpu": 35.658555999930286,
+        "verify_resume_wait": 0.07891654968261719,
+        "render": 108.1
+      }
+    },
+    {
+      "frame": 90,
+      "t_capture": 1792145012.0960875,
+      "timing_ms": {
+        "worker_round_trip": 105.6,
+        "decode": 1.0,
+        "verify": 158.9,
+        "queue": 0.09012222290039062,
+        "fetch": 6.9,
+        "compute": 95.0,
+        "dispatch_and_result_io": 3.574472045898432,
+        "apply_wait": 18.889665603637695,
+        "verify_executor_wait": 0.39076805114746094,
+        "verify_work": 139.5437717437744,
+        "verify_thread_cpu": 44.73521200009145,
+        "verify_resume_wait": 0.05245208740234375,
+        "render": 98.1
+      }
+    },
+    {
+      "frame": 91,
+      "t_capture": 1792145012.2291458,
+      "timing_ms": {
+        "worker_round_trip": 106.6,
+        "decode": 1.4,
+        "verify": 160.3,
+        "queue": 3.7543773651123047,
+        "fetch": 6.8,
+        "compute": 94.2,
+        "dispatch_and_result_io": 1.8256416320800781,
+        "apply_wait": 35.46142578125,
+        "verify_executor_wait": 0.18358230590820312,
+        "verify_work": 124.61543083190918,
+        "verify_thread_cpu": 36.997460000065985,
+        "verify_resume_wait": 0.058650970458984375,
+        "render": 104.4
+      }
+    },
+    {
+      "frame": 92,
+      "t_capture": 1792145012.3630795,
+      "timing_ms": {
+        "worker_round_trip": 118.0,
+        "decode": 1.6,
+        "verify": 146.0,
+        "queue": 0.11110305786132812,
+        "fetch": 12.9,
+        "compute": 96.8,
+        "dispatch_and_result_io": 8.222544479370114,
+        "apply_wait": 8.46409797668457,
+        "verify_executor_wait": 0.09036064147949219,
+        "verify_work": 137.4075412750244,
+        "verify_thread_cpu": 40.72656599998936,
+        "verify_resume_wait": 0.05555152893066406,
+        "render": 104.2
+      }
+    },
+    {
+      "frame": 93,
+      "t_capture": 1792145012.496915,
+      "timing_ms": {
+        "worker_round_trip": 105.8,
+        "decode": 1.1,
+        "verify": 180.3,
+        "queue": 0.09775161743164062,
+        "fetch": 6.0,
+        "compute": 97.3,
+        "dispatch_and_result_io": 2.374743652343753,
+        "apply_wait": 43.02859306335449,
+        "verify_executor_wait": 0.18024444580078125,
+        "verify_work": 136.31057739257812,
+        "verify_thread_cpu": 41.89427300002535,
+        "verify_resume_wait": 0.728607177734375,
+        "render": 105.3
+      }
+    },
+    {
+      "frame": 94,
+      "t_capture": 1792145012.6636875,
+      "timing_ms": {
+        "worker_round_trip": 102.2,
+        "decode": 1.1,
+        "verify": 171.1,
+        "queue": 0.26488304138183594,
+        "fetch": 5.9,
+        "compute": 94.0,
+        "dispatch_and_result_io": 2.0766330718994084,
+        "apply_wait": 36.54217720031738,
+        "verify_executor_wait": 0.10156631469726562,
+        "verify_work": 134.37318801879883,
+        "verify_thread_cpu": 40.86762800000088,
+        "verify_resume_wait": 0.06318092346191406,
+        "render": 100.2
+      }
+    },
+    {
+      "frame": 95,
+      "t_capture": 1792145012.7968116,
+      "timing_ms": {
+        "worker_round_trip": 128.7,
+        "decode": 1.1,
+        "verify": 175.6,
+        "queue": 0.10228157043457031,
+        "fetch": 5.5,
+        "compute": 120.6,
+        "dispatch_and_result_io": 2.462211990356451,
+        "apply_wait": 8.347034454345703,
+        "verify_executor_wait": 0.16999244689941406,
+        "verify_work": 166.98694229125977,
+        "verify_thread_cpu": 47.657321000087904,
+        "verify_resume_wait": 0.06341934204101562,
+        "render": 99.8
+      }
+    },
+    {
+      "frame": 96,
+      "t_capture": 1792145012.9308996,
+      "timing_ms": {
+        "worker_round_trip": 125.1,
+        "decode": 3.0,
+        "verify": 170.4,
+        "queue": 0.17833709716796875,
+        "fetch": 6.4,
+        "compute": 103.9,
+        "dispatch_and_result_io": 14.657799911499012,
+        "apply_wait": 42.68360137939453,
+        "verify_executor_wait": 0.09703636169433594,
+        "verify_work": 127.52771377563477,
+        "verify_thread_cpu": 41.93066200002704,
+        "verify_resume_wait": 0.09870529174804688,
+        "render": 105.4
+      }
+    },
+    {
+      "frame": 97,
+      "t_capture": 1792145013.0975704,
+      "timing_ms": {
+        "worker_round_trip": 112.5,
+        "decode": 1.5,
+        "verify": 152.1,
+        "queue": 6.83283805847168,
+        "fetch": 7.0,
+        "compute": 96.0,
+        "dispatch_and_result_io": 2.619668960571289,
+        "apply_wait": 15.92564582824707,
+        "verify_executor_wait": 0.08821487426757812,
+        "verify_work": 136.0495090484619,
+        "verify_thread_cpu": 43.1379479999805,
+        "verify_resume_wait": 0.049591064453125,
+        "render": 130.4
+      }
+    },
+    {
+      "frame": 98,
+      "t_capture": 1792145013.2301755,
+      "timing_ms": {
+        "worker_round_trip": 243.2,
+        "decode": 3.4,
+        "verify": 49.3,
+        "queue": 0.5881786346435547,
+        "fetch": 12.5,
+        "compute": 169.7,
+        "dispatch_and_result_io": 60.450270462036144,
+        "apply_wait": 1.7406940460205078,
+        "verify_executor_wait": 0.8327960968017578,
+        "verify_work": 46.61202430725098,
+        "verify_thread_cpu": 31.79036599999563,
+        "verify_resume_wait": 0.09918212890625,
+        "render": 89.3
+      }
+    },
+    {
+      "frame": 99,
+      "t_capture": 1792145013.4967275,
+      "timing_ms": {
+        "worker_round_trip": 117.8,
+        "decode": 8.6,
+        "verify": 73.5,
+        "queue": 0.05698204040527344,
+        "fetch": 5.1,
+        "compute": 111.0,
+        "dispatch_and_result_io": 1.6203655242919979,
+        "apply_wait": 0.2651214599609375,
+        "verify_executor_wait": 0.5500316619873047,
+        "verify_work": 72.54338264465332,
+        "verify_thread_cpu": 39.9037000000817,
+        "verify_resume_wait": 0.11873245239257812,
+        "render": 77.8
+      }
+    },
+    {
+      "frame": 100,
+      "t_capture": 1792145013.6298974,
+      "timing_ms": {
+        "worker_round_trip": 120.3,
+        "decode": 8.6,
+        "verify": 71.8,
+        "queue": 0.5052089691162109,
+        "fetch": 5.7,
+        "compute": 102.4,
+        "dispatch_and_result_io": 11.686739349365226,
+        "apply_wait": 0.26988983154296875,
+        "verify_executor_wait": 0.1575946807861328,
+        "verify_work": 71.31648063659668,
+        "verify_thread_cpu": 37.88494700006595,
+        "verify_resume_wait": 0.06723403930664062,
+        "render": 94.3
+      }
+    },
+    {
+      "frame": 101,
+      "t_capture": 1792145013.7633586,
+      "timing_ms": {
+        "worker_round_trip": 137.9,
+        "decode": 1.9,
+        "verify": 59.7,
+        "queue": 0.44465065002441406,
+        "fetch": 6.3,
+        "compute": 113.0,
+        "dispatch_and_result_io": 18.125899505615223,
+        "apply_wait": 0.3333091735839844,
+        "verify_executor_wait": 0.04291534423828125,
+        "verify_work": 59.275150299072266,
+        "verify_thread_cpu": 32.212121000043226,
+        "verify_resume_wait": 0.07319450378417969,
+        "render": 70.8
+      }
+    },
+    {
+      "frame": 102,
+      "t_capture": 1792145013.8977776,
+      "timing_ms": {
+        "worker_round_trip": 131.3,
+        "decode": 1.1,
+        "verify": 57.6,
+        "queue": 0.3943443298339844,
+        "fetch": 5.3,
+        "compute": 124.2,
+        "dispatch_and_result_io": 1.4397220611572266,
+        "apply_wait": 1.8880367279052734,
+        "verify_executor_wait": 0.04124641418457031,
+        "verify_work": 55.608510971069336,
+        "verify_thread_cpu": 31.44870800008448,
+        "verify_resume_wait": 0.04982948303222656,
+        "render": 87.4
+      }
+    },
+    {
+      "frame": 103,
+      "t_capture": 1792145014.0305948,
+      "timing_ms": {
+        "worker_round_trip": 123.9,
+        "decode": 1.4,
+        "verify": 95.4,
+        "queue": 0.07653236389160156,
+        "fetch": 4.2,
+        "compute": 107.0,
+        "dispatch_and_result_io": 12.61339073181152,
+        "apply_wait": 0.164031982421875,
+        "verify_executor_wait": 0.1289844512939453,
+        "verify_work": 86.27486228942871,
+        "verify_thread_cpu": 36.496642000088286,
+        "verify_resume_wait": 8.805036544799805,
+        "render": 116.0
+      }
+    },
+    {
+      "frame": 104,
+      "t_capture": 1792145014.1635673,
+      "timing_ms": {
+        "worker_round_trip": 133.5,
+        "decode": 2.1,
+        "verify": 107.3,
+        "queue": 0.5252361297607422,
+        "fetch": 4.6,
+        "compute": 121.2,
+        "dispatch_and_result_io": 7.146491241455081,
+        "apply_wait": 1.7542839050292969,
+        "verify_executor_wait": 1.8644332885742188,
+        "verify_work": 103.63173484802246,
+        "verify_thread_cpu": 37.12760600001275,
+        "verify_resume_wait": 0.08869171142578125,
+        "render": 133.2
+      }
+    },
+    {
+      "frame": 105,
+      "t_capture": 1792145014.2973938,
+      "timing_ms": {
+        "worker_round_trip": 208.1,
+        "decode": 10.8,
+        "verify": 66.5,
+        "queue": 0.062465667724609375,
+        "fetch": 9.1,
+        "compute": 155.1,
+        "dispatch_and_result_io": 43.8063819885254,
+        "apply_wait": 0.2079010009765625,
+        "verify_executor_wait": 0.08177757263183594,
+        "verify_work": 58.084964752197266,
+        "verify_thread_cpu": 36.78895799998827,
+        "verify_resume_wait": 8.081674575805664,
+        "render": 88.8
+      }
+    },
+    {
+      "frame": 106,
+      "t_capture": 1792145014.5305572,
+      "timing_ms": {
+        "worker_round_trip": 115.8,
+        "decode": 6.7,
+        "verify": 66.3,
+        "queue": 0.461578369140625,
+        "fetch": 5.9,
+        "compute": 99.5,
+        "dispatch_and_result_io": 9.93284187316894,
+        "apply_wait": 8.705854415893555,
+        "verify_executor_wait": 1.005411148071289,
+        "verify_work": 56.5180778503418,
+        "verify_thread_cpu": 35.45766899992486,
+        "verify_resume_wait": 0.059604644775390625,
+        "render": 145.8
+      }
+    },
+    {
+      "frame": 107,
+      "t_capture": 1792145014.6643124,
+      "timing_ms": {
+        "worker_round_trip": 159.3,
+        "decode": 26.4,
+        "verify": 56.0,
+        "queue": 0.118255615234375,
+        "fetch": 4.9,
+        "compute": 145.1,
+        "dispatch_and_result_io": 9.225940704345703,
+        "apply_wait": 0.29087066650390625,
+        "verify_executor_wait": 0.05245208740234375,
+        "verify_work": 55.606842041015625,
+        "verify_thread_cpu": 29.268419000004542,
+        "verify_resume_wait": 0.06866455078125,
+        "render": 93.4
+      }
+    },
+    {
+      "frame": 108,
+      "t_capture": 1792145014.851864,
+      "timing_ms": {
+        "worker_round_trip": 127.2,
+        "decode": 1.8,
+        "verify": 66.2,
+        "queue": 0.4773139953613281,
+        "fetch": 12.6,
+        "compute": 96.9,
+        "dispatch_and_result_io": 17.220666885375977,
+        "apply_wait": 0.14472007751464844,
+        "verify_executor_wait": 0.037670135498046875,
+        "verify_work": 65.94395637512207,
+        "verify_thread_cpu": 36.25280300002487,
+        "verify_resume_wait": 0.08702278137207031,
+        "render": 88.7
+      }
+    },
+    {
+      "frame": 109,
+      "t_capture": 1792145014.9664345,
+      "timing_ms": {
+        "worker_round_trip": 123.7,
+        "decode": 1.5,
+        "verify": 67.0,
+        "queue": 0.8783340454101562,
+        "fetch": 4.3,
+        "compute": 106.8,
+        "dispatch_and_result_io": 11.712032699584967,
+        "apply_wait": 0.22745132446289062,
+        "verify_executor_wait": 0.12326240539550781,
+        "verify_work": 63.55571746826172,
+        "verify_thread_cpu": 33.75857699995777,
+        "verify_resume_wait": 3.134489059448242,
+        "render": 73.2
+      }
+    },
+    {
+      "frame": 110,
+      "t_capture": 1792145015.1005101,
+      "timing_ms": {
+        "worker_round_trip": 134.2,
+        "decode": 1.2,
+        "verify": 61.7,
+        "queue": 0.5075931549072266,
+        "fetch": 4.9,
+        "compute": 127.1,
+        "dispatch_and_result_io": 1.6650848388671875,
+        "apply_wait": 0.13899803161621094,
+        "verify_executor_wait": 0.04220008850097656,
+        "verify_work": 61.48409843444824,
+        "verify_thread_cpu": 33.95282200006022,
+        "verify_resume_wait": 0.06365776062011719,
+        "render": 71.5
+      }
+    },
+    {
+      "frame": 111,
+      "t_capture": 1792145015.2319155,
+      "timing_ms": {
+        "worker_round_trip": 129.3,
+        "decode": 1.0,
+        "verify": 66.5,
+        "queue": 0.4074573516845703,
+        "fetch": 4.2,
+        "compute": 123.1,
+        "dispatch_and_result_io": 1.5852691650390653,
+        "apply_wait": 0.19311904907226562,
+        "verify_executor_wait": 0.08511543273925781,
+        "verify_work": 66.10894203186035,
+        "verify_thread_cpu": 33.841826999946534,
+        "verify_resume_wait": 0.06175041198730469,
+        "render": 86.2
+      }
+    },
+    {
+      "frame": 112,
+      "t_capture": 1792145015.3692956,
+      "timing_ms": {
+        "worker_round_trip": 126.9,
+        "decode": 1.0,
+        "verify": 66.7,
+        "queue": 0.43773651123046875,
+        "fetch": 5.1,
+        "compute": 114.9,
+        "dispatch_and_result_io": 6.453638076782227,
+        "apply_wait": 0.19931793212890625,
+        "verify_executor_wait": 0.04315376281738281,
+        "verify_work": 66.4370059967041,
+        "verify_thread_cpu": 34.455146000027526,
+        "verify_resume_wait": 0.06198883056640625,
+        "render": 76.4
+      }
+    },
+    {
+      "frame": 113,
+      "t_capture": 1792145015.5054154,
+      "timing_ms": {
+        "worker_round_trip": 168.6,
+        "decode": 1.2,
+        "verify": 74.4,
+        "queue": 0.4811286926269531,
+        "fetch": 4.2,
+        "compute": 162.0,
+        "dispatch_and_result_io": 1.948756027221691,
+        "apply_wait": 0.17452239990234375,
+        "verify_executor_wait": 0.32973289489746094,
+        "verify_work": 73.76861572265625,
+        "verify_thread_cpu": 37.11722700006703,
+        "verify_resume_wait": 0.0743865966796875,
+        "render": 78.4
+      }
+    },
+    {
+      "frame": 114,
+      "t_capture": 1792145015.6662889,
+      "timing_ms": {
+        "worker_round_trip": 146.0,
+        "decode": 1.0,
+        "verify": 42.5,
+        "queue": 0.4723072052001953,
+        "fetch": 12.0,
+        "compute": 123.9,
+        "dispatch_and_result_io": 9.589931106567377,
+        "apply_wait": 0.1518726348876953,
+        "verify_executor_wait": 0.08344650268554688,
+        "verify_work": 42.22536087036133,
+        "verify_thread_cpu": 26.805015000036292,
+        "verify_resume_wait": 0.07605552673339844,
+        "render": 69.7
+      }
+    },
+    {
+      "frame": 115,
+      "t_capture": 1792145015.833361,
+      "timing_ms": {
+        "worker_round_trip": 129.8,
+        "decode": 1.0,
+        "verify": 40.6,
+        "queue": 0.9658336639404297,
+        "fetch": 5.7,
+        "compute": 116.0,
+        "dispatch_and_result_io": 7.110644149780271,
+        "apply_wait": 0.1652240753173828,
+        "verify_executor_wait": 0.04696846008300781,
+        "verify_work": 40.338754653930664,
+        "verify_thread_cpu": 26.1775569999827,
+        "verify_resume_wait": 0.07414817810058594,
+        "render": 68.4
+      }
+    },
+    {
+      "frame": 116,
+      "t_capture": 1792145015.9650826,
+      "timing_ms": {
+        "worker_round_trip": 119.8,
+        "decode": 1.0,
+        "verify": 61.3,
+        "queue": 0.5445480346679688,
+        "fetch": 4.2,
+        "compute": 113.3,
+        "dispatch_and_result_io": 1.7102432250976562,
+        "apply_wait": 0.15544891357421875,
+        "verify_executor_wait": 0.048160552978515625,
+        "verify_work": 61.052560806274414,
+        "verify_thread_cpu": 35.62170600002901,
+        "verify_resume_wait": 0.08749961853027344,
+        "render": 72.2
+      }
+    },
+    {
+      "frame": 117,
+      "t_capture": 1792145016.0654974,
+      "timing_ms": {
+        "worker_round_trip": 145.2,
+        "decode": 1.1,
+        "verify": 57.8,
+        "queue": 0.3693103790283203,
+        "fetch": 5.2,
+        "compute": 136.2,
+        "dispatch_and_result_io": 3.4435783386230696,
+        "apply_wait": 0.45800209045410156,
+        "verify_executor_wait": 0.11324882507324219,
+        "verify_work": 57.114362716674805,
+        "verify_thread_cpu": 33.822596999925736,
+        "verify_resume_wait": 0.08797645568847656,
+        "render": 77.2
+      }
+    },
+    {
+      "frame": 118,
+      "t_capture": 1792145016.231681,
+      "timing_ms": {
+        "worker_round_trip": 127.5,
+        "decode": 1.0,
+        "verify": 61.4,
+        "queue": 0.47278404235839844,
+        "fetch": 5.0,
+        "compute": 120.7,
+        "dispatch_and_result_io": 1.376864242553708,
+        "apply_wait": 0.148773193359375,
+        "verify_executor_wait": 0.11539459228515625,
+        "verify_work": 61.101436614990234,
+        "verify_thread_cpu": 38.042187000087324,
+        "verify_resume_wait": 0.07724761962890625,
+        "render": 69.7
+      }
+    },
+    {
+      "frame": 119,
+      "t_capture": 1792145016.366203,
+      "timing_ms": {
+        "worker_round_trip": 125.9,
+        "decode": 1.2,
+        "verify": 49.7,
+        "queue": 0.4305839538574219,
+        "fetch": 4.2,
+        "compute": 113.7,
+        "dispatch_and_result_io": 7.562293624877924,
+        "apply_wait": 0.133514404296875,
+        "verify_executor_wait": 0.050067901611328125,
+        "verify_work": 49.37148094177246,
+        "verify_thread_cpu": 35.378680999997414,
+        "verify_resume_wait": 0.09202957153320312,
+        "render": 69.3
+      }
+    },
+    {
+      "frame": 120,
+      "t_capture": 1792145016.4986415,
+      "timing_ms": {
+        "worker_round_trip": 184.8,
+        "decode": 1.2,
+        "verify": 68.4,
+        "queue": 0.5609989166259766,
+        "fetch": 4.3,
+        "compute": 151.1,
+        "dispatch_and_result_io": 28.80624732971191,
+        "apply_wait": 0.15878677368164062,
+        "verify_executor_wait": 2.059459686279297,
+        "verify_work": 66.07437133789062,
+        "verify_thread_cpu": 35.47819599998547,
+        "verify_resume_wait": 0.07677078247070312,
+        "render": 74.5
+      }
+    },
+    {
+      "frame": 121,
+      "t_capture": 1792145016.6906292,
+      "timing_ms": {
+        "worker_round_trip": 138.9,
+        "decode": 1.0,
+        "verify": 45.1,
+        "queue": 0.5018711090087891,
+        "fetch": 8.5,
+        "compute": 123.5,
+        "dispatch_and_result_io": 6.444423675537109,
+        "apply_wait": 0.14257431030273438,
+        "verify_executor_wait": 0.04673004150390625,
+        "verify_work": 44.791460037231445,
+        "verify_thread_cpu": 33.2553429999507,
+        "verify_resume_wait": 0.13637542724609375,
+        "render": 182.4
+      }
+    }
+  ]
+}

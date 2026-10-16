@@ -73,6 +73,7 @@ def test_worker_result_corrects_bad_pose_before_control_and_records_both(monkeyp
     assert run.frames[0]["t_verified"] <= run.frames[0]["t_rendered"] <= run.frames[0]["t_result"]
     assert shown == [check]
     assert check["accepted"] and check["surface"]["state"] == "disagreement"
+    assert "group_transport" in check  # primary and secondary roles use the same fusion rule
     assert run.meta["pose_disagreements"][0]["frame"] == 0
     assert track.last["pose_verification"] == [check]
     corrected = np.asarray(check["constraint"]["pose"])
@@ -311,6 +312,7 @@ def test_secondary_object_uses_corrected_absolute_pose_and_rejects_missing_depth
     asyncio.run(p.tracking._apply_track_result(job))
     check = p.runtime._state.track.last["pose_verification"][1]
     assert check["accepted"] and check["constraint"]["state"] == "corrected"
+    assert "group_transport" in check
     np.testing.assert_allclose(found["delta"], check["constraint"]["pose"])
     np.testing.assert_allclose(target.hold_views[-1][1], found["delta"])
     held = found["delta"].copy()
