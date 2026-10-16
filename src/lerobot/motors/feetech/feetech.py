@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import logging
+import time
 from collections.abc import Sequence
 from copy import deepcopy
 from dataclasses import dataclass
@@ -71,6 +72,20 @@ class BusReplyError(ConnectionError):
 
 
 @dataclass
+class BlockReadTiming:
+    """Wall/CPU time for one checked request; reply times follow motor order."""
+
+    setup_ms: float
+    tx_ms: float
+    rx_ms: float
+    decode_ms: float
+    wall_ms: float
+    thread_cpu_ms: float
+    rx_packet_ms: dict[str, float]
+    rx_packet_cpu_ms: dict[str, float]
+
+
+@dataclass
 class BlockRead:
     """:meth:`FeetechMotorsBus.sync_read_block`'s result: each register's values by motor, each motor's status byte,
     and each reply's data bytes."""
@@ -78,6 +93,7 @@ class BlockRead:
     values: dict[str, dict[str, Value]]
     errors: dict[str, int]
     raw: dict[str, list[int]]
+    timing: BlockReadTiming | None = None
 
 
 class OperatingMode(Enum):
@@ -382,6 +398,8 @@ class FeetechMotorsBus(SerialMotorsBus):
         Raises:
             BusReplyError: a reply that cannot be the one asked for; its ``raw`` holds what came back.
         """
+        t_start = time.perf_counter_ns()
+        cpu_start = time.thread_time_ns()
         self._assert_protocol_is_compatible("sync_read")
         names = self._get_motors_list(motors)
         ids = [self.motors[name].id for name in names]
@@ -398,12 +416,20 @@ class FeetechMotorsBus(SerialMotorsBus):
         raw: dict[str, list[int]] = {}
         errors: dict[str, int] = {}
         self._setup_sync_reader(ids, start, length)
+        t_setup = time.perf_counter_ns()
         comm = self.sync_reader.txPacket()
+        t_tx = time.perf_counter_ns()
         if not self._is_comm_success(comm):
             self.clear_input(REPLY_SETTLE_S)
             raise BusReplyError(f"the request did not go out: {self.packet_handler.getTxRxResult(comm)}", raw)
+        rx_packet_ms: dict[str, float] = {}
+        rx_packet_cpu_ms: dict[str, float] = {}
         for id_, name in zip(ids, names, strict=True):
+            t_rx_start = time.perf_counter_ns()
+            cpu_rx_start = time.thread_time_ns()
             packet, comm = self.packet_handler.rxPacket(self.port_handler)
+            rx_packet_ms[name] = (time.perf_counter_ns() - t_rx_start) / 1e6
+            rx_packet_cpu_ms[name] = (time.thread_time_ns() - cpu_rx_start) / 1e6
             if not self._is_comm_success(comm):
                 raw[name] = [int(b) for b in packet]
                 self.clear_input(REPLY_SETTLE_S)
@@ -420,6 +446,7 @@ class FeetechMotorsBus(SerialMotorsBus):
                 )
             errors[name] = int(packet[scs.PKT_ERROR])
 
+        t_rx = time.perf_counter_ns()
         values: dict[str, dict[str, Value]] = {}
         for data_name, (addr, n) in spans.items():
             ids_values = {
@@ -431,7 +458,18 @@ class FeetechMotorsBus(SerialMotorsBus):
                 self._normalize(decoded) if normalize and data_name in self.normalized_data else decoded
             )
             values[data_name] = {self._id_to_name(id_): value for id_, value in read.items()}
-        return BlockRead(values=values, errors=errors, raw=raw)
+        t_end = time.perf_counter_ns()
+        timing = BlockReadTiming(
+            setup_ms=(t_setup - t_start) / 1e6,
+            tx_ms=(t_tx - t_setup) / 1e6,
+            rx_ms=(t_rx - t_tx) / 1e6,
+            decode_ms=(t_end - t_rx) / 1e6,
+            wall_ms=(t_end - t_start) / 1e6,
+            thread_cpu_ms=(time.thread_time_ns() - cpu_start) / 1e6,
+            rx_packet_ms=rx_packet_ms,
+            rx_packet_cpu_ms=rx_packet_cpu_ms,
+        )
+        return BlockRead(values=values, errors=errors, raw=raw, timing=timing)
 
     def _split_into_byte_chunks(self, value: int, length: int) -> list[int]:
         if length == 1:

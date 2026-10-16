@@ -44,3 +44,23 @@ This is a joint-command scheduling surrogate. It does not simulate servo
 dynamics, collision, contact, camera delay or IK feasibility, and its target
 shifts are synthetic. It establishes the queue timing tradeoff; a physical
 rollout is still needed to measure achieved rate and insertion accuracy.
+
+## Motor read profile in subsequent Act records
+
+The `arm.npz` file now saves `pre_read_wait_ms`, `pre_read_late_ms`,
+`read_budget_ms`, and `tick_gap_ms` in addition to the existing tick phases.
+The first three reveal how much of each interval is deliberate pacing and how
+late the read starts; `tick_gap_ms` measures the interval between loop command
+endpoints, including a tick without a write.
+
+`read_state_ms`, `read_check_ms`, and `read_fault_ms` split the checked read.
+`bus_setup_ms`, `bus_tx_ms`, `bus_rx_ms`, and `bus_decode_ms` split the serial
+block read; `bus_rx_motor_ms` and `bus_rx_motor_cpu_ms` have columns in the
+saved `motors` order. `read_cpu_ms` and `bus_cpu_ms` are thread CPU time; the
+matching `*_off_cpu_ms` values are wall time minus CPU time. Off-CPU time can
+include serial waiting, thread descheduling, or lock waits, so it must be read
+alongside the transmit/reply timings rather than called bus latency alone.
+`send_action_ms` and `send_action_cpu_ms` isolate the motor write from the
+queue, clamp, and IK work within `command_ms`; they are NaN on a tick with no
+write.
+Older Act records simply lack these optional arrays.

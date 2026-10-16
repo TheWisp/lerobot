@@ -447,13 +447,38 @@ def _finish_run(run: _Run, samples: list[dict[str, Any]], fk: Any, result: dict[
             ),
             "motors": np.array(MOTOR_NAMES),
         }
-        for key in ("tick_ms", "lock_ms", "read_ms", "pace_ms", "command_ms", "commit_ms"):
+        for key in (
+            "tick_ms",
+            "lock_ms",
+            "read_ms",
+            "pace_ms",
+            "command_ms",
+            "send_action_ms",
+            "send_action_cpu_ms",
+            "commit_ms",
+            "read_cpu_ms",
+            "read_off_cpu_ms",
+            "read_state_ms",
+            "read_check_ms",
+            "read_fault_ms",
+            "bus_wall_ms",
+            "bus_cpu_ms",
+            "bus_off_cpu_ms",
+            "bus_setup_ms",
+            "bus_tx_ms",
+            "bus_rx_ms",
+            "bus_decode_ms",
+            "read_budget_ms",
+            "pre_read_wait_ms",
+            "pre_read_late_ms",
+            "tick_gap_ms",
+        ):
             if all(key in s for s in samples):
                 arm[key] = np.array([s[key] for s in samples], dtype=float)
         for key in ("playback_waiting", "playback_queue_depth", "playback_active", "playback_limited"):
             if all(key in s for s in samples):
                 arm[key] = np.array([s[key] for s in samples], dtype=int)
-        for key in ("load", "temps"):  # each motor's load and temperature at every tick, as the jog read them
+        for key in ("load", "temps", "bus_rx_motor_ms", "bus_rx_motor_cpu_ms"):
             if all(key in s for s in samples):
                 arm[key] = np.array(
                     [[s[key].get(m, np.nan) for m in MOTOR_NAMES] for s in samples], dtype=float

@@ -487,7 +487,7 @@ def _live_joint_command(
     }
 
 
-def _bad_read(j: _Jog, e: _BadReadError) -> None:
+def _bad_read(j: _Jog, e: _BadReadError, wall_ms: float, cpu_ms: float) -> None:
     """A tick whose read cannot be the arm sends nothing, so the motors hold their last goal; the replies are logged,
     and BAD_READS_FREEZE in a row freeze the arm."""
     with j.lock:
@@ -495,7 +495,14 @@ def _bad_read(j: _Jog, e: _BadReadError) -> None:
         n = j.bad_reads
         if n >= BAD_READS_FREEZE and not j.halted:
             j.halted, j.reason = True, f"bad joint reads, {n} in a row ({e}) — frozen"
-    logger.warning("jog: bad read %d in a row, no command this tick: %s; replies %s", n, e, e.raw)
+    logger.warning(
+        "jog: bad read %d in a row (%.1f ms wall, %.1f ms thread CPU), no command this tick: %s; replies %s",
+        n,
+        wall_ms,
+        cpu_ms,
+        e,
+        e.raw,
+    )
 
 
 def _loop(j: _Jog) -> None:
@@ -504,6 +511,13 @@ def _loop(j: _Jog) -> None:
     from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
 
     robot = j.robot
+
+    def send_timed(action: dict[str, float]) -> tuple[float, float]:
+        cpu_start = time.thread_time()
+        wall_start = time.perf_counter()
+        robot.send_action(action)
+        return 1000.0 * (time.perf_counter() - wall_start), 1000.0 * (time.thread_time() - cpu_start)
+
     grip = float(j.q_cmd["gripper"])
     period = 1.0 / HZ
     last_tick_at = 0.0
@@ -512,9 +526,13 @@ def _loop(j: _Jog) -> None:
         # Begin the next checked read just before the next write is due.
         # A recent fast read predicts its duration; a rare long read must not
         # make subsequent reads stale by a whole motor period.
+        pre_read_wait_start = time.perf_counter()
+        read_budget = 0.0
+        read_due = pre_read_wait_start
         if last_tick_at:
             read_budget = min(read_durations) if read_durations else 0.0
-            time.sleep(max(0.0, last_tick_at + period - read_budget - time.perf_counter()))
+            read_due = last_tick_at + period - read_budget
+            time.sleep(max(0.0, read_due - pre_read_wait_start))
             if j.stop.is_set():
                 break
         t0 = time.perf_counter()
@@ -529,18 +547,28 @@ def _loop(j: _Jog) -> None:
                 ctrl = j.ctrl
                 mode, leader, q_target = j.mode, j.leader, j.q_target
             t_locked = time.perf_counter()
+            read_cpu_start = time.thread_time()
             try:
                 state = _read_state(robot.bus)
+                t_state = time.perf_counter()
                 _check_state(robot.bus, state, j.good)
+                t_checked = time.perf_counter()
             except _BadReadError as e:  # no command on what cannot be the arm; a second in a row freezes it
-                _bad_read(j, e)
+                _bad_read(
+                    j,
+                    e,
+                    1000.0 * (time.perf_counter() - t_locked),
+                    1000.0 * (time.thread_time() - read_cpu_start),
+                )
                 last_tick_at = time.perf_counter()
                 continue
             j.good, j.bad_reads = state, 0
             _faults(robot.bus, state)
+            t_faults = time.perf_counter()
             q_obs = state.q
             observed_at = time.perf_counter()
             t_read = time.perf_counter()
+            read_cpu_ms = 1000.0 * (time.thread_time() - read_cpu_start)
             read_durations.append(t_read - t_locked)
             if last_tick_at:
                 # Count the read as part of the 33 ms motor period, as LeRobot's
@@ -549,6 +577,7 @@ def _loop(j: _Jog) -> None:
                 # fast after a slow one.
                 time.sleep(max(0.0, last_tick_at + period - t_read))
             t_paced = time.perf_counter()
+            send_action_ms = send_action_cpu_ms = np.nan
             if grip_target is not None:
                 step = GRIP_UNITS_S / HZ
                 grip += float(np.clip(grip_target - grip, -step, step))
@@ -573,7 +602,7 @@ def _loop(j: _Jog) -> None:
                         # may use a bounded correction for static friction; the path still
                         # judges arrival against the original, untrimmed joint goal.
                         sent = _path_endpoint_action(j, path, command, q_obs, state.load)
-                        robot.send_action(
+                        send_action_ms, send_action_cpu_ms = send_timed(
                             _clamped({f"{m}.pos": sent[m] for m in MOTOR_NAMES}, q_obs, j.joint_ranges)
                         )
                         q_cmd, holding, grip = command, False, command["gripper"]
@@ -583,7 +612,7 @@ def _loop(j: _Jog) -> None:
                 act = leader.get_action()
                 q_lead = {m: float(act[f"{m}.pos"]) for m in MOTOR_NAMES}
                 sent = _clamped({f"{m}.pos": q_lead[m] for m in MOTOR_NAMES}, q_obs, j.joint_ranges)
-                robot.send_action(sent)
+                send_action_ms, send_action_cpu_ms = send_timed(sent)
                 q_cmd, holding, grip = {m: sent[f"{m}.pos"] for m in MOTOR_NAMES}, False, q_lead["gripper"]
                 j.settle, j.goal_prev = _Settle(), None  # the human closes the loop
             elif mode == "joints" and q_target is not None:
@@ -604,7 +633,7 @@ def _loop(j: _Jog) -> None:
                             elapsed = 1.0 / HZ if not j.playback_slew_at else now - j.playback_slew_at
                             q_target = _live_joint_command(j.q_cmd, q_target, elapsed)
                             j.playback_slew_at = now
-                        robot.send_action(
+                        send_action_ms, send_action_cpu_ms = send_timed(
                             _clamped(
                                 _trimmed(j, {f"{m}.pos": q_target[m] for m in MOTOR_NAMES}),
                                 q_obs,
@@ -631,7 +660,9 @@ def _loop(j: _Jog) -> None:
                         "gripper_pos": grip,
                     }
                 )
-                robot.send_action(_clamped(_trimmed(j, out), q_obs, j.joint_ranges))
+                send_action_ms, send_action_cpu_ms = send_timed(
+                    _clamped(_trimmed(j, out), q_obs, j.joint_ranges)
+                )
                 q_cmd = {m: float(out[f"{m}.pos"]) for m in MOTOR_NAMES}  # the goal itself, untrimmed
                 # A held tick (no IK solution, or an implausible joint jump) must
                 # not let the reference run ahead of the arm; it waits here and
@@ -642,6 +673,7 @@ def _loop(j: _Jog) -> None:
             else:
                 q_cmd, holding = None, False
             t_sent = time.perf_counter()
+            tick_gap_ms = 1000.0 * (t_sent - last_tick_at) if last_tick_at else np.nan
             loads, temps = state.load, state.temps
             with j.lock:
                 t_end = time.perf_counter()
@@ -668,6 +700,7 @@ def _loop(j: _Jog) -> None:
                 j.last_read_at = time.monotonic()
                 j.ticks += 1
                 if j.record is not None:
+                    bus_timing = state.bus_timing
                     j.record.append(
                         {
                             "t": time.time() - j.record_t0,
@@ -675,8 +708,34 @@ def _loop(j: _Jog) -> None:
                             "tick_ms": 1000.0 * (t_end - t0),
                             "lock_ms": 1000.0 * (t_locked - t0),
                             "read_ms": 1000.0 * (t_read - t_locked),
+                            "read_cpu_ms": read_cpu_ms,
+                            "read_off_cpu_ms": max(0.0, 1000.0 * (t_read - t_locked) - read_cpu_ms),
+                            "read_state_ms": 1000.0 * (t_state - t_locked),
+                            "read_check_ms": 1000.0 * (t_checked - t_state),
+                            "read_fault_ms": 1000.0 * (t_faults - t_checked),
+                            "bus_wall_ms": bus_timing.wall_ms if bus_timing is not None else np.nan,
+                            "bus_cpu_ms": bus_timing.thread_cpu_ms if bus_timing is not None else np.nan,
+                            "bus_off_cpu_ms": (
+                                max(0.0, bus_timing.wall_ms - bus_timing.thread_cpu_ms)
+                                if bus_timing is not None
+                                else np.nan
+                            ),
+                            "bus_setup_ms": bus_timing.setup_ms if bus_timing is not None else np.nan,
+                            "bus_tx_ms": bus_timing.tx_ms if bus_timing is not None else np.nan,
+                            "bus_rx_ms": bus_timing.rx_ms if bus_timing is not None else np.nan,
+                            "bus_decode_ms": bus_timing.decode_ms if bus_timing is not None else np.nan,
+                            "bus_rx_motor_ms": bus_timing.rx_packet_ms if bus_timing is not None else {},
+                            "bus_rx_motor_cpu_ms": bus_timing.rx_packet_cpu_ms
+                            if bus_timing is not None
+                            else {},
+                            "read_budget_ms": 1000.0 * read_budget,
+                            "pre_read_wait_ms": 1000.0 * (t0 - pre_read_wait_start),
+                            "pre_read_late_ms": 1000.0 * max(0.0, t0 - read_due),
+                            "tick_gap_ms": tick_gap_ms,
                             "pace_ms": 1000.0 * (t_paced - t_read),
                             "command_ms": 1000.0 * (t_sent - t_paced),
+                            "send_action_ms": send_action_ms,
+                            "send_action_cpu_ms": send_action_cpu_ms,
                             "commit_ms": 1000.0 * (t_end - t_sent),
                             "obs": dict(q_obs),
                             "cmd": dict(j.q_cmd),
@@ -901,6 +960,7 @@ class _ArmState:
     errors: dict[str, int]  # each reply's status byte
     raw: dict[str, list[int]]
     at: float  # monotonic, when it was read
+    bus_timing: Any = None
 
 
 def _read_state(bus: Any) -> _ArmState:
@@ -929,6 +989,7 @@ def _read_state(bus: Any) -> _ArmState:
         errors=dict(block.errors),
         raw=block.raw,
         at=time.monotonic(),
+        bus_timing=block.timing,
     )
 
 

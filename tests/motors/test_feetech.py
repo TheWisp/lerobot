@@ -353,6 +353,12 @@ def test_sync_read_block_reads_several_registers_in_one_request(mock_motors, dum
     assert block.values["Present_Temperature"] == {"dummy_1": 30, "dummy_2": 30, "dummy_3": 41}
     assert block.errors == {"dummy_1": 0, "dummy_2": 32, "dummy_3": 0}
     assert block.raw["dummy_3"] == [2600 & 0xFF, 2600 >> 8, 0, 0, 0, 0, 120, 41]
+    assert block.timing is not None
+    timing = block.timing
+    assert set(timing.rx_packet_ms) == set(dummy_motors)
+    assert set(timing.rx_packet_cpu_ms) == set(dummy_motors)
+    assert timing.wall_ms >= timing.setup_ms + timing.tx_ms + timing.rx_ms + timing.decode_ms - 0.001
+    assert timing.thread_cpu_ms >= 0.0
 
 
 def test_sync_read_block_refuses_a_bad_reply_and_clears_what_came_after_it(mock_motors, dummy_motors):

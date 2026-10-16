@@ -558,6 +558,11 @@ def test_a_slow_tick_is_kept_with_where_its_time_went():
         assert state["ticks_ms"]["slow"] == 1 and state["ticks_ms"]["max"] >= 150.0
         assert state["slow_ticks"][-1]["phases_ms"]["read_state"] >= 150.0
         assert j.record[0]["read_ms"] >= 150.0
+        assert j.record[0]["bus_tx_ms"] >= 150.0, "the injected delay is inside the bus request"
+        assert j.record[0]["read_off_cpu_ms"] >= 100.0
+        assert set(j.record[0]["bus_rx_motor_ms"]) == set(MOTOR_NAMES)
+        assert all("pre_read_wait_ms" in sample and "tick_gap_ms" in sample for sample in j.record)
+        assert all(sample["send_action_ms"] >= 0.0 for sample in j.record)
         for sample in j.record:
             assert sample["tick_ms"] == pytest.approx(
                 sum(sample[k] for k in ("lock_ms", "read_ms", "pace_ms", "command_ms", "commit_ms"))
