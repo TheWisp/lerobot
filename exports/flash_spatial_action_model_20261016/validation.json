@@ -8,12 +8,12 @@
         "height": 1080,
         "pix_fmt": "yuv420p",
         "r_frame_rate": "30/1",
-        "nb_frames": "2416"
+        "nb_frames": "2461"
       }
     ],
     "format": {
-      "duration": "80.533333",
-      "size": "60624881"
+      "duration": "82.033333",
+      "size": "60942657"
     }
   },
   "stacking_grid_overlay.mp4": {
@@ -84,5 +84,22 @@
       "size": "7877135"
     }
   },
-  "full_master_decode": "Passed; no decoder errors"
+  "full_master_decode": "Passed; no decoder errors",
+  "05_summary.mp4": {
+    "programs": [],
+    "streams": [
+      {
+        "codec_name": "h264",
+        "width": 1920,
+        "height": 1080,
+        "pix_fmt": "yuv420p",
+        "r_frame_rate": "30/1",
+        "nb_frames": "150"
+      }
+    ],
+    "format": {
+      "duration": "5.000000",
+      "size": "780142"
+    }
+  }
 }

@@ -289,7 +289,7 @@ def grid(stacks, overlay, subject="pick and place"):
 
 def demo_frames(demo):
     times = np.loadtxt(ROOT / "insertion/recording/times.txt")
-    base = chrome("Single demo")
+    base = chrome("Single demo", "No task-specific fine-tuning")
     for n in range(13 * FPS):
         t = demo.t0 + 4.5 + n / FPS
         i = max(0, int(np.searchsorted(times, t, side="right") - 1))
@@ -314,7 +314,7 @@ def act_frames(demo, overlay):
     if overlay:
         rows = rows[round(5.5 * FPS) : round(24.5 * FPS)]
     stamps = [f.get("t_result", f["t_frame"]) for f in META["frames"]]
-    rawbase = chrome("Autonomous, 1x speed", "Raw")
+    rawbase = chrome("Autonomous, 1x speed", "Raw · no pre-scanned object mesh")
     olddetail, base = None, None
     for n, row in enumerate(rows):
         i = row.get("image")
@@ -346,7 +346,7 @@ def act_frames(demo, overlay):
                 if t < 21.5
                 else "Release and retreat"
             )
-            detail = event
+            detail = "Demo: goal · Vision: live pose · Planning: arm motion" if n < 3 * FPS else event
             if detail != olddetail:
                 base = chrome(
                     "Autonomous, 1x speed",
@@ -360,7 +360,7 @@ def act_frames(demo, overlay):
 
 def title_frames(summary=False):
     cap = cv2.VideoCapture(str(OUT / "stacking_grid_raw.mp4"))
-    count = 105 if summary else 45
+    count = 150 if summary else 45
     if summary:
         cap.set(cv2.CAP_PROP_POS_FRAMES, GRID_SECONDS * FPS - count)
     for _n in range(count):
@@ -372,10 +372,11 @@ def title_frames(summary=False):
         bgr = (bgr.astype(float) * 0.32 + np.asarray(BG[::-1]) * 0.35).clip(0, 255).astype(np.uint8)
         im = Image.fromarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))
         if summary:
-            text(im, (160, 245), "Single-demo generalization", 68, bold=True)
-            text(im, (160, 340), "Object poses · Camera viewpoints", 52, ACCENT)
-            text(im, (160, 520), "Robust to occlusion & perturbations", 64, bold=True)
-            text(im, (160, 700), "Real time", 64, bold=True)
+            text(im, (130, 205), "One demo defines object-relative goals", 60, bold=True)
+            text(im, (130, 325), "Live vision updates poses · planning moves the arm", 45, ACCENT)
+            text(im, (130, 460), "New objects: no CAD, no scan, no fine-tuning", 52, bold=True)
+            text(im, (130, 590), "New poses · viewpoints · occlusion · perturbations", 47, bold=True)
+            text(im, (130, 725), "Real time", 66, bold=True)
         else:
             text(im, (W // 2, 350), "Preview: FLASH", 128, bold=True, anchor="ma")
             text(im, (W // 2, 550), "A Spatial-Action Model", 70, anchor="ma")
@@ -397,14 +398,15 @@ def main():
         "controller_speed_during_recording": 2.0,
         "demo_cut_seconds": [4.5, 17.5],
         "overlay_cut_seconds": [5.5, 24.5],
-        "edit_revision": 4,
+        "edit_revision": 5,
         "grid_seconds": GRID_SECONDS,
         "grid_layout": [3, 3],
         "grid_crop_size": GRID_CROP_SIZE,
         "grid_overlay_fade_seconds": None,
         "summary_real_time_claim": "Real time",
+        "claim_scope": "No pre-scanned object mesh or task-specific weight fine-tuning is used in these rigid-object runs. The demo supplies object-relative goals; live vision updates object poses; reachability/IK plans arm motion. Deformable surfaces may contain trackable visual features, but deformable 6-DoF action transfer has not been demonstrated and is not claimed in the video.",
         "title_seconds": 1.5,
-        "summary_seconds": 3.5,
+        "summary_seconds": 5.0,
         "grid_sources": [
             {
                 "run": str(s.run),
@@ -451,7 +453,7 @@ def main():
     encode("02_autonomous_raw.mp4", act_frames(insertion, False), len(TIMELINE["rows"]))
     encode("03_autonomous_overlay.mp4", act_frames(insertion, True), 570)
     encode("00_title.mp4", title_frames(), 45)
-    encode("05_summary.mp4", title_frames(True), 105)
+    encode("05_summary.mp4", title_frames(True), 150)
     names = [
         "00_title.mp4",
         "01_single_demo.mp4",
