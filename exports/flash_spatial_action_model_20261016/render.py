@@ -49,7 +49,9 @@ PLACEMENT_CENTRES = {
     "20261012_194250": (330, 292),
     "20261013_211511": (334, 282),
 }
-GRID_SECONDS = 9
+STACKING_GRID_SECONDS = 12
+INSERTION_GRID_SECONDS = 9
+STACKING_EXTRA_SECONDS = 3
 GRID_CROP_SIZE = (320, 164)
 INSERTIONS = [
     ("20261015_165734", (364, 250)),
@@ -231,7 +233,8 @@ class Stack:
         self.points = replay._replay_points(self.meta, demo)
         assert self.points.get("cube") is not None
         self.times = [f["t_frame"] - self.meta["t_started"] for f in self.meta["frames"]]
-        self.start = 33.0 if name == "20261012_194250" else release - 2.5
+        original_start = 33.0 if name == "20261012_194250" else release - 2.5
+        self.start = original_start - STACKING_EXTRA_SECONDS
         self.centre = PLACEMENT_CENTRES[name]
         self.last = None
         self.raw = self.drawn = None
@@ -277,9 +280,9 @@ class Insertion:
         return self.drawn if overlay else self.raw
 
 
-def grid(stacks, overlay, subject="pick and place"):
+def grid(stacks, overlay, subject, seconds):
     base = chrome(f"Different rollouts: {subject}", "Autonomous, 1x speed")
-    for n in range(GRID_SECONDS * FPS):
+    for n in range(seconds * FPS):
         canvas = base.copy()
         for k, stack in enumerate(stacks):
             x, y = 24 + (k % 3) * 628, 84 + (k // 3) * 328
@@ -362,7 +365,7 @@ def title_frames(summary=False):
     cap = cv2.VideoCapture(str(OUT / "stacking_grid_raw.mp4"))
     count = 150 if summary else 45
     if summary:
-        cap.set(cv2.CAP_PROP_POS_FRAMES, GRID_SECONDS * FPS - count)
+        cap.set(cv2.CAP_PROP_POS_FRAMES, STACKING_GRID_SECONDS * FPS - count)
     for _n in range(count):
         ok, bgr = cap.read()
         assert ok
@@ -398,8 +401,9 @@ def main():
         "controller_speed_during_recording": 2.0,
         "demo_cut_seconds": [4.5, 17.5],
         "overlay_cut_seconds": [5.5, 24.5],
-        "edit_revision": 5,
-        "grid_seconds": GRID_SECONDS,
+        "edit_revision": 6,
+        "grid_seconds": STACKING_GRID_SECONDS,
+        "insertion_grid_seconds": INSERTION_GRID_SECONDS,
         "grid_layout": [3, 3],
         "grid_crop_size": GRID_CROP_SIZE,
         "grid_overlay_fade_seconds": None,
@@ -411,7 +415,7 @@ def main():
             {
                 "run": str(s.run),
                 "start_seconds": s.start,
-                "end_seconds": s.start + GRID_SECONDS,
+                "end_seconds": s.start + STACKING_GRID_SECONDS,
                 "crop_centre": s.centre,
             }
             for s in stacks
@@ -420,12 +424,13 @@ def main():
             {
                 "run": str(s.run),
                 "start_seconds": s.start,
-                "end_seconds": s.start + GRID_SECONDS,
+                "end_seconds": s.start + INSERTION_GRID_SECONDS,
                 "crop_centre": s.centre,
             }
             for s in insertions
         ],
-        "insertion_grid_selection": "Nine camera-timeline runs visually checked for a seated dowel and visible retreat. All use the same crop dimensions as the placement grid, centred on insertion. Completed runs with a missed ring were excluded.",
+        "insertion_grid_selection": "Nine camera-timeline runs visually checked for a seated dowel and visible retreat. All use the same crop dimensions as the stacking grid, centred on insertion. Completed runs with a missed ring were excluded.",
+        "stacking_grid_edit": "Each source begins three seconds earlier than revision 5 and ends at the same moment, preserving release and retreat. Earlier footage reveals the small cube in several runs; it remains occluded by the arm in some views.",
         "timing": "Camera timeline at 30 Hz; latest available recorded async result. Older grid clips use recorded t_frame timestamps and hold frames, with no optical-flow interpolation. Last frame held where a source ends.",
         "overlay": "Main insertion replay uses existing drawing without diagnostic prose/panel. Both grids retain every available recorded segmentation outline, raw-model silhouette, accepted/predicted target silhouette and scene wireframe through the last frame, without fading. Missing recorded geometry is not fabricated. Poses are estimates, not ground truth.",
         "audit": {
@@ -445,10 +450,26 @@ def main():
         "no_robot_or_server_access": True,
     }
     (OUT / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
-    encode("stacking_grid_overlay.mp4", grid(stacks, True), GRID_SECONDS * FPS)
-    encode("stacking_grid_raw.mp4", grid(stacks, False), GRID_SECONDS * FPS)
-    encode("insertion_grid_overlay.mp4", grid(insertions, True, "dowel insertion"), GRID_SECONDS * FPS)
-    encode("insertion_grid_raw.mp4", grid(insertions, False, "dowel insertion"), GRID_SECONDS * FPS)
+    encode(
+        "stacking_grid_overlay.mp4",
+        grid(stacks, True, "stacking gamepad onto a small cube", STACKING_GRID_SECONDS),
+        STACKING_GRID_SECONDS * FPS,
+    )
+    encode(
+        "stacking_grid_raw.mp4",
+        grid(stacks, False, "stacking gamepad onto a small cube", STACKING_GRID_SECONDS),
+        STACKING_GRID_SECONDS * FPS,
+    )
+    encode(
+        "insertion_grid_overlay.mp4",
+        grid(insertions, True, "dowel insertion", INSERTION_GRID_SECONDS),
+        INSERTION_GRID_SECONDS * FPS,
+    )
+    encode(
+        "insertion_grid_raw.mp4",
+        grid(insertions, False, "dowel insertion", INSERTION_GRID_SECONDS),
+        INSERTION_GRID_SECONDS * FPS,
+    )
     encode("01_single_demo.mp4", demo_frames(insertion), 390)
     encode("02_autonomous_raw.mp4", act_frames(insertion, False), len(TIMELINE["rows"]))
     encode("03_autonomous_overlay.mp4", act_frames(insertion, True), 570)

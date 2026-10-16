@@ -17,8 +17,9 @@
     5.5,
     24.5
   ],
-  "edit_revision": 5,
-  "grid_seconds": 9,
+  "edit_revision": 6,
+  "grid_seconds": 12,
+  "insertion_grid_seconds": 9,
   "grid_layout": [
     3,
     3
@@ -35,7 +36,7 @@
   "grid_sources": [
     {
       "run": "/home/feit/.cache/huggingface/lerobot/demos/pick_place/acts/20261011_080249",
-      "start_seconds": 10.9,
+      "start_seconds": 7.9,
       "end_seconds": 19.9,
       "crop_centre": [
         290,
@@ -44,7 +45,7 @@
     },
     {
       "run": "/home/feit/.cache/huggingface/lerobot/demos/pick_place/acts/20261011_233111",
-      "start_seconds": 18.2,
+      "start_seconds": 15.2,
       "end_seconds": 27.2,
       "crop_centre": [
         362,
@@ -53,7 +54,7 @@
     },
     {
       "run": "/home/feit/.cache/huggingface/lerobot/demos/pick_place/acts/20261012_041448",
-      "start_seconds": 16.5,
+      "start_seconds": 13.5,
       "end_seconds": 25.5,
       "crop_centre": [
         306,
@@ -62,7 +63,7 @@
     },
     {
       "run": "/home/feit/.cache/huggingface/lerobot/demos/pick_place/acts/20261012_042101",
-      "start_seconds": 12.7,
+      "start_seconds": 9.7,
       "end_seconds": 21.7,
       "crop_centre": [
         315,
@@ -71,7 +72,7 @@
     },
     {
       "run": "/home/feit/.cache/huggingface/lerobot/demos/pick_place/acts/20261012_042338",
-      "start_seconds": 16.8,
+      "start_seconds": 13.8,
       "end_seconds": 25.8,
       "crop_centre": [
         291,
@@ -80,7 +81,7 @@
     },
     {
       "run": "/home/feit/.cache/huggingface/lerobot/demos/pick_place/acts/20261012_042642",
-      "start_seconds": 13.1,
+      "start_seconds": 10.1,
       "end_seconds": 22.1,
       "crop_centre": [
         282,
@@ -89,7 +90,7 @@
     },
     {
       "run": "/home/feit/.cache/huggingface/lerobot/demos/pick_place/acts/20261012_192802",
-      "start_seconds": 17.5,
+      "start_seconds": 14.5,
       "end_seconds": 26.5,
       "crop_centre": [
         343,
@@ -98,7 +99,7 @@
     },
     {
       "run": "/home/feit/.cache/huggingface/lerobot/demos/pick_place/acts/20261012_194250",
-      "start_seconds": 33.0,
+      "start_seconds": 30.0,
       "end_seconds": 42.0,
       "crop_centre": [
         330,
@@ -107,7 +108,7 @@
     },
     {
       "run": "/home/feit/.cache/huggingface/lerobot/demos/pick_place/acts/20261013_211511",
-      "start_seconds": 16.2,
+      "start_seconds": 13.2,
       "end_seconds": 25.2,
       "crop_centre": [
         334,
@@ -198,7 +199,8 @@
       ]
     }
   ],
-  "insertion_grid_selection": "Nine camera-timeline runs visually checked for a seated dowel and visible retreat. All use the same crop dimensions as the placement grid, centred on insertion. Completed runs with a missed ring were excluded.",
+  "insertion_grid_selection": "Nine camera-timeline runs visually checked for a seated dowel and visible retreat. All use the same crop dimensions as the stacking grid, centred on insertion. Completed runs with a missed ring were excluded.",
+  "stacking_grid_edit": "Each source begins three seconds earlier than revision 5 and ends at the same moment, preserving release and retreat. Earlier footage reveals the small cube in several runs; it remains occluded by the arm in some views.",
   "timing": "Camera timeline at 30 Hz; latest available recorded async result. Older grid clips use recorded t_frame timestamps and hold frames, with no optical-flow interpolation. Last frame held where a source ends.",
   "overlay": "Main insertion replay uses existing drawing without diagnostic prose/panel. Both grids retain every available recorded segmentation outline, raw-model silhouette, accepted/predicted target silhouette and scene wireframe through the last frame, without fading. Missing recorded geometry is not fabricated. Poses are estimates, not ground truth.",
   "audit": {
