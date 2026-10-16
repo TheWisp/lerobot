@@ -506,7 +506,17 @@ def _loop(j: _Jog) -> None:
     robot = j.robot
     grip = float(j.q_cmd["gripper"])
     period = 1.0 / HZ
+    last_tick_at = 0.0
+    read_durations = deque(maxlen=max(1, int(HZ / 3)))
     while not j.stop.is_set():
+        # Begin the next checked read just before the next write is due.
+        # A recent fast read predicts its duration; a rare long read must not
+        # make subsequent reads stale by a whole motor period.
+        if last_tick_at:
+            read_budget = min(read_durations) if read_durations else 0.0
+            time.sleep(max(0.0, last_tick_at + period - read_budget - time.perf_counter()))
+            if j.stop.is_set():
+                break
         t0 = time.perf_counter()
         try:
             with j.lock:
@@ -524,13 +534,21 @@ def _loop(j: _Jog) -> None:
                 _check_state(robot.bus, state, j.good)
             except _BadReadError as e:  # no command on what cannot be the arm; a second in a row freezes it
                 _bad_read(j, e)
-                time.sleep(max(0.0, period - (time.perf_counter() - t0)))
+                last_tick_at = time.perf_counter()
                 continue
             j.good, j.bad_reads = state, 0
             _faults(robot.bus, state)
             q_obs = state.q
             observed_at = time.perf_counter()
             t_read = time.perf_counter()
+            read_durations.append(t_read - t_locked)
+            if last_tick_at:
+                # Count the read as part of the 33 ms motor period, as LeRobot's
+                # record loop does. Still never write earlier than one period
+                # after the previous tick, even if this read was unexpectedly
+                # fast after a slow one.
+                time.sleep(max(0.0, last_tick_at + period - t_read))
+            t_paced = time.perf_counter()
             if grip_target is not None:
                 step = GRIP_UNITS_S / HZ
                 grip += float(np.clip(grip_target - grip, -step, step))
@@ -629,8 +647,8 @@ def _loop(j: _Jog) -> None:
                 t_end = time.perf_counter()
                 j.tick_s.append(t_end - t0)
                 if t_end - t0 > SLOW_TICK_S:
-                    marks = (t0, t_locked, t_read, t_sent, t_end)
-                    phases = ("lock", "read_state", "command", "lock_again")
+                    marks = (t0, t_locked, t_read, t_paced, t_sent, t_end)
+                    phases = ("lock", "read_state", "pace", "command", "lock_again")
                     j.slow_ticks.append(
                         {
                             "at": time.time(),
@@ -657,7 +675,8 @@ def _loop(j: _Jog) -> None:
                             "tick_ms": 1000.0 * (t_end - t0),
                             "lock_ms": 1000.0 * (t_locked - t0),
                             "read_ms": 1000.0 * (t_read - t_locked),
-                            "command_ms": 1000.0 * (t_sent - t_read),
+                            "pace_ms": 1000.0 * (t_paced - t_read),
+                            "command_ms": 1000.0 * (t_sent - t_paced),
                             "commit_ms": 1000.0 * (t_end - t_sent),
                             "obs": dict(q_obs),
                             "cmd": dict(j.q_cmd),
@@ -682,10 +701,7 @@ def _loop(j: _Jog) -> None:
             with j.lock:
                 j.halted, j.reason = True, f"loop error: {e}"
             return
-        # Space motor writes, not just loop starts. A 60 ms encoder read used
-        # to leave no sleep and put the next command on the bus only 2–5 ms
-        # later. Keep the whole checked sample interval after a delayed write.
-        time.sleep(max(0.0, period - (time.perf_counter() - t_sent)))
+        last_tick_at = t_sent
 
 
 def _connect(body: ConnectBody) -> dict:

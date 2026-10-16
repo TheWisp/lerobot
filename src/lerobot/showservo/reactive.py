@@ -256,67 +256,6 @@ def checked_joint_samples(
     return linear if checked(linear) else None
 
 
-def checked_queue_blend(
-    kin: Any,
-    previous: np.ndarray,
-    old: list[np.ndarray],
-    new: list[np.ndarray],
-    grip_index: int,
-    box: tuple,
-    floor: float,
-    max_joint_tick_deg: float,
-    blend_ticks: int,
-    previous_sample: np.ndarray | None = None,
-    max_joint_accel_deg: float | None = None,
-) -> list[np.ndarray] | None:
-    """Ease a replacement chunk away from its unsent predecessor, RTC-style.
-
-    The first overlap sample mostly follows the old command; the last follows
-    the new one. Never blend a gripper event. The entire proposed joint walk
-    must still satisfy the joint-rate, Cartesian-corridor and workspace checks
-    used for a newly solved chunk. A failed check leaves the caller's original
-    checked replacement available, rather than sending an unchecked average.
-    """
-    count = min(blend_ticks, len(old), len(new))
-    if count < 2:
-        return None
-    old = [np.asarray(q, dtype=float) for q in old[:count]]
-    new = [np.asarray(q, dtype=float) for q in new]
-    if any(abs(a[grip_index] - b[grip_index]) > 1e-6 for a, b in zip(old, new, strict=False)):
-        return None
-    result = [q.copy() for q in new]
-    for k in range(count):
-        weight_new = (k + 1) / count
-        result[k] = (1.0 - weight_new) * old[k] + weight_new * new[k]
-        result[k][grip_index] = new[k][grip_index]
-    arm = np.arange(len(previous)) != grip_index
-    steps = np.diff(np.stack([previous, *result]), axis=0)
-    if np.max(np.abs(steps[:, arm])) > max_joint_tick_deg + 1e-9:
-        return None
-    if previous_sample is not None and max_joint_accel_deg is not None:
-        velocities = np.diff(np.stack([previous_sample, previous, *result]), axis=0)
-        if np.max(np.abs(np.diff(velocities, axis=0)[:, arm])) > max_joint_accel_deg + 1e-9:
-            return None
-    start = kin.forward_kinematics(previous)
-    end = kin.forward_kinematics(new[-1])
-    lo, hi = np.asarray(box[0]), np.asarray(box[1])
-    bottom = min(lo[2], floor, start[2, 3])
-    for k, q in enumerate(result, start=1):
-        actual = kin.forward_kinematics(q)
-        expected = core.interp_rigid(start, end, k / len(result))
-        distance, angle = core.pose_residual(actual, expected)
-        p = actual[:3, 3]
-        if (
-            distance > core.ACT_REACH_TOL_M
-            or angle > core.ACT_REACH_TOL_DEG
-            or p[2] < bottom - core.ACT_REACH_TOL_M
-            or np.any(p[:2] < lo[:2] - core.ACT_REACH_TOL_M)
-            or np.any(p > hi + core.ACT_REACH_TOL_M)
-        ):
-            return None
-    return result
-
-
 def unverified_object_shift(motion: np.ndarray, points: np.ndarray, tolerance_m: float) -> float | None:
     """Measured object-centre motion too large to carry through an unverified pregrasp.
 

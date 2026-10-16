@@ -21,22 +21,6 @@ def pose(x):
     return t
 
 
-def test_checked_queue_blend_keeps_old_prefix_and_new_endpoint_without_blending_grip():
-    kin = _TipKinematics()
-    start = np.array([0.0, 0, 0, 0, 0, 0, 80])
-    old = [np.array([x, 0, 0, 0, 0, 0, 80.0]) for x in (1, 2, 3, 4)]
-    new = [np.array([x, 0, 0, 0, 0, 0, 80.0]) for x in (0.5, 1, 1.5, 2)]
-    box = ((-1, -1, -1), (1, 1, 1))
-    blended = reactive.checked_queue_blend(kin, start, old, new, 6, box, -1.0, 2.0, 4)
-    assert blended is not None
-    assert blended[0][0] == pytest.approx(0.875)
-    np.testing.assert_array_equal(blended[-1], new[-1])
-    assert reactive.checked_queue_blend(kin, start, old, new, 6, box, -1.0, 0.5, 4) is None
-    releasing = [q.copy() for q in old]
-    releasing[1][6] = 20.0
-    assert reactive.checked_queue_blend(kin, start, releasing, new, 6, box, -1.0, 2.0, 4) is None
-
-
 def test_unverified_pregrasp_shift_uses_object_centre():
     centre = np.array([0.2, 0.0, 0.0])
     turn = np.eye(4)
@@ -168,9 +152,6 @@ def test_update_during_contact_retargets_remaining_phase_and_preserves_release(m
             diagnostics=diagnostics,
         )
     )
-    if change == "attachment":
-        assert diagnostics["blended_replacements"] >= 1
-        assert diagnostics["blended_samples"] >= 2
     assert not reason
     offset = state["motion"][0, 3] + state["fix"][0, 3]
     assert kin.forward_kinematics(last)[0, 3] == pytest.approx(0.008 + offset, abs=core.ACT_SOLVE_TOL_M)
@@ -188,6 +169,81 @@ def test_update_during_contact_retargets_remaining_phase_and_preserves_release(m
         np.testing.assert_array_equal(first["fix"], np.eye(4))
         assert evidence[-1][0]["hold_revision"] == 1
         np.testing.assert_array_equal(evidence[-1][0]["fix"], pose(-0.003))
+
+
+def test_timed_chunk_retarget_keeps_slots_and_trims_executed_prefix(monkeypatch):
+    kin = _TipKinematics()
+    n = 20
+    q = np.zeros(len(MOTOR_NAMES))
+    state = {"motion": np.eye(4), "q": q.copy()}
+    sent = []
+
+    def send(command):
+        sent.append(command)
+        state["q"] = np.array([command[m] for m in MOTOR_NAMES])
+
+    fake_playback(monkeypatch, send)
+    monkeypatch.setattr(runtime, "ACT_TICK_S", 0.001)
+    monkeypatch.setattr(jog, "servo_ranges", lambda: None)
+    monkeypatch.setattr(jog, "workspace_box", lambda: ((-1, -1, -1), (1, 1, 1)))
+    monkeypatch.setattr(
+        jog,
+        "current_tip_and_anchor",
+        lambda: (
+            kin.forward_kinematics(state["q"]),
+            np.eye(4),
+            dict(zip(MOTOR_NAMES, state["q"], strict=True)),
+        ),
+    )
+    original_retarget = live_execution._retarget_timed_tail
+
+    def slow_retarget(*args):
+        result = original_retarget(*args)
+        time.sleep(2 / jog.HZ)  # the motor sends part of the old chunk while this solves
+        return result
+
+    monkeypatch.setattr(live_execution, "_retarget_timed_tail", slow_retarget)
+    path = {
+        "local": np.stack([pose(i * 0.0002) for i in range(n + 1)]),
+        "frames": ["target"] * (n + 1),
+        "held": np.zeros(n + 1, bool),
+        "grips": np.zeros(n + 1),
+        "hints": np.zeros((n + 1, len(q))),
+        "floor": np.full(n + 1, -1.0),
+    }
+    plan = {
+        "q": np.tile(q, (n + 1, 1)),
+        "times": np.arange(n + 1) / jog.HZ,
+        "stage": ["move"] * (n + 1),
+        "live_path": path,
+    }
+    phases = []
+
+    def observed(phase, *_):
+        phases.append(phase)
+        if phase == 3:
+            state["motion"] = pose(0.0006)
+
+    diagnostics = {}
+    reason, last = asyncio.run(
+        live_execution.stream(
+            plan,
+            kin,
+            lambda: {"target": state["motion"]},
+            lambda: np.eye(4),
+            lambda: "",
+            observed,
+            lambda *_: pytest.fail("timed correction should stay reachable"),
+            (0.12, np.pi),
+            1,
+            diagnostics=diagnostics,
+        )
+    )
+    assert not reason
+    assert phases == sorted(phases) and phases[-1] == n
+    assert diagnostics["chunk_replacements"] > 0, diagnostics
+    assert diagnostics["chunk_trimmed_samples"] >= 1, diagnostics
+    assert kin.forward_kinematics(last)[0, 3] == pytest.approx(n * 0.0002 + 0.0006, abs=core.ACT_SOLVE_TOL_M)
 
 
 def test_cas_replaces_only_unsent_command_and_preserves_lag_guard(monkeypatch):

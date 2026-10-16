@@ -76,7 +76,6 @@ async def state() -> dict:
             "progress": s.act.progress,
             "speed": s.act.speed,
             "queue_horizon_s": s.act.queue_horizon_s,
-            "queue_blend_ms": s.act.queue_blend_ms,
             "plan": s.act.plan,
             "place": s.act.place,
         },

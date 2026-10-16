@@ -13,6 +13,118 @@ from lerobot.showservo import motion as core, reactive
 
 from . import runtime
 
+# In the measured insertion trace, checking all 30 buffered slots took roughly
+# 0.2 s per retarget. Eight slots cover 267 ms of motor execution while their
+# solves take about 40 ms; the normal producer replenishes the queue afterward.
+RETARGET_HORIZON_S = 0.25
+
+
+def _retarget_timed_tail(
+    kin,
+    plan,
+    start,
+    before_start,
+    old_q,
+    old_phases,
+    old_due,
+    old_goals,
+    old_compositions,
+    motions,
+    fix,
+    limits,
+    speed,
+    ranges,
+    box,
+    gi,
+    revision,
+    frozen_ticks,
+):
+    """Re-solve an unsent chunk in its existing motor slots.
+
+    As with RTC's inference-delay prefix, retain the old checked commands that
+    may execute during this job. Every later slot keeps its recorded phase and
+    gripper state. If a changed target needs more time, use the ordinary
+    incremental replan instead of silently dilating the recorded sequence.
+    """
+    from .. import jog
+
+    path = plan["live_path"]
+    if not old_q or frozen_ticks >= len(old_q):
+        return None
+    samples = [np.asarray(q, dtype=float).copy() for q in old_q[:frozen_ticks]]
+    phases = list(old_phases[:frozen_ticks])
+    goals = list(old_goals[:frozen_ticks])
+    compositions = list(old_compositions[:frozen_ticks])
+    previous = samples[-1] if samples else np.asarray(start, dtype=float).copy()
+    previous_sample = samples[-2] if len(samples) > 1 else np.asarray(before_start, dtype=float).copy()
+    joint_tick = min(jog.PLAYBACK_LAG_DEG, jog.RAMP_DEG_S * speed / jog.HZ)
+    k = frozen_ticks
+    while k < len(old_q):
+        original = old_compositions[k]
+        if original is None or original["constraint"] != "pose":
+            return None
+        i = int(original["phase"])
+        end = k + 1
+        while end < len(old_q) and old_compositions[end] is not None and old_compositions[end]["phase"] == i:
+            end += 1
+        ticks = end - k
+        if any(abs(float(q[gi] - previous[gi])) > 1e-6 for q in old_q[k:end]):
+            # The release/grasp event cannot be moved by a queue splice.
+            return None
+        frame = original["frame"]
+        local = np.asarray(original["local"], dtype=float)
+        attachment = fix if original["held"] else np.eye(4)
+        goal = np.asarray(motions[frame]) @ local @ attachment
+        result = reactive.checked_step(
+            kin,
+            previous,
+            goal,
+            float(old_q[end - 1][gi]),
+            path["hints"][i],
+            gi,
+            ranges,
+            box,
+            float(path["floor"][i]),
+            ticks / jog.HZ,
+            (limits[0] * speed, limits[1] * speed),
+            jog.GRIP_UNITS_S * speed,
+            preferred=plan["q"][i],
+        )
+        if result["reason"] or result["complete"] != (old_phases[end - 1] == i):
+            return None
+        checked = reactive.checked_joint_samples(
+            kin,
+            previous,
+            result,
+            ticks,
+            gi,
+            box,
+            float(path["floor"][i]),
+            joint_tick,
+            previous_sample=previous_sample,
+            max_joint_accel_deg=jog.RAMP_DEG_S * speed / jog.HZ,
+            continuous=path.get("move", ["follow"] * len(plan["q"]))[i] in {"line", "lift"},
+            joint_ranges=ranges,
+        )
+        if checked is None:
+            return None
+        if any(abs(float(q[gi] - old_q[k + j][gi])) > 1e-6 for j, q in enumerate(checked)):
+            return None
+        new_composition = {
+            **original,
+            "at": time.time(),
+            "motion": np.asarray(motions[frame]).tolist(),
+            "fix": np.asarray(fix).tolist(),
+            "hold_revision": revision,
+        }
+        samples.extend(checked)
+        phases.extend(old_phases[k:end])
+        goals.extend([goal] * ticks)
+        compositions.extend([new_composition] * ticks)
+        previous_sample, previous = checked[-2] if len(checked) > 1 else previous, checked[-1]
+        k = end
+    return samples, phases, list(old_due), goals, compositions
+
 
 async def stream(
     plan,
@@ -29,7 +141,6 @@ async def stream(
     best_effort_stopped=None,
     diagnostics=None,
     queue_horizon_s=1.0,
-    queue_blend_ms=200.0,
 ):
     """Return (reason, last command). Phase advances only after its command is consumed.
 
@@ -82,7 +193,6 @@ async def stream(
     arm = np.arange(len(qs[0])) != gi
     best_phase, best_seen, best_progress_at = None, None, time.monotonic()
     horizon = max(2, int(round(queue_horizon_s * jog.HZ)))
-    blend_ticks = max(0, int(round(queue_blend_ms * jog.HZ / 1000.0)))
     unchanged_snapshot = None
     solve_seconds = deque(maxlen=10)
     if diagnostics is not None:
@@ -91,12 +201,13 @@ async def stream(
             tail_replacements=0,
             starved_polls=0,
             max_queue_samples=0,
-            blended_replacements=0,
-            blended_samples=0,
-            blend_rejected=0,
             stale_replacements=0,
+            chunk_replacements=0,
+            chunk_trimmed_samples=0,
+            chunk_rejected=0,
+            chunk_solve_ms=[],
+            retarget_horizon_s=RETARGET_HORIZON_S,
             queue_horizon_s=queue_horizon_s,
-            queue_blend_ms=queue_blend_ms,
         )
 
     def changed_pending(done, motion, fix):
@@ -162,6 +273,131 @@ async def stream(
             )
         motion, fix = motions(), correction()
         replacing = changed_pending(done, motion, fix)
+        retarget_count = min(len(qs) - done - 1, max(4, int(round(RETARGET_HORIZON_S * jog.HZ))))
+        if replacing and retarget_count >= 4:
+            # Match LeRobot RTC's timing model: the old queue executes while a
+            # whole checked chunk is produced. Keep a predicted execution
+            # prefix, then trim the *actual* number of commands consumed before
+            # atomically installing the new unsent tail.
+            old_count = retarget_count
+            expected_solve_s = old_count * (np.median(solve_seconds) if solve_seconds else 0.002)
+            frozen_ticks = min(old_count - 1, max(1, int(np.ceil(2 * expected_solve_s * jog.HZ))))
+            chunk_started = time.perf_counter()
+            candidate = await loop.run_in_executor(
+                runtime._ACT_EXECUTOR,
+                functools.partial(
+                    _retarget_timed_tail,
+                    kin,
+                    plan,
+                    qs[done],
+                    qs[max(0, done - 1)],
+                    qs[done + 1 : done + 1 + old_count],
+                    phases[done + 1 : done + 1 + old_count],
+                    due[done + 1 : done + 1 + old_count],
+                    goals[done + 1 : done + 1 + old_count],
+                    compositions[done + 1 : done + 1 + old_count],
+                    motion,
+                    fix,
+                    limits,
+                    speed,
+                    jog.servo_ranges(),
+                    jog.workspace_box(),
+                    gi,
+                    None if revision is None else revision(),
+                    frozen_ticks,
+                ),
+            )
+            if diagnostics is not None:
+                diagnostics["chunk_solve_ms"].append((time.perf_counter() - chunk_started) * 1000.0)
+            if candidate is not None:
+                new_q, new_phases, new_due, new_goals, new_compositions = candidate
+                installed = False
+                for _ in range(3):
+                    current_done, _ = jog.playback_state()
+                    consumed = current_done - done
+                    if consumed < 0 or consumed >= len(new_q):
+                        break
+                    join_phase = (
+                        new_compositions[consumed]["phase"]
+                        if new_compositions[consumed] is not None
+                        else new_phases[consumed]
+                    )
+                    # Slicing alone is not enough for an IK trajectory: the
+                    # splice must still join the actually sent old command
+                    # within the same joint-speed, acceleration and workspace
+                    # checks as the original samples.
+                    join = reactive.checked_joint_samples(
+                        kin,
+                        qs[current_done],
+                        {"reason": "", "q": new_q[consumed], "pose": kin.forward_kinematics(new_q[consumed])},
+                        1,
+                        gi,
+                        jog.workspace_box(),
+                        float(path["floor"][join_phase]),
+                        min(jog.PLAYBACK_LAG_DEG, jog.RAMP_DEG_S * speed / jog.HZ),
+                        previous_sample=qs[max(0, current_done - 1)],
+                        max_joint_accel_deg=jog.RAMP_DEG_S * speed / jog.HZ,
+                        continuous=True,
+                        joint_ranges=jog.servo_ranges(),
+                    )
+                    if join is None:
+                        break
+                    if consumed + 1 < len(new_q):
+                        second_phase = (
+                            new_compositions[consumed + 1]["phase"]
+                            if new_compositions[consumed + 1] is not None
+                            else new_phases[consumed + 1]
+                        )
+                        second = reactive.checked_joint_samples(
+                            kin,
+                            new_q[consumed],
+                            {
+                                "reason": "",
+                                "q": new_q[consumed + 1],
+                                "pose": kin.forward_kinematics(new_q[consumed + 1]),
+                            },
+                            1,
+                            gi,
+                            jog.workspace_box(),
+                            float(path["floor"][second_phase]),
+                            min(jog.PLAYBACK_LAG_DEG, jog.RAMP_DEG_S * speed / jog.HZ),
+                            previous_sample=qs[current_done],
+                            max_joint_accel_deg=jog.RAMP_DEG_S * speed / jog.HZ,
+                            continuous=True,
+                            joint_ranges=jog.servo_ranges(),
+                        )
+                        if second is None:
+                            break
+                    if jog.replace_playback_tail(
+                        current_done,
+                        [as_dict(q) for q in new_q[consumed:]],
+                        new_due[consumed:],
+                    ):
+                        del qs[current_done + 1 :]
+                        del phases[current_done + 1 :]
+                        del due[current_done + 1 :]
+                        del goals[current_done + 1 :]
+                        del compositions[current_done + 1 :]
+                        qs.extend(new_q[consumed:])
+                        phases.extend(new_phases[consumed:])
+                        due.extend(new_due[consumed:])
+                        goals.extend(new_goals[consumed:])
+                        compositions.extend(new_compositions[consumed:])
+                        unchanged_snapshot = (
+                            tuple((name, value.tobytes()) for name, value in motion.items()),
+                            fix.tobytes(),
+                        )
+                        if diagnostics is not None:
+                            diagnostics["tail_replacements"] += 1
+                            diagnostics["chunk_replacements"] += 1
+                            diagnostics["chunk_trimmed_samples"] += consumed
+                        poll_delay = 0.0
+                        installed = True
+                        break
+                if installed:
+                    continue
+            if diagnostics is not None:
+                diagnostics["chunk_rejected"] += 1
         # Keep the old checked tail moving while the replacement is solved.
         # The swap below is atomic and only succeeds if this head has not
         # advanced; a changed head is replanned on the next producer turn.
@@ -303,13 +539,6 @@ async def stream(
         )
         if continuous:
             nominal_ticks = min(horizon, max(nominal_ticks, 6))
-        if (
-            replacing
-            and blend_ticks >= 2
-            and len(qs) - done - 1 >= 2
-            and abs(float(path["grips"][i] - qs[done][gi])) < 1e-6
-        ):
-            nominal_ticks = max(nominal_ticks, min(blend_ticks, horizon))
         if pending + nominal_ticks > horizon:
             continue
         box, floor = jog.workspace_box(), float(path["floor"][i])
@@ -430,33 +659,6 @@ async def stream(
             continue
         # Gripper events follow the completed phase, never an intermediate correction.
         next_phase = i if result["complete"] else phase
-        blended_count = 0
-        if replacing and blend_ticks >= 2 and len(qs) - done - 1 >= 2:
-            old = []
-            for k in range(min(blend_ticks, len(samples), len(qs) - done - 1)):
-                index = done + k + 1
-                if phases[index] not in (phase, i) or abs(qs[index][gi] - samples[k][gi]) > 1e-6:
-                    break
-                old.append(qs[index])
-            if len(old) >= 2:
-                blended = reactive.checked_queue_blend(
-                    kin,
-                    qs[done],
-                    old,
-                    samples,
-                    gi,
-                    box,
-                    floor,
-                    joint_tick,
-                    blend_ticks,
-                    previous_sample=qs[max(0, done - 1)],
-                    max_joint_accel_deg=jog.RAMP_DEG_S * speed / jog.HZ,
-                )
-                if blended is not None:
-                    blended_count = min(blend_ticks, len(old), len(samples))
-                    samples = blended
-                elif diagnostics is not None:
-                    diagnostics["blend_rejected"] += 1
         due_samples = [due[base] + (k + 1) / jog.HZ for k in range(ticks)]
         commands = [as_dict(q) for q in samples]
         accepted = (
@@ -473,21 +675,13 @@ async def stream(
                 unchanged_snapshot = None
                 if diagnostics is not None:
                     diagnostics["tail_replacements"] += 1
-                    if blended_count:
-                        diagnostics["blended_replacements"] += 1
-                        diagnostics["blended_samples"] += blended_count
                 del qs[done + 1 :]
                 del phases[done + 1 :]
                 del due[done + 1 :]
                 del goals[done + 1 :]
                 del compositions[done + 1 :]
             for k, (q, at) in enumerate(zip(samples, due_samples, strict=True)):
-                sample_composition = (
-                    {**composition, "queue_blend_weight_new": (k + 1) / blended_count}
-                    if k < blended_count
-                    else composition
-                )
-                entry = (q, next_phase if k == ticks - 1 else phase, at, goal, sample_composition)
+                entry = (q, next_phase if k == ticks - 1 else phase, at, goal, composition)
                 for array, value in zip((qs, phases, due, goals, compositions), entry, strict=True):
                     array.append(value)
         elif replacing and diagnostics is not None:

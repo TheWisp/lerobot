@@ -560,7 +560,7 @@ def test_a_slow_tick_is_kept_with_where_its_time_went():
         assert j.record[0]["read_ms"] >= 150.0
         for sample in j.record:
             assert sample["tick_ms"] == pytest.approx(
-                sum(sample[k] for k in ("lock_ms", "read_ms", "command_ms", "commit_ms"))
+                sum(sample[k] for k in ("lock_ms", "read_ms", "pace_ms", "command_ms", "commit_ms"))
             )
     finally:
         jog._jog = old
@@ -597,7 +597,11 @@ def test_a_slow_read_does_not_bunch_the_next_motor_commands(monkeypatch):
     monkeypatch.setattr(jog.time, "sleep", pause)
     jog._loop(j)
     assert len(sent_at) == 5
-    assert np.min(np.diff(sent_at)) >= 1 / jog.HZ - 1e-9, "no catch-up packet burst after the slow read"
+    intervals = np.diff(sent_at)
+    assert np.min(intervals) >= 1 / jog.HZ - 1e-9, "no catch-up packet burst after the slow read"
+    assert np.sum(np.isclose(intervals, 1 / jog.HZ, atol=0.003)) >= 3, (
+        "normal encoder reads must fit inside the 30 Hz period, not be added after it"
+    )
 
 
 @pytest.mark.parametrize("fresh_lift,should_advance", [(4.0, True), (-2.0, False)])

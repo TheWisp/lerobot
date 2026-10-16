@@ -1322,7 +1322,6 @@ async function actGo(confirmation = null) {
         const options = apInjectBody();
         await pgPost('/api/pregrasp/act', {speed: Number(document.getElementById('act-speed').value || 1), ...options,
             queue_horizon_s: Number(document.getElementById('act-queue-horizon').value),
-            queue_blend_ms: Number(document.getElementById('act-queue-blend').value),
             allow_grasp_prediction: options.correct_hold && apAllowGraspPrediction,
             confirm_recovered_pose: confirmation});
         actWarningDismiss();

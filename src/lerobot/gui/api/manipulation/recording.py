@@ -166,7 +166,6 @@ def _record_trial(run_dir: str | None = None) -> dict[str, Any]:
         "demo": None if demo is None else demo.name,
         "speed": act.speed,
         "queue_horizon_s": act.queue_horizon_s,
-        "queue_blend_ms": act.queue_blend_ms,
         "result": "done" if act.ok else act.step,
         "reason": act.reason,
         "progress": act.progress,
@@ -390,7 +389,6 @@ def _begin_run(
         "demo_reference_constraints": dict(demo.reference_constraints),
         "speed": speed,
         "queue_horizon_s": runtime._state.act.queue_horizon_s,
-        "queue_blend_ms": runtime._state.act.queue_blend_ms,
         "started": time.strftime("%Y-%m-%d %H:%M:%S"),
         "t_started": time.time(),
         "t_bc": np.asarray(t_bc, dtype=float).tolist(),
@@ -449,7 +447,7 @@ def _finish_run(run: _Run, samples: list[dict[str, Any]], fk: Any, result: dict[
             ),
             "motors": np.array(MOTOR_NAMES),
         }
-        for key in ("tick_ms", "lock_ms", "read_ms", "command_ms", "commit_ms"):
+        for key in ("tick_ms", "lock_ms", "read_ms", "pace_ms", "command_ms", "commit_ms"):
             if all(key in s for s in samples):
                 arm[key] = np.array([s[key] for s in samples], dtype=float)
         for key in ("playback_waiting", "playback_queue_depth", "playback_active", "playback_limited"):
