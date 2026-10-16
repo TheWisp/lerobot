@@ -8,12 +8,12 @@
         "height": 1080,
         "pix_fmt": "yuv420p",
         "r_frame_rate": "30/1",
-        "nb_frames": "2551"
+        "nb_frames": "2776"
       }
     ],
     "format": {
-      "duration": "85.033333",
-      "size": "62518922"
+      "duration": "92.533333",
+      "size": "63046946"
     }
   },
   "stacking_grid_overlay.mp4": {
@@ -100,6 +100,91 @@
     "format": {
       "duration": "5.000000",
       "size": "776205"
+    }
+  },
+  "00a_demo_transition.mp4": {
+    "programs": [],
+    "streams": [
+      {
+        "codec_name": "h264",
+        "width": 1920,
+        "height": 1080,
+        "pix_fmt": "yuv420p",
+        "r_frame_rate": "30/1",
+        "nb_frames": "45"
+      }
+    ],
+    "format": {
+      "duration": "1.500000",
+      "size": "89449"
+    }
+  },
+  "01a_raw_transition.mp4": {
+    "programs": [],
+    "streams": [
+      {
+        "codec_name": "h264",
+        "width": 1920,
+        "height": 1080,
+        "pix_fmt": "yuv420p",
+        "r_frame_rate": "30/1",
+        "nb_frames": "45"
+      }
+    ],
+    "format": {
+      "duration": "1.500000",
+      "size": "106539"
+    }
+  },
+  "02a_overlay_transition.mp4": {
+    "programs": [],
+    "streams": [
+      {
+        "codec_name": "h264",
+        "width": 1920,
+        "height": 1080,
+        "pix_fmt": "yuv420p",
+        "r_frame_rate": "30/1",
+        "nb_frames": "45"
+      }
+    ],
+    "format": {
+      "duration": "1.500000",
+      "size": "117049"
+    }
+  },
+  "03a_insertion_transition.mp4": {
+    "programs": [],
+    "streams": [
+      {
+        "codec_name": "h264",
+        "width": 1920,
+        "height": 1080,
+        "pix_fmt": "yuv420p",
+        "r_frame_rate": "30/1",
+        "nb_frames": "45"
+      }
+    ],
+    "format": {
+      "duration": "1.500000",
+      "size": "106802"
+    }
+  },
+  "04a_stacking_transition.mp4": {
+    "programs": [],
+    "streams": [
+      {
+        "codec_name": "h264",
+        "width": 1920,
+        "height": 1080,
+        "pix_fmt": "yuv420p",
+        "r_frame_rate": "30/1",
+        "nb_frames": "45"
+      }
+    ],
+    "format": {
+      "duration": "1.500000",
+      "size": "112241"
     }
   }
 }

@@ -52,7 +52,30 @@ PLACEMENT_CENTRES = {
 STACKING_GRID_SECONDS = 12
 INSERTION_GRID_SECONDS = 9
 STACKING_EXTRA_SECONDS = 3
+TRANSITION_FRAMES = 45
 GRID_CROP_SIZE = (320, 164)
+TRANSITIONS = [
+    ("00a_demo_transition.mp4", "01_single_demo.mp4", "Single demo", "One RGB-D camera"),
+    ("01a_raw_transition.mp4", "02_autonomous_raw.mp4", "Autonomous rollout", "Raw camera · 1× speed"),
+    (
+        "02a_overlay_transition.mp4",
+        "03_autonomous_overlay.mp4",
+        "Same autonomous rollout",
+        "Tracking overlays · 1× speed",
+    ),
+    (
+        "03a_insertion_transition.mp4",
+        "insertion_grid_overlay.mp4",
+        "Different rollouts",
+        "Dowel insertion · 1× speed",
+    ),
+    (
+        "04a_stacking_transition.mp4",
+        "stacking_grid_overlay.mp4",
+        "Different rollouts",
+        "Stacking gamepad onto a small cube · 1× speed",
+    ),
+]
 INSERTIONS = [
     ("20261015_165734", (364, 250)),
     ("20261015_184144", (278, 224)),
@@ -387,6 +410,28 @@ def title_frames(summary=False):
     cap.release()
 
 
+def transition_frames(source_name, heading, subtitle):
+    cap = cv2.VideoCapture(str(OUT / source_name))
+    cap.set(cv2.CAP_PROP_POS_MSEC, 500)
+    ok, bgr = cap.read()
+    cap.release()
+    assert ok, source_name
+    # Use the next section's own footage so the card previews its content.
+    bgr = cv2.resize(bgr[84:1056, 24:1896], (W, H))
+    bgr = cv2.GaussianBlur(bgr, (0, 0), 22)
+    bgr = (bgr.astype(float) * 0.28 + np.asarray(BG[::-1]) * 0.55).clip(0, 255).astype(np.uint8)
+    background = Image.fromarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))
+    card = background.copy()
+    draw = ImageDraw.Draw(card)
+    draw.rounded_rectangle((W // 2 - 90, 340, W // 2 + 90, 349), radius=4, fill=ACCENT)
+    text(card, (W // 2, 478), heading, 93, bold=True, anchor="mm")
+    text(card, (W // 2, 610), subtitle, 58, ACCENT, anchor="mm")
+    for n in range(TRANSITION_FRAMES):
+        fade = min(1.0, (n + 1) / 7, (TRANSITION_FRAMES - n) / 7)
+        im = Image.blend(background, card, fade)
+        yield cv2.cvtColor(np.asarray(im), cv2.COLOR_RGB2BGR)
+
+
 def main():
     insertion, stacking = _demo(ROOT / "insertion"), _demo(ROOT / "pick_place")
     stacks = [Stack(n, r, stacking) for n, r in STACKS]
@@ -401,7 +446,7 @@ def main():
         "controller_speed_during_recording": 2.0,
         "demo_cut_seconds": [4.5, 17.5],
         "overlay_cut_seconds": [5.5, 24.5],
-        "edit_revision": 6,
+        "edit_revision": 7,
         "grid_seconds": STACKING_GRID_SECONDS,
         "insertion_grid_seconds": INSERTION_GRID_SECONDS,
         "grid_layout": [3, 3],
@@ -410,6 +455,16 @@ def main():
         "summary_real_time_claim": "Real time",
         "claim_scope": "No pre-scanned object mesh or task-specific weight fine-tuning is used in these rigid-object runs. The demo supplies object-relative goals; live vision updates object poses; reachability/IK plans arm motion. Deformable surfaces may contain trackable visual features, but deformable 6-DoF action transfer has not been demonstrated and is not claimed in the video.",
         "title_seconds": 1.5,
+        "transitions": [
+            {
+                "clip": name,
+                "precedes": source,
+                "heading": heading,
+                "subtitle": subtitle,
+                "seconds": TRANSITION_FRAMES / FPS,
+            }
+            for name, source, heading, subtitle in TRANSITIONS
+        ],
         "summary_seconds": 5.0,
         "grid_sources": [
             {
@@ -475,12 +530,19 @@ def main():
     encode("03_autonomous_overlay.mp4", act_frames(insertion, True), 570)
     encode("00_title.mp4", title_frames(), 45)
     encode("05_summary.mp4", title_frames(True), 150)
+    for name, source, heading, subtitle in TRANSITIONS:
+        encode(name, transition_frames(source, heading, subtitle), TRANSITION_FRAMES)
     names = [
         "00_title.mp4",
+        "00a_demo_transition.mp4",
         "01_single_demo.mp4",
+        "01a_raw_transition.mp4",
         "02_autonomous_raw.mp4",
+        "02a_overlay_transition.mp4",
         "03_autonomous_overlay.mp4",
+        "03a_insertion_transition.mp4",
         "insertion_grid_overlay.mp4",
+        "04a_stacking_transition.mp4",
         "stacking_grid_overlay.mp4",
         "05_summary.mp4",
     ]

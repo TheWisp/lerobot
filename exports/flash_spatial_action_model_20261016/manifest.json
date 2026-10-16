@@ -17,7 +17,7 @@
     5.5,
     24.5
   ],
-  "edit_revision": 6,
+  "edit_revision": 7,
   "grid_seconds": 12,
   "insertion_grid_seconds": 9,
   "grid_layout": [
@@ -32,6 +32,43 @@
   "summary_real_time_claim": "Real time",
   "claim_scope": "No pre-scanned object mesh or task-specific weight fine-tuning is used in these rigid-object runs. The demo supplies object-relative goals; live vision updates object poses; reachability/IK plans arm motion. Deformable surfaces may contain trackable visual features, but deformable 6-DoF action transfer has not been demonstrated and is not claimed in the video.",
   "title_seconds": 1.5,
+  "transitions": [
+    {
+      "clip": "00a_demo_transition.mp4",
+      "precedes": "01_single_demo.mp4",
+      "heading": "Single demo",
+      "subtitle": "One RGB-D camera",
+      "seconds": 1.5
+    },
+    {
+      "clip": "01a_raw_transition.mp4",
+      "precedes": "02_autonomous_raw.mp4",
+      "heading": "Autonomous rollout",
+      "subtitle": "Raw camera \u00b7 1\u00d7 speed",
+      "seconds": 1.5
+    },
+    {
+      "clip": "02a_overlay_transition.mp4",
+      "precedes": "03_autonomous_overlay.mp4",
+      "heading": "Same autonomous rollout",
+      "subtitle": "Tracking overlays \u00b7 1\u00d7 speed",
+      "seconds": 1.5
+    },
+    {
+      "clip": "03a_insertion_transition.mp4",
+      "precedes": "insertion_grid_overlay.mp4",
+      "heading": "Different rollouts",
+      "subtitle": "Dowel insertion \u00b7 1\u00d7 speed",
+      "seconds": 1.5
+    },
+    {
+      "clip": "04a_stacking_transition.mp4",
+      "precedes": "stacking_grid_overlay.mp4",
+      "heading": "Different rollouts",
+      "subtitle": "Stacking gamepad onto a small cube \u00b7 1\u00d7 speed",
+      "seconds": 1.5
+    }
+  ],
   "summary_seconds": 5.0,
   "grid_sources": [
     {
