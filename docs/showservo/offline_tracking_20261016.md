@@ -127,3 +127,50 @@ semantics and object tracking are unchanged. A separate recovery worker or
 incremental recovery scheduler remains necessary to prevent expensive locate
 jobs from blocking continuous P2P; merely prioritizing queued track jobs
 cannot preempt a locate already in progress.
+
+### Deployed retest: 20261016_100628
+
+Deployed `65ad01477` to port 9100 and ran the physical insertion at speed 2,
+1 s queue horizon and 200 ms blend, with grasp prediction allowed. Initial
+attempt stopped before motion because the saved ring find failed; clicking
+its observed current position produced a strong find (167/400 matches).
+The next act completed successfully and the camera showed the dowel standing
+in the ring. The arm then parked and disconnected. This demonstrates the
+rollout completed, not that held-pose correction or smoothness is solved.
+
+The saved act has 104 P2P frames, about 3.06 results/s over their arrival span.
+Measured elapsed timing (milliseconds):
+
+| Stage                                    |   Mean | Median |    p95 |
+| ---------------------------------------- | -----: | -----: | -----: |
+| Worker round trip                        | 317.11 | 100.65 | 759.00 |
+| Worker queue                             | 210.44 |   0.65 | 660.22 |
+| Worker compute                           |  85.00 |  82.75 | 104.28 |
+| Fetch                                    |   5.99 |   5.10 |  12.38 |
+| Dispatch/result I/O and scheduling       |  15.69 |   4.77 |  15.89 |
+| Verification work, elapsed               |  56.64 |  32.94 | 122.05 |
+| Verification thread CPU (subset of work) |  19.22 |  18.32 |  36.70 |
+| Overlay elapsed                          |  96.41 |  75.25 | 180.26 |
+| Overlay thread CPU (subset of elapsed)   |  41.94 |  39.55 |  53.52 |
+| Overlay preview (subset of drawing)      |  52.13 |  41.25 |  95.99 |
+
+Queueing accounts for 66.4% of aggregate worker round-trip time; 37 frames
+waited over 100 ms in the queue. One observed frame spent 664.54 ms queued,
+88 ms computing and 3.35 ms in dispatch/result I/O. Tracking recovered to
+about 10 FPS after repeated recovery jobs ended. The shared-worker bottleneck
+is now measured directly, not inferred from the residual.
+
+There is also a separate startup outlier: frame 1 spent 845.33 ms in
+dispatch/result I/O and scheduling despite only 0.25 ms queued and 91.5 ms
+compute. Its precise blocking source is not yet established. Verification
+elapsed time also substantially exceeds thread CPU time, consistent with
+waiting or contention, but these counters alone cannot identify which lock,
+GIL holder, or scheduler caused it.
+
+The controller reported no abort/freeze, but smoothness remains imperfect:
+9 empty-queue episodes over 100 ms, 3.31 s total empty-queue time, a longest
+empty-queue interval of 674 ms, and a maximum motor tick gap of 342 ms.
+These are separate metrics from perception FPS. The deployed change is
+instrumentation plus a drawing optimization, not a fix for recovery queue
+blocking or these controller gaps. The captured act and camera frames are at
+`~/.cache/huggingface/lerobot/demos/insertion/acts/20261016_100628`.
