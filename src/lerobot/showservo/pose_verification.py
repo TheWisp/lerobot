@@ -74,6 +74,8 @@ def with_group_consistency(
     tol_deg: float,
     held: bool = False,
     corrected_group_check: dict | None = None,
+    observation: tuple[np.ndarray, np.ndarray, np.ndarray, dict] | None = None,
+    noise_m: float = 0.003,
 ) -> dict:
     """Withhold a partly constrained pose that still contradicts synchronized group motion.
 
@@ -89,6 +91,11 @@ def with_group_consistency(
     # its tilt. Compare the *control* pose's motion from its own fixed baseline,
     # so a stable initial correction is not mistaken for a new object motion.
     if corrected_group_check is not None and corrected_group_check.get("state") == "disagreement":
+        override = _observed_group_override(
+            decision, corrected_group_check.get("predicted_pose"), observation, noise_m
+        )
+        if override is not None:
+            return {**decision, "group_override": override}
         return {
             **decision,
             "state": "rejected",
@@ -105,12 +112,62 @@ def with_group_consistency(
     residual = difference(proposed, predicted, np.asarray(centre, dtype=float), tol_m, tol_deg)
     if residual["state"] != "disagreement":
         return decision
+    override = _observed_group_override(decision, predicted, observation, noise_m)
+    if override is not None:
+        return {**decision, "group_override": override}
     return {
         **decision,
         "state": "rejected",
         "pose": None,
         "group_residual": residual,
         "reason": "measured surface leaves a pose that contradicts synchronized point-group motion",
+    }
+
+
+def _observed_group_override(decision, group_pose, observation, noise_m):
+    """A mostly visible RGB-D surface may arbitrate a conflicting group motion.
+
+    Require at least 80% of the reference material to agree with the corrected
+    pose, and a 20-percentage-point advantage over the group prediction. The
+    large margin deliberately excludes partially occluded or near-tied views.
+    Depth must agree within the existing two-noise-band visibility allowance.
+    """
+    if observation is None:
+        return None
+    proposed, predicted = _pose(decision.get("pose")), _pose(group_pose)
+    if proposed is None or predicted is None:
+        return None
+    reference, depth, mask, intr = observation
+    ref = np.asarray(reference, dtype=float).reshape(-1, 3)
+    if not len(ref) or depth is None or mask is None or intr is None:
+        return None
+
+    def support(pose):
+        import cv2
+
+        pts = ref @ pose[:3, :3].T + pose[:3, 3]
+        z = pts[:, 2]
+        uv = np.rint(
+            pts[:, :2] / np.maximum(z[:, None], 1e-9) * [intr["fx"], intr["fy"]] + [intr["cx"], intr["cy"]]
+        ).astype(int)
+        h, w = depth.shape
+        valid = (z > 0) & (uv[:, 0] >= 0) & (uv[:, 0] < w) & (uv[:, 1] >= 0) & (uv[:, 1] < h)
+        uv, z = uv[valid], z[valid]
+        if not len(uv):
+            return 0.0
+        interior = cv2.erode(np.asarray(mask, np.uint8), np.ones((MASK_EROSION, MASK_EROSION), np.uint8))
+        measured = np.asarray(depth)[uv[:, 1], uv[:, 0]]
+        agreed = (interior[uv[:, 1], uv[:, 0]] > 0) & (measured > 0) & (np.abs(measured - z) <= 2 * noise_m)
+        return float(agreed.sum() / len(ref))
+
+    proposal_support, group_support = support(proposed), support(predicted)
+    if proposal_support < 0.8 or proposal_support - group_support < 0.2:
+        return None
+    return {
+        "reason": "current RGB-D mask and depth support the pose over group motion",
+        "pose_support": proposal_support,
+        "group_support": group_support,
+        "reference_points": len(ref),
     }
 
 
@@ -186,6 +243,7 @@ class GroupMotionReference:
             "mode": "recent" if selected is recent else "fixed",
             "fixed": fixed,
             "recent": recent,
+            "predicted_pose": (recent_pose if selected is recent else fixed_pose).tolist(),
             "group_pose": group.tolist(),
         }
 

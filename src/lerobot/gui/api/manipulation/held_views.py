@@ -391,7 +391,7 @@ async def measure(
     return result, "stopped" if stopped() else problem, attempts
 
 
-async def watch(demo, obj, t_bc, prediction, stopped, publish, log):
+async def watch(demo, obj, t_bc, prediction, stopped, publish, log, prepared_references=None):
     """Keep measuring during motion; one job at a time, using capture-time FK.
 
     Camera publication and encoder times share the host perf-counter clock.
@@ -409,8 +409,12 @@ async def watch(demo, obj, t_bc, prediction, stopped, publish, log):
     kin = copy.deepcopy(original)
     last = None
     try:
-        bank = await asyncio.get_running_loop().run_in_executor(
-            runtime._RENDER_EXECUTOR, prepare_references, demo, obj, t_bc
+        bank = (
+            await prepared_references
+            if prepared_references is not None
+            else await asyncio.get_running_loop().run_in_executor(
+                runtime._RENDER_EXECUTOR, prepare_references, demo, obj, t_bc
+            )
         )
     except Exception as exc:
         log(f"held reference preparation: {type(exc).__name__}: {exc}", [])
@@ -423,22 +427,30 @@ async def watch(demo, obj, t_bc, prediction, stopped, publish, log):
 
     async def capture(_obj):
         nonlocal last
-        snapshot = await camera.timed_frame(last)
-        if snapshot is None:
-            raise RuntimeError("camera cannot supply timestamped frames for a moving held observation")
-        rgb, depth, intr, stamp = snapshot
-        last = stamp
-        # Wait for a right bracket, at most the existing history matching budget.
-        until = time.monotonic() + runtime.HISTORY_MATCH_S
-        q = jog.joints_at(stamp, 2.0 / jog.HZ)
-        while q is None and time.monotonic() < until and not stopped():
-            await asyncio.sleep(runtime.ACT_TICK_S)
+        # A camera frame inside a delayed motor read has no valid bracket even
+        # after the next tick arrives. Try a newer frame rather than abandoning
+        # the entire held observation on that one bad sample.
+        deadline = time.monotonic() + runtime.HOLD_TRACK_WAIT_S
+        while not stopped() and time.monotonic() < deadline:
+            snapshot = await camera.timed_frame(last)
+            if snapshot is None:
+                raise RuntimeError("camera cannot supply timestamped frames for a moving held observation")
+            rgb, depth, intr, stamp = snapshot
+            last = stamp
+            until = min(deadline, time.monotonic() + runtime.HISTORY_MATCH_S)
             q = jog.joints_at(stamp, 2.0 / jog.HZ)
+            while q is None and time.monotonic() < until and not stopped():
+                await asyncio.sleep(runtime.ACT_TICK_S)
+                q = jog.joints_at(stamp, 2.0 / jog.HZ)
+            if q is not None:
+                break
+        else:
+            q = None
         if q is None:
             if stopped():
                 return None
             raise TimeoutError(
-                "no encoder samples bracket the camera frame within the synchronization tolerance"
+                "no encoder samples bracket a camera frame within the synchronization tolerance"
             )
         from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
 

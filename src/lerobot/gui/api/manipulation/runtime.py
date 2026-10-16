@@ -178,6 +178,7 @@ class _Track:
     done: asyncio.Event | None = None  # set when the in-flight worker result arrives
     task: asyncio.Task | None = None
     apply_task: asyncio.Task | None = None  # serialize verification, control updates, and recording
+    overlay_task: asyncio.Task | None = None  # display rendering never holds a control/verification slot
     slots: asyncio.Semaphore | None = None  # bound queued/processing frames to two
     epoch: int = 0  # stop/restart invalidates late results
     # (when the frame was read, certified, delta_cam) per frame, bounded. The frame's time, not the answer's: the
@@ -381,6 +382,11 @@ _RENDER_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
 # they must not occupy the track's only executor while the arm is moving.
 _TRACK_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
     max_workers=1, thread_name_prefix="manipulation-track"
+)
+
+
+_OVERLAY_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
+    max_workers=1, thread_name_prefix="manipulation-overlay"
 )
 
 

@@ -602,12 +602,19 @@ def main() -> None:
                 done[name] = {"ok": False, "reason": why}
                 print(f"{name}: {why}", flush=True)
                 continue
+            previous_ring = rings.get(name)
             idx_own = tapir.add(rgb, own)
-            rings[name] = np.asarray(tapir.add(rgb, borrowed), dtype=int)
+            new_ring = np.asarray(tapir.add(rgb, borrowed), dtype=int)
             centre = np.nanmedian(pts[mask], axis=0)
             pose = np.eye(4)
             pose[:3, 3] = centre
             tracker.add_object(name, idx_own, pose)
+            if previous_ring is not None:
+                tracker.retire_unowned(previous_ring)
+            rings[name] = new_ring
+            # Re-designation replaces both the object's points and its borrowed
+            # field. Drop the retired queries now, before the next GPU step.
+            tapir.drop(np.flatnonzero(tracker.retired))
             centres[name], outlines[name] = centre, scene.contour_3d(mask, pts)
             objects[name] = (outlines[name], centre, None)
             if name not in names:
@@ -807,6 +814,11 @@ def main() -> None:
             t0 = time.time()
             picture = scene.drawing(k, tracker, xyz, seen, objects, surfaces, base, world.quiet, wire=wire)
             row["ms"]["picture"] = round((time.time() - t0) * 1000, 1)  # the picture with its wireframe
+            picture["perf"] = {
+                **row["ms"],
+                "active_tracks": len(tapir.ids),
+                "processed_fps": round(fps, 1),
+            }
             img = scene.draw(
                 rgb,
                 k,
@@ -843,10 +855,20 @@ def main() -> None:
             if view is not None:  # objects asked for while it runs: designated between frames, on this one
                 asked, taken = view.take_requests()
                 if asked:
-                    view.designated.update(designate(rgb, pts, asked, taken=uv[seen]))
+                    available = seen.copy()
+                    for name in asked:
+                        if name in rings:
+                            old = rings[name]
+                            available[old[old < len(available)]] = False  # this field is about to be replaced
+                    view.designated.update(designate(rgb, pts, asked, taken=uv[available]))
                 view.served += taken
             if later and n >= args.designate_at:
-                designate(rgb, pts, later, taken=uv[seen])
+                available = seen.copy()
+                for name in later:
+                    if name in rings:
+                        old = rings[name]
+                        available[old[old < len(available)]] = False
+                designate(rgb, pts, later, taken=uv[available])
                 later = {}
     except KeyboardInterrupt:
         pass

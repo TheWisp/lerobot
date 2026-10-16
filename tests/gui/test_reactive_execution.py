@@ -702,6 +702,7 @@ def test_missing_encoder_bracket_is_logged_as_timing_failure_not_arm_disconnecti
     monkeypatch.setattr(jog, "kinematics", _TipKinematics)
     monkeypatch.setattr(jog, "joints_at", lambda *args: None)
     monkeypatch.setattr(runtime, "HISTORY_MATCH_S", 0)
+    monkeypatch.setattr(runtime, "HOLD_TRACK_WAIT_S", 0.01)
     monkeypatch.setattr(held_views, "prepare_references", lambda *args: [object()])
 
     async def frame(after):
@@ -724,6 +725,43 @@ def test_missing_encoder_bracket_is_logged_as_timing_failure_not_arm_disconnecti
     )
     assert len(logs) == 1 and "encoder samples bracket" in logs[0]
     assert not published
+
+
+def test_moving_hold_retries_new_camera_frame_after_motor_read_gap(monkeypatch):
+    from lerobot.gui.api.manipulation import camera, held_views, runtime
+
+    state = {"done": False}
+    seen = []
+    q = dict(zip(MOTOR_NAMES, [12.0, 0, 0, 0, 0, 0, 80], strict=True))
+    monkeypatch.setattr(jog, "kinematics", _TipKinematics)
+    monkeypatch.setattr(jog, "joints_at", lambda at, _gap: q if at == 124.0 else None)
+    monkeypatch.setattr(runtime, "HISTORY_MATCH_S", 0)
+    monkeypatch.setattr(held_views, "prepare_references", lambda *args: [object()])
+
+    async def frame(after):
+        seen.append(after)
+        return np.zeros((3, 3, 3)), np.ones((3, 3)), {}, 123.0 if after is None else 124.0
+
+    async def measure(*args, capture, **kwargs):
+        view = await capture("arbitrary")
+        assert view[3][0, 3] == pytest.approx(0.012)
+        state["done"] = True
+        return None, "", []
+
+    monkeypatch.setattr(camera, "timed_frame", frame)
+    monkeypatch.setattr(held_views, "measure", measure)
+    asyncio.run(
+        held_views.watch(
+            None,
+            "arbitrary",
+            np.eye(4),
+            lambda: np.eye(4),
+            lambda: state["done"],
+            lambda *args: None,
+            lambda *args: None,
+        )
+    )
+    assert seen == [None, 123.0]
 
 
 def test_free_waypoint_curve_brakes_at_endpoint_and_checks_incoming_velocity():

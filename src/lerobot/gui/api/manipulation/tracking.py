@@ -616,6 +616,8 @@ def _compare_track_poses(
             tol_deg=core.ACT_REACH_TOL_DEG,
             held=context.get("why") == "held",
             corrected_group_check=corrected_group,
+            observation=(ref, job.depth_m, mask, job.intr),
+            noise_m=core.POINT_NOISE_M,
         )
         check["elapsed_ms"] = (time.perf_counter() - started) * 1000
         checks.append(check)
@@ -802,10 +804,13 @@ async def _apply_track_result(job: runtime._Job) -> None:
                 tracker.accept()
     _log_pose_conflicts(checks, tr)
     status["pose_verification"] = checks
-    overlay = await asyncio.get_event_loop().run_in_executor(
-        runtime._TRACK_EXECUTOR, rendering._render_live, job.rgb, r, result, transported, teach, status
-    )
-    job.rendered_at = time.time()
+    pipelined = bool(job.extra.get("pipeline"))
+    overlay = None
+    if not pipelined:
+        overlay = await asyncio.get_running_loop().run_in_executor(
+            runtime._OVERLAY_EXECUTOR, rendering._render_live, job.rgb, r, result, transported, teach, status
+        )
+        job.rendered_at = time.time()
     if (
         job.result_received_at is not None
         and job.result_decoded_at is not None
@@ -815,9 +820,10 @@ async def _apply_track_result(job: runtime._Job) -> None:
             "worker_round_trip": round(1000 * (job.result_received_at - job.created), 1),
             "decode": round(1000 * (job.result_decoded_at - job.result_received_at), 1),
             "verify": round(1000 * (job.verified_at - job.result_decoded_at), 1),
-            "render": round(1000 * (job.rendered_at - job.verified_at), 1),
             **job.worker_timing_ms,
         }
+        if job.rendered_at is not None:
+            status["timing_ms"]["render"] = round(1000 * (job.rendered_at - job.verified_at), 1)
     with runtime._state.lock:
         stale = tr.job != job.id if epoch is None else tr.epoch != epoch or not tr.on
         if runtime._state.track is not tr or stale or runtime._state.teach is not teach:
@@ -836,7 +842,9 @@ async def _apply_track_result(job: runtime._Job) -> None:
             "depth_m": job.depth_m,
             "intr": job.intr,
         }
-        tr.last, tr.overlay = status, overlay
+        tr.last = status
+        if overlay is not None:
+            tr.overlay = overlay
         if tr.job == job.id:
             tr.job = None
         tr.history.append((job.created, result is not None, None if result is None else result["delta_cam"]))
@@ -850,8 +858,47 @@ async def _apply_track_result(job: runtime._Job) -> None:
                 (time.time(), job.rgb[::2, ::2].copy())
             )  # half size: a demo's video is a record, not evidence
         run, step = runtime._state.run, runtime._state.act.step
+    frame_index = len(run.frames) if run is not None else None
     if run is not None:
         run.frame(job, r, status, step, None if result is None else result["delta_cam"], transported)
+    if pipelined and (tr.overlay_task is None or tr.overlay_task.done()):
+        # The path overlay is display work. A slow draw must not hold the two
+        # worker/verification slots or delay a target update during contact.
+        render_status = dict(status)
+
+        async def draw_overlay() -> None:
+            try:
+                picture = await asyncio.get_running_loop().run_in_executor(
+                    runtime._OVERLAY_EXECUTOR,
+                    rendering._render_live,
+                    job.rgb,
+                    r,
+                    result,
+                    transported,
+                    teach,
+                    render_status,
+                )
+            except Exception:
+                logger.exception("Could not draw live tracking overlay")
+                return
+            job.rendered_at = time.time()
+            stages = render_status.get("render_stages_ms")
+            if run is not None and frame_index is not None and frame_index < len(run.frames):
+                run.frames[frame_index]["t_rendered"] = job.rendered_at
+                if stages is not None:
+                    run.frames[frame_index]["render_stages_ms"] = stages
+                timing = run.frames[frame_index].get("timing_ms")
+                if timing is not None and job.verified_at is not None:
+                    timing["render"] = round(1000 * (job.rendered_at - job.verified_at), 1)
+            with runtime._state.lock:
+                if runtime._state.track is tr and tr.epoch == epoch and runtime._state.teach is teach:
+                    tr.overlay = picture
+                    if tr.last is status:
+                        status["render_stages_ms"] = stages
+
+        tr.overlay_task = asyncio.create_task(draw_overlay())
+    elif pipelined:
+        status["overlay_skipped"] = True
     if epoch is None and tr.done is not None:
         tr.done.set()
 

@@ -611,6 +611,20 @@ class GroupTracker:
             self._grow(int(np.max(tracks)) + 1)
             self.owned[np.asarray(tracks, dtype=int)] = True
 
+    def retire_unowned(self, tracks: np.ndarray) -> None:
+        """Remove obsolete borrowed tracks when an object's surrounding field is reseeded.
+
+        Their old corners are still visible, so the normal unseen/failed-fit retirement
+        would retain them indefinitely and make every later TAPIR step more expensive.
+        """
+        ids = np.asarray(tracks, dtype=int)
+        ids = ids[(ids >= 0) & (ids < len(self.group_of))]
+        ids = ids[~self.owned[ids]]
+        self.retired[ids] = True
+        self.group_of[ids] = -1
+        self.anchor[ids] = np.nan
+        self.rest_group[ids] = -1
+
     def _place_objects(self, xyz: np.ndarray, seen: np.ndarray) -> None:
         """Each object: carried by the group it rests in, then placed by its own points when the act's rule holds for
         them (``own_share`` of its modelled points seen in the group most of its tracks are in, and the inliers of

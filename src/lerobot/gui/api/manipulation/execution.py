@@ -611,6 +611,7 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
                         functools.partial(hold_stopped, hold_generation),
                         publish_hold,
                         log_hold,
+                        prepared_references=held_bank_task,
                     )
                 )
                 beside.append(hold_watch)
@@ -959,7 +960,17 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
             grip_problem = carry_problem = ""
             act.place = None
             hold_task = None
+            held_bank_task = None
             if carries:
+                if act.correct_hold:
+
+                    async def prepare_held_bank(demo=demo, held_obj=held_obj):
+                        return await asyncio.get_running_loop().run_in_executor(
+                            runtime._RENDER_EXECUTOR, held_views.prepare_references, demo, held_obj, t_bc
+                        )
+
+                    held_bank_task = asyncio.create_task(prepare_held_bank())
+                    beside.append(held_bank_task)
 
                 async def demo_holds(
                     demo=demo, held_obj=held_obj

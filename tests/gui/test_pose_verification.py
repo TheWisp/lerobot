@@ -121,6 +121,51 @@ def test_group_conflict_with_partial_surface_cannot_publish_a_control_pose(monke
     assert not check["accepted"] and p.runtime._state.test is None
 
 
+def test_visible_rgbd_surface_can_resolve_wrong_group_motion():
+    import cv2
+
+    x, y = np.meshgrid(np.linspace(-0.02, 0.02, 21), np.linspace(-0.02, 0.02, 21))
+    reference = np.column_stack((x.ravel(), y.ravel(), np.full(x.size, 0.4)))
+    intr = {"fx": 400.0, "fy": 400.0, "cx": 100.0, "cy": 100.0}
+    moved = np.eye(4)
+    moved[0, 3] = 0.024
+    mask = np.zeros((200, 200), np.uint8)
+    cv2.rectangle(mask, (102, 78), (146, 122), 1, -1)
+    depth = np.zeros_like(mask, dtype=float)
+    depth[mask > 0] = 0.4
+    group = {
+        "state": "disagreement",
+        "predicted_pose": np.eye(4).tolist(),
+    }
+    decision = {"state": "corrected", "pose": moved.tolist(), "observed_dof": 3}
+    accepted = pose_verification.with_group_consistency(
+        decision,
+        group,
+        np.zeros(3),
+        tol_m=0.003,
+        tol_deg=3.0,
+        corrected_group_check=group,
+        observation=(reference, depth, mask, intr),
+        noise_m=0.003,
+    )
+    assert accepted["pose"] == decision["pose"]
+    assert accepted["group_override"]["pose_support"] > accepted["group_override"]["group_support"]
+
+    # A partly visible surface cannot settle a disagreement this way.
+    mask[:, 124:] = 0
+    obscured = pose_verification.with_group_consistency(
+        decision,
+        group,
+        np.zeros(3),
+        tol_m=0.003,
+        tol_deg=3.0,
+        corrected_group_check=group,
+        observation=(reference, depth, mask, intr),
+        noise_m=0.003,
+    )
+    assert obscured["state"] == "rejected" and obscured["pose"] is None
+
+
 def test_surface_correction_is_checked_against_group_motion_before_control(monkeypatch, tmp_path):
     job, teach, _, track = setup_case(monkeypatch, tmp_path)
     job.result["delta"] = np.eye(4)

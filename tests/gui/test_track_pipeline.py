@@ -3,12 +3,55 @@
 import asyncio
 import io
 import json
+import threading
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 from starlette.requests import Request
 
 from lerobot.gui.api.manipulation import runtime, tracking, worker
+
+
+@pytest.mark.asyncio
+async def test_slow_overlay_does_not_delay_pipelined_pose_application(monkeypatch):
+    old = (runtime._state.track, runtime._state.teach, runtime._state.run)
+    tr = runtime._Track(on=True, epoch=1)
+    teach = SimpleNamespace(keypoints={"concept": "object"})
+    runtime._state.track, runtime._state.teach, runtime._state.run = tr, teach, None
+    drawing, release = threading.Event(), threading.Event()
+    monkeypatch.setattr(tracking, "_verify_track_poses", lambda *args: [])
+
+    def draw(*args):
+        drawing.set()
+        assert release.wait(2)
+        return b"image"
+
+    monkeypatch.setattr(tracking.rendering, "_render_live", draw)
+    job = runtime._Job(
+        id="frame",
+        kind="track",
+        concept="object",
+        rgb=np.zeros((2, 2, 3), np.uint8),
+        depth_m=np.ones((2, 2), np.float32),
+        intr={},
+        created=0.0,
+        extra={"pipeline": True, "track_epoch": 1},
+        result={"ok": False, "algo": "p2p", "state": "lost"},
+    )
+    try:
+        await asyncio.wait_for(tracking._apply_track_result(job), 1)
+        assert tr.last["state"] == "lost"
+        assert tr.overlay is None and job.rendered_at is None
+        await asyncio.wait_for(asyncio.to_thread(drawing.wait, 1), 2)
+        release.set()
+        await asyncio.wait_for(tr.overlay_task, 2)
+        assert tr.overlay == b"image" and job.rendered_at is not None
+    finally:
+        release.set()
+        if tr.overlay_task is not None:
+            await tr.overlay_task
+        runtime._state.track, runtime._state.teach, runtime._state.run = old
 
 
 @pytest.mark.asyncio

@@ -371,6 +371,18 @@ def test_a_body_displaced_once_does_not_split_off():
     assert not any(src == t.group_of[0] and f <= 45 for f, src, *_ in t.split_log), t.split_log
 
 
+def test_replaced_borrowed_field_retires_without_touching_object_tracks():
+    """Re-designating an object must not leave its old surrounding field on the GPU."""
+    xyz = _cloud(20, (0.0, 0.0, 0.45), (0.1, 0.1, 0.01))
+    t = GroupTracker(min_group=4)
+    t.add_object("target", np.arange(16, 20), _pose(xyz[16:].mean(axis=0)))
+    _run(t, [(xyz, np.ones(20, bool))] * 5)
+    t.retire_unowned(np.arange(20))
+    assert t.retired[:16].all() and (t.group_of[:16] == -1).all()
+    assert not t.retired[16:20].any(), "the object's own points remain active"
+    assert np.isnan(t.anchor[:16]).all()
+
+
 def test_a_hidden_object_leaves_with_what_it_rests_on_when_that_splits_off():
     """A desk of 300 points around a tray of 100, one group while still; a cube of 30 on the tray hides under a
     sheet at frame 15. From frame 30 the tray slides 50 mm: the tray splits off the desk's group, and the cube's
