@@ -31,9 +31,10 @@ from lerobot.showservo import motion as core, symmetry
 
 from . import acquisition, holds, recording, runtime
 
-# An act finds its object afresh before the arm moves, so a confirmed recovered pose meets a new find every time. It
-# stays confirmed while the new find puts the object where the confirmed one did. Finds of a still dowel on 2026-10-16
-# moved its centre and ends by at most 3.8 mm between them; its other end assignment moved them 104 mm.
+# An act finds its objects afresh before the arm moves. A new find whose ends are in doubt keeps the ends of the find
+# the act started from (measured, or confirmed by the operator) while it puts the object in the same place. Finds of a
+# still dowel on 2026-10-16 moved its centre and ends by at most 4.5 mm between them; its other end assignment moved
+# them 104 mm.
 RECONFIRM_M = 0.015
 
 
@@ -59,15 +60,14 @@ def _recovered_pose_problem(obj: str, found: dict[str, Any], *, preview: bool = 
     state = runtime._state
     act = state.act
     teach, demo = state.teach, state.demo
+    if act.on and _same_place(demo, obj, act.start_poses.get(obj), found.get("delta")):
+        return ""  # where the act's starting find, whose ends were measured or confirmed, put it
     if act.on and act.force_recovered_pose and obj == act.recovered_pose_object:
         if (
             demo is not None
             and teach is not None
             and found is teach.keypoints.get("ref")
-            and (
-                act.recovered_pose_token == _recovered_pose_token(demo, teach)
-                or _same_place(demo, obj, act.recovered_pose, found.get("delta"))
-            )
+            and act.recovered_pose_token == _recovered_pose_token(demo, teach)
         ):
             return ""
         return (
@@ -78,10 +78,10 @@ def _recovered_pose_problem(obj: str, found: dict[str, Any], *, preview: bool = 
     )
 
 
-def _same_place(demo: runtime._Demo, obj: str, a: Any, b: Any) -> bool:
+def _same_place(demo: runtime._Demo | None, obj: str, a: Any, b: Any) -> bool:
     """Whether two finds' motions (camera frame) put ``obj`` in one place: none of the points a find carries
     (tracking._view_points) lands more than :data:`RECONFIRM_M` apart."""
-    if a is None or b is None:
+    if a is None or b is None or demo is None or demo.objects.get(obj, {}).get("status") != "done":
         return False
     from . import tracking
 

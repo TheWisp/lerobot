@@ -289,7 +289,7 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
             for name in more:
                 if founds[name].get("delta") is not None:
                     acquisition._store_located(name, {**founds[name], "tracking": True})
-            # A recovered find has passed _find_afresh only where the confirmed one put the object
+            # A recovered find has passed _find_afresh only where the act's starting find put the object
             # (planning._recovered_pose_problem). One that told the object's ends apart leaves no ambiguity to bypass.
             fresh = ((teach.keypoints.get("ref") if teach is not None else None) or {}).get(
                 "surface_constraint"
@@ -1687,7 +1687,18 @@ async def act_start(body: ActBody, request: Request) -> dict:
         act.force_recovered_pose = bool(problem)
         act.recovered_pose_token = token if problem else None
         act.recovered_pose_object = planning._session_object(demo) if problem else None
-        act.recovered_pose = np.asarray(reference["delta"], dtype=float) if problem else None
+        # Finds whose ends are settled: measured, or (the object just checked) confirmed by the operator.
+        settled = {
+            name: found
+            for name, found in runtime._state.located.items()
+            if (found.get("surface_constraint") or {}).get("state") != "recovered"
+        }
+        settled[planning._session_object(demo) or ""] = reference
+        act.start_poses = {
+            name: np.asarray(found["delta"], dtype=float)
+            for name, found in settled.items()
+            if name and found.get("ok") and found.get("delta") is not None
+        }
         act.finds = []
         act.on, act.ok, act.reason, act.step, act.stop_requested, act.progress, act.speed = (
             True,

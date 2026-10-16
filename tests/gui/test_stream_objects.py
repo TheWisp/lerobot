@@ -1396,6 +1396,16 @@ def test_act_refuses_recovered_axis_pose_without_a_checked_grasp_choice(client, 
             problem = manipulation.planning._recovered_pose_problem("gamepad", refound.keypoints["ref"])
             assert (problem == "") is kept, (delta, problem)
             assert kept or "changed after confirmation" in problem
+
+        # An act that started from a measured find (nothing to confirm) whose own find comes back ambiguous: the
+        # same place keeps the measured ends; elsewhere it is the usual refusal.
+        act = manipulation.runtime._state.act
+        act.force_recovered_pose, act.recovered_pose_object = False, None
+        for delta, kept in ((about_middle(2.0, 0.003), True), (about_middle(180.0), False)):
+            ref = {**teach.keypoints["ref"], "delta": delta}
+            problem = manipulation.planning._recovered_pose_problem("gamepad", ref)
+            assert (problem == "") is kept, (delta, problem)
+            assert kept or "collision-checked grasp selection" in problem
     finally:
         with manipulation.runtime._state.lock:
             manipulation.runtime._state.demo = manipulation.runtime._state.teach = None
