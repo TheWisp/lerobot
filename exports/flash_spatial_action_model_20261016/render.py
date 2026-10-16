@@ -374,7 +374,7 @@ def title_frames(summary=False):
         if summary:
             text(im, (130, 205), "One demo defines object-relative goals", 60, bold=True)
             text(im, (130, 325), "Live vision updates poses · planning moves the arm", 45, ACCENT)
-            text(im, (130, 460), "New objects: no CAD, no scan, no fine-tuning", 52, bold=True)
+            text(im, (130, 460), "Model-free objects: no CAD, scan or fine-tuning", 50, bold=True)
             text(im, (130, 590), "New poses · viewpoints · occlusion · perturbations", 47, bold=True)
             text(im, (130, 725), "Real time", 66, bold=True)
         else:
