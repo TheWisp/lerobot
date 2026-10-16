@@ -33,7 +33,7 @@ from pydantic import BaseModel
 
 from lerobot.showservo import motion as core, pose_verification, surface_constraint, symmetry
 
-from . import acquisition, camera, planning, recording, rendering, runtime, worker
+from . import acquisition, camera, groups, planning, recording, rendering, runtime, worker
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -820,6 +820,8 @@ async def _apply_track_result(job: runtime._Job) -> None:
         check["raw_p2p_used"] = bool(
             check["accepted"] and check.get("constraint", {}).get("state") == "unchanged"
         )
+        if check["accepted"]:
+            groups._accept_transport(check, job.created)
         if check["accepted"] and (check.get("groups") or {}).get("context", {}).get("why") != "held":
             tracker = tr.corrected_verification.get(check["object"])
             if tracker is not None:

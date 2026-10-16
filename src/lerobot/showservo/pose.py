@@ -438,15 +438,22 @@ def main_plane_normal(
     assert len(pts) >= 3, "a plane needs three points"
     rng = np.random.default_rng(seed)
     best, best_n = -1, np.array([0.0, 0.0, 1.0])
-    for _ in range(tries):
-        a, b, c = pts[rng.choice(len(pts), 3, replace=False)]
-        n = np.cross(b - a, c - a)
-        if np.linalg.norm(n) < 1e-12:
-            continue
-        n /= np.linalg.norm(n)
-        count = int((np.abs((pts - a) @ n) < tol_m).sum())
-        if count > best:
-            best, best_n = count, n
+    # Preserve the same RNG draws and first-best tie rule. Batch the numerical
+    # work instead of invoking small NumPy operations 300 times under the GIL.
+    # Chunks bound temporary memory independently of the number of trials.
+    for offset in range(0, tries, 32):
+        triples = np.asarray([rng.choice(len(pts), 3, replace=False) for _ in range(min(32, tries - offset))])
+        a, b, c = (pts[triples[:, i]] for i in range(3))
+        normals = np.cross(b - a, c - a)
+        lengths = np.linalg.norm(normals, axis=1)
+        valid = lengths >= 1e-12
+        normals /= np.where(valid, lengths, 1.0)[:, None]
+        distances = np.einsum("pti,ti->pt", pts[:, None, :] - a[None, :, :], normals)
+        counts = (np.abs(distances) < tol_m).sum(axis=0)
+        counts[~valid] = -1
+        index = int(np.argmax(counts))
+        if counts[index] > best:
+            best, best_n = int(counts[index]), normals[index].copy()
     return best_n
 
 

@@ -226,6 +226,7 @@ async def _designate_in_groups(
                     for name in objects:
                         feed.frames.pop(name, None)
                         feed.evidence.pop(name, None)
+                        feed.transport_blocked.pop(name, None)
                         feed.floor[name] = since
                 return "", since
         if proc is not None and proc.poll() is not None:
@@ -288,6 +289,26 @@ async def _groups_feed_pump() -> None:
                 feed.task = None
 
 
+def _accept_transport(check: dict, stamp: float) -> None:
+    """Do not carry an accepted visual anchor with the group it just overruled.
+
+    A lagging group can catch up later and otherwise apply the same motion twice.
+    Resume only when a subsequent accepted visual observation agrees with group
+    motion. Missing evidence cannot certify that the conflict has resolved.
+    """
+    name = check["object"]
+    with runtime._state.lock:
+        blocked = runtime._state.groups_feed.transport_blocked
+        conflict = bool((check.get("constraint") or {}).get("group_override"))
+        consistent = (check.get("corrected_groups") or {}).get("state") == "consistent"
+        if conflict or (name in blocked and not consistent):
+            blocked[name] = stamp
+            check["group_transport"] = "withheld: accepted visual pose overrides conflicting group motion"
+        else:
+            blocked.pop(name, None)
+            check["group_transport"] = "enabled"
+
+
 def _carried(
     name: str,
     since: float,
@@ -297,6 +318,8 @@ def _carried(
     """How the point groups moved ``name`` since the frame read at ``since``, camera frame (:func:`core.carried_motion`);
     no motion without them."""
     with runtime._state.lock:
+        if runtime._state.groups_feed.transport_blocked.get(name) == since:
+            return np.eye(4)
         frames = (
             list(runtime._state.groups_feed.frames.get(name, ())) if runtime._state.groups_with_acts else []
         )
@@ -312,6 +335,8 @@ def _motion_supported(name: str) -> bool:
     """
     with runtime._state.lock:
         feed = runtime._state.groups_feed
+        if name in feed.transport_blocked:
+            return False
         drawing = feed.drawing or {}
         context = (drawing.get("objects") or {}).get(name) or {}
         group = (drawing.get("groups") or {}).get(str(context.get("group"))) or {}
