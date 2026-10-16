@@ -38,6 +38,19 @@ STACKS = [
     ("20261012_194250", 33.5),
     ("20261013_211511", 18.7),
 ]
+PLACEMENT_CENTRES = {
+    "20261011_080249": (290, 271),
+    "20261011_233111": (362, 251),
+    "20261012_041448": (306, 273),
+    "20261012_042101": (315, 305),
+    "20261012_042338": (291, 314),
+    "20261012_042642": (282, 324),
+    "20261012_192802": (343, 294),
+    "20261012_194250": (330, 292),
+    "20261013_211511": (334, 282),
+}
+GRID_SECONDS = 7
+GRID_CROP_SIZE = (320, 164)
 
 # Keep the actual recorded overlay geometry. Only the diagnostic prose and the
 # appended verification panel are omitted in this presentation, in this process.
@@ -53,24 +66,21 @@ def text(im, xy, value, size, fill=WHITE, bold=False, anchor=None):
     ImageDraw.Draw(im).text(xy, value, font=font(size, bold), fill=fill, anchor=anchor)
 
 
-def chrome(title, detail, footer=""):
+def chrome(title, detail=""):
     im = Image.new("RGB", (W, H), BG)
-    text(im, (36, 25), title, 35, bold=True)
-    text(im, (1884, 28), "FLASH", 29, ACCENT, True, "ra")
-    text(im, (36, 73), detail, 23, MUTED)
-    if footer:
-        text(im, (36, 1046), footer, 20, MUTED)
+    text(im, (36, 22), title, 35, bold=True)
+    if detail:
+        text(im, (1884, 28), detail, 25, MUTED, anchor="ra")
     return cv2.cvtColor(np.asarray(im), cv2.COLOR_RGB2BGR)
 
 
 def scene_frame(bgr, base, progress):
     im = base.copy()
     # Retain the complete image, with its original aspect ratio.
-    height = 912
+    height = 960
     width = round(bgr.shape[1] * height / bgr.shape[0])
     x = (W - width) // 2
-    im[120 : 120 + height, x : x + width] = cv2.resize(bgr, (width, height), interpolation=cv2.INTER_LINEAR)
-    cv2.rectangle(im, (x, 1034), (x + int(width * progress), 1037), ACCENT[::-1], -1)
+    im[88 : 88 + height, x : x + width] = cv2.resize(bgr, (width, height), interpolation=cv2.INTER_LINEAR)
     return im
 
 
@@ -142,7 +152,8 @@ class Stack:
         self.points = replay._replay_points(self.meta, demo)
         assert self.points.get("cube") is not None
         self.times = [f["t_frame"] - self.meta["t_started"] for f in self.meta["frames"]]
-        self.start = release - 6.0
+        self.start = 35.0 if name == "20261012_194250" else release - 0.5
+        self.centre = PLACEMENT_CENTRES[name]
         self.last = None
         self.raw = self.drawn = None
 
@@ -151,48 +162,45 @@ class Stack:
         i = min(i, len(self.times) - 1)
         if i != self.last:
             raw = cv2.imread(str(self.run / "frames" / f"{i:06d}.jpg"))
-            drawn = replay._replay_draw(self.run, self.meta, i, self.points)
-            # A fixed crop, identical throughout each clip: retain the placement
-            # region, finger approach, release and retreat. No synthetic view.
-            self.raw = cv2.resize(raw[88:432, 48:744], (616, 304))
-            self.drawn = cv2.resize(drawn[88:432, 48:744], (616, 304))
+            drawn = raw.copy()
+            # Keep just the recorded cube silhouette in the grid. Removing the
+            # point cloud, axes, wireframe and labels makes the actual result legible.
+            frame = self.meta["frames"][i]
+            with np.load(self.run / "frames" / f"{i:06d}.npz") as z:
+                pose = z.get("onto_held")
+                for k, held in enumerate(frame.get("held") or []):
+                    if held["object"] == "cube":
+                        pose = z.get(f"held_{k}")
+                if pose is not None:
+                    mask = rendering._found_mask(self.meta["intr"], self.points["cube"], pose, raw.shape)
+                    if mask is not None:
+                        contours, _ = cv2.findContours(
+                            mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+                        )
+                        cv2.drawContours(drawn, contours, -1, rendering.runtime.FOUND_COLOUR, 1, cv2.LINE_AA)
+            cx, cy = self.centre
+            cw, ch = GRID_CROP_SIZE
+            crop = np.s_[cy - ch // 2 : cy + ch // 2, cx - cw // 2 : cx + cw // 2]
+            self.raw = cv2.resize(raw[crop], (616, 316))
+            self.drawn = cv2.resize(drawn[crop], (616, 316))
             self.last = i
-        return self.drawn if overlay else self.raw
+        alpha = float(np.clip(4.0 - t, 0, 1)) if overlay else 0.0
+        return cv2.addWeighted(self.drawn, alpha, self.raw, 1 - alpha, 0)
 
 
 def grid(stacks, overlay):
-    detail = (
-        "Nine placements · orange outline: estimated cube pose, including when occluded"
-        if overlay
-        else "Nine placements · raw camera views"
-    )
-    base = chrome(
-        "Autonomous, 1x speed",
-        detail,
-        "Independent runs aligned around release · original capture cadence · final-frame holds",
-    )
-    for n in range(12 * FPS):
+    base = chrome("Different rollouts", "Autonomous, 1x speed")
+    for n in range(GRID_SECONDS * FPS):
         canvas = base.copy()
         for k, stack in enumerate(stacks):
-            x, y = 24 + (k % 3) * 628, 110 + (k // 3) * 316
-            canvas[y : y + 304, x : x + 616] = stack.frame(n / FPS, overlay)
-            cv2.rectangle(canvas, (x + 7, y + 7), (x + 45, y + 33), (20, 25, 30), -1)
-            cv2.putText(
-                canvas,
-                f"{k + 1:02d}",
-                (x + 13, y + 26),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.53,
-                (235, 240, 245),
-                1,
-                cv2.LINE_AA,
-            )
+            x, y = 24 + (k % 3) * 628, 84 + (k // 3) * 328
+            canvas[y : y + 316, x : x + 616] = stack.frame(n / FPS, overlay)
         yield canvas
 
 
 def demo_frames(demo):
     times = np.loadtxt(ROOT / "insertion/recording/times.txt")
-    base = chrome("Single demo", "One human demonstration · segmentation masks only")
+    base = chrome("Single demo")
     for n in range(13 * FPS):
         t = demo.t0 + 4.5 + n / FPS
         i = max(0, int(np.searchsorted(times, t, side="right") - 1))
@@ -217,7 +225,7 @@ def act_frames(demo, overlay):
     if overlay:
         rows = rows[round(5.5 * FPS) : round(24.5 * FPS)]
     stamps = [f.get("t_result", f["t_frame"]) for f in META["frames"]]
-    rawbase = chrome("Autonomous, 1x speed", "Complete rollout · raw camera video")
+    rawbase = chrome("Autonomous, 1x speed", "Raw")
     olddetail, base = None, None
     for n, row in enumerate(rows):
         i = row.get("image")
@@ -249,12 +257,11 @@ def act_frames(demo, overlay):
                 if t < 21.5
                 else "Release and retreat"
             )
-            detail = "Tracking overlay  /  " + event
+            detail = event
             if detail != olddetail:
                 base = chrome(
                     "Autonomous, 1x speed",
                     detail,
-                    "Recorded estimates: segmentation · object poses · rigid motion groups",
                 )
                 olddetail = detail
         else:
@@ -264,35 +271,31 @@ def act_frames(demo, overlay):
 
 def title_frames(summary=False):
     cap = cv2.VideoCapture(str(OUT / "stacking_grid_raw.mp4"))
-    count = 9 * FPS if summary else 105
+    count = 105 if summary else 45
+    if summary:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, GRID_SECONDS * FPS - count)
     for _n in range(count):
         ok, bgr = cap.read()
         assert ok
         # Reuse only the footage area, without its labels, as an animated backdrop.
-        bgr = cv2.resize(bgr[110:1046, 24:1896], (W, H))
-        bgr = cv2.GaussianBlur(bgr, (0, 0), 18)
-        bgr = (bgr.astype(float) * 0.28 + np.asarray(BG[::-1]) * 0.35).clip(0, 255).astype(np.uint8)
+        bgr = cv2.resize(bgr[84:1056, 24:1896], (W, H))
+        bgr = cv2.GaussianBlur(bgr, (0, 0), 9)
+        bgr = (bgr.astype(float) * 0.32 + np.asarray(BG[::-1]) * 0.35).clip(0, 255).astype(np.uint8)
         im = Image.fromarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))
-        draw = ImageDraw.Draw(im)
-        draw.rectangle((116, 180, 198, 188), fill=ACCENT)
-        text(im, (110, 224), "FLASH", 112, bold=True)
-        text(im, (116, 361), "A Spatial-Action Model", 54)
         if summary:
-            text(im, (116, 535), "01", 29, ACCENT, True)
-            text(im, (196, 526), "Object-pose and camera-viewpoint generalization", 38, bold=True)
-            text(im, (196, 582), "from a single demonstration", 34, MUTED)
-            text(im, (116, 704), "02", 29, ACCENT, True)
-            text(im, (196, 695), "Robustness to occlusion and perturbations", 38, bold=True)
-            text(im, (116, 939), "Recorded real-world examples", 24, MUTED)
+            text(im, (160, 330), "Single-demo generalization", 68, bold=True)
+            text(im, (160, 425), "Object poses · Camera viewpoints", 52, ACCENT)
+            text(im, (160, 620), "Robust to occlusion & perturbations", 64, bold=True)
         else:
-            text(im, (116, 537), "One demonstration. New object configurations.", 34, MUTED)
-            text(im, (116, 935), "Real robot · real-time playback", 26, ACCENT)
+            text(im, (W // 2, 320), "FLASH", 172, bold=True, anchor="ma")
+            text(im, (W // 2, 550), "A Spatial-Action Model", 70, anchor="ma")
         yield cv2.cvtColor(np.asarray(im), cv2.COLOR_RGB2BGR)
     cap.release()
 
 
 def main():
     insertion, stacking = _demo(ROOT / "insertion"), _demo(ROOT / "pick_place")
+    stacks = [Stack(n, r, stacking) for n, r in STACKS]
     manifest = {
         "title": "FLASH: A Spatial-Action Model",
         "fps": FPS,
@@ -303,21 +306,24 @@ def main():
         "controller_speed_during_recording": 2.0,
         "demo_cut_seconds": [4.5, 17.5],
         "overlay_cut_seconds": [5.5, 24.5],
-        "grid_seconds": 12.0,
+        "edit_revision": 2,
+        "grid_seconds": GRID_SECONDS,
         "grid_layout": [3, 3],
-        "grid_release_alignment_seconds": 6.0,
-        "grid_crop_xyxy": [48, 88, 744, 432],
+        "grid_crop_size": GRID_CROP_SIZE,
+        "grid_overlay_fade_seconds": [3, 4],
+        "title_seconds": 1.5,
+        "summary_seconds": 3.5,
         "grid_sources": [
             {
-                "run": str(ROOT / "pick_place/acts" / n),
-                "start_seconds": r - 6,
-                "end_seconds": r + 6,
-                "release_marker_seconds": r,
+                "run": str(s.run),
+                "start_seconds": s.start,
+                "end_seconds": s.start + GRID_SECONDS,
+                "crop_centre": s.centre,
             }
-            for n, r in STACKS
+            for s in stacks
         ],
         "timing": "Camera timeline at 30 Hz; latest available recorded async result. Older grid clips use recorded t_frame timestamps and hold frames, with no optical-flow interpolation. Last frame held where a source ends.",
-        "overlay": "Existing replay drawing, with diagnostic prose and verification panel omitted. Cube outline uses recorded accepted/predicted pose, not a newly inferred ground truth.",
+        "overlay": "Insertion uses existing replay drawing without diagnostic prose/panel. Grid shows only the recorded cube silhouette, fading to raw footage during retreat. Cube pose is a recorded accepted/predicted estimate, not ground truth.",
         "audit": {
             "completed": True,
             "visually_observed_insertion": True,
@@ -335,14 +341,13 @@ def main():
         "no_robot_or_server_access": True,
     }
     (OUT / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
-    stacks = [Stack(n, r, stacking) for n, r in STACKS]
-    encode("stacking_grid_overlay.mp4", grid(stacks, True), 360)
-    encode("stacking_grid_raw.mp4", grid(stacks, False), 360)
+    encode("stacking_grid_overlay.mp4", grid(stacks, True), GRID_SECONDS * FPS)
+    encode("stacking_grid_raw.mp4", grid(stacks, False), GRID_SECONDS * FPS)
     encode("01_single_demo.mp4", demo_frames(insertion), 390)
     encode("02_autonomous_raw.mp4", act_frames(insertion, False), len(TIMELINE["rows"]))
     encode("03_autonomous_overlay.mp4", act_frames(insertion, True), 570)
-    encode("00_title.mp4", title_frames(), 105)
-    encode("05_summary.mp4", title_frames(True), 270)
+    encode("00_title.mp4", title_frames(), 45)
+    encode("05_summary.mp4", title_frames(True), 105)
     names = [
         "00_title.mp4",
         "01_single_demo.mp4",

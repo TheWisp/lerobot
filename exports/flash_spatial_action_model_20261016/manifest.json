@@ -17,76 +17,107 @@
     5.5,
     24.5
   ],
-  "grid_seconds": 12.0,
+  "edit_revision": 2,
+  "grid_seconds": 7,
   "grid_layout": [
     3,
     3
   ],
-  "grid_release_alignment_seconds": 6.0,
-  "grid_crop_xyxy": [
-    48,
-    88,
-    744,
-    432
+  "grid_crop_size": [
+    320,
+    164
   ],
+  "grid_overlay_fade_seconds": [
+    3,
+    4
+  ],
+  "title_seconds": 1.5,
+  "summary_seconds": 3.5,
   "grid_sources": [
     {
       "run": "/home/feit/.cache/huggingface/lerobot/demos/pick_place/acts/20261011_080249",
-      "start_seconds": 7.4,
-      "end_seconds": 19.4,
-      "release_marker_seconds": 13.4
+      "start_seconds": 12.9,
+      "end_seconds": 19.9,
+      "crop_centre": [
+        290,
+        271
+      ]
     },
     {
       "run": "/home/feit/.cache/huggingface/lerobot/demos/pick_place/acts/20261011_233111",
-      "start_seconds": 14.7,
-      "end_seconds": 26.7,
-      "release_marker_seconds": 20.7
+      "start_seconds": 20.2,
+      "end_seconds": 27.2,
+      "crop_centre": [
+        362,
+        251
+      ]
     },
     {
       "run": "/home/feit/.cache/huggingface/lerobot/demos/pick_place/acts/20261012_041448",
-      "start_seconds": 13.0,
-      "end_seconds": 25.0,
-      "release_marker_seconds": 19.0
+      "start_seconds": 18.5,
+      "end_seconds": 25.5,
+      "crop_centre": [
+        306,
+        273
+      ]
     },
     {
       "run": "/home/feit/.cache/huggingface/lerobot/demos/pick_place/acts/20261012_042101",
-      "start_seconds": 9.2,
-      "end_seconds": 21.2,
-      "release_marker_seconds": 15.2
+      "start_seconds": 14.7,
+      "end_seconds": 21.7,
+      "crop_centre": [
+        315,
+        305
+      ]
     },
     {
       "run": "/home/feit/.cache/huggingface/lerobot/demos/pick_place/acts/20261012_042338",
-      "start_seconds": 13.3,
-      "end_seconds": 25.3,
-      "release_marker_seconds": 19.3
+      "start_seconds": 18.8,
+      "end_seconds": 25.8,
+      "crop_centre": [
+        291,
+        314
+      ]
     },
     {
       "run": "/home/feit/.cache/huggingface/lerobot/demos/pick_place/acts/20261012_042642",
-      "start_seconds": 9.6,
-      "end_seconds": 21.6,
-      "release_marker_seconds": 15.6
+      "start_seconds": 15.1,
+      "end_seconds": 22.1,
+      "crop_centre": [
+        282,
+        324
+      ]
     },
     {
       "run": "/home/feit/.cache/huggingface/lerobot/demos/pick_place/acts/20261012_192802",
-      "start_seconds": 14.0,
-      "end_seconds": 26.0,
-      "release_marker_seconds": 20.0
+      "start_seconds": 19.5,
+      "end_seconds": 26.5,
+      "crop_centre": [
+        343,
+        294
+      ]
     },
     {
       "run": "/home/feit/.cache/huggingface/lerobot/demos/pick_place/acts/20261012_194250",
-      "start_seconds": 27.5,
-      "end_seconds": 39.5,
-      "release_marker_seconds": 33.5
+      "start_seconds": 35.0,
+      "end_seconds": 42.0,
+      "crop_centre": [
+        330,
+        292
+      ]
     },
     {
       "run": "/home/feit/.cache/huggingface/lerobot/demos/pick_place/acts/20261013_211511",
-      "start_seconds": 12.7,
-      "end_seconds": 24.7,
-      "release_marker_seconds": 18.7
+      "start_seconds": 18.2,
+      "end_seconds": 25.2,
+      "crop_centre": [
+        334,
+        282
+      ]
     }
   ],
   "timing": "Camera timeline at 30 Hz; latest available recorded async result. Older grid clips use recorded t_frame timestamps and hold frames, with no optical-flow interpolation. Last frame held where a source ends.",
-  "overlay": "Existing replay drawing, with diagnostic prose and verification panel omitted. Cube outline uses recorded accepted/predicted pose, not a newly inferred ground truth.",
+  "overlay": "Insertion uses existing replay drawing without diagnostic prose/panel. Grid shows only the recorded cube silhouette, fading to raw footage during retreat. Cube pose is a recorded accepted/predicted estimate, not ground truth.",
   "audit": {
     "completed": true,
     "visually_observed_insertion": true,
