@@ -121,3 +121,50 @@ The changes, each kept by a test:
   28.5 ticks/s on the idle arm. A late tick is followed on schedule; a tick that
   overran the next slot restarts the schedule a period after its write, so a
   stall is never followed by two commands back to back.
+
+### On the arm
+
+Measured on 2026-10-16 with the camera and P2P tracking running (about 9.5
+tracker frames/s), the SO-107 left arm at the ready pose, and py-spy sampling the
+GIL holder from outside the server. The baseline profiles ran the build before
+these changes with only the `gc_ms` timing added. The baseline Act,
+`20261016_201209`, ran earlier the same day on the build before these changes,
+without py-spy. The Act with the changes is `20261016_211332`, from the same
+demo and settings (speed 1, 1 s horizon, grasp prediction allowed).
+
+| Run                     | Ticks/s | Gap p50/p95/p99 ms  | Gaps > 2 ticks | Read p50/p95/max ms | Read CPU p95 ms | Write p95 ms | Queue empty |
+| ----------------------- | ------: | ------------------- | -------------: | ------------------- | --------------: | -----------: | ----------: |
+| stationary, baseline    |    26.1 | 35.2 / 52.5 / 63.9  |              3 | 1.8 / 12.3 / 27.7   |            1.35 |          7.6 |             |
+| stationary, changed     |    29.9 | 33.1 / 44.4 / 49.4  |              0 | 2.0 / 8.1 / 22.7    |            0.43 |          4.0 |             |
+| 10 mm moves, baseline   |    25.9 | 35.5 / 53.2 / 59.3  |              0 | 1.7 / 17.3 / 26.0   |            1.35 |          7.4 |             |
+| 10 mm moves, changed    |    30.0 | 33.4 / 45.4 / 51.6  |              0 | 4.3 / 12.5 / 27.7   |            0.45 |          8.1 |             |
+| insertion Act, baseline |    21.4 | 39.0 / 82.4 / 117.5 |             60 | 3.1 / 26.7 / 395.1  |            1.31 |          9.2 |      2.87 s |
+| insertion Act, changed  |    28.6 | 33.5 / 47.4 / 65.0  |              6 | 2.0 / 12.5 / 79.5   |            0.39 |          6.4 |      2.43 s |
+
+The changed loop also executes the demo closer to its recorded speed, so its
+commands are faster per second (p95 21.2 to 26.0 °/s) while smoother per tick
+(second difference p95 0.39° to 0.27°). Following error p95 rose from 2.7° to
+3.4° accordingly.
+
+Where the baseline's reads waited, sampled from the motor thread's `wchan` and
+`schedstat`: 74–76 % in `futex_do_wait` (the GIL), about 20 % on the CPU (the
+SDK's poll), about 1 % runnable but queued, and at most 0.2 % blocked in the
+kernel (`__flush_work`). During reads over 5 ms, py-spy found the GIL held by the overlay
+thread replanning the Act preview (`_render_live` → `_act_preview` →
+`plan_key_frames`, 53–63 % of the samples), by the RealSense read loop
+(25–29 %) and by the event loop (6–22 %).
+
+What still stalls the loop after these changes:
+
+- Garbage collection. Collections totalling 270 ms (stationary baseline) and
+  316 ms (changed Act) within a single tick were recorded in `gc_ms`; the latter
+  is the changed Act's longest gap, 340 ms.
+- The RealSense spatial and temporal filters keep the GIL for each call, about
+  4.4 ms per frame at 30 frames/s. A thread in the same process as the camera's
+  read loop, sleeping at 30 Hz, woke up to 4.1 ms late with them and 0.08 ms
+  without them, at a 0.5 ms switch interval. In the changed Act the camera's read loop
+  held the GIL in 35 % of the samples taken during reads over 5 ms.
+- The queue empties at key frame 7 of the insertion, where the producer keeps a
+  held object's release at the head of the queue and supplies one sample per
+  solve: 26 of the 26 empty spells there fell within ten ticks of a gripper
+  command change. They total 1.18 s, the longest 135 ms (487 ms in the baseline).
