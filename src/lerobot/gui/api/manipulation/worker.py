@@ -156,6 +156,7 @@ async def worker_job(wait: float = 20.0) -> Response:
                 job_id = w.pending.pop(0)
                 job = w.jobs[job_id]
                 job.taken = True
+                job.worker_timing_ms["queue"] = 1000 * (time.time() - job.created)
                 return Response(
                     content=json.dumps(
                         {
@@ -207,6 +208,17 @@ async def worker_result(id: str, request: Request) -> dict:
                 job.worker_timing_ms[name] = value
         except (KeyError, ValueError):
             pass
+    timing = job.worker_timing_ms
+    if all(k in timing for k in ("queue", "fetch", "compute")):
+        # Includes dispatch/HTTP response scheduling and result upload. Fetch and
+        # compute are worker durations; no cross-process clock sync is needed.
+        timing["dispatch_and_result_io"] = max(
+            0.0,
+            1000 * (job.result_received_at - job.created)
+            - timing["queue"]
+            - timing["fetch"]
+            - timing["compute"],
+        )
     data = np.load(io.BytesIO(body), allow_pickle=False)
     meta = json.loads(str(data["meta"]))
     result: dict[str, Any] = dict(meta)

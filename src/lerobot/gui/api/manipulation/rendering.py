@@ -297,6 +297,8 @@ def _render_live(rgb, r, result, transported, teach, status) -> bytes:
     import cv2
 
     started = time.perf_counter()
+    cpu_started = time.thread_time()
+    preview_ms = 0.0
     bgr = groups._paint_groups(cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
     painted = time.perf_counter()
     belief = None  # the object's motion the view draws, and where it comes from
@@ -345,7 +347,9 @@ def _render_live(rgb, r, result, transported, teach, status) -> bytes:
             with runtime._state.lock:
                 demo = runtime._state.demo
             if demo is not None:
+                preview_started = time.perf_counter()
                 path = planning._act_preview(demo, d, t_bc)
+                preview_ms = 1000 * (time.perf_counter() - preview_started)
                 if path is not None:
                     _draw_path(bgr, t_bc, teach.intr, path)
     path_drawn = time.perf_counter()
@@ -424,6 +428,8 @@ def _render_live(rgb, r, result, transported, teach, status) -> bytes:
     encoded = camera._jpeg(_pose_verification_panel(bgr, checks, len(checks)) if checks else bgr)
     finished = time.perf_counter()
     status["render_stages_ms"] = {
+        "thread_cpu": round((time.thread_time() - cpu_started) * 1000, 1),
+        "preview": round(preview_ms, 1),  # included in held_and_path, not additive
         "groups": round((painted - started) * 1000, 1),
         "held_and_path": round((path_drawn - painted) * 1000, 1),
         "other_objects": round((objects_drawn - path_drawn) * 1000, 1),
@@ -478,10 +484,13 @@ def _draw_path(
     import cv2
 
     stride = max(1, len(tips) // 200)
-    pts = [p for p in (camera._project(t_bc, intr, tip[:3, 3]) for tip in tips[::stride]) if p is not None]
-    for a, b in zip(pts, pts[1:], strict=False):
-        cv2.line(bgr, a, b, colour, 2)
-    if pts:
-        cv2.circle(bgr, pts[0], 5, colour, -1)
+    # Transform/project the entire path once instead of inverting the same camera
+    # transform for each point. OpenCV draws the polyline in one native call.
+    t_cb = np.linalg.inv(t_bc)
+    xyz = np.asarray(tips)[::stride, :3, 3] @ t_cb[:3, :3].T + t_cb[:3, 3]
+    pts = np.rint(_project_cam(intr, xyz)).astype(np.int32)
+    if len(pts):
+        cv2.polylines(bgr, [pts], False, colour, 2)
+        cv2.circle(bgr, tuple(pts[0]), 5, colour, -1)
         x, y = pts[-1]
         cv2.rectangle(bgr, (x - 4, y - 4), (x + 4, y + 4), colour, -1)

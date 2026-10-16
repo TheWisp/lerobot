@@ -87,3 +87,43 @@ final target movement was too strong. It followed the tray's earlier motion,
 but missed the later independent ring movement. The physical insertion
 succeeded, yet this act cannot prove that its final alignment was due to an
 accurate updated ring pose.
+
+## Worker gaps and overlay cost
+
+The `075037` act's elapsed worker round trip averages 217.75 ms, while
+reported fetch and computation average 6.42 and 87.88 ms. The remaining
+123.45 ms is **not measured GPU computation**. `manipulation_worker.run`
+executes jobs serially, and held-view recovery submits `locate` jobs to that
+same worker. There are 15 held-view locate results during this act. In the
+slow interval, track frame 34 takes 768.1 ms round trip but reports just
+4.3 ms fetch and 86.1 ms compute; a held-view locate completes at
+07:50:45.128 before that tracking result arrives at 07:50:45.205. Repeated
+locates coincide with the subsequent long tracking intervals. This establishes
+a blocking shared-worker path and explains the pattern, but old telemetry
+cannot assign every residual millisecond to queueing versus HTTP/event-loop
+scheduling.
+
+New `timing_ms` fields separate `queue` (creation to worker dispatch),
+`dispatch_and_result_io` (remaining transport/scheduling outside fetch and
+compute), `apply_wait` (decoded result to ordered apply),
+`verify_executor_wait`, `verify_work`, and `verify_resume_wait`.
+`verify_thread_cpu` is CPU consumption inside `verify_work`, not another
+additive duration. These diagnostics require a restarted server and a new
+capture; no new physical rollout was performed for this change.
+
+The live overlay has its own executor and drops drawing opportunities while
+busy: control does not await it. It still shares CPU/GIL/locks with the server.
+Its new `thread_cpu` measurement distinguishes CPU work from elapsed duration;
+`preview` is a subset of `held_and_path`. An isolated reconstruction of five
+recorded frames took about 5–11 ms after warming imports, but does not recreate
+all live state or concurrent load. It cannot establish a new live FPS.
+
+OpenCV is already the drawing backend. Batch projection now inverts the
+camera transform once per path, then draws one native polyline instead of
+projecting and drawing each segment in Python. A 200-point path measured
+1.34 → 0.32 ms median (200 repetitions, identical pixels); regression coverage
+checks empty, single-point, dense, and partly behind-camera paths. Planner
+semantics and object tracking are unchanged. A separate recovery worker or
+incremental recovery scheduler remains necessary to prevent expensive locate
+jobs from blocking continuous P2P; merely prioritizing queued track jobs
+cannot preempt a locate already in progress.

@@ -4,6 +4,7 @@ import asyncio
 import io
 import json
 import threading
+import time
 from types import SimpleNamespace
 
 import numpy as np
@@ -41,6 +42,9 @@ async def test_slow_overlay_does_not_delay_pipelined_pose_application(monkeypatc
     )
     try:
         await asyncio.wait_for(tracking._apply_track_result(job), 1)
+        assert job.worker_timing_ms["verify_work"] >= 0
+        assert job.worker_timing_ms["verify_thread_cpu"] >= 0
+        assert job.worker_timing_ms["verify_resume_wait"] >= 0
         assert tr.last["state"] == "lost"
         assert tr.overlay is None and job.rendered_at is None
         await asyncio.wait_for(asyncio.to_thread(drawing.wait, 1), 2)
@@ -124,3 +128,17 @@ async def test_track_replies_return_while_results_apply_in_order(monkeypatch):
         runtime._state.worker.jobs.pop("first", None)
         runtime._state.worker.jobs.pop("second", None)
         runtime._state.worker.jobs.pop("late", None)
+
+
+@pytest.mark.asyncio
+async def test_worker_records_time_waiting_for_dispatch():
+    old = runtime._state.worker
+    runtime._state.worker = runtime._Worker(proc=SimpleNamespace(poll=lambda: None))
+    try:
+        job = worker._queue_job("track", "object", np.zeros((2, 2, 3), np.uint8), np.ones((2, 2)), {})
+        job.created = time.time() - 0.5
+        response = await worker.worker_job(wait=0)
+        assert json.loads(response.body)["id"] == job.id
+        assert job.worker_timing_ms["queue"] >= 500
+    finally:
+        runtime._state.worker = old

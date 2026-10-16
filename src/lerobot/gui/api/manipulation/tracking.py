@@ -670,10 +670,25 @@ async def _apply_track_result(job: runtime._Job) -> None:
         flat = bool(job.extra.get("geometry", runtime._state.flat))
     if stale or teach is None:
         return
-    checks = await asyncio.get_running_loop().run_in_executor(
-        runtime._TRACK_EXECUTOR, _verify_track_poses, job, r, teach, False, False
-    )
+    submitted = time.time()
+    if job.result_decoded_at is not None:
+        job.worker_timing_ms["apply_wait"] = 1000 * (submitted - job.result_decoded_at)
+
+    def verify():
+        started = time.time()
+        cpu = time.thread_time()
+        job.worker_timing_ms["verify_executor_wait"] = 1000 * (started - submitted)
+        try:
+            return _verify_track_poses(job, r, teach, False, False)
+        finally:
+            job.worker_timing_ms["verify_work"] = 1000 * (time.time() - started)
+            job.worker_timing_ms["verify_thread_cpu"] = 1000 * (time.thread_time() - cpu)
+            job.worker_timing_ms["verify_finished_at"] = time.time()
+
+    checks = await asyncio.get_running_loop().run_in_executor(runtime._TRACK_EXECUTOR, verify)
     job.verified_at = time.time()
+    finished = job.worker_timing_ms.pop("verify_finished_at")
+    job.worker_timing_ms["verify_resume_wait"] = 1000 * (job.verified_at - finished)
     # Teach/track can be replaced while the executor is measuring this frame.
     with runtime._state.lock:
         stale = tr.job != job.id if epoch is None else tr.epoch != epoch or not tr.on
