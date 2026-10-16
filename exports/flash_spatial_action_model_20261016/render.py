@@ -24,9 +24,11 @@ BG = (10, 16, 24)
 WHITE, MUTED, ACCENT = (242, 245, 248), (168, 183, 197), (112, 234, 207)
 FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-RUN = ROOT / "insertion/acts/20261016_112149"
+RUN = ROOT / "insertion/acts/20261016_232658"
 META = json.loads((RUN / "act.json").read_text())
 TIMELINE = json.loads((RUN / "camera/timeline.json").read_text())
+OVERLAY_START_S = 5.5
+OVERLAY_ROWS = [row for row in TIMELINE["rows"] if row["t_wall"] - META["t_started"] >= OVERLAY_START_S]
 STACKS = [
     ("20261011_080249", 13.4),
     ("20261011_233111", 20.7),
@@ -166,9 +168,9 @@ class Encoder:
         assert self.p.wait() == 0, self.path
 
 
-def encode(name, frames, count):
+def encode(name, frames, count, *, force=False):
     path = OUT / name
-    if path.exists() and path.stat().st_size > 10000:
+    if not force and path.exists() and path.stat().st_size > 10000:
         print(f"Already rendered: {name}", flush=True)
         return
     enc = Encoder(path)
@@ -336,9 +338,7 @@ def demo_frames(demo):
 
 def act_frames(demo, overlay):
     points = replay._replay_points(META, demo)
-    rows = TIMELINE["rows"]
-    if overlay:
-        rows = rows[round(5.5 * FPS) : round(24.5 * FPS)]
+    rows = OVERLAY_ROWS if overlay else TIMELINE["rows"]
     stamps = [f.get("t_result", f["t_frame"]) for f in META["frames"]]
     rawbase = chrome("Autonomous, 1x speed", "Raw · no pre-scanned object mesh")
     olddetail, base = None, None
@@ -351,27 +351,9 @@ def act_frames(demo, overlay):
             at = float(row["t_wall"])
             source = bisect.bisect_right(stamps, at) - 1
             if source >= 0:
-                raw = replay._replay_draw(
-                    RUN,
-                    META,
-                    source,
-                    points,
-                    camera_bgr=raw,
-                    at=at,
-                    mono_at=row.get("camera_mono") or row["t_mono"],
-                )
+                raw = object_outlines(raw, RUN, META, source, points)
             t = at - META["t_started"]
-            event = (
-                "Manual ring displacement"
-                if t < 8.5
-                else "Approach and rotation"
-                if t < 11
-                else "Contact and tray perturbations"
-                if t < 17
-                else "Insertion"
-                if t < 21.5
-                else "Release and retreat"
-            )
+            event = "Grasp and carry" if t < 8.5 else "Insertion"
             detail = "Demo: goal · Vision: live pose · Planning: arm motion" if n < 3 * FPS else event
             if detail != olddetail:
                 base = chrome(
@@ -443,10 +425,13 @@ def main():
         "autonomous_run": str(RUN),
         "autonomous_camera_slots": len(TIMELINE["rows"]),
         "playback_speed": 1.0,
-        "controller_speed_during_recording": 2.0,
+        "controller_speed_during_recording": META["speed"],
         "demo_cut_seconds": [4.5, 17.5],
-        "overlay_cut_seconds": [5.5, 24.5],
-        "edit_revision": 7,
+        "overlay_cut_seconds": [
+            OVERLAY_START_S,
+            TIMELINE["rows"][-1]["t_wall"] - META["t_started"],
+        ],
+        "edit_revision": 8,
         "grid_seconds": STACKING_GRID_SECONDS,
         "insertion_grid_seconds": INSERTION_GRID_SECONDS,
         "grid_layout": [3, 3],
@@ -487,16 +472,11 @@ def main():
         "insertion_grid_selection": "Nine camera-timeline runs visually checked for a seated dowel and visible retreat. All use the same crop dimensions as the stacking grid, centred on insertion. Completed runs with a missed ring were excluded.",
         "stacking_grid_edit": "Each source begins three seconds earlier than revision 5 and ends at the same moment, preserving release and retreat. Earlier footage reveals the small cube in several runs; it remains occluded by the arm in some views.",
         "timing": "Camera timeline at 30 Hz; latest available recorded async result. Older grid clips use recorded t_frame timestamps and hold frames, with no optical-flow interpolation. Last frame held where a source ends.",
-        "overlay": "Main insertion replay uses existing drawing without diagnostic prose/panel. Both grids retain every available recorded segmentation outline, raw-model silhouette, accepted/predicted target silhouette and scene wireframe through the last frame, without fading. Missing recorded geometry is not fabricated. Poses are estimates, not ground truth.",
+        "overlay": "The main replay and both grids retain every available recorded segmentation outline, raw-model silhouette, accepted/predicted target silhouette and scene wireframe, without dense diagnostic surfaces, prose panels, or fading. Missing recorded geometry is not fabricated. Poses are estimates, not ground truth.",
         "audit": {
-            "completed": True,
             "visually_observed_insertion": True,
-            "tracking_hz": 4.34177,
-            "longest_motor_tick_ms": 603.44,
-            "queue_empty_time_over_100ms_s": 3.150,
-            "verified_post_lift_held_pose": False,
-            "group_transport_withheld_updates": 10,
-            "caveat": "Successful task, with remaining timing and held-pose verification limitations.",
+            "controller_result": META["result"],
+            "caveat": "The dowel was seated in the ring, but the controller aborted during withdrawal before completing the Act.",
         },
         "wording_sources": [
             "https://proceedings.mlr.press/v229/vitiello23a.html",
@@ -526,12 +506,17 @@ def main():
         INSERTION_GRID_SECONDS * FPS,
     )
     encode("01_single_demo.mp4", demo_frames(insertion), 390)
-    encode("02_autonomous_raw.mp4", act_frames(insertion, False), len(TIMELINE["rows"]))
-    encode("03_autonomous_overlay.mp4", act_frames(insertion, True), 570)
+    encode("02_autonomous_raw.mp4", act_frames(insertion, False), len(TIMELINE["rows"]), force=True)
+    encode("03_autonomous_overlay.mp4", act_frames(insertion, True), len(OVERLAY_ROWS), force=True)
     encode("00_title.mp4", title_frames(), 45)
     encode("05_summary.mp4", title_frames(True), 150)
     for name, source, heading, subtitle in TRANSITIONS:
-        encode(name, transition_frames(source, heading, subtitle), TRANSITION_FRAMES)
+        encode(
+            name,
+            transition_frames(source, heading, subtitle),
+            TRANSITION_FRAMES,
+            force=name in {"01a_raw_transition.mp4", "02a_overlay_transition.mp4"},
+        )
     names = [
         "00_title.mp4",
         "00a_demo_transition.mp4",

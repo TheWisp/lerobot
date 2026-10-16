@@ -8,12 +8,12 @@
         "height": 1080,
         "pix_fmt": "yuv420p",
         "r_frame_rate": "30/1",
-        "nb_frames": "2776"
+        "nb_frames": "2257"
       }
     ],
     "format": {
-      "duration": "92.533333",
-      "size": "63046946"
+      "duration": "75.233333",
+      "size": "54490979"
     }
   },
   "stacking_grid_overlay.mp4": {
@@ -84,7 +84,6 @@
       "size": "7877135"
     }
   },
-  "full_master_decode": "Passed; no decoder errors",
   "05_summary.mp4": {
     "programs": [],
     "streams": [
@@ -133,7 +132,7 @@
     ],
     "format": {
       "duration": "1.500000",
-      "size": "106539"
+      "size": "100853"
     }
   },
   "02a_overlay_transition.mp4": {
@@ -150,7 +149,7 @@
     ],
     "format": {
       "duration": "1.500000",
-      "size": "117049"
+      "size": "112443"
     }
   },
   "03a_insertion_transition.mp4": {
@@ -186,5 +185,41 @@
       "duration": "1.500000",
       "size": "112241"
     }
-  }
+  },
+  "02_autonomous_raw.mp4": {
+    "programs": [],
+    "streams": [
+      {
+        "codec_name": "h264",
+        "width": 1920,
+        "height": 1080,
+        "pix_fmt": "yuv420p",
+        "r_frame_rate": "30/1",
+        "nb_frames": "491"
+      }
+    ],
+    "format": {
+      "duration": "16.366667",
+      "size": "13820268"
+    }
+  },
+  "03_autonomous_overlay.mp4": {
+    "programs": [],
+    "streams": [
+      {
+        "codec_name": "h264",
+        "width": 1920,
+        "height": 1080,
+        "pix_fmt": "yuv420p",
+        "r_frame_rate": "30/1",
+        "nb_frames": "326"
+      }
+    ],
+    "format": {
+      "duration": "10.866667",
+      "size": "10492476"
+    }
+  },
+  "full_master_decode": "Passed; no decoder errors",
+  "autonomous_run": "/home/feit/.cache/huggingface/lerobot/demos/insertion/acts/20261016_232658"
 }

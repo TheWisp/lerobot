@@ -5,8 +5,8 @@
     1920,
     1080
   ],
-  "autonomous_run": "/home/feit/.cache/huggingface/lerobot/demos/insertion/acts/20261016_112149",
-  "autonomous_camera_slots": 766,
+  "autonomous_run": "/home/feit/.cache/huggingface/lerobot/demos/insertion/acts/20261016_232658",
+  "autonomous_camera_slots": 491,
   "playback_speed": 1.0,
   "controller_speed_during_recording": 2.0,
   "demo_cut_seconds": [
@@ -15,9 +15,9 @@
   ],
   "overlay_cut_seconds": [
     5.5,
-    24.5
+    16.333541870117188
   ],
-  "edit_revision": 7,
+  "edit_revision": 8,
   "grid_seconds": 12,
   "insertion_grid_seconds": 9,
   "grid_layout": [
@@ -239,16 +239,16 @@
   "insertion_grid_selection": "Nine camera-timeline runs visually checked for a seated dowel and visible retreat. All use the same crop dimensions as the stacking grid, centred on insertion. Completed runs with a missed ring were excluded.",
   "stacking_grid_edit": "Each source begins three seconds earlier than revision 5 and ends at the same moment, preserving release and retreat. Earlier footage reveals the small cube in several runs; it remains occluded by the arm in some views.",
   "timing": "Camera timeline at 30 Hz; latest available recorded async result. Older grid clips use recorded t_frame timestamps and hold frames, with no optical-flow interpolation. Last frame held where a source ends.",
-  "overlay": "Main insertion replay uses existing drawing without diagnostic prose/panel. Both grids retain every available recorded segmentation outline, raw-model silhouette, accepted/predicted target silhouette and scene wireframe through the last frame, without fading. Missing recorded geometry is not fabricated. Poses are estimates, not ground truth.",
+  "overlay": "The main replay and both grids retain every available recorded segmentation outline, raw-model silhouette, accepted/predicted target silhouette and scene wireframe, without dense diagnostic surfaces, prose panels, or fading. Missing recorded geometry is not fabricated. Poses are estimates, not ground truth.",
   "audit": {
-    "completed": true,
     "visually_observed_insertion": true,
-    "tracking_hz": 4.34177,
-    "longest_motor_tick_ms": 603.44,
-    "queue_empty_time_over_100ms_s": 3.15,
-    "verified_post_lift_held_pose": false,
-    "group_transport_withheld_updates": 10,
-    "caveat": "Successful task, with remaining timing and held-pose verification limitations."
+    "controller_result": {
+      "ok": false,
+      "step": "aborted",
+      "reason": "arm frozen: playback shoulder_lift still 4.0 deg behind at transport tolerance after 0.5 s (observed 42.1, commanded 38.1 deg) \u2014 frozen",
+      "progress": 0.02040816326530612
+    },
+    "caveat": "The dowel was seated in the ring, but the controller aborted during withdrawal before completing the Act."
   },
   "wording_sources": [
     "https://proceedings.mlr.press/v229/vitiello23a.html",
