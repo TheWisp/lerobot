@@ -221,7 +221,15 @@ def gui_page():
 @pytest.fixture
 def act_simulation(monkeypatch):
     """Synthetic act simulations supply their reference poses directly."""
-    from lerobot.gui.api import manipulation
+    import numpy as np
+
+    from lerobot.gui.api import manipulation, showservo
+
+    class Camera:
+        def read_newer_color_and_depth(self, _after):
+            return np.zeros((24, 32, 3), np.uint8), np.zeros((24, 32), np.uint16), time.perf_counter()
+
+    monkeypatch.setattr(showservo, "live_camera", lambda: Camera())
 
     # These state-machine simulations provide poses directly, not RGB-D that
     # depicts those poses. Real reference validation is covered by the geometry

@@ -590,9 +590,6 @@ REPLAY_COLOURS = ((0, 220, 255), (255, 255, 0), (120, 230, 120), (240, 110, 200)
 REPLAY_TOLD = (0, 0, 255)
 
 
-REPLAY_VIDEO_FPS = 10  # an exported replay's rate: each recorded frame shown until the next one's time
-
-
 REPLAY_VIDEO_TIMEOUT_S = 120.0
 
 

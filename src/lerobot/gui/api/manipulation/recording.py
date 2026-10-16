@@ -371,9 +371,12 @@ def _write_run_frame(
 def _begin_run(
     demo: runtime._Demo, speed: float, delta: np.ndarray, t_bc: np.ndarray, plan: dict[str, Any]
 ) -> _Run:
-    """Start recording the act, beside its demo when it is saved. Post: ``_state.run`` is the recording."""
+    """Start the fixed-rate Act recording before motion. Post: ``_state.run`` owns it."""
     from .. import jog, showservo
 
+    camera = showservo.live_camera()
+    if camera is None:
+        raise RuntimeError("the fixed-rate Act recorder needs a live camera")
     with runtime._state.lock:
         teach, track = runtime._state.teach, runtime._state.track
         ref = dict((teach.keypoints.get("ref") or {}) if teach is not None else {})
@@ -413,15 +416,19 @@ def _begin_run(
         run.arm_recording = True
     except RuntimeError as e:
         meta["arm_error"] = str(e)
-    camera = showservo.live_camera()
-    if camera is not None:
-        try:
-            timeline = ActTimeline(run.root / "camera", camera, jog.HZ)
-            timeline.start()
-            run.timeline = timeline
-        except Exception as e:
-            logger.exception("Act camera timeline could not start")
-            meta["timeline_error"] = f"{type(e).__name__}: {e}"
+    timeline = None
+    try:
+        timeline = ActTimeline(run.root / "camera", camera, jog.HZ)
+        timeline.start()
+        run.timeline = timeline
+    except Exception as e:
+        if timeline is not None and (timeline.sampler is not None or timeline.writer is not None):
+            with contextlib.suppress(Exception):
+                timeline.close()
+        if run.arm_recording:
+            with contextlib.suppress(Exception):
+                jog.stop_record()
+        raise RuntimeError(f"the fixed-rate Act recorder could not start: {e}") from e
     with runtime._state.lock:
         runtime._state.run = run
     return run

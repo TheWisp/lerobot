@@ -766,8 +766,12 @@ The key-frame runner is tested against expected grasp, carry, placement, drop,
 reach, occlusion and hold-correction behavior. Planner tests verify reference
 poses, recorded follow samples, timing, gripper commands, joint hints and floor
 references directly. They no longer require a second implementation as an oracle.
-Persisted mark-to-key-frame conversion, old replay records and the HTTP routes
-retain their own compatibility checks.
+Persisted mark-to-key-frame conversion and the HTTP routes retain their own
+compatibility checks. **NOT IMPLEMENTED for old variable-rate
+Act replays:** the replay API and video export now require the 30 Hz camera
+timeline. Older Act folders without `camera/timeline.json` remain raw evidence
+but are not playable through the Approach replay UI. Point2Pose result frames
+are still saved asynchronously as pose evidence; they do not set replay pace.
 
 ### Physical validation of reactive execution (2026-10-14)
 

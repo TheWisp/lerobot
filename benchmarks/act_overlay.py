@@ -2,9 +2,8 @@
 
     python benchmarks/act_overlay.py ACT_DIR
 
-Writes ``ACT_DIR/replay.mp4``: every recorded frame as the camera saw it beside it drawn as the replay draws it
-(lerobot.gui.api.manipulation.replay._replay_pair), at the act's own pace; what the act did not record is said on the frame, not
-rebuilt.
+Writes ``ACT_DIR/replay.mp4`` from the fixed-rate camera timeline. Each image is shown beside the
+asynchronous tracking and control evidence available at that instant.
 """
 
 import argparse

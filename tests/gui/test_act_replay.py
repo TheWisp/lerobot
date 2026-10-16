@@ -38,6 +38,26 @@ def _act(tmp_path: pathlib.Path, held: bool = True, groups: bool = True, wired: 
     act = tmp_path / "act"
     (act / "frames").mkdir(parents=True)
     cv2.imwrite(str(act / "frames" / "000000.jpg"), np.full((H, W, 3), 60, np.uint8))
+    (act / "camera" / "rgb").mkdir(parents=True)
+    shutil.copy(act / "frames" / "000000.jpg", act / "camera" / "rgb" / "000000.jpg")
+    (act / "camera" / "timeline.json").write_text(
+        json.dumps(
+            {
+                "fps": 30.0,
+                "saved": 1,
+                "rows": [
+                    {
+                        "slot": 0,
+                        "t_mono": 0.0,
+                        "t_wall": 10.0,
+                        "camera_mono": 0.0,
+                        "image": 0,
+                        "status": "captured",
+                    }
+                ],
+            }
+        )
+    )
     picked = np.zeros((H, W), np.uint8)
     picked[300:360, 600:700] = 255
     cv2.imwrite(str(act / "frames" / "000000_mask.png"), picked)
@@ -375,7 +395,8 @@ def test_the_replay_of_a_trial_lists_its_frames_and_serves_each_drawn(client, tm
     assert r.json() | {"result": None} == {
         "trial": 0,
         "n": 1,
-        "frames": [{"i": 0, "t": 1.0, "step": "place"}],
+        "frames": [{"i": 0, "t": 0.0, "step": "place"}],
+        "fps": 30.0,
         "result": None,
         "control_cadence": None,
         "held_recorded": True,
@@ -388,7 +409,7 @@ def test_the_replay_of_a_trial_lists_its_frames_and_serves_each_drawn(client, tm
     assert drawn.shape == (H, W, 3)
     r = client.get("/api/pregrasp/replay/frame.jpg", params={"trial": 0, "i": 0, "pair": 1})
     pair = cv2.imdecode(np.frombuffer(r.content, np.uint8), cv2.IMREAD_COLOR).astype(float)
-    camera = cv2.imread(str(act / "frames" / "000000.jpg")).astype(float)
+    camera = cv2.imread(str(act / "camera" / "rgb" / "000000.jpg")).astype(float)
     assert pair.shape == (H, 2 * W, 3), (
         "the camera's frame and the drawn one side by side, as the export shows them"
     )
@@ -401,13 +422,49 @@ def test_the_replay_of_a_trial_lists_its_frames_and_serves_each_drawn(client, tm
     assert client.get("/api/pregrasp/replay", params={"trial": 2}).status_code == 404
 
 
+def test_replay_requires_the_fixed_rate_timeline(client, tmp_path, monkeypatch):
+    act = _act(tmp_path)
+    (act / "camera" / "timeline.json").unlink()
+    monkeypatch.setattr(manipulation.runtime, "_trials", [{"run": str(act)}])
+    for path in ("/api/pregrasp/replay", "/api/pregrasp/replay/frame.jpg", "/api/pregrasp/replay/video.mp4"):
+        r = client.get(path, params={"trial": 0, "i": 0})
+        assert r.status_code == 404
+        assert r.json()["detail"] == "this act has no fixed-rate camera timeline"
+
+
+def test_act_recorder_rejects_missing_camera_before_recording(monkeypatch):
+    from lerobot.gui.api import jog, showservo
+
+    monkeypatch.setattr(showservo, "live_camera", lambda: None)
+    monkeypatch.setattr(jog, "start_record", lambda: pytest.fail("arm recording started without a camera"))
+    with pytest.raises(RuntimeError, match="fixed-rate Act recorder needs a live camera"):
+        manipulation.recording._begin_run(None, 1.0, np.eye(4), np.eye(4), {})
+
+
 def _second_frame(act: pathlib.Path, t: float) -> None:
-    """A second recorded frame, the first one's files again, at frame time ``t``."""
+    """A second asynchronous result and camera image on the fixed 30 Hz timeline."""
     for suffix in (".jpg", "_mask.png", ".npz"):
         shutil.copy(act / "frames" / f"000000{suffix}", act / "frames" / f"000001{suffix}")
     meta = json.loads((act / "act.json").read_text())
     meta["frames"].append({**meta["frames"][0], "i": 1, "t_frame": t, "step": "settling"})
     (act / "act.json").write_text(json.dumps(meta))
+    timeline_path = act / "camera" / "timeline.json"
+    timeline = json.loads(timeline_path.read_text())
+    last = round((t - 10.0) * 30)
+    shutil.copy(act / "frames" / "000001.jpg", act / "camera" / "rgb" / f"{last:06d}.jpg")
+    timeline["rows"].extend(
+        {
+            "slot": i,
+            "t_mono": i / 30,
+            "t_wall": 10.0 + i / 30,
+            "camera_mono": i / 30 if i == last else 0.0,
+            "image": last if i == last else 0,
+            "status": "captured" if i == last else "held_camera_frame",
+        }
+        for i in range(1, last + 1)
+    )
+    timeline["saved"] = 2
+    timeline_path.write_text(json.dumps(timeline))
 
 
 def test_replay_indexes_disagreements_and_displays_saved_measurements_below_the_scene(
@@ -428,7 +485,7 @@ def test_replay_indexes_disagreements_and_displays_saved_measurements_below_the_
     (act / "act.json").write_text(json.dumps(meta))
     monkeypatch.setattr(manipulation.runtime, "_trials", [{"run": str(act)}])
     data = client.get("/api/pregrasp/replay", params={"trial": 0}).json()
-    assert data["pose_verification_recorded"] and data["pose_disagreement_frames"] == [1]
+    assert data["pose_verification_recorded"] and data["pose_disagreement_frames"] == [15]
     captured = []
     original = manipulation.replay._replay_text
 
@@ -437,13 +494,14 @@ def test_replay_indexes_disagreements_and_displays_saved_measurements_below_the_
         return original(im, text, *args)
 
     monkeypatch.setattr(manipulation.replay, "_replay_text", capture)
-    pictures = [manipulation.replay._replay_pair(act, meta, i, {}) for i in range(2)]
+    rows = json.loads((act / "camera" / "timeline.json").read_text())["rows"]
+    pictures = [manipulation.replay._timeline_pair(act, meta, rows[i], {}) for i in (0, 15)]
     assert pictures[0].shape == pictures[1].shape
     assert pictures[0].shape[0] > H and pictures[0].shape[1] == 2 * W
     assert any("DISAGREEMENT 12.0 deg / 0.2 mm; P2P accepted" in t for t in captured)
     assert "Pose verification: not recorded" in captured
     assert any("RGB-D refit: inconclusive" in t for t in captured)
-    raw = cv2.imread(str(act / "frames/000001.jpg"))
+    raw = cv2.imread(str(act / "camera/rgb/000015.jpg"))
     np.testing.assert_array_equal(pictures[1][:H, :W], raw)
     assert np.any(pictures[1][H:, W:, 2] > 240), "the warning is visible below the image"
 
@@ -469,9 +527,7 @@ def test_a_trials_replay_exports_as_a_video_at_the_acts_own_pace(client, tmp_pat
     assert 'filename="act_act_replay.mp4"' in r.headers["content-disposition"]
     got = tmp_path / "got.mp4"
     got.write_bytes(r.content)
-    assert _frame_count(got) == 0.5 * manipulation.runtime.REPLAY_VIDEO_FPS + 1, (
-        "half a second, at the act's pace"
-    )
+    assert _frame_count(got) == 16, "half a second, at the act's pace"
     first = cv2.VideoCapture(str(got)).read()[1]
     assert first.shape == (H, 2 * W, 3), "the camera's frame and the drawn one side by side"
     assert _near(first, 600, 330, (60, 60, 60), tol=10), (
@@ -548,7 +604,7 @@ def test_timeline_draws_the_arm_at_the_camera_publication_time(tmp_path, monkeyp
 def test_act_export_uses_each_fixed_timeline_camera_frame(overlay, client, tmp_path, monkeypatch):
     act = _act(tmp_path)
     camera = act / "camera" / "rgb"
-    camera.mkdir(parents=True)
+    camera.mkdir(parents=True, exist_ok=True)
     for i in range(6):
         cv2.imwrite(str(camera / f"{i:06d}.jpg"), np.full((H, W, 3), 20 + 20 * i, np.uint8))
     (act / "camera" / "timeline.json").write_text(
