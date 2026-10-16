@@ -145,6 +145,10 @@ def test_the_feed_takes_each_objects_poses_from_its_designation_on_and_the_newes
     view.add_poses(
         time.time(), {"cube": _pose(0.0, 0.0, 0.5).ravel().tolist()}, picture
     )  # an earlier designation
+    with view.poses_lock:
+        _stamp, _poses, evidence = view.poses[-1]
+    assert evidence["cube"]["own"] is False
+    assert evidence["cube"]["group_supported"] is False
     loop = _ViewLoop(view, lambda: _pose(0.1, 0.0, 0.43))
 
     async def run():
@@ -153,6 +157,13 @@ def test_the_feed_takes_each_objects_poses_from_its_designation_on_and_the_newes
         for _ in range(100):
             await asyncio.sleep(0.02)
             if len(manipulation.runtime._state.groups_feed.frames.get("cube", ())) >= 3:
+                break
+        loop.drawing = False
+        stamp = time.time() + 0.1
+        view.add_poses(stamp, {"cube": _pose(0.1, 0.0, 0.43).ravel().tolist()}, picture)
+        for _ in range(100):
+            await asyncio.sleep(0.02)
+            if manipulation.runtime._state.groups_feed.evidence.get("cube"):
                 break
         return since
 
@@ -164,6 +175,8 @@ def test_the_feed_takes_each_objects_poses_from_its_designation_on_and_the_newes
         assert all(np.allclose(m, _pose(0.1, 0.0, 0.43)) for _, m in frames), (
             "none of the earlier designation's"
         )
+        assert feed.evidence["cube"][-1][0] == frames[-1][0]
+        assert feed.evidence["cube"][-1][1]["own"] is False
         with manipulation.runtime._state.lock:
             feed.drawing = {**picture, "stamp": time.time()}
         painted = manipulation.groups._paint_groups(np.zeros((480, 848, 3), np.uint8))

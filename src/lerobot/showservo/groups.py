@@ -27,6 +27,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass, field
+from time import perf_counter
 from typing import Any
 
 import numpy as np
@@ -163,6 +164,7 @@ class GroupTracker:
         self.objects: dict[str, TrackedObject] = {}
         self.positions: deque = deque(maxlen=join_frames + 1)  # (xyz, seen) of the last frames, newest last
         self._next_group = 0
+        self.timing_ms: dict[str, float] = {}
 
     # ── the two loops ──
 
@@ -174,13 +176,21 @@ class GroupTracker:
         self.positions.append((xyz, seen))
         self.unseen = np.where(seen, 0, self.unseen + 1)
         self.cooldown = np.maximum(self.cooldown - 1, 0)
-        self._fit_groups(xyz, seen)
-        self._split(xyz, seen)
-        self._leave()
-        self._join(xyz, seen)
-        self._fission(xyz, seen)
-        self._fusion()
-        self._place_objects(xyz, seen)
+        stages = (
+            ("fit", lambda: self._fit_groups(xyz, seen)),
+            ("split", lambda: self._split(xyz, seen)),
+            ("leave", self._leave),
+            ("join", lambda: self._join(xyz, seen)),
+            ("fission", lambda: self._fission(xyz, seen)),
+            ("fusion", self._fusion),
+            ("objects", lambda: self._place_objects(xyz, seen)),
+        )
+        timing = {}
+        for name, run in stages:
+            start = perf_counter()
+            run()
+            timing[name] = round((perf_counter() - start) * 1000, 2)
+        self.timing_ms = timing
 
     def _grow(self, n: int) -> None:
         k = n - len(self.group_of)
@@ -221,6 +231,7 @@ class GroupTracker:
                     prior=g.motion,
                     prior_rot_deg=self.step_deg,
                     prior_trans_m=self.step_m,
+                    fast_prior=True,
                 )
             if fit is not None and fit.ok:
                 g.motion, g.supported, g.rms, g.n_fit = fit.transform, True, fit.rms, fit.n_inliers
@@ -664,6 +675,7 @@ class GroupTracker:
                     prior=_rigid(obj.carried),
                     prior_rot_deg=self.step_deg,
                     prior_trans_m=self.step_m,
+                    fast_prior=True,
                 )
                 if fit.ok and fit.n_inliers >= self.min_own:
                     modelled = [int(t) for t in tracks if int(t) in obj.model]

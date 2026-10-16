@@ -142,6 +142,7 @@ class _GroupsFeed:
 
     task: asyncio.Task | None = None
     frames: dict[str, collections.deque] = field(default_factory=dict)
+    evidence: dict[str, collections.deque] = field(default_factory=dict)  # same frame time as each pose
     floor: dict[str, float] = field(
         default_factory=dict
     )  # name -> its frames count after this time (designation)

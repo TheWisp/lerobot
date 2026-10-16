@@ -503,6 +503,7 @@ def _compare_track_poses(
         demo, tr = runtime._state.demo, runtime._state.track
         groups_on = runtime._state.groups_with_acts
         group_frames = {n: list(fs) for n, fs in runtime._state.groups_feed.frames.items()}
+        group_evidence = {n: list(fs) for n, fs in runtime._state.groups_feed.evidence.items()}
         floors = dict(runtime._state.groups_feed.floor)
         drawing = runtime._state.groups_feed.drawing or {}
         targets = dict(runtime._state.targets)
@@ -553,11 +554,17 @@ def _compare_track_poses(
         group_info = (drawing.get("groups") or {}).get(str(context.get("group"))) or {}
         if fs:
             nearest = min(fs, key=lambda f: abs(f[0] - job.created))[0]
+            matched = next((e for t, e in reversed(group_evidence.get(name, ())) if t == nearest), None)
+            if matched is not None:
+                context = matched
+                group_info = {"supported": matched.get("group_supported", False)}
             timing = {"nearest_frame_t": nearest, "time_skew_s": abs(nearest - job.created)}
             # Use interpolation only when bracketed, or a sample within the
             # existing frame/pose synchronization allowance. Never compare stale
             # groups to current P2P as if both were observed now.
-            if timing["time_skew_s"] <= runtime.HISTORY_MATCH_S and group_info.get("supported", True):
+            if timing["time_skew_s"] <= runtime.HISTORY_MATCH_S and (
+                context.get("own") or group_info.get("supported", True)
+            ):
                 group = core._groups_pose_at(fs, job.created)
         tracker = tr.verification.setdefault(name, pose_verification.GroupReference())
         compared = tracker.compare(

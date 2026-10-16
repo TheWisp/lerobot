@@ -307,7 +307,7 @@ class MjpegView:
         self.ticket_lock = threading.Lock()
         self.poses: collections.deque = collections.deque(
             maxlen=POSES_KEPT
-        )  # (frame time, {name: pose}), oldest first
+        )  # (frame time, {name: pose}, {name: evidence}), oldest first
         self.drawing: dict | None = (
             None  # the newest frame's picture (groups_scene.drawing), with its frame time
         )
@@ -375,7 +375,7 @@ class MjpegView:
                         self._json(400, {"detail": "since is a frame time, in seconds"})
                         return
                     with view.poses_lock:
-                        frames = [[t, poses] for t, poses in view.poses if t > since]
+                        frames = [[t, poses, evidence] for t, poses, evidence in view.poses if t > since]
                         drawing = view.drawing
                     self._json(200, {"frames": frames, "drawing": drawing})
                     return
@@ -432,8 +432,22 @@ class MjpegView:
     def add_poses(self, stamp: float, poses: dict[str, list[float]], drawing: dict | None = None) -> None:
         """One frame's poses of the designated objects, for GET /poses (a frame with none says the view is alive),
         and its picture for another camera view (groups_scene.drawing), the newest kept."""
+        objects = (drawing or {}).get("objects") or {}
+        groups = (drawing or {}).get("groups") or {}
+        evidence = {
+            name: {
+                "group": context.get("group"),
+                "own": bool(context.get("own")),
+                "why": context.get("why"),
+                "n_seen": context.get("n_seen"),
+                "n_grouped": context.get("n_grouped"),
+                "group_supported": bool((groups.get(str(context.get("group"))) or {}).get("supported")),
+            }
+            for name in poses
+            if (context := objects.get(name)) is not None
+        }
         with self.poses_lock:
-            self.poses.append((stamp, poses))
+            self.poses.append((stamp, poses, evidence))
             if drawing is not None:
                 self.drawing = {**drawing, "stamp": stamp}
 
@@ -537,11 +551,15 @@ def main() -> None:
     ap.add_argument("--port", type=int, default=9141)
     ap.add_argument("--resize", type=int, default=256)
     ap.add_argument("--pips", type=int, default=4)
+    ap.add_argument("--borrowed-points", type=int, default=N_RING)
     args = ap.parse_args()
     signal.signal(
         signal.SIGTERM, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt())
     )  # a kill stops the recording too
     groups, scene = load_by_path()
+    if args.borrowed_points < 2 * groups.GroupTracker().min_group:
+        ap.error("borrowed-points must cover at least two minimum rigid groups")
+    n_ring = args.borrowed_points
     source = (
         LiveSource(args.server)
         if args.live
@@ -568,6 +586,7 @@ def main() -> None:
     wire = scene.Wireframe()  # each group's wireframe, kept from frame to frame: given every frame, in order
     tapir = None
     objects, outlines, centres, rings = {}, {}, {}, {}
+    ring_seeded_frame: dict[str, int] = {}
     timeline, frame_no, t_wall = [], 0, time.time()
     prev_small, prev_depth, still_for, moving_frames = None, None, None, []
     known_groups: set[int] = set()
@@ -594,7 +613,7 @@ def main() -> None:
         done: dict[str, dict] = {}
         for (name, click), mask in zip(asked.items(), masks, strict=True):
             own = scene.stable_points(gray, mask & np.isfinite(pts).all(axis=2), N_OBJECT, 24, spacing=6)
-            borrowed = scene.stable_points(gray, field, N_RING, 48, near=np.asarray(click, float))
+            borrowed = scene.stable_points(gray, field, n_ring, 48, near=np.asarray(click, float))
             for u, v in borrowed.astype(int):  # taken: the next object borrows other corners, not copies
                 cv2.circle(field.view(np.uint8), (int(u), int(v)), 6, 0, -1)
             if len(own) < 4 or not len(borrowed):
@@ -612,6 +631,7 @@ def main() -> None:
             if previous_ring is not None:
                 tracker.retire_unowned(previous_ring)
             rings[name] = new_ring
+            ring_seeded_frame[name] = frame_no
             # Re-designation replaces both the object's points and its borrowed
             # field. Drop the retired queries now, before the next GPU step.
             tapir.drop(np.flatnonzero(tracker.retired))
@@ -658,7 +678,7 @@ def main() -> None:
                         view.designated.update(done)
                 else:  # nothing to expand from: corners balanced over the whole view
                     gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
-                    borrowed = scene.stable_points(gray, np.isfinite(pts).all(axis=2), N_RING, 48)
+                    borrowed = scene.stable_points(gray, np.isfinite(pts).all(axis=2), n_ring, 48)
                     tapir.add(rgb, borrowed)
                     print(f"no objects: {len(borrowed)} points over the view", flush=True)
                 budget = len(tapir.tracker.query_points)  # what was seeded: the field is kept near this
@@ -704,6 +724,10 @@ def main() -> None:
             if frame_no % RESEED_EVERY == 0 and frame_no > 0:
                 gray = None
                 for name in names:
+                    # New queries need the group's join history before their
+                    # ungrouped state can be interpreted as field loss.
+                    if frame_no - ring_seeded_frame[name] <= tracker.join_frames:
+                        continue
                     obj = tracker.objects[name]
                     ring = rings[name]
                     # Standing: in some group and not retired. An object that moved on its own sits in a group of
@@ -715,7 +739,7 @@ def main() -> None:
                             & (tracker.unseen[ring] < 15)
                         ).sum()
                     )
-                    if standing >= N_RING // 2:
+                    if standing >= n_ring // 2:
                         continue
                     if gray is None:
                         gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
@@ -730,9 +754,10 @@ def main() -> None:
                     field &= ~scene.outline_mask(field.shape, outlines[name], centres[name], obj.pose, k)
                     for u, v in uv[seen].astype(int):  # nor where a track already is
                         cv2.circle(field.view(np.uint8), (int(u), int(v)), 6, 0, -1)
-                    fresh = scene.stable_points(gray, field, N_RING - standing, 48, near=at)
+                    fresh = scene.stable_points(gray, field, n_ring - standing, 48, near=at)
                     if len(fresh):
                         rings[name] = np.concatenate([ring, np.asarray(tapir.add(rgb, fresh), dtype=int)])
+                        ring_seeded_frame[name] = frame_no
                         print(
                             f"frame {n}: {name} had {standing} borrowed points standing; {len(fresh)} added",
                             flush=True,
@@ -773,7 +798,11 @@ def main() -> None:
                 "retired": int(tracker.retired.sum()),
                 "world": base,
                 "moving": bool(moving_frames[-1]),
-                "ms": {"track": round(t_track, 1), "group": round(t_group, 1)},
+                "ms": {
+                    "track": round(t_track, 1),
+                    "group": round(t_group, 1),
+                    **{f"group_{name}": ms for name, ms in tracker.timing_ms.items()},
+                },
                 # each group's motion since its birth: how far its body moved and turned (mm, degrees)
                 "motion": {
                     str(g): [

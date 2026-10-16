@@ -245,6 +245,7 @@ def ransac_fit_rigid(
     prior_rot_deg: float = 180.0,
     prior_trans_m: float = float("inf"),
     priors: list[tuple[Rigid3, float, float]] | None = None,
+    fast_prior: bool = False,
 ) -> RigidFit:
     """Robust Kabsch over index-matched 3D points. Post: never raises; abstains instead.
 
@@ -328,6 +329,48 @@ def ransac_fit_rigid(
             if float(np.linalg.norm(cand.apply(centroid) - ref.apply(centroid))) > trans_m:
                 return False
         return True
+
+    if fast_prior and prior is not None:
+        # A near-unanimous, low-residual prior can be refitted directly. The
+        # consensus is checked both before and after fitting; otherwise use the
+        # full RANSAC ballot so an independently moving body or a group of
+        # drifting queries can still replace the prior. Established members
+        # propose when this group uses hypothesis weights.
+        near = np.linalg.norm(prior.apply(s) - d, axis=1) < inlier_m
+        established = np.ones(len(s), bool) if w is None else w > 0
+        enough = near.sum() >= 0.9 * len(s)
+        if w is not None:
+            enough &= w[near].sum() >= 0.9 * w.sum()
+        if enough and (near & established).sum() >= min_points:
+            try:
+                quick, scale = fit_rigid(s[near & established], d[near & established], estimate_scale=True)
+                err = np.linalg.norm(quick.apply(s) - d, axis=1)
+                inl = err < inlier_m
+                if inl.sum() >= 0.9 * len(s) and reachable(quick):
+                    # Once established members have nominated the motion,
+                    # every agreeing point joins the refit, as in full RANSAC.
+                    quick, scale = fit_rigid(s[inl], d[inl], estimate_scale=True)
+                    err = np.linalg.norm(quick.apply(s) - d, axis=1)
+                    inl = err < inlier_m
+                    if (
+                        inl.sum() >= 0.9 * len(s)
+                        and float(np.sqrt(np.mean(err[inl] ** 2))) <= inlier_m / 2
+                        and abs(scale - 1.0) <= 0.1
+                        and reachable(quick)
+                    ):
+                        residuals[idx] = err
+                        accepted = np.zeros(n, dtype=bool)
+                        accepted[idx[inl]] = True
+                        return RigidFit(
+                            ok=True,
+                            transform=quick,
+                            inliers=accepted,
+                            residuals=residuals,
+                            rms=float(np.sqrt(np.mean(err[inl] ** 2))),
+                            scale=scale,
+                        )
+            except AssertionError:
+                pass
 
     def consider(draw_p) -> None:
         nonlocal best_inl, best_mass, count_inl

@@ -47,3 +47,18 @@ def test_group_evidence_has_the_same_authority_for_any_free_object(monkeypatch, 
     context["why"] = ""
     drawing["stamp"] -= runtime.GROUPS_DRAW_MAX_AGE_S
     assert not groups._motion_supported(name), "stale evidence cannot authorize following"
+
+
+def test_motion_support_uses_evidence_from_the_pose_frame(monkeypatch):
+    monkeypatch.setattr(groups.time, "time", lambda: 100.0)
+    name = "target"
+    feed = runtime._GroupsFeed(
+        frames={name: deque([(99.9, np.eye(4))])},
+        evidence={name: deque([(99.9, {"own": False, "why": "", "group_supported": False})])},
+        drawing={"stamp": 100.0, "objects": {name: {"group": 3}}, "groups": {"3": {"supported": True}}},
+    )
+    monkeypatch.setattr(runtime._state, "groups_feed", feed)
+    monkeypatch.setattr(runtime._state, "groups_with_acts", True)
+    assert not groups._motion_supported(name), "a newer group fit cannot authorize the older unsupported pose"
+    feed.evidence[name][-1][1]["own"] = True
+    assert groups._motion_supported(name)

@@ -225,6 +225,7 @@ async def _designate_in_groups(
                 with runtime._state.lock:
                     for name in objects:
                         feed.frames.pop(name, None)
+                        feed.evidence.pop(name, None)
                         feed.floor[name] = since
                 return "", since
         if proc is not None and proc.poll() is not None:
@@ -262,7 +263,9 @@ async def _groups_feed_pump() -> None:
             answer = await _groups_call("GET", f"/poses?since={since!r}")
             if answer:
                 with runtime._state.lock:
-                    for stamp, poses in answer.get("frames") or ():
+                    for frame in answer.get("frames") or ():
+                        stamp, poses = frame[:2]
+                        evidence = frame[2] if len(frame) > 2 else {}
                         stamp = float(stamp)
                         if stamp <= feed.since:
                             continue
@@ -271,6 +274,10 @@ async def _groups_feed_pump() -> None:
                                 feed.frames.setdefault(
                                     name, collections.deque(maxlen=runtime.GROUPS_FRAMES_KEPT)
                                 ).append((stamp, np.asarray(m, dtype=float).reshape(4, 4)))
+                                if name in evidence:
+                                    feed.evidence.setdefault(
+                                        name, collections.deque(maxlen=runtime.GROUPS_FRAMES_KEPT)
+                                    ).append((stamp, evidence[name]))
                         feed.since, feed.fresh = stamp, time.monotonic()
                     if answer.get("drawing"):
                         feed.drawing = answer["drawing"]
@@ -311,11 +318,18 @@ def _motion_supported(name: str) -> bool:
         frames = feed.frames.get(name)
         if not runtime._state.groups_with_acts or not frames:
             return False
-        fresh = time.time() - min(float(drawing.get("stamp") or 0), frames[-1][0])
+        evidence = feed.evidence.get(name)
+        if evidence and evidence[-1][0] == frames[-1][0]:
+            context = evidence[-1][1]
+            supported = bool(context.get("group_supported"))
+            fresh = time.time() - frames[-1][0]
+        else:  # compatibility with a view that has not supplied per-frame evidence
+            supported = bool(group.get("supported"))
+            fresh = time.time() - min(float(drawing.get("stamp") or 0), frames[-1][0])
         return (
             fresh <= runtime.GROUPS_DRAW_MAX_AGE_S
             and context.get("why") != "held"
-            and (bool(context.get("own")) or bool(group.get("supported")))
+            and (bool(context.get("own")) or supported)
         )
 
 

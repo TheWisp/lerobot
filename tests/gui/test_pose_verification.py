@@ -98,6 +98,24 @@ def test_stale_group_pose_is_explicitly_unavailable(monkeypatch, tmp_path):
     assert not check["accepted"] and check["disagreement"]
 
 
+def test_group_authority_uses_the_pose_frames_evidence_not_a_later_drawing(monkeypatch, tmp_path):
+    job, teach, _, _ = setup_case(monkeypatch, tmp_path)
+    job.created = 1.0
+    feed = p.runtime._state.groups_feed
+    feed.frames["cube"] = [(1.0, np.eye(4)), (1.1, np.eye(4))]
+    feed.evidence["cube"] = [
+        (1.0, {"group": 0, "own": False, "group_supported": False}),
+        (1.1, {"group": 0, "own": False, "group_supported": True}),
+    ]
+    feed.drawing = {"objects": {"cube": {"group": 0}}, "groups": {"0": {"supported": True}}}
+    check = p.tracking._verify_track_poses(job, job.result, teach, False)[0]
+    assert check["groups"]["state"] == "unavailable"
+    assert check["groups"]["context"]["group"] == 0
+    job.created = 1.1
+    check = p.tracking._verify_track_poses(job, job.result, teach, False)[0]
+    assert check["groups"]["state"] == "baseline"
+
+
 def test_group_conflict_with_partial_surface_cannot_publish_a_control_pose(monkeypatch, tmp_path):
     job, _, _, track = setup_case(monkeypatch, tmp_path)
     shifted = np.eye(4)

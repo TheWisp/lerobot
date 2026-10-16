@@ -235,6 +235,27 @@ def test_a_prior_nothing_reaches_is_an_abstention_not_a_guess():
     assert not fit.ok, "the truth carries the centroid 22 mm, past a 5 mm bound"
 
 
+def test_fast_prior_agrees_on_a_stable_group_and_falls_back_after_a_jump():
+    rng = np.random.default_rng(42)
+    src = rng.uniform([-0.15, -0.10, 0.38], [0.15, 0.10, 0.48], (120, 3))
+    truth = Rigid3.from_rotvec((0.0, 0.0, np.deg2rad(1.0)), (0.001, -0.001, 0.0))
+    dst = truth.apply(src) + rng.normal(0, 0.0007, src.shape)
+    dst[:5] += 0.03  # depth/track outliers must not pull the direct refit
+    kwargs = {"inlier_m": 0.010, "prior": Rigid3.identity(), "prior_rot_deg": 45.0}
+    full = ransac_fit_rigid(src, dst, **kwargs)
+    fast = ransac_fit_rigid(src, dst, fast_prior=True, **kwargs)
+    assert full.ok and fast.ok
+    assert np.linalg.norm(fast.transform.trans - full.transform.trans) < 0.0005
+    assert np.degrees((fast.transform.compose(full.transform.inverse())).angle) < 0.3
+
+    jumped = dst + [0.025, 0.0, 0.0]
+    full = ransac_fit_rigid(src, jumped, **kwargs)
+    fast = ransac_fit_rigid(src, jumped, fast_prior=True, **kwargs)
+    assert full.ok and fast.ok
+    assert np.allclose(fast.transform.trans, full.transform.trans)
+    assert np.array_equal(fast.inliers, full.inliers), "the stale prior must use the full ballot"
+
+
 # --- the shape sets what a plain object's matches cannot ---------------------------
 
 RIG = CameraIntrinsics(fx=604.2, fy=604.2, cx=419.2, cy=250.6)  # the rig's D435 at 848x480
