@@ -367,11 +367,40 @@ def act_frames(demo, overlay):
 
 
 def title_frames(summary=False):
-    cap = cv2.VideoCapture(str(OUT / "stacking_grid_raw.mp4"))
-    count = 150 if summary else 45
     if summary:
-        cap.set(cv2.CAP_PROP_POS_FRAMES, STACKING_GRID_SECONDS * FPS - count)
-    for _n in range(count):
+        background = Image.new("RGB", (W, H), BG)
+        card = background.copy()
+        draw = ImageDraw.Draw(card)
+        text(card, (80, 65), "FLASH", 92, ACCENT, bold=True)
+        text(card, (80, 175), "A Spatial-Action Model", 41, MUTED)
+        draw.line((80, 240, W - 80, 240), fill=(42, 65, 75), width=2)
+        properties = (
+            "One demo",
+            "Model-free",
+            "Viewpoint generalization",
+            "Occlusion robustness",
+            "Perturbation robustness",
+            "Real time",
+        )
+        for i, label in enumerate(properties):
+            x = 80 + (i % 2) * 915
+            y = 270 + (i // 2) * 245
+            draw.rounded_rectangle(
+                (x, y, x + 845, y + 215),
+                radius=22,
+                fill=(18, 30, 42),
+                outline=(43, 67, 77),
+                width=2,
+            )
+            draw.rounded_rectangle((x + 40, y + 42, x + 112, y + 51), radius=4, fill=ACCENT)
+            text(card, (x + 40, y + 90), label, 52, bold=True)
+        for n in range(150):
+            frame = Image.blend(background, card, min(1.0, (n + 1) / 10))
+            yield cv2.cvtColor(np.asarray(frame), cv2.COLOR_RGB2BGR)
+        return
+
+    cap = cv2.VideoCapture(str(OUT / "stacking_grid_raw.mp4"))
+    for _n in range(45):
         ok, bgr = cap.read()
         assert ok
         # Reuse only the footage area, without its labels, as an animated backdrop.
@@ -379,15 +408,8 @@ def title_frames(summary=False):
         bgr = cv2.GaussianBlur(bgr, (0, 0), 9)
         bgr = (bgr.astype(float) * 0.32 + np.asarray(BG[::-1]) * 0.35).clip(0, 255).astype(np.uint8)
         im = Image.fromarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))
-        if summary:
-            text(im, (130, 205), "One demo defines object-relative goals", 60, bold=True)
-            text(im, (130, 325), "Live vision updates poses · planning moves the arm", 45, ACCENT)
-            text(im, (130, 460), "Model-free objects: no CAD, scan or fine-tuning", 50, bold=True)
-            text(im, (130, 590), "New poses · viewpoints · occlusion · perturbations", 47, bold=True)
-            text(im, (130, 725), "Real time", 66, bold=True)
-        else:
-            text(im, (W // 2, 350), "Preview: FLASH", 128, bold=True, anchor="ma")
-            text(im, (W // 2, 550), "A Spatial-Action Model", 70, anchor="ma")
+        text(im, (W // 2, 350), "Preview: FLASH", 128, bold=True, anchor="ma")
+        text(im, (W // 2, 550), "A Spatial-Action Model", 70, anchor="ma")
         yield cv2.cvtColor(np.asarray(im), cv2.COLOR_RGB2BGR)
     cap.release()
 
@@ -431,7 +453,7 @@ def main():
             OVERLAY_START_S,
             TIMELINE["rows"][-1]["t_wall"] - META["t_started"],
         ],
-        "edit_revision": 8,
+        "edit_revision": 9,
         "grid_seconds": STACKING_GRID_SECONDS,
         "insertion_grid_seconds": INSERTION_GRID_SECONDS,
         "grid_layout": [3, 3],
@@ -451,6 +473,14 @@ def main():
             for name, source, heading, subtitle in TRANSITIONS
         ],
         "summary_seconds": 5.0,
+        "summary_properties": [
+            "One demo",
+            "Model-free",
+            "Viewpoint generalization",
+            "Occlusion robustness",
+            "Perturbation robustness",
+            "Real time",
+        ],
         "grid_sources": [
             {
                 "run": str(s.run),
@@ -509,7 +539,7 @@ def main():
     encode("02_autonomous_raw.mp4", act_frames(insertion, False), len(TIMELINE["rows"]), force=True)
     encode("03_autonomous_overlay.mp4", act_frames(insertion, True), len(OVERLAY_ROWS), force=True)
     encode("00_title.mp4", title_frames(), 45)
-    encode("05_summary.mp4", title_frames(True), 150)
+    encode("05_summary.mp4", title_frames(True), 150, force=True)
     for name, source, heading, subtitle in TRANSITIONS:
         encode(
             name,

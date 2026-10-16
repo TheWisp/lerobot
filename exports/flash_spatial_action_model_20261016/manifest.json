@@ -17,7 +17,7 @@
     5.5,
     16.333541870117188
   ],
-  "edit_revision": 8,
+  "edit_revision": 9,
   "grid_seconds": 12,
   "insertion_grid_seconds": 9,
   "grid_layout": [
@@ -70,6 +70,14 @@
     }
   ],
   "summary_seconds": 5.0,
+  "summary_properties": [
+    "One demo",
+    "Model-free",
+    "Viewpoint generalization",
+    "Occlusion robustness",
+    "Perturbation robustness",
+    "Real time"
+  ],
   "grid_sources": [
     {
       "run": "/home/feit/.cache/huggingface/lerobot/demos/pick_place/acts/20261011_080249",
