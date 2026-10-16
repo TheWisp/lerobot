@@ -49,8 +49,19 @@ PLACEMENT_CENTRES = {
     "20261012_194250": (330, 292),
     "20261013_211511": (334, 282),
 }
-GRID_SECONDS = 7
+GRID_SECONDS = 9
 GRID_CROP_SIZE = (320, 164)
+INSERTIONS = [
+    ("20261015_165734", (364, 250)),
+    ("20261015_184144", (278, 224)),
+    ("20261015_233027", (328, 250)),
+    ("20261016_005114", (318, 234)),
+    ("20261016_022104", (417, 337)),
+    ("20261016_075037", (361, 299)),
+    ("20261016_100628", (367, 338)),
+    ("20261016_110310", (331, 302)),
+    ("20261016_112149", (366, 294)),
+]
 
 # Keep the actual recorded overlay geometry. Only the diagnostic prose and the
 # appended verification panel are omitted in this presentation, in this process.
@@ -145,6 +156,33 @@ def encode(name, frames, count):
     print(f"Complete: {name}", flush=True)
 
 
+def target_outline(raw, run, meta, i, points, name):
+    """Draw only the target silhouette from the recorded pose, without labels."""
+    drawn = raw.copy()
+    if i < 0:
+        return drawn
+    frame = meta["frames"][i]
+    with np.load(run / "frames" / f"{i:06d}.npz") as z:
+        pose = z.get("onto_held")
+        for k, held in enumerate(frame.get("held") or []):
+            if held["object"] == name:
+                pose = z.get(f"held_{k}")
+        if pose is not None:
+            mask = rendering._found_mask(meta["intr"], points[name], pose, raw.shape)
+            if mask is not None:
+                contours, _ = cv2.findContours(
+                    mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+                )
+                cv2.drawContours(drawn, contours, -1, rendering.runtime.FOUND_COLOUR, 1, cv2.LINE_AA)
+    return drawn
+
+
+def tile_crop(frame, centre):
+    cx, cy = centre
+    cw, ch = GRID_CROP_SIZE
+    return cv2.resize(frame[cy - ch // 2 : cy + ch // 2, cx - cw // 2 : cx + cw // 2], (616, 316))
+
+
 class Stack:
     def __init__(self, name, release, demo):
         self.run = ROOT / "pick_place/acts" / name
@@ -152,7 +190,7 @@ class Stack:
         self.points = replay._replay_points(self.meta, demo)
         assert self.points.get("cube") is not None
         self.times = [f["t_frame"] - self.meta["t_started"] for f in self.meta["frames"]]
-        self.start = 35.0 if name == "20261012_194250" else release - 0.5
+        self.start = 33.0 if name == "20261012_194250" else release - 2.5
         self.centre = PLACEMENT_CENTRES[name]
         self.last = None
         self.raw = self.drawn = None
@@ -162,34 +200,46 @@ class Stack:
         i = min(i, len(self.times) - 1)
         if i != self.last:
             raw = cv2.imread(str(self.run / "frames" / f"{i:06d}.jpg"))
-            drawn = raw.copy()
-            # Keep just the recorded cube silhouette in the grid. Removing the
-            # point cloud, axes, wireframe and labels makes the actual result legible.
-            frame = self.meta["frames"][i]
-            with np.load(self.run / "frames" / f"{i:06d}.npz") as z:
-                pose = z.get("onto_held")
-                for k, held in enumerate(frame.get("held") or []):
-                    if held["object"] == "cube":
-                        pose = z.get(f"held_{k}")
-                if pose is not None:
-                    mask = rendering._found_mask(self.meta["intr"], self.points["cube"], pose, raw.shape)
-                    if mask is not None:
-                        contours, _ = cv2.findContours(
-                            mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-                        )
-                        cv2.drawContours(drawn, contours, -1, rendering.runtime.FOUND_COLOUR, 1, cv2.LINE_AA)
-            cx, cy = self.centre
-            cw, ch = GRID_CROP_SIZE
-            crop = np.s_[cy - ch // 2 : cy + ch // 2, cx - cw // 2 : cx + cw // 2]
-            self.raw = cv2.resize(raw[crop], (616, 316))
-            self.drawn = cv2.resize(drawn[crop], (616, 316))
+            drawn = target_outline(raw, self.run, self.meta, i, self.points, "cube")
+            self.raw = tile_crop(raw, self.centre)
+            self.drawn = tile_crop(drawn, self.centre)
             self.last = i
-        alpha = float(np.clip(4.0 - t, 0, 1)) if overlay else 0.0
+        alpha = float(np.clip(6.0 - t, 0, 1)) if overlay else 0.0
         return cv2.addWeighted(self.drawn, alpha, self.raw, 1 - alpha, 0)
 
 
-def grid(stacks, overlay):
-    base = chrome("Different rollouts", "Autonomous, 1x speed")
+class Insertion:
+    def __init__(self, name, centre, demo):
+        self.run = ROOT / "insertion/acts" / name
+        self.meta = json.loads((self.run / "act.json").read_text())
+        self.rows = json.loads((self.run / "camera/timeline.json").read_text())["rows"]
+        self.times = [r["t_wall"] - self.meta["t_started"] for r in self.rows]
+        self.result_times = [f.get("t_result", f["t_frame"]) for f in self.meta["frames"]]
+        self.points = replay._replay_points(self.meta, demo)
+        assert self.points.get("ring") is not None
+        release = next(f["t_frame"] for f in self.meta["frames"] if f["step"] == "key frame 8")
+        self.start = release - self.meta["t_started"] - 4.5
+        self.centre = centre
+        self.last = None
+        self.raw = self.drawn = None
+
+    def frame(self, t, overlay):
+        row = self.rows[max(0, bisect.bisect_right(self.times, self.start + t) - 1)]
+        source = bisect.bisect_right(self.result_times, row["t_wall"]) - 1
+        key = (row["image"], source)
+        if key != self.last:
+            raw = cv2.imread(str(self.run / "camera/rgb" / f"{row['image']:06d}.jpg"))
+            assert raw is not None
+            drawn = target_outline(raw, self.run, self.meta, source, self.points, "ring")
+            self.raw = tile_crop(raw, self.centre)
+            self.drawn = tile_crop(drawn, self.centre)
+            self.last = key
+        alpha = float(np.clip(6.0 - t, 0, 1)) if overlay else 0.0
+        return cv2.addWeighted(self.drawn, alpha, self.raw, 1 - alpha, 0)
+
+
+def grid(stacks, overlay, subject="pick and place"):
+    base = chrome(f"Different rollouts: {subject}", "Autonomous, 1x speed")
     for n in range(GRID_SECONDS * FPS):
         canvas = base.copy()
         for k, stack in enumerate(stacks):
@@ -287,7 +337,7 @@ def title_frames(summary=False):
             text(im, (160, 425), "Object poses · Camera viewpoints", 52, ACCENT)
             text(im, (160, 620), "Robust to occlusion & perturbations", 64, bold=True)
         else:
-            text(im, (W // 2, 320), "FLASH", 172, bold=True, anchor="ma")
+            text(im, (W // 2, 350), "Preview: FLASH", 128, bold=True, anchor="ma")
             text(im, (W // 2, 550), "A Spatial-Action Model", 70, anchor="ma")
         yield cv2.cvtColor(np.asarray(im), cv2.COLOR_RGB2BGR)
     cap.release()
@@ -296,8 +346,9 @@ def title_frames(summary=False):
 def main():
     insertion, stacking = _demo(ROOT / "insertion"), _demo(ROOT / "pick_place")
     stacks = [Stack(n, r, stacking) for n, r in STACKS]
+    insertions = [Insertion(n, c, insertion) for n, c in INSERTIONS]
     manifest = {
-        "title": "FLASH: A Spatial-Action Model",
+        "title": "Preview: FLASH — A Spatial-Action Model",
         "fps": FPS,
         "resolution": [W, H],
         "autonomous_run": str(RUN),
@@ -306,11 +357,11 @@ def main():
         "controller_speed_during_recording": 2.0,
         "demo_cut_seconds": [4.5, 17.5],
         "overlay_cut_seconds": [5.5, 24.5],
-        "edit_revision": 2,
+        "edit_revision": 3,
         "grid_seconds": GRID_SECONDS,
         "grid_layout": [3, 3],
         "grid_crop_size": GRID_CROP_SIZE,
-        "grid_overlay_fade_seconds": [3, 4],
+        "grid_overlay_fade_seconds": [5, 6],
         "title_seconds": 1.5,
         "summary_seconds": 3.5,
         "grid_sources": [
@@ -322,8 +373,18 @@ def main():
             }
             for s in stacks
         ],
+        "insertion_grid_sources": [
+            {
+                "run": str(s.run),
+                "start_seconds": s.start,
+                "end_seconds": s.start + GRID_SECONDS,
+                "crop_centre": s.centre,
+            }
+            for s in insertions
+        ],
+        "insertion_grid_selection": "Nine camera-timeline runs visually checked for a seated dowel and visible retreat. All use the same crop dimensions as the placement grid, centred on insertion. Completed runs with a missed ring were excluded.",
         "timing": "Camera timeline at 30 Hz; latest available recorded async result. Older grid clips use recorded t_frame timestamps and hold frames, with no optical-flow interpolation. Last frame held where a source ends.",
-        "overlay": "Insertion uses existing replay drawing without diagnostic prose/panel. Grid shows only the recorded cube silhouette, fading to raw footage during retreat. Cube pose is a recorded accepted/predicted estimate, not ground truth.",
+        "overlay": "Main insertion replay uses existing drawing without diagnostic prose/panel. Grids show only the recorded target silhouette, fading to raw footage during retreat. Target pose is a recorded accepted/predicted estimate, not ground truth.",
         "audit": {
             "completed": True,
             "visually_observed_insertion": True,
@@ -343,6 +404,8 @@ def main():
     (OUT / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     encode("stacking_grid_overlay.mp4", grid(stacks, True), GRID_SECONDS * FPS)
     encode("stacking_grid_raw.mp4", grid(stacks, False), GRID_SECONDS * FPS)
+    encode("insertion_grid_overlay.mp4", grid(insertions, True, "dowel insertion"), GRID_SECONDS * FPS)
+    encode("insertion_grid_raw.mp4", grid(insertions, False, "dowel insertion"), GRID_SECONDS * FPS)
     encode("01_single_demo.mp4", demo_frames(insertion), 390)
     encode("02_autonomous_raw.mp4", act_frames(insertion, False), len(TIMELINE["rows"]))
     encode("03_autonomous_overlay.mp4", act_frames(insertion, True), 570)
@@ -353,6 +416,7 @@ def main():
         "01_single_demo.mp4",
         "02_autonomous_raw.mp4",
         "03_autonomous_overlay.mp4",
+        "insertion_grid_overlay.mp4",
         "stacking_grid_overlay.mp4",
         "05_summary.mp4",
     ]

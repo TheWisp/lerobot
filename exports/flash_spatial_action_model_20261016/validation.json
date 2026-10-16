@@ -8,12 +8,12 @@
         "height": 1080,
         "pix_fmt": "yuv420p",
         "r_frame_rate": "30/1",
-        "nb_frames": "2086"
+        "nb_frames": "2416"
       }
     ],
     "format": {
-      "duration": "69.533333",
-      "size": "49378823"
+      "duration": "80.533333",
+      "size": "58699107"
     }
   },
   "stacking_grid_overlay.mp4": {
@@ -25,12 +25,12 @@
         "height": 1080,
         "pix_fmt": "yuv420p",
         "r_frame_rate": "30/1",
-        "nb_frames": "210"
+        "nb_frames": "270"
       }
     ],
     "format": {
-      "duration": "7.000000",
-      "size": "3020744"
+      "duration": "9.000000",
+      "size": "4317796"
     }
   },
   "stacking_grid_raw.mp4": {
@@ -42,12 +42,47 @@
         "height": 1080,
         "pix_fmt": "yuv420p",
         "r_frame_rate": "30/1",
-        "nb_frames": "210"
+        "nb_frames": "270"
       }
     ],
     "format": {
-      "duration": "7.000000",
-      "size": "2938342"
+      "duration": "9.000000",
+      "size": "4195805"
     }
-  }
+  },
+  "insertion_grid_overlay.mp4": {
+    "programs": [],
+    "streams": [
+      {
+        "codec_name": "h264",
+        "width": 1920,
+        "height": 1080,
+        "pix_fmt": "yuv420p",
+        "r_frame_rate": "30/1",
+        "nb_frames": "270"
+      }
+    ],
+    "format": {
+      "duration": "9.000000",
+      "size": "8015065"
+    }
+  },
+  "insertion_grid_raw.mp4": {
+    "programs": [],
+    "streams": [
+      {
+        "codec_name": "h264",
+        "width": 1920,
+        "height": 1080,
+        "pix_fmt": "yuv420p",
+        "r_frame_rate": "30/1",
+        "nb_frames": "270"
+      }
+    ],
+    "format": {
+      "duration": "9.000000",
+      "size": "7877135"
+    }
+  },
+  "full_master_decode": "Passed; no decoder errors"
 }

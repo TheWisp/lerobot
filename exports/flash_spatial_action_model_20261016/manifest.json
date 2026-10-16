@@ -1,5 +1,5 @@
 {
-  "title": "FLASH: A Spatial-Action Model",
+  "title": "Preview: FLASH \u2014 A Spatial-Action Model",
   "fps": 30,
   "resolution": [
     1920,
@@ -17,8 +17,8 @@
     5.5,
     24.5
   ],
-  "edit_revision": 2,
-  "grid_seconds": 7,
+  "edit_revision": 3,
+  "grid_seconds": 9,
   "grid_layout": [
     3,
     3
@@ -28,15 +28,15 @@
     164
   ],
   "grid_overlay_fade_seconds": [
-    3,
-    4
+    5,
+    6
   ],
   "title_seconds": 1.5,
   "summary_seconds": 3.5,
   "grid_sources": [
     {
       "run": "/home/feit/.cache/huggingface/lerobot/demos/pick_place/acts/20261011_080249",
-      "start_seconds": 12.9,
+      "start_seconds": 10.9,
       "end_seconds": 19.9,
       "crop_centre": [
         290,
@@ -45,7 +45,7 @@
     },
     {
       "run": "/home/feit/.cache/huggingface/lerobot/demos/pick_place/acts/20261011_233111",
-      "start_seconds": 20.2,
+      "start_seconds": 18.2,
       "end_seconds": 27.2,
       "crop_centre": [
         362,
@@ -54,7 +54,7 @@
     },
     {
       "run": "/home/feit/.cache/huggingface/lerobot/demos/pick_place/acts/20261012_041448",
-      "start_seconds": 18.5,
+      "start_seconds": 16.5,
       "end_seconds": 25.5,
       "crop_centre": [
         306,
@@ -63,7 +63,7 @@
     },
     {
       "run": "/home/feit/.cache/huggingface/lerobot/demos/pick_place/acts/20261012_042101",
-      "start_seconds": 14.7,
+      "start_seconds": 12.7,
       "end_seconds": 21.7,
       "crop_centre": [
         315,
@@ -72,7 +72,7 @@
     },
     {
       "run": "/home/feit/.cache/huggingface/lerobot/demos/pick_place/acts/20261012_042338",
-      "start_seconds": 18.8,
+      "start_seconds": 16.8,
       "end_seconds": 25.8,
       "crop_centre": [
         291,
@@ -81,7 +81,7 @@
     },
     {
       "run": "/home/feit/.cache/huggingface/lerobot/demos/pick_place/acts/20261012_042642",
-      "start_seconds": 15.1,
+      "start_seconds": 13.1,
       "end_seconds": 22.1,
       "crop_centre": [
         282,
@@ -90,7 +90,7 @@
     },
     {
       "run": "/home/feit/.cache/huggingface/lerobot/demos/pick_place/acts/20261012_192802",
-      "start_seconds": 19.5,
+      "start_seconds": 17.5,
       "end_seconds": 26.5,
       "crop_centre": [
         343,
@@ -99,7 +99,7 @@
     },
     {
       "run": "/home/feit/.cache/huggingface/lerobot/demos/pick_place/acts/20261012_194250",
-      "start_seconds": 35.0,
+      "start_seconds": 33.0,
       "end_seconds": 42.0,
       "crop_centre": [
         330,
@@ -108,7 +108,7 @@
     },
     {
       "run": "/home/feit/.cache/huggingface/lerobot/demos/pick_place/acts/20261013_211511",
-      "start_seconds": 18.2,
+      "start_seconds": 16.2,
       "end_seconds": 25.2,
       "crop_centre": [
         334,
@@ -116,8 +116,92 @@
       ]
     }
   ],
+  "insertion_grid_sources": [
+    {
+      "run": "/home/feit/.cache/huggingface/lerobot/demos/insertion/acts/20261015_165734",
+      "start_seconds": 15.927138805389404,
+      "end_seconds": 24.927138805389404,
+      "crop_centre": [
+        364,
+        250
+      ]
+    },
+    {
+      "run": "/home/feit/.cache/huggingface/lerobot/demos/insertion/acts/20261015_184144",
+      "start_seconds": 13.372796535491943,
+      "end_seconds": 22.372796535491943,
+      "crop_centre": [
+        278,
+        224
+      ]
+    },
+    {
+      "run": "/home/feit/.cache/huggingface/lerobot/demos/insertion/acts/20261015_233027",
+      "start_seconds": 12.057540893554688,
+      "end_seconds": 21.057540893554688,
+      "crop_centre": [
+        328,
+        250
+      ]
+    },
+    {
+      "run": "/home/feit/.cache/huggingface/lerobot/demos/insertion/acts/20261016_005114",
+      "start_seconds": 16.148555278778076,
+      "end_seconds": 25.148555278778076,
+      "crop_centre": [
+        318,
+        234
+      ]
+    },
+    {
+      "run": "/home/feit/.cache/huggingface/lerobot/demos/insertion/acts/20261016_022104",
+      "start_seconds": 14.69221544265747,
+      "end_seconds": 23.69221544265747,
+      "crop_centre": [
+        417,
+        337
+      ]
+    },
+    {
+      "run": "/home/feit/.cache/huggingface/lerobot/demos/insertion/acts/20261016_075037",
+      "start_seconds": 16.566895723342896,
+      "end_seconds": 25.566895723342896,
+      "crop_centre": [
+        361,
+        299
+      ]
+    },
+    {
+      "run": "/home/feit/.cache/huggingface/lerobot/demos/insertion/acts/20261016_100628",
+      "start_seconds": 24.39687752723694,
+      "end_seconds": 33.39687752723694,
+      "crop_centre": [
+        367,
+        338
+      ]
+    },
+    {
+      "run": "/home/feit/.cache/huggingface/lerobot/demos/insertion/acts/20261016_110310",
+      "start_seconds": 17.40563464164734,
+      "end_seconds": 26.40563464164734,
+      "crop_centre": [
+        331,
+        302
+      ]
+    },
+    {
+      "run": "/home/feit/.cache/huggingface/lerobot/demos/insertion/acts/20261016_112149",
+      "start_seconds": 16.82020330429077,
+      "end_seconds": 25.82020330429077,
+      "crop_centre": [
+        366,
+        294
+      ]
+    }
+  ],
+  "insertion_grid_selection": "Nine camera-timeline runs visually checked for a seated dowel and visible retreat. All use the same crop dimensions as the placement grid, centred on insertion. Completed runs with a missed ring were excluded.",
   "timing": "Camera timeline at 30 Hz; latest available recorded async result. Older grid clips use recorded t_frame timestamps and hold frames, with no optical-flow interpolation. Last frame held where a source ends.",
-  "overlay": "Insertion uses existing replay drawing without diagnostic prose/panel. Grid shows only the recorded cube silhouette, fading to raw footage during retreat. Cube pose is a recorded accepted/predicted estimate, not ground truth.",
+  "overlay": "Main insertion replay uses existing drawing without diagnostic prose/panel. Grids show only the recorded target silhouette, fading to raw footage during retreat. Target pose is a recorded accepted/predicted estimate, not ground truth.",
   "audit": {
     "completed": true,
     "visually_observed_insertion": true,
