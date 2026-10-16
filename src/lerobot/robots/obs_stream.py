@@ -56,6 +56,8 @@ from typing import NamedTuple
 
 import numpy as np
 
+from lerobot.utils.depth_preview import depth_to_rgb_preview
+
 logger = logging.getLogger(__name__)
 
 ENV_VAR = "LEROBOT_OBS_STREAM"
@@ -340,9 +342,17 @@ class ObservationStream:
             k for k, v in obs_features.items() if not isinstance(v, tuple)
         )
         self.action_keys: list[str] = sorted(action_features.keys())
-        self.image_keys: dict[str, tuple[int, ...]] = dict(
-            sorted((k, v) for k, v in obs_features.items() if isinstance(v, tuple))
-        )
+        # The tap is a display stream: blocks are uint8 and readers render
+        # RGB. A single-channel feature is a depth map in uint16 millimetres,
+        # so it is advertised and written as a (H, W, 3) colour preview under
+        # its own key rather than truncated into noise.
+        self._preview_keys: set[str] = set()
+        self.image_keys: dict[str, tuple[int, ...]] = {}
+        for k, v in sorted((k, v) for k, v in obs_features.items() if isinstance(v, tuple)):
+            if len(v) == 3 and v[2] == 1:
+                self._preview_keys.add(k)
+                v = (v[0], v[1], 3)
+            self.image_keys[k] = v
         self._cycle = 0
         self._mark: float | None = None
         self._stamp = _NO_STAMP
@@ -402,6 +412,8 @@ class ObservationStream:
         for cam_key, block in self._img_blocks.items():
             img = obs.get(cam_key)
             if img is not None:
+                if cam_key in self._preview_keys:
+                    img = depth_to_rgb_preview(img)
                 block.write_array(np.ascontiguousarray(img, dtype=np.uint8), self._stamp)
 
     def image_seq(self, cam_key: str) -> int:

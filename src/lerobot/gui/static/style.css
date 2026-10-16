@@ -2498,6 +2498,27 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
    overlay layer and stays clickable (the overlay is pointer-events:none). */
 .obs-cam-zoom { top: 3px; right: 4px; border: 1px solid #0f3460; font-size: 12px; padding: 3px 6px; cursor: pointer; }
 .obs-cam-zoom:hover { color: #fff; border-color: #4da3ff; }
+/* Depth display mapping: the mode select sits left of the enlarge control and
+   the near/far range drops under it, shown only for Fixed. Bordered,
+   because a border is what says "control" here. */
+/* Spans the tile between its left edge and the enlarge control, so the strip
+   takes what is left once both number boxes have their width; a narrow tile
+   shortens the strip, never the numbers. */
+.depth-chip { top: 3px; left: 4px; right: 34px; display: flex; flex-direction: column; gap: 4px; align-items: flex-end; padding: 3px 5px; box-sizing: border-box; }
+.depth-chip-mode { display: flex; gap: 4px; align-items: center; color: #aaa; font-size: 11px; }
+.depth-chip-mode select { background: #111; color: #ddd; border: 1px solid #0f3460; border-radius: 2px; font-size: 11px; cursor: pointer; }
+/* The range: a number box at each end of the palette strip. In fixed mode two
+   native range inputs sit on the strip; only their thumbs take the pointer, so
+   the lower input's thumb is reachable through the upper one. */
+.depth-chip-range { display: flex; gap: 4px; align-items: center; width: 100%; }
+.depth-num { flex: 0 0 46px; width: 46px; box-sizing: border-box; font-size: 11px; background: #111; color: #ddd; border: 1px solid #0f3460; border-radius: 2px; padding: 1px 3px; }
+.depth-num[readonly] { color: #9ab; border-color: transparent; background: transparent; }
+.depth-unit { color: #aaa; font-size: 11px; }
+.depth-strip { position: relative; flex: 1 1 60px; min-width: 50px; max-width: 150px; height: 10px; border-radius: 5px; border: 1px solid #0f3460; }
+.depth-knob { position: absolute; left: 0; top: -5px; width: 100%; height: 20px; margin: 0; background: none; pointer-events: none; -webkit-appearance: none; appearance: none; }
+.depth-knob::-webkit-slider-thumb { -webkit-appearance: none; pointer-events: auto; width: 10px; height: 20px; border-radius: 3px; background: #ddd; border: 1px solid #0f3460; cursor: ew-resize; }
+.depth-knob::-moz-range-thumb { pointer-events: auto; width: 10px; height: 20px; border-radius: 3px; background: #ddd; border: 1px solid #0f3460; cursor: ew-resize; }
+.depth-knob::-webkit-slider-runnable-track, .depth-knob::-moz-range-track { background: none; }
 
 /* PROTOTYPE — click-to-segment. While armed the tiles ARE the control, so they must
    look clickable: crosshair over the whole cell (not just the image, or the letterbox

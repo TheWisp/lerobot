@@ -8,8 +8,8 @@
     "v": "6"
   },
   "app.js": {
-    "sha256_16": "16e9c86fb6575d60",
-    "v": "89"
+    "sha256_16": "7eb3bbbc069ac3db",
+    "v": "92"
   },
   "apply_completion.js": {
     "sha256_16": "02caba238a16fe46",
@@ -44,12 +44,16 @@
     "v": "5"
   },
   "chunk_player.js": {
-    "sha256_16": "ac3153fa2fa7b795",
-    "v": "22"
+    "sha256_16": "be2c357473a11999",
+    "v": "23"
   },
   "dataset_browser.js": {
     "sha256_16": "8ed58e70ceba9f0b",
     "v": "3"
+  },
+  "depth_chip.js": {
+    "sha256_16": "924832f930c9b13d",
+    "v": "1"
   },
   "dialogs.js": {
     "sha256_16": "a3cf9886d48139ea",
@@ -104,16 +108,16 @@
     "v": "16"
   },
   "robot.js": {
-    "sha256_16": "76ad2fd8e83e4f79",
-    "v": "27"
+    "sha256_16": "03daffc8cca73f49",
+    "v": "29"
   },
   "run.js": {
-    "sha256_16": "e6f57815e7b534d1",
-    "v": "76"
+    "sha256_16": "7b1fb54d9ad409e3",
+    "v": "78"
   },
   "style.css": {
-    "sha256_16": "8d7c9b87552b13c3",
-    "v": "127"
+    "sha256_16": "88272a88d4205d8e",
+    "v": "129"
   },
   "timeline_lanes.js": {
     "sha256_16": "e77d56c09759662d",
@@ -144,7 +148,7 @@
     "v": "4"
   },
   "urdf_viz.html": {
-    "sha256_16": "01a0d5cf8a133698",
-    "v": "8"
+    "sha256_16": "ccb071f48b60ca49",
+    "v": "10"
   }
 }

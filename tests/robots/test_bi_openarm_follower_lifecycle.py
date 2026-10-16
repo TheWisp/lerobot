@@ -33,3 +33,15 @@ def test_right_connect_failure_rolls_back_left_arm():
     robot.left_arm.connect.assert_called_once_with(False)
     robot.right_arm.connect.assert_called_once_with(False)
     robot.left_arm.disconnect.assert_called_once_with()
+
+
+def test_camera_feature_names_follow_what_get_observation_publishes():
+    """Top-level cameras keep their key; a camera an arm owns takes that arm's
+    prefix, which is the name its features carry in the dataset."""
+    robot = object.__new__(BiOpenArmFollower)
+    robot._top_level_cam_keys = {"top", "top_l", "top_r", "top_depth"}
+    robot.left_arm = MagicMock(cameras={"top": object(), "wrist": object()})
+    robot.right_arm = MagicMock(cameras={"wrist": object()})
+    # NB: `cameras` merges both dicts, so a shared per-arm name collapses there; the
+    # map is keyed the same way and the right arm's entry wins, as the merge does.
+    assert robot.camera_feature_names == {"top": "top", "wrist": "right_wrist"}
