@@ -372,7 +372,7 @@ def title_frames(summary=False):
         cap.set(cv2.CAP_PROP_POS_FRAMES, STACKING_GRID_SECONDS * FPS - 150)
         properties = (
             "One demo, no learning",
-            "Model-free",
+            "No CAD or prior 3D scan",
             "Placement generalization",
             "Viewpoint generalization",
             "Occlusion robustness",
@@ -458,7 +458,7 @@ def main():
             OVERLAY_START_S,
             TIMELINE["rows"][-1]["t_wall"] - META["t_started"],
         ],
-        "edit_revision": 10,
+        "edit_revision": 11,
         "grid_seconds": STACKING_GRID_SECONDS,
         "insertion_grid_seconds": INSERTION_GRID_SECONDS,
         "grid_layout": [3, 3],
@@ -480,7 +480,7 @@ def main():
         "summary_seconds": 5.0,
         "summary_properties": [
             "One demo, no learning",
-            "Model-free",
+            "No CAD or prior 3D scan",
             "Placement generalization",
             "Viewpoint generalization",
             "Occlusion robustness",

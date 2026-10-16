@@ -17,7 +17,7 @@
     5.5,
     16.333541870117188
   ],
-  "edit_revision": 10,
+  "edit_revision": 11,
   "grid_seconds": 12,
   "insertion_grid_seconds": 9,
   "grid_layout": [
@@ -72,7 +72,7 @@
   "summary_seconds": 5.0,
   "summary_properties": [
     "One demo, no learning",
-    "Model-free",
+    "No CAD or prior 3D scan",
     "Placement generalization",
     "Viewpoint generalization",
     "Occlusion robustness",
