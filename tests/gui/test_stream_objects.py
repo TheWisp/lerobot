@@ -8,6 +8,7 @@ and a fake tracker, and the server's flow with the worker's answer played by the
 
 from __future__ import annotations
 
+import dataclasses
 import io
 import json
 import pathlib
@@ -1367,10 +1368,34 @@ def test_act_refuses_recovered_axis_pose_without_a_checked_grasp_choice(client, 
         assert "collision-checked" in manipulation.planning._recovered_pose_problem(
             "box", {"surface_constraint": {"state": "recovered"}}
         )
-        teach.keypoints["ref"]["delta"] = alternate
-        assert "changed after confirmation" in manipulation.planning._recovered_pose_problem(
-            "gamepad", teach.keypoints["ref"]
-        )
+        # The act finds the object afresh before it moves (2026-10-16: every confirmed act stopped there). That new
+        # find keeps the confirmation while it puts the object where the confirmed find did; a reversed or moved
+        # object asks again.
+        middle = manipulation.tracking._view_points(demo, "gamepad").mean(axis=0)
+
+        def about_middle(deg, shift_m=0.0):
+            from scipy.spatial.transform import Rotation
+
+            out = np.eye(4)
+            out[:3, :3] = Rotation.from_euler("z", deg, degrees=True).as_matrix()
+            out[:3, 3] = middle - out[:3, :3] @ middle + [shift_m, 0.0, 0.0]
+            return out
+
+        for delta, kept in (
+            (about_middle(2.0, 0.003), True),
+            (about_middle(180.0), False),
+            (about_middle(0.0, 0.03), False),
+        ):
+            refound = dataclasses.replace(
+                teach,
+                stamp=teach.stamp + 1.0,
+                keypoints={**teach.keypoints, "ref": {**teach.keypoints["ref"], "delta": delta}},
+            )
+            with manipulation.runtime._state.lock:
+                manipulation.runtime._state.teach = refound
+            problem = manipulation.planning._recovered_pose_problem("gamepad", refound.keypoints["ref"])
+            assert (problem == "") is kept, (delta, problem)
+            assert kept or "changed after confirmation" in problem
     finally:
         with manipulation.runtime._state.lock:
             manipulation.runtime._state.demo = manipulation.runtime._state.teach = None

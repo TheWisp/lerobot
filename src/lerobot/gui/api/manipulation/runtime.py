@@ -289,6 +289,9 @@ class _Act:
     force_recovered_pose: bool = False  # operator confirmed the current ambiguous grasp assignment
     recovered_pose_token: str | None = None
     recovered_pose_object: str | None = None
+    recovered_pose: np.ndarray | None = (
+        None  # the confirmed find's motion, camera frame (planning._same_place)
+    )
     finds: list[str] = field(
         default_factory=list
     )  # the find log's rows of the finds it asked for (_log_find)

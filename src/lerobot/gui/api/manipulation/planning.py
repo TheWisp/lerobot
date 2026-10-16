@@ -31,6 +31,11 @@ from lerobot.showservo import motion as core, symmetry
 
 from . import acquisition, holds, recording, runtime
 
+# An act finds its object afresh before the arm moves, so a confirmed recovered pose meets a new find every time. It
+# stays confirmed while the new find puts the object where the confirmed one did. Finds of a still dowel on 2026-10-16
+# moved its centre and ends by at most 3.8 mm between them; its other end assignment moved them 104 mm.
+RECONFIRM_M = 0.015
+
 
 def _recovered_pose_token(demo: runtime._Demo, teach: runtime._Teach) -> str:
     """Bind a force choice to exactly the find and key frames shown in its preview."""
@@ -59,7 +64,10 @@ def _recovered_pose_problem(obj: str, found: dict[str, Any], *, preview: bool = 
             demo is not None
             and teach is not None
             and found is teach.keypoints.get("ref")
-            and act.recovered_pose_token == _recovered_pose_token(demo, teach)
+            and (
+                act.recovered_pose_token == _recovered_pose_token(demo, teach)
+                or _same_place(demo, obj, act.recovered_pose, found.get("delta"))
+            )
         ):
             return ""
         return (
@@ -68,6 +76,19 @@ def _recovered_pose_problem(obj: str, found: dict[str, Any], *, preview: bool = 
     return (
         f"{obj}'s measured pose has equivalent end assignments; collision-checked grasp selection is required"
     )
+
+
+def _same_place(demo: runtime._Demo, obj: str, a: Any, b: Any) -> bool:
+    """Whether two finds' motions (camera frame) put ``obj`` in one place: none of the points a find carries
+    (tracking._view_points) lands more than :data:`RECONFIRM_M` apart."""
+    if a is None or b is None:
+        return False
+    from . import tracking
+
+    points = tracking._view_points(demo, obj)
+    a, b = np.asarray(a, dtype=float), np.asarray(b, dtype=float)
+    apart = points @ (a[:3, :3] - b[:3, :3]).T + (a[:3, 3] - b[:3, 3])
+    return bool(len(points)) and float(np.max(np.linalg.norm(apart, axis=1))) <= RECONFIRM_M
 
 
 def _object_motion(

@@ -289,11 +289,13 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
             for name in more:
                 if founds[name].get("delta") is not None:
                     acquisition._store_located(name, {**founds[name], "tracking": True})
-            if act.force_recovered_pose and (
-                teach is None or planning._recovered_pose_token(demo, teach) != act.recovered_pose_token
-            ):
-                fail("a new find changed the proposed grasp pose; review its preview and confirm it again")
-                return
+            # A recovered find has passed _find_afresh only where the confirmed one put the object
+            # (planning._recovered_pose_problem). One that told the object's ends apart leaves no ambiguity to bypass.
+            fresh = ((teach.keypoints.get("ref") if teach is not None else None) or {}).get(
+                "surface_constraint"
+            )
+            if act.force_recovered_pose and (fresh or {}).get("state") != "recovered":
+                act.force_recovered_pose = False
         if test is None or not test.result.get("ok"):
             fail("find the object first")
             return
@@ -1685,6 +1687,7 @@ async def act_start(body: ActBody, request: Request) -> dict:
         act.force_recovered_pose = bool(problem)
         act.recovered_pose_token = token if problem else None
         act.recovered_pose_object = planning._session_object(demo) if problem else None
+        act.recovered_pose = np.asarray(reference["delta"], dtype=float) if problem else None
         act.finds = []
         act.on, act.ok, act.reason, act.step, act.stop_requested, act.progress, act.speed = (
             True,
