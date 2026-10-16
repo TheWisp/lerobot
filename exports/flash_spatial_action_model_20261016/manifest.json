@@ -1,0 +1,105 @@
+{
+  "title": "FLASH: A Spatial-Action Model",
+  "fps": 30,
+  "resolution": [
+    1920,
+    1080
+  ],
+  "autonomous_run": "/home/feit/.cache/huggingface/lerobot/demos/insertion/acts/20261016_112149",
+  "autonomous_camera_slots": 766,
+  "playback_speed": 1.0,
+  "controller_speed_during_recording": 2.0,
+  "demo_cut_seconds": [
+    4.5,
+    17.5
+  ],
+  "overlay_cut_seconds": [
+    5.5,
+    24.5
+  ],
+  "grid_seconds": 12.0,
+  "grid_layout": [
+    3,
+    3
+  ],
+  "grid_release_alignment_seconds": 6.0,
+  "grid_crop_xyxy": [
+    48,
+    88,
+    744,
+    432
+  ],
+  "grid_sources": [
+    {
+      "run": "/home/feit/.cache/huggingface/lerobot/demos/pick_place/acts/20261011_080249",
+      "start_seconds": 7.4,
+      "end_seconds": 19.4,
+      "release_marker_seconds": 13.4
+    },
+    {
+      "run": "/home/feit/.cache/huggingface/lerobot/demos/pick_place/acts/20261011_233111",
+      "start_seconds": 14.7,
+      "end_seconds": 26.7,
+      "release_marker_seconds": 20.7
+    },
+    {
+      "run": "/home/feit/.cache/huggingface/lerobot/demos/pick_place/acts/20261012_041448",
+      "start_seconds": 13.0,
+      "end_seconds": 25.0,
+      "release_marker_seconds": 19.0
+    },
+    {
+      "run": "/home/feit/.cache/huggingface/lerobot/demos/pick_place/acts/20261012_042101",
+      "start_seconds": 9.2,
+      "end_seconds": 21.2,
+      "release_marker_seconds": 15.2
+    },
+    {
+      "run": "/home/feit/.cache/huggingface/lerobot/demos/pick_place/acts/20261012_042338",
+      "start_seconds": 13.3,
+      "end_seconds": 25.3,
+      "release_marker_seconds": 19.3
+    },
+    {
+      "run": "/home/feit/.cache/huggingface/lerobot/demos/pick_place/acts/20261012_042642",
+      "start_seconds": 9.6,
+      "end_seconds": 21.6,
+      "release_marker_seconds": 15.6
+    },
+    {
+      "run": "/home/feit/.cache/huggingface/lerobot/demos/pick_place/acts/20261012_192802",
+      "start_seconds": 14.0,
+      "end_seconds": 26.0,
+      "release_marker_seconds": 20.0
+    },
+    {
+      "run": "/home/feit/.cache/huggingface/lerobot/demos/pick_place/acts/20261012_194250",
+      "start_seconds": 27.5,
+      "end_seconds": 39.5,
+      "release_marker_seconds": 33.5
+    },
+    {
+      "run": "/home/feit/.cache/huggingface/lerobot/demos/pick_place/acts/20261013_211511",
+      "start_seconds": 12.7,
+      "end_seconds": 24.7,
+      "release_marker_seconds": 18.7
+    }
+  ],
+  "timing": "Camera timeline at 30 Hz; latest available recorded async result. Older grid clips use recorded t_frame timestamps and hold frames, with no optical-flow interpolation. Last frame held where a source ends.",
+  "overlay": "Existing replay drawing, with diagnostic prose and verification panel omitted. Cube outline uses recorded accepted/predicted pose, not a newly inferred ground truth.",
+  "audit": {
+    "completed": true,
+    "visually_observed_insertion": true,
+    "tracking_hz": 4.34177,
+    "longest_motor_tick_ms": 603.44,
+    "queue_empty_time_over_100ms_s": 3.15,
+    "verified_post_lift_held_pose": false,
+    "group_transport_withheld_updates": 10,
+    "caveat": "Successful task, with remaining timing and held-pose verification limitations."
+  },
+  "wording_sources": [
+    "https://proceedings.mlr.press/v229/vitiello23a.html",
+    "https://publications.ri.cmu.edu/view-generalizable-manipulation-policies"
+  ],
+  "no_robot_or_server_access": true
+}

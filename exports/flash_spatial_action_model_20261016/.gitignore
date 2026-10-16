@@ -1,0 +1,4 @@
+*.mp4
+*.jpg
+concat.txt
+__pycache__/
