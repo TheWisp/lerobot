@@ -551,6 +551,7 @@ def main() -> None:
     ap.add_argument("--port", type=int, default=9141)
     ap.add_argument("--resize", type=int, default=256)
     ap.add_argument("--pips", type=int, default=4)
+    ap.add_argument("--own-share", type=float, default=0.97)
     ap.add_argument("--borrowed-points", type=int, default=N_RING)
     args = ap.parse_args()
     signal.signal(
@@ -580,7 +581,7 @@ def main() -> None:
     if args.designate_at is not None:
         later, names, clicks = dict(zip(names, clicks, strict=True)), [], []
     k = source.k
-    tracker = groups.GroupTracker()
+    tracker = groups.GroupTracker(own_share=args.own_share)
     surfaces_memory = scene.SurfaceMemory()
     world = scene.World()
     wire = scene.Wireframe()  # each group's wireframe, kept from frame to frame: given every frame, in order
@@ -821,8 +822,10 @@ def main() -> None:
                 obj = tracker.objects[name]
                 row["objects"][name] = {
                     "n_seen": obj.n_seen,
+                    "n_grouped": obj.n_grouped,
                     "group": obj.group,
                     "own_ok": obj.own_ok,
+                    "why": obj.why,
                     "pose": obj.pose[:3, 3].tolist(),
                     "rot": np.round(obj.pose[:3, :3], 5).tolist(),
                     "carried": None if obj.carried is None else obj.carried[:3, 3].tolist(),
