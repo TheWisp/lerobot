@@ -32,6 +32,7 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import contextlib
+import gc
 import json
 import logging
 import math
@@ -248,6 +249,8 @@ class _Jog:
     slow_ticks: deque = field(
         default_factory=lambda: deque(maxlen=SLOW_TICKS_KEPT)
     )  # ticks over SLOW_TICK_S: when, how long, the mode, and the milliseconds each phase took
+    # The motor loop's native thread id, for sampling its scheduler state from outside the process.
+    loop_thread_id: int = 0
 
     @property
     def connected(self) -> bool:
@@ -255,6 +258,22 @@ class _Jog:
 
 
 _jog = _Jog()
+
+# Time the whole process has spent in garbage collection, ms. A collection holds the GIL throughout, so a long one
+# stalls the motor loop however little work its own tick has; each tick records the share since the last.
+_gc_ms = 0.0
+_gc_started = 0.0
+
+
+def _gc_timer(phase: str, info: dict) -> None:
+    global _gc_ms, _gc_started
+    if phase == "start":
+        _gc_started = time.perf_counter()
+    else:
+        _gc_ms += 1000.0 * (time.perf_counter() - _gc_started)
+
+
+gc.callbacks.append(_gc_timer)
 
 
 def _quat_from_matrix(r: np.ndarray) -> list[float]:
@@ -518,10 +537,12 @@ def _loop(j: _Jog) -> None:
         robot.send_action(action)
         return 1000.0 * (time.perf_counter() - wall_start), 1000.0 * (time.thread_time() - cpu_start)
 
+    j.loop_thread_id = threading.get_native_id()
     grip = float(j.q_cmd["gripper"])
     period = 1.0 / HZ
     last_tick_at = 0.0
     read_durations = deque(maxlen=max(1, int(HZ / 3)))
+    gc_seen = _gc_ms
     while not j.stop.is_set():
         # Begin the next checked read just before the next write is due.
         # A recent fast read predicts its duration; a rare long read must not
@@ -675,6 +696,7 @@ def _loop(j: _Jog) -> None:
             t_sent = time.perf_counter()
             tick_gap_ms = 1000.0 * (t_sent - last_tick_at) if last_tick_at else np.nan
             loads, temps = state.load, state.temps
+            gc_tick_ms, gc_seen = _gc_ms - gc_seen, _gc_ms
             with j.lock:
                 t_end = time.perf_counter()
                 j.tick_s.append(t_end - t0)
@@ -737,6 +759,7 @@ def _loop(j: _Jog) -> None:
                             "send_action_ms": send_action_ms,
                             "send_action_cpu_ms": send_action_cpu_ms,
                             "commit_ms": 1000.0 * (t_end - t_sent),
+                            "gc_ms": gc_tick_ms,
                             "obs": dict(q_obs),
                             "cmd": dict(j.q_cmd),
                             "playback_waiting": j.playback_waiting,
@@ -1920,6 +1943,7 @@ def _state_locked(j: _Jog) -> dict:
         "load": dict(j.load),
         "protection": j.protection,
         "gripper": {"cmd": q_cmd["gripper"], "obs": q_obs["gripper"], "target": j.grip_target},
+        "loop_thread_id": j.loop_thread_id,
         "mode": j.mode,
         "leader": j.leader_id or None,
         "recording": j.record is not None,

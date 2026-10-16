@@ -14,6 +14,7 @@
 
 """Jog API: the bounded pose walk, the motor->URDF conversion, and the guards that need no arm."""
 
+import gc
 import math
 import threading
 import time
@@ -570,6 +571,28 @@ def test_a_slow_tick_is_kept_with_where_its_time_went():
     finally:
         jog._jog = old
         jog._stop_loop(j)
+
+
+def test_each_tick_records_the_garbage_collection_inside_it():
+    """A collection holds the GIL throughout, so it stalls the motor loop whichever thread runs it."""
+    q = dict.fromkeys(MOTOR_NAMES, 0.0)
+    robot = _FakeRobot(q)
+    j = jog._Jog(robot=robot, kin=_FakeKin(), mode="joints", q_target=q, q_cmd=q, q_obs=q)
+    j.record, j.record_t0 = [], time.time()
+    collected_ms = []
+
+    def read():
+        if len(collected_ms) == 1:
+            j.stop.set()
+        started = time.perf_counter()
+        gc.collect()
+        collected_ms.append(1000.0 * (time.perf_counter() - started))
+
+    robot.bus.on_request = read
+    jog._loop(j)
+    assert len(j.record) == 2
+    for sample, ms in zip(j.record, collected_ms, strict=True):
+        assert sample["gc_ms"] >= 0.9 * ms
 
 
 def test_a_slow_read_does_not_bunch_the_next_motor_commands(monkeypatch):

@@ -472,6 +472,7 @@ def _finish_run(run: _Run, samples: list[dict[str, Any]], fk: Any, result: dict[
             "pre_read_wait_ms",
             "pre_read_late_ms",
             "tick_gap_ms",
+            "gc_ms",
         ):
             if all(key in s for s in samples):
                 arm[key] = np.array([s[key] for s in samples], dtype=float)
