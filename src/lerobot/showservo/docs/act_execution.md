@@ -114,6 +114,26 @@ its IK has a null space the SO-107's does not. The runner and the stream take th
 speed limits, the gripper's units and closing direction, and nothing else from the arm, and today it has the SO-107's
 motor names built in.
 
+<a id="o10"></a>**O10. The gripper's own readings tell a hold from a miss within a quarter second.** Its reading settles
+0.10 s after the closing command ends, and its load, once the command is still, sits at 128 to 240 with an object
+between the fingers and at most 34 without, on both demos' objects ([E9](#e9), [E10](#e10)). So a Milestone at a
+grasp can be passed on the arm's readings alone, before any camera view.
+
+<a id="o11"></a>**O11. The gripper's load is effort, not contact force.** While the command moves and the reading
+trails it by 4 to 5 units, the load reads 210 to 264 with the fingers open on nothing ([E11](#e11)). So the load is a
+hold signal only while the command is still and the reading has settled.
+
+<a id="o12"></a>**O12. The camera confirms a hold late, and sees the object in the gripper later still or never.**
+The resting place reads empty 4.5 s after the closing, once the carry has moved the arm off it ([E12](#e12)); the first
+view that placed the held object came 10 to 22 s after the closing, in 8 acts of 57 ([E10](#e10)); after the
+release, the object's reference view placed it in 0 of 33 views ([E13](#e13)). So the camera can contradict a
+Milestone, with a delay, but cannot gate one.
+
+<a id="o13"></a>**O13. The pose the act aims with is not steady at the millimetre.** Trusted views of the ring at
+rest spread 15 to 20 mm at the 95th percentile within an act; the pose the act aimed its insertion with drifted
+13 mm over 2.3 s while the ring stood still ([E14](#e14)). So "the object moved" needs a margin above that spread,
+and a check that depends on the object's pose is no better than it.
+
 ## Constraints and freedoms
 
 <a id="c1"></a>**C1.** Commands are dense: one pose per motor tick, each within what the arm covers in a tick
@@ -202,6 +222,68 @@ looked up ([Q4](#open-questions)).
     apart, as the recovery proposal asks, so a motor fault after a placement is not reported as a failed task.
     ([R11](#requirements))
 
+## The Milestone state check
+
+A Milestone is met or failed by what the arm and the camera show, and the two differ in speed and in what fools
+them. The check therefore has two layers: a **fast layer** from the arm's own readings, evaluated every tick, which is
+what Progress passes a Milestone on; and a **slow layer** from the camera, which confirms or contradicts the fast
+layer within a budget. A contradiction fails the Milestone and runs the Progress update (architecture item 6). A
+Milestone marked _confirm_ (a final one by default) waits for the slow layer before Progress passes it.
+([R1](#requirements), [R2](#requirements), [O10](#o10) to [O13](#o13))
+
+**The fast layer** reads three things, each sampled every tick:
+
+- The gripper's width: its reading against the reading it shows closed on nothing, measured once when the arm
+  connects, and against the width the demo's gripper stopped at over the same Milestone. A hold on the dowel reads
+  1.2 to 1.6 units from the empty closing, the reading's noise at rest 0.4 units at the 95th percentile, so the
+  predicate takes the median of the last three ticks ([E9](#e9)). A fixed margin on the command, as today's
+  `grasp_held` uses, left 0.16 units between the two misses and the 75 holds on record ([E9](#e9)).
+- The gripper's load, only while its command has been still for 0.15 s and its reading has settled: then it is the
+  holding effort, 128 to 240 with an object between the fingers and at most 34 closed on nothing or open, on both
+  demos' objects ([E10](#e10)). While the gripper moves, or trails its command, the load is the servo's effort and
+  reads 200 and more with nothing in the fingers ([E11](#e11)); the predicate ignores it then.
+- The fingertip pose from the joints, against the key frame in its leg frame.
+
+The reading settles 0.10 s after the closing command ends (0.14 s at the 90th percentile, 0.40 at most), and the load
+is at its holding level 0.1 s later ([E10](#e10)): the fast layer answers within about 0.25 s of the gripper's
+command reaching its end.
+
+**The slow layer** reads the camera in two ways, neither of which names an object or a task:
+
+- Presence or absence at a predicted pose, from depth: the object's surface points at the pose the act predicts
+  (where it lay; where the fingertip released it, by the hold) against the live depth under them: present within the
+  object's own height, absent where the depth is the background, covered where it is nearer. Used for _attached_
+  (the resting place reads absent once the carry uncovers it) and _released_ (present where it was let go). On the
+  rig the resting place read absent 4.5 s after the closing, because the arm covers it until the carry moves off,
+  and then stayed absent ([E12](#e12)).
+- A find of the object against a demo frame designated at the Milestone, for _related_: the object's reference view
+  from before the act never placed it in its final state (the standing dowel, 0 of 33 views after the release,
+  [E13](#e13)); the demo's own frame at that key frame shows it as it should end. Consecutive finds ran 0.75 s apart
+  on the rig, 1.2 s at the 90th percentile ([E13](#e13)); the check costs one designation per such Milestone in the
+  demo editor.
+
+A view of the object in the gripper is not a signal the check can wait for: the first such hold evidence came 10 to
+22 s after the closing, in 8 of 57 acts, with 110 attempts that failed ([E10](#e10)).
+
+**By kind:**
+
+| Milestone  | Fast layer, every tick                                                                                     | Slow layer, within its budget                                                       | Measured on the rig                                                  |
+| ---------- | ---------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| _arrived_  | fingertip within tolerance of the key frame in its leg frame                                               | none: it is as good as the leg frame's pose ([E14](#e14))                           | one tick                                                             |
+| _attached_ | width within the demo's band of the empty closing, and load at its holding level, command still            | the resting place absent once uncovered                                             | fast 0.25 s; slow 4.5 s                                              |
+| held on    | the same two, every tick the command is still; a drop reads as width at the empty closing and load falling | none needed                                                                         | at a release the load fell from 200 to 28 within 0.4 s ([E11](#e11)) |
+| _released_ | reading follows the command (within 1 unit) and load at its open level                                     | present where it was let go, not moving with the fingertip                          | reading within 0.03 s, load within 0.4 to 0.6 s ([E11](#e11))        |
+| _related_  | none                                                                                                       | a find against the demo frame designated at the Milestone, once the arm has cleared | about one find, 0.75 to 1.2 s ([E13](#e13)); the whole to measure    |
+
+**What the check is relative to.** Every threshold is taken from a measurement, not a constant: the empty-closing
+reading from the arm at connect, the width band and the holding level from the demo's own grip (the demo's reading
+stopped 2.13 units short of its command on the dowel, [E9](#e9)) and from the arm's readings in the act's record,
+the object's height from its surface points. The Progress update's margin for a moved object is set by the pose rule's
+own spread: trusted views of the ring at rest spread 15 to 20 mm at the 95th percentile within an act, and the pose
+the act aimed with drifted 13 mm over 2.3 s while the ring stood still ([E14](#e14)). A move counts as a move only
+beyond that spread, 20 mm or 5° on the rig, seen on more than one view; how the pose rule could be steadier is
+[act_loop.md](act_loop.md)'s subject, not this design's.
+
 ## Alternatives, and what this costs
 
 **Keep the runner and plan ahead of the arm** (what `a3e0cf48c` and `d8d36d606` do). It shortens the stops at stage
@@ -256,9 +338,11 @@ built on the IK the act already uses and takes the arm's calibrated ranges into 
 microseconds but per arm and per calibration ([Alternatives](#alternatives-and-what-this-costs)). Leaning: online,
 with the map if the ranking misses [R8](#requirements)'s 200 ms.
 
-To measure: the tracker's pose jitter on an object at rest, which sets the margin for a Progress update and the
-weights in its distance; the OpenArm 2's following error and its mink IK's timing (its solver is not installed on
-this desktop); the time to rank the ring's allowed turns; the command stage's latency on the rig under load.
+To measure: the OpenArm 2's following error and its mink IK's timing (its solver is not installed on this
+desktop), and what its gripper (a 1 N·m finger in position-force mode) reports for width and load; the time to rank
+the ring's allowed turns; the command stage's latency on the rig under load; the time from a release to a find of the
+placed object against the demo's frame, with the arm clearing the view; the depth presence check at the released
+pose, which needs the predicted pose logged in the camera frame (the saved hold is relative to the fingertip).
 
 ## Glossary
 
@@ -272,6 +356,8 @@ this desktop); the time to rank the ring's allowed turns; the command stage's la
 - **Pose entry:** one motor tick of the queue: a pose relative to its leg frame, or a line's two anchors and how far
   along it is, with the gripper command and the tick it is due.
 - **Anchor:** one end of a line: its start in the arm's base frame, or its end relative to the leg frame.
+- **Fast layer, slow layer:** the two halves of a Milestone's state check: the arm's own readings every tick, and the
+  camera's confirmation within a budget.
 
 ## Appendix: evidence
 
@@ -324,3 +410,40 @@ cap, the carry planned ahead). The insertion's follow: demo 4.81 s, 6.20 s, then
 
 <a id="e8"></a>**E8. Tracker rate.** About 9.5 frames/s on the rig with Point2Pose tracking, 2026-10-16
 ([action_queue_timing.md](../../gui/docs/action_queue_timing.md)).
+
+<a id="e9"></a>**E9. Gripper width.** 264 act records; 77 with a grasp check (`core.grasp_held`). Holds (75): the
+reading stopped 0.85 to 2.40 units short of the closing command (10th percentile 1.19, median 2.13). Misses (2, acts
+`20261015_213310`, `_221031`): 0.69 and 0.41 short, readings 99.3 and 99.6 at a command of 100. The demo's own grip:
+97.87 at a command of 100 (2.13 short). Held readings over 34 carries: 97.94 to 98.35; the reading's deviation from
+its median within a carry 0.27 to 0.41 units at the 95th percentile, 0.82 at most. 1 unit = 14.9 encoder counts
+(calibration range 1991 to 3480). The reading settles (three ticks moving under 0.3) 0.10 s after the closing command
+ends, 0.14 s at the 90th percentile, 0.40 s at most (95 acts).
+
+<a id="e10"></a>**E10. Gripper load at rest.** `Present_Load` of the gripper, median over 0.5 to 2 s after the closing
+command ended: holds 144 to 232 (10th percentile 144 over 73 acts; by demo: insertion 224, pick-and-place 128), misses
+20 and 34, before the closing 8 (at most 24). Over the carries of acts `20261017_125408` and `_150843`: 10th
+percentile 200, minimum 92 and 180, no tick under 64. Hold evidence from vision (`hold_selections` not from
+prediction): 8 acts, 9.9 to 21.8 s after the closing ended, all "held-view position; rotation predicted"; 110 failed
+attempts over 48 acts.
+
+<a id="e11"></a>**E11. The release.** Acts `20261017_150843` and `_125408`, by 0.1 s from the start of the opening
+command: the reading follows the command within 0.03 s; the load falls from 200 to 28 and 44 at 0.4 to 0.5 s, as the
+command pauses at 83.9; it rises to 210 to 264 at 1.0 to 1.2 s while the command goes on to 65.7 and the reading
+trails it by 4 to 5 units, and falls to 2 to 16 once the reading has caught up.
+
+<a id="e12"></a>**E12. The resting place.** The object's mask and depth on the act's first frame; per later frame, the
+share of those pixels reading the object (within half its height), the table, or something nearer. Act
+`20261017_150843`: nearer (the arm) from 3 s before the closing to 4 s after; empty from 4.45 s after the closing
+ended (the carry began at 0.82 s), then empty at the 10th percentile 0.50 and object at the 90th 0.00 over the next
+6 s. Act `_125408`: empty from 4.50 s, then 0.83 and 0.02. The dowel lay 7 to 13 mm above the table in those
+frames. In the missed act `_213310` the arm never lifted, and the place read nearer throughout.
+
+<a id="e13"></a>**E13. The placed object.** Act `20261017_150843`: 33 frames after the release, the dowel's
+Point2Pose view against its reference accepted in none (surface state "disagreement" in all 33); its colour tracks
+still visible on 179 of 323. Finds: 679 pairs of consecutive dowel locates in the acts of 2026-10-15 to 17, 0.75 s
+apart at the median, 1.22 s at the 90th percentile.
+
+<a id="e14"></a>**E14. Pose spread at rest.** Trusted views of the ring before the carry, 41 acts, 14 views each at the
+median: the constrained pose's translation from its median 15.2 mm at the 95th percentile per act (median act; 44.9
+in the worst), the raw tracker pose 19.8 mm; rotation 2.0° (raw 2.6°). Act `_150843`: the ring motion its targets
+were composed with moved from (−13.1, 44.4, 6.3) to (−16.3, 44.9, 19.7) mm between 0 and 2.3 s of the carry.
