@@ -1500,6 +1500,14 @@ def play_joints(samples: list[dict[str, float]], due_s: list[float]) -> None:
         j.playback_held, j.playback_blocked = None, None
 
 
+def playback_clock() -> float:
+    """Seconds on the playback's own clock: what its due times are measured against, waits for a lagging joint
+    included."""
+    j = _jog
+    with j.lock:
+        return time.monotonic() - j.playback_t0
+
+
 def playback_state() -> tuple[int, list[float]]:
     """How far the playback has gone: the last sample sent (-1 before the first) and when each was sent."""
     j = _jog

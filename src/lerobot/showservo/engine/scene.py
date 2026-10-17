@@ -68,9 +68,10 @@ class SceneLog:
     """The scene as perception reported it, kept for ``keep_s``: views, tracks and depth frames by time, and the arm's
     fingertip (from its observed joints). Writers append in time order, from any thread; readers ask by time."""
 
-    def __init__(self, camera: Camera | None = None, keep_s: float = 30.0):
+    def __init__(self, camera: Camera | None = None, keep_s: float = 30.0, depth_keep_s: float = 3.0):
         self.camera = camera
         self.keep_s = keep_s
+        self.depth_keep_s = depth_keep_s  # depth frames are megabytes each: only the newest few seconds
         self.surfaces: dict[str, np.ndarray] = {}  # each object's surface points at its demo pose, base frame
         self.symmetry_axes: dict[
             str, np.ndarray
@@ -101,7 +102,8 @@ class SceneLog:
     def add_depth(self, depth: Depth) -> None:
         with self._lock:
             self._depth.append(depth)
-            self._trim(self._depth, depth.t)
+            while self._depth and self._depth[0].t < depth.t - self.depth_keep_s:
+                self._depth.popleft()
 
     def add_tip(self, t: float, tip: np.ndarray) -> None:
         with self._lock:

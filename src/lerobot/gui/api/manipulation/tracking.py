@@ -887,6 +887,13 @@ async def _apply_track_result(job: runtime._Job) -> None:
     frame_index = len(run.frames) if run is not None else None
     if run is not None:
         run.frame(job, r, status, step, None if result is None else result["delta_cam"], transported)
+    with runtime._state.lock:
+        listeners = list(runtime._state.frame_listeners)
+    for listener in listeners:
+        try:
+            listener(job, r, result)
+        except Exception:
+            logger.exception("a tracked-frame listener failed")
     if pipelined and (tr.overlay_task is None or tr.overlay_task.done()):
         # The path overlay is display work. A slow draw must not hold the two
         # worker/verification slots or delay a target update during contact.

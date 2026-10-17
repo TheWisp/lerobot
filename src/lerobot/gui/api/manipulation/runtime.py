@@ -289,6 +289,10 @@ class _Act:
     force_recovered_pose: bool = False  # operator confirmed the current ambiguous grasp assignment
     recovered_pose_token: str | None = None
     recovered_pose_object: str | None = None
+    runner: str = (
+        "key_frames"  # which runner plays the act: "key_frames" or "engine" (showservo/docs/act_execution.md)
+    )
+    perturb: list[dict[str, Any]] | None = None  # faults the engine injects on purpose (engine.perturb)
     # Each object's find the act started from, with its ends settled, camera frame (planning._same_place).
     start_poses: dict[str, np.ndarray] = field(default_factory=dict)
     finds: list[str] = field(
@@ -359,6 +363,8 @@ class _State:
     recording: dict[str, Any] | None = None  # while a demo is being recorded: its start and the frames so far
     stream: _StreamRecorder | None = None  # the camera stream being written while a demo is recorded
     run: recording._Run | None = None  # the act being recorded: its tracker frames, its targets, the arm
+    # Called with (job, result, trusted view) for every tracked frame, beside the act's recorder: the act engine's feed.
+    frame_listeners: list[Any] = field(default_factory=list)
     camera_recording: _StreamRecorder | None = (
         None  # the camera recorded on its own, to replay the tracker over
     )

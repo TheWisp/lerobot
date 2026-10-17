@@ -62,9 +62,11 @@ class Objects:
         self.centres = {n: s.mean(axis=0) for n, s in self.surfaces.items()}
         self.walk_m_s, self.walk_rad_s = walk_m_s, walk_rad_s
         self.depth_unit_m = depth_unit_m
-        self.rest = {
-            n: [-np.inf, np.inf] for n in self.used
-        }  # [since, until): views then count toward its noise
+        self.rest = {n: [-np.inf, np.inf] for n in self.used}  # [since, until): what counts toward its noise
+        self.camera = scene.camera
+        self._at_touch: dict[
+            str, dict[str, object]
+        ] = {}  # each touched object's noise, measured as it was touched
 
     def update(self, dt: float, hold: set[str] = frozenset()) -> None:
         """Read the newest views; move each object's pose toward its newest by at most the walk speed over ``dt``. An
@@ -103,20 +105,38 @@ class Objects:
         return np.eye(4) if name == BASE or name not in self.used else self.used[name]
 
     def touched(self, name: str, t: float) -> None:
-        """From ``t`` the object is in the act's hands: what the camera says of it no longer counts as noise."""
+        """From ``t`` the object is in the act's hands: what the camera says of it no longer counts as noise. Its noise
+        is measured now, while the frames of it standing untouched are still in the log."""
         if name in self.rest:
             self.rest[name][1] = min(self.rest[name][1], t)
+            self._at_touch[name] = {
+                "view": self._view_noise(name),
+                "track": self._track_noise(name),
+                "depth": self._depth_noise(name, self.camera),
+            }
 
     def resting(self, name: str, t: float) -> None:
         """From ``t`` it stands untouched again, somewhere new: its noise is measured afresh."""
         if name in self.rest:
             self.rest[name] = [t, np.inf]
+            self._at_touch.pop(name, None)
+
+    def view_noise(self, name: str) -> tuple[float, float] | None:
+        return self._at_touch[name]["view"] if name in self._at_touch else self._view_noise(name)
+
+    def track_noise(self, name: str) -> float | None:
+        return self._at_touch[name]["track"] if name in self._at_touch else self._track_noise(name)
+
+    def depth_noise(self, name: str, camera=None) -> float | None:
+        if name in self._at_touch:
+            return self._at_touch[name]["depth"]
+        return self._depth_noise(name, camera or self.camera)
 
     def _in_rest(self, name: str, t: float) -> bool:
         since, until = self.rest.get(name, (-np.inf, np.inf))
         return since <= t < until
 
-    def view_noise(self, name: str) -> tuple[float, float] | None:
+    def _view_noise(self, name: str) -> tuple[float, float] | None:
         """How far its views wandered while it stood untouched: metres at its centre and degrees, or None with too few
         views; never under the depth image's step."""
         views = [v for v in self.scene.views(name) if self._in_rest(name, v.t)]
@@ -127,7 +147,7 @@ class Objects:
             return None
         return max(m, self.depth_unit_m), d
 
-    def track_noise(self, name: str) -> float | None:
+    def _track_noise(self, name: str) -> float | None:
         """How far the median of its tracked points wandered while it stood untouched, in pixels, from the first such
         frame; None with too few frames; never under a pixel."""
         frames = [f for f in self.scene.tracks(name) if self._in_rest(name, f.t)]
@@ -147,7 +167,7 @@ class Objects:
         noise = predicates.spread(np.array(shifts)) if len(shifts) >= predicates.MEDIAN_MIN else None
         return None if noise is None else max(noise, PIXEL)
 
-    def depth_noise(self, name: str, camera) -> float | None:
+    def _depth_noise(self, name: str, camera) -> float | None:
         """How far the depth on its surface wandered while it stood untouched: per surface pixel, its distances from
         that pixel's median over the frames, at the 95th percentile; never under the depth image's step."""
         frames = [d for d in self.scene.depths() if self._in_rest(name, d.t)]

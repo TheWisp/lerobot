@@ -90,6 +90,8 @@ class ActBody(BaseModel):
     allow_grasp_prediction: bool = False  # use the grasp-time hold if post-carry vision cannot verify it
     queue_horizon_s: float = Field(1.0, ge=0.5, le=5.0)  # checked, replaceable motor lookahead
     confirm_recovered_pose: str | None = None  # token from the warning for this find and demo
+    runner: Literal["key_frames", "engine"] = "key_frames"  # the act engine runs beside the key-frame runner
+    perturb: list[dict[str, Any]] | None = None  # the engine's faults injected on purpose (engine.perturb)
     model_config = ConfigDict(extra="forbid")
 
 
@@ -1775,6 +1777,11 @@ async def _act_task(speed: float, server: str | None = None) -> None:
             act.on, act.ok, act.step = False, False, "aborted"
             act.reason = "demo or act changed during surface validation" if stale else problem
             return
+    if act.runner == "engine":
+        from . import engine_act
+
+        await engine_act._act_engine_task(speed, server, act.perturb)
+        return
     await _act_key_frames_task(speed, server)
 
 
@@ -1824,6 +1831,7 @@ async def act_start(body: ActBody, request: Request) -> dict:
         act.correct_hold = body.correct_hold
         act.allow_grasp_prediction = body.allow_grasp_prediction
         act.queue_horizon_s = body.queue_horizon_s
+        act.runner, act.perturb = body.runner, body.perturb
         act.force_recovered_pose = bool(problem)
         act.recovered_pose_token = token if problem else None
         act.recovered_pose_object = planning._session_object(demo) if problem else None
