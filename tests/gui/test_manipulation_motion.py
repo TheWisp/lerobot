@@ -1591,6 +1591,178 @@ def test_the_plan_goes_straight_to_each_pregrasp_then_replays_the_grasp_as_recor
     )
 
 
+def _arc_demo(radius=0.03, seconds=2.0, hz=30.0):
+    """A 30 Hz demo whose fingertip, never turning, rests 1 s, sweeps a half circle of ``radius`` in ``seconds`` and
+    rests 1 s: the key frames at either end of the sweep are 2 * radius apart, the demo's path between them pi * radius
+    long. The gripper's command stays at 70."""
+    t = np.arange(int(round((seconds + 2.0) * hz)) + 1) / hz
+    a = np.pi * np.clip((t - 1.0) / seconds, 0.0, 1.0)
+    tips = np.tile(np.eye(4), (len(t), 1, 1))
+    tips[:, 0, 3] = 0.20 - radius * np.cos(a)
+    tips[:, 1, 3] = radius * np.sin(a)
+    tips[:, 2, 3] = 0.10
+    q = np.zeros((len(t), 7))
+    q[:, 6] = 70.0
+    return t, tips, np.full(len(t), 70.0), q
+
+
+@pytest.mark.parametrize("speed", [1.0, 0.5])
+def test_a_line_moves_at_the_demos_pace_along_its_whole_path_between_its_key_frames(speed):
+    """2026-10-17: the user's speed 1.0 should replay a line between two key frames at the demo's average speed there,
+    its travelled path over its time, not its displacement over its time; at the walk's 40 mm/s the insertion demo's
+    withdrawal (114 mm/s) and lift away (175 mm/s) took 1.3 and 2.9 times as long as the demo."""
+    t, tips, grip, q = _arc_demo()
+    i0, i1 = 30, 90  # the sweep's ends: 60 mm apart, 94 mm along the arc, 2 s
+    kps = [{"t": float(t[i0]), "kind": "pregrasp"}, {"t": float(t[i1]), "kind": "pregrasp"}]
+    lin = 0.04
+    plan = core.plan_key_frames(
+        _resolved_steps(kps, np.eye(4)),
+        t,
+        tips,
+        grip,
+        q,
+        tips[i0],
+        70.0,
+        lin,
+        np.radians(30),
+        80.0,
+        speed,
+        30.0,
+    )
+    a1, a2 = plan["arrive"]
+    took = plan["times"][a2] - plan["times"][a1]
+    arc_speed = np.pi * 0.03 / 2.0
+    assert took == pytest.approx(0.06 / arc_speed / speed, abs=1.0 / 30.0), "the chord at the arc's own speed"
+    assert np.all(plan["walk_scale"][a1 + 1 : a2 + 1] == pytest.approx(arc_speed / lin * speed, rel=1e-3))
+    assert plan["walk_scale"][0] == speed and plan["walk_scale"][a1] == speed, (
+        "the first key frame has no demo before it: the walk's speed"
+    )
+
+
+def test_a_line_takes_the_demos_pace_from_its_turns_too():
+    """A demo that turned 90 deg in place over 1 s, three times the walk's 30 deg/s: a line that turns 45 deg and
+    slides 10 mm takes a third of the walk's 1.5 s."""
+    hz = 30.0
+    t = np.arange(61) / hz
+    tips = np.tile(np.eye(4), (len(t), 1, 1))
+    tips[:, :3, 3] = [0.2, 0.0, 0.1]
+    tips[:, :3, :3] = Rotation.from_euler(
+        "z", (90 * np.clip(t - 0.5, 0.0, 1.0))[:, None], degrees=True
+    ).as_matrix()
+    q = np.zeros((len(t), 7))
+    assert core.demo_pace(t, tips, float(t[15]), float(t[45]), 0.04, np.radians(30)) == pytest.approx(
+        3.0, rel=1e-3
+    )
+    target = np.eye(4)
+    target[:3, :3] = Rotation.from_euler("z", 45, degrees=True).as_matrix()
+    target[:3, 3] = [0.21, 0.0, 0.1]
+    steps = [
+        {
+            "t": float(t[15]),
+            "kind": core.KEY_KIND,
+            "frame": "world",
+            "move": "line",
+            "grip": "along",
+            "constraint": "pose",
+            "label": "a",
+            "motion": np.eye(4),
+            "fix": np.eye(4),
+            "held": False,
+            "since": None,
+        },
+        {
+            "t": float(t[45]),
+            "kind": core.KEY_KIND,
+            "frame": "world",
+            "move": "line",
+            "grip": "along",
+            "constraint": "pose",
+            "label": "b",
+            "motion": np.eye(4),
+            "fix": np.eye(4),
+            "held": False,
+            "since": float(t[15]),
+            "target_local": target,
+        },
+    ]
+    plan = core.plan_key_frames(
+        steps, t, tips, np.zeros(len(t)), q, tips[15], 0.0, 0.04, np.radians(30), 80.0, 1.0, hz
+    )
+    a1, a2 = plan["arrive"]
+    assert plan["times"][a2] - plan["times"][a1] == pytest.approx(0.5, abs=1.0 / hz)
+
+
+def test_the_demos_pace_falls_back_or_stays_bounded_where_it_cannot_be_measured():
+    """No key frame before, both key frames on one sample, the demo standing still, a jump of one tick, a high act
+    speed: a finite line speed within the walk's own range (jog's slider), so a line never divides by zero or runs
+    away."""
+    from lerobot.gui.api import jog
+
+    assert (
+        core.LINE_SPEED_M_S == jog.LINEAR_M_S_RANGE
+        and pytest.approx(jog.ANGULAR_RAD_S_RANGE) == core.LINE_TURN_RAD_S
+    ), "a line keeps to the range the walk itself may be set to"
+    lin, ang = 0.04, np.radians(30)
+    slowest, fastest = max(0.005 / lin, np.radians(5) / ang), min(0.30 / lin, np.radians(180) / ang)
+    t = np.arange(60) / 30.0
+    still = np.tile(np.eye(4), (60, 1, 1))
+    assert core.demo_pace(t, still, None, float(t[30]), lin, ang) == 1.0, "no key frame before: the walk"
+    assert core.demo_pace(t, still, float(t[30]), float(t[30]), lin, ang) == 1.0, (
+        "one sample: nothing measured"
+    )
+    assert core.demo_pace(t, still, float(t[40]), float(t[30]), lin, ang) == 1.0, (
+        "out of order: nothing measured"
+    )
+    standing = core.demo_pace(t, still, float(t[10]), float(t[40]), lin, ang)
+    assert standing == 0.0 and core.line_scale(standing, 1.0, lin, ang) == pytest.approx(slowest), (
+        "a demo standing still: the slowest line"
+    )
+    jump = still.copy()
+    jump[31:, 0, 3] = 0.05  # 50 mm in one tick: 1.5 m/s
+    leap = core.demo_pace(t, jump, float(t[30]), float(t[31]), lin, ang)
+    assert np.isfinite(leap) and core.line_scale(leap, 1.0, lin, ang) == pytest.approx(fastest), (
+        "a one-tick jump: the fastest line"
+    )
+    assert core.line_scale(1.0, 100.0, lin, ang) == pytest.approx(fastest), (
+        "nor an act sped up past the range"
+    )
+    assert core.line_scale(2.0, 0.5, lin, ang) == pytest.approx(1.0), "the act's speed scales the demo's pace"
+    steps = [
+        {
+            "t": float(t[30]),
+            "kind": core.KEY_KIND,
+            "frame": "world",
+            "move": "line",
+            "grip": "along",
+            "constraint": "pose",
+            "label": "a",
+            "motion": np.eye(4),
+            "fix": np.eye(4),
+            "held": False,
+            "since": None,
+        },
+        {
+            "t": float(t[31]),
+            "kind": core.KEY_KIND,
+            "frame": "world",
+            "move": "line",
+            "grip": "along",
+            "constraint": "pose",
+            "label": "b",
+            "motion": np.eye(4),
+            "fix": np.eye(4),
+            "held": False,
+            "since": float(t[30]),
+        },
+    ]
+    for tips in (still, jump):
+        plan = core.plan_key_frames(
+            steps, t, tips, np.zeros(60), np.zeros((60, 7)), np.eye(4), 0.0, lin, ang, 80.0, 1.0, 30.0
+        )
+        assert np.all(np.isfinite(plan["times"])) and np.all(np.diff(plan["times"]) > 0)
+        assert np.all(np.isfinite(plan["walk_scale"])) and np.all(plan["walk_scale"] > 0)
+
+
 # ── key frames: one planner for every key frame, holding read from the gripper ───────────────
 
 

@@ -1331,6 +1331,43 @@ def pose_residual(a: np.ndarray, b: np.ndarray) -> tuple[float, float]:
     return float(np.linalg.norm(a[:3, 3] - b[:3, 3])), float(np.degrees(ang))
 
 
+# A line's speed keeps within the walk's own range (jog.LINEAR_M_S_RANGE, jog.ANGULAR_RAD_S_RANGE): the demo's pace
+# over a few jittery samples, or that times the act's speed, cannot ask for a runaway speed, nor a demo standing
+# still for none.
+LINE_SPEED_M_S = (0.005, 0.30)
+LINE_TURN_RAD_S = (np.radians(5.0), np.radians(180.0))
+
+
+def demo_pace(
+    t: np.ndarray, tips: np.ndarray, since: float | None, until: float, lin_m_s: float, ang_rad_s: float
+) -> float:
+    """How many times the walk's speed (``lin_m_s``, ``ang_rad_s``) the demo's fingertip moved at from ``since`` to
+    ``until``: the time the walk takes over the demo's own path there, every curve and turn of it (each sample's move
+    at the walk's rates), over the time the demo took. 1.0, the walk's own, where there is nothing to measure: no
+    key frame before, or no two samples between. Finite; a line bounds what it makes of it (:func:`line_scale`)."""
+    assert lin_m_s > 0.0 and ang_rad_s > 0.0, "a positive walk speed"
+    if since is None:
+        return 1.0
+    i0, i1 = int(np.argmin(np.abs(t - since))), int(np.argmin(np.abs(t - until)))
+    took = float(t[i1] - t[i0])
+    if i1 <= i0 or took <= 0.0:
+        return 1.0
+    path = np.asarray(tips[i0 : i1 + 1], dtype=float)
+    moved = np.linalg.norm(np.diff(path[:, :3, 3], axis=0), axis=1)
+    turn = np.einsum("nji,njk->nik", path[:-1, :3, :3], path[1:, :3, :3])
+    turned = np.arccos(np.clip((np.trace(turn, axis1=1, axis2=2) - 1.0) / 2.0, -1.0, 1.0))
+    return float(np.maximum(moved / lin_m_s, turned / ang_rad_s).sum()) / took
+
+
+def line_scale(pace: float, speed: float, lin_m_s: float, ang_rad_s: float) -> float:
+    """The multiple of the walk's speed a line goes at: the demo's ``pace`` there times the act's ``speed``, kept so
+    that its speeds stay within :data:`LINE_SPEED_M_S` and :data:`LINE_TURN_RAD_S`. Pre: the walk's speeds within
+    those ranges, so the bounds are in order."""
+    lo = max(LINE_SPEED_M_S[0] / lin_m_s, LINE_TURN_RAD_S[0] / ang_rad_s)
+    hi = min(LINE_SPEED_M_S[1] / lin_m_s, LINE_TURN_RAD_S[1] / ang_rad_s)
+    return min(max(pace * speed, lo), hi)
+
+
 def plan_key_frames(
     steps: list[dict[str, Any]],
     t: np.ndarray,
@@ -1352,20 +1389,23 @@ def plan_key_frames(
 
     Every pose is ``motion . adjust . tip . fix`` (``adjust`` defaults to identity), the demo's fingertip pose then moved, but a lift's: where the step before
     left the arm, ``up_mm`` higher along the base's z, the gripper kept. A line runs from where the arm stands
-    at the walk's speed; along it the gripper keeps its opening while held, else goes to the demo's command at the
+    at the demo's own pace since the key frame before (:func:`line_scale`; the walk's speed for the first key frame);
+    along it the gripper keeps its opening while held, else goes to the demo's command at the
     key frame, "first" with the arm standing, "along" with the arm. A follow replays the demo's samples after
     ``since`` up to the key frame on the demo's clock with its gripper command, its joint changes as hints and its
     fingertip heights as the floor. Both are scaled by ``speed``; the first sample is ``start_pose``, where the arm is.
 
     Pre: speed > 0. Post: ``times`` (N,) from 0, ``poses`` (N, 4, 4) base frame, ``grips`` (N,), ``hints`` (N, J)
-    (zero on lines), ``floor_ref`` (N,) (+inf on lines), ``stage`` (N,) the steps' labels, ``arrive`` the sample each
-    line ends on and ``spans`` each follow's (first, last) samples, None for one with none, both in step order.
+    (zero on lines), ``floor_ref`` (N,) (+inf on lines), ``stage`` (N,) the steps' labels, ``walk_scale`` (N,) the
+    multiple of the walk's speed a step to each sample may move at (a line's :func:`line_scale`, ``speed``
+    elsewhere), ``arrive`` the sample each line ends on and ``spans`` each follow's (first, last) samples, None for one
+    with none, both in step order.
     """
     assert speed > 0.0, "a positive speed"
     t = np.asarray(t, dtype=float)
     dt = 1.0 / hz
     nj = np.asarray(q_demo).shape[1]
-    times, poses, grips, hints, floor_ref, stage, constraints = (
+    times, poses, grips, hints, floor_ref, stage, constraints, scales = (
         [0.0],
         [np.asarray(start_pose, float)],
         [float(start_grip)],
@@ -1373,12 +1413,20 @@ def plan_key_frames(
         [np.inf],
         ["start"],
         ["pose"],
+        [float(speed)],
     )
     arrive: list[int] = []
     spans: list[tuple[int, int] | None] = []
 
     def add(
-        dt_s: float, pose: np.ndarray, grip: float, hint: np.ndarray, ref: float, label: str, constraint: str
+        dt_s: float,
+        pose: np.ndarray,
+        grip: float,
+        hint: np.ndarray,
+        ref: float,
+        label: str,
+        constraint: str,
+        scale: float = speed,
     ) -> None:
         times.append(times[-1] + dt_s)
         poses.append(pose)
@@ -1387,6 +1435,7 @@ def plan_key_frames(
         floor_ref.append(ref)
         stage.append(label)
         constraints.append(constraint)
+        scales.append(scale)
 
     def index(tk: float) -> int:
         return int(np.argmin(np.abs(t - tk)))
@@ -1430,7 +1479,10 @@ def plan_key_frames(
                 add(dt, pose, grip + (g - grip) * k / n, np.zeros(nj), np.inf, label, constraint)
             grip = g
         dist_m, ang_deg = pose_residual(pose, target)
-        dur = max(dist_m / (lin_m_s * speed), np.radians(ang_deg) / (ang_rad_s * speed))
+        scale = line_scale(
+            demo_pace(t, tips, s.get("since"), s["t"], lin_m_s, ang_rad_s), speed, lin_m_s, ang_rad_s
+        )
+        dur = max(dist_m / (lin_m_s * scale), np.radians(ang_deg) / (ang_rad_s * scale))
         n = max(1, int(np.ceil(dur * hz)))
         for k in range(1, n + 1):
             add(
@@ -1441,6 +1493,7 @@ def plan_key_frames(
                 np.inf,
                 label,
                 constraint,
+                scale,
             )
         arrive.append(len(times) - 1)
         pose, grip = target, g
@@ -1452,6 +1505,7 @@ def plan_key_frames(
         "floor_ref": np.array(floor_ref),
         "stage": stage,
         "constraint": constraints,
+        "walk_scale": np.array(scales),
         "arrive": arrive,
         "spans": spans,
     }

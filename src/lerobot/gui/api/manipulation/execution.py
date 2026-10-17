@@ -83,9 +83,7 @@ class InjectBody(BaseModel):
 
 
 class ActBody(BaseModel):
-    speed: float = (
-        1.0  # scales the straight lines (from the jog's walk speed) and the grasp (from the demo's clock)
-    )
+    speed: float = 1.0  # scales the straight lines (from the demo's own pace between key frames) and the follows (its clock)
     inject: InjectBody | None = None
     correct_hold: bool = True  # False: a place replays the demo against the target, uncorrected for the hold
     allow_grasp_prediction: bool = False  # use the grasp-time hold if post-carry vision cannot verify it

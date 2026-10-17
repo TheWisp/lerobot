@@ -19,6 +19,13 @@ from . import runtime
 RETARGET_HORIZON_S = 0.25
 
 
+def _step_limits(path: dict, i: int, limits, speed: float) -> tuple[float, float]:
+    """The Cartesian limits of a step to phase ``i``: the walk's, times the multiple the plan reaches the phase at
+    (on a line the demo's own pace there, :func:`core.line_scale`), or times the act's speed where it has none."""
+    scale = float(path["walk_scale"][i]) if "walk_scale" in path else speed
+    return limits[0] * scale, limits[1] * scale
+
+
 def _retarget_timed_tail(
     kin,
     plan,
@@ -86,7 +93,7 @@ def _retarget_timed_tail(
             box,
             float(path["floor"][i]),
             ticks / jog.HZ,
-            (limits[0] * speed, limits[1] * speed),
+            _step_limits(path, i, limits, speed),
             jog.GRIP_UNITS_S * speed,
             preferred=plan["q"][i],
         )
@@ -565,7 +572,7 @@ async def stream(
         async def solve(
             step_ticks,
             args=solve_args,
-            move_limits=(limits[0] * speed, limits[1] * speed),
+            move_limits=_step_limits(path, i, limits, speed),
             grip_rate=jog.GRIP_UNITS_S * speed,
             preferred=plan["q"][i],
         ):

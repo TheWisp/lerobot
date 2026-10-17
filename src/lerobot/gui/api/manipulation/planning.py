@@ -1000,6 +1000,7 @@ def _plan_act_once(
             "floor": plan["floor_ref"],
             "constraint": plan["constraint"],
             "move": [by_label[label]["move"] if label in by_label else "start" for label in plan["stage"]],
+            "walk_scale": plan["walk_scale"],
         },
         "marks": marks,
         "summary": {

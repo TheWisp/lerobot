@@ -972,3 +972,74 @@ def test_free_line_aims_at_real_waypoint_but_does_not_skip_release(monkeypatch, 
     assert set(phases) == {0, 4, 5, 7}, "only generated samples may be coalesced"
     assert next(q for q in sent if q[-1] < 80)[0] == pytest.approx(16 if move_target else 12, abs=0.5)
     assert last[0] == pytest.approx(22 if move_target else 18, abs=0.5) and last[-1] == 20
+
+
+class _ExactTipKinematics(_TipKinematics):
+    """The fake arm with an IK that lands on the pose in one call: a step reaches its whole Cartesian limit."""
+
+    def inverse_kinematics(self, seed, pose):
+        q = np.asarray(seed, dtype=float).copy()
+        q[:3] = np.asarray(pose[:3, 3]) * 1000.0
+        return q
+
+
+@pytest.mark.parametrize("pace", [0.5, 1.0, 1.5, 2.0])
+def test_a_line_streams_at_the_pace_its_plan_reaches_it(monkeypatch, pace):
+    """A line goes at the walk's speed times the multiple its plan reaches it at (the demo's own pace between its key
+    frames, :func:`core.line_scale`): 15 mm at a 10 mm/s walk takes 1.5 s, at twice the walk three quarters of a
+    second. Before, every line streamed at the walk's speed times the act's whatever its plan said."""
+    kin = _ExactTipKinematics()
+    state = {"q": np.zeros(7)}
+    sent = []
+
+    def send(q):
+        state["q"] = np.array([q[m] for m in MOTOR_NAMES])
+        sent.append(state["q"].copy())
+
+    fake_playback(monkeypatch, send)
+    monkeypatch.setattr(runtime, "ACT_TICK_S", 0.001)
+    monkeypatch.setattr(jog, "servo_ranges", lambda: None)
+    monkeypatch.setattr(jog, "workspace_box", lambda: ((-1, -1, -1), (1, 1, 1)))
+    monkeypatch.setattr(
+        jog,
+        "current_tip_and_anchor",
+        lambda: (
+            kin.forward_kinematics(state["q"]),
+            np.eye(4),
+            dict(zip(MOTOR_NAMES, state["q"], strict=True)),
+        ),
+    )
+    end = np.zeros(7)
+    end[0] = 15.0
+    plan = {
+        "q": np.stack([np.zeros(7), end]),
+        "times": np.array([0.0, 1.5 / pace]),
+        "stage": ["start", "line"],
+        "live_path": {
+            "local": np.stack([pose(0.0), pose(0.015)]),
+            "frames": ["world"] * 2,
+            "held": np.zeros(2, bool),
+            "grips": np.zeros(2),
+            "hints": np.zeros((2, 7)),
+            "floor": np.full(2, -1.0),
+            "move": ["start", "line"],
+            "walk_scale": np.array([1.0, pace]),
+        },
+    }
+    start = time.monotonic()
+    reason, last = asyncio.run(
+        live_execution.stream(
+            plan,
+            kin,
+            lambda: {"world": np.eye(4)},
+            lambda: np.eye(4),
+            lambda: "test timeout" if time.monotonic() - start > 5 else "",
+            lambda *_: None,
+            lambda *_: pytest.fail("a reachable line"),
+            (0.01, np.pi),
+            1,
+        )
+    )
+    assert not reason and last[0] == pytest.approx(15.0, abs=0.5)
+    moving = [q for q in sent if 0.05 < q[0] < 14.95]
+    assert len(moving) == pytest.approx(1.5 / pace * jog.HZ, abs=3), "ticks on the way at the line's own pace"
