@@ -237,7 +237,8 @@ needed only where timing matters ([R5](#requirements)).
 3. **The loop.** Every tick: the target is the leg's next sample carried by the pose of the leg's object; the arm steps
    toward it within the jog's limits; the gripper command follows the demo's along the leg's progress. A leg ends when
    the arm reaches its last sample within the reach tolerance. ([R1](#requirements), [R3](#requirements),
-   [R5](#requirements), [C4](#constraints-and-freedoms))
+   [R5](#requirements), [C4](#constraints-and-freedoms)) How the loop moves along the demo, where it waits and when it
+   goes back is designed in [act_execution.md](act_execution.md).
 4. **What the loop replaces.** The wait for the object to hold still and its rule of taking the last view once the
    object is hidden (`_still_decision` at `c2f8bedd4`); the grasp, carry and place played back from plans made once (`stream`); the
    separate correction for how the object sits in the gripper, since a held object's pose moves with the fingertip.

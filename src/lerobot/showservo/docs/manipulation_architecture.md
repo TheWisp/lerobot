@@ -1026,6 +1026,8 @@ matters when a loaded lift stops centimetres short without a motor fault.
 
 ### Proposed key-frame recovery and task outcome contract
 
+[act_execution.md](act_execution.md) develops this proposal into a design: Progress, Milestones and their regression.
+
 This is a design proposal, not current behavior. Today phase indices only move
 forward. An accepted target update changes the current and future commands,
 but cannot make the arm revisit an approach or clearance frame already passed.
