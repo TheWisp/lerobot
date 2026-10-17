@@ -258,8 +258,8 @@ within a time the operator sets. ([R1](#requirements), [R3](#requirements), [R8]
 
 ### Going back, or ahead
 
-When a check fails, when an object moves by more than its measured noise on two views in a row, or when a command
-cannot be reached, Progress moves to the nearest point of the demo that matches what the camera sees:
+**When a check fails**, or a command cannot be reached, Progress moves to the nearest point of the demo that matches
+what the camera sees:
 
 - not past the next Milestone that has not yet succeeded;
 - never back past a final Milestone;
@@ -267,8 +267,19 @@ cannot be reached, Progress moves to the nearest point of the demo that matches 
   the demo.
 
 A Milestone that Progress goes back past must succeed again; one that fails a second time makes the act give up
-([Q1](#open-questions)). The arm gets to the new point by a short straight move at the walk speed, opening the gripper
-first if it has to open, closing it last if it has to close. ([R2](#requirements), [R4](#requirements))
+([Q1](#open-questions)). The arm first waits for a new view of the object, which may have fallen somewhere new, then
+gets to the new point by a short straight move at the walk speed, opening the gripper first if it has to open, closing
+it last if it has to close. ([R2](#requirements), [R4](#requirements))
+
+**When the object the arm is heading for moves** by more than its measured noise, on two views in a row:
+
+- during a follow — in contact, or nearly, as in a grasp or an insertion — the arm backs out along the demo's own path
+  relative to where the object was, to the start of that follow, and goes in again relative to where it is now. The
+  nearest point is not enough here: after a sideways move every point of the descent is as far, so nothing would take
+  the arm up out of the ring. Until the second view confirms the move, the arm keeps to where the object was rather
+  than drifting sideways inside it.
+- during a line, the line re-aims from where the arm is and keeps its speed: a target moved nearer is reached sooner,
+  one moved away later.
 
 A missed grasp, step by step:
 
@@ -360,7 +371,8 @@ and waste more time on a task that cannot succeed. Leaning: twice.
 
 <a id="q2"></a>**Q2. After a failure, how does the arm get back to the earlier point?** Straight there, after opening
 the gripper; or by playing the demo's motion backwards. Straight is shorter; backwards follows a path the demo showed
-was clear of the object. Leaning: straight there.
+was clear of the object. Leaning: straight there. In contact the question does not arise: a moved object
+always backs the arm out along the demo's path (see [Going back, or ahead](#going-back-or-ahead)).
 
 To measure: the checks on the act records, with real and made-up misses ([R3](#requirements), [R8](#requirements));
 what the depth fit costs per frame; how much each object's views, tracked points and depth wander at rest on the rig,
