@@ -21,7 +21,7 @@ RETARGET_HORIZON_S = 0.25
 
 def _step_limits(path: dict, i: int, limits, speed: float) -> tuple[float, float]:
     """The Cartesian limits of a step to phase ``i``: the walk's, times the multiple the plan reaches the phase at
-    (on a line the demo's own pace there, :func:`core.line_scale`), or times the act's speed where it has none."""
+    (the demo's own speed there times the act's, :func:`core.walk_scale`), or times the act's speed where it has none."""
     scale = float(path["walk_scale"][i]) if "walk_scale" in path else speed
     return limits[0] * scale, limits[1] * scale
 

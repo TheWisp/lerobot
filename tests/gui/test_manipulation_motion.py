@@ -1639,6 +1639,54 @@ def test_a_line_moves_at_the_demos_pace_along_its_whole_path_between_its_key_fra
     )
 
 
+@pytest.mark.parametrize("speed", [1.0, 0.5])
+def test_a_follow_may_move_as_fast_as_the_demo_did_at_each_sample(speed):
+    """2026-10-17: speed 1.0 is the demo's own speed for the grasp and the place too; their steps were held to the
+    walk's 40 mm/s times the speed, and the insertion's (83 mm/s at its fastest) took 6.2 s for the demo's 4.8. A
+    follow's step may now move as fast as the demo did there, times the speed, and never slower than the walk's
+    speed times the speed, which leaves live corrections their room where the demo stood nearly still."""
+    t, tips, grip, q = _arc_demo()
+    i0, i1 = 30, 90
+    kps = [{"t": float(t[i0]), "kind": "pregrasp"}, {"t": float(t[i1]), "kind": "grasp_end"}]
+    lin = 0.02  # the arc's 47 mm/s is 2.36 times this walk
+    plan = core.plan_key_frames(
+        _resolved_steps(kps, np.eye(4)),
+        t,
+        tips,
+        grip,
+        q,
+        tips[i0],
+        70.0,
+        lin,
+        np.radians(30),
+        80.0,
+        speed,
+        30.0,
+    )
+    p0, p1 = plan["spans"][0]
+    chord = np.linalg.norm(tips[i0 + 1, :3, 3] - tips[i0, :3, 3])
+    assert np.all(plan["walk_scale"][p0 : p1 + 1] == pytest.approx(chord * 30.0 / lin * speed, rel=1e-6))
+    assert np.allclose(np.diff(plan["times"][p0 - 1 : p1 + 1]), 1.0 / 30.0 / speed), "on the demo's clock"
+    slow = core.plan_key_frames(
+        _resolved_steps(kps, np.eye(4)),
+        t,
+        tips,
+        grip,
+        q,
+        tips[i0],
+        70.0,
+        0.2,
+        np.radians(30),
+        80.0,
+        speed,
+        30.0,
+    )
+    s0, s1 = slow["spans"][0]
+    assert np.all(slow["walk_scale"][s0 : s1 + 1] == pytest.approx(speed)), (
+        "a walk faster than the demo: the walk's"
+    )
+
+
 def test_a_line_takes_the_demos_pace_from_its_turns_too():
     """A demo that turned 90 deg in place over 1 s, three times the walk's 30 deg/s: a line that turns 45 deg and
     slides 10 mm takes a third of the walk's 1.5 s."""
@@ -1714,19 +1762,19 @@ def test_the_demos_pace_falls_back_or_stays_bounded_where_it_cannot_be_measured(
         "out of order: nothing measured"
     )
     standing = core.demo_pace(t, still, float(t[10]), float(t[40]), lin, ang)
-    assert standing == 0.0 and core.line_scale(standing, 1.0, lin, ang) == pytest.approx(slowest), (
+    assert standing == 0.0 and core.walk_scale(standing, 1.0, lin, ang) == pytest.approx(slowest), (
         "a demo standing still: the slowest line"
     )
     jump = still.copy()
     jump[31:, 0, 3] = 0.05  # 50 mm in one tick: 1.5 m/s
     leap = core.demo_pace(t, jump, float(t[30]), float(t[31]), lin, ang)
-    assert np.isfinite(leap) and core.line_scale(leap, 1.0, lin, ang) == pytest.approx(fastest), (
+    assert np.isfinite(leap) and core.walk_scale(leap, 1.0, lin, ang) == pytest.approx(fastest), (
         "a one-tick jump: the fastest line"
     )
-    assert core.line_scale(1.0, 100.0, lin, ang) == pytest.approx(fastest), (
+    assert core.walk_scale(1.0, 100.0, lin, ang) == pytest.approx(fastest), (
         "nor an act sped up past the range"
     )
-    assert core.line_scale(2.0, 0.5, lin, ang) == pytest.approx(1.0), "the act's speed scales the demo's pace"
+    assert core.walk_scale(2.0, 0.5, lin, ang) == pytest.approx(1.0), "the act's speed scales the demo's pace"
     steps = [
         {
             "t": float(t[30]),
