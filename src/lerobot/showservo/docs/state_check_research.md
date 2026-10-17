@@ -78,6 +78,35 @@ fast signal, fail later on the consequence, regress.
 - **VLM judges are not in the loop.** 10–20 s per query and 70–96% accuracy put them where REFLECT puts them: after
   the fact, explaining, or as the slowest contradiction.
 
+## How games and simulators define the same predicates
+
+Games, VR toolkits and robot simulators decide "grabbed", "inside", "placed" without perception: they own the
+state, contacts and exact poses included. What carries over is how few predicates they need, and how each is
+defined.
+
+| Predicate       | Games and VR                                                                                                                                                                                              | Robot simulators and benchmarks                                                                                                                                                                                                       |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Held            | A grab constraint the system creates; it breaks past a linear or angular threshold [[UNR]](#sources); the held object follows the hand instantly, kinematically, or by velocity tracking [[XR]](#sources) | robosuite: a geom of each fingerpad touches the object [[RS]](#sources); ManiSkill: each finger's contact force ≥ 0.5 N within 85° of its opening direction [[MS]](#sources); RLBench: in the gripper's grasped list [[RL]](#sources) |
+| Lifted, dropped | —                                                                                                                                                                                                         | robosuite: height above the table by 4 cm; Isaac Lab: the root below a minimum height, in the world frame [[IL]](#sources)                                                                                                            |
+| In a place      | A socket snaps whatever hovers within its radius to its pose and fires enter and exit events [[XR]](#sources); a trigger volume fires on overlap                                                          | robosuite: inside the bin's box and height band, and the gripper at least about 4 cm away; OmniGibson: a bounding-box test, then a point in the convex hull [[OG]](#sources)                                                          |
+| On, at a goal   | —                                                                                                                                                                                                         | LIBERO: in contact, above, horizontal offset under 3 cm [[LB]](#sources); ManiSkill: within 2.5 cm of the goal and the robot's joint speeds at most 0.2                                                                               |
+| Part moved      | —                                                                                                                                                                                                         | RLBench and OmniGibson: a joint moved past a threshold from where it started                                                                                                                                                          |
+| At rest         | A body below a velocity threshold sleeps, and wakes on contact [[UN]](#sources)                                                                                                                           | ManiSkill's "static" robot check                                                                                                                                                                                                      |
+| Steps in order  | —                                                                                                                                                                                                         | RLBench: an ordered set of conditions, each checked only once the one before is met; it never goes back                                                                                                                               |
+
+Four things follow for a perception-based version:
+
+1. **The vocabulary is small.** Held, in a place, on or at a relation, part moved, at rest, and their order cover
+   the tasks the benchmarks ship. A drop into a hole is a trigger volume; a throw into a bin is containment after
+   the release; turning a handle is a part past a threshold.
+2. **Two success checks require the effect to outlast the effector.** ManiSkill counts a placement only with the
+   robot static; robosuite counts an object in its bin only with the gripper away from it.
+3. **The grab-break rule needs no rigidity.** The system knows where the held object should be, hand times the
+   grab offset, and declares the grab broken when the object drifts past a threshold from it. A physics hand stuck
+   against geometry is detected the same way.
+4. **What does not transfer is the privileged state.** Every predicate needs a version that reads the camera and
+   answers yes, no, or cannot tell; the benchmarks never need the third answer.
+
 ## Open decisions
 
 1. **Touch on the gripper.** Without it, cloth Milestones about _what_ is pinched are unverifiable; with it, the
@@ -141,3 +170,25 @@ fast signal, fail later on the consequence, regress.
 - VLA recovery: π0 https://arxiv.org/abs/2410.24164 (recovery from the data mix); π0.5 https://www.pi.website/download/pi05.pdf
   (high-level sub-task inference "easily distracted"); SO-101 benchmark https://arxiv.org/abs/2606.08881
   (recovery rates π0.5 30.8%, Wall-X 20.5%, ACT 6.5%, SmolVLA 3.2%); RePO-VLA https://arxiv.org/abs/2605.09410.
+- [UNR] Unreal Engine, constraint break thresholds:
+  https://docs.unrealengine.com/4.27/en-US/API/Runtime/Engine/PhysicsEngine/FConstraintProfileProperties/index.html;
+  a VR pickup by physics constraint: https://answers.unrealengine.com/questions/856306/view.html; trigger overlaps
+  with grabbed objects: https://answers.unrealengine.com/questions/662184/view.html.
+- [XR] Unity XR Interaction Toolkit, XR Grab Interactable (movement types, throw on detach):
+  https://docs.unity3d.com/Packages/com.unity.xr.interaction.toolkit@3.0/manual/xr-grab-interactable.html; XR Socket
+  Interactor: https://docs.unity3d.com/Packages/com.unity.xr.interaction.toolkit@3.0/manual/xr-socket-interactor.html.
+- [UN] Unity, rigidbody sleeping:
+  https://docs.unity.com/en-us/engine/6000.0/manual/physics-section/physics-overview/physics-optimization/cpu/rigidbody-sleeping;
+  PD-driven physics hands: Hurricane VR,
+  https://assetstore.unity.com/packages/tools/physics/hurricane-vr-physics-interaction-toolkit-177300.
+- [RS] robosuite: `lift.py`, `pick_place.py`, `manipulation_env.py` (`_check_grasp`),
+  https://github.com/ARISE-Initiative/robosuite/tree/master/robosuite/environments/manipulation.
+- [MS] ManiSkill: PickCube, https://maniskill.readthedocs.io/en/latest/_modules/mani_skill/envs/tasks/tabletop/pick_cube.html;
+  the Panda agent's `is_grasping` and `is_static`,
+  https://github.com/haosulab/ManiSkill/blob/main/mani_skill/agents/robots/panda/panda.py.
+- [RL] RLBench conditions: https://github.com/stepjam/RLBench/blob/master/rlbench/backend/conditions.py.
+- [IL] Isaac Lab terminations (`root_height_below_minimum`):
+  https://isaac-sim.github.io/IsaacLab/v2.3.0/_modules/isaaclab/envs/mdp/terminations.html.
+- [OG] OmniGibson object states: https://behavior.stanford.edu/omnigibson/modules/object_states.html.
+- [LB] LIBERO predicates:
+  https://github.com/Lifelong-Robot-Learning/LIBERO/blob/master/libero/libero/envs/predicates/base_predicates.py.
