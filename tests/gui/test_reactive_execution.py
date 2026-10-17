@@ -1109,3 +1109,65 @@ def test_a_follow_faster_than_the_walk_keeps_the_demos_clock_at_its_planned_scal
         assert len(moving) == pytest.approx(jog.HZ, abs=4), "the demo's second"
     else:
         assert len(moving) > 2 * jog.HZ, "held to the walk: over twice the demo's time"
+
+
+def test_the_stream_says_where_its_plan_ends_once_queued_before_it_is_played(monkeypatch):
+    """The act plans what comes next from the command the plan ends at, while the queue ahead of it still plays: the
+    stream tells it once, as the last phase is queued, the command it then ends on."""
+    kin = _ExactTipKinematics()
+    state = {"q": np.zeros(7)}
+    sent, told = [], []
+
+    def send(q):
+        state["q"] = np.array([q[m] for m in MOTOR_NAMES])
+        sent.append((time.monotonic(), state["q"].copy()))
+
+    fake_playback(monkeypatch, send)
+    monkeypatch.setattr(runtime, "ACT_TICK_S", 0.001)
+    monkeypatch.setattr(jog, "servo_ranges", lambda: None)
+    monkeypatch.setattr(jog, "workspace_box", lambda: ((-1, -1, -1), (1, 1, 1)))
+    monkeypatch.setattr(
+        jog,
+        "current_tip_and_anchor",
+        lambda: (
+            kin.forward_kinematics(state["q"]),
+            np.eye(4),
+            dict(zip(MOTOR_NAMES, state["q"], strict=True)),
+        ),
+    )
+    n = 31
+    x = np.arange(n) * 0.006 / 30.0
+    q = np.zeros((n, 7))
+    q[:, 0] = x * 1000.0
+    plan = {
+        "q": q,
+        "times": np.arange(n) / 30.0,
+        "stage": ["start"] + ["follow"] * (n - 1),
+        "live_path": {
+            "local": np.stack([pose(v) for v in x]),
+            "frames": ["world"] * n,
+            "held": np.zeros(n, bool),
+            "grips": np.zeros(n),
+            "hints": np.zeros((n, 7)),
+            "floor": np.full(n, -1.0),
+            "move": ["start"] + ["follow"] * (n - 1),
+        },
+    }
+    start = time.monotonic()
+    reason, last = asyncio.run(
+        live_execution.stream(
+            plan,
+            kin,
+            lambda: {"world": np.eye(4)},
+            lambda: np.eye(4),
+            lambda: "test timeout" if time.monotonic() - start > 5 else "",
+            lambda *_: None,
+            lambda *_: pytest.fail("a reachable follow"),
+            (0.04, np.pi),
+            1,
+            queued_last=lambda q_last: told.append((time.monotonic(), q_last)),
+        )
+    )
+    assert not reason and len(told) == 1, "told once"
+    assert np.allclose(told[0][1], last) and np.allclose(told[0][1], sent[-1][1]), "the command it ends on"
+    assert told[0][0] < sent[-1][0] - 0.3, "while most of a second of the queue was still to play"

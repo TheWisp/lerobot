@@ -148,12 +148,15 @@ async def stream(
     best_effort_stopped=None,
     diagnostics=None,
     queue_horizon_s=1.0,
+    queued_last=None,
 ):
     """Return (reason, last command). Phase advances only after its command is consumed.
 
     Planning/IK never owns the motor bus. A short checked horizon keeps the bus
     moving while a solve or observation is late. New poses replace only unsent
     samples; the existing servo lag/release guards keep their state.
+    ``queued_last(q)`` is told, once, the command the plan's last phase is queued at, while the queue ahead of it
+    still plays: what comes next can be planned from there (a later correction may still move it).
     """
     from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
 
@@ -272,6 +275,9 @@ async def stream(
             jog.playback_stop()
             return why, qs[max(0, recorded)]
         done, stamps = jog.playback_state()
+        if queued_last is not None and phases[-1] == len(plan["q"]) - 1:
+            queued_last(np.asarray(qs[-1], dtype=float).copy())
+            queued_last = None
         if diagnostics is not None:
             depth = len(qs) - done - 1
             diagnostics["max_queue_samples"] = max(diagnostics["max_queue_samples"], depth)

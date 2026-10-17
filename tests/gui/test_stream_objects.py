@@ -4905,21 +4905,31 @@ def test_a_plan_made_ahead_is_made_again_when_the_arm_stands_elsewhere(tmp_path,
 def test_a_place_planned_ahead_is_made_again_when_the_hold_is_seen_otherwise_during_the_carry(
     tmp_path, monkeypatch, shift_mm, why
 ):
-    """The held object is seen elsewhere in the fingers while the carry streams, after the place was planned ahead with
-    the grasp's hold: the carry's stream ends where the hold seen puts the arm, and the place is planned again with
+    """The held object is seen elsewhere in the fingers while the carry streams, just after the place was planned ahead
+    with the grasp's hold: the carry's stream ends where the hold seen puts the arm, and the place is planned again with
     it, and aims by it; caught by where the arm stands, or by the targets where the arm stands within its tolerance."""
     import asyncio
     import time as _time
 
     seen = {}
+    real_stream = manipulation.live_execution.stream
+
+    async def stream(*args, queued_last=None, **kw):
+        """The stream, noting when it has said where the carry ends: the place is then planned ahead from there."""
+        if queued_last is not None:
+            tell = queued_last
+
+            def queued_last(q, tell=tell):
+                tell(q)
+                seen["place planned ahead"] = True
+
+        return await real_stream(*args, queued_last=queued_last, **kw)
 
     async def watch(demo, held_obj, t_bc, prediction, stopped, publish, log, **_kw):
-        act = manipulation.runtime._state.act
-        for planning in (True, False):  # the carry's first sample: its planning over
-            while (act.step == "planning the carry") != planning:
-                if stopped():
-                    return
-                await asyncio.sleep(0.002)
+        while "place planned ahead" not in seen:
+            if stopped():
+                return
+            await asyncio.sleep(0.002)
         shift = np.eye(4)
         shift[:3, 3] = np.array(shift_mm) / 1000.0
         seen["fix"] = prediction() @ shift
@@ -4937,6 +4947,7 @@ def test_a_place_planned_ahead_is_made_again_when_the_hold_is_seen_otherwise_dur
             await asyncio.sleep(0.01)
 
     monkeypatch.setattr(manipulation.held_views, "watch", watch)
+    monkeypatch.setattr(manipulation.live_execution, "stream", stream)
     try:
         demo, sim, _views, m = _run_place_act(tmp_path, monkeypatch, allow_grasp_prediction=True)
         act = manipulation.runtime._state.act

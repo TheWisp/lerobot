@@ -670,9 +670,12 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
             landing_turn = (centre, (old_turn + result["turn_deg"]) % 360.0, axis)
             return True
 
-        async def stream(planned: dict[str, Any]) -> str:
+        async def stream(
+            planned: dict[str, Any], queued_last: Callable[[np.ndarray], None] | None = None
+        ) -> str:
             """Stream a plan's joints, then wait for the arm to settle on the last: "" or why not. The jog's loop plays
-            them back on its own clock (:func:`jog.play_joints`); ``sent`` follows the samples that went out."""
+            them back on its own clock (:func:`jog.play_joints`); ``sent`` follows the samples that went out.
+            ``queued_last`` as :func:`live_execution.stream` has it."""
             nonlocal streaming, sent
             q, times, stage = planned["q"], planned["times"], planned["stage"]
             sent = -1
@@ -750,6 +753,7 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
                     best_effort_stopped=best_effort_stopped,
                     diagnostics=stream_diagnostics,
                     queue_horizon_s=act.queue_horizon_s,
+                    queued_last=queued_last,
                 )
                 return why
             n = len(q)
@@ -894,31 +898,20 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
                 out.append(None if m is None else m @ demo.tips[index(frames[n]["t"])])
             return out
 
-        def plan_ahead(
-            label: str,
-            span: tuple[int, int],
-            start: np.ndarray | Callable[[], np.ndarray],
-            fix: np.ndarray | None,
-        ) -> dict:
-            """Plan key frames ``span`` beside the arm from ``start``, the joints the stream now running will leave the
-            arm at (or what works them out, on the plan executor), aimed by what the act holds now, the landing chosen
-            again when the turn the start took no longer plans, as the act would once the stream ends; but on the plan
-            executor and its own model, so the stream's solves never wait for it. :func:`take_ahead` uses it when the
-            arm gets there and what it was made from still holds."""
+        def plan_ahead(label: str, span: tuple[int, int], q_from: np.ndarray, fix: np.ndarray | None) -> dict:
+            """Plan key frames ``span`` beside the arm from ``q_from``, the joints the stream now running will leave it
+            at, aimed by what the act holds now, the landing chosen again when the turn the start took no longer plans,
+            as the act would once the stream ends; but on the plan executor and its own model, so the stream's solves
+            never wait for it. :func:`take_ahead` uses it when the arm gets there and what it was made from still
+            holds."""
+            q_from = np.array(q_from, dtype=float)
             session = any(frames[n]["frame"] == (obj or "") for n in range(*span))
             delta_cam = follow() if session else None
             planned_demo = demo
-            ahead: dict[str, Any] = {"span": span, "q_from": None, "session": session, "fix": fix}
+            ahead: dict[str, Any] = {"span": span, "q_from": q_from, "session": session, "fix": fix}
 
             async def attempts() -> list[tuple[str, dict, list, bool]]:
                 made: list[tuple[str, dict, list, bool]] = []
-                q_from = np.array(
-                    await asyncio.get_running_loop().run_in_executor(runtime._PLAN_EXECUTOR, start)
-                    if callable(start)
-                    else start,
-                    dtype=float,
-                )
-                ahead["q_from"] = q_from
                 for suffix, landed, extra in (
                     ("", True, {}),
                     (", the landing chosen again", False, {"landing": planned_demo.landing}),
@@ -947,30 +940,6 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
             ahead["task"] = asyncio.create_task(attempts())
             beside.append(ahead["task"])
             return ahead
-
-        def stream_end(planned: dict, fix: np.ndarray) -> Callable[[], np.ndarray]:
-            """What works out where streaming ``planned`` will leave the arm: its last target aimed by what the act
-            holds now and corrected by the hold ``fix``, solved from the plan's last joints, as the stream solves it.
-            Its frames are read now; the solve runs where it is called."""
-            q_last = np.asarray(planned["q"][-1], dtype=float)
-            path = planned.get("live_path")
-            if path is None or path.get("constraint", ["pose"])[-1] != "pose":
-                return lambda: q_last
-            last = {k: v[-1:] for k, v in path.items()}
-            goal = reactive.targets(last, {name: frame_now(name) for name in set(last["frames"])}, fix)[0]
-
-            def solve() -> np.ndarray:
-                return core.solve_plan_joints(
-                    plan_kin,
-                    goal[None],
-                    np.array([q_last[gi]]),
-                    np.zeros((1, len(q_last))),
-                    q_last,
-                    gi,
-                    *(ranges if ranges is not None else (None, None)),
-                )["q"][0]
-
-            return solve
 
         async def take_ahead(ahead: dict | None, fix: np.ndarray | None) -> dict | None:
             """The plan made ahead (:func:`plan_ahead`), kept in the act's record as if made now, when what it was made
@@ -1441,17 +1410,15 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
             if "live_path" in carried_plan:
                 carried_plan["live_path"]["grips"] = np.full(last + 1, closing_cmd)
             # With the hold carried on, the place is planned from the carry's end while it streams (take_ahead).
-            placing_ahead = (
-                plan_ahead(
-                    "hold correction and place",
-                    (hold_line, phase_stop),
-                    stream_end(carried_plan, live_fix.copy()),
-                    live_fix.copy(),
-                )
-                if continuous_hold
-                else None
-            )
-            why = await stream(carried_plan)
+            placing_ahead: dict | None = None
+
+            def place_ahead(q_last: np.ndarray, span: tuple[int, int] = (hold_line, phase_stop)) -> None:
+                """The place, planned from the command the carry ends at once that is queued, while the carry streams,
+                with the hold as the act has it then."""
+                nonlocal placing_ahead
+                placing_ahead = plan_ahead("hold correction and place", span, q_last, hold_prediction())
+
+            why = await stream(carried_plan, queued_last=place_ahead if continuous_hold else None)
             if why:
                 fail(why)
                 return
