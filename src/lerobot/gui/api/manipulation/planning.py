@@ -21,6 +21,7 @@ from __future__ import annotations
 import functools
 import hashlib
 import pathlib
+import threading
 from collections.abc import Callable
 from typing import Any
 
@@ -36,6 +37,15 @@ from . import acquisition, holds, recording, runtime
 # still dowel on 2026-10-16 moved its centre and ends by at most 4.5 mm between them; its other end assignment moved
 # them 104 mm.
 RECONFIRM_M = 0.015
+
+# The live view draws the act's path on every frame it renders, about ten a second, but the path changes only when a
+# key frame's target moves. Re-planning it cost 44-51 ms a frame through the acts of 2026-10-16, holding the GIL beside
+# the motor loop. It is planned again once a key frame's target has moved further than the line can show at the tray
+# (2 mm or 1 deg, about 3 pixels); in those acts' recorded object poses that was a quarter of the rendered frames.
+PREVIEW_REPLAN_M = 0.002
+PREVIEW_REPLAN_DEG = 1.0
+_preview_lock = threading.Lock()
+_preview_last: dict[str, Any] = {}  # the live view's last planned path and what it was planned for
 
 
 def _recovered_pose_token(demo: runtime._Demo, teach: runtime._Teach) -> str:
@@ -464,6 +474,23 @@ def _act_preview(
     )
     if not steps:
         return None
+    key = (
+        id(demo),
+        repr(demo.keypoints),
+        np.asarray(t_bc).tobytes(),
+        [(k["t"], k["frame"], k["move"]) for k in steps],
+    )
+    targets = [k["motion"] @ demo.tips[int(np.argmin(np.abs(demo.t - k["t"])))] @ k["fix"] for k in steps]
+    if preview_pose is None:  # a review's candidate poses are planned as asked
+        with _preview_lock:
+            last = dict(_preview_last)
+        if last.get("key") == key and all(
+            distance <= PREVIEW_REPLAN_M and angle <= PREVIEW_REPLAN_DEG
+            for distance, angle in (
+                core.pose_residual(a, b) for a, b in zip(last["targets"], targets, strict=True)
+            )
+        ):
+            return last["poses"]
     i = int(np.argmin(np.abs(demo.t - steps[0]["t"])))
     plan = core.plan_key_frames(
         steps,
@@ -479,6 +506,9 @@ def _act_preview(
         1.0,
         jog.HZ,
     )
+    if preview_pose is None:
+        with _preview_lock:
+            _preview_last.update(key=key, targets=targets, poses=plan["poses"])
     return plan["poses"]
 
 

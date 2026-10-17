@@ -1412,6 +1412,55 @@ def test_act_refuses_recovered_axis_pose_without_a_checked_grasp_choice(client, 
             manipulation.runtime._state.act = manipulation.runtime._Act()
 
 
+def test_the_live_path_preview_is_planned_again_only_when_a_key_frame_moves_visibly(tmp_path, monkeypatch):
+    """The live view drew the act's path by planning it on every rendered frame (44-51 ms each through the acts of
+    2026-10-16, beside the motor loop). It keeps drawing the last path until a key frame's target has moved further
+    than the line shows."""
+    demo, _, _ = _place_demo(tmp_path, time.time())
+    teach = manipulation.runtime._Teach(
+        at="t",
+        box=(0, 0, 0, 0),
+        rgb=None,
+        depth_m=None,
+        intr=INTR,
+        keypoints={"ref": {"object": "gamepad", "ok": True, "delta": np.eye(4)}},
+    )
+    planned = []
+    real_plan = core.plan_key_frames
+
+    def counting(*args, **kwargs):
+        planned.append(1)
+        return real_plan(*args, **kwargs)
+
+    monkeypatch.setattr(core, "plan_key_frames", counting)
+    manipulation.planning._preview_last.clear()
+
+    def moved(x_m):
+        delta = np.eye(4)
+        delta[0, 3] = x_m
+        return delta
+
+    try:
+        with manipulation.runtime._state.lock:
+            manipulation.runtime._state.demo = demo
+            manipulation.runtime._state.teach = teach
+        first = manipulation.planning._act_preview(demo, np.eye(4), np.eye(4))
+        assert first is not None and len(planned) == 1
+        assert manipulation.planning._act_preview(demo, moved(0.001), np.eye(4)) is first, (
+            "1 mm: the same line"
+        )
+        assert len(planned) == 1
+        again = manipulation.planning._act_preview(demo, moved(0.005), np.eye(4))
+        assert len(planned) == 2 and again is not first
+        np.testing.assert_allclose(again[0, :3, 3] - first[0, :3, 3], [0.005, 0.0, 0.0], atol=1e-9)
+        manipulation.planning._act_preview(demo, moved(0.005), np.eye(4), preview_pose=np.eye(4))
+        assert len(planned) == 3, "a review's candidate is planned as asked"
+    finally:
+        manipulation.planning._preview_last.clear()
+        with manipulation.runtime._state.lock:
+            manipulation.runtime._state.demo = manipulation.runtime._state.teach = None
+
+
 def _run_place_act(
     tmp_path,
     monkeypatch,
