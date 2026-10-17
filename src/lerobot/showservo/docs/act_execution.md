@@ -256,6 +256,12 @@ command reaching its end.
   (the resting place reads absent once the carry uncovers it) and _released_ (present where it was let go). On the
   rig the resting place read absent 4.5 s after the closing, because the arm covers it until the carry moves off,
   and then stayed absent ([E12](#e12)).
+- Co-motion of the object's colour tracks with the fingertip, for _attached_: the tracks' median displacement in the
+  image against the fingertip's projected displacement, once the fingertip has moved 30 mm. Held, the tracks move
+  0.84 to 1.0 of the fingertip's displacement in 8 of the 22 acts with a verdict and 0.29 to 2.4 in the rest; at rest
+  they move 0.01 to 0.03 of it in 33 of 39 approaches, and in the other 6 shifted 7 to 50 px coherently while the
+  act's own pose updates moved the object 15 to 34 mm ([E15](#e15)). The verdict needs five tracks the gripper has
+  not covered, which 22 of 49 acts had; the demo's lift moved 35 mm 0.57 s after its gripper closed ([E16](#e16)).
 - A find of the object against a demo frame designated at the Milestone, for _related_: the object's reference view
   from before the act never placed it in its final state (the standing dowel, 0 of 33 views after the release,
   [E13](#e13)); the demo's own frame at that key frame shows it as it should end. Consecutive finds ran 0.75 s apart
@@ -263,17 +269,23 @@ command reaching its end.
   demo editor.
 
 A view of the object in the gripper is not a signal the check can wait for: the first such hold evidence came 10 to
-22 s after the closing, in 8 of 57 acts, with 110 attempts that failed ([E10](#e10)).
+22 s after the closing, in 8 of 57 acts, with 110 attempts that failed ([E10](#e10)). Nor is the object's pose in the
+hand something the camera gives soon after a grasp today: the tracker's 3D pose of the held object was wrong by
+hundreds of millimetres in every carry frame, since the depth under its tracks is the gripper's, and a pose from the
+tracks alone (perspective-n-point on the original model points still visible, 6 to 13 of them) is degenerate on a thin object
+([E17](#e17)). So the hold used after a grasp stays the one predicted at the grasp (4.6 to 7.4 mm from the demo's,
+[E6](#e6)) until a measurement made for it; making that measurement fast is a change to the tracker, not to this
+check ([act_loop.md](act_loop.md)).
 
 **By kind:**
 
-| Milestone  | Fast layer, every tick                                                                                     | Slow layer, within its budget                                                       | Measured on the rig                                                  |
-| ---------- | ---------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| _arrived_  | fingertip within tolerance of the key frame in its leg frame                                               | none: it is as good as the leg frame's pose ([E14](#e14))                           | one tick                                                             |
-| _attached_ | width within the demo's band of the empty closing, and load at its holding level, command still            | the resting place absent once uncovered                                             | fast 0.25 s; slow 4.5 s                                              |
-| held on    | the same two, every tick the command is still; a drop reads as width at the empty closing and load falling | none needed                                                                         | at a release the load fell from 200 to 28 within 0.4 s ([E11](#e11)) |
-| _released_ | reading follows the command (within 1 unit) and load at its open level                                     | present where it was let go, not moving with the fingertip                          | reading within 0.03 s, load within 0.4 to 0.6 s ([E11](#e11))        |
-| _related_  | none                                                                                                       | a find against the demo frame designated at the Milestone, once the arm has cleared | about one find, 0.75 to 1.2 s ([E13](#e13)); the whole to measure    |
+| Milestone  | Fast layer, every tick                                                                                     | Slow layer, within its budget                                                                                                                          | Measured on the rig                                                                              |
+| ---------- | ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------ |
+| _arrived_  | fingertip within tolerance of the key frame in its leg frame                                               | none: it is as good as the leg frame's pose ([E14](#e14))                                                                                              | one tick                                                                                         |
+| _attached_ | width within the demo's band of the empty closing, and load at its holding level, command still            | the object's tracks move with the fingertip once it has moved 30 mm (2D co-motion, [E15](#e15)); the resting place absent once uncovered ([E12](#e12)) | fast 0.25 s; co-motion about 0.8 s at the demo's lift speed, in 3 acts of 5; resting place 4.5 s |
+| held on    | the same two, every tick the command is still; a drop reads as width at the empty closing and load falling | none needed                                                                                                                                            | at a release the load fell from 200 to 28 within 0.4 s ([E11](#e11))                             |
+| _released_ | reading follows the command (within 1 unit) and load at its open level                                     | present where it was let go, not moving with the fingertip                                                                                             | reading within 0.03 s, load within 0.4 to 0.6 s ([E11](#e11))                                    |
+| _related_  | none                                                                                                       | a find against the demo frame designated at the Milestone, once the arm has cleared                                                                    | about one find, 0.75 to 1.2 s ([E13](#e13)); the whole to measure                                |
 
 **What the check is relative to.** Every threshold is taken from a measurement, not a constant: the empty-closing
 reading from the arm at connect, the width band and the holding level from the demo's own grip (the demo's reading
@@ -447,3 +459,28 @@ apart at the median, 1.22 s at the 90th percentile.
 median: the constrained pose's translation from its median 15.2 mm at the 95th percentile per act (median act; 44.9
 in the worst), the raw tracker pose 19.8 mm; rotation 2.0° (raw 2.6°). Act `_150843`: the ring motion its targets
 were composed with moved from (−13.1, 44.4, 6.3) to (−16.3, 44.9, 19.7) mm between 0 and 2.3 s of the carry.
+
+<a id="e15"></a>**E15. 2D co-motion.** 49 acts of 2026-10-15 to 17 with frames saved and a closing; the reference
+frame 0.3 s after the closing ended, the verdict at the first frame with the fingertip's projection 25 px from the
+reference. 22 verdicts (five or more tracks in common): tracks' median displacement over the fingertip's, 0.29 to
+2.38, median 0.91; 20 acts had 0 to 4 tracks left; 7 never moved 25 px. At rest, over the approach (key frame 1) of
+39 acts: 33 at 0.006 to 0.034 with no track moved more than 8 px; 6 at 0.20 to 1.85 with every track moved, the
+median shift 7 to 50 px, and the act's aimed pose of the object moved 15 to 34 mm over the same key frames (steps of
+12 to 29 mm). Track ids are stable: 323 distinct over an act, none jumping more than 30 px between frames.
+
+<a id="e16"></a>**E16. The demo's lift.** After its gripper command reached its closing value the demo's fingertip
+had moved 20 mm in 0.27 s, 35 mm in 0.57 s, 50 mm in 0.63 s. Under the runner of 2026-10-17 the fingertip reached
+25 px of projected motion 1.7 to 5.3 s after the closing (standing for the grasp check and the carry's planning).
+
+<a id="e17"></a>**E17. The pose in the hand.** Act `20261017_150843`: the tracker's pose of the dowel existed in all
+86 carry frames, accepted in none; its motion since the first frame after the closing came to 413 mm against the
+fingertip's 136 mm, under every frame convention tried. Perspective-n-point (OpenCV, RANSAC, 3 px) on the original model points
+still tracked: 6 to 13 inliers, reprojection 0.4 to 2.0 px, the object-in-fingertip offset scattered over 1.2 m and
+111° at the median across the carry; at rest with 24 to 25 inliers it differed from the accepted tracker pose by 19
+to 58 mm. In the demo's own carry the tracker saw the dowel in 0 of 101 samples.
+
+<a id="e18"></a>**E18. What each frame records.** Per saved frame (`frames/NNNNNN.npz`, by `p2p_bridge`): the tracker's
+key-point rows as `track_idx` (ids, growing as it re-seeds), `track_uv`, `track_vis`; the original designation's 3D
+key points `model_xyz` with `model_valid`; the points the fit used, `fit_uv`, `fit_inlier`; the pose `delta`; the
+followed objects under `other_*`; the point groups' points with depth. The held object's pose is stored relative to
+the fingertip (`held_0`), not in the camera frame.
