@@ -398,6 +398,11 @@ _OVERLAY_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
 _ACT_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="manipulation-act")
 
 
+# Plans an act makes ahead of the arm, beside the stream: never on the act's executor, whose one worker feeds the
+# motor queue (a carry's planning, 0.5-2.5 s on the rig, would empty it).
+_PLAN_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="manipulation-plan")
+
+
 _SEEN_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="manipulation-seen")
 
 

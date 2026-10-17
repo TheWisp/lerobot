@@ -25,6 +25,7 @@ import dataclasses
 import functools
 import logging
 import time
+from collections.abc import Callable
 from typing import Any, Literal
 
 import numpy as np
@@ -310,6 +311,7 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
             fail("connect the arm first")
             return
         kin = copy.deepcopy(kin)  # planning FK/IK must not mutate the motor loop's model
+        plan_kin = copy.deepcopy(kin)  # plans made ahead run beside the stream's solves: a model of their own
         ranges = jog.servo_ranges()
         landing_obj = planning._landing_object(demo)
         landing_turn: tuple[np.ndarray, float, np.ndarray] | None = (
@@ -520,18 +522,19 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
             """The current measured motion, carried by its point group between certified views."""
             return planning._delta_base(demo, follow(), t_bc)
 
-        def other_now(name: str) -> np.ndarray:
+        def other_now(name: str, landed: bool = True) -> np.ndarray:
             """Another object's motion as its track has it now, moved on with what it rests on, base frame, the last
-            one when it has no newer, turned by the landing the plan took when it is the object landed on."""
+            one when it has no newer, turned by the landing the plan took when it is the object landed on (and
+            ``landed``)."""
             motion, _problem = planning._object_motion(demo, name, t_bc, carry=lambda s: carried(name, s))
             if motion is not None:
                 motions[name] = motion
-            if name == landing_obj and landing_turn is not None:
+            if landed and name == landing_obj and landing_turn is not None:
                 return core.landed(motions[name], *landing_turn)
             return motions[name]
 
-        def others_now() -> dict[str, np.ndarray]:
-            return {name: other_now(name) for name in others}
+        def others_now(landed: bool = True) -> dict[str, np.ndarray]:
+            return {name: other_now(name, landed) for name in others}
 
         def frame_now(frame: str) -> np.ndarray:
             """A key frame's frame's motion for a walk, base frame, asked again every tick."""
@@ -879,6 +882,157 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
             replanned(label, p)
             return p
 
+        def aimed(
+            span: tuple[int, int], delta_cam: np.ndarray | None, objects: dict[str, np.ndarray]
+        ) -> list:
+            """The demo's fingertip at each key frame of ``span`` moved with its frame, by ``delta_cam`` (the session
+            object, camera frame) and ``objects`` (base frame), uncorrected for the hold: what a plan of them aims at."""
+            motion = planning._frame_motion(demo, delta_cam, t_bc, objects)
+            out = []
+            for n in range(*span):
+                m = motion(frames[n]["frame"])
+                out.append(None if m is None else m @ demo.tips[index(frames[n]["t"])])
+            return out
+
+        def plan_ahead(
+            label: str,
+            span: tuple[int, int],
+            start: np.ndarray | Callable[[], np.ndarray],
+            fix: np.ndarray | None,
+        ) -> dict:
+            """Plan key frames ``span`` beside the arm from ``start``, the joints the stream now running will leave the
+            arm at (or what works them out, on the plan executor), aimed by what the act holds now, the landing chosen
+            again when the turn the start took no longer plans, as the act would once the stream ends; but on the plan
+            executor and its own model, so the stream's solves never wait for it. :func:`take_ahead` uses it when the
+            arm gets there and what it was made from still holds."""
+            session = any(frames[n]["frame"] == (obj or "") for n in range(*span))
+            delta_cam = follow() if session else None
+            planned_demo = demo
+            ahead: dict[str, Any] = {"span": span, "q_from": None, "session": session, "fix": fix}
+
+            async def attempts() -> list[tuple[str, dict, list, bool]]:
+                made: list[tuple[str, dict, list, bool]] = []
+                q_from = np.array(
+                    await asyncio.get_running_loop().run_in_executor(runtime._PLAN_EXECUTOR, start)
+                    if callable(start)
+                    else start,
+                    dtype=float,
+                )
+                ahead["q_from"] = q_from
+                for suffix, landed, extra in (
+                    ("", True, {}),
+                    (", the landing chosen again", False, {"landing": planned_demo.landing}),
+                ):
+                    objects = others_now(landed)
+                    p = await asyncio.get_running_loop().run_in_executor(
+                        runtime._PLAN_EXECUTOR,
+                        functools.partial(planning._plan_act, part=span, ranges=ranges, **extra),
+                        planned_demo,
+                        delta_cam,
+                        t_bc,
+                        plan_kin,
+                        q_from,
+                        limits_before,
+                        jog.workspace_box(),
+                        speed,
+                        0,
+                        objects,
+                        fix,
+                    )
+                    made.append((label + suffix, p, aimed(span, delta_cam, objects), landed))
+                    if p["ok"] or landing_turn is None:
+                        break
+                return made
+
+            ahead["task"] = asyncio.create_task(attempts())
+            beside.append(ahead["task"])
+            return ahead
+
+        def stream_end(planned: dict, fix: np.ndarray) -> Callable[[], np.ndarray]:
+            """What works out where streaming ``planned`` will leave the arm: its last target aimed by what the act
+            holds now and corrected by the hold ``fix``, solved from the plan's last joints, as the stream solves it.
+            Its frames are read now; the solve runs where it is called."""
+            q_last = np.asarray(planned["q"][-1], dtype=float)
+            path = planned.get("live_path")
+            if path is None or path.get("constraint", ["pose"])[-1] != "pose":
+                return lambda: q_last
+            last = {k: v[-1:] for k, v in path.items()}
+            goal = reactive.targets(last, {name: frame_now(name) for name in set(last["frames"])}, fix)[0]
+
+            def solve() -> np.ndarray:
+                return core.solve_plan_joints(
+                    plan_kin,
+                    goal[None],
+                    np.array([q_last[gi]]),
+                    np.zeros((1, len(q_last))),
+                    q_last,
+                    gi,
+                    *(ranges if ranges is not None else (None, None)),
+                )["q"][0]
+
+            return solve
+
+        async def take_ahead(ahead: dict | None, fix: np.ndarray | None) -> dict | None:
+            """The plan made ahead (:func:`plan_ahead`), kept in the act's record as if made now, when what it was made
+            from still holds: the arm stands within ACT_SETTLE_DEG of where it was planned from, and each key frame's
+            target, corrected by the hold (``fix``, the act's now, against the plan's), moved less than the live view's
+            path is planned again for (planning.PREVIEW_REPLAN_M, _DEG). None otherwise, the act then planning from where
+            the arm stands as it would without; ``run.meta["ahead"]`` says which and why."""
+            nonlocal landing_turn
+            if ahead is None:
+                return None
+            why, made = "", []
+            try:
+                made = await ahead["task"]
+            except Exception as e:  # a plan that could not be made ahead is made now
+                why = f"planning ahead failed: {type(e).__name__}: {e}"
+            cur = jog.current_tip_and_anchor()
+            if not why and cur is None:
+                why = "the arm went away"
+            if not why:
+                q_now = np.array([float(cur[2][m]) for m in MOTOR_NAMES])
+                arm = np.arange(len(q_now)) != gi
+                off = float(np.max(np.abs(q_now[arm] - ahead["q_from"][arm])))
+                if off > runtime.ACT_SETTLE_DEG:
+                    why = f"the arm stands {off:.1f} deg from where it was planned from"
+            most = (0.0, 0.0)  # the largest change of a target since it was planned, mm and deg
+            if not why:
+                then = made[-1][2]
+                now = aimed(ahead["span"], follow() if ahead["session"] else None, others_now(made[-1][3]))
+                fix_then = np.eye(4) if ahead["fix"] is None else np.asarray(ahead["fix"], float)
+                fix_now = np.eye(4) if fix is None else np.asarray(fix, float)
+                for n, a, b in zip(range(*ahead["span"]), then, now, strict=True):
+                    if (a is None) != (b is None):
+                        why = f"{frames[n]['label']}'s frame was found or lost since"
+                        break
+                    if a is None:
+                        continue
+                    moved_m, moved_deg = core.pose_residual(a @ fix_then, b @ fix_now)
+                    most = (max(most[0], moved_m * 1000.0), max(most[1], moved_deg))
+                    if moved_m > planning.PREVIEW_REPLAN_M or moved_deg > planning.PREVIEW_REPLAN_DEG:
+                        why = (
+                            f"{frames[n]['label']} moved {moved_m * 1000.0:.1f} mm, {moved_deg:.1f} deg since"
+                        )
+                        break
+            entry = {
+                "at": time.time(),
+                "plans": [m[0] for m in made],
+                "used": not why,
+                "why": why,
+                "moved_mm": round(most[0], 2),
+                "moved_deg": round(most[1], 2),
+            }
+            run.meta.setdefault("ahead", []).append(entry)
+            if why:
+                return None
+            for label, p, _then, _landed in made:
+                replanned(label, p)
+            p, landed = made[-1][1], made[-1][3]
+            if not landed and p["ok"] and (p.get("landing") or {}).get("turn_deg") is not None:
+                landing_turn = (p["landing_centre"], float(p["landing"]["turn_deg"]), p["landing_axis"])
+            entry["landing_turn_deg"] = None if landing_turn is None else float(landing_turn[1])
+            return p
+
         async def caught_up() -> str:
             """Use the pre-motion finds and finish reading the demo's hold reference if it is still running."""
             nonlocal demo_grip, grip_problem, demo_carry, carry_problem, hold_task
@@ -996,6 +1150,7 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
             grip_watch: asyncio.Task | None = None
             closing, i_grasp_end = 1.0, None
             last_follow: dict[str, Any] | None = None
+            carry_ahead: dict | None = None
             waited = False
             for n in range(phase_start, split):
                 k = frames[n]
@@ -1042,6 +1197,9 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
                 i0 = index(frames[n - 1]["t"])
                 closing = float(np.sign(demo.q_cmd[i, gi] - demo.q_cmd[i0, gi])) or 1.0
                 i_grasp_end, last_follow = i, planned
+                if carries and n == split - 1:
+                    # The carry is planned from where this grasp will leave the arm while it streams (take_ahead).
+                    carry_ahead = plan_ahead("carry", (split, phase_stop), planned["q"][-1], None)
                 if (
                     carries
                     and holding is not None
@@ -1251,22 +1409,26 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
             end_lines = held_follow if held_follow is not None else phase_stop
             hold_line = min(n for n in range(split, end_lines) if frames[n]["move"] == "line")
             act.step = "planning the carry"
-            carry = await plan_span("carry", (split, phase_stop), live_fix if continuous_hold else None)
-            if not carry["ok"] and landing_turn is not None:
-                # The turn the start took no longer plans from where the arm and the object are now, but any turn the
-                # demo's landing rule allows is the same place: rank them again.
-                saved, landing_turn = landing_turn, None
-                carry = await plan_span(
-                    "carry, the landing chosen again",
-                    (split, phase_stop),
-                    live_fix if continuous_hold else None,
-                    landing=demo.landing,
-                )
-                landing_turn = (
-                    (carry["landing_centre"], float(carry["landing"]["turn_deg"]), carry["landing_axis"])
-                    if carry["ok"] and (carry.get("landing") or {}).get("turn_deg") is not None
-                    else saved
-                )
+            # What the carry planned ahead need not still match is the hold's correction: the carry's stream applies
+            # the newest every step, as it does each observation of the hold, and the place is planned again with it.
+            carry = await take_ahead(carry_ahead, None)
+            if carry is None:
+                carry = await plan_span("carry", (split, phase_stop), live_fix if continuous_hold else None)
+                if not carry["ok"] and landing_turn is not None:
+                    # The turn the start took no longer plans from where the arm and the object are now, but any turn
+                    # the demo's landing rule allows is the same place: rank them again.
+                    saved, landing_turn = landing_turn, None
+                    carry = await plan_span(
+                        "carry, the landing chosen again",
+                        (split, phase_stop),
+                        live_fix if continuous_hold else None,
+                        landing=demo.landing,
+                    )
+                    landing_turn = (
+                        (carry["landing_centre"], float(carry["landing"]["turn_deg"]), carry["landing_axis"])
+                        if carry["ok"] and (carry.get("landing") or {}).get("turn_deg") is not None
+                        else saved
+                    )
             if not carry["ok"]:
                 fail(carry["reason"])
                 return
@@ -1278,6 +1440,17 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
             carried_plan["q"] = q_carry
             if "live_path" in carried_plan:
                 carried_plan["live_path"]["grips"] = np.full(last + 1, closing_cmd)
+            # With the hold carried on, the place is planned from the carry's end while it streams (take_ahead).
+            placing_ahead = (
+                plan_ahead(
+                    "hold correction and place",
+                    (hold_line, phase_stop),
+                    stream_end(carried_plan, live_fix.copy()),
+                    live_fix.copy(),
+                )
+                if continuous_hold
+                else None
+            )
             why = await stream(carried_plan)
             if why:
                 fail(why)
@@ -1463,27 +1636,29 @@ async def _act_key_frames_task(speed: float, server: str | None = None) -> None:
             # The hold changes the target after the carry has already been checked. Plan its correction together with
             # the remaining key frames before commanding it: a walk can otherwise stall at a wrist limit for 20 s.
             act.step = "planning the hold correction and place"
-            placing = await plan_span(
-                "hold correction and place", (hold_line, phase_stop), fix, grip_cmd=closing_cmd
-            )
-            if not placing["ok"] and landing_turn is not None:
-                saved, landing_turn = landing_turn, None
+            placing = await take_ahead(placing_ahead, fix)
+            if placing is None:
                 placing = await plan_span(
-                    "hold correction and place, the landing chosen again",
-                    (hold_line, phase_stop),
-                    fix,
-                    grip_cmd=closing_cmd,
-                    landing=demo.landing,
+                    "hold correction and place", (hold_line, phase_stop), fix, grip_cmd=closing_cmd
                 )
-                landing_turn = (
-                    (
-                        placing["landing_centre"],
-                        float(placing["landing"]["turn_deg"]),
-                        placing["landing_axis"],
+                if not placing["ok"] and landing_turn is not None:
+                    saved, landing_turn = landing_turn, None
+                    placing = await plan_span(
+                        "hold correction and place, the landing chosen again",
+                        (hold_line, phase_stop),
+                        fix,
+                        grip_cmd=closing_cmd,
+                        landing=demo.landing,
                     )
-                    if placing["ok"] and (placing.get("landing") or {}).get("turn_deg") is not None
-                    else saved
-                )
+                    landing_turn = (
+                        (
+                            placing["landing_centre"],
+                            float(placing["landing"]["turn_deg"]),
+                            placing["landing_axis"],
+                        )
+                        if placing["ok"] and (placing.get("landing") or {}).get("turn_deg") is not None
+                        else saved
+                    )
             if landing_obj is not None and landing_obj in motions and held_follow is not None:
                 end_at = index(frames[held_follow]["t"])
                 then = run.meta.get("target", {}).get("motion_base")

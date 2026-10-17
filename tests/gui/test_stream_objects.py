@@ -1475,6 +1475,7 @@ def _run_place_act(
     allow_grasp_prediction=False,
     finds_wait_for_the_arm=False,
     box_moves_in_the_carry=None,
+    box_moves_once_the_arm_moves=None,
     covered_after_find=False,
     sag_deg=0.0,
     wrist_deg=0.0,
@@ -1500,7 +1501,8 @@ def _run_place_act(
     ``inject`` and ``correct_hold`` are what the operator asked the act for (:class:`manipulation.execution.InjectBody`). With
     ``finds_wait_for_the_arm`` the worker answers nothing until the arm has been given a target. With
     ``box_moves_in_the_carry``, a motion (camera frame), the session that follows the gamepad, which the box joins at
-    the act's start, sees the box moved by it once the gamepad is carried. With ``covered_after_find`` the arm hides
+    the act's start, sees the box moved by it once the gamepad is carried; with ``box_moves_once_the_arm_moves`` as soon
+    as the arm has first moved, after the act's start was planned. With ``covered_after_find`` the arm hides
     the gamepad from the camera once it is found again: the restarted track never sees it. With ``sag_deg`` the
     shoulder reads that much short of its command while the gripper holds the gamepad, as the load holds it down. With
     ``wrist_deg`` the demo turns the arm's wrist that far for the place (:func:`_place_demo`); ``box_turn_deg`` turns
@@ -1771,6 +1773,10 @@ def _run_place_act(
                 sim["box_moved"] = sim.get("box_moved") or carried
                 share = {"name": "box", "ok": True, "lost": False, "n_visible": 50, "n_tracks": 50}
                 moved = box_moves_in_the_carry if sim["box_moved"] else np.eye(4)
+                manipulation.tracking._apply_others({"others": [share], "other_delta_0": moved}, (H, W))
+            if box_moves_once_the_arm_moves is not None and taught:
+                share = {"name": "box", "ok": True, "lost": False, "n_visible": 50, "n_tracks": 50}
+                moved = box_moves_once_the_arm_moves if sim["first_move_at"] is not None else np.eye(4)
                 manipulation.tracking._apply_others({"others": [share], "other_delta_0": moved}, (H, W))
             if pending and sim["first_answer"] is None:
                 sim["first_answer"] = _time.monotonic()
@@ -2487,6 +2493,10 @@ def test_a_landing_that_no_longer_plans_after_the_grasp_is_chosen_again(tmp_path
         kept = record["target"]["landing"]["turn_deg"]
         carries = [p for p in record["plans"] if p["stage"].startswith("carry")]
         assert [p["ok"] for p in carries] == [False, True], carries
+        ahead = record["ahead"][0]
+        assert not ahead["used"] and "pre-place 1 moved" in ahead["why"], (
+            "the carry planned ahead aimed at the box before it turned: planned again, and only that kept"
+        )
         assert (
             "drives wrist_flex toward" in carries[0]["reason"]
             and "past its servo's range" in carries[0]["reason"]
@@ -4775,6 +4785,256 @@ def test_hold_correction_precedes_a_low_held_line(tmp_path, monkeypatch, slip):
         assert np.linalg.norm(end[:3, 3] - goal[:3, 3]) < 0.0005
         assert placing[0][-1] == 85.0 and placing[-1][-1] == 60.0, (
             "keep the grip through correction, then release"
+        )
+    finally:
+        _end_place_state()
+
+
+def _timed_plans(monkeypatch, slow_s):
+    """Make every plan of more than one key frame after the first (the carry, the place) take ``slow_s`` longer, and
+    keep when each plan ran: (start, end, part), wall clock, as the act's record keeps its samples."""
+    import time as _time
+
+    real = manipulation.planning._plan_act
+    plans: list[tuple] = []
+
+    def plan_act(*args, part="all", **kw):
+        start = _time.time()
+        if isinstance(part, tuple) and part[1] - part[0] > 1 and part[0] > 0:
+            _time.sleep(slow_s)
+        out = real(*args, part=part, **kw)
+        plans.append((start, _time.time(), part))
+        return out
+
+    monkeypatch.setattr(manipulation.planning, "_plan_act", plan_act)
+    return plans
+
+
+def _stage_boundary(tmp_path, stage, nth=0):
+    """The act's record where it leaves ``stage`` the ``nth`` time: (that stage's last sample's time, the next sample's
+    time and stage)."""
+    targets = _act_targets(tmp_path)
+    ends = [k for k in range(len(targets) - 1) if targets[k]["step"] == stage != targets[k + 1]["step"]]
+    last = ends[nth]
+    return targets[last]["t"], targets[last + 1]["t"], targets[last + 1]["step"]
+
+
+def _ahead_record(tmp_path):
+    row = json.loads((tmp_path / "trials.jsonl").read_text().splitlines()[-1])
+    return json.loads((pathlib.Path(row["run"]) / "act.json").read_text()).get("ahead", [])
+
+
+@pytest.mark.usefixtures("act_simulation")
+def test_the_carry_is_planned_while_the_grasp_streams_not_after_it(tmp_path, monkeypatch):
+    """2026-10-17: after the grasp the arm stood still while the carry was planned, 0.5 s on the rig, and 2.5 s when the
+    plan from there failed and the landing was chosen again (acts 20261017_125408, _130202). The carry is planned from
+    where the grasp will leave the arm while the grasp streams, so the arm goes on once the grasp is checked."""
+    slow = 0.3
+    plans = _timed_plans(monkeypatch, slow)
+    try:
+        demo, _sim, _views, _m = _run_place_act(tmp_path, monkeypatch, allow_grasp_prediction=True)
+        act = manipulation.runtime._state.act
+        assert act.ok, act.reason
+        frames = core.key_frames(demo.keypoints)
+        after = next(n for n, k in enumerate(frames) if k["label"] == "grasp") + 1
+        carry = next(p for p in plans if isinstance(p[2], tuple) and p[2][0] == after)
+        last, then, stage = _stage_boundary(tmp_path, "grasp")
+        assert stage in ("start", frames[after]["label"]), "the carry streams next"
+        assert carry[0] < last, "the carry's plan began before the grasp's last sample went out"
+        assert then - last < slow, (
+            f"the arm stood {then - last:.2f} s at the grasp, as long as the carry's planning"
+        )
+    finally:
+        _end_place_state()
+
+
+@pytest.mark.usefixtures("act_simulation")
+def test_the_place_is_planned_while_the_carry_streams_when_the_hold_is_carried_on(tmp_path, monkeypatch):
+    """With the grasp's hold carried on (grasp prediction), the place is planned from where the carry will leave the
+    arm, its hold correction applied as the carry's stream applies it, while the carry streams: on the rig the arm
+    stood 0.6 s after the carry for that plan (act 20261017_130202)."""
+    slow = 0.3
+    plans = _timed_plans(monkeypatch, slow)
+    try:
+        demo, _sim, _views, _m = _run_place_act(tmp_path, monkeypatch, allow_grasp_prediction=True)
+        act = manipulation.runtime._state.act
+        assert act.ok, act.reason
+        assert [(a["plans"], a["used"]) for a in _ahead_record(tmp_path)] == [
+            (["carry"], True),
+            (["hold correction and place"], True),
+        ]
+        frames = core.key_frames(demo.keypoints)
+        held_line = next(n for n, k in enumerate(frames) if k["label"] == "pre-place 1")
+        placing = [p for p in plans if p[2] == (held_line, len(frames))][1]
+        last, then, _stage = _stage_boundary(tmp_path, "pre-place 1")
+        assert placing[0] < last, "the place's plan began before the carry's last sample went out"
+        assert then - last < slow, (
+            f"the arm stood {then - last:.2f} s after the carry, as long as the place's planning"
+        )
+    finally:
+        _end_place_state()
+
+
+@pytest.mark.usefixtures("act_simulation")
+def test_a_plan_made_ahead_is_made_again_when_the_arm_stands_elsewhere(tmp_path, monkeypatch):
+    """The load holds the shoulder 3 deg short of its command once the gripper closes: the carry and the place were
+    planned ahead from the commanded joints, more than ACT_SETTLE_DEG from where the arm stands, so both are planned
+    again from there, as without planning ahead, and the act's record says why."""
+    try:
+        _run_place_act(tmp_path, monkeypatch, allow_grasp_prediction=True, sag_deg=3.0)
+        act = manipulation.runtime._state.act
+        assert act.ok, act.reason
+        ahead = _ahead_record(tmp_path)
+        assert [a["used"] for a in ahead] == [False, False]
+        assert all(a["why"] == "the arm stands 3.0 deg from where it was planned from" for a in ahead)
+    finally:
+        _end_place_state()
+
+
+@pytest.mark.usefixtures("act_simulation")
+@pytest.mark.parametrize(
+    ("shift_mm", "why"),
+    [
+        ((5.0, 0.0, 0.0), "deg from where it was planned from"),  # the carry ended 5 deg elsewhere
+        (
+            (1.5, 1.5, 0.0),
+            "pre-place 1 moved 2.1 mm",
+        ),  # within ACT_SETTLE_DEG at each joint, 2.1 mm at the target
+    ],
+)
+def test_a_place_planned_ahead_is_made_again_when_the_hold_is_seen_otherwise_during_the_carry(
+    tmp_path, monkeypatch, shift_mm, why
+):
+    """The held object is seen elsewhere in the fingers while the carry streams, after the place was planned ahead with
+    the grasp's hold: the carry's stream ends where the hold seen puts the arm, and the place is planned again with
+    it, and aims by it; caught by where the arm stands, or by the targets where the arm stands within its tolerance."""
+    import asyncio
+    import time as _time
+
+    seen = {}
+
+    async def watch(demo, held_obj, t_bc, prediction, stopped, publish, log, **_kw):
+        act = manipulation.runtime._state.act
+        for planning in (True, False):  # the carry's first sample: its planning over
+            while (act.step == "planning the carry") != planning:
+                if stopped():
+                    return
+                await asyncio.sleep(0.002)
+        shift = np.eye(4)
+        shift[:3, 3] = np.array(shift_mm) / 1000.0
+        seen["fix"] = prediction() @ shift
+        publish(
+            {
+                "orientation": "measured",
+                "fix": seen["fix"],
+                "accepted_at": _time.time(),
+                "observed_at": _time.time(),
+                "source": "verified tracking",
+                "reason": "seen in the gripper",
+            }
+        )
+        while not stopped():
+            await asyncio.sleep(0.01)
+
+    monkeypatch.setattr(manipulation.held_views, "watch", watch)
+    try:
+        demo, sim, _views, m = _run_place_act(tmp_path, monkeypatch, allow_grasp_prediction=True)
+        act = manipulation.runtime._state.act
+        assert act.ok, act.reason
+        ahead = _ahead_record(tmp_path)
+        assert "fix" in seen, "the hold was seen during the carry"
+        assert ahead[0]["used"] and not ahead[1]["used"] and why in ahead[1]["why"], ahead
+        end = _TipKinematics().forward_kinematics(sim["streamed"][-1])
+        expected = m["box"] @ demo.tips[PLACE_AT["place_end"]] @ seen["fix"]
+        assert core.pose_residual(end, expected)[0] <= 0.0005, "the place aims by the hold seen"
+    finally:
+        _end_place_state()
+
+
+@pytest.mark.usefixtures("act_simulation")
+def test_a_carry_whose_landing_is_chosen_again_is_planned_ahead_too(tmp_path, monkeypatch):
+    """Act 20261017_130202 stood 2.5 s after its grasp: the carry from there failed at the turn its start had taken, and
+    the landing was ranked again. Both run ahead now, while the grasp streams, and the carry takes the turn chosen
+    again, as it would planned after the grasp."""
+    real = manipulation.planning._plan_act
+    calls = []
+
+    def plan_act(*args, part="all", landing="exact", **kw):
+        if isinstance(part, tuple) and part[0] > 0 and part[1] - part[0] > 1 and not calls:
+            calls.append(part)
+            return {"ok": False, "reason": "the start's turn no longer plans from the grasp"}
+        return real(*args, part=part, landing=landing, **kw)
+
+    monkeypatch.setattr(manipulation.planning, "_plan_act", plan_act)
+    try:
+        _run_place_act(tmp_path, monkeypatch, landing="turn", allow_grasp_prediction=True)
+        act = manipulation.runtime._state.act
+        assert act.ok, act.reason
+        row = json.loads((tmp_path / "trials.jsonl").read_text().splitlines()[-1])
+        record = json.loads((pathlib.Path(row["run"]) / "act.json").read_text())
+        assert record["ahead"][0]["used"] and record["ahead"][0]["plans"] == [
+            "carry",
+            "carry, the landing chosen again",
+        ]
+        carries = [p for p in record["plans"] if p["stage"].startswith("carry")]
+        assert [p["ok"] for p in carries] == [False, True], (
+            "both in the act's record, as if made after the grasp"
+        )
+        assert record["ahead"][0]["landing_turn_deg"] == carries[1]["landing"]["turn_deg"], (
+            "the act lands by it"
+        )
+    finally:
+        _end_place_state()
+
+
+@pytest.mark.usefixtures("act_simulation")
+def test_a_landing_chosen_again_ahead_is_the_one_the_place_aims_by(tmp_path, monkeypatch):
+    """The box turns 40 deg about its middle once the arm has moved, after the act's start chose its turn: the carry,
+    planned ahead while the grasp streams, no longer plans at that turn (the wrist would pass its servo), chooses
+    the landing again, and is used; the place then aims by the turn chosen again and plans at once."""
+    from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
+
+    probe, _kin, _box = _place_demo(tmp_path / "probe", time.time(), wrist_deg=80.0)
+    found_at = np.array([0.030, 0.010, 0.0])
+    axis, centre = manipulation.planning._landing_axis(probe, "box", np.eye(4))
+    turned = core.turn_about(centre + found_at, 40.0, axis)
+    try:
+        result = _run_place_act(
+            tmp_path,
+            monkeypatch,
+            wrist_deg=80.0,
+            landing="turn",
+            ranges=(-WRIST_HI, WRIST_HI),
+            box_moves_once_the_arm_moves=turned,
+            allow_grasp_prediction=True,
+        )
+        demo, sim, m = result[0], result[1], result[3]
+        act = manipulation.runtime._state.act
+        assert act.ok, act.reason
+        row = json.loads((tmp_path / "trials.jsonl").read_text().splitlines()[-1])
+        record = json.loads((pathlib.Path(row["run"]) / "act.json").read_text())
+        assert record["ahead"][0]["used"] and record["ahead"][0]["plans"] == [
+            "carry",
+            "carry, the landing chosen again",
+        ], record["ahead"]
+        carries = [p for p in record["plans"] if p["stage"].startswith("carry")]
+        again = carries[1]["landing"]["turn_deg"]
+        assert again == (record["target"]["landing"]["turn_deg"] - 40.0) % 360.0, (
+            "turned back by the box's turn"
+        )
+        wf = MOTOR_NAMES.index("wrist_flex")
+        assert all(abs(q[wf]) <= 93.3 for q in sim["streamed"]), "no joint asked past its servo"
+        landed = core.landed(
+            turned @ m["box"],
+            np.asarray(record["target"]["landing_centre"]),
+            again,
+            np.asarray(record["target"]["landing_axis"]),
+        )
+        end = _TipYawKinematics().forward_kinematics(sim["streamed"][-1])
+        placed = landed @ demo.tips[PLACE_AT["place_end"]] @ np.asarray(act.place["fix"])
+        assert np.linalg.norm(end[:3, 3] - placed[:3, 3]) <= 0.0005, "placed at the turn chosen again"
+        assert not record.get("live_replans"), (
+            "the streams aimed by the turn chosen again: no turn searched mid-way"
         )
     finally:
         _end_place_state()
