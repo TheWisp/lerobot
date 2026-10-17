@@ -812,26 +812,29 @@ def test_playback_lag_timeout_freezes_without_advancing_or_changing_goals(openin
     assert j.playback_sent == 0 and j.q_target == target and j.q_cmd == target
 
 
-def test_a_playback_sends_every_sample_in_order_and_a_slow_tick_delays_the_rest():
-    """The act's stream is played back on the loop's own clock: a sample goes out no earlier than its time, one per
-    tick, and a tick held up by the bus delays the samples after it instead of skipping them, as a stream set from
-    another thread did (the fingers' opening and the lift away then reached the arm in one command)."""
-    q = dict.fromkeys(MOTOR_NAMES, 0.0)
+def test_a_playback_keeps_its_clock_after_a_slow_tick_but_plays_where_the_gripper_starts_and_stops():
+    """The act's stream is played back on the loop's own clock: a sample goes out no earlier than its time. After a
+    tick the bus held up, the loop sends the newest sample due, so the stream still ends on time (one sample per tick
+    delayed every sample after it, and an act took the demo's 4.8 s insertion in 9.7 s). The samples where the
+    gripper starts and stops moving are each sent: a stream set from another thread once took the fingers' opening and
+    the lift away in one command (2026-10-08)."""
+    q = {**dict.fromkeys(MOTOR_NAMES, 0.0), "gripper": 50.0}
     robot = _FakeRobot(q)
     reads = [0]
 
     def hold_one_tick():
         reads[0] += 1
         if reads[0] == 6:
-            time.sleep(0.15)  # the bus holds one tick up mid-stream
+            time.sleep(0.15)  # the bus holds one tick up early in the stream
 
     robot.bus.on_request = hold_one_tick
     j = jog._Jog(robot=robot, kin=_FakeKin(), arm="left", workspace_min=(-1.0, -1.0, -1.0))
     j.settle_on = False
     j.mode, j.q_target, j.q_cmd = "joints", dict(q), dict(q)
     old, jog._jog = jog._jog, j
-    n, dt = 20, 1.0 / jog.HZ
-    samples = [{**q, "shoulder_pan": float(k + 1)} for k in range(n)]
+    n, dt = 24, 1.0 / jog.HZ
+    grips = [50.0] * 16 + [45.0, 40.0, 35.0] + [35.0] * (n - 19)  # the fingers open over samples 16-18
+    samples = [{**q, "shoulder_pan": float(k + 1), "gripper": grips[k]} for k in range(n)]
     due = [k * dt for k in range(n)]
     j.thread = threading.Thread(target=jog._loop, args=(j,), daemon=True)
     try:
@@ -842,15 +845,63 @@ def test_a_playback_sends_every_sample_in_order_and_a_slow_tick_delays_the_rest(
         while jog.playback_state()[0] < n - 1 and time.monotonic() < deadline:
             time.sleep(0.01)
         sent, at = jog.playback_state()
-        assert sent == n - 1
+        assert sent == n - 1 and len(at) == n, "a sent time for every sample, skipped ones too"
         pans = [a["shoulder_pan.pos"] for a in robot.sent]
         went_out = [p for i, p in enumerate(pans) if p >= 1.0 and (i == 0 or p != pans[i - 1])]
-        assert went_out == [float(k + 1) for k in range(n)], "every sample, in order, none skipped"
+        assert went_out == sorted(went_out), "in order"
+        assert len(went_out) < n, "the samples the slow tick made late were caught up, not all sent late"
+        assert {16.0, 19.0} <= set(went_out), "the samples before the fingers open and where they stop"
         assert all(a - t_start >= d - 0.005 for a, d in zip(at, due, strict=True)), "none before its time"
-        assert at[-1] - t_start > due[-1] + 0.1, "the slow tick delayed the samples after it"
+        assert at[-1] - t_start < due[-1] + 0.08, "the stream ends on its clock, not 0.15 s late"
     finally:
         jog._jog = old
         jog._stop_loop(j)
+
+
+@pytest.mark.parametrize(
+    ("grips", "expected"),
+    [
+        ([50.0] * 6 + [40.0] * 4, [5, 6, 9]),  # one step: the samples before and at it are each sent
+        ([50.0] * 4 + [46.0, 42.0, 38.0, 34.0] + [34.0] * 2, [3, 7, 9]),  # an opening: inside it, caught up
+    ],
+)
+def test_a_late_tick_catches_up_to_the_newest_due_sample_but_not_past_where_the_gripper_starts_or_stops(
+    grips, expected
+):
+    q = {**dict.fromkeys(MOTOR_NAMES, 0.0), "gripper": 50.0}
+    samples = [{**q, "shoulder_pan": 0.5 * k, "gripper": grips[k]} for k in range(10)]
+    j = jog._Jog(
+        mode="joints",
+        q_target=dict(samples[0]),
+        playback=samples,
+        playback_due=[k / jog.HZ for k in range(10)],
+        playback_sent=0,
+        playback_t0=0.0,
+        playback_tick=0.0,
+    )
+    sent = []
+    for now in (0.29, 0.30, 0.31):  # samples 1-8 are due at the first tick
+        jog._advance_playback(j, now, dict(j.q_target))  # the arm stands where the last command put it
+        sent.append(j.playback_sent)
+    assert sent == expected, "caught up to where the gripper starts, then to where it stops, then to the end"
+    assert len(j.playback_sent_at) == 9, "a sent time for every sample, skipped ones too"
+
+
+def test_a_late_tick_catches_up_no_further_than_the_lag_budget_ahead_of_the_arm():
+    q = dict.fromkeys(MOTOR_NAMES, 0.0)
+    step = 0.4 * jog.PLAYBACK_LAG_DEG
+    samples = [{**q, "shoulder_pan": step * k} for k in range(10)]
+    j = jog._Jog(
+        mode="joints",
+        q_target=dict(samples[0]),
+        playback=samples,
+        playback_due=[k / jog.HZ for k in range(10)],
+        playback_sent=0,
+        playback_t0=0.0,
+        playback_tick=0.0,
+    )
+    jog._advance_playback(j, 0.29, dict(samples[0]))  # samples 1-8 due, the arm still at sample 0
+    assert j.playback_sent == 2, "the newest sample within the lag budget of the arm, not the newest due"
 
 
 def test_live_playback_slews_replanned_arm_target_without_delaying_gripper():

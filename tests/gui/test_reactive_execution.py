@@ -344,12 +344,21 @@ def test_unheld_grasp_close_can_fill_the_checked_queue(monkeypatch):
     assert np.all(np.diff(np.array(sent)[:, gi]) >= 0), "the queue still closes in order"
 
 
+@pytest.mark.parametrize("opening", [False, True])
+@pytest.mark.parametrize("demo_fps", [30.0, 29.93, 60.0, 15.0])
 @pytest.mark.parametrize("solve_s", [0.02, 0.055])
-def test_checked_horizon_keeps_motor_ticks_filled_while_solves_take_time(monkeypatch, solve_s):
-    """Even a 55 ms IK solve should feed two interpolated 30 Hz commands."""
+def test_checked_horizon_keeps_motor_ticks_filled_while_solves_take_time(
+    monkeypatch, solve_s, demo_fps, opening
+):
+    """Even a 55 ms IK solve should feed two interpolated 30 Hz commands, and the replay keeps the demo's clock at
+    any demo frame rate: a slow solve or a demo denser than the loop covers more of the demo per step instead of
+    stretching it, and a demo recorded a hair under 30 fps (the insertion's 29.93) is not given two ticks a sample.
+    So does a gripper opening, whose end still is a step of its own."""
     kin = _TipKinematics()
     initial = np.zeros(len(MOTOR_NAMES))
-    count = 24
+    ticks = 24  # the demo's duration in motor ticks
+    deg_per_tick = 0.9  # just under the joint slew limit, 1 deg a tick at speed 1
+    count = round(ticks * demo_fps / jog.HZ)
     lock, stop = threading.Lock(), threading.Event()
     playback = {"samples": [], "due": [], "sent": -1, "at": [], "t0": 0.0, "q": initial.copy()}
     motor_ticks = []
@@ -407,10 +416,11 @@ def test_checked_horizon_keeps_motor_ticks_filled_while_solves_take_time(monkeyp
             q = playback["q"].copy()
         return kin.forward_kinematics(q), np.eye(4), dict(zip(MOTOR_NAMES, q, strict=True))
 
-    def checked_step(_kin, previous, goal, *_args, **_kwargs):
+    def checked_step(_kin, previous, goal, grip, *_args, **_kwargs):
         time.sleep(solve_s)
         q = previous.copy()
         q[0] = goal[0, 3] * 1000
+        q[-1] = grip
         return {"reason": "", "q": q, "pose": goal, "complete": True}
 
     monkeypatch.setattr(jog, "play_joints", play)
@@ -423,20 +433,25 @@ def test_checked_horizon_keeps_motor_ticks_filled_while_solves_take_time(monkeyp
     monkeypatch.setattr(jog, "servo_ranges", lambda: None)
     monkeypatch.setattr(jog, "workspace_box", lambda: ((-1, -1, -1), (1, 1, 1)))
     monkeypatch.setattr(reactive, "checked_step", checked_step)
-    local = np.stack([pose(i / 1000) for i in range(count + 1)])
+    local = np.stack([pose(deg_per_tick * ticks * i / count / 1000) for i in range(count + 1)])
+    grips = np.zeros(count + 1)
+    if opening:  # the fingers open over the middle third
+        grips = np.interp(np.arange(count + 1), [count / 3, 2 * count / 3], [80.0, 20.0])
     plan = {
         "q": np.tile(initial, (count + 1, 1)),
-        "times": np.arange(count + 1) / jog.HZ,
+        "times": np.arange(count + 1) / demo_fps,
         "stage": ["move"] * (count + 1),
         "live_path": {
             "local": local,
             "frames": ["world"] * (count + 1),
             "held": np.zeros(count + 1, bool),
-            "grips": np.zeros(count + 1),
+            "grips": grips,
             "hints": np.zeros((count + 1, len(MOTOR_NAMES))),
             "floor": np.full(count + 1, -1.0),
         },
     }
+    initial[-1] = grips[0]
+    playback["q"] = initial.copy()
     thread = threading.Thread(target=motor, daemon=True)
     thread.start()
     try:
@@ -456,11 +471,20 @@ def test_checked_horizon_keeps_motor_ticks_filled_while_solves_take_time(monkeyp
     finally:
         stop.set()
         thread.join(timeout=1)
-    assert not reason and last[0] == pytest.approx(count)
-    if solve_s < 1 / jog.HZ:
-        assert playback["due"][-1] <= count / jog.HZ + 1e-6, "fast IK must not double the demo clock"
-    active = np.array([q for _, q in motor_ticks if 2 <= q < count - 1])
-    assert len(active) >= count - 4
+    assert not reason and last[0] == pytest.approx(deg_per_tick * ticks)
+    # The opening's start and end are steps of their own: a tick each at most, where they split two samples of a tick.
+    late_ticks = 3 if opening else 1
+    assert playback["due"][-1] <= plan["times"][-1] + late_ticks / jog.HZ + 1e-6, (
+        "no frame rate may stretch the demo clock"
+    )
+    if opening:
+        end = int(np.flatnonzero(np.abs(np.diff(grips)) > 1e-6)[-1]) + 1
+        opened = next(s for s in playback["samples"] if s["gripper"] == pytest.approx(grips[-1]))
+        assert opened["shoulder_pan"] == pytest.approx(local[end][0, 3] * 1000), (
+            "the fingers finish opening where the demo's opening ends, not on the way to the move after it"
+        )
+    active = np.array([q for _, q in motor_ticks if 2 <= q < deg_per_tick * ticks - 1])
+    assert len(active) >= ticks - 5  # the ticks the arm is between 2 and 1 short of the end, less one
     assert np.mean(np.diff(active) < 0.05) < 0.2, "slow IK must not make the bus hold every other tick"
 
 

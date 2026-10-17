@@ -168,3 +168,40 @@ What still stalls the loop after these changes:
   held object's release at the head of the queue and supplies one sample per
   solve: 26 of the 26 empty spells there fell within ten ticks of a gripper
   command change. They total 1.18 s, the longest 135 ms (487 ms in the baseline).
+
+## Replay clock
+
+An Act at speed 1 should take its demo's time whatever the demo's frame rate and
+the motor loop's. Act `20261017_112723` took 9.74 s over the insertion (key
+frames 6 to 7) that the demo did in 4.81 s. The producer gave each demo sample
+`ceil(dt * 30 - 1e-8)` ticks; the demo was recorded at 29.93 fps, 33.39 ms
+apart, so 126 of its 143 samples got two ticks. The motor loop then sent one
+sample per tick, so a late tick delayed every sample after it.
+
+The producer now takes each step's ticks from the plan's clock: the ticks
+between its two phases' ticks, rounded half up, which add up to the plan's time.
+Phases due before a step could end are merged into it — denser demos, and solves
+slower than a tick once three or more have been timed — while the gripper keeps
+its direction. The motor loop sends the newest due sample after a late tick. Two
+kinds of sample are never skipped: one where the gripper starts, stops or
+reverses, and one further than `PLAYBACK_LAG_DEG` from where a joint is. A step
+stretched by the joint slew limit, or by a lag wait, is not made up afterwards.
+
+`benchmarks/playback_clock_sim.py` replays the insertion segment's joint
+commands (no IK, servo dynamics or contact). It resamples the segment to other
+frame rates and plays them on other loop rates. The last column uses the tick
+intervals measured in `20261017_112723`. Each cell is duration over the demo's,
+ceil and one sample per tick → clock and newest:
+
+| Demo fps         |       30 Hz |       20 Hz |       50 Hz | 30 Hz, measured ticks |
+| ---------------- | ----------: | ----------: | ----------: | --------------------: |
+| recorded (29.93) | 1.88 → 1.00 | 1.50 → 1.05 | 1.20 → 1.00 |           1.95 → 1.00 |
+| 15               | 0.99 → 0.99 | 1.49 → 0.99 | 1.19 → 0.99 |           1.02 → 0.99 |
+| 30               | 1.00 → 1.00 | 1.50 → 1.03 | 1.20 → 1.00 |           1.03 → 1.00 |
+| 60               | 2.00 → 1.05 | 3.00 → 1.11 | 1.20 → 1.01 |           2.09 → 1.05 |
+
+Most of what remains above 1.00 is in the release. In the 60 fps replay on a
+30 Hz loop the release takes 1.30 s against the demo's 1.12 s, and the rest of
+the segment 3.70 s against 3.65 s. Each start or stop of the gripper is a step
+of its own, and the demo's gripper command wobbles by 0.1 units during the
+release, so each wobble is one more start or stop.

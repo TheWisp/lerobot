@@ -446,6 +446,21 @@ def _advance_playback(j: _Jog, now: float, observed: dict[str, float] | None = N
     observed = j.q_obs if observed is None else observed
     j.playback_waiting = False
     k = j.playback_sent + 1
+    # After a late tick more than one sample is due: send the newest, so the playback keeps its clock instead of
+    # falling a tick behind for good. Never skip one where the gripper starts, stops or reverses: the fingers' opening
+    # and the arm's next move then reached the arm in one command and pulled the gamepad over (2026-10-08). Nor skip to
+    # one further than PLAYBACK_LAG_DEG from where a joint is: catching up must not make the lag the wait below bounds.
+    while (
+        k + 1 < len(j.playback)
+        and j.playback_due[k + 1] <= now - j.playback_t0
+        and not _gripper_turns_at(j.playback, k, j.q_target)
+        and all(
+            abs(v - observed[m]) <= PLAYBACK_LAG_DEG
+            for m, v in j.playback[k + 1].items()
+            if m != "gripper" and m in observed
+        )
+    ):
+        k += 1
     errors = {m: abs(j.q_target[m] - observed[m]) for m in j.q_target if m != "gripper" and m in observed}
     lagging = max(errors, key=errors.__getitem__, default="joint")
     behind = errors.get(lagging, 0.0)
@@ -481,10 +496,28 @@ def _advance_playback(j: _Jog, now: float, observed: dict[str, float] | None = N
         j.playback_held = None
         if k < len(j.playback) and now - j.playback_t0 >= j.playback_due[k]:
             j.q_target = j.playback[k]
+            j.playback_sent_at.extend(
+                [time.time()] * (k - j.playback_sent)
+            )  # one per sample, skipped ones too
             j.playback_sent = k
-            j.playback_sent_at.append(time.time())
     j.playback_tick = now
     j.playback_queue_depth = len(j.playback) - j.playback_sent - 1
+
+
+def gripper_direction(delta: float) -> int:
+    """-1, 0 or 1: the way a gripper command change of ``delta`` moves the fingers (0 within 1e-6)."""
+    return 0 if abs(delta) <= 1e-6 else (1 if delta > 0 else -1)
+
+
+def _gripper_turns_at(samples: list[dict[str, float]], k: int, before: dict[str, float] | None) -> bool:
+    """Whether the gripper command starts, stops or reverses at ``samples[k]``; ``before`` is the sample ahead of
+    ``samples[0]``. Such a sample is sent, never skipped by a playback catching up; inside one opening or closing a
+    skipped sample only keeps it on time."""
+    prev = samples[k - 1] if k > 0 else before
+    if prev is None or k + 1 >= len(samples):
+        return True
+    grip = [s.get("gripper", 0.0) for s in (prev, samples[k], samples[k + 1])]
+    return gripper_direction(grip[1] - grip[0]) != gripper_direction(grip[2] - grip[1])
 
 
 def _live_joint_command(
@@ -1441,11 +1474,12 @@ def set_target_joints(q: dict[str, float]) -> None:
 
 
 def play_joints(samples: list[dict[str, float]], due_s: list[float]) -> None:
-    """Hand the loop a stream of joint targets to play back on its own clock: in order, one per tick, each no earlier
-    than its time from now. A stream set from another thread sample by sample loses the samples set while a tick is
-    slow, and the arm takes only the newest: in an act of 2026-10-08 the fingers' opening and the lift away reached the
-    arm in one command, and the gamepad was pulled over. Pre: joints mode (:func:`joints_start`), not frozen, one
-    non-decreasing time per sample."""
+    """Hand the loop a stream of joint targets to play back on its own clock: in order, each no earlier than its time
+    from now; a tick that comes late sends the newest due one (see :func:`_advance_playback` for the samples never
+    skipped). A stream set from another thread sample by sample loses the samples set while a tick is slow, and the
+    arm takes only the newest: in an act of 2026-10-08 the fingers' opening and the lift away reached the arm in one
+    command, and the gamepad was pulled over. Pre: joints mode (:func:`joints_start`), not frozen, one non-decreasing
+    time per sample."""
     assert len(samples) == len(due_s), "one time per sample"
     j = _jog
     with j.lock:

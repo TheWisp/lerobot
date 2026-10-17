@@ -161,23 +161,36 @@ async def stream(
     def as_dict(q):
         return dict(zip(MOTOR_NAMES, map(float, q), strict=True))
 
+    def clock_tick(k):
+        """The motor tick, from the stream's start, at which phase ``k`` is due on the plan's clock. Rounded half up:
+        round() takes every other half-tick sample down, and a 60 fps demo then has steps of one and three samples."""
+        return int(np.floor(float(plan["times"][k]) * jog.HZ + 0.5 + 1e-9))
+
     def next_target_phase(phase, current):
+        """The phase the next step aims for. Free-line samples are merged, and so are phases due on the plan's clock
+        before a solve of the recent median duration could end: a demo recorded denser than the motor loop, or solves
+        slower than a tick, keep the plan's wall-clock time with fewer, longer steps instead of stretching it. Every
+        caller gets the same phase, so a replacement solves the goal its step is logged and timed for. A gripper
+        opening or closing merges only with phases that carry it on: the step ends where it stops, so its end never
+        shares a step with the move after it."""
         i = min(phase + 1, len(plan["q"]) - 1)
         moves = path.get("move")
-        if moves is None or moves[i] not in {"line", "lift"}:
-            return i
+        line = moves is not None and moves[i] in {"line", "lift"}
         # Generated samples along a free line are validation points, not
         # independent stop targets. Preserve real stage/gripper boundaries.
-        if abs(float(path["grips"][i] - current[gi])) > 1e-6:
-            return i
-        while i + 1 < len(plan["q"]):
+        gripping = jog.gripper_direction(path["grips"][i] - current[gi])
+        # Only sustained slow solves merge: the median of fewer than three is the spike the queue absorbs.
+        sustained = len(solve_seconds) >= 3
+        compute_ticks = int(np.ceil(np.median(solve_seconds) * jog.HZ)) if sustained else 1
+        at_tick = clock_tick(phase) + compute_ticks - 1
+        while i + 1 < len(plan["q"]) and ((line and not gripping) or clock_tick(i) <= at_tick):
             k = i + 1
             if (
                 plan["stage"][k] != plan["stage"][i]
-                or moves[k] != moves[i]
+                or (moves is not None and moves[k] != moves[i])
                 or path["frames"][k] != path["frames"][i]
                 or path["held"][k] != path["held"][i]
-                or abs(float(path["grips"][k] - current[gi])) > 1e-6
+                or jog.gripper_direction(path["grips"][k] - path["grips"][i]) != gripping
                 or constraints[k] != constraints[i]
             ):
                 break
@@ -522,17 +535,12 @@ async def stream(
             "fix": np.asarray(fix).tolist(),
             "hold_revision": None if revision is None else revision(),
         }
-        # Preserve one-tick demo phases when IK keeps up. A two-tick minimum
-        # doubled every small contact/hold sample even with 2 ms solves.
-        # Sustained slower IK can still use a longer checked interpolation;
-        # isolated spikes are absorbed by the queue, not baked into its speed.
-        compute_ticks = 1 if not solve_seconds else int(np.ceil(np.median(solve_seconds) * jog.HZ))
-        nominal_ticks = max(
-            1,
-            min(
-                6, max(compute_ticks, int(np.ceil((plan["times"][i] - plan["times"][phase]) * jog.HZ - 1e-8)))
-            ),
-        )
+        # A step takes the ticks between its phases' ticks on the plan's clock. They add up to the plan's own time
+        # at any demo frame rate and motor rate; rounding each sample's spacing up instead gave the insertion demo's
+        # 33.4 ms samples (29.93 fps) two ticks each, 9.7 s for its 4.8 s (2026-10-16/17); stretching steps to the
+        # solve time slowed the replay the same way. Phases due before the step can end were merged above
+        # (next_target_phase). A step the arm's joint speed stretches is not made up after.
+        nominal_ticks = max(1, min(6, clock_tick(i) - clock_tick(phase)))
         continuous = (
             path.get("move", ["follow"] * len(plan["q"]))[i] in {"line", "lift"}
             and abs(float(path["grips"][i] - qs[base][gi])) < 1e-6
