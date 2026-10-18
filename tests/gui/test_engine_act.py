@@ -114,3 +114,15 @@ def test_the_fingertip_now_is_the_latest_encoder_read(monkeypatch):
     np.testing.assert_allclose(scene.tip_at(10.0 + 0.5 / jog.HZ)[:3, 3], 1.5)  # between two reads
     np.testing.assert_allclose(scene.tip_at(10.0 + 1.5 / jog.HZ)[:3, 3], 3.0)  # now: the latest read
     assert scene.tip_at(10.0 + 4.0 / jog.HZ) is None  # no read for that long: not the arm now
+
+
+def test_only_the_engine_acts_a_key_frame_held_where_its_leg_begins():
+    from lerobot.showservo import motion as core
+
+    marks = [
+        {"t": 1.0, "kind": "key", "frame": "dowel", "move": "line", "grip": "first"},
+        {"t": 2.0, "kind": "key", "frame": core.START_FRAME, "move": "follow", "grip": "first"},
+    ]
+    assert "act engine only" in execution._runner_problem("key_frames", marks)
+    assert execution._runner_problem("engine", marks) == ""
+    assert execution._runner_problem("key_frames", marks[:1]) == ""

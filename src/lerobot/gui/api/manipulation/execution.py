@@ -1785,6 +1785,14 @@ async def _act_task(speed: float, server: str | None = None) -> None:
     await _act_key_frames_task(speed, server)
 
 
+def _runner_problem(runner: str, keypoints: list[dict[str, Any]]) -> str:
+    """Why ``runner`` cannot act these marks, or ''. The key-frame runner has no key frame held where its leg begins
+    (core.START_FRAME): only the act engine replays one."""
+    if runner == "key_frames" and any(k["frame"] == core.START_FRAME for k in core.key_frames(keypoints)):
+        return "a key frame held where its leg begins ('start') is replayed by the act engine only"
+    return ""
+
+
 @router.post("/act")
 async def act_start(body: ActBody, request: Request) -> dict:
     """Replay the demo on the object where it is now: the whole recorded path, carried by the object's motion."""
@@ -1809,6 +1817,8 @@ async def act_start(body: ActBody, request: Request) -> dict:
             raise HTTPException(409, "record or load a demo first")
         if not planning._has_key_frames(demo):
             raise HTTPException(409, "mark a key frame first (Edit demo)")
+        if problem := _runner_problem(body.runner, demo.keypoints):
+            raise HTTPException(409, problem)
         # No trusted live view is needed: the act finds the object afresh without one. A track kept through an act
         # has added the points it saw while carried, more than a view of the object at rest can show.
         if teach is None or runtime._state.teach_job is not None:

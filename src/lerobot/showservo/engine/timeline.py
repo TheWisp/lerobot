@@ -22,6 +22,7 @@ import numpy as np
 from lerobot.showservo import motion as core
 
 BASE = core.WORLD_FRAME  # the arm's base: what a key frame held in no object's frame is relative to
+START = core.START_FRAME  # where the leg begins: the demo's motion since its key frame before, from there
 
 
 @dataclasses.dataclass(frozen=True)
@@ -104,7 +105,7 @@ class Timeline:
         self.frames = key_frames
 
         def resolve(frame: str) -> str:
-            return BASE if frame == BASE else (frame or session_object or "")
+            return frame if frame in (BASE, START) else (frame or session_object or "")
 
         self.holdings = core.demo_holdings(demo.t, demo.grip, demo.grip_obs, key_frames)
         legs = []
@@ -141,7 +142,10 @@ class Timeline:
             out.append(Event("grasp", obj, h["grip"], leg, s, "gripper", h["grip"]))
             if h["release"] is not None:
                 leg_r, s_r = self.position(h["release"])
-                out.append(Event("release", obj, h["release"], leg_r, s_r, self.legs[leg_r].obj, h["grip"]))
+                ref = self.legs[leg_r].obj
+                out.append(
+                    Event("release", obj, h["release"], leg_r, s_r, BASE if ref == START else ref, h["grip"])
+                )
         return sorted(out, key=lambda e: (e.leg, e.s))
 
     def position(self, i: int) -> tuple[int, float]:

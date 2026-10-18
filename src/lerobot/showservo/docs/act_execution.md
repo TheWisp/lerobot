@@ -324,17 +324,18 @@ sequenceDiagram
 
 ### What the engine keeps of the key frames
 
-| Today                                                         | In the engine                                                                                                                   |
-| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| A key frame's object: an object, the taught object, the world | the object the leg arriving at it is heading for                                                                                |
-| Its move: line, follow, lift                                  | line: straight from where the arm is; follow: the demo's own path; lift: straight up by `up_mm` from where it is                |
-| Its gripper: first, along                                     | on a line, the gripper moves before the arm, or with it                                                                         |
-| Its constraint: pose, orientation                             | the whole pose; or only the rotation, the position staying where the leg started                                                |
-| Its constraint: best effort                                   | the key frame is a target: when the arm stops short, the leg ends where the arm is and the next starts from there ([E23](#e23)) |
-| A held object, from the grasp to the release                  | the legs between allow for how it sits in the gripper; the grasp and the release are Milestones                                 |
-| An object's symmetry: repeating turns, an axis, swapped ends  | turns its legs may take, chosen beside the motion; poses the checks count as the same                                           |
-| The demo's landing: exact, symmetric turns, any turn          | turns the legs onto the target may take, chosen beside the motion; poses the checks count as the same                           |
-| The point groups carrying objects between views               | another source of object poses                                                                                                  |
+| Today                                                         | In the engine                                                                                                                                                             |
+| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A key frame's object: an object, the taught object, the world | the object the leg arriving at it is heading for                                                                                                                          |
+| (new) Its frame: start, where its leg begins                  | the demo's motion since the key frame before, from wherever the arm began the leg: C0·D(t0)⁻¹·D(t); a lift that turns as the demo turned. The key-frame runner refuses it |
+| Its move: line, follow, lift                                  | line: straight from where the arm is; follow: the demo's own path; lift: straight up by `up_mm` from where it is                                                          |
+| Its gripper: first, along                                     | on a line, the gripper moves before the arm, or with it                                                                                                                   |
+| Its constraint: pose, orientation                             | the whole pose; or only the rotation, the position staying where the leg started                                                                                          |
+| Its constraint: best effort                                   | the key frame is a target: when the arm stops short, the leg ends where the arm is and the next starts from there ([E23](#e23))                                           |
+| A held object, from the grasp to the release                  | the legs between allow for how it sits in the gripper; the grasp and the release are Milestones                                                                           |
+| An object's symmetry: repeating turns, an axis, swapped ends  | turns its legs may take, chosen beside the motion; poses the checks count as the same                                                                                     |
+| The demo's landing: exact, symmetric turns, any turn          | turns the legs onto the target may take, chosen beside the motion; poses the checks count as the same                                                                     |
+| The point groups carrying objects between views               | another source of object poses                                                                                                                                            |
 
 Allowed turns are ranked again when their object moves — IK of the leg's key frames and a few of its points, from the
 arm's present joints, by whether the arm reaches them and how close its joints stay to the demo's — and a different

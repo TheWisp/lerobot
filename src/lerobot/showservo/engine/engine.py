@@ -30,7 +30,7 @@ from . import predicates as pred
 from .objects import Objects
 from .predicates import Answer, Verdict
 from .scene import SceneLog, Tracks
-from .timeline import BASE, Event, Timeline
+from .timeline import BASE, START, Event, Timeline
 
 FAILURE_FRAMES = 2  # a choice: the fewest camera frames in a row that ignore a single bad one
 TRIES = 2  # act_execution.md Q1's leaning: a Milestone may fail once and be tried again
@@ -216,6 +216,7 @@ class Engine:
         self._over = False  # the generator has made the act's last command
         self._unreachable = ""
         self.stretched_s = 0.0  # demo seconds the joint bound slowed
+        self.anchors: dict[int, np.ndarray] = {}  # legs held in START, from where each began
 
     # ── records ──
 
@@ -243,8 +244,18 @@ class Engine:
 
     # ── composition ──
 
+    def _anchor(self, leg_n: int) -> np.ndarray:
+        """Where a leg held in START puts the demo's pose: the leg's start times the demo's pose there, inverted. Set
+        when the leg begins; before that, predicted from where the leg before it ends."""
+        if leg_n in self.anchors:
+            return self.anchors[leg_n]
+        before = self._state_pose(leg_n - 1, 1.0) if leg_n > 0 else self.cmds[0].pose
+        return before @ np.linalg.inv(self.demo.pose_at(self.tl.legs[leg_n].t0))
+
     def _compose(self, leg_n: int, d: np.ndarray) -> np.ndarray:
         leg = self.tl.legs[leg_n]
+        if leg.obj == START:  # the demo's gripper motion from where the leg began: any hold rides along
+            return self._anchor(leg_n) @ d
         out = self.objects.motion(leg.obj) @ d
         if leg.held is not None and leg.held in self.fix:
             out = out @ self.fix[leg.held]
@@ -301,6 +312,8 @@ class Engine:
     def _leg_run(self, leg_n: int, s0: float, c0: np.ndarray, g0: float) -> Run:
         leg = self.tl.legs[leg_n]
         td0 = self.tl.time(leg_n, s0)
+        if leg.obj == START:
+            self.anchors[leg_n] = c0 @ np.linalg.inv(self.demo.pose_at(td0))
         if leg.move == "follow":
             d0 = self.demo.pose_at(td0)
             m, deg = core.pose_residual(c0, self._compose(leg_n, d0))

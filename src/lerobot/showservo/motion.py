@@ -634,6 +634,10 @@ PLACE_KINDS = ("preplace", "place_end")  # follow the object it is placed onto
 # servos reach it wherever the objects lie. For now world waypoints come after the place end: the lift away after the
 # release, which the place itself replays moved with the object placed onto.
 WORLD_FRAME = "world"
+# A key frame held where its leg begins: the demo's motion since the key frame before it, applied from wherever the arm
+# began the leg (C0 . D(t0)^-1 . D(t)). A lift that turns as the demo turned, from wherever the grasp happened. Only the
+# act engine replays it.
+START_FRAME = "start"
 ACT_REACH_TOL_M = (
     0.003  # a planned pose solved to within this is reached: under the hand-eye calibration's own error
 )
@@ -1115,7 +1119,7 @@ def key_frames_problem(frames: list[dict[str, Any]], t_start: float, t_end: floa
                 "a follow replays the demo from the key frame before it, and a lift leaves the arm off the demo's "
                 "path: put a straight line between them"
             )
-        if k["move"] == "follow" and k.get("frame") != frames[n - 1].get("frame"):
+        if k["move"] == "follow" and k.get("frame") not in (START_FRAME, frames[n - 1].get("frame")):
             return (
                 "a follow is held in the frame of the key frame before it, where the arm stands as it begins"
             )

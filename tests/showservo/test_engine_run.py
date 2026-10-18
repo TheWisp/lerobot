@@ -432,6 +432,55 @@ def test_an_act_whose_checks_cannot_tell_is_not_reported_a_success(monkeypatch):
     assert sim.engine.result["why"].startswith("not confirmed"), sim.engine.result
 
 
+def test_a_key_frame_held_where_its_leg_begins_replays_the_demos_motion_from_there():
+    """A key frame in the "start" frame is the demo's motion since the key frame before it, applied from wherever the
+    arm began the leg: C0 . D(t0)^-1 . D(t). The block lies 25 mm from where the demo picked it up, so the lift
+    after the grasp rises 60 mm from where the arm took it, not along the demo's own path 25 mm away."""
+    from lerobot.showservo import motion as core
+
+    demo, kf, bodies = pick_place_demo()
+    kf = [
+        {**k, "frame": core.START_FRAME, "move": "follow", "constraint": "pose", "up_mm": None}
+        if k["move"] == "lift"
+        else k
+        for k in kf
+    ]
+    shift = pose((0.015, -0.020, 0.0))
+
+    def moved(world):
+        world.bodies["dowel"].motion = shift
+
+    sim = run_act(demo, kf, bodies, setup=moved)
+    assert sim.engine.result["ok"], sim.engine.result
+    assert _on_ring(sim), sim.world.events
+    lift = next(n for n, leg in enumerate(sim.engine.tl.legs) if leg.label == "lift 1")
+    first = next(k for k, c in enumerate(sim.engine.cmds) if c.kind == "leg" and c.leg == lift)
+    cmds = [c for c in sim.engine.cmds if c.kind == "leg" and c.leg == lift]
+    start = sim.engine.cmds[first - 1].pose
+    t0 = sim.engine.tl.legs[lift].t0
+    for c in cmds:
+        expected = start @ np.linalg.inv(demo.pose_at(t0)) @ demo.pose_at(c.td)
+        assert np.linalg.norm(c.pose[:3, 3] - expected[:3, 3]) < 1e-4
+    rise = cmds[-1].pose[:3, 3] - start[:3, 3]
+    np.testing.assert_allclose(rise, demo.pose_at(cmds[-1].td)[:3, 3] - demo.pose_at(t0)[:3, 3], atol=1e-4)
+    assert rise[2] > 0.05, "it rose as the demo did"
+    assert np.linalg.norm(cmds[-1].pose[:2, 3] - demo.pose_at(3.6)[:2, 3]) > 0.02, "not the demo's own path"
+
+
+def test_a_start_frame_follow_may_follow_a_key_frame_in_another_frame():
+    from lerobot.showservo import motion as core
+
+    base = {"grip": "first", "constraint": "pose"}
+    frames = [
+        {**base, "t": 1.0, "frame": "dowel", "move": "line"},
+        {**base, "t": 2.0, "frame": "dowel", "move": "follow"},
+        {**base, "t": 3.0, "frame": core.START_FRAME, "move": "follow"},
+    ]
+    assert core.key_frames_problem(frames, 0.0, 5.0) == ""
+    frames[2]["frame"] = "ring"
+    assert "frame of the key frame before it" in core.key_frames_problem(frames, 0.0, 5.0)
+
+
 def test_the_queue_never_runs_dry_when_the_engines_steps_come_late():
     """On the rig the engine's steps come when the GUI process lets them, not every tick: with a queue sized for the
     IK solve alone, 30 of 248 moving ticks sent nothing new and the next caught up with a double step, a visible
