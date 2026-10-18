@@ -65,6 +65,7 @@ class PoseEstimator(Protocol):
 
 POINT2POSE = "point2pose"  # the session tracker's fit, by its own verdict (found, the object not lost)
 OLD_RUNNER = "old runner checks"  # the views the key-frame runner's checks certify, surface-corrected where they correct
+GROUPS = "point groups"  # the point groups' pose: carried by the group the object moves with, placed by its own points
 
 
 class SourceVerdict:

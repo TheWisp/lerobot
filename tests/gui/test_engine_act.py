@@ -240,3 +240,85 @@ def test_the_old_runners_checks_are_a_candidate_beside_point2pose(monkeypatch):
         _job(4.0), r, None
     )  # the runner refused this view of the dowel; its view of the ring is not of this frame
     assert len(scene.measurements("dowel")) == 1 and len(scene.measurements("ring")) == 1
+
+
+def test_the_point_groups_pose_in_the_same_camera_frame_is_a_candidate(monkeypatch):
+    """With the objects designated in the point groups, each frame's candidates include the groups' pose of each in
+    the same camera frame (stamped by the wall clock there, by the perf counter here): its motion since designation,
+    applied to where the act found it. Between two of the groups' frames it is interpolated; a frame the groups have
+    not reached yet has none, rather than their last pose stamped with a newer time."""
+    import collections
+
+    from lerobot.showservo.estimation import GROUPS, SourceVerdict
+
+    monkeypatch.setattr(engine_act.planning, "_delta_base", lambda d, delta, t_bc: np.asarray(delta))
+    monkeypatch.setattr(runtime._state, "targets", {})
+    designated = np.eye(4)
+    designated[:3, 3] = (0.10, 0.0, 0.40)
+    moved = designated.copy()
+    moved[0, 3] += 0.020
+    monkeypatch.setattr(
+        runtime._state.groups_feed,
+        "frames",
+        {"dowel": collections.deque([(1000.0, designated), (1000.1, moved)])},
+    )
+    start = np.eye(4)
+    start[:3, 3] = (0.30, 0.0, 0.0)
+    scene = SceneLog()
+    feed = engine_act._Feed(
+        scene,
+        types.SimpleNamespace(),
+        np.eye(4),
+        "dowel",
+        [],
+        SourceVerdict(GROUPS),
+        groups_from=1000.0,
+        starts={"dowel": start},
+    )
+    feed.wall_offset = lambda: 1000.0
+    r = {"ok": True, "delta": np.eye(4)}
+    feed(_job(0.05), r, None)  # halfway between the groups' two frames
+    feed(_job(0.2), r, None)  # after their newest
+    assert [m.t for m in scene.measurements("dowel")] == [0.05]
+    np.testing.assert_allclose(scene.measurements("dowel")[0].motion[:3, 3], (0.31, 0.0, 0.0), atol=1e-9)
+    assert feed.refused == {"dowel: no point groups candidate": 1}
+
+
+def test_an_object_moving_to_another_group_has_no_confident_groups_pose(monkeypatch):
+    """While most of an object's seen points are in a group it has not moved to yet, the groups' pose of it is still
+    the old group's: lifted, it reads as lying where it lay, and a check of the grasp took that for an answer (act
+    20261018_231143 replayed, 'the other outcome' 0.4 mm away). Such a frame's groups pose is not confident."""
+    import collections
+
+    from lerobot.showservo.estimation import GROUPS, SourceVerdict
+
+    monkeypatch.setattr(engine_act.planning, "_delta_base", lambda d, delta, t_bc: np.asarray(delta))
+    monkeypatch.setattr(runtime._state, "targets", {})
+    pose = np.eye(4)
+    monkeypatch.setattr(
+        runtime._state.groups_feed,
+        "frames",
+        {"dowel": collections.deque([(1000.0, pose), (1000.1, pose), (1000.2, pose)])},
+    )
+    monkeypatch.setattr(
+        runtime._state.groups_feed,
+        "evidence",
+        {"dowel": collections.deque([(1000.0, {}), (1000.1, {"moving": True}), (1000.2, {})])},
+    )
+    scene = SceneLog()
+    feed = engine_act._Feed(
+        scene,
+        types.SimpleNamespace(),
+        np.eye(4),
+        "dowel",
+        [],
+        SourceVerdict(GROUPS),
+        groups_from=1000.0,
+        starts={"dowel": np.eye(4)},
+    )
+    feed.wall_offset = lambda: 1000.0
+    r = {"ok": True, "delta": np.eye(4)}
+    feed(_job(0.05), r, None)  # between a frame in transition and one before it
+    feed(_job(0.2), r, None)  # the frame after
+    assert [m.t for m in scene.measurements("dowel")] == [0.2]
+    assert feed.refused == {"dowel: point groups: moving to another group": 1}

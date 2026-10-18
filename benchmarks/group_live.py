@@ -430,9 +430,17 @@ class MjpegView:
         if ok:
             self.jpg, self.stamp = buf.tobytes(), time.time()
 
-    def add_poses(self, stamp: float, poses: dict[str, list[float]], drawing: dict | None = None) -> None:
+    def add_poses(
+        self,
+        stamp: float,
+        poses: dict[str, list[float]],
+        drawing: dict | None = None,
+        moving: set[str] | frozenset[str] = frozenset(),
+    ) -> None:
         """One frame's poses of the designated objects, for GET /poses (a frame with none says the view is alive),
-        and its picture for another camera view (groups_scene.drawing), the newest kept."""
+        and its picture for another camera view (groups_scene.drawing), the newest kept. ``moving``: the objects
+        whose seen points are mostly in another group they have not moved to yet, so their pose is the old group's
+        while they may already be moving with the new one."""
         objects = (drawing or {}).get("objects") or {}
         groups = (drawing or {}).get("groups") or {}
         evidence = {
@@ -443,6 +451,7 @@ class MjpegView:
                 "n_seen": context.get("n_seen"),
                 "n_grouped": context.get("n_grouped"),
                 "group_supported": bool((groups.get(str(context.get("group"))) or {}).get("supported")),
+                "moving": name in moving,
             }
             for name in poses
             if (context := objects.get(name)) is not None
@@ -918,6 +927,7 @@ def main() -> None:
                     stamp,
                     {name: np.round(tracker.objects[name].pose, 6).ravel().tolist() for name in names},
                     picture,
+                    {name for name in names if tracker.objects[name].pending is not None},
                 )
                 view.show(img)
                 lag_ms.append(

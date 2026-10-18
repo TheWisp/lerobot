@@ -41,6 +41,7 @@ from lerobot.showservo.engine.scene import Camera, Measurement, SceneLog
 from lerobot.showservo.engine.timeline import Demo, Timeline
 from lerobot.showservo.engine.world import World
 from lerobot.showservo.estimation import (
+    GROUPS,
     OLD_RUNNER,
     POINT2POSE,
     Candidate,
@@ -50,7 +51,7 @@ from lerobot.showservo.estimation import (
     tracker_verdict,
 )
 
-from . import acquisition, camera, holds, planning, recording, runtime
+from . import acquisition, camera, groups, holds, planning, recording, runtime
 
 logger = logging.getLogger(__name__)
 
@@ -121,8 +122,10 @@ class _Feed:
     """Each tracked frame, into the scene log (act_execution.md, "The loops, and who writes what"): the frame's time,
     and each object's pose the estimator takes (:mod:`lerobot.showservo.estimation`). The feed only turns the trackers'
     output into candidates, base frame, each with its source's verdict: Point2Pose's own (its fit found, the object not
-    lost) and the key-frame runner's checks on that view, which ran on the frame before the feed is called; which of
-    them is a measurement is the estimator's."""
+    lost) and the key-frame runner's checks on that view, which ran on the frame before the feed is called; and with
+    the objects designated in the point groups at ``groups_from`` (wall clock), the groups' pose of each in the same
+    camera frame, as its motion since then applied to where the act found it (``starts``, base frame). Which of them
+    is a measurement is the estimator's."""
 
     def __init__(
         self,
@@ -132,9 +135,16 @@ class _Feed:
         session: str,
         others: list[str],
         estimator: PoseEstimator | None = None,
+        groups_from: float | None = None,
+        starts: dict[str, np.ndarray] | None = None,
     ):
         self.scene, self.demo, self.t_bc, self.session, self.others = scene, demo, t_bc, session, others
         self.estimator = tracker_verdict() if estimator is None else estimator
+        self.groups_from, self.starts = groups_from, dict(starts or {})
+        self.groups_ref: dict[str, np.ndarray] = {}  # each object's pose in the groups at its designation
+        # The camera's frame times are the host's perf counter here and its wall clock in the groups: one read of
+        # the camera, two clocks (recording._share_frames).
+        self.wall_offset = lambda: time.time() - time.perf_counter()
         self.reference: dict[
             str, np.ndarray | None
         ] = {}  # each other object's demo pose its measurement is against
@@ -204,6 +214,35 @@ class _Feed:
                 )
         return out
 
+    def _groups_candidates(self, t_mono: float) -> dict[str, Candidate]:
+        """Each designated object's pose in the point groups in the camera frame read at ``t_mono``, interpolated
+        between the groups' frames around it; none for an object the groups have not reached that frame of. Not
+        confident while its seen points are mostly in a group it has not moved to yet: its pose is still the old
+        group's, which a check of whether it moved would take for an answer."""
+        if self.groups_from is None:
+            return {}
+        wall = t_mono + self.wall_offset()
+        with runtime._state.lock:
+            frames = {
+                n: [f for f in runtime._state.groups_feed.frames.get(n, ()) if f[0] >= self.groups_from]
+                for n in self.starts
+            }
+            evidence = {n: list(runtime._state.groups_feed.evidence.get(n, ())) for n in self.starts}
+        out = {}
+        for name, fs in frames.items():
+            if fs and name not in self.groups_ref:
+                self.groups_ref[name] = np.asarray(fs[0][1], dtype=float)
+            if not fs or not fs[0][0] <= wall <= fs[-1][0]:
+                continue
+            cam = core._groups_pose_at(fs, wall) @ np.linalg.inv(self.groups_ref[name])
+            motion = self.t_bc @ cam @ np.linalg.inv(self.t_bc) @ self.starts[name]
+            stamps = [f[0] for f in fs]
+            k = int(np.searchsorted(stamps, wall))
+            around = {stamps[k]} if stamps[k] == wall else {stamps[k - 1], stamps[k]}
+            moving = any(e.get("moving") for stamp, e in evidence[name] if stamp in around)
+            out[name] = Candidate(GROUPS, motion, not moving, "moving to another group" if moving else "")
+        return out
+
     def __call__(self, job: runtime._Job, r: dict[str, Any], result: dict[str, Any] | None) -> None:
         t = job.camera_stamp_mono
         if t is None:
@@ -221,7 +260,10 @@ class _Feed:
                 float(intr["cy"]),
                 np.linalg.inv(self.t_bc),
             )
-        for name, e in self.estimator.estimate(t, self._candidates(r, result, job.created), frame).items():
+        candidates = self._candidates(r, result, job.created)
+        for name, c in self._groups_candidates(t).items():
+            candidates.setdefault(name, []).append(c)
+        for name, e in self.estimator.estimate(t, candidates, frame).items():
             if e.motion is not None:
                 self.scene.add_measurement(name, Measurement(t=t, motion=e.motion))
             else:
@@ -410,8 +452,45 @@ async def _act_engine_task(
             perturb=Perturbations.from_spec(perturb),
             clock=time.perf_counter,
         )
-        # Point2Pose's views, refused where the camera sees through the surface they put the object at (E33).
-        feed = _Feed(scene, demo, t_bc, session, others, SeenThrough(POINT2POSE, surfaces))
+        groups_from = None
+        with runtime._state.lock:
+            with_groups = runtime._state.groups_with_acts
+        if with_groups:
+            # The point groups carry the objects; designated where the act found them, before anything moves.
+            seen_mask = test.result.get("live_mask")
+            clicks = {
+                session: acquisition._deepest_pixel(
+                    seen_mask if seen_mask is not None else teach.keypoints.get("mask"), teach.rgb.shape
+                )
+            }
+            for name in others:
+                mask = (acquisition._located(demo, name) or {}).get("mask")
+                clicks[name] = None if mask is None else acquisition._deepest_pixel(mask, mask.shape)
+            unknown = [n for n, c in clicks.items() if c is None]
+            if unknown:
+                fail(f"where {' and '.join(unknown)} is, for the point groups: click it in the camera view")
+                return
+            act.step = f"designating {' and '.join(clicks)} in the point groups"
+            why, groups_from = await groups._designate_in_groups(
+                clicks, server or runtime._state.server_url, stopped
+            )
+            if why:
+                fail(why)
+                return
+        # The point groups' poses where they run, else Point2Pose's views; refused where the camera sees through the
+        # surface they put the object at (E33).
+        source = GROUPS if groups_from is not None else POINT2POSE
+        feed = _Feed(
+            scene,
+            demo,
+            t_bc,
+            session,
+            others,
+            SeenThrough(source, surfaces),
+            groups_from=groups_from,
+            starts=starts,
+        )
+        designated_at = time.monotonic()
         with runtime._state.lock:
             runtime._state.frame_listeners.append(feed)
         run = recording._begin_run(
@@ -422,6 +501,7 @@ async def _act_engine_task(
             {"ok": True, "summary": "act engine"},
         )
         run.meta["runner"] = "engine"
+        run.meta["pose_source"] = source
         run.meta["perturb"] = perturb
         q0 = np.array([float(cur[2][m]) for m in names])
         act.step = "starting"
@@ -433,6 +513,8 @@ async def _act_engine_task(
         recorded = 0
         while not engine.done:
             st = jog.current_status()
+            with runtime._state.lock:
+                groups_fresh = runtime._state.groups_feed.fresh
             why = (
                 "stopped"
                 if act.stop_requested
@@ -440,6 +522,10 @@ async def _act_engine_task(
                 if not st.get("connected")
                 else f"arm frozen: {st.get('reason')}"
                 if st.get("halted")
+                # Without new frames from the groups their objects would stand still whatever happened to them.
+                else f"the point groups view drew no frame for {runtime.GROUPS_STALE_S:g} s"
+                if groups_from is not None
+                and time.monotonic() - max(groups_fresh, designated_at) > runtime.GROUPS_STALE_S
                 else ""
             )
             if why:
