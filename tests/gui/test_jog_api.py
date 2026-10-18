@@ -23,7 +23,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from lerobot.gui.api import jog
@@ -521,40 +521,66 @@ def test_a_connect_that_fails_partway_lets_go_of_the_port(tmp_path, monkeypatch)
     assert not jog._jog.connected
 
 
-@pytest.mark.parametrize("profile_gains", [{}, {"p_coefficient": 24, "gravity_ff_alpha": 1.5}])
-def test_the_arm_runs_with_its_robot_profiles_own_gains(tmp_path, monkeypatch, profile_gains):
-    """The jog drives LeRobot's SO-107 follower as the robot profile defines it, as recording and policy rollouts do:
-    the profile's gains if it sets them, else the follower's own defaults. A request cannot set them."""
+@pytest.mark.parametrize(
+    ("profile", "built"),
+    [
+        (
+            {"type": "bi_so107_follower", "fields": {"left_arm_port": "/dev/fake", "id": "white"}},
+            "SO107Follower",
+        ),
+        (
+            {
+                "type": "so107_follower_gravity",
+                "fields": {"port": "/dev/fake", "id": "white_left", "arm": "left", "p_coefficient": 24},
+            },
+            "SO107FollowerGravity",
+        ),
+    ],
+    ids=["plain", "gravity"],
+)
+def test_the_arm_runs_as_its_robot_profile_defines_it(tmp_path, monkeypatch, profile, built):
+    """The jog drives the robot type its profile names, configured as the profile says: a plain SO-107 profile gets
+    LeRobot's follower with LeRobot's gains, a so107_follower_gravity one its own type with its gains and feed-forward
+    (as the profile sets them, its defaults otherwise). A request cannot set gains."""
     import json
 
     import pydantic
 
     from lerobot.gui.api import robot as robot_api
-    from lerobot.robots import so_follower
+    from lerobot.robots import so107_follower_gravity, so_follower
 
-    fields = {"left_arm_port": "/dev/fake", "id": "white", **profile_gains}
-    (tmp_path / "white.json").write_text(json.dumps({"type": "bi_so107_follower", "fields": fields}))
+    (tmp_path / "white.json").write_text(json.dumps(profile))
     monkeypatch.setattr(robot_api, "ROBOT_PROFILES_DIR", tmp_path)
     seen = []
 
-    class _Follower:
-        def __init__(self, cfg):
-            seen.append(cfg)
-            self.bus = SimpleNamespace(
-                motors={},
-                port_handler=SimpleNamespace(closePort=lambda: None),
-                _connect=lambda handshake=True: None,
-            )
+    def fake(name):
+        class _Follower:
+            def __init__(self, cfg):
+                seen.append((name, cfg))
+                self.bus = SimpleNamespace(
+                    motors={},
+                    port_handler=SimpleNamespace(closePort=lambda: None),
+                    _connect=lambda handshake=True: None,
+                )
 
-        def connect(self, calibrate=True):
-            raise ConnectionError("stop here")
+            def connect(self, calibrate=True):
+                raise ConnectionError("stop here")
 
-    monkeypatch.setattr(so_follower, "SO107Follower", _Follower)
+        return _Follower
+
+    monkeypatch.setattr(so_follower, "SO107Follower", fake("SO107Follower"))
+    monkeypatch.setattr(so107_follower_gravity, "SO107FollowerGravity", fake("SO107FollowerGravity"))
     with pytest.raises(ConnectionError):
         jog._connect(jog.ConnectBody(profile="white", arm="left"))
-    defaults = so_follower.SO107FollowerConfig(port="/dev/fake")
-    for name in ("p_coefficient", "i_coefficient", "d_coefficient", "gravity_ff_alpha"):
-        assert getattr(seen[0], name) == profile_gains.get(name, getattr(defaults, name)), name
+    ((name, cfg),) = seen
+    assert name == built
+    assert cfg.use_degrees and cfg.max_relative_target is None, "the jog's own units and clamp"
+    if built == "SO107FollowerGravity":
+        assert (cfg.p_coefficient, cfg.gravity_ff_alpha, cfg.arm) == (24, 3.2, "left")
+        with pytest.raises(HTTPException, match="left arm, not the right"):
+            jog._connect(jog.ConnectBody(profile="white", arm="right"))
+    else:
+        assert not hasattr(cfg, "p_coefficient") and not hasattr(cfg, "gravity_ff_alpha")
     with pytest.raises(pydantic.ValidationError):
         jog.ConnectBody(profile="white", arm="left", p_coefficient=32)
 
@@ -1353,27 +1379,40 @@ def test_on_the_so107_no_solve_asks_a_joint_past_its_servos_range():
     assert np.linalg.norm(kin.forward_kinematics(q)[:3, 3] - target[:3, 3]) > 0.002, "the pose is not reached"
 
 
-def test_the_connect_narrows_the_models_limits_to_the_servos(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    "profile",
+    [
+        {
+            "type": "bi_so107_follower",
+            "fields": {
+                "left_arm_port": "/dev/fake",
+                "id": "white",
+                "joint_limits_deg": {"left": {"wrist_roll": {"max": 90.0}}},
+            },
+        },
+        {
+            "type": "so107_follower_gravity",
+            "fields": {
+                "port": "/dev/fake",
+                "id": "white_left",
+                "arm": "left",
+                "joint_limits_deg": {"wrist_roll": {"max": 90.0}},
+            },
+        },
+    ],
+    ids=["bimanual profile", "gravity type"],
+)
+def test_the_connect_narrows_the_models_limits_to_the_servos(tmp_path, monkeypatch, profile):
     """A connect reads the servos' calibrated ranges off the bus and narrows the model's limits to them before any
-    solve: the walk's included, which no plan checks."""
+    solve: the walk's included, which no plan checks. The profile's working bounds narrow them further, a bimanual
+    profile's per arm, the gravity type's in its own config."""
     import json
 
     from lerobot.gui.api import robot as robot_api
-    from lerobot.robots import so_follower
+    from lerobot.robots import so107_follower_gravity, so_follower
     from lerobot.robots.so107_description import cartesian_ik
 
-    (tmp_path / "white.json").write_text(
-        json.dumps(
-            {
-                "type": "bi_so107_follower",
-                "fields": {
-                    "left_arm_port": "/dev/fake",
-                    "id": "white",
-                    "joint_limits_deg": {"left": {"wrist_roll": {"max": 90.0}}},
-                },
-            }
-        )
-    )
+    (tmp_path / "white.json").write_text(json.dumps(profile))
     monkeypatch.setattr(robot_api, "ROBOT_PROFILES_DIR", tmp_path)
     cal = {m: SimpleNamespace(range_min=1000, range_max=3000) for m in MOTOR_NAMES}
     cal["wrist_roll"] = SimpleNamespace(range_min=0, range_max=4095)
@@ -1399,6 +1438,7 @@ def test_the_connect_narrows_the_models_limits_to_the_servos(tmp_path, monkeypat
             pass
 
     monkeypatch.setattr(so_follower, "SO107Follower", _Follower)
+    monkeypatch.setattr(so107_follower_gravity, "SO107FollowerGravity", _Follower)
     monkeypatch.setattr(
         cartesian_ik, "make_so107_arm_kinematics", lambda alignment, tip_offset=None: "the model"
     )

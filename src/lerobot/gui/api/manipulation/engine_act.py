@@ -174,6 +174,22 @@ async def _find_objects(demo: runtime._Demo, obj: str | None, others: list[str],
     return ""
 
 
+def arm_refusal() -> str | None:
+    """Why the act engine cannot drive the connected arm, or None. It commands joints from the calibrated kinematics
+    without watching the fingertip, so it drives only the arm held on its commanded pose against gravity: the
+    ``so107_follower_gravity`` robot type, never a plain follower that settles short under load."""
+    from lerobot.robots.so107_follower_gravity import ROBOT_TYPE
+
+    from .. import jog
+
+    kind = jog.connected_robot_type()
+    if kind == ROBOT_TYPE:
+        return None
+    if kind is None:
+        return "connect the arm first"
+    return f"the act engine drives only a {ROBOT_TYPE} arm; the connected profile is {kind!r}"
+
+
 async def _act_engine_task(
     speed: float, server: str | None = None, perturb: list[dict[str, Any]] | None = None
 ) -> None:

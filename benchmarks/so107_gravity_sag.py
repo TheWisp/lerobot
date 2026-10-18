@@ -52,7 +52,7 @@ from lerobot.robots.so107_description.cartesian_ik import (
     make_so107_arm_kinematics,
 )
 from lerobot.robots.so107_description.joint_alignment import LEFT_ARM_ALIGNMENT, MOTOR_NAMES
-from lerobot.robots.so_follower import SO107Follower, SO107FollowerConfig
+from lerobot.robots.so107_follower_gravity import SO107FollowerGravity, SO107FollowerGravityRobotConfig
 
 HZ = 30.0
 SPEED_M_S = 0.025
@@ -266,13 +266,14 @@ class Run:
         (self.out / "stations.json").write_text(json.dumps(self.stations, indent=1))
 
 
-def connect_arm(args) -> tuple[SO107Follower, np.ndarray]:
+def connect_arm(args) -> tuple[SO107FollowerGravity, np.ndarray]:
     """Connect the left arm, write the requested gains, optionally move to a start pose.
 
     Post: the returned joints are inside the URDF limits with a margin, else the arm is
     disconnected and the error says how far it sits from the seam.
     """
-    cfg = SO107FollowerConfig(
+    # The gravity type at the gains asked for: P 16 with alpha 0 is the plain follower's controller.
+    cfg = SO107FollowerGravityRobotConfig(
         id=args.id,
         port=args.port,
         use_degrees=True,
@@ -283,9 +284,9 @@ def connect_arm(args) -> tuple[SO107Follower, np.ndarray]:
         i_coefficient=int(args.i),
         d_coefficient=int(args.d),
         gravity_ff_alpha=float(args.ff_alpha),
-        gravity_ff_arm="left",
+        arm="left",
     )
-    robot = SO107Follower(cfg)
+    robot = SO107FollowerGravity(cfg)
     robot.connect(calibrate=False)
     try:
         assert robot.is_calibrated, "arm reports uncalibrated"

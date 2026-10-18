@@ -32,6 +32,7 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import contextlib
+import dataclasses
 import gc
 import json
 import logging
@@ -193,6 +194,7 @@ class _Jog:
     max_rot_delta_rad: float = MAX_ROT_DELTA_RAD
     holding: bool = False  # the IK refused the last tick's step (unreachable or an implausible jump)
     robot_id: str = ""
+    robot_type: str = ""  # the robot profile's type: the act engine drives only so107_follower_gravity
     profile: str = ""
     grip_target: float | None = None  # 0..100; None until the operator asks for a change
     tip_offset: np.ndarray | None = None  # anchor->tip in use (measured when a calibration exists)
@@ -755,6 +757,9 @@ def _loop(j: _Jog) -> None:
 
 
 def _connect(body: ConnectBody) -> dict:
+    import draccus
+
+    from lerobot.robots import RobotConfig, so107_follower_gravity
     from lerobot.robots.so107_description.cartesian_ik import (
         SO107_WORKSPACE_MAX,
         SO107_WORKSPACE_MIN,
@@ -779,26 +784,37 @@ def _connect(body: ConnectBody) -> dict:
     if kind == "bi_so107_follower":
         port = str(fields[f"{body.arm}_arm_port"])
         motor_id = f"{fields.get('id', body.profile)}_{body.arm}"
-    elif kind == "so107_follower":
+    elif kind in ("so107_follower", so107_follower_gravity.ROBOT_TYPE):
         port = str(fields["port"])
         motor_id = str(fields.get("id", body.profile))
     else:
         raise HTTPException(422, f"profile {body.profile!r} is {kind!r}; jog needs an SO-107 profile")
 
-    cfg = SO107FollowerConfig(
-        id=motor_id,
-        port=port,
-        use_degrees=True,
-        disable_torque_on_disconnect=False,
-        max_relative_target=None,  # the jog clamps every goal itself, against its own checked read (_clamped)
-        cameras={},
-        gravity_ff_arm=body.arm,
-        **{
-            k: fields[k]
-            for k in ("p_coefficient", "i_coefficient", "d_coefficient", "gravity_ff_alpha")
-            if k in fields
-        },
-    )
+    held = {
+        "id": motor_id,
+        "port": port,
+        "use_degrees": True,
+        "disable_torque_on_disconnect": False,
+        "max_relative_target": None,  # the jog clamps every goal itself, against its own checked read (_clamped)
+        "cameras": {},
+    }
+    if kind == so107_follower_gravity.ROBOT_TYPE:
+        # The robot as its profile defines it, gains, feed-forward and working bounds included.
+        cfg = dataclasses.replace(draccus.decode(RobotConfig, {**fields, "type": kind}), **held)
+        if cfg.arm != body.arm:
+            raise HTTPException(422, f"profile {body.profile!r} is the {cfg.arm} arm, not the {body.arm}")
+        make_robot = so107_follower_gravity.SO107FollowerGravity
+        limits = {"joint_limits_deg": {body.arm: cfg.joint_limits_deg}}
+        gains = {
+            "p": cfg.p_coefficient,
+            "i": cfg.i_coefficient,
+            "d": cfg.d_coefficient,
+            "gravity_ff_alpha": cfg.gravity_ff_alpha,
+        }
+    else:
+        cfg = SO107FollowerConfig(**held)
+        make_robot, limits = SO107Follower, fields
+        gains = {"p": 16, "i": 0, "d": 32, "gravity_ff_alpha": 0.0}  # what SOFollower.configure writes
     alignment = LEFT_ARM_ALIGNMENT if body.arm == "left" else RIGHT_ARM_ALIGNMENT
     # A measured fingertip replaces the URDF's guess at the tip whenever one is saved.
     from lerobot.gui.config_paths import gui_config_dir
@@ -829,7 +845,7 @@ def _connect(body: ConnectBody) -> dict:
             SO107_WORKSPACE_MIN[1],
             min(SO107_WORKSPACE_MIN[2], surface_z - 0.005),
         )
-    robot = SO107Follower(cfg)
+    robot = make_robot(cfg)
     # A motor left latched by an overload fails the connect handshake; clear it first,
     # on the raw port, without touching the motors that are holding the arm.
     robot.bus._connect(handshake=False)
@@ -848,7 +864,7 @@ def _connect(body: ConnectBody) -> dict:
     try:
         if not robot.is_calibrated:
             raise RuntimeError(f"arm {motor_id!r} reports uncalibrated")
-        joint_ranges = _profile_joint_ranges(fields, body.arm, *_servo_ranges_of(robot.bus))
+        joint_ranges = _profile_joint_ranges(limits, body.arm, *_servo_ranges_of(robot.bus))
         _limit_to_servos(kin, alignment, *joint_ranges)  # every IK path uses the arm's actual working bounds
         protection = _read_protection(robot.bus)
         q0 = np.array([_read_checked(robot.bus, None).q[m] for m in MOTOR_NAMES], dtype=float)
@@ -888,6 +904,7 @@ def _connect(body: ConnectBody) -> dict:
         settle_on=_jog.settle_on,
         protection=protection,
         robot_id=motor_id,
+        robot_type=kind,
         profile=body.profile,
         tip_offset=(TIP_OFFSET if tip_offset is None else tip_offset).copy(),
         tip_calibrated=tip_offset is not None,
@@ -897,12 +914,7 @@ def _connect(body: ConnectBody) -> dict:
     j.q_cmd = {m: float(q0[i]) for i, m in enumerate(MOTOR_NAMES)}
     j.q_obs = dict(j.q_cmd)
     j.ref0, j.ref, j.target = t0.copy(), t0.copy(), t0.copy()
-    j.gains = {
-        "p": cfg.p_coefficient,
-        "i": cfg.i_coefficient,
-        "d": cfg.d_coefficient,
-        "gravity_ff_alpha": cfg.gravity_ff_alpha,
-    }
+    j.gains = gains
     j.thread = threading.Thread(target=_loop, args=(j,), daemon=True, name="jog-stream")
     _jog = j
     j.thread.start()
@@ -1731,6 +1743,12 @@ def _disconnect(j: _Jog) -> None:
         j.robot.disconnect()
 
 
+def connected_robot_type() -> str | None:
+    """The connected arm's robot type, or None without one."""
+    with _jog.lock:
+        return _jog.robot_type if _jog.connected else None
+
+
 def current_tip_and_anchor() -> tuple[np.ndarray, np.ndarray, dict[str, float]] | None:
     """FK of the arm as the encoders read it now: ``(tip 4x4, anchor 4x4, q_obs)``, or None when no arm is up.
 
@@ -1873,7 +1891,7 @@ def _state_locked(j: _Jog) -> dict:
     err_deg = float(
         np.degrees(np.linalg.norm(Rotation.from_matrix(t_cmd[:3, :3] @ t_obs[:3, :3].T).as_rotvec()))
     )
-    ff = getattr(j.robot, "_gravity_ff", None)
+    ff = getattr(j.robot, "gravity", None)
     offsets = ff.offset_deg(q_cmd) if ff is not None else {}
     joint_ranges = (
         {

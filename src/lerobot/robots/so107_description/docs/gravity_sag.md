@@ -35,11 +35,12 @@ function of pose can cancel.
 
 `goal = q_desired + alpha * tau_g(q_desired)` — the position-mode "virtual displacement"
 every gravity scheme on these servos uses (phospho ships it to float a leader arm; here it
-is applied to the _desired_ pose to hold a trajectory). It lives in the follower
-(`gravity_ff_alpha`, `gravity_ff_arm` in the SO follower config) so teleop, record, replay
-and the jog all get it, computed by `GravityFeedForward` from the vendored URDF. Servo gains
-are follower config fields too (`p_coefficient`, `i_coefficient`, `d_coefficient`), with the
-old defaults unchanged.
+is applied to the _desired_ pose to hold a trajectory). It is computed by `GravityFeedForward`
+from the vendored URDF and lives in its own robot type, `so107_follower_gravity`
+(`lerobot.robots.so107_follower_gravity`), with the gains it was measured at: P 32, I 0,
+D 32, alpha 3.2. The plain `so107_follower` stays LeRobot's (P 16, no feed-forward), so a
+robot profile says which controller an arm runs, and nothing recorded or trained on one is
+mistaken for the other. The Show-and-Servo act engine accepts only the gravity type.
 
 60 mm horizontal circle at constant commanded height, May protocol
 (`so107_cartesian_shapes.py`, 256 waypoints at 30 Hz):

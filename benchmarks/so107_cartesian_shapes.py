@@ -473,7 +473,7 @@ def main() -> None:
         run = Run(robot, ctrl, kin, p0, float(q0[MOTOR_NAMES.index("gripper")]), out)
         run.q_seed = q0.copy()
         if args.ff_alpha > 0:
-            offs = robot._gravity_ff.offset_deg(dict(zip(MOTOR_NAMES, q0, strict=True)))
+            offs = robot.gravity.offset_deg(dict(zip(MOTOR_NAMES, q0, strict=True)))
             print(
                 f"gravity feed-forward ON in the follower: alpha {args.ff_alpha} deg/(N*m); offset at seed (deg):",
                 {m: round(v, 2) for m, v in offs.items()},

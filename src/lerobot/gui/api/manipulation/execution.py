@@ -1790,6 +1790,12 @@ async def act_start(body: ActBody, request: Request) -> dict:
     """Replay the demo on the object where it is now: the whole recorded path, carried by the object's motion."""
     from .. import jog
 
+    if body.runner == "engine":
+        from . import engine_act
+
+        refusal = engine_act.arm_refusal()  # outside the act state's lock: it takes the jog's
+        if refusal:
+            raise HTTPException(409, refusal)
     with runtime._state.lock:
         demo, test, teach, act = (
             runtime._state.demo,

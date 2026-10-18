@@ -72,3 +72,21 @@ def test_an_act_asks_for_the_engine_and_its_faults():
         execution.ActBody(runner="planner")
     with pytest.raises(ValueError):
         Perturbations.from_spec([{"kind": "teleport"}])
+
+
+@pytest.mark.parametrize(
+    ("connected", "refused"),
+    [
+        ("so107_follower_gravity", None),
+        ("bi_so107_follower", "only a so107_follower_gravity arm"),
+        (None, "connect"),
+    ],
+)
+def test_the_engine_drives_only_the_gravity_compensated_arm(monkeypatch, connected, refused):
+    """The engine commands joints from the calibrated kinematics without watching the fingertip: a plain follower
+    settles up to 33 mm short under load, so an engine act on one is refused before it starts."""
+    from lerobot.gui.api import jog
+
+    monkeypatch.setattr(jog, "connected_robot_type", lambda: connected)
+    reason = engine_act.arm_refusal()
+    assert (reason is None) if refused is None else (refused in reason)
