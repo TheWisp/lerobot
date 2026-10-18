@@ -466,7 +466,7 @@ def state():
 def connect():
     code, out = _call(
         "/api/jog/connect",
-        {"profile": "white", "arm": "left", "p_coefficient": 32, "i_coefficient": 0, "gravity_ff_alpha": 3.2},
+        {"profile": "white", "arm": "left"},
         timeout=120,
     )
     if code != 200:

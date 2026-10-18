@@ -44,7 +44,7 @@ from typing import Any, Literal
 
 import numpy as np
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from ._guarded_path import GuardedPath
 
@@ -129,12 +129,11 @@ READY_DEG = {  # hardcode-ok: SO-107 working pose
 
 
 class ConnectBody(BaseModel):
+    """The arm runs as its robot profile defines it, gains and feed-forward included: a request cannot set them."""
+
+    model_config = ConfigDict(extra="forbid")
     profile: str
     arm: str = "left"
-    p_coefficient: int | None = None
-    i_coefficient: int | None = None
-    d_coefficient: int | None = None
-    gravity_ff_alpha: float | None = None
 
 
 class TargetBody(BaseModel):
@@ -786,12 +785,6 @@ def _connect(body: ConnectBody) -> dict:
     else:
         raise HTTPException(422, f"profile {body.profile!r} is {kind!r}; jog needs an SO-107 profile")
 
-    def pick(name, default):
-        v = getattr(body, name)
-        if v is not None:
-            return v
-        return fields.get(name, default)
-
     cfg = SO107FollowerConfig(
         id=motor_id,
         port=port,
@@ -799,11 +792,12 @@ def _connect(body: ConnectBody) -> dict:
         disable_torque_on_disconnect=False,
         max_relative_target=None,  # the jog clamps every goal itself, against its own checked read (_clamped)
         cameras={},
-        p_coefficient=int(pick("p_coefficient", 16)),
-        i_coefficient=int(pick("i_coefficient", 0)),
-        d_coefficient=int(pick("d_coefficient", 32)),
-        gravity_ff_alpha=float(pick("gravity_ff_alpha", 0.0)),
         gravity_ff_arm=body.arm,
+        **{
+            k: fields[k]
+            for k in ("p_coefficient", "i_coefficient", "d_coefficient", "gravity_ff_alpha")
+            if k in fields
+        },
     )
     alignment = LEFT_ARM_ALIGNMENT if body.arm == "left" else RIGHT_ARM_ALIGNMENT
     # A measured fingertip replaces the URDF's guess at the tip whenever one is saved.

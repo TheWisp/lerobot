@@ -521,6 +521,44 @@ def test_a_connect_that_fails_partway_lets_go_of_the_port(tmp_path, monkeypatch)
     assert not jog._jog.connected
 
 
+@pytest.mark.parametrize("profile_gains", [{}, {"p_coefficient": 24, "gravity_ff_alpha": 1.5}])
+def test_the_arm_runs_with_its_robot_profiles_own_gains(tmp_path, monkeypatch, profile_gains):
+    """The jog drives LeRobot's SO-107 follower as the robot profile defines it, as recording and policy rollouts do:
+    the profile's gains if it sets them, else the follower's own defaults. A request cannot set them."""
+    import json
+
+    import pydantic
+
+    from lerobot.gui.api import robot as robot_api
+    from lerobot.robots import so_follower
+
+    fields = {"left_arm_port": "/dev/fake", "id": "white", **profile_gains}
+    (tmp_path / "white.json").write_text(json.dumps({"type": "bi_so107_follower", "fields": fields}))
+    monkeypatch.setattr(robot_api, "ROBOT_PROFILES_DIR", tmp_path)
+    seen = []
+
+    class _Follower:
+        def __init__(self, cfg):
+            seen.append(cfg)
+            self.bus = SimpleNamespace(
+                motors={},
+                port_handler=SimpleNamespace(closePort=lambda: None),
+                _connect=lambda handshake=True: None,
+            )
+
+        def connect(self, calibrate=True):
+            raise ConnectionError("stop here")
+
+    monkeypatch.setattr(so_follower, "SO107Follower", _Follower)
+    with pytest.raises(ConnectionError):
+        jog._connect(jog.ConnectBody(profile="white", arm="left"))
+    defaults = so_follower.SO107FollowerConfig(port="/dev/fake")
+    for name in ("p_coefficient", "i_coefficient", "d_coefficient", "gravity_ff_alpha"):
+        assert getattr(seen[0], name) == profile_gains.get(name, getattr(defaults, name)), name
+    with pytest.raises(pydantic.ValidationError):
+        jog.ConnectBody(profile="white", arm="left", p_coefficient=32)
+
+
 def test_a_slow_tick_is_kept_with_where_its_time_went():
     """A tick that holds the loop up is kept with how long each part took, so a stalled stream can be traced to the
     bus, the solve or the lock; the state shows the recent ticks' timing."""

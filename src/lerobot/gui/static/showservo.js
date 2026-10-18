@@ -366,11 +366,9 @@ async function jogToggle() {
             jogStatus('disconnected — the arm holds, torque on');
             return;
         }
-        const num = (id) => { const v = document.getElementById(id).value; return v === '' ? null : Number(v); };
         const body = {
             profile: document.getElementById('jog-profile').value,
             arm: document.getElementById('jog-arm').value,
-            p_coefficient: num('jog-p'), i_coefficient: num('jog-i'), gravity_ff_alpha: num('jog-alpha'),
         };
         // The tile polls /api/jog/meta until the arm is up, so it can start now.
         const tile = document.getElementById('jog-tile');
