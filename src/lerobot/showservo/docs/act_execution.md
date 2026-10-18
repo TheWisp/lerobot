@@ -196,8 +196,8 @@ it. That is what keeps the act on the demo's time at any recording rate and any 
   budget (3° on the SO-107) — the clock waits for it: the commands queued are cancelled, so the goal stands still,
   which lets the motor loop's trim free a sticking joint, and the clock resumes from the last command sent once every
   joint is back within the budget. Running on, the motor loop holds at 5° behind and freezes the arm half a second
-  later ([E21](#e21)). A joint that does not move even toward a still goal is jammed against something; the engine
-  sees no obstacles, and the motor loop's freeze stops the act.
+  later ([E21](#e21)). A joint that does not move even toward a still goal is beyond what waiting fixes — on the rig
+  its cause is not yet known ([E21](#e21)) — and the motor loop's freeze stops the act.
 
 ([R6](#requirements), [R7](#requirements), [R12](#requirements))
 
@@ -482,9 +482,12 @@ pointing at the ring); the shoulder's load rose to its maximum and the jog froze
 before over; a lift key frame or a follow from the dowel's frame into the ring's would replay that.
 
 <a id="e21"></a>**E21. The second engine act on the rig**, 2026-10-18, `271f1717b` with a lift marked after the grasp, speed
-0.5 (act `20261018_052107`). The dowel lay about 6 cm further from the arm's base than in the acts of 2026-10-17. Through
-the lift the shoulder moved in steps — its reading stood still while its command went on, until the error broke it
-loose — at 24 to 31° with its load at 400 to 624; in act `20261017_150843` the same lift kept the shoulder at 1.5 to
-21°, its load at most 404 and its lag at most 3.0°. The lagging shoulder against a following elbow drew the fingertip
-toward the base, the dowel's far end met the tray's rim, and the shoulder stood 5° behind a still goal at a load of
-624 until the jog froze the arm. The act of that morning (E20) had ended the same way against the ring.
+0.5 (act `20261018_052107`). The dowel lay about 6 cm further from the arm's base than in the acts of 2026-10-17.
+The gripper held it throughout (reading 95.5 to 97.6 at a command of 100). Through the lift the shoulder moved in
+steps — its reading stood still while its command went on, until the error broke it loose — at 24 to 31° with its
+load at 400 to 624; in act `20261017_150843` the same lift kept the shoulder at 1.5 to 21°, its load at most 404 and
+its lag at most 3.0°. The fingertip followed its commanded path across within 4 mm and fell behind it in height (47
+against 71 mm after 3.2 s); the dowel's tracked points moving 40 px toward the image's edge are the lift's perspective,
+not a move across. The shoulder then stood 5° behind a still goal at a load of 624, at the same 24 to 26° where the
+morning's act (E20) had stopped, until the jog froze the arm. Why it stood there is not known: no contact shows in the
+frames, and the morning's act stopped with the dowel at the ring.
