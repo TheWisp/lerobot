@@ -5,13 +5,14 @@
 # You may obtain a copy of the License at
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
-"""The act engine's run loop (act_execution.md, "The two loops"): commands made from the demo's clock a few ticks
-ahead, Milestones checked on every camera frame, and Progress moved back or ahead when a check fails or an object
-moves.
+"""The act engine: the control loop's world, task and motion steps (act_execution.md, "The loops, and who writes
+what").
 
-``Engine.step(now)`` is called often, at least once per motor tick: it reads what the motor loop has sent, checks the
-open Milestones against the camera frames that arrived, and tops the queue up. It never waits; the arm stands still
-only when the queue runs out on purpose (the act ended, a final Milestone, an object to be seen again).
+``Engine.step(now)`` runs once per control tick, in order: the world step (every object takes its new measurements),
+the task step (Progress from what the motor step has sent; each open Milestone answers each new measurement of its
+object; going back or ahead when one fails or the target moves) and the motion step (top the command queue up, solved
+a few ticks ahead so a slow IK solve never holds up the motor step). It never waits; the arm stands still only when
+the queue runs out on purpose (the act ended, a final Milestone, an object to be measured again).
 """
 
 from __future__ import annotations
@@ -27,12 +28,12 @@ import numpy as np
 from lerobot.showservo import motion as core
 
 from . import predicates as pred
-from .objects import Objects
 from .predicates import Answer, Verdict
-from .scene import SceneLog, Tracks
+from .scene import Measurement, SceneLog
 from .timeline import BASE, START, Event, Timeline
+from .world import Steady, World
 
-FAILURE_FRAMES = 2  # a choice: the fewest camera frames in a row that ignore a single bad one
+FAILURE_FRAMES = 2  # a choice: the fewest measurements in a row that ignore a single bad one
 TRIES = 2  # act_execution.md Q1's leaning: a Milestone may fail once and be tried again
 SLOPE_MAX = 3.0  # a cubic from 0 to 1 stays monotonic with end slopes up to 3
 
@@ -140,7 +141,6 @@ class Milestone:
     seen: float = -np.inf
     streak: int = 0
     closed: bool = False
-    ref_tracks: Tracks | None = None
     data: dict[str, Any] = dataclasses.field(default_factory=dict)
     last: Verdict | None = None
 
@@ -159,8 +159,9 @@ def _smooth(u: float) -> float:
 
 
 class Engine:
-    """One act. ``objects`` holds the act's objects' poses and noise; ``perturb``, when given, may change a command on
-    its way to the motor loop (tests, and fault injection on the rig), never what the engine believes it sent."""
+    """One act: the control loop's world, task and motion steps (act_execution.md, "The loops, and who writes what").
+    ``world`` holds the act's objects' poses and noise; ``perturb``, when given, may change a command on its way to
+    the motor loop (tests, and fault injection on the rig), never what the engine believes it sent."""
 
     def __init__(
         self,
@@ -168,14 +169,14 @@ class Engine:
         arm: Arm,
         scene: SceneLog,
         playback: Playback,
-        objects: Objects,
+        world: World,
         speed: float = 1.0,
         settings: dict[str, Any] | None = None,
         perturb: Any | None = None,
         clock: Callable[[], float] = time.perf_counter,
     ):
         assert speed > 0.0, "a positive speed"
-        self.tl, self.arm, self.scene, self.pb, self.objects = timeline, arm, scene, playback, objects
+        self.tl, self.arm, self.scene, self.pb, self.world = timeline, arm, scene, playback, world
         self.demo = timeline.demo
         self.speed = speed
         self.settings = dict(settings or {})
@@ -199,15 +200,17 @@ class Engine:
         self.run: Run | None = None
         self.tau = 0.0
         self.progress: tuple[int, float] = (0, 0.0)
-        self.hold: dict[
-            str, np.ndarray
-        ] = {}  # how each held object sits in the gripper, measured at its grasp
-        self.fix: dict[str, np.ndarray] = {}  # the gripper-side correction that follows from it
+        self.holds: dict[
+            str, Steady
+        ] = {}  # how each held object sits in the gripper, relative to the fingertip
+        self.grasp_i: dict[str, int] = {}  # each held object's grasp, as a demo sample
         self.records: list[dict[str, Any]] = []
         self.solve_s = 0.0  # the slowest solve so far
         self.step_gaps: list[float] = []  # the time between the engine's own steps, newest last
         self.waiting: dict[str, Any] | None = None
-        self.moved_views: dict[str, int] = {}
+        self.watched: dict[
+            str, Any
+        ] = {}  # the target the commands were made with: its pose, time, far streak
         self.ended: float | None = None
         self.end_frames = 0
         self.done = False
@@ -252,25 +255,31 @@ class Engine:
         before = self._state_pose(leg_n - 1, 1.0) if leg_n > 0 else self.cmds[0].pose
         return before @ np.linalg.inv(self.demo.pose_at(self.tl.legs[leg_n].t0))
 
-    def _compose(self, leg_n: int, d: np.ndarray) -> np.ndarray:
+    def _compose(self, leg_n: int, d: np.ndarray, motion: np.ndarray | None = None) -> np.ndarray:
+        """The demo's pose ``d`` carried by the leg's object, at its estimate or at ``motion``."""
         leg = self.tl.legs[leg_n]
         if leg.obj == START:  # the demo's gripper motion from where the leg began: any hold rides along
             return self._anchor(leg_n) @ d
-        out = self.objects.motion(leg.obj) @ d
-        if leg.held is not None and leg.held in self.fix:
-            out = out @ self.fix[leg.held]
+        out = (self.world.motion(leg.obj) if motion is None else motion) @ d
+        if leg.held is not None and leg.held in self.holds:
+            out = out @ self._fix(leg.held)
         return out
+
+    def _fix(self, obj: str) -> np.ndarray:
+        """The gripper-side change that puts the held ``obj`` where the demo had it: the demo's fingertip at the grasp
+        against how the object sits in the gripper now (the grasp's, until measurements its check confirms replace it)."""
+        return np.linalg.inv(self.demo.tips[self.grasp_i[obj]]) @ np.linalg.inv(self.holds[obj].estimate)
 
     def _state_pose(self, leg_n: int, s: float) -> np.ndarray:
         return self._compose(leg_n, self.demo.pose_at(self.tl.time(leg_n, s)))
 
-    def _line_end(self, leg_n: int, c0: np.ndarray) -> np.ndarray:
+    def _line_end(self, leg_n: int, c0: np.ndarray, motion: np.ndarray | None = None) -> np.ndarray:
         leg = self.tl.legs[leg_n]
         if leg.move == "lift":
             end = c0.copy()
             end[2, 3] += leg.up_m
             return end
-        end = self._compose(leg_n, self.demo.pose_at(leg.t1))
+        end = self._compose(leg_n, self.demo.pose_at(leg.t1), motion)
         if leg.constraint == "orientation":
             end[:3, 3] = c0[:3, 3]
         return end
@@ -352,7 +361,9 @@ class Engine:
         leg = self.tl.legs[leg_n]
         end = self._state_pose(leg_n, s)
         g1 = (
-            g0 if leg.held is not None and leg.held in self.fix else self.demo.grip_at(self.tl.time(leg_n, s))
+            g0
+            if leg.held is not None and leg.held in self.holds
+            else self.demo.grip_at(self.tl.time(leg_n, s))
         )
         grip_s = abs(g1 - g0) / self.arm.grip_units_s
         opening = (g1 - g0) * self.arm.closing < 0
@@ -392,8 +403,8 @@ class Engine:
             s = run.s0 * (1.0 - motion_u)
             td = self.tl.time(run.leg, s)
             pose = run.d0 @ self.demo.pose_at(td)
-            if leg.held is not None and leg.held in self.fix:
-                pose = pose @ self.fix[leg.held]
+            if leg.held is not None and leg.held in self.holds:
+                pose = pose @ self._fix(leg.held)
             return pose, run.g0, s, td
         s = run.s0 + motion_u * (1.0 - run.s0)
         td = self.tl.time(run.leg, s)
@@ -541,157 +552,68 @@ class Engine:
         info: dict[str, Any] = {"tip_from": "reading" if tip is not None else "command"}
         if tip is None:
             tip = self.cmds[self.sent].pose if self.sent >= 0 else self.cmds[0].pose
-        m.status, m.t, m.seen, m.streak, m.closed, m.ref_tracks = "checking", now, now, 0, False, None
+        m.status, m.t, m.seen, m.streak, m.closed = "checking", now, now, 0, False
         if e.kind == "grasp":
-            motion = self.objects.motion(e.obj)
-            self.hold[e.obj] = np.linalg.inv(tip) @ motion
-            self.fix[e.obj] = np.linalg.inv(self.demo.tips[e.i]) @ np.linalg.inv(motion) @ tip
-            fix_m, fix_deg = core.pose_residual(np.eye(4), self.fix[e.obj])
+            motion = self.world.motion(e.obj)
+            # How it sits: its pose and the fingertip now, then each measurement its check says shows it still held.
+            self.holds[e.obj] = Steady(
+                np.linalg.inv(tip) @ motion, self.world.centres.get(e.obj, np.zeros(3))
+            )
+            self.grasp_i[e.obj] = e.i
+            fix_m, fix_deg = core.pose_residual(np.eye(4), self._fix(e.obj))
             info.update(fix_mm=round(fix_m * 1000.0, 2), fix_deg=round(fix_deg, 2))
-            self.objects.touched(e.obj, now)
+            self.world.touched(e.obj, now)
             m.data = {"tip": tip, "motion": motion}
         else:
             for g in self.milestones:
                 if g.event.kind == "grasp" and g.event.obj == e.obj and g.event.i == e.grasp_i:
                     g.closed = True
-            hold = self.hold.get(e.obj)
-            ref = self.objects.motion(e.ref)
-            put = tip @ hold if hold is not None else None
-            m.data = {"tip": tip, "put": put, "ref_motion": ref}
+            hold = self.holds.pop(e.obj, None)
+            ref = self.world.motion(e.ref)
+            put = tip @ hold.estimate if hold is not None else None
+            m.data = {"tip": tip, "put": put}
             if put is not None:
                 m.data["rel_put"] = np.linalg.inv(ref) @ put
-                rel_demo = self.demo.tips[e.i] @ np.linalg.inv(self.demo.tips[e.grasp_i])
-                # Both poses come from the arm, put through the reach tolerance; an object's own views add theirs.
-                noise = (core.ACT_REACH_TOL_M, core.ACT_REACH_TOL_DEG)
-                ref_noise = self.objects.view_noise(e.ref) if e.ref != BASE else (0.0, 0.0)
-                noise = None if ref_noise is None else (noise[0] + ref_noise[0], noise[1] + ref_noise[1])
-                if noise is not None:
-                    m.data["placement"] = pred.related(
-                        put,
-                        ref,
-                        rel_demo,
-                        self.objects.centres.get(e.obj, np.zeros(3)),
-                        noise[0],
-                        noise[1],
-                        m.allow_m,
-                        m.allow_deg,
-                    )
-            self.fix.pop(e.obj, None)
         self._record("milestone begins", now, milestone=m.name, **info)
 
     # ── checks ──
 
-    def _frame_times(self, m: Milestone) -> list[float]:
-        times = {f.t for f in self.scene.tracks(m.event.obj, since=m.seen + 1e-9)}
-        times |= {d.t for d in self.scene.depths(since=m.seen + 1e-9)}
-        return sorted(times)
-
-    def _project_shift(self, centre: np.ndarray, motion: np.ndarray) -> np.ndarray:
-        uv, _ = self.scene.camera.project(np.stack([centre, (motion @ np.append(centre, 1.0))[:3]]))
-        return uv[1] - uv[0]
-
-    def _evidence(self, m: Milestone, t: float) -> Verdict:
+    def _evidence(self, m: Milestone, x: Measurement) -> Verdict:
+        """A Milestone's answer from one measurement of its object: the measured pose against where each outcome puts
+        it (act_execution.md, "What a check answers"). A grasp's success also takes how the object sits from it."""
         e, obj = m.event, m.event.obj
-        tip_t = self.scene.tip_at(t)
-        if tip_t is None:
-            return Verdict(Answer.UNKNOWN, "no arm reading at that frame")
-        tracks = {f.t: f for f in self.scene.tracks(obj, since=m.t)}
-        if m.ref_tracks is None and tracks:
-            m.ref_tracks = tracks[min(tracks)]
-        tip_ref = None if m.ref_tracks is None else self.scene.tip_at(m.ref_tracks.t)
-        c_demo = self.objects.centres.get(obj, np.zeros(3))
-        surface = self.objects.surfaces.get(obj)
-        cam = self.scene.camera
-        out: list[Verdict] = []
-        view_noise = self.objects.view_noise(obj)
-        depth_noise = self.objects.depth_noise(obj, cam) if surface is not None else None
-        depth = next((d for d in self.scene.depths(since=t - 1e-9) if d.t == t), None)
+        noise = self.world.noise(obj)
+        if noise is None:
+            return Verdict(Answer.UNKNOWN, f"{obj}'s noise is not measured yet")
+        tip = self.scene.tip_at(x.t)
+        if tip is None:
+            return Verdict(Answer.UNKNOWN, "no joint reading at that frame")
+        seen = self.world.centre(obj, x.motion)
         if e.kind == "grasp":
-            where = m.data["motion"]  # where it lay
-            c = (where @ np.append(c_demo, 1.0))[:3]
-            if tip_ref is not None and t in tracks and cam is not None:
-                carry = tip_t @ np.linalg.inv(tip_ref)
-                c_ref = (tip_ref @ np.linalg.inv(m.data["tip"]) @ np.append(c, 1.0))[:3]  # had it come along
-                noise_px = self.objects.track_noise(obj)
-                if noise_px is not None:
-                    out.append(
-                        pred.moves_with(
-                            m.ref_tracks, tracks[t], self._project_shift(c_ref, carry), np.zeros(2), noise_px
-                        )
-                    )
-            carry_event = tip_t @ np.linalg.inv(m.data["tip"])
-            apart = float(np.linalg.norm((carry_event @ np.append(c, 1.0))[:3] - c))
-            if (
-                depth is not None
-                and depth_noise is not None
-                and surface is not None
-                and view_noise is not None
-            ):
-                extent = float(np.max(np.linalg.norm(surface - c_demo, axis=1)))
-                if apart > 2.0 * extent + view_noise[0]:
-                    still = pred.sits_at(surface, where, depth, cam, depth_noise, lateral_m=view_noise[0])
-                    if still.yes:
-                        out.append(Verdict(Answer.NO, f"still where it lay: {still.why}", still.evidence))
-            views = [v for v in self.scene.views(obj, since=m.t + 1e-9) if v.t <= t]
-            if views and view_noise is not None:
-                seen = (views[-1].motion @ np.append(c_demo, 1.0))[:3]
-                out.append(
-                    pred.decide(
-                        seen * 1000,
-                        (carry_event @ np.append(c, 1.0))[:3] * 1000,
-                        c * 1000,
-                        view_noise[0] * 1000,
-                        "mm",
-                    )
-                )
-            return pred.combine(out)
+            hold = self.holds.get(obj)
+            if hold is None:
+                return Verdict(Answer.UNKNOWN, "not held")
+            held, lay = self.world.centre(obj, tip @ hold.estimate), self.world.centre(obj, m.data["motion"])
+            v = pred.decide(seen * 1000, held * 1000, lay * 1000, noise[0] * 1000, "mm")
+            if v.yes:  # still held: how it sits now
+                hold.add(x.t, np.linalg.inv(tip) @ x.motion, self.world.move_threshold(obj))
+            return v
         put = m.data.get("put")
         if put is None:
-            return Verdict(Answer.UNKNOWN, "how it sat in the gripper was never measured")
-        ref_now = self.objects.motion(e.ref)
-        stays = ref_now @ m.data["rel_put"]
-        c_put = (put @ np.append(c_demo, 1.0))[:3]
-        c_stays = (stays @ np.append(c_demo, 1.0))[:3]
-        away = tip_t @ np.linalg.inv(m.data["tip"])
-        c_away = (away @ np.append(c_put, 1.0))[:3]
-        if tip_ref is not None and t in tracks and cam is not None:
-            noise_px = self.objects.track_noise(obj)
-            gone = tip_t @ np.linalg.inv(tip_ref)
-            ref_put = self.scene.tip_at(m.ref_tracks.t) if m.ref_tracks is not None else None
-            if noise_px is not None and ref_put is not None:
-                c_ref = (np.linalg.inv(m.data["tip"]) @ np.append(c_put, 1.0))[:3]
-                c_ref = (ref_put @ np.append(c_ref, 1.0))[
-                    :3
-                ]  # where the gripper had it at the reference frame
-                shift_new = self._project_shift(c_put, stays @ np.linalg.inv(put))
-                shift_old = self._project_shift(c_ref, gone)
-                out.append(pred.moves_with(m.ref_tracks, tracks[t], shift_new, shift_old, noise_px))
-        if "placement" in m.data and m.data["placement"].no:
-            out.append(
-                Verdict(
-                    Answer.NO, f"put down off target: {m.data['placement'].why}", m.data["placement"].evidence
-                )
-            )
-        if depth is not None and depth_noise is not None and surface is not None and view_noise is not None:
-            extent = float(np.max(np.linalg.norm(surface - c_demo, axis=1)))
-            if float(np.linalg.norm(c_away - c_stays)) > 2.0 * extent + view_noise[0]:
-                out.append(
-                    pred.sits_at(surface, stays, depth, cam, depth_noise, lateral_m=view_noise[0] + m.allow_m)
-                )
-        views = [v for v in self.scene.views(obj, since=m.t + 1e-9) if v.t <= t]
-        if views and view_noise is not None:
-            seen = (views[-1].motion @ np.append(c_demo, 1.0))[:3]
-            out.append(pred.decide(seen * 1000, c_stays * 1000, c_away * 1000, view_noise[0] * 1000, "mm"))
-        return pred.combine(out)
+            return Verdict(Answer.UNKNOWN, "it was never held")
+        stays = self.world.centre(obj, self.world.motion(e.ref) @ m.data["rel_put"])
+        away = self.world.centre(obj, tip @ np.linalg.inv(m.data["tip"]) @ put)
+        return pred.decide(seen * 1000, stays * 1000, away * 1000, noise[0] * 1000, "mm")
 
     def _check(self, now: float) -> None:
+        """The task step's checks: every open Milestone answers each new measurement of its object."""
         for m in self.milestones:
             if m.status not in ("checking", "success") or m.closed:
                 continue
-            for t in self._frame_times(m):
-                v = self._evidence(m, t)
-                m.seen, m.last = t, v
-                self._record("check", now, milestone=m.name, frame=t, answer=v.answer.value, why=v.why)
+            for x in self.scene.measurements(m.event.obj, since=m.seen + 1e-9):
+                v = self._evidence(m, x)
+                m.seen, m.last = x.t, v
+                self._record("check", now, milestone=m.name, frame=x.t, answer=v.answer.value, why=v.why)
                 if v.no:
                     m.streak += 1
                     if m.streak >= FAILURE_FRAMES:
@@ -725,6 +647,7 @@ class Engine:
             self._finish(False, f"the {m.name} failed {m.failures} times: {v.why}", now)
             return
         e = m.event
+        self.holds.pop(e.obj, None)  # it is not where the gripper would have it
         hi_i = e.i if e.kind == "grasp" else e.grasp_i
         self.waiting = {"obj": e.obj, "since": now, "hi": float(self.demo.t[hi_i]), "cause": m.name}
 
@@ -749,7 +672,7 @@ class Engine:
         best, best_cost = None, np.inf
         for i in np.flatnonzero((self.demo.t >= lo_t) & (self.demo.t < hi_t)):
             leg_n, s = self.tl.position(int(i))
-            if self.tl.legs[leg_n].held is not None and self.tl.legs[leg_n].held not in self.fix:
+            if self.tl.legs[leg_n].held is not None and self.tl.legs[leg_n].held not in self.holds:
                 continue  # a state with an object in the gripper, which it does not hold
             cost = self.arm.walk_seconds(here, self._state_pose(leg_n, s)) + abs(
                 float(self.demo.t[i]) - t_here
@@ -762,22 +685,20 @@ class Engine:
         last = self.cmds[self.sent]
         for m in self.milestones:
             if m.status != "ahead" and (m.event.leg, m.event.s) >= target:
-                m.status, m.streak, m.closed, m.data, m.ref_tracks = "ahead", 0, False, {}, None
+                m.status, m.streak, m.closed, m.data = "ahead", 0, False, {}
                 if m.event.kind == "grasp":
-                    self.fix.pop(m.event.obj, None)
-                    self.hold.pop(m.event.obj, None)
+                    self.holds.pop(m.event.obj, None)
         self.run, self.tau = self._transition(target, last.pose, last.grip), 0.0
         self._over, self.ended = False, None
         self._record("progress moved", now, to=list(target), cause=cause)
 
     def _resume(self, now: float) -> None:
         w = self.waiting
-        if self.objects.latest_t[w["obj"]] <= w["since"]:
+        if self.world.t[w["obj"]] <= w["since"]:
             if now - w["since"] > self.wait_view_s:
                 self._finish(False, f"{w['obj']} was not seen again within {self.wait_view_s:g} s", now)
             return
-        self.objects.snap(w["obj"])
-        self.objects.resting(w["obj"], self.objects.latest_t[w["obj"]])
+        self.world.resting(w["obj"], self.world.t[w["obj"]])
         last = self.cmds[self.sent]
         t_here = last.td if last.td is not None else self.tl.time(*self.progress)
         target, _ = self._nearest(self._lo_time(None), w["hi"], last.pose, t_here)
@@ -788,35 +709,32 @@ class Engine:
         self._place(target, now, f"the {w['cause']} failed")
 
     def _watch_moves(self, now: float) -> None:
-        """An object the current leg heads for moved by more than its noise, on two views in a row (R4). During a
-        follow — contact, or nearly — the arm backs out along the demo's path relative to where the object was, to the
-        follow's start, and goes in again relative to where it is now. During a line the line re-aims from where the
-        arm is and keeps its speed, so a target moved nearer is reached sooner."""
+        """The object the current leg heads for moved: the world's pose of it is further than twice its noise from
+        the pose the run's commands were first made with (R4). During a follow — contact, or nearly — the arm backs out along
+        the demo's path relative to where the object was, to the follow's start, and goes in again relative to where
+        it is now. During a line the line re-aims from where the arm is and keeps its speed, so a target moved nearer
+        is reached sooner."""
         run = self.run
         if run is None or run.kind != "leg":
             return
         leg = self.tl.legs[run.leg]
         obj = leg.obj
-        if obj == BASE or obj not in self.objects.used or leg.move == "lift":
+        if obj in (BASE, START) or obj in self.holds or leg.move == "lift" or obj not in self.world.pose:
             return
-        off, threshold = self.objects.off(obj), self.objects.move_threshold(obj)
-        t_view = self.objects.latest_t[obj]
-        if off <= threshold:
-            self.moved_views[obj] = 0
+        w = self.watched.get(obj)
+        if w is None or w["run"] is not run:  # a new run: its commands are made with the pose now
+            self.watched[obj] = {"run": run, "pose": self.world.motion(obj).copy()}
             return
-        if t_view <= self.moved_views.get(obj + ":t", -np.inf):
+        here = self.world.motion(obj)
+        off = float(np.linalg.norm(self.world.centre(obj, here) - self.world.centre(obj, w["pose"])))
+        if off <= self.world.move_threshold(obj):
             return
-        self.moved_views[obj + ":t"] = t_view
-        self.moved_views[obj] = self.moved_views.get(obj, 0) + 1
-        if self.moved_views[obj] < FAILURE_FRAMES:
-            return
-        self.moved_views[obj] = 0
+        before = w["pose"]
+        w["pose"] = here.copy()
         cause = f"{obj} moved {off * 1000:.0f} mm"
         if leg.move == "follow":
             if any(m.status != "ahead" and m.event.leg == run.leg for m in self.milestones):
                 return  # the gripper has acted on it in this follow: the composition follows it
-            before = self.objects.used[obj].copy()
-            self.objects.snap(obj)
             self._on_sent(now)
             self._cancel()
             last = self.cmds[self.sent]
@@ -834,9 +752,8 @@ class Engine:
             )
             return
         here = self.cmds[-1]
-        old_end = self._line_end(run.leg, here.pose)
+        old_end = self._line_end(run.leg, here.pose, before)
         remaining = max(0.0, run.total - self.tau)
-        self.objects.snap(obj)
         new_end = self._line_end(run.leg, here.pose)
         old_len, new_len = (
             self.arm.walk_seconds(here.pose, old_end),
@@ -865,10 +782,7 @@ class Engine:
         self._last_now = now
         if dt > 0:
             self.step_gaps = [*self.step_gaps[-99:], dt]
-        hold = set()
-        if self.run is not None and self.run.kind == "leg" and self.tl.legs[self.run.leg].move == "follow":
-            hold = {self.tl.legs[self.run.leg].obj}
-        self.objects.update(dt, hold)
+        self.world.update()
         self._on_sent(now)
         self._check(now)
         if self.done:
@@ -892,7 +806,7 @@ class Engine:
         """The motion is over: once every open check has answered, or two camera frames have come without an answer,
         the act ends."""
         open_ms = [m for m in self.milestones if m.status == "checking" and not m.closed]
-        frames = {d.t for d in self.scene.depths(since=self.ended)}
+        frames = self.scene.frames(since=self.ended)
         if open_ms and len(frames) < FAILURE_FRAMES:
             return
         failed = [m for m in self.milestones if m.status == "failure"]

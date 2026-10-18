@@ -35,12 +35,12 @@ import numpy as np
 
 from lerobot.showservo import motion as core
 from lerobot.showservo.engine.engine import Arm, Engine
-from lerobot.showservo.engine.objects import Objects
 from lerobot.showservo.engine.perturb import Perturbations
-from lerobot.showservo.engine.scene import Camera, Depth, SceneLog, Tracks, View
+from lerobot.showservo.engine.scene import Camera, Measurement, SceneLog
 from lerobot.showservo.engine.timeline import Demo, Timeline
+from lerobot.showservo.engine.world import World
 
-from . import acquisition, camera, planning, recording, runtime
+from . import acquisition, camera, holds, planning, recording, runtime
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +83,16 @@ class _ArmScene(SceneLog):
         super().__init__(cam, keep_s=120.0)
         self.kin, self.names = kin, names
 
+    def tip_now(self) -> np.ndarray | None:
+        from .. import jog
+
+        latest = jog.latest_joints()
+        if latest is None:
+            return None
+        return np.asarray(
+            self.kin.forward_kinematics(np.array([latest[1][m] for m in self.names])), dtype=float
+        )
+
     def tip_at(self, t: float, max_gap_s: float = 0.2) -> np.ndarray | None:
         from .. import jog
 
@@ -98,51 +108,56 @@ class _ArmScene(SceneLog):
 
 
 class _Feed:
-    """Each frame the tracker placed, into the scene log: the session object's and the others' tracks, the depth,
-    and the views the pose rule accepted, each at the frame's camera stamp."""
+    """Each tracked frame, into the scene log (act_execution.md, "The loops, and who writes what"): the frame's time,
+    and every object's pose as the trackers measured it whenever they were confident in it, by their own verdict
+    (Point2Pose's fit found, the object not lost). Nothing else gates a measurement: not how much of the object is
+    seen, not whether it is held, not which object it is."""
 
     def __init__(
         self, scene: SceneLog, demo: runtime._Demo, t_bc: np.ndarray, session: str, others: list[str]
     ):
         self.scene, self.demo, self.t_bc, self.session, self.others = scene, demo, t_bc, session, others
+        self.reference: dict[
+            str, np.ndarray | None
+        ] = {}  # each other object's demo pose its measurement is against
         self.frames = 0
+
+    def _other_motion(self, name: str, delta: np.ndarray) -> np.ndarray | None:
+        """``name``'s motion since the demo, base frame, from the tracker's delta for it (as ``planning._object_motion``
+        composes a locate's)."""
+        with runtime._state.lock:
+            target = runtime._state.targets.get(name)
+        if target is None or target.anchor is None:
+            return None
+        if name not in self.reference:
+            f = planning._pose_frame(self.demo, name)
+            self.reference[name] = None if f is None else holds._demo_control_pose(self.demo, name, f)[0]
+        reference = self.reference[name]
+        if reference is None:
+            return None
+        cam = np.asarray(delta, dtype=float) @ target.anchor @ np.linalg.inv(reference)
+        return self.t_bc @ cam @ np.linalg.inv(self.t_bc)
 
     def __call__(self, job: runtime._Job, r: dict[str, Any], result: dict[str, Any] | None) -> None:
         t = job.camera_stamp_mono
         if t is None:
             return
         self.frames += 1
-        self.scene.add_depth(Depth(t=t, metres=np.asarray(job.depth_m, dtype=np.float32)))
-        if r.get("track_uv") is not None:
-            self.scene.add_tracks(self.session, _tracks(t, r, "track_idx", "track_uv", "track_vis"))
-        if result is not None and result.get("delta_cam") is not None:
-            self.scene.add_view(
-                self.session,
-                View(t=t, motion=planning._delta_base(self.demo, result["delta_cam"], self.t_bc)),
-            )
+        self.scene.add_frame(t)
+        if r.get("ok") and r.get("delta") is not None:
+            motion = planning._delta_base(self.demo, np.asarray(r["delta"], dtype=float), self.t_bc)
+            self.scene.add_measurement(self.session, Measurement(t=t, motion=motion))
         names = [o.get("name") for o in r.get("others") or ()]
         for name in self.others:
             if name not in names:
                 continue
             k = names.index(name)
-            if r.get(f"other_track_uv_{k}") is not None:
-                self.scene.add_tracks(
-                    name, _tracks(t, r, f"other_track_idx_{k}", f"other_track_uv_{k}", f"other_track_vis_{k}")
-                )
-            with runtime._state.lock:
-                found = runtime._state.located.get(name)
-            if found is not None and found.get("stamp") == t:  # this frame's view placed it
-                motion, problem = planning._object_motion(self.demo, name, self.t_bc)
-                if motion is not None and not problem:
-                    self.scene.add_view(name, View(t=t, motion=motion))
-
-
-def _tracks(t: float, r: dict[str, Any], idx: str, uv: str, vis: str) -> Tracks:
-    points = np.asarray(r[uv], dtype=float).reshape(-1, 2)
-    ids = np.asarray(r.get(idx, np.arange(len(points))), dtype=int).reshape(-1)
-    seen = np.asarray(r.get(vis, np.ones(len(points), dtype=bool)), dtype=bool).reshape(-1)
-    n = min(len(points), len(ids), len(seen))
-    return Tracks(t=t, ids=ids[:n], uv=points[:n], visible=seen[:n])
+            share = r["others"][k]
+            if not share.get("ok") or share.get("lost") or r.get(f"other_delta_{k}") is None:
+                continue
+            motion = self._other_motion(name, r[f"other_delta_{k}"])
+            if motion is not None:
+                self.scene.add_measurement(name, Measurement(t=t, motion=motion))
 
 
 def _camera(teach: runtime._Teach, t_bc: np.ndarray, shape: tuple[int, ...]) -> Camera:
@@ -290,13 +305,13 @@ async def _act_engine_task(
             q=np.asarray(demo.q_obs, dtype=float),
         )
         timeline = Timeline(demo_record, frames, session_object=session)
-        objects = Objects(scene, starts, surfaces, lin, ang)
+        world = World(scene, starts, {n: np.asarray(pts).mean(axis=0) for n, pts in surfaces.items()})
         engine = Engine(
             timeline,
             arm,
             scene,
             _JogPlayback(names),
-            objects,
+            world,
             speed=speed,
             perturb=Perturbations.from_spec(perturb),
             clock=time.perf_counter,

@@ -5,14 +5,12 @@
 # You may obtain a copy of the License at
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
-"""A small synthetic scene for the act engine's tests: a camera over a table, box-shaped objects, depth frames and
-2D tracks rendered from them, an arm whose joints are its fingertip's pose, and a motor loop that plays a playback
-queue the way the jog does.
+"""A small synthetic scene for the act engine's tests: box-shaped objects on a table, a camera that measures every
+object's pose each frame (9.5 frames a second, as on the rig), an arm whose joints are its fingertip's pose, and a
+motor loop that plays a playback queue the way the jog does.
 
 The camera is the rig's (intrinsics and pose from its act records of 2026-10-13: 848 x 480, fx 604, 0.40 m above the
-table and 20 degrees off vertical), and objects sit where its axis meets the table (``WORK``), so millimetres and
-pixels relate as they do there: a 50 mm vertical lift moves about 25 px in the image. Depth is rendered exactly (the table by ray and plane, objects by a
-z-buffer of dense surface points), so a test that fails here fails on geometry, not on noise.
+table and 20 degrees off vertical), and objects sit where its axis meets the table (``WORK``).
 """
 
 from __future__ import annotations
@@ -22,7 +20,7 @@ import dataclasses
 import numpy as np
 from scipy.spatial.transform import Rotation
 
-from lerobot.showservo.engine.scene import Camera, Depth, Tracks, View
+from lerobot.showservo.engine.scene import Camera, Measurement
 
 W, H = 848, 480
 K = np.array([[604.2, 0.0, 419.2], [0.0, 604.2, 250.6], [0.0, 0.0, 1.0]])
@@ -84,43 +82,6 @@ class Body:
     @property
     def centre(self) -> np.ndarray:
         return self.points.mean(axis=0)
-
-
-def render_depth(cam: Camera, bodies: list[np.ndarray], t: float = 0.0, table_z: float = 0.0) -> Depth:
-    """Depth (metres, camera z) of the table at ``table_z`` and every body's points in front of it."""
-    v, u = np.mgrid[0:H, 0:W].astype(float)
-    rays = np.stack([(u - K[0, 2]) / K[0, 0], (v - K[1, 2]) / K[1, 1], np.ones_like(u)], axis=-1)
-    r_bc, origin = cam.t_bc[:3, :3], cam.t_bc[:3, 3]
-    dirs = rays @ r_bc.T  # base frame, per unit of camera z
-    with np.errstate(divide="ignore", invalid="ignore"):
-        z = (table_z - origin[2]) / dirs[..., 2]
-    depth = np.where(z > 0, z, 0.0)
-    nearest = np.full((H, W), np.inf)
-    for pts in bodies:
-        uv, zc = cam.project(pts)
-        ui, vi = np.round(uv[:, 0]).astype(int), np.round(uv[:, 1]).astype(int)
-        ok = (zc > 0) & (ui >= 0) & (ui < W) & (vi >= 0) & (vi < H)
-        for du in (0, 1):  # each point covers 2 x 2 pixels, so a millimetre's spacing leaves no holes
-            for dv in (0, 1):
-                np.minimum.at(
-                    nearest, (np.clip(vi[ok] + dv, 0, H - 1), np.clip(ui[ok] + du, 0, W - 1)), zc[ok]
-                )
-    depth = np.where(np.isfinite(nearest) & ((depth == 0) | (nearest < depth)), nearest, depth)
-    return Depth(t=t, metres=depth)
-
-
-def track_points(body: Body, n: int = 24, seed: int = 0) -> np.ndarray:
-    """Indices of ``n`` of the body's surface points that its tracks follow."""
-    return np.random.default_rng(seed).choice(len(body.points), size=n, replace=False)
-
-
-def render_tracks(
-    cam: Camera, body: Body, rows: np.ndarray, t: float, hidden: np.ndarray | None = None
-) -> Tracks:
-    """The body's tracked points projected now; ``hidden`` (per row) marks those the gripper covers."""
-    uv, _ = cam.project(body.now()[rows])
-    visible = np.ones(len(rows), dtype=bool) if hidden is None else ~np.asarray(hidden, dtype=bool)
-    return Tracks(t=t, ids=np.arange(len(rows)), uv=uv, visible=visible)
 
 
 # ── an arm, a motor loop and a world for the engine's tests ──
@@ -241,9 +202,8 @@ class World:
 
     The gripper holds an object when it closes past ``close_at`` with the fingertip within ``reach_m`` of the
     object's centre, unless ``misses`` says to miss that many grasps; it lets go when it opens again, and the object
-    falls straight down onto whatever is under its centre. Views are reported only of objects not held (the rig's
-    pose rule rejects a held object's), with ``view_noise_m`` of noise; tracked points are hidden where something
-    nearer covers them; depth is exact to the millimetre, as the rig's depth images are."""
+    falls straight down onto whatever is under its centre. Every frame, the camera measures every object's pose, held
+    or not (:meth:`perceive`)."""
 
     def __init__(
         self, cam, bodies, kin, gripper=FakeKin.GRIPPER, close_at=95.0, reach_m=0.015, seed=0, table_z=0.0
@@ -251,21 +211,15 @@ class World:
         self.cam, self.bodies, self.kin, self.gi = cam, bodies, kin, gripper
         self.table_z = table_z
         self.close_at, self.reach_m = close_at, reach_m
-        self.rows = {n: track_points(b, n=30, seed=k) for k, (n, b) in enumerate(bodies.items())}
         self.held, self.hold = None, None
         self.misses = 0
-        self.view_noise_m, self.track_noise_px = 0.0, 0.0
+        self.view_noise_m = 0.0
         self.hidden: set[str] = set()
         self.rng = np.random.default_rng(seed)
         self.last_grip = None
         self.events = []  # (t, what)
         self.frame_k = -1
         self.at = []  # scheduled changes: (t, fn)
-
-    def gripper_points(self, tip):
-        """The fingers, as the depth camera sees them: a 30 x 30 x 50 mm block above the fingertip."""
-        c = (tip @ np.array([0.0, 0.0, -0.03, 1.0]))[:3]
-        return box_points((0.03, 0.03, 0.05), c, step_m=0.002)
 
     def _support_z(self, name, xy):
         top = self.table_z
@@ -315,37 +269,20 @@ class World:
         self.last_grip = g
 
     def perceive(self, t, scene, tip):
-        """Report a camera frame at ``t`` when one is due (9.5 a second)."""
+        """Report a camera frame at ``t`` when one is due (9.5 a second): every object's pose as the trackers measure
+        it, with ``view_noise_m`` of noise, held or not; an object in ``hidden`` is not measured."""
         k = int(np.floor(t * 9.5 + 1e-9))
         if k == self.frame_k:
             return False
         self.frame_k = k
-        depth = render_depth(
-            self.cam,
-            [b.now() for b in self.bodies.values()] + [self.gripper_points(tip)],
-            t=t,
-            table_z=self.table_z,
-        )
-        depth = Depth(t=t, metres=np.round(depth.metres, 3))
-        scene.add_depth(depth)
+        scene.add_frame(t)
         for name, b in self.bodies.items():
-            tr = render_tracks(self.cam, b, self.rows[name], t)
-            uv, z = self.cam.project(b.now()[self.rows[name]])
-            ui = np.clip(np.round(uv[:, 0]).astype(int), 0, W - 1)
-            vi = np.clip(np.round(uv[:, 1]).astype(int), 0, H - 1)
-            covered = depth.metres[vi, ui] < z - 0.004
-            uvn = (
-                tr.uv + self.rng.normal(0.0, self.track_noise_px, tr.uv.shape)
-                if self.track_noise_px
-                else tr.uv
-            )
-            visible = ~covered & (name not in self.hidden)
-            scene.add_tracks(name, Tracks(t=t, ids=tr.ids, uv=uvn, visible=visible))
-            if name != self.held:
-                m = b.motion.copy()
-                if self.view_noise_m:
-                    m[:3, 3] += self.rng.normal(0.0, self.view_noise_m, 3)
-                scene.add_view(name, View(t=t, motion=m))
+            if name in self.hidden:
+                continue
+            m = b.motion.copy()
+            if self.view_noise_m:
+                m[:3, 3] += self.rng.normal(0.0, self.view_noise_m, 3)
+            scene.add_measurement(name, Measurement(t=t, motion=m))
         return True
 
 
@@ -481,14 +418,6 @@ def pick_place_demo(
     return demo, kf, bodies
 
 
-def visible_surface(cam, body, table_z=0.0):
-    """What the act knows of an object's shape: the points its camera saw of it, at its demo pose."""
-    uv, z = cam.project(body.points)
-    seen = render_depth(cam, [body.points], table_z=table_z)
-    ui, vi = np.round(uv[:, 0]).astype(int), np.round(uv[:, 1]).astype(int)
-    return body.points[np.abs(seen.metres[vi, ui] - z) < 0.002]
-
-
 @dataclasses.dataclass
 class Sim:
     engine: object
@@ -520,9 +449,9 @@ def run_act(
     """One act in the simulated world: the arm starts where the demo did, the camera has seen the objects at rest for
     a second, and the engine steps once per 30 Hz tick before the motor loop does."""
     from lerobot.showservo.engine.engine import Arm, Engine
-    from lerobot.showservo.engine.objects import Objects
     from lerobot.showservo.engine.scene import SceneLog
     from lerobot.showservo.engine.timeline import Timeline
+    from lerobot.showservo.engine.world import World as Estimates
 
     cam = camera(work)
     kin = FakeKin() if kin is None else kin
@@ -552,19 +481,17 @@ def run_act(
         walk_m_s=0.04,
         walk_rad_s=np.radians(30.0),
     )
-    objects = Objects(
+    world_est = Estimates(
         scene,
         {n: b.motion.copy() for n, b in bodies.items()},
-        {n: visible_surface(cam, Body(b.points), world.table_z) for n, b in bodies.items()},
-        arm.walk_m_s,
-        arm.walk_rad_s,
+        {n: b.points.mean(axis=0) for n, b in bodies.items()},
     )
     engine = Engine(
         Timeline(demo, key_frames),
         arm,
         scene,
         motor,
-        objects,
+        world_est,
         speed=speed,
         perturb=perturb,
         settings=settings,

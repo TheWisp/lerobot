@@ -20,44 +20,48 @@ from lerobot.showservo.engine.perturb import OpenGripper, Perturbations
 from lerobot.showservo.engine.scene import SceneLog
 
 
-def _job(stamp, h=480, w=848):
-    return types.SimpleNamespace(camera_stamp_mono=stamp, depth_m=np.full((h, w), 0.43))
+def _job(stamp):
+    return types.SimpleNamespace(camera_stamp_mono=stamp)
 
 
-def test_a_tracked_frame_feeds_tracks_depth_and_the_views_that_placed_its_objects(monkeypatch):
+def test_every_object_the_trackers_are_confident_in_is_measured_every_frame(monkeypatch):
+    """The feed passes each object's tracker measurement on every frame, by the trackers' own verdict only: a frame
+    the key-frame runner's acceptance rules turned away (``result`` None) still measures every object; a lost or
+    failed one is not measured; the frame's time is kept either way (act_execution.md R4)."""
     scene = SceneLog()
-    demo = types.SimpleNamespace()
     monkeypatch.setattr(engine_act.planning, "_delta_base", lambda d, delta, t_bc: np.asarray(delta) + 1.0)
-    monkeypatch.setattr(engine_act.planning, "_object_motion", lambda d, name, t_bc: (np.eye(4) * 2.0, ""))
-    feed = engine_act._Feed(scene, demo, np.eye(4), "dowel", ["ring", "cup"])
+    monkeypatch.setattr(engine_act.planning, "_pose_frame", lambda d, name: 1)
+    monkeypatch.setattr(engine_act.holds, "_demo_control_pose", lambda d, name, f: (np.eye(4), ""))
+    anchor = np.eye(4)
+    anchor[:3, 3] = (0.01, 0.0, 0.0)
+    monkeypatch.setattr(
+        runtime._state,
+        "targets",
+        {"ring": types.SimpleNamespace(anchor=anchor), "cup": types.SimpleNamespace(anchor=np.eye(4))},
+    )
+    feed = engine_act._Feed(scene, types.SimpleNamespace(), np.eye(4), "dowel", ["ring", "cup"])
     r = {
-        "track_idx": np.array([3, 4, 5]),
-        "track_uv": np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]]),
-        "track_vis": np.array([True, False, True]),
-        "others": [{"name": "cup"}, {"name": "ring"}],
-        "other_track_idx_1": np.array([7, 8]),
-        "other_track_uv_1": np.array([[9.0, 9.0], [8.0, 8.0]]),
-        "other_track_vis_1": np.array([True, True]),
+        "ok": True,
+        "delta": np.eye(4),
+        "others": [{"name": "cup", "ok": True, "lost": True}, {"name": "ring", "ok": True, "lost": False}],
+        "other_delta_0": np.eye(4),
+        "other_delta_1": np.eye(4),
     }
-    monkeypatch.setitem(runtime._state.located, "ring", {"stamp": 12.5})
-    monkeypatch.setitem(
-        runtime._state.located, "cup", {"stamp": 11.0}
-    )  # placed by an earlier frame, not this one
-    feed(_job(12.5), r, {"delta_cam": np.eye(4)})
-    assert [d.t for d in scene.depths()] == [12.5]
-    dowel = scene.tracks("dowel")[0]
-    assert dowel.ids.tolist() == [3, 4, 5] and dowel.visible.tolist() == [True, False, True]
-    assert scene.tracks("ring")[0].ids.tolist() == [7, 8]
-    assert scene.tracks("cup") == []  # its arrays were not in the frame
-    np.testing.assert_allclose(scene.views("dowel")[0].motion, np.eye(4) + 1.0)
-    assert len(scene.views("ring")) == 1 and scene.views("cup") == []
+    feed(_job(12.5), r, None)
+    feed(_job(12.6), {**r, "ok": False}, None)  # Point2Pose found no fit of the dowel in this one
+    assert scene.frames() == [12.5, 12.6]
+    assert [m.t for m in scene.measurements("dowel")] == [12.5]
+    np.testing.assert_allclose(scene.measurements("dowel")[0].motion, np.eye(4) + 1.0)
+    assert [m.t for m in scene.measurements("ring")] == [12.5, 12.6]
+    np.testing.assert_allclose(scene.measurements("ring")[0].motion[:3, 3], (0.01, 0.0, 0.0))
+    assert scene.measurements("cup") == []
 
 
 def test_a_frame_without_a_camera_stamp_is_not_fed():
     scene = SceneLog()
     feed = engine_act._Feed(scene, None, np.eye(4), "dowel", [])
-    feed(_job(None), {"track_uv": np.zeros((2, 2))}, None)
-    assert scene.depths() == [] and scene.tracks("dowel") == []
+    feed(_job(None), {"ok": True, "delta": np.eye(4)}, None)
+    assert scene.frames() == [] and scene.measurements("dowel") == []
 
 
 def test_an_act_asks_for_the_engine_and_its_faults():

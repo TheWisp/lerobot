@@ -169,6 +169,30 @@ def _open_mid_carry(s=0.4, seconds=0.6):
     return Perturbations([OpenGripper(leg="pre-place 1", s=s, seconds=seconds)])
 
 
+def test_a_block_that_slips_in_the_gripper_is_put_down_where_it_now_sits():
+    """How a held object sits is taken at the grasp and replaced by each later measurement the grasp's check says
+    shows it still held (act_execution.md, "The loops"). The block slips 6 mm in the fingers early in the carry: it
+    still moves with the gripper, so the check holds, the hold follows the measurements, and the place puts the block
+    on the ring rather than 6 mm off."""
+    demo, kf, bodies = pick_place_demo()
+
+    def slip(world):
+        def go(w, t):
+            if w.held is not None:
+                w.hold = w.hold @ pose((0.006, 0.0, 0.0))
+                w.events.append((t, "slipped 6 mm"))
+            else:
+                w.at.append((t + 0.1, go))
+
+        world.at.append((1.0 + 3.0, go))
+
+    sim = run_act(demo, kf, bodies, setup=slip)
+    assert any("slipped" in e for _, e in sim.world.events), sim.world.events
+    assert not _records(sim, "failure")
+    assert sim.engine.result["ok"], sim.engine.result
+    assert _on_ring(sim, tol_m=0.002), sim.world.events
+
+
 def test_a_missed_grasp_goes_back_and_grasps_again():
     demo, kf, bodies = pick_place_demo()
     sim = run_act(demo, kf, bodies, setup=lambda w: setattr(w, "misses", 1))
@@ -222,12 +246,13 @@ def test_a_grasp_that_fails_twice_gives_up_and_says_why():
     assert "grasp of dowel failed 2 times" in sim.engine.result["why"]
 
 
-def test_noisy_views_and_tracks_fail_no_undisturbed_act():
-    """Views wandering by 6 mm and tracks by 1.5 px: the checks can't tell more often, and never fail (R9)."""
+def test_noisy_measurements_fail_no_undisturbed_act():
+    """Measurements wandering by 6 mm on each axis: the checks can't tell more often, and never fail (R9); the
+    targets, the median of the measurements since each object last moved, do not jerk the arm."""
     demo, kf, bodies = pick_place_demo()
 
     def noisy(world):
-        world.view_noise_m, world.track_noise_px = 0.006, 1.5
+        world.view_noise_m = 0.006
 
     sim = run_act(demo, kf, bodies, setup=noisy)
     assert not _records(sim, "failure"), _records(sim, "failure")
@@ -309,17 +334,6 @@ def test_a_gripper_pulse_between_ticks_reaches_its_peak(fps, speed):
     assert max(near) == pytest.approx(demo_peak)
 
 
-def test_the_grasp_check_does_not_take_the_lifted_block_for_one_left_behind():
-    """With fingers the depth camera cannot see, the block is in view at its resting place while the lift begins:
-    until it has moved away by more than its own size, its place reading "present" says nothing of a miss."""
-    demo, kf, bodies = pick_place_demo()
-    sim = run_act(
-        demo, kf, bodies, setup=lambda w: setattr(w, "gripper_points", lambda tip: np.zeros((0, 3)))
-    )
-    assert not _records(sim, "failure"), _records(sim, "failure")
-    assert sim.engine.result["ok"], sim.engine.result
-
-
 def test_the_arm_does_not_drift_with_a_moved_target_while_in_contact():
     """The ring moves during the place: until the second view confirms it, the commands stay on the place's path as
     composed with where the ring was, rather than creeping sideways inside it."""
@@ -340,8 +354,11 @@ def test_the_arm_does_not_drift_with_a_moved_target_while_in_contact():
         if c.kind == "leg" and c.leg == place and k in sent and shove_at <= sent[k] <= back
     ]
     assert during
+    held = (
+        np.linalg.inv(ring0 @ sim.engine.demo.pose_at(during[0].td)) @ during[0].pose
+    )  # how it held the block
     for c in during:
-        expected = ring0 @ sim.engine.demo.pose_at(c.td) @ sim.engine.fix.get("dowel", np.eye(4))
+        expected = ring0 @ sim.engine.demo.pose_at(c.td) @ held
         assert np.linalg.norm(c.pose[:3, 3] - expected[:3, 3]) < 0.0005
 
 
@@ -422,8 +439,8 @@ def test_an_act_whose_checks_cannot_tell_is_not_reported_a_success(monkeypatch):
 
     monkeypatch.setattr(
         engine_mod.pred,
-        "combine",
-        lambda verdicts: predicates.Verdict(predicates.Answer.UNKNOWN, "no evidence"),
+        "decide",
+        lambda *a, **k: predicates.Verdict(predicates.Answer.UNKNOWN, "no evidence"),
     )
     demo, kf, bodies = pick_place_demo()
     sim = run_act(demo, kf, bodies)
