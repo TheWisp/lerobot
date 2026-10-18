@@ -170,10 +170,10 @@ def _open_mid_carry(s=0.4, seconds=0.6):
 
 
 def test_a_block_that_slips_in_the_gripper_is_put_down_where_it_now_sits():
-    """How a held object sits is taken at the grasp and replaced by each later measurement the grasp's check says
-    shows it still held (act_execution.md, "The loops"). The block slips 6 mm in the fingers early in the carry: it
-    still moves with the gripper, so the check holds, the hold follows the measurements, and the place puts the block
-    on the ring rather than 6 mm off."""
+    """How a held object sits is taken at the grasp and estimated from every later measurement but those the grasp's
+    check answers "not held" (act_execution.md, "The loops"). The block slips 6 mm in the fingers early in the carry:
+    it still moves with the gripper, so the check holds, the hold follows the measurements, and the place puts the
+    block on the ring rather than 6 mm off."""
     demo, kf, bodies = pick_place_demo()
 
     def slip(world):
@@ -190,6 +190,72 @@ def test_a_block_that_slips_in_the_gripper_is_put_down_where_it_now_sits():
     assert any("slipped" in e for _, e in sim.world.events), sim.world.events
     assert not _records(sim, "failure")
     assert sim.engine.result["ok"], sim.engine.result
+    assert _on_ring(sim, tol_m=0.002), sim.world.events
+
+
+def test_a_block_pushed_as_the_fingers_close_is_held_as_it_sits_from_the_next_view():
+    """2026-10-18 on the rig (act 20261018_113106, act_execution.md E27): the closing fingers pushed the object 14 mm,
+    and the engine took how it sits from its pose before the push. The views showed where it sat, but the hold took only
+    those its check called a success, and the check predicted from that same hold: for 3 s each view was 'neither' or
+    'cannot tell', one counted as a failure, then the hold jumped 20 mm at once. Here the block shifts 12 mm in the
+    fingers as they close: the hold takes the next views, no check fails, and the block is set on the ring."""
+    demo, kf, bodies = pick_place_demo()
+
+    def push(world):
+        def go(w, t):
+            if w.held is not None:
+                w.hold = w.hold @ pose((0.0, 0.012, 0.0))
+                w.events.append((t, "pushed 12 mm"))
+            else:
+                w.at.append((t + 0.01, go))
+
+        world.at.append((1.0, go))
+
+    sim = run_act(demo, kf, bodies, setup=push)
+    assert any("pushed" in e for _, e in sim.world.events), sim.world.events
+    assert not _records(sim, "failure"), _records(sim, "failure")
+    assert sim.engine.result["ok"], sim.engine.result
+    assert _on_ring(sim, tol_m=0.002), sim.world.events
+
+
+def test_a_block_that_turns_in_the_gripper_is_followed_not_jumped_to():
+    """The same act (E27), turned upright for the insertion: the object slid and turned in the fingers (24 mm, 21 deg),
+    the views showed it, and how it sits changed 18 mm and 13 deg on one update; the commands, made from it, jumped
+    by that between two ticks. Here the block turns 20 deg and slides 30 mm mid-carry: no command moves further than
+    the undisturbed act's largest step plus one tick of the walk (its translation, and its turn at the fingertip's
+    distance from the block's centre), and the block is set on the ring."""
+    demo, kf, bodies = pick_place_demo()
+    lever = []
+
+    def turn(world):
+        def go(w, t):
+            if w.held is None:
+                w.at.append((t + 0.1, go))
+                return
+            b = w.bodies[w.held]
+            tip = b.motion @ np.linalg.inv(w.hold)
+            c = b.now().mean(axis=0)
+            about = pose(tuple(c)) @ pose((0.0, 0.0, 0.03), rpy_deg=(20.0, 0.0, 0.0)) @ pose(tuple(-c))
+            w.hold = np.linalg.inv(tip) @ about @ b.motion
+            lever.append(float(np.linalg.norm(tip[:3, 3] - c)) + 0.03)  # the centre turned about moves 30 mm
+            w.events.append((t, "turned 20 deg, slid 30 mm"))
+
+        world.at.append((1.0 + 5.0, go))
+
+    sim = run_act(demo, kf, bodies, setup=turn)
+    plain = run_act(*pick_place_demo())
+    assert any("turned" in e for _, e in sim.world.events), sim.world.events
+    assert sim.engine.result["ok"], sim.engine.result
+    assert _records(sim, "moved in the gripper"), sim.engine.records
+
+    def largest_step(cmds):
+        return max(
+            np.linalg.norm(b.pose[:3, 3] - a.pose[:3, 3]) for a, b in zip(cmds, cmds[1:], strict=False)
+        )
+
+    arm = sim.engine.arm
+    walk = (arm.walk_m_s + arm.walk_rad_s * lever[0]) / arm.hz
+    assert largest_step(sim.engine.cmds) <= largest_step(plain.engine.cmds) + walk
     assert _on_ring(sim, tol_m=0.002), sim.world.events
 
 

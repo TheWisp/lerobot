@@ -237,6 +237,10 @@ class Engine:
         # so an object that moves becomes motion of the arm, not a jump between two commands; a new path (going back,
         # backing out) starts from the world's poses as they are, being a move from where the arm is (E26).
         self.aims: dict[str, np.ndarray] = {}
+        self.held_aims: dict[str, np.ndarray] = {}  # the same for how each held object sits in the gripper
+        self.let_go: dict[
+            str, np.ndarray
+        ] = {}  # the gripper-side change each released object had when let go
         self.moves_recorded: dict[str, float] = {}
 
     # ── records ──
@@ -279,14 +283,20 @@ class Engine:
         if leg.obj == START:  # the demo's gripper motion from where the leg began: any hold rides along
             return self._anchor(leg_n) @ d
         out = (self.aims.get(leg.obj, self.world.motion(leg.obj)) if motion is None else motion) @ d
-        if leg.held is not None and leg.held in self.holds:
-            out = out @ self._fix(leg.held)
-        return out
+        return out @ self._held_fix(leg.held)
+
+    def _held_fix(self, held: str | None) -> np.ndarray:
+        """The gripper-side change for the object a leg began holding: while it is held, from how it sits; once let
+        go in the leg, as it was then, so the gripper goes on from where it let go."""
+        if held is None:
+            return np.eye(4)
+        return self._fix(held) if held in self.holds else self.let_go.get(held, np.eye(4))
 
     def _fix(self, obj: str) -> np.ndarray:
         """The gripper-side change that puts the held ``obj`` where the demo had it: the demo's fingertip at the grasp
-        against how the object sits in the gripper now (the grasp's, until measurements its check confirms replace it)."""
-        return np.linalg.inv(self.demo.tips[self.grasp_i[obj]]) @ np.linalg.inv(self.holds[obj].estimate)
+        against how the object sits in the gripper, as the commands follow it."""
+        sits = self.held_aims.get(obj, self.holds[obj].estimate)
+        return np.linalg.inv(self.demo.tips[self.grasp_i[obj]]) @ np.linalg.inv(sits)
 
     def _state_pose(self, leg_n: int, s: float) -> np.ndarray:
         return self._compose(leg_n, self.demo.pose_at(self.tl.time(leg_n, s)))
@@ -420,9 +430,7 @@ class Engine:
         if run.kind == "retrace":
             s = run.s0 * (1.0 - motion_u)
             td = self.tl.time(run.leg, s)
-            pose = run.d0 @ self.demo.pose_at(td)
-            if leg.held is not None and leg.held in self.holds:
-                pose = pose @ self._fix(leg.held)
+            pose = run.d0 @ self.demo.pose_at(td) @ self._held_fix(leg.held)
             return pose, run.g0, s, td
         s = run.s0 + motion_u * (1.0 - run.s0)
         td = self.tl.time(run.leg, s)
@@ -573,7 +581,9 @@ class Engine:
         m.status, m.t, m.seen, m.streak, m.closed = "checking", now, now, 0, False
         if e.kind == "grasp":
             motion = self.world.motion(e.obj)
-            # How it sits: its pose and the fingertip now, then each measurement its check says shows it still held.
+            # How it sits: its pose and the fingertip now, until its measurements replace it (_sits).
+            self.held_aims.pop(e.obj, None)
+            self.let_go.pop(e.obj, None)
             self.holds[e.obj] = Steady(
                 np.linalg.inv(tip) @ motion, self.world.centres.get(e.obj, np.zeros(3))
             )
@@ -586,6 +596,8 @@ class Engine:
             for g in self.milestones:
                 if g.event.kind == "grasp" and g.event.obj == e.obj and g.event.i == e.grasp_i:
                     g.closed = True
+            if e.obj in self.holds:
+                self.let_go[e.obj] = self._fix(e.obj)
             hold = self.holds.pop(e.obj, None)
             ref = self.world.motion(e.ref)
             put = tip @ hold.estimate if hold is not None else None
@@ -612,10 +624,7 @@ class Engine:
             if hold is None:
                 return Verdict(Answer.UNKNOWN, "not held")
             held, lay = self.world.centre(obj, tip @ hold.estimate), self.world.centre(obj, m.data["motion"])
-            v = pred.decide(seen * 1000, held * 1000, lay * 1000, noise[0] * 1000, "mm")
-            if v.yes:  # still held: how it sits now
-                hold.add(x.t, np.linalg.inv(tip) @ x.motion, self.world.move_threshold(obj))
-            return v
+            return pred.decide(seen * 1000, held * 1000, lay * 1000, noise[0] * 1000, "mm")
         put = m.data.get("put")
         if put is None:
             return Verdict(Answer.UNKNOWN, "it was never held")
@@ -631,6 +640,8 @@ class Engine:
             for x in self.scene.measurements(m.event.obj, since=m.seen + 1e-9):
                 v = self._evidence(m, x)
                 m.seen, m.last = x.t, v
+                if m.event.kind == "grasp" and not v.no:
+                    self._sits(m.event.obj, x, now)
                 self._record("check", now, milestone=m.name, frame=x.t, answer=v.answer.value, why=v.why)
                 if v.no:
                     m.streak += 1
@@ -641,6 +652,24 @@ class Engine:
                 m.streak = 0
                 if v.yes and m.status == "checking":
                     m.status = "success"
+
+    def _sits(self, obj: str, x: Measurement, now: float) -> None:
+        """How the held ``obj`` sits in the gripper takes a measurement, after the check answered from how it sat
+        before: every one but those showing it out of the gripper, which say nothing about how it sits there."""
+        hold, tip = self.holds.get(obj), self.scene.tip_at(x.t)
+        if hold is None or tip is None:
+            return
+        before = hold.estimate
+        if hold.add(x.t, np.linalg.inv(tip) @ x.motion, self.world.move_threshold(obj)):
+            apart = np.linalg.norm(self.world.centre(obj, hold.estimate) - self.world.centre(obj, before))
+            self._record(
+                "moved in the gripper",
+                now,
+                obj=obj,
+                frame=x.t,
+                mm=round(float(apart) * 1000, 1),
+                deg=round(core.pose_residual(before, hold.estimate)[1], 1),
+            )
 
     # ── going back, or ahead ──
 
@@ -702,6 +731,8 @@ class Engine:
     def _place(self, target: tuple[int, float], now: float, cause: str) -> None:
         last = self.cmds[self.sent]
         self.aims.clear()  # a new path: to where the objects are now
+        self.held_aims.clear()
+        self.let_go.clear()
         for m in self.milestones:
             if m.status != "ahead" and (m.event.leg, m.event.s) >= target:
                 m.status, m.streak, m.closed, m.data = "ahead", 0, False, {}
@@ -818,15 +849,11 @@ class Engine:
                     mm=round(float(apart) * 1000, 1),
                     deg=round(deg, 1),
                 )
-        for name, pose in self.world.pose.items():  # the motion step's targets follow the world's poses
-            aim = self.aims.get(name, pose)
-            self.aims[name] = _toward(
-                aim, pose, self.world.centres[name], self.arm.walk_m_s * dt, self.arm.walk_rad_s * dt
-            )
         self._on_sent(now)
         self._check(now)
         if self.done:
             return
+        self._follow(dt)
         if self.waiting is not None:
             self._resume(now)
             if self.done or self.waiting is not None:
@@ -841,6 +868,25 @@ class Engine:
             self._record("motion ends", now)
         if self.ended is not None:
             self._end(now)
+
+    def _follow(self, dt: float) -> None:
+        """The motion step's inputs follow their estimates at no more than the walk speed: each object's pose and how
+        each held one sits in the gripper, so a changed estimate becomes motion of the arm, not a jump (E26)."""
+        step_m, step_rad = self.arm.walk_m_s * dt, self.arm.walk_rad_s * dt
+        for name, pose in self.world.pose.items():
+            self.aims[name] = _toward(
+                self.aims.get(name, pose), pose, self.world.centres[name], step_m, step_rad
+            )
+        self.held_aims = {
+            name: _toward(
+                self.held_aims.get(name, hold.estimate),
+                hold.estimate,
+                self.world.centres.get(name, np.zeros(3)),
+                step_m,
+                step_rad,
+            )
+            for name, hold in self.holds.items()
+        }
 
     def _end(self, now: float) -> None:
         """The motion is over: once every open check has answered, or two camera frames have come without an answer,

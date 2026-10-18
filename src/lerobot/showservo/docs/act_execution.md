@@ -150,17 +150,19 @@ flowchart LR
   moving). Between measurements an object is where it was last measured. ([R4](#requirements))
 - **The gripper is the only special thing,** and it is in the joint readings, not the world. A held object's pose
   between its measurements is the fingertip now times how it sits in the gripper. How it sits is taken at the grasp,
-  from the object's pose and the fingertip at that moment, and replaced by each later measurement that the grasp's
-  check answers "still held". Whether it is held is the task's question, never the world's.
+  from the object's pose and the fingertip at that moment, and estimated from then on like any pose, from every
+  measurement but those the grasp's check answers "not held" (they say nothing about how it sits in the gripper). The
+  check answers each measurement from how it sat before that measurement ([E27](#e27)). Whether it is held is the
+  task's question, never the world's.
 - **The motion step solves ahead.** IK takes 1.7 ms at the median and up to 75 and 299 ms on the rig ([E1](#e1),
   [E25](#e25)), so commands are solved a few ticks before they are due and queued: as many ticks as the slowest solve
   of this run and the gap between control ticks cover, plus one. The motor step sends whatever is due and never waits
   on a solve; on the rig it runs on its own thread at the same 30 Hz, so a slow solve can delay the motion step, never
   the servos.
-- **A moved object becomes motion, never a jump.** The pose the motion step makes commands from follows the world's
-  pose of each object at no more than the walk speed during a leg; a new path (going back after a failure, backing out
-  of a moved target) starts from the world's poses as they are, being itself a move from where the arm stands
-  ([E26](#e26)).
+- **A moved object becomes motion, never a jump.** What the motion step makes commands from — each object's pose,
+  and how each held object sits in the gripper — follows its estimate at no more than the walk speed during a leg; a
+  new path (going back after a failure, backing out of a moved target) starts from the estimates as they are, being
+  itself a move from where the arm stands ([E26](#e26), [E27](#e27)).
 - **One clock** stamps capture times, joint reads and due times. The world step pairs a measurement with the joint
   reading at its capture time, interpolated between two reads and never extrapolated.
 - **A failure or a moved target takes effect at once:** the task step moves Progress, the commands not yet sent are
@@ -190,7 +192,8 @@ What this does:
   best-effort stop) does `w` rise over the first part, to close the gap.
 - With nothing moved, both sides are the demo's own pose.
 - While an object is held, the pose is corrected for how it sits in the gripper ([O5](#o5)), as the task state has
-  it, so the held object, not the fingertip, goes where the demo's went.
+  it, so the held object, not the fingertip, goes where the demo's went. Once it is let go, the rest of that leg keeps
+  the correction it had then: the gripper goes on from where it let go ([E27](#e27)).
 - A new measurement of the target reaches every command made after it; commands already queued keep the pose they
   were made with.
 
@@ -564,3 +567,16 @@ object's pose each tick — moved by that between two ticks, no arm configuratio
 gave up: "the arm would have to jump to another configuration". The moved-target rule, which looks at distance only
 (threshold twice the noise, 11.3 mm), did not back out. With the commands' poses following the world at the walk
 speed, the replay goes through the descent and the grasp begins.
+
+<a id="e27"></a>**E27. How a held object sits, gated on its own prediction**, 2026-10-18, act `20261018_113106`
+(`7442baa2f`), replayed offline as E26. The closing fingers pushed the object 14 mm (7.1-7.8 s; the fingertip moved 5 mm) just
+before the grasp began, and the world had not taken the push: its noise, measured over every view until the
+grasp, counted the push's own views and rose from 4.5 to 6.6 mm, so the move threshold stood at 13.3 mm. How the
+object sits was taken from that pose, 14-17 mm from where every view after the grasp put it (the views drawn on the frames
+lie on the object; the pose taken at the grasp does not). The views could replace it only where the grasp's check
+answered "still held", and the check predicted from that same pose: for 2.9 s the views were "cannot tell" or
+"neither" (one counted a failure, of the two that send Progress back), then the first "held" replaced it by 19.7 mm at
+once. At 12.1-13.3 s, turned upright for the insertion, the object slid and turned in the fingers: 24.1 mm and 20.8 deg between the
+medians of its views carried lying (7.9-11.8 s) and standing (14.0-21.5 s, 95% of them within 3.1 mm of theirs); how it sits changed 18.4 mm and
+12.9 deg on one update, the commands carrying it jumped by that, and the act gave up at key frame 5. The live act, on
+the pose taken at the grasp, put the object in the ring.
