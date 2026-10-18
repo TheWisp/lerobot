@@ -30,6 +30,7 @@ import http.server
 import importlib.util
 import json
 import pathlib
+import pickle
 import queue
 import signal
 import socketserver
@@ -537,7 +538,11 @@ def main() -> None:
     ap.add_argument("--server", default=SERVER, help="the GUI server whose camera the live view reads")
     ap.add_argument("--recording")
     ap.add_argument("--out")
-    ap.add_argument("--dump", help="replay: save every frame's 3D tracks (xyz, seen, t) to this .npz")
+    ap.add_argument(
+        "--dump",
+        help="replay: save every frame's 3D tracks (xyz, seen, t) to this .npz, and beside it (.groups.pkl) each "
+        "frame's groups (membership, each group's motion, the objects' poses) and each object's own tracks",
+    )
     ap.add_argument("--object", action="append", default=[], help="name=u,v on the start frame")
     ap.add_argument(
         "--designate-at",
@@ -593,6 +598,7 @@ def main() -> None:
     known_groups: set[int] = set()
     lag_ms: list[float] = []
     dumped: list = []
+    dumped_groups: list = []
 
     def designate(rgb, pts, asked: dict, taken=None) -> dict[str, dict]:
         """Each asked object (name -> click) designated on this frame: SAM 2.1's mask for its click, its own corners,
@@ -704,6 +710,15 @@ def main() -> None:
             t0 = time.time()
             tracker.update(xyz, seen)
             t_group = (time.time() - t0) * 1000
+            if args.dump:
+                dumped_groups.append(
+                    (
+                        stamp,
+                        tracker.group_of.copy(),
+                        {gid: groups._matrix(g.motion).tolist() for gid, g in tracker.groups.items()},
+                        {o.name: np.asarray(o.pose).tolist() for o in tracker.objects.values()},
+                    )
+                )
             base = world.update(tracker)
             for (
                 gid
@@ -761,6 +776,39 @@ def main() -> None:
                         ring_seeded_frame[name] = frame_no
                         print(
                             f"frame {n}: {name} had {standing} borrowed points standing; {len(fresh)} added",
+                            flush=True,
+                        )
+                # Following: around where each object's own points are seen now, as many points as it borrows
+                # (n_ring, within RING_PX[1] of them), on any surface with depth, still or moving, so whatever moves
+                # with it (the fingers holding it) is tracked and can join its group. The borrowed points above are
+                # seeded on surfaces still for a while, which a lifted object and the fingers holding it are not; at
+                # rest they are around it already and nothing is added. Borrowed, not its own: a point joins its
+                # group only by moving with it.
+                for name in names:
+                    obj = tracker.objects[name]
+                    mine = obj.tracks[obj.tracks < len(uv)]
+                    mine = mine[seen[mine]]
+                    if not len(mine):
+                        continue
+                    at = np.median(uv[mine], axis=0)
+                    others = np.flatnonzero(seen & ~tracker.owned[: len(seen)])
+                    near = int((np.hypot(*(uv[others] - at).T) <= RING_PX[1]).sum())
+                    if near >= n_ring:
+                        continue
+                    if gray is None:
+                        gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+                    field = np.isfinite(pts).all(axis=2)
+                    vv, uu = np.mgrid[0 : field.shape[0], 0 : field.shape[1]]
+                    field &= np.hypot(uu - at[0], vv - at[1]) <= RING_PX[1]
+                    for u, v in uv[seen].astype(int):  # nor where a track already is
+                        cv2.circle(field.view(np.uint8), (int(u), int(v)), 6, 0, -1)
+                    fresh = scene.stable_points(gray, field, n_ring - near, 48, near=at)
+                    if len(fresh):
+                        rings[name] = np.concatenate(
+                            [rings[name], np.asarray(tapir.add(rgb, fresh), dtype=int)]
+                        )
+                        print(
+                            f"frame {n}: following {name}: {near} points around it; {len(fresh)} added",
                             flush=True,
                         )
                 # The field as a whole: tracks are lost to hands, paper and drift for good (retired), and a world
@@ -917,6 +965,14 @@ def main() -> None:
             xyz_all[f, : len(x)], seen_all[f, : len(v)] = x, v
         np.savez_compressed(args.dump, xyz=xyz_all, seen=seen_all, t=np.array([t for t, _, _ in dumped]))
         print(f"dumped {len(dumped)} frames x {n_max} tracks to {args.dump}", flush=True)
+        with open(str(args.dump) + ".groups.pkl", "wb") as fh:
+            pickle.dump(
+                {
+                    "frames": dumped_groups,
+                    "own": {o.name: np.asarray(o.tracks).tolist() for o in tracker.objects.values()},
+                },
+                fh,
+            )
     if out:
         (out / "timeline.json").write_text(json.dumps(timeline))
         span = max(1e-3, timeline[-1]["t"] - timeline[0]["t"]) if len(timeline) > 1 else 1.0

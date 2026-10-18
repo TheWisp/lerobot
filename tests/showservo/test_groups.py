@@ -361,6 +361,33 @@ def test_a_body_that_starts_to_move_splits_off_within_frames():
     assert slow is not None and slow >= fast + 4, (fast, slow)
 
 
+@pytest.mark.parametrize("split_trigger_m", [GroupTracker().split_trigger_m, 0.0])
+def test_what_a_body_moved_before_it_was_told_apart_moves_the_object_it_holds_too(split_trigger_m):
+    """A gripper of 60 points holds a stick of 30 over the tray; from frame 10 only 8 of the stick's points, at the
+    gripper's end, are seen: too few and too bunched to place it. Gripper and stick rest with the tray, one group,
+    until frame 40, then move off at 2 mm a frame (act 20261018_191804 at 11.5 s, the arm moving again after a
+    pause). The tracker tells the body apart only once its points have moved: a new group starting at rest left the
+    stick behind by that much for good (6.2 mm there). It starts with the motion its points made since they last held
+    still, and the stick moves with it. Both ways a body becomes a group: split off as a body, and point by point
+    (split off, ``split_trigger_m`` 0), then founded by the points no group explains."""
+    tray = _cloud(200, (0.0, 0.0, 0.45), (0.5, 0.35, 0.002))
+    gripper = _cloud(60, (0.16, 0.05, 0.40), (0.04, 0.04, 0.04))
+    xs = np.linspace(-0.05, 0.05, 30)
+    centre = np.array([0.10, 0.05, 0.42])
+    stick = centre + np.stack([xs, 0.008 * np.cos(xs * 300), 0.008 * np.sin(xs * 300)], axis=1)
+    t = GroupTracker(split_trigger_m=split_trigger_m)
+    t.add_object("stick", np.arange(260, 290), _pose(centre))
+    for k in range(75):
+        off = np.array([0.002 * max(k - 40, 0), 0.0, 0.0])
+        seen = np.ones(290, bool)
+        if k >= 10:
+            seen[260:282] = False  # all but the 8 at the gripper's end
+        _run(t, [(np.vstack([tray, gripper + off, stick + off]), seen)])
+    moved = t.pose("stick")[:3, 3] - centre
+    assert t.objects["stick"].group != t.group_of[0], "it moves with the gripper's group"
+    assert np.linalg.norm(moved - [0.002 * 34, 0.0, 0.0]) < 0.003, moved
+
+
 def test_a_body_displaced_once_does_not_split_off():
     """The cube's points jump 15 mm in one frame and stay there (a tracker glitch, a hand brushing past), well past
     the split's trigger: they hold their new offset rather than keep moving, so no body splits off at once (without
@@ -451,44 +478,38 @@ def test_a_corner_of_an_object_left_in_view_does_not_turn_it_its_group_carries_i
     )
 
 
-def test_tracks_of_a_covered_object_that_slide_onto_the_wrist_do_not_carry_it_off():
+def test_tracks_that_slide_onto_the_wrist_carry_an_object_off_until_its_own_points_place_it_back():
     """The wrist comes over a gamepad at frame 30 and moves on at 4 mm a frame: 18 of its 30 tracks stick to the
-    wrist and move with it, still seen, the rest hidden (Point2Pose's tracks slid onto the gripper so on 2026-10-09).
-    The slid ones split off as a body into the arm's group, where most of its grouped tracks now are, which took the
-    gamepad along before; another group takes it only on a view that places it there, and 60% of it seen is none. Its
-    hidden tracks stay with the tray: where a hidden track goes in a split is the support's vote around it, not the
-    object's own tracks, which may be the ones sliding."""
+    wrist and move with it, still seen, the rest hidden (Point2Pose's tracks slid onto the gripper so on 2026-10-09;
+    the point tracker's slid along the arm's edge so in act 20261018_231143). Its seen points are all in the arm's
+    group, as when the gripper lifts it with 60% of it in view: points alone cannot tell the two apart, and it goes
+    with the arm. From frame 50 the slid tracks are lost and the other 12 are seen where it lies: they pin it, and
+    place it back there, in the tray's group."""
     tray = _cloud(200, (0.0, 0.0, 0.45), (0.5, 0.35, 0.002))
     centre = np.array([0.10, 0.05, 0.43])
     pad = _cloud(30, centre, (0.072, 0.040, 0.010))
     arm = _cloud(40, (0.10, 0.05, 0.36), (0.05, 0.05, 0.05))
-    slid = np.arange(18)  # the gamepad's tracks that stick to the wrist; the other 12 are hidden
-
-    def run(**rule):
-        t = GroupTracker(**rule)
-        t.add_object("gamepad", np.arange(240, 270), _pose(centre))
-        frames = []
-        for k in range(75):
-            off = np.array([0.004 * max(k - 20, 0), 0.0, 0.0])  # the arm moves on from frame 20
-            pts, seen = pad.copy(), np.ones(270, bool)
-            if k >= 30:  # from where they were as the wrist came over
-                pts[slid] += off - [0.040, 0.0, 0.0]
-                seen[240 + len(slid) :] = False
-            frames.append((np.vstack([tray, arm + off, pts]), seen))
-        return _run(t, frames)
-
-    t = run()
-    arm_group = int(np.bincount(t.group_of[200:240][t.group_of[200:240] >= 0]).argmax())
-    assert arm_group != t.group_of[0] and (t.group_of[240 + slid] == arm_group).mean() > 0.5, (
-        "the slid tracks went to the arm's group"
-    )
-    assert (t.group_of[240 + len(slid) : 270] == t.group_of[0]).all(), "the hidden ones stayed with the tray"
+    slid = np.arange(18)  # the gamepad's tracks that stick to the wrist; the other 12 are hidden under it
+    t = GroupTracker()
+    t.add_object("gamepad", np.arange(240, 270), _pose(centre))
+    carried_off = None
+    for k in range(80):
+        off = np.array([0.004 * max(k - 20, 0), 0.0, 0.0])  # the arm moves on from frame 20
+        pts, seen = pad.copy(), np.ones(270, bool)
+        if k >= 30:  # from where they were as the wrist came over
+            pts[slid] += off - [0.040, 0.0, 0.0]
+            seen[240 + len(slid) :] = False
+        if k >= 50:  # the wrist has gone: the slid tracks are lost, the rest seen where it lies
+            seen[240 : 240 + len(slid)] = False
+            seen[240 + len(slid) :] = True
+        _run(t, [(np.vstack([tray, arm + off, pts]), seen)])
+        if k == 49:
+            carried_off = t.pose("gamepad")[:3, 3] - centre
+    assert carried_off is not None and carried_off[0] > 0.03, carried_off
     pose = t.pose("gamepad")
     assert t.objects["gamepad"].group == t.group_of[0], "it rests in the tray's group"
     assert np.linalg.norm(pose[:3, 3] - centre) < 0.003, pose[:3, 3]
     assert np.degrees(Rotation.from_matrix(pose[:3, :3]).magnitude()) < 3.0
-    loose = run(own_share=0.0, point_noise_m=1e-6).pose("gamepad")
-    assert np.linalg.norm(loose[:3, 3] - centre) > 0.03, "a view of the slid tracks alone would carry it off"
 
 
 def test_an_object_at_rest_stays_with_its_group_until_its_own_points_show_it_moved():

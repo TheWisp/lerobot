@@ -98,6 +98,17 @@ with the arm (`test_tracks_of_a_covered_object_that_slide_onto_the_wrist_do_not_
 `tests/showservo/test_groups.py`, against `groups.py` before `_place_objects` took the rule). So an object's support
 may change only on a view that places it, or with the body it lies hidden in, as its support's points decide.
 
+**Changed 2026-10-19: the rule kept a lifted object on the table.** In acts `20261018_231143` and `20261018_191804`
+the gripper lifted the object with 12 to 31 of its 60 points seen, most of them in the gripper's group, never the
+97% a view needs, and its pose stayed where it had lain. An object now goes with the group most of its seen points
+are in, once they have been there for `join_frames` frames, and from where it was when those points last held still.
+Points that slid onto what passed over it carry it off as before, and it is put back where it lay once more of its
+points seen there sit at its old place than at the new one: the gamepad above
+(`test_tracks_that_slide_onto_the_wrist_carry_an_object_off_until_its_own_points_place_it_back`), and in act
+`20261018_231143` five tracks dragged along the arm's edge carried it 38 mm for 0.6 s, then it was back where it lay,
+5 s before the lift. A view still needs the share to re-place it: a corner left in view tilts it otherwise
+(`test_a_corner_of_an_object_left_in_view_does_not_turn_it_its_group_carries_it`).
+
 **O9. In the point groups, a small object at rest wobbled with its own points.** Each frame its own points passed
 the rule they re-placed it outright: a 36 mm cube 1 to 5 degrees from one frame to the next while it lay still, and
 in the act of 2026-10-10 09:20 the carry turned the cube's place target 2.1 degrees though nothing had moved (act
@@ -108,7 +119,12 @@ moved.
 **O10. The point groups lose an object in the gripper.** In the act of 2026-10-10 00:55 the gamepad's outline stayed
 on the tray while the gripper carried it to the cube, as it had in a replay of the demo before the rule: the fingers
 hide most of it, and its hidden points stay with what it lay on. So while the gripper holds it, its pose is the arm's,
-which neither the fingers nor the camera hide. This is a prediction of motion,
+which neither the fingers nor the camera hide. (2026-10-19: the groups seeded new points only on surfaces that had
+held still, so nothing on the fingers was tracked to carry it. With points kept around the object wherever it is,
+moving or not, the fingers join its group: replayed on act `20261018_231143`, the groups carried it through the
+lift and the turn upright, 0 to 17% of its surface seen through, while Point2Pose's view lay flat. In act
+`20261018_191804` it turned in the fingers as they closed, 8.4 to 8.9 s, which no group shows and too few of its
+points saw to re-place it: 9 to 21% seen through until 12 s.) This is a prediction of motion,
 not a fresh measurement of how the object sits between the fingers. Since
 2026-10-12, corrected placement by default requires a current visual hold and the demo's
 carry reference. The runner validates the demo carry reference before starting
