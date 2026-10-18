@@ -14,6 +14,7 @@
 
 """Jog API: the bounded pose walk, the motor->URDF conversion, and the guards that need no arm."""
 
+import asyncio
 import gc
 import math
 import threading
@@ -1729,3 +1730,31 @@ def test_a_freeze_during_async_ik_keeps_its_cause_when_the_producer_publishes(mo
         else:
             jog.playback_stop_at_observed()
     assert j.playback == [q] and j.playback_sent == 0
+
+
+def test_a_replay_ramps_to_its_first_command_then_plays_the_rest_on_their_recorded_clock(monkeypatch):
+    calls = []
+
+    async def joints_start(q):
+        calls.append(("ramp", q))
+
+    monkeypatch.setattr(jog, "joints_start", joints_start)
+    monkeypatch.setattr(jog, "play_joints", lambda samples, due: calls.append(("play", samples, due)))
+    monkeypatch.setattr(
+        jog,
+        "append_playback_chunk",
+        lambda tail, samples, due: calls.append(("append", tail, samples, due)) or True,
+    )
+    samples = [{"shoulder_lift": float(k)} for k in range(3)]
+    out = asyncio.run(jog.replay(jog.ReplayBody(samples=samples, due_s=[10.0, 10.1, 10.3])))
+    assert out == {"samples": 3, "seconds": pytest.approx(0.3)}
+    assert calls[0] == ("ramp", samples[0])
+    assert calls[1] == ("play", [samples[0]], [0.0])
+    assert calls[2][:3] == ("append", 0, samples[1:]) and calls[2][3] == pytest.approx([0.1, 0.3])
+
+
+@pytest.mark.parametrize("due", [[0.0, 0.2, 0.1], [0.0, 0.1]])
+def test_a_replay_refuses_times_that_go_back_or_do_not_match_its_commands(due):
+    with pytest.raises(jog.HTTPException) as e:
+        asyncio.run(jog.replay(jog.ReplayBody(samples=[{"gripper": 1.0}] * 3, due_s=due)))
+    assert e.value.status_code == 422

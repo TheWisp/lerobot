@@ -2435,6 +2435,38 @@ async def ready() -> dict:
         raise HTTPException(500, f"ready failed: {e}") from e
 
 
+class ReplayBody(BaseModel):
+    samples: list[dict[str, float]]  # the jog's motor dictionaries, in the order they go out
+    due_s: list[float]  # each sample's time, non-decreasing; only the differences count
+
+
+@router.post("/replay")
+async def replay(body: ReplayBody) -> dict:
+    """Play recorded joint commands back through the live playback, as an act sends them: a ramp to the first at the
+    ready/park speed, then each at its time, under the same per-tick bound and lag guards. For diagnosing an act from
+    its own record (``arm.npz``: ``q_cmd`` at ``t``)."""
+    n = len(body.samples)
+    if n < 2 or len(body.due_s) != n or any(b < a for a, b in zip(body.due_s, body.due_s[1:], strict=False)):
+        raise HTTPException(422, "two or more samples, one non-decreasing time each")
+    try:
+        await joints_start(body.samples[0])
+        play_joints([body.samples[0]], [0.0])
+        if not append_playback_chunk(0, body.samples[1:], [t - body.due_s[0] for t in body.due_s[1:]]):
+            raise RuntimeError("the playback changed while the replay started")
+    except RuntimeError as e:
+        raise HTTPException(409, str(e)) from e
+    return {"samples": n, "seconds": body.due_s[-1] - body.due_s[0]}
+
+
+@router.post("/replay/stop")
+async def replay_stop() -> dict:
+    """Hand the arm back to the Cartesian walk where it stands."""
+    try:
+        return await joints_stop()
+    except RuntimeError as e:
+        raise HTTPException(409, str(e)) from e
+
+
 @router.post("/park")
 async def park() -> dict:
     """Fold the arm to its profile's rest pose, release torque, disconnect. Connect again to resume."""
