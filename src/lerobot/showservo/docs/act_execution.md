@@ -151,10 +151,12 @@ flowchart LR
   takes each frame's candidates, a pose per source with that source's own verdict, and says per object which pose
   to take, or none and why; the act's record counts the refusals. Neither the world nor the engine sees a tracker, so
   a better estimator replaces the one in use without touching either. Two sources today: Point2Pose's own verdict
-  (its fit found, the object not lost), the one in use, which passes views every other check rejects
-  ([E30](#e30)); and the key-frame runner's checks, which refuse nearly every view instead ([E31](#e31)).
-  **NOT IMPLEMENTED:** an estimator that takes the held object's views and refuses E30's, tried on the recorded acts
-  first.
+  (its fit found, the object not lost), which passes views every other check rejects ([E30](#e30)); and the
+  key-frame runner's checks, which refuse nearly every view instead ([E31](#e31)). The one in use takes Point2Pose's
+  view unless the camera sees through it: the camera's ray to a point of the object's surface, at that pose, met
+  something farther than the point, so the surface the pose puts there is not there (a point the ray met something
+  nearer on is only hidden). A view is refused when more of the surface is seen through than the object's cut-off;
+  the tolerance and the cut-off are measured on the object's own views in its first second ([E33](#e33)).
 - **One rule for every object.** A new measurement replaces the object's pose. No rule
   names an object, or depends on its role (the one picked up, the one placed onto) or its state (held, touched,
   moving). Between measurements an object is where it was last measured. ([R4](#requirements))
@@ -649,3 +651,19 @@ Point2Pose's view, which the engine took, had it lying diagonally. The record he
 and the size of each change the engine made, not where it believed the object was, so which views moved the
 commands, and by how much, could not be read from it. The object was dropped afterwards by the recovery (lowered and
 opened above the table), not by the act.
+
+<a id="e33"></a>**E33. Poses the camera sees through**, 2026-10-18, the four rig acts of the day replayed offline. For
+each point of an object's demo surface at a view's pose, the depth the same camera frame measured on the ray to it,
+against the point's: at rest a median 1.4-1.7 mm apart (95th percentile 5-7 mm for the ring, 10-12 mm for the
+object, at its ends). On the wrong views the rays pass through the surface: the upright object seen end-on, the
+model lying diagonally where the camera sees the tray about 100 mm farther; the ring with the object in its hole,
+the tilted model 10-25 mm in front of the ring's measured top. Over the frames labelled from the images, with each
+object's tolerance twice its 95th percentile at rest and its cut-off twice its largest share seen through at rest
+(at least two points): every bad view refused (the ring's 93 after the insertion, the object's 6 turning upright),
+5% of the good ones refused (36 of 673; a refused view leaves the estimate where it was). Point2Pose's own fitted
+points miss the ring's (at most 7% seen through): the check needs the whole surface. Replayed with it, act
+`20261018_162243` runs to the end of its motion instead of stopping in key frame 7; `20261018_113106` reaches the
+release (its check then answers "neither", 15 mm from staying put and 19 from going with the gripper: the object
+leaned in the ring's hole, and the ring's pose stood where its last view before the insertion put it, while the frames
+show the insertion pushed it); `20261018_191804` no longer drifts its grip, and stops in key frame 6 with the wrist at its
+bound (the demo holds it 0.6 deg from it there), 3 mm short.

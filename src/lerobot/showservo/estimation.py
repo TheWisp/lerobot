@@ -34,6 +34,19 @@ class Candidate:
 
 
 @dataclasses.dataclass(frozen=True)
+class Frame:
+    """What the camera measured in the frame the candidates are of: its depth image (metres, 0 where it has none),
+    aligned to the image the trackers saw; its intrinsics; and where the camera is (base to camera)."""
+
+    depth_m: np.ndarray
+    fx: float
+    fy: float
+    cx: float
+    cy: float
+    cam_from_base: np.ndarray
+
+
+@dataclasses.dataclass(frozen=True)
 class Estimate:
     """An object's pose in one frame, to take as a measurement; None when there is none to take. ``why`` says which."""
 
@@ -42,8 +55,11 @@ class Estimate:
 
 
 class PoseEstimator(Protocol):
-    def estimate(self, t: float, candidates: dict[str, list[Candidate]]) -> dict[str, Estimate]:
-        """Each object's estimate from the candidates of the camera frame captured at ``t``."""
+    def estimate(
+        self, t: float, candidates: dict[str, list[Candidate]], frame: Frame | None = None
+    ) -> dict[str, Estimate]:
+        """Each object's estimate from the candidates of the camera frame captured at ``t``, and what that frame
+        measured when it is given."""
         ...
 
 
@@ -57,7 +73,9 @@ class SourceVerdict:
     def __init__(self, source: str):
         self.source = source
 
-    def estimate(self, t: float, candidates: dict[str, list[Candidate]]) -> dict[str, Estimate]:
+    def estimate(
+        self, t: float, candidates: dict[str, list[Candidate]], frame: Frame | None = None
+    ) -> dict[str, Estimate]:
         out = {}
         for name, found in candidates.items():
             c = next((c for c in found if c.source == self.source), None)
@@ -81,3 +99,70 @@ def old_runner_checks() -> SourceVerdict:
     middle, its surface agreeing (lerobot.gui.api.manipulation.tracking). Not the runner's carrying between views by
     the point groups, which needs to know what the gripper holds."""
     return SourceVerdict(OLD_RUNNER)
+
+
+REST_S = 1.0  # a choice: each object's first second of views, which its tolerances are measured on (as the world's)
+MIN_REST_VIEWS = 3  # the fewest views a tolerance is measured on
+
+
+class SeenThrough:
+    """A source's confident candidate, unless the camera saw through it (act_execution.md E33): for each point of the
+    object's surface at the candidate's pose, the camera's ray to it met something farther than the point by more than
+    the object's tolerance, so the surface the pose puts there is not there. A point the ray met something nearer on
+    is hidden, not contradicted. A candidate is refused when more of its surface is seen through than the object's
+    cut-off. Both are measured on the object's own views in its first REST_S, before anything has touched it: the
+    tolerance twice the 95th percentile of how far the measured depth lay from its points, the cut-off twice the
+    largest share then seen through, and at least two points' worth. Until they are measured its views pass.
+    ``surfaces`` are each object's surface points at its demo pose, base frame."""
+
+    def __init__(self, source: str, surfaces: dict[str, np.ndarray]):
+        self.source = source
+        self.surfaces = {n: np.asarray(p, dtype=float).reshape(-1, 3) for n, p in surfaces.items()}
+        self.rest: dict[str, list[np.ndarray]] = {}  # each object's gaps per view, in its first REST_S
+        self.since: dict[str, float] = {}
+        self.limits: dict[str, tuple[float, float]] = {}  # each object's tolerance (m) and cut-off (share)
+
+    def gaps(self, name: str, motion: np.ndarray, frame: Frame) -> np.ndarray:
+        """For each of ``name``'s surface points at ``motion`` the camera has depth for: the measured depth on its ray
+        less the point's (metres)."""
+        m = frame.cam_from_base @ np.asarray(motion, dtype=float)
+        p = self.surfaces[name] @ m[:3, :3].T + m[:3, 3]
+        p = p[p[:, 2] > 0]
+        u = np.round(frame.fx * p[:, 0] / p[:, 2] + frame.cx).astype(int)
+        v = np.round(frame.fy * p[:, 1] / p[:, 2] + frame.cy).astype(int)
+        h, w = frame.depth_m.shape
+        ok = (u >= 0) & (u < w) & (v >= 0) & (v < h)
+        measured = np.zeros(len(p))
+        measured[ok] = frame.depth_m[v[ok], u[ok]]
+        ok &= measured > 0
+        return measured[ok] - p[ok, 2]
+
+    def estimate(
+        self, t: float, candidates: dict[str, list[Candidate]], frame: Frame | None = None
+    ) -> dict[str, Estimate]:
+        out = SourceVerdict(self.source).estimate(t, candidates)
+        for name, e in out.items():
+            if e.motion is None or frame is None or name not in self.surfaces:
+                continue
+            gaps = self.gaps(name, e.motion, frame)
+            if not len(gaps):
+                continue
+            if name not in self.limits:
+                self.since.setdefault(name, t)
+                self.rest.setdefault(name, []).append(gaps)
+                if t - self.since[name] >= REST_S and len(self.rest[name]) >= MIN_REST_VIEWS:
+                    views = self.rest.pop(name)
+                    tol = 2.0 * float(np.percentile(np.abs(np.concatenate(views)), 95))
+                    cut = max(
+                        2.0 * max(float(np.mean(g > tol)) for g in views), 2.0 / min(len(g) for g in views)
+                    )
+                    self.limits[name] = (tol, cut)
+                out[name] = Estimate(e.motion, f"{e.why}; its tolerances are being measured")
+                continue
+            tol, cut = self.limits[name]
+            share = float(np.mean(gaps > tol))
+            if share > cut:
+                out[name] = Estimate(None, "the camera sees through more of its surface than its cut-off")
+            else:
+                out[name] = Estimate(e.motion, f"{e.why}; {share:.0%} of its surface seen through")
+        return out

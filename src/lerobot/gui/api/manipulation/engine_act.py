@@ -40,7 +40,15 @@ from lerobot.showservo.engine.perturb import Perturbations
 from lerobot.showservo.engine.scene import Camera, Measurement, SceneLog
 from lerobot.showservo.engine.timeline import Demo, Timeline
 from lerobot.showservo.engine.world import World
-from lerobot.showservo.estimation import OLD_RUNNER, POINT2POSE, Candidate, PoseEstimator, tracker_verdict
+from lerobot.showservo.estimation import (
+    OLD_RUNNER,
+    POINT2POSE,
+    Candidate,
+    Frame,
+    PoseEstimator,
+    SeenThrough,
+    tracker_verdict,
+)
 
 from . import acquisition, camera, holds, planning, recording, runtime
 
@@ -202,7 +210,18 @@ class _Feed:
             return
         self.frames += 1
         self.scene.add_frame(t)
-        for name, e in self.estimator.estimate(t, self._candidates(r, result, job.created)).items():
+        frame = None
+        depth, intr = getattr(job, "depth_m", None), getattr(job, "intr", None)
+        if depth is not None and intr:
+            frame = Frame(
+                np.asarray(depth, dtype=float),
+                float(intr["fx"]),
+                float(intr["fy"]),
+                float(intr["cx"]),
+                float(intr["cy"]),
+                np.linalg.inv(self.t_bc),
+            )
+        for name, e in self.estimator.estimate(t, self._candidates(r, result, job.created), frame).items():
             if e.motion is not None:
                 self.scene.add_measurement(name, Measurement(t=t, motion=e.motion))
             else:
@@ -391,7 +410,8 @@ async def _act_engine_task(
             perturb=Perturbations.from_spec(perturb),
             clock=time.perf_counter,
         )
-        feed = _Feed(scene, demo, t_bc, session, others)
+        # Point2Pose's views, refused where the camera sees through the surface they put the object at (E33).
+        feed = _Feed(scene, demo, t_bc, session, others, SeenThrough(POINT2POSE, surfaces))
         with runtime._state.lock:
             runtime._state.frame_listeners.append(feed)
         run = recording._begin_run(

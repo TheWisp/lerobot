@@ -171,7 +171,7 @@ def test_the_feed_measures_only_what_its_estimator_takes(monkeypatch):
     seen = []
 
     class OnlyTheDowel:
-        def estimate(self, t, candidates):
+        def estimate(self, t, candidates, frame=None):
             seen.append({n: [(c.source, c.ok, c.why) for c in cs] for n, cs in candidates.items()})
             return {
                 n: Estimate(cs[0].motion, "taken") if n == "dowel" else Estimate(None, "not this one")
