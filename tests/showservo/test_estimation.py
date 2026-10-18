@@ -11,18 +11,19 @@ from __future__ import annotations
 
 import numpy as np
 
-from lerobot.showservo.estimation import Candidate, TrackerVerdict
+from lerobot.showservo.estimation import Candidate, SourceVerdict
 
 
-def test_the_trackers_verdict_takes_the_first_confident_candidate_and_says_why_not():
+def test_a_sources_verdict_takes_that_sources_candidate_when_it_is_confident_and_says_why_not():
     a, b = np.eye(4), np.eye(4) * 2.0
-    out = TrackerVerdict().estimate(
+    out = SourceVerdict("second").estimate(
         1.0,
         {
-            "block": [Candidate("first", a, ok=False, why="no fit"), Candidate("second", b, ok=True)],
-            "ring": [Candidate("first", a, ok=False, why="lost"), Candidate("second", b, ok=False)],
+            "block": [Candidate("first", a, ok=True), Candidate("second", b, ok=True)],
+            "ring": [Candidate("first", a, ok=True), Candidate("second", b, ok=False, why="lost")],
+            "cup": [Candidate("first", a, ok=True)],
         },
     )
     assert out["block"].motion is b and out["block"].why == "second: confident"
-    assert out["ring"].motion is None
-    assert out["ring"].why == "first: lost; second: not confident"
+    assert out["ring"].motion is None and out["ring"].why == "second: lost"
+    assert out["cup"].motion is None and out["cup"].why == "no second candidate"

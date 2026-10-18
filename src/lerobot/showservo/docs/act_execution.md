@@ -148,11 +148,13 @@ flowchart LR
 ```
 
 - **Which tracker output is a measurement is its own layer:** the pose estimator (`lerobot.showservo.estimation`)
-  takes each frame's candidates, a pose per tracker with that tracker's own verdict, and says per object which pose
+  takes each frame's candidates, a pose per source with that source's own verdict, and says per object which pose
   to take, or none and why; the act's record counts the refusals. Neither the world nor the engine sees a tracker, so
-  a better estimator replaces the one in use without touching either. The one in use takes the trackers' own verdicts
-  (Point2Pose's fit found, the object not lost), which pass views every other check rejects ([E30](#e30)).
-  **NOT IMPLEMENTED:** an estimator that refuses them, tried on the recorded acts first.
+  a better estimator replaces the one in use without touching either. Two sources today: Point2Pose's own verdict
+  (its fit found, the object not lost), the one in use, which passes views every other check rejects
+  ([E30](#e30)); and the key-frame runner's checks, which refuse nearly every view instead ([E31](#e31)).
+  **NOT IMPLEMENTED:** an estimator that takes the held object's views and refuses E30's, tried on the recorded acts
+  first.
 - **One rule for every object.** A new measurement replaces the object's pose. No rule
   names an object, or depends on its role (the one picked up, the one placed onto) or its state (held, touched,
   moving). Between measurements an object is where it was last measured. ([R4](#requirements))
@@ -622,3 +624,15 @@ the table. The world moved the ring, the moved-target rule backed out, and the w
 checks tried on the act do not separate these views from the held object's good ones: model points the depth sees
 past (0-10% of the ring's against 4-33% of the object's), and the posed demo surface against the depth inside the
 object's mask (median 3.6-8.1 mm against 4.3-5.0 mm).
+
+<a id="e31"></a>**E31. The key-frame runner's checks as the estimator**, 2026-10-18, acts `20261018_113106` and
+`20261018_135723` replayed offline with each estimator (their verdicts as recorded live).
+
+| Act                             | Point2Pose's verdict                                  | The key-frame runner's checks                                                                                                                                                                                                 |
+| ------------------------------- | ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 113106                          | stops in key frame 7 on the ring's tilted views (E30) | the whole motion; the insertion's commands within 4.8-7.0 mm of the live act's, which put the object in the ring; ends "not confirmed": no view of the object certified after 0.5 s, so neither grasp nor release was checked |
+| 135723 (its record ends at 8 s) | backs out of a 4 mm move, then grasps                 | grasps                                                                                                                                                                                                                        |
+
+In 113106 the checks certified 7 of the object's 214 views, all in the first 0.5 s, before the arm moved (its views
+carried in the gripper are right: E27), and 41 of the ring's 112 before the insertion, none of its 102 after. They avoid E30 by refusing nearly
+every view: the act then runs on the poses it had at the grasp, as the live act did, and checks nothing.

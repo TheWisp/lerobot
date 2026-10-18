@@ -21,7 +21,11 @@ from lerobot.showservo.engine.scene import SceneLog
 
 
 def _job(stamp):
-    return types.SimpleNamespace(camera_stamp_mono=stamp)
+    return types.SimpleNamespace(camera_stamp_mono=stamp, created=None if stamp is None else 1000.0 + stamp)
+
+
+def _target(anchor):
+    return types.SimpleNamespace(anchor=anchor, last={}, hold_views=[])
 
 
 def test_every_object_the_trackers_are_confident_in_is_measured_every_frame(monkeypatch):
@@ -37,7 +41,7 @@ def test_every_object_the_trackers_are_confident_in_is_measured_every_frame(monk
     monkeypatch.setattr(
         runtime._state,
         "targets",
-        {"ring": types.SimpleNamespace(anchor=anchor), "cup": types.SimpleNamespace(anchor=np.eye(4))},
+        {"ring": _target(anchor), "cup": _target(np.eye(4))},
     )
     feed = engine_act._Feed(scene, types.SimpleNamespace(), np.eye(4), "dowel", ["ring", "cup"])
     r = {
@@ -162,7 +166,7 @@ def test_the_feed_measures_only_what_its_estimator_takes(monkeypatch):
     monkeypatch.setattr(
         runtime._state,
         "targets",
-        {"ring": types.SimpleNamespace(anchor=np.eye(4)), "cup": types.SimpleNamespace(anchor=np.eye(4))},
+        {"ring": _target(np.eye(4)), "cup": _target(np.eye(4))},
     )
     seen = []
 
@@ -188,11 +192,51 @@ def test_the_feed_measures_only_what_its_estimator_takes(monkeypatch):
     feed(_job(3.0), r, None)
     assert seen == [
         {
-            "dowel": [("point2pose", True, "")],
-            "ring": [("point2pose", True, "")],
-            "cup": [("point2pose", False, "lost")],
+            "dowel": [("point2pose", True, ""), ("old runner checks", False, "not certified")],
+            "ring": [("point2pose", True, ""), ("old runner checks", False, "not certified")],
+            "cup": [("point2pose", False, "lost"), ("old runner checks", False, "not certified")],
         }
     ]
     assert [m.t for m in scene.measurements("dowel")] == [3.0]
     assert scene.measurements("ring") == [] and scene.measurements("cup") == []
     assert feed.refused == {"ring: not this one": 1, "cup: not this one": 1}
+
+
+def test_the_old_runners_checks_are_a_candidate_beside_point2pose(monkeypatch):
+    """The key-frame runner's checks run on every frame before the feed (lerobot.gui.api.manipulation.tracking): the
+    session object's view they certified comes as the feed's ``result``, another object's as its track's newest view
+    of this frame. Each is a candidate of its own, so an estimator may take them instead of Point2Pose's verdict."""
+    from lerobot.showservo.estimation import old_runner_checks
+
+    monkeypatch.setattr(engine_act.planning, "_delta_base", lambda d, delta, t_bc: np.asarray(delta))
+    monkeypatch.setattr(engine_act.planning, "_pose_frame", lambda d, name: 1)
+    monkeypatch.setattr(engine_act.holds, "_demo_control_pose", lambda d, name, f: (np.eye(4), ""))
+    certified_ring = np.eye(4)
+    certified_ring[:3, 3] = (0.0, 0.02, 0.0)
+    ring = _target(np.eye(4))
+    ring.last, ring.hold_views = {"state": "tracking"}, [(1003.0, certified_ring)]
+    cup = _target(np.eye(4))
+    cup.last = {"state": "untrusted", "reason": "only 56% of its points are seen"}
+    monkeypatch.setattr(runtime._state, "targets", {"ring": ring, "cup": cup})
+    certified_dowel = np.eye(4)
+    certified_dowel[:3, 3] = (0.01, 0.0, 0.0)
+    scene = SceneLog()
+    feed = engine_act._Feed(
+        scene, types.SimpleNamespace(), np.eye(4), "dowel", ["ring", "cup"], old_runner_checks()
+    )
+    r = {
+        "ok": True,
+        "delta": np.eye(4),
+        "others": [{"name": "cup", "ok": True, "lost": False}, {"name": "ring", "ok": True, "lost": False}],
+        "other_delta_0": np.eye(4),
+        "other_delta_1": np.eye(4),
+    }
+    feed(_job(3.0), r, {"delta_cam": certified_dowel})
+    np.testing.assert_allclose(scene.measurements("dowel")[0].motion, certified_dowel)
+    np.testing.assert_allclose(scene.measurements("ring")[0].motion, certified_ring)
+    assert scene.measurements("cup") == []
+    assert feed.refused == {"cup: old runner checks: only 56% of its points are seen": 1}
+    feed(
+        _job(4.0), r, None
+    )  # the runner refused this view of the dowel; its view of the ring is not of this frame
+    assert len(scene.measurements("dowel")) == 1 and len(scene.measurements("ring")) == 1

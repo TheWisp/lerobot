@@ -40,7 +40,7 @@ from lerobot.showservo.engine.perturb import Perturbations
 from lerobot.showservo.engine.scene import Camera, Measurement, SceneLog
 from lerobot.showservo.engine.timeline import Demo, Timeline
 from lerobot.showservo.engine.world import World
-from lerobot.showservo.estimation import Candidate, PoseEstimator, TrackerVerdict
+from lerobot.showservo.estimation import OLD_RUNNER, POINT2POSE, Candidate, PoseEstimator, tracker_verdict
 
 from . import acquisition, camera, holds, planning, recording, runtime
 
@@ -112,8 +112,9 @@ class _ArmScene(SceneLog):
 class _Feed:
     """Each tracked frame, into the scene log (act_execution.md, "The loops, and who writes what"): the frame's time,
     and each object's pose the estimator takes (:mod:`lerobot.showservo.estimation`). The feed only turns the trackers'
-    output into candidates, base frame, with each tracker's own verdict (Point2Pose's fit found, the object not lost);
-    which of them is a measurement is the estimator's."""
+    output into candidates, base frame, each with its source's verdict: Point2Pose's own (its fit found, the object not
+    lost) and the key-frame runner's checks on that view, which ran on the frame before the feed is called; which of
+    them is a measurement is the estimator's."""
 
     def __init__(
         self,
@@ -125,7 +126,7 @@ class _Feed:
         estimator: PoseEstimator | None = None,
     ):
         self.scene, self.demo, self.t_bc, self.session, self.others = scene, demo, t_bc, session, others
-        self.estimator = TrackerVerdict() if estimator is None else estimator
+        self.estimator = tracker_verdict() if estimator is None else estimator
         self.reference: dict[
             str, np.ndarray | None
         ] = {}  # each other object's demo pose its measurement is against
@@ -139,22 +140,37 @@ class _Feed:
             target = runtime._state.targets.get(name)
         if target is None or target.anchor is None:
             return None
+        return self._view_motion(name, np.asarray(delta, dtype=float) @ target.anchor)
+
+    def _view_motion(self, name: str, view: np.ndarray) -> np.ndarray | None:
+        """``name``'s motion since the demo, base frame, from its view: its motion from the demo's camera view."""
         if name not in self.reference:
             f = planning._pose_frame(self.demo, name)
             self.reference[name] = None if f is None else holds._demo_control_pose(self.demo, name, f)[0]
         reference = self.reference[name]
         if reference is None:
             return None
-        cam = np.asarray(delta, dtype=float) @ target.anchor @ np.linalg.inv(reference)
+        cam = np.asarray(view, dtype=float) @ np.linalg.inv(reference)
         return self.t_bc @ cam @ np.linalg.inv(self.t_bc)
 
-    def _candidates(self, r: dict[str, Any]) -> dict[str, list[Candidate]]:
+    def _candidates(
+        self, r: dict[str, Any], certified: dict[str, Any] | None, stamp: float
+    ) -> dict[str, list[Candidate]]:
+        """Each object's candidates. ``certified`` is the runner's result for the session object (None when its checks
+        refused the view); ``stamp`` the frame's read time, which stamps the views they certified of the others."""
         out = {}
         if r.get("delta") is not None:
             motion = planning._delta_base(self.demo, np.asarray(r["delta"], dtype=float), self.t_bc)
             out[self.session] = [
-                Candidate("point2pose", motion, bool(r.get("ok")), "" if r.get("ok") else "no fit")
+                Candidate(POINT2POSE, motion, bool(r.get("ok")), "" if r.get("ok") else "no fit")
             ]
+            if certified is not None and certified.get("delta_cam") is not None:
+                view = planning._delta_base(
+                    self.demo, np.asarray(certified["delta_cam"], dtype=float), self.t_bc
+                )
+                out[self.session].append(Candidate(OLD_RUNNER, view, True))
+            else:
+                out[self.session].append(Candidate(OLD_RUNNER, motion, False, "not certified"))
         names = [o.get("name") for o in r.get("others") or ()]
         for name in self.others:
             if name not in names or r.get(f"other_delta_{names.index(name)}") is None:
@@ -166,7 +182,18 @@ class _Feed:
                 continue
             ok = bool(share.get("ok")) and not share.get("lost")
             why = "" if ok else ("lost" if share.get("lost") else "no fit")
-            out[name] = [Candidate("point2pose", motion, ok, why)]
+            out[name] = [Candidate(POINT2POSE, motion, ok, why)]
+            with runtime._state.lock:
+                target = runtime._state.targets.get(name)
+                last = dict(target.last) if target is not None else {}
+                views = list(target.hold_views[-1:]) if target is not None else []
+            view = self._view_motion(name, views[0][1]) if views and views[0][0] == stamp else None
+            if last.get("state") == "tracking" and view is not None:
+                out[name].append(Candidate(OLD_RUNNER, view, True))
+            else:
+                out[name].append(
+                    Candidate(OLD_RUNNER, motion, False, str(last.get("reason") or "not certified"))
+                )
         return out
 
     def __call__(self, job: runtime._Job, r: dict[str, Any], result: dict[str, Any] | None) -> None:
@@ -175,7 +202,7 @@ class _Feed:
             return
         self.frames += 1
         self.scene.add_frame(t)
-        for name, e in self.estimator.estimate(t, self._candidates(r)).items():
+        for name, e in self.estimator.estimate(t, self._candidates(r, result, job.created)).items():
             if e.motion is not None:
                 self.scene.add_measurement(name, Measurement(t=t, motion=e.motion))
             else:

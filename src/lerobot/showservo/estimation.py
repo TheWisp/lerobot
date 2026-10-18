@@ -47,18 +47,37 @@ class PoseEstimator(Protocol):
         ...
 
 
-class TrackerVerdict:
-    """The trackers' own verdicts: an object's pose is its first candidate its tracker is confident in. It passes
-    views every other check rejects (act_execution.md E30), and is the rule the engine started with."""
+POINT2POSE = "point2pose"  # the session tracker's fit, by its own verdict (found, the object not lost)
+OLD_RUNNER = "old runner checks"  # the views the key-frame runner's checks certify, surface-corrected where they correct
+
+
+class SourceVerdict:
+    """One source's own verdict: an object's pose is that source's candidate when the source is confident in it."""
+
+    def __init__(self, source: str):
+        self.source = source
 
     def estimate(self, t: float, candidates: dict[str, list[Candidate]]) -> dict[str, Estimate]:
         out = {}
         for name, found in candidates.items():
-            c = next((c for c in found if c.ok), None)
-            if c is not None:
+            c = next((c for c in found if c.source == self.source), None)
+            if c is None:
+                out[name] = Estimate(None, f"no {self.source} candidate")
+            elif c.ok:
                 out[name] = Estimate(c.motion, f"{c.source}: confident")
             else:
-                out[name] = Estimate(
-                    None, "; ".join(f"{c.source}: {c.why or 'not confident'}" for c in found)
-                )
+                out[name] = Estimate(None, f"{c.source}: {c.why or 'not confident'}")
         return out
+
+
+def tracker_verdict() -> SourceVerdict:
+    """The rule the engine started with: Point2Pose's own verdict. It passes views every other check rejects
+    (act_execution.md E30)."""
+    return SourceVerdict(POINT2POSE)
+
+
+def old_runner_checks() -> SourceVerdict:
+    """The key-frame runner's checks: enough of the object's tracks seen with a depth that agrees, its fit pinning its
+    middle, its surface agreeing (lerobot.gui.api.manipulation.tracking). Not the runner's carrying between views by
+    the point groups, which needs to know what the gripper holds."""
+    return SourceVerdict(OLD_RUNNER)
