@@ -69,17 +69,12 @@ def _span(sim, from_leg):
 @pytest.mark.parametrize("speed", [1.0, 1.7])
 def test_the_act_takes_the_demos_time_over_the_speed_at_any_frame_rate(fps, speed):
     """From the first key frame on, the act runs on the demo's clock: (7.6 - 1.5) s / speed (R6). Before it, the arm
-    walks from wherever it is, which no demo time covers. Where a joint would move faster than its bound the clock
-    slows, by what the engine reports (R12): at 1.7 times the demo's speed the lift and the withdrawal peak above this
-    arm's 0.18 m/s; at the demo's own speed nothing does."""
+    walks from wherever it is, which no demo time covers."""
     demo, kf, bodies = pick_place_demo(fps=fps)
     sim = run_act(demo, kf, bodies, speed=speed)
     assert sim.engine.result["ok"], sim.engine.result
-    stretched = sim.engine.stretched_s / speed
-    expected = (kf[-1]["t"] - kf[0]["t"]) / speed + stretched
-    assert abs(_span(sim, 1) - expected) <= 2.0 / 30.0, (_span(sim, 1), expected, stretched)
-    if speed == 1.0:
-        assert stretched == 0.0
+    assert sim.engine.stretched_s == 0.0
+    assert abs(_span(sim, 1) - (kf[-1]["t"] - kf[0]["t"]) / speed) <= 2.0 / 30.0, _span(sim, 1)
 
 
 def test_key_frames_on_every_demo_frame_keep_the_demos_time():
@@ -350,21 +345,31 @@ def test_the_arm_does_not_drift_with_a_moved_target_while_in_contact():
         assert np.linalg.norm(c.pose[:3, 3] - expected[:3, 3]) < 0.0005
 
 
-def test_a_sticking_joint_is_waited_for_instead_of_driven_into_the_motor_loops_freeze():
-    """The lift's joint sticks under load until it is 6 degrees behind or its goal has stood still for 0.6 s, the
-    jog's trim then freeing it (on the rig the shoulder was still stuck 0.33 s into a still goal, E21). Run on, the
-    motor loop holds at 5 degrees behind and freezes the arm 0.5 s later; waited for whenever a joint trails by more
-    than the loop's 3 degree catch-up budget, the goal stands still before the hold and the act completes."""
+def test_a_sticking_joint_breaks_away_as_the_commands_go_on():
+    """Lifting, the rig's shoulder stood still until its error had built up its breakaway, then moved on (E21). Here
+    the lift's joint sticks under load until it is 7 degrees behind, past the 5 degrees the motor loop once held its
+    goal at: the commands go on, the joint breaks away, the act completes on its clock."""
     demo, kf, bodies = pick_place_demo()
-    stuck = run_act(demo, kf, bodies, speed=0.5, stick={2: 6.0}, trim_ticks=18, lag_deg=None)
-    assert stuck.motor.halted  # the control: the motor loop freezes the arm
-    sim = run_act(demo, kf, pick_place_demo()[2], speed=0.5, stick={2: 6.0}, trim_ticks=18)
+    free = run_act(demo, kf, bodies, speed=0.5)
+    sim = run_act(demo, kf, pick_place_demo()[2], speed=0.5, stick={2: 7.0})
     assert not sim.motor.halted
     assert sim.engine.result["ok"], sim.engine.result
     assert _on_ring(sim), sim.world.events
-    assert _records(sim, "waiting for the arm")
     lags = [float(np.max(np.abs(q_cmd - q_obs)[:6])) for _, _, q_cmd, q_obs in sim.motor.log]
-    assert max(lags) < sim.motor.stop_lag
+    assert max(lags) > 5.0, "the joint stuck past the old hold"
+    assert abs(_span(sim, 1) - _span(free, 1)) <= 2.0 / 30.0, "and nothing waited for it"
+
+
+def test_a_joint_bound_below_the_demos_speed_slows_the_clock_by_what_the_engine_reports():
+    """R12: where a joint would move further in a tick than its bound, the clock slows instead. With a bound of 3 deg a
+    tick, at 1.7 times the demo's speed the lift and the withdrawal peak above this arm's 0.18 m/s."""
+    demo, kf, bodies = pick_place_demo()
+    sim = run_act(demo, kf, bodies, speed=1.7, step_deg=3.0)
+    assert sim.engine.result["ok"], sim.engine.result
+    stretched = sim.engine.stretched_s / 1.7
+    assert stretched > 0.0
+    assert abs(_span(sim, 1) - ((kf[-1]["t"] - kf[0]["t"]) / 1.7 + stretched)) <= 2.0 / 30.0
+    assert sim.motor.clamped < 1e-6
 
 
 def test_the_queue_never_runs_dry_when_the_engines_steps_come_late():

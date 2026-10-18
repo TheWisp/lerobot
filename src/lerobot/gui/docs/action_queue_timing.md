@@ -182,10 +182,13 @@ The producer now takes each step's ticks from the plan's clock: the ticks
 between its two phases' ticks, rounded half up, which add up to the plan's time.
 Phases due before a step could end are merged into it — denser demos, and solves
 slower than a tick once three or more have been timed — while the gripper keeps
-its direction. The motor loop sends the newest due sample after a late tick. Two
-kinds of sample are never skipped: one where the gripper starts, stops or
-reverses, and one further than `PLAYBACK_LAG_DEG` from where a joint is. A step
-stretched by the joint slew limit, or by a lag wait, is not made up afterwards.
+its direction. The motor loop sends the newest due sample after a late tick,
+whether or not the joints have kept up, but never skips one where the gripper
+starts, stops or reverses. (Until 2026-10-18 it also did not skip past one
+further than `PLAYBACK_LAG_DEG` from where a joint was, and held its playback for
+a joint 5° behind: the hold stalled a sticking shoulder, see
+`showservo/docs/act_execution.md` E22.) A step stretched by the joint bound, or
+by the wait before a gripper opening, is not made up afterwards.
 
 `benchmarks/playback_clock_sim.py` replays the insertion segment's joint
 commands (no IK, servo dynamics or contact). It resamples the segment to other

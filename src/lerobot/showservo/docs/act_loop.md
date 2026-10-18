@@ -403,6 +403,12 @@ not a control pose. Evidence is in
 `/home/feit/Documents/showservo-experiments/20261014/pause-test-2355/` and
 the act record in `demos/insertion/acts/20261014_235641`.
 
+**Removed 2026-10-18.** Joint playback no longer waits for a joint behind it,
+except before a gripper opening (3 degrees, at most 0.5 seconds, then it opens);
+only a joint 25 degrees behind freezes the arm. Holding the goal still stopped the
+effort that frees a sticking shoulder (`act_execution.md` E22). What follows is
+the rule as it was.
+
 Joint playback pauses when an arm joint is more than 3 degrees behind its last
 sample. After a 0.5 second catch-up wait, transport can continue within a
 5 degree following budget. The soft wait becomes available again once all arm

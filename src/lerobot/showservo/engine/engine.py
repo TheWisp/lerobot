@@ -41,23 +41,20 @@ SLOPE_MAX = 3.0  # a cubic from 0 to 1 stays monotonic with end slopes up to 3
 class Arm:
     """What the engine needs of an arm (act_execution.md O10). ``kin`` maps joints in degrees, the gripper's column
     included: ``forward_kinematics(q)`` and ``inverse_kinematics(seed, pose)``. ``step_deg`` is the most an arm joint
-    may move in one tick (the motor loop's own bound for live commands); ``walk_m_s`` and ``walk_rad_s`` the walk
-    speed the operator set."""
+    may move in one tick, a bound against a solve that jumps rather than a speed limit (the motor loop's own per-tick
+    clamp, MAX_STEP_DEG on the jog); ``walk_m_s`` and ``walk_rad_s`` the walk speed the operator set."""
 
     kin: Any
     gripper: int
     closing: float = 1.0
     lo: np.ndarray | None = None
     hi: np.ndarray | None = None
-    step_deg: float = 3.0
+    step_deg: float = 12.0
     workspace: tuple[tuple[float, float, float], tuple[float, float, float]] | None = None
     hz: float = 30.0
     walk_m_s: float = 0.04
     walk_rad_s: float = math.radians(30.0)
     grip_units_s: float = 80.0
-    lag_deg: float | None = (
-        None  # the motor loop's catch-up budget: a joint further behind than this is waited for
-    )
 
     def fk(self, q: np.ndarray) -> np.ndarray:
         return np.asarray(self.kin.forward_kinematics(np.asarray(q, dtype=float)), dtype=float)
@@ -91,9 +88,6 @@ class Playback(Protocol):
     def append(self, expected_tail: int, samples: list[np.ndarray], due_s: list[float]) -> bool: ...
 
     def cancel(self, expected_sent: int) -> bool: ...
-
-    def observed(self) -> np.ndarray | None:
-        """The arm's newest checked joint reading, or None without one."""
 
 
 @dataclasses.dataclass
@@ -220,8 +214,6 @@ class Engine:
         self.result: dict[str, Any] | None = None
         self._last_now: float | None = None
         self._over = False  # the generator has made the act's last command
-        self.waiting_arm: float | None = None  # since when the arm trails by more than its catch-up budget
-        self.waited_s = 0.0
         self._unreachable = ""
         self.stretched_s = 0.0  # demo seconds the joint bound slowed
 
@@ -246,7 +238,6 @@ class Engine:
             ],
             "commands": len(self.cmds),
             "stretched_s": self.stretched_s,
-            "waited_for_arm_s": self.waited_s,
         }
         self._record("end", now, ok=ok, why=why)
 
@@ -837,32 +828,6 @@ class Engine:
         self.run, self.tau = nxt, 0.0
         self._record("line re-aimed", now, cause=cause, seconds=nxt.seconds)
 
-    def _trailing(self, now: float) -> bool:
-        """Whether to wait for the arm: a joint trails the last command sent by more than the motor loop's catch-up
-        budget. The queue is cancelled so the goal stands still, which lets the motor loop's trim free a sticking
-        joint, instead of running on into the loop's own freeze (act_execution.md E21); the clock resumes from the last
-        command sent once every joint is back within the budget."""
-        observed = getattr(self.pb, "observed", None)
-        if self.arm.lag_deg is None or observed is None or self.sent < 0:
-            return False
-        q = observed()
-        if q is None:
-            return False
-        lag = np.abs(np.asarray(q, dtype=float) - self.cmds[self.sent].q)
-        lag[self.arm.gripper] = 0.0
-        worst = float(lag.max())
-        if worst > self.arm.lag_deg:
-            if self.waiting_arm is None:
-                self.waiting_arm = now
-                self._cancel()
-                self._record("waiting for the arm", now, joint=int(np.argmax(lag)), lag_deg=worst)
-            return True
-        if self.waiting_arm is not None:
-            self.waited_s += now - self.waiting_arm
-            self._record("the arm caught up", now, waited_s=now - self.waiting_arm)
-            self.waiting_arm = None
-        return False
-
     # ── the step ──
 
     def start(self, q_now: np.ndarray, now: float) -> None:
@@ -893,8 +858,6 @@ class Engine:
             if self.done or self.waiting is not None:
                 return
         self._watch_moves(now)
-        if self._trailing(now):
-            return
         if not self._over:
             self._fill(now)
             if self.done:

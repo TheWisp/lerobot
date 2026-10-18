@@ -21,10 +21,16 @@ pink = pytest.mark.skipif(
 )
 
 
-def _act_on(kin, q_ready, gripper):
+def _act_on(kin, q_ready, gripper, top_deg_s, offset=(-0.05, -0.06, 0.126)):
+    """The act, with the demo laid out ``offset`` from where the arm stands ready. A demo recorded on the arm cannot
+    turn a joint faster than ``top_deg_s``, what the arm does: one that does (its fingertip's turn held through a
+    wrist near its singularity) has the engine follow motion the motor loop cannot, and freeze."""
     tip = np.asarray(kin.forward_kinematics(q_ready), dtype=float)
-    work = tip[:3, 3] - np.array([-0.05, -0.06, 0.126])  # the demo starts where the arm stands ready
+    work = tip[:3, 3] - np.array(offset)
     demo, kf, bodies = pick_place_demo(work=work, rot=tip[:3, :3], kin=kin, seed_q=q_ready, gripper=gripper)
+    speed = np.abs(np.diff(demo.q, axis=0)) / np.diff(demo.t)[:, None]
+    speed[:, gripper] = 0.0
+    assert speed.max() <= top_deg_s, f"the demo turns a joint at {speed.max():.0f} deg/s"
     return run_act(demo, kf, bodies, kin=kin, gripper=gripper, seed_q=q_ready, work=work)
 
 
@@ -49,7 +55,14 @@ def test_the_engine_drives_the_so107():
         "wrist_roll": 0.0,
         "gripper": 20.0,
     }
-    sim = _act_on(kin, np.array([ready[m] for m in MOTOR_NAMES]), MOTOR_NAMES.index("gripper"))
+    # The fastest the rig's SO-107 joints turned in the jog's act records (2026-10-05 to 18, 106,545 ticks): 224 deg/s.
+    sim = _act_on(
+        kin,
+        np.array([ready[m] for m in MOTOR_NAMES]),
+        MOTOR_NAMES.index("gripper"),
+        224.0,
+        (-0.08, 0.0, 0.126),
+    )
     assert sim.engine.result["ok"], sim.engine.result
     assert _placed(sim), sim.world.events
     assert sim.motor.clamped < 1e-6
@@ -61,7 +74,8 @@ def test_the_engine_drives_the_openarm2():
 
     kin = make_openarm_arm_kinematics("left")
     q_ready = np.array([10.0, 10.0, 0.0, 60.0, 0.0, 10.0, 0.0, 20.0])  # 7 arm joints, then the gripper's slot
-    sim = _act_on(kin, q_ready, 7)
+    top = np.degrees(5.4454)  # the slowest joint limit openarm_right_viz.urdf declares, 312 deg/s
+    sim = _act_on(kin, q_ready, 7, top)
     assert sim.engine.result["ok"], sim.engine.result
     assert _placed(sim), sim.world.events
     assert sim.motor.clamped < 1e-6

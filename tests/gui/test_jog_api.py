@@ -663,10 +663,11 @@ def test_the_motor_loop_keeps_30_hz_when_its_reads_and_writes_take_time(monkeypa
     assert np.mean(np.diff(sent_at)) == pytest.approx(1 / jog.HZ, abs=1e-6)
 
 
-@pytest.mark.parametrize("fresh_lift,should_advance", [(4.0, True), (-2.0, False)])
+@pytest.mark.parametrize("fresh_lift,should_advance", [(4.0, True), (0.0, False)])
 def test_playback_uses_the_current_checked_read_before_advancing(fresh_lift, should_advance):
-    q = dict.fromkeys(MOTOR_NAMES, 0.0)
-    current, following = {**q, "shoulder_lift": 4.0}, {**q, "shoulder_lift": 6.0}
+    """Whether an opening waits for the arm is judged on this tick's read, not the one before it."""
+    q = {**dict.fromkeys(MOTOR_NAMES, 0.0), "gripper": 80.0}
+    current, following = {**q, "shoulder_lift": 4.0}, {**q, "shoulder_lift": 4.0, "gripper": 75.0}
     robot = _FakeRobot({**q, "shoulder_lift": fresh_lift})
     j = jog._Jog(
         robot=robot,
@@ -684,7 +685,7 @@ def test_playback_uses_the_current_checked_read_before_advancing(fresh_lift, sho
     robot.bus.on_request = j.stop.set  # exactly one checked tick
     jog._loop(j)
     assert j.playback_sent == (1 if should_advance else 0)
-    assert robot.sent[0]["shoulder_lift.pos"] == (6.0 if should_advance else 4.0)
+    assert robot.sent[0]["gripper.pos"] == pytest.approx(75.0 if should_advance else 80.0, abs=0.1)
 
 
 def test_a_bad_read_cannot_consume_an_unsent_gripper_event():
@@ -737,80 +738,92 @@ def _play(robot, samples, due, timeout_s=10.0):
         jog._stop_loop(j)
 
 
-def test_a_playback_waits_for_a_joint_behind_so_the_others_do_not_run_ahead():
-    """2026-10-11 06:50: the lift after the release ran its schedule while the loaded shoulder lagged up to 8.4 deg;
-    the elbow, on time, unfolded ahead of it and the fingertip went 20 mm down into the stack. The playback waits for a
-    joint further than PLAYBACK_LAG_DEG behind the sample sent, and arrives later instead; the elbow waits with it."""
+def test_a_playback_keeps_its_clock_while_a_joint_trails():
+    """A follower is not held back for a joint that trails its command: in the SO-107 end-to-end datasets the shoulder
+    trailed by 7.8-12.5 deg (95th percentile) and kept following. The playback ends on its schedule with the shoulder
+    behind it."""
     q = dict.fromkeys(MOTOR_NAMES, 0.0)
     robot = _LaggingRobot(q, deg_per_tick=1.0)
-    n = 30  # the shoulder 2 deg a tick on the schedule, the elbow with it; the arm turns the shoulder 1 deg a tick
-    samples = [{**q, "shoulder_lift": -2.0 * k, "elbow_flex": 2.0 * k} for k in range(n)]
+    n = 30  # the shoulder 1.5 deg a tick on the schedule; the arm turns it 1 deg a tick
+    samples = [{**q, "shoulder_lift": -1.5 * k, "elbow_flex": 1.5 * k} for k in range(n)]
     (sent, at), seen = _play(robot, samples, [k / jog.HZ for k in range(n)])
-    assert sent == n - 1, "it plays to the end"
-    lag = [abs(cmd["shoulder_lift"] - obs["shoulder_lift"]) for cmd, obs in seen]
-    assert max(lag) <= jog.PLAYBACK_LAG_DEG + 2.0 + 1e-9, (
-        f"the shoulder kept within a sample of the lag: {max(lag)}"
-    )
-    ahead = [abs(cmd["elbow_flex"] + obs["shoulder_lift"]) for cmd, obs in seen]
-    assert max(ahead) <= jog.PLAYBACK_LAG_DEG + 2.0 + 1e-9, "the elbow did not run ahead of the shoulder"
-    assert at[-1] - at[0] > (n - 1) / jog.HZ * 1.5, "later than its schedule"
+    assert sent == n - 1, "it plays to the end, unfrozen"
+    assert at[-1] - at[0] < (n - 1) / jog.HZ + 0.1, "on its schedule"
+    lag = max(abs(cmd["shoulder_lift"] - obs["shoulder_lift"]) for cmd, obs in seen)
+    assert lag > jog.PLAYBACK_LAG_DEG + 5.0, f"the shoulder trailed and was not waited for: {lag}"
 
 
-def test_playback_can_overcome_static_friction_after_its_catchup_wait():
-    """The successful 2026-10-12 19:42 lift stayed still at 3.1 deg error during the wait,
-    then moved once the command advanced to about 4 deg. Freezing at the wait deadlocks that arm."""
+def test_a_sticking_joint_breaks_away_as_its_goal_moves_on():
+    """2026-10-18, replaying act 20261018_052107 with nothing held: lifting, the shoulder stood still while its load
+    built up to its breakaway, and moved on, three times. The fourth time the playback's former lag hold kept its goal
+    5 deg away (6.8 with the feed-forward), its load stopped at 624, and it stood there until the jog froze. Here the
+    shoulder moves only once its goal is more than 7 deg away: the playback must not hold the goal for it."""
 
     class FrictionRobot(_FakeRobot):
         def send_action(self, action):
             self.sent.append(dict(action))
             for key, value in action.items():
                 motor = key.removesuffix(".pos")
-                if motor != "shoulder_lift" or abs(value - self.q[motor]) > 4.0:
+                if motor != "shoulder_lift" or abs(value - self.q[motor]) > 7.0:
                     self.q[motor] = float(value)
             return action
 
     q = {**dict.fromkeys(MOTOR_NAMES, 0.0), "gripper": 80.0}
     robot = FrictionRobot(q)
-    samples = [{**q, "shoulder_lift": 0.5 * k, "elbow_flex": 0.5 * k} for k in range(28)]
+    samples = [{**q, "shoulder_lift": 0.5 * k, "elbow_flex": 0.5 * k} for k in range(60)]
     (sent, at), _seen = _play(robot, samples, [k / jog.HZ for k in range(len(samples))])
-    assert sent == len(samples) - 1, "a bounded static following offset must not deadlock transport"
-    assert robot.q["shoulder_lift"] > 10.0
-    assert at[-1] - at[0] < 1.5, "normal breakaway friction must not add repeated half-second stops"
+    assert sent == len(samples) - 1, "a sticking joint must not stop the playback"
+    assert robot.q["shoulder_lift"] > 20.0, "the shoulder broke away and followed"
+    assert at[-1] - at[0] < (len(samples) - 1) / jog.HZ + 0.1, "and was not waited for"
 
 
-def test_a_blocked_playback_freezes_before_other_joints_and_release_run_ahead():
-    """The 2026-10-12 retreat continued after its lag wait expired, reaching a 68 mm tool error and shoulder
-    overload. Keep the remaining arm and release samples unsent when the shoulder cannot catch up."""
+def test_a_blocked_joint_freezes_the_arm_before_the_release():
+    """The 2026-10-12 retreat ran on with its shoulder blocked, to a 68 mm tool error and a shoulder overload. A joint
+    DIVERGE_DEG behind its command is blocked, not trailing: the arm freezes there, and the release is never sent."""
     q = {**dict.fromkeys(MOTOR_NAMES, 0.0), "gripper": 80.0}
     robot = _LaggingRobot(q, deg_per_tick=10.0, stop=1.0)
     n = 30
     samples = [
-        {**q, "shoulder_lift": 0.5 * k, "elbow_flex": 0.5 * k, "gripper": 80.0 if k < 15 else 20.0}
+        {**q, "shoulder_lift": 2.0 * k, "elbow_flex": 2.0 * k, "gripper": 80.0 if k < 20 else 20.0}
         for k in range(n)
     ]
     (sent, _at), seen = _play(robot, samples, [k / jog.HZ for k in range(n)], timeout_s=2.0)
-    assert sent < 15, "the blocked arm must stop before the release"
-    assert max(action["elbow_flex.pos"] for action in robot.sent) <= 1.0 + jog.PLAYBACK_STOP_LAG_DEG + 0.5
-    assert all(action["gripper.pos"] == 80.0 for action in robot.sent), "retain the last closing command"
-    assert seen[-1][0] == samples[sent], "the pending arm target must not run ahead either"
+    assert sent < 20, "frozen before the release"
+    assert all(action["gripper.pos"] == 80.0 for action in robot.sent), "the last closing command is kept"
+    assert max(cmd["shoulder_lift"] for cmd, _ in seen) <= 1.0 + jog.DIVERGE_DEG + 2.0 + 1e-9, (
+        "frozen a sample past DIVERGE_DEG"
+    )
 
 
-@pytest.mark.parametrize("opening", [True, False])
-def test_playback_lag_timeout_freezes_without_advancing_or_changing_goals(opening):
+def test_an_opening_waits_once_for_a_joint_behind_then_opens_without_freezing():
+    """A release waits for the arm at the place, PLAYBACK_LAG_DEG at most PLAYBACK_HOLD_MAX_S; it opens then with the
+    joint still behind, and the opening's later samples are not each waited for."""
     q = {**dict.fromkeys(MOTOR_NAMES, 0.0), "gripper": 80.0}
-    target = {**q, "shoulder_lift": 4.0 if opening else 6.0}
-    j = jog._Jog(q_obs=q, q_target=target.copy(), q_cmd=target.copy())
-    j.playback = [target, {**target, "elbow_flex": 10.0, "gripper": 20.0 if opening else 80.0}]
-    j.playback_due, j.playback_sent, j.playback_tick = [0.0, 0.1], 0, 10.0
+    target = {**q, "shoulder_lift": jog.PLAYBACK_LAG_DEG + 1.0}  # the shoulder stays this far behind
+    j = jog._Jog(q_obs=q, q_target=dict(target), q_cmd=dict(target))
+    j.playback = [target, *({**target, "gripper": g} for g in (60.0, 40.0, 20.0))]
+    j.playback_due = [0.0, 0.0, 1 / jog.HZ, 2 / jog.HZ]
+    j.playback_sent, j.playback_t0, j.playback_tick = 0, 10.0, 10.0
+    sent = []
+    for tick in range(40):
+        jog._advance_playback(j, 10.0 + tick / jog.HZ)
+        sent.append(j.playback_sent)
+    assert not j.halted and j.q_target["gripper"] == 20.0
+    opened = next(i for i, k in enumerate(sent) if k > 0)
+    assert abs(opened - jog.PLAYBACK_HOLD_MAX_S * jog.HZ) <= 1, f"opened after the wait: tick {opened}"
+    assert sent.index(3) <= opened + 2, "and on, a sample a tick"
+
+
+def test_a_transport_sample_goes_out_on_time_however_far_a_joint_trails():
+    q = {**dict.fromkeys(MOTOR_NAMES, 0.0), "gripper": 80.0}
+    target = {**q, "shoulder_lift": jog.DIVERGE_DEG - 5.0}
+    j = jog._Jog(q_obs=q, q_target=dict(target), q_cmd=dict(target))
+    j.playback = [target, {**target, "shoulder_lift": jog.DIVERGE_DEG - 4.0}]
+    j.playback_due, j.playback_sent, j.playback_t0, j.playback_tick = [0.0, 0.1], 0, 10.0, 10.0
     jog._advance_playback(j, 10.0)
-    assert j.playback_waiting and j.playback_queue_depth == 1
-    jog._advance_playback(j, 10.0 + jog.PLAYBACK_HOLD_MAX_S - 0.01)
-    assert not j.halted
-    jog._advance_playback(j, 10.0 + jog.PLAYBACK_HOLD_MAX_S)
-    assert j.halted and "behind" in j.reason
-    assert "shoulder_lift" in j.reason
-    assert f"observed 0.0, commanded {target['shoulder_lift']:.1f} deg" in j.reason
-    assert j.playback_sent == 0 and j.q_target == target and j.q_cmd == target
+    assert j.playback_sent == 0 and not j.playback_waiting, "not due yet, and not waiting"
+    jog._advance_playback(j, 10.2)
+    assert j.playback_sent == 1 and not j.playback_waiting and not j.halted
 
 
 def test_a_playback_keeps_its_clock_after_a_slow_tick_but_plays_where_the_gripper_starts_and_stops():
@@ -888,10 +901,9 @@ def test_a_late_tick_catches_up_to_the_newest_due_sample_but_not_past_where_the_
     assert len(j.playback_sent_at) == 9, "a sent time for every sample, skipped ones too"
 
 
-def test_a_late_tick_catches_up_no_further_than_the_lag_budget_ahead_of_the_arm():
+def test_a_late_tick_catches_up_to_the_newest_due_sample_wherever_the_arm_is():
     q = dict.fromkeys(MOTOR_NAMES, 0.0)
-    step = 0.4 * jog.PLAYBACK_LAG_DEG
-    samples = [{**q, "shoulder_pan": step * k} for k in range(10)]
+    samples = [{**q, "shoulder_pan": 1.2 * k} for k in range(10)]
     j = jog._Jog(
         mode="joints",
         q_target=dict(samples[0]),
@@ -902,17 +914,19 @@ def test_a_late_tick_catches_up_no_further_than_the_lag_budget_ahead_of_the_arm(
         playback_tick=0.0,
     )
     jog._advance_playback(j, 0.29, dict(samples[0]))  # samples 1-8 due, the arm still at sample 0
-    assert j.playback_sent == 2, "the newest sample within the lag budget of the arm, not the newest due"
+    assert j.playback_sent == 8, "the newest due sample: the playback keeps its clock, not the arm's pace"
 
 
-def test_live_playback_slews_replanned_arm_target_without_delaying_gripper():
-    """A fresh object pose can move a wrist goal by 6 deg between 30 Hz motor ticks."""
+def test_a_live_playback_sends_its_target_as_given_within_the_step_clamp():
+    """The act's producer bounds its own joint steps; the jog sends a live target as it is, clamped only to MAX_STEP_DEG
+    from the joint's reading, and the gripper's with it."""
     q = {**dict.fromkeys(MOTOR_NAMES, 0.0), "gripper": 78.0}
     robot = _FakeRobot(q)
     j = jog._Jog(robot=robot, kin=_FakeKin(), arm="left", workspace_min=(-1.0, -1.0, -1.0))
+    far = jog.MAX_STEP_DEG + 6.0
     j.mode, j.q_target, j.q_cmd, j.q_obs = (
         "joints",
-        {**q, "wrist_roll": 6.0, "gripper": 80.0},
+        {**q, "wrist_roll": 6.0, "wrist_flex": far, "gripper": 80.0},
         dict(q),
         dict(q),
     )
@@ -922,16 +936,14 @@ def test_live_playback_slews_replanned_arm_target_without_delaying_gripper():
     try:
         j.thread.start()
         deadline = time.monotonic() + 2.0
-        while (not robot.sent or robot.sent[-1]["wrist_roll.pos"] < 6.0) and time.monotonic() < deadline:
+        while len(robot.sent) < 2 and time.monotonic() < deadline:
             time.sleep(0.005)
-        goals = [action["wrist_roll.pos"] for action in robot.sent]
-        assert len(goals) >= 2 and goals[-1] == pytest.approx(6.0)
-        assert max(np.diff([0.0, *goals])) <= jog.PLAYBACK_LAG_DEG + 1e-6
-        assert all(action["gripper.pos"] == 80.0 for action in robot.sent)
-        assert j.q_target["wrist_roll"] == 6.0  # the full checked goal remains available to the lag guard
-        assert jog._live_joint_command({"wrist_roll": 0.0}, {"wrist_roll": 9.0}, 0.5)[
-            "wrist_roll"
-        ] == pytest.approx(jog.PLAYBACK_LAG_DEG)  # a delayed tick cannot catch up in one jump
+        first, second = robot.sent[:2]
+        assert first["wrist_roll.pos"] == pytest.approx(6.0) and first["gripper.pos"] == 80.0, (
+            "in one command"
+        )
+        assert first["wrist_flex.pos"] == pytest.approx(jog.MAX_STEP_DEG), "clamped from the reading"
+        assert second["wrist_flex.pos"] == pytest.approx(far)
     finally:
         jog._stop_loop(j)
 

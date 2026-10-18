@@ -252,12 +252,12 @@ def test_cas_replaces_only_unsent_command_and_preserves_lag_guard(monkeypatch):
     monkeypatch.setattr(jog, "_jog", j)
     jog.play_joints([q], [0.0])
     j.playback_sent, j.playback_sent_at = 0, [10.0]
-    j.playback_blocked, j.playback_held = 12.0, 11.0
+    j.playback_held = 11.0
     clock = j.playback_t0
     assert jog.update_playback_next(0, {**q, "gripper": 80}, 0.1)
     assert jog.update_playback_next(0, {**q, "gripper": 70}, 0.1)
     assert len(j.playback) == 2 and j.playback[-1]["gripper"] == 70
-    assert (j.playback_t0, j.playback_blocked, j.playback_held) == (clock, 12.0, 11.0)
+    assert (j.playback_t0, j.playback_held) == (clock, 11.0)
     j.playback_sent = 1
     assert not jog.update_playback_next(0, {**q, "gripper": 20}, 0.1)
     assert j.playback[-1]["gripper"] == 70
@@ -269,7 +269,7 @@ def test_checked_horizon_replaces_only_unsent_future_without_resetting_guards(mo
     monkeypatch.setattr(jog, "_jog", j)
     jog.play_joints([q], [0.0])
     j.playback_sent, j.playback_sent_at = 0, [10.0]
-    j.playback_blocked, j.playback_held = 12.0, 11.0
+    j.playback_held = 11.0
     clock = j.playback_t0
     assert jog.append_playback_next(0, {**q, "shoulder_pan": 1.0}, 0.1)
     assert jog.append_playback_chunk(
@@ -283,7 +283,7 @@ def test_checked_horizon_replaces_only_unsent_future_without_resetting_guards(mo
     assert jog.replace_playback_tail(1, [{**q, "shoulder_pan": 1.5, "gripper": 20.0}], [0.2])
     assert [sample["shoulder_pan"] for sample in j.playback] == [0.0, 1.0, 1.5]
     assert j.playback[-1]["gripper"] == 20.0
-    assert (j.playback_t0, j.playback_blocked, j.playback_held) == (clock, 12.0, 11.0)
+    assert (j.playback_t0, j.playback_held) == (clock, 11.0)
 
 
 def test_unheld_grasp_close_can_fill_the_checked_queue(monkeypatch):
@@ -573,17 +573,6 @@ def test_checked_motor_samples_keep_velocity_continuous_across_solve_chunks():
         max_joint_accel_deg=1,
     )
     assert [q[0] for q in fallback] == [1, 2, 3, 4]
-
-
-def test_empty_live_queue_cannot_reset_hard_lag_timeout():
-    q = dict.fromkeys(MOTOR_NAMES, 0.0)
-    target = {**q, "shoulder_lift": jog.PLAYBACK_STOP_LAG_DEG + 1}
-    j = jog._Jog(q_obs=q, q_target=target, playback_live=True)
-    j.playback, j.playback_due, j.playback_sent = [target], [0.0], 0
-    jog._advance_playback(j, 10.0)
-    jog._advance_playback(j, 10.0 + jog.PLAYBACK_HOLD_MAX_S)
-    assert j.halted and "behind" in j.reason
-    assert j.playback_sent == 0
 
 
 def test_best_effort_stop_clears_pending_command_and_holds_fresh_encoders(monkeypatch):

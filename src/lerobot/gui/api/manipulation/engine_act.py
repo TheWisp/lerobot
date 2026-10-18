@@ -74,12 +74,6 @@ class _JogPlayback:
 
         return jog.replace_playback_tail(expected_sent, [], [])
 
-    def observed(self) -> np.ndarray | None:
-        from .. import jog
-
-        cur = jog.current_tip_and_anchor()
-        return None if cur is None else np.array([float(cur[2][m]) for m in self.names])
-
 
 class _ArmScene(SceneLog):
     """The scene log, the fingertip read from the jog's own history of checked reads (the camera's stamps and the
@@ -260,13 +254,12 @@ async def _act_engine_task(
             closing=float(holdings[0]["closing"]) if holdings else 1.0,
             lo=None if jog.servo_ranges() is None else jog.servo_ranges()[0],
             hi=None if jog.servo_ranges() is None else jog.servo_ranges()[1],
-            step_deg=jog.PLAYBACK_LAG_DEG,
+            step_deg=jog.MAX_STEP_DEG,
             workspace=jog.workspace_box(),
             hz=jog.HZ,
             walk_m_s=lin,
             walk_rad_s=ang,
             grip_units_s=jog.GRIP_UNITS_S,
-            lag_deg=jog.PLAYBACK_LAG_DEG,
         )
         demo_record = Demo(
             t=np.asarray(demo.t, dtype=float),
@@ -372,7 +365,6 @@ async def _act_engine_task(
                         for m in engine.milestones
                     ],
                     "stretched_s": engine.stretched_s,
-                    "waited_for_arm_s": engine.waited_s,
                     "records": engine.records,
                     "frames_fed": None if feed is None else feed.frames,
                     "slowest_solve_ms": engine.solve_s * 1000.0,

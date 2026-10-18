@@ -71,9 +71,12 @@ of [O1](#o1). So IK can run for every tick, a few ticks ahead, and ranking must 
 
 <a id="o4"></a>**O4. The arm can move several times faster than the act lets it, and runs behind its commands.** The
 demo moved joints at up to 158 °/s and the arm ran about 3 ticks behind; the act caps joints at 30 °/s, the speed
-meant for ready and park ([E2](#e2), [E5](#e5)). The motor loop moves each live command at most 3° a tick from the one
-before, sends the newest due command each tick, and never skips one where the gripper starts, stops or turns back
-(`jog._advance_playback`). So the limit is 90 °/s, and commands still queued can always be replaced.
+meant for ready and park ([E2](#e2), [E5](#e5)). The motor loop sends the newest due command each tick, never skips
+one where the gripper starts, stops or turns back, and holds each goal within 12° of the joint's reading
+(`jog._advance_playback`, `jog._clamped`); commands still queued can always be replaced. It once also moved each live
+command at most 3° a tick from the one before (90 °/s) and held its playback for a joint 5° behind; neither is measured
+against the arm, which turns its joints at up to 224 °/s and in end-to-end runs trails by 8 to 12° at the 95th
+percentile ([E22](#e22)). Both are gone.
 
 <a id="o5"></a>**O5. The grasp never lands exactly where it was aimed:** 4.6 to 7.4 mm and 1.2 to 1.8° from the demo's
 in every act of 2026-10-16 and 17 ([E6](#e6)). So what follows a grasp must allow for how the object actually sits in
@@ -190,14 +193,12 @@ it. That is what keeps the act on the demo's time at any recording rate and any 
 - The gripper's turning points — where the demo's gripper command starts, stops or turns back — are never smoothed
   away: the tick nearest each one gets its exact value, so a closing reaches its full command even when it falls
   between ticks. The motor loop never skips such a command when it catches up.
-- Where the arm cannot keep up (a joint would move faster than its limit), the clock runs slower there, and the act's
-  record says by how much.
-- Where the arm trails its commands — a joint further behind the last command sent than the motor loop's catch-up
-  budget (3° on the SO-107) — the clock waits for it: the commands queued are cancelled, so the goal stands still,
-  which lets the motor loop's trim free a sticking joint, and the clock resumes from the last command sent once every
-  joint is back within the budget. Running on, the motor loop holds at 5° behind and freezes the arm half a second
-  later ([E21](#e21)). A joint that does not move even toward a still goal is beyond what waiting fixes — on the rig
-  its cause is not yet known ([E21](#e21)) — and the motor loop's freeze stops the act.
+- Where a joint would move further in a tick than the motor loop's clamp (12°), the clock runs slower there, and the
+  act's record says by how much. The bound guards against a solve that jumps; it is not a speed limit, and on the rig
+  it has not slowed an act ([E22](#e22)).
+- Nothing waits for an arm that trails its commands. A joint that sticks breaks away as its goal moves on, as in
+  end-to-end runs; a goal held still stops the effort that frees it ([E22](#e22)). A joint 25° behind its command is
+  blocked, and the motor loop freezes the arm. Only a gripper opening waits, at most 0.5 s, for every joint within 3°.
 
 ([R6](#requirements), [R7](#requirements), [R12](#requirements))
 
@@ -416,7 +417,8 @@ after the grasp: the carry failed at the start's landing turn and every turn was
 
 <a id="e5"></a>**E5. The joint cap.** `jog.RAMP_DEG_S` = 30 °/s with a 1.5 easing margin: the lines of `150843` ran at
 0.64 to 0.67° a tick; its lift away turned the shoulder 62° in 3.3 s, which the demo did in 1.2 s, faster than 30 °/s on
-31 of 36 samples (158 °/s at most). Live playback: `jog.PLAYBACK_LAG_DEG` = 3° a tick from the previous command.
+31 of 36 samples (158 °/s at most). Live playback, until 2026-10-18: 3° a tick from the previous command
+(`jog.PLAYBACK_LAG_DEG`, [E22](#e22)).
 
 <a id="e6"></a>**E6. The hold at the grasp.** Against the demo's, in the eight acts of 2026-10-16 23:19 to 10-17 13:02:
 4.6 to 7.4 mm, 1.2 to 1.8°.
@@ -489,5 +491,17 @@ load at 400 to 624; in act `20261017_150843` the same lift kept the shoulder at 
 its lag at most 3.0°. The fingertip followed its commanded path across within 4 mm and fell behind it in height (47
 against 71 mm after 3.2 s); the dowel's tracked points moving 40 px toward the image's edge are the lift's perspective,
 not a move across. The shoulder then stood 5° behind a still goal at a load of 624, at the same 24 to 26° where the
-morning's act (E20) had stopped, until the jog froze the arm. Why it stood there is not known: no contact shows in the
-frames, and the morning's act stopped with the dowel at the ring.
+morning's act (E20) had stopped, until the jog froze the arm. No contact shows in the frames. It stood there because
+the motor loop's hold had stopped its goal 5° ahead of it ([E22](#e22)).
+
+<a id="e22"></a>**E22. The motor loop's own hold stalled the shoulder**, 2026-10-18. Act `20261018_052107`'s commands
+replayed with nothing held (`/api/jog/replay`, P 32, feed-forward 3.2): lifting, the shoulder stood still at 30.6°,
+27.1° and 24.4° while its load rose to about 530, then moved on, each time. At 24.35° the replay's commands had ended
+4.96° from it (6.8° with the feed-forward's −1.87°), where the act's hold had stopped them; its load settled at 624
+and it stood for 4 s. Four end-to-end SO-107 datasets on this machine (`cylinder_ring_assembly`,
+`cylinder_socket_merged_head`, `eval_cylinder_socket_feb_15`, `eval_act_pickup_socket_mar_01`; the last two from before
+the follower's gains were configurable, so P 16 and no feed-forward), sent every frame with nothing held back: the
+shoulder lift trailed its command by 1.5 to 1.9° at the median and 7.8 to 12.5° at the 95th percentile, more than 5°
+behind on 17 to 29% of frames, and the arm followed. Its joints turned at 42 to 161 °/s at the 99.9th percentile; in
+the jog's act records (2026-10-05 to 18, 106,545 ticks) at 56 to 136 °/s, 224 °/s at most. Neither act of 2026-10-18
+was slowed by the engine's 3° joint bound (`stretched_s` 0.0).

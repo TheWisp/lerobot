@@ -151,11 +151,11 @@ class FakeKin:
 
 class Motor:
     """The motor loop as the jog runs a live playback: each tick it sends the newest due command, never skipping one
-    where the gripper starts, stops or turns back, and moves each arm joint at most ``step_deg`` from the command
-    before. The arm follows its command a share ``follow`` of the way each tick."""
+    where the gripper starts, stops or turns back, each arm joint's goal at most ``step_deg`` from its reading (the
+    jog's MAX_STEP_DEG clamp). The arm moves a share ``follow`` of the way to its goal each tick."""
 
     def __init__(
-        self, q0, hz=30.0, step_deg=3.0, follow=0.5, gripper=FakeKin.GRIPPER, stick=None, trim_ticks=9
+        self, q0, hz=30.0, step_deg=12.0, follow=0.5, gripper=FakeKin.GRIPPER, stick=None, diverge_deg=25.0
     ):
         self.samples, self.due = [np.asarray(q0, dtype=float).copy()], [0.0]
         self.sent_i, self.t0, self.now = -1, 0.0, 0.0
@@ -163,25 +163,20 @@ class Motor:
         self.q_obs = self.q_cmd.copy()
         self.hz, self.step_deg, self.follow, self.gi = hz, step_deg, follow, gripper
         self.log = []  # (t, sent index, q_cmd, q_obs)
-        self.clamped = 0.0  # the most a command was held back by the per-tick bound
-        # The jog's guard: a joint more than STOP_LAG behind holds the playback, and a hold of HOLD_MAX freezes the arm.
-        self.stop_lag, self.hold_max = 5.0, 0.5
-        self.blocked_since, self.halted = None, False
+        self.clamped = 0.0  # the most a goal was held back by the clamp from the reading
+        # The jog's one guard on lag: a joint DIVERGE_DEG behind its command is blocked, and the arm freezes.
+        self.diverge_deg, self.halted = diverge_deg, False
         # A joint that sticks under load (index -> breakaway degrees): while ``loaded`` and driven up (its command
-        # above its reading), it moves only once its error passes the breakaway, or its goal has stood still for
-        # TRIM_TICKS (the jog's trim then frees it). The world sets ``loaded`` while the gripper holds something.
+        # above its reading) it stands still until its error passes the breakaway, as the rig's shoulder did lifting
+        # (act_execution.md E21). The world sets ``loaded`` while the gripper holds something.
         self.stick = dict(stick or {})
         self.loaded = False
-        self.trim_ticks, self.still = trim_ticks, 0
 
     def start(self, now):
         self.t0 = self.now = now
 
     def sent(self):
         return self.sent_i
-
-    def observed(self):
-        return self.q_obs.copy()
 
     def clock(self):
         return self.now - self.t0
@@ -215,45 +210,29 @@ class Motor:
         return way[0] != way[1]
 
     def tick(self, now):
-        dt = now - self.now
         self.now = now
         if self.halted:
             self.log.append((now, self.sent_i, self.q_cmd.copy(), self.q_obs.copy()))
             return
         arm = np.arange(len(self.q_cmd)) != self.gi
-        behind = float(np.max(np.abs(self.q_cmd - self.q_obs)[arm]))
-        if behind > self.stop_lag:
-            self.blocked_since = now if self.blocked_since is None else self.blocked_since
-            self.t0 += dt  # the samples still to come wait as long
-            if now - self.blocked_since >= self.hold_max:
-                self.halted = True
-        else:
-            self.blocked_since = None
         rel = now - self.t0
         k = self.sent_i + 1
-        if self.blocked_since is None and k < len(self.samples) and self.due[k] <= rel + 1e-9:
+        if k < len(self.samples) and self.due[k] <= rel + 1e-9:
             while k + 1 < len(self.samples) and self.due[k + 1] <= rel + 1e-9 and not self._turns(k):
                 k += 1
             self.sent_i = k
-        before = self.q_cmd.copy()
         if self.sent_i >= 0:
-            target = self.samples[self.sent_i]
-            step = np.clip(target - self.q_cmd, -self.step_deg, self.step_deg)
-            new = np.where(arm, self.q_cmd + step, target)
-            self.clamped = max(self.clamped, float(np.max(np.abs(target - new)[arm])))
-            self.q_cmd = new
-        self.still = self.still + 1 if np.allclose(before, self.q_cmd) else 0
-        moved = self.q_obs + (self.q_cmd - self.q_obs) * self.follow
+            self.q_cmd = self.samples[self.sent_i].copy()
+        reach = np.clip(self.q_cmd - self.q_obs, -self.step_deg, self.step_deg)
+        goal = np.where(arm, self.q_obs + reach, self.q_cmd)
+        self.clamped = max(self.clamped, float(np.max(np.abs(self.q_cmd - goal)[arm])))
+        moved = self.q_obs + (goal - self.q_obs) * self.follow
         for j, breakaway in self.stick.items():
-            up = self.q_cmd[j] > self.q_obs[j]
-            if (
-                self.loaded
-                and up
-                and self.q_cmd[j] - self.q_obs[j] <= breakaway
-                and self.still < self.trim_ticks
-            ):
+            if self.loaded and 0.0 < self.q_cmd[j] - self.q_obs[j] <= breakaway:
                 moved[j] = self.q_obs[j]  # stuck
         self.q_obs = moved
+        if float(np.max(np.abs(self.q_cmd - self.q_obs)[arm])) > self.diverge_deg:
+            self.halted = True
         self.log.append((now, self.sent_i, self.q_cmd.copy(), self.q_obs.copy()))
 
 
@@ -527,15 +506,13 @@ def run_act(
     perturb=None,
     setup=None,
     until_s=40.0,
-    step_deg=3.0,
+    step_deg=12.0,
     settings=None,
     kin=None,
     gripper=FakeKin.GRIPPER,
     seed_q=None,
     work=None,
     stick=None,
-    trim_ticks=9,
-    lag_deg=3.0,
     skip_steps=None,
 ):
     """One act in the simulated world: the arm starts where the demo did, the camera has seen the objects at rest for
@@ -562,7 +539,7 @@ def run_act(
         world.perceive(t, scene, kin.forward_kinematics(q0))
         scene.add_tip(t, kin.forward_kinematics(q0))
         t += dt
-    motor = Motor(q0, step_deg=step_deg, gripper=gripper, stick=stick, trim_ticks=trim_ticks)
+    motor = Motor(q0, gripper=gripper, stick=stick)
     arm = Arm(
         kin,
         gripper=gripper,
@@ -570,7 +547,6 @@ def run_act(
         hz=30.0,
         walk_m_s=0.04,
         walk_rad_s=np.radians(30.0),
-        lag_deg=lag_deg,
     )
     objects = Objects(
         scene,

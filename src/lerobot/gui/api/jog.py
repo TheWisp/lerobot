@@ -69,17 +69,19 @@ ANGULAR_RAD_S_RANGE = (math.radians(5.0), math.radians(180.0))
 MAX_ROT_DELTA_RAD = math.radians(60.0)
 ROT_DELTA_RAD_RANGE = (math.radians(10.0), math.radians(150.0))
 DIVERGE_DEG = 25.0  # a joint this far behind its command is stalled or blocked: freeze
-# A release waits for a joint this far behind the sample sent (:func:`_advance_playback`). On 2026-10-11 06:50 the
-# lift after the release ran its schedule while the loaded shoulder fell behind: 3.2-3.9 deg behind put the fingertip
-# 7-9 mm off the planned path, 8.4 deg (its first 0.3 s, from rest) 26 mm, 20 mm down into the stack; through the
-# rest of that act the joints stayed within 4.2 deg and the fingertip within 7 mm.
+# A release waits for a joint this far behind the sample sent (:func:`_advance_playback`), at most
+# PLAYBACK_HOLD_MAX_S. On 2026-10-11 06:50 the lift after the release ran its schedule while the loaded shoulder fell
+# behind: 3.2-3.9 deg behind put the fingertip 7-9 mm off the planned path, 8.4 deg (its first 0.3 s, from rest)
+# 26 mm, 20 mm down into the stack; through the rest of that act the joints stayed within 4.2 deg and the fingertip
+# within 7 mm.
 PLAYBACK_LAG_DEG = 3.0
-# Successful SO-107 lifts on 2026-10-12 needed 4.4-4.6 deg to break static friction after the 3 deg pause.
-# Pausing forever at 3 deg cannot build that effort. Allow this measured breakaway range, bounded at 5 deg,
-# then hold/freeze instead of the former unlimited timeout continuation (23 deg before an overload).
-# This is a transport following budget, not placement accuracy: opening still requires the tighter tolerance.
-PLAYBACK_STOP_LAG_DEG = 5.0
-PLAYBACK_HOLD_MAX_S = 0.5  # recoverable startup lag took 0.3 s; each catch-up wait is bounded
+PLAYBACK_HOLD_MAX_S = 0.5
+# Nothing else holds a playback for a joint behind it: a goal held still while a joint sticks stops the effort that
+# frees it. Lifting, the shoulder stops while its load builds to its breakaway and then jumps on (2026-10-18 replay of
+# act 20261018_052107: still at 30.6, 27.1 and 24.4 deg while the load rose to 530); held 5 deg behind (6.8 deg with
+# the feed-forward) it stayed at load 624 for 4 s and never moved. End-to-end SO-107 datasets run with no such hold:
+# the shoulder trails its command by 1.5-1.9 deg (median), 7.8-12.5 deg (95th percentile), and keeps following.
+# DIVERGE_DEG remains the freeze for a joint that is blocked.
 # The temperature a servo reports is shown and recorded, not acted on. The servos put a wrong value in it for one read
 # now and then, in an otherwise whole reply: at rest the three at the wrist end, +3 to +15 C on 0.2-0.7 % of reads;
 # moving under load any of them (2026-10-11: shoulder_lift 33 C, then 88 C and 110 C, a read each). LeRobot's own
@@ -229,13 +231,9 @@ class _Jog:
     playback_sent: int = -1  # the last sample sent
     playback_sent_at: list[float] = field(default_factory=list)  # when each sample was sent, wall clock
     playback_tick: float = 0.0  # the monotonic time of the playback's last tick
-    playback_held: float | None = None  # since when the playback waits for a joint behind its target
-    playback_blocked: float | None = None  # since exceeding the hard bound, or delaying a release
+    playback_held: float | None = None  # since when a gripper opening waits for a joint behind its target
     playback_waiting: bool = False  # this motor tick held its queue head for following error
     playback_queue_depth: int = 0  # unsent samples after this motor tick
-    playback_slew_at: float = (
-        0.0  # last live-playback command tick; a delayed tick cannot spend its missed steps
-    )
     guarded_path: GuardedPath | None = None
     path_settle: _Settle = field(default_factory=_Settle)
     path_goal_prev: dict[str, float] | None = None
@@ -434,72 +432,41 @@ def _path_endpoint_action(
 
 
 def _advance_playback(j: _Jog, now: float, observed: dict[str, float] | None = None) -> None:
-    """Consume one checked sample within the transport following budget.
-
-    Do not stop at the tighter release tolerance on every transport step: this
-    repeatedly deadlocks normal breakaway friction for half a second. Check
-    the next sample against the transport budget before sending it instead.
-    Opening still requires the tighter tolerance. A blocked arm cannot advance
-    other joints indefinitely. Pre: j.lock held, joints playback under way.
-    """
+    """Send the newest due sample: the playback keeps its clock whether or not the joints keep up, as a follower does
+    a policy's actions. Only a gripper opening waits for the arm, PLAYBACK_LAG_DEG at most PLAYBACK_HOLD_MAX_S, and
+    then opens. Pre: j.lock held, joints playback under way."""
     assert j.playback is not None
     observed = j.q_obs if observed is None else observed
     j.playback_waiting = False
     k = j.playback_sent + 1
     # After a late tick more than one sample is due: send the newest, so the playback keeps its clock instead of
     # falling a tick behind for good. Never skip one where the gripper starts, stops or reverses: the fingers' opening
-    # and the arm's next move then reached the arm in one command and pulled the gamepad over (2026-10-08). Nor skip to
-    # one further than PLAYBACK_LAG_DEG from where a joint is: catching up must not make the lag the wait below bounds.
+    # and the arm's next move then reached the arm in one command and pulled the gamepad over (2026-10-08).
     while (
         k + 1 < len(j.playback)
         and j.playback_due[k + 1] <= now - j.playback_t0
         and not _gripper_turns_at(j.playback, k, j.q_target)
-        and all(
-            abs(v - observed[m]) <= PLAYBACK_LAG_DEG
-            for m, v in j.playback[k + 1].items()
-            if m != "gripper" and m in observed
-        )
     ):
         k += 1
-    errors = {m: abs(j.q_target[m] - observed[m]) for m in j.q_target if m != "gripper" and m in observed}
-    lagging = max(errors, key=errors.__getitem__, default="joint")
-    behind = errors.get(lagging, 0.0)
     pending = k < len(j.playback) and j.playback_sent >= 0
+    due = k < len(j.playback) and now - j.playback_t0 >= j.playback_due[k]
+    behind = max(
+        (abs(j.q_target[m] - observed[m]) for m in j.q_target if m != "gripper" and m in observed),
+        default=0.0,
+    )
     opening = pending and j.playback[k].get("gripper", 0.0) < j.q_target.get("gripper", 0.0) - 1e-6
-    # A sample can move a different joint or reverse direction; compare its
-    # actual error, rather than treating all motion as increasing the lag.
-    next_errors = (
-        {m: abs(j.playback[k].get(m, j.q_target[m]) - observed[m]) for m in errors} if pending else {}
-    )
-    advancing_past_budget = behind > PLAYBACK_LAG_DEG and any(
-        error > PLAYBACK_STOP_LAG_DEG and error > errors[m] for m, error in next_errors.items()
-    )
-    blocked = (pending or (j.playback_live and j.playback_sent >= 0)) and (
-        behind > PLAYBACK_STOP_LAG_DEG or advancing_past_budget or (opening and behind > PLAYBACK_LAG_DEG)
-    )
-    j.playback_blocked = (j.playback_blocked if j.playback_blocked is not None else now) if blocked else None
-    if blocked and now - j.playback_blocked >= PLAYBACK_HOLD_MAX_S:
-        j.playback_waiting = True
-        j.halted = True
-        context = "before gripper opening" if opening else "at transport tolerance"
-        j.reason = (
-            f"playback {lagging} still {behind:.1f} deg behind {context} after {PLAYBACK_HOLD_MAX_S:.1f} s"
-            f" (observed {observed[lagging]:.1f}, commanded {j.q_target[lagging]:.1f} deg) — frozen"
-        )
-        return
-    waiting = blocked
-    if waiting:
-        j.playback_waiting = True
-        j.playback_held = j.playback_held if j.playback_held is not None else now
-        j.playback_t0 += now - j.playback_tick  # the samples still to come wait as long
-    else:
+    # The wait starts at the opening's first due sample; its later samples, while the arm stays behind, do not restart it.
+    if not (opening and behind > PLAYBACK_LAG_DEG):
         j.playback_held = None
-        if k < len(j.playback) and now - j.playback_t0 >= j.playback_due[k]:
-            j.q_target = j.playback[k]
-            j.playback_sent_at.extend(
-                [time.time()] * (k - j.playback_sent)
-            )  # one per sample, skipped ones too
-            j.playback_sent = k
+    elif due and j.playback_held is None:
+        j.playback_held = now
+    if due and j.playback_held is not None and now - j.playback_held < PLAYBACK_HOLD_MAX_S:
+        j.playback_waiting = True
+        j.playback_t0 += now - j.playback_tick  # the samples still to come wait as long
+    elif due:
+        j.q_target = j.playback[k]
+        j.playback_sent_at.extend([time.time()] * (k - j.playback_sent))  # one per sample, skipped ones too
+        j.playback_sent = k
     j.playback_tick = now
     j.playback_queue_depth = len(j.playback) - j.playback_sent - 1
 
@@ -518,25 +485,6 @@ def _gripper_turns_at(samples: list[dict[str, float]], k: int, before: dict[str,
         return True
     grip = [s.get("gripper", 0.0) for s in (prev, samples[k], samples[k + 1])]
     return gripper_direction(grip[1] - grip[0]) != gripper_direction(grip[2] - grip[1])
-
-
-def _live_joint_command(
-    previous: dict[str, float], target: dict[str, float], elapsed: float
-) -> dict[str, float]:
-    """Bound each live arm command by the playback's existing following budget.
-
-    Replanning can replace an object pose between motor ticks. Sending the
-    resulting joint correction in one packet makes the motor goal a staircase
-    even while the bus runs at 30 Hz. A delayed tick does not accumulate a
-    larger step. The gripper keeps its checked phase timing.
-    """
-    step = PLAYBACK_LAG_DEG * HZ * min(1.0 / HZ, max(0.0, elapsed))
-    return {
-        name: value
-        if name == "gripper" or name not in previous
-        else previous[name] + float(np.clip(value - previous[name], -step, step))
-        for name, value in target.items()
-    }
 
 
 def _bad_read(j: _Jog, e: _BadReadError, wall_ms: float, cpu_ms: float) -> None:
@@ -676,11 +624,6 @@ def _loop(j: _Jog) -> None:
                     active = j.mode == "joints" and j.q_target is not None and not j.halted
                     if active:
                         q_target = dict(j.q_target)
-                        if j.playback_live:
-                            now = time.monotonic()
-                            elapsed = 1.0 / HZ if not j.playback_slew_at else now - j.playback_slew_at
-                            q_target = _live_joint_command(j.q_cmd, q_target, elapsed)
-                            j.playback_slew_at = now
                         send_action_ms, send_action_cpu_ms = send_timed(
                             _clamped(
                                 _trimmed(j, {f"{m}.pos": q_target[m] for m in MOTOR_NAMES}),
@@ -1495,9 +1438,8 @@ def play_joints(samples: list[dict[str, float]], due_s: list[float]) -> None:
         j.playback = [dict(s) for s in samples]
         j.playback_due = [float(t) for t in due_s]
         j.playback_t0 = j.playback_tick = time.monotonic()
-        j.playback_slew_at = 0.0
         j.playback_sent, j.playback_sent_at = -1, []
-        j.playback_held, j.playback_blocked = None, None
+        j.playback_held = None
 
 
 def playback_clock() -> float:
