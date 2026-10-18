@@ -158,6 +158,19 @@ def _smooth(u: float) -> float:
     return u * u * (3.0 - 2.0 * u)
 
 
+def _toward(a: np.ndarray, b: np.ndarray, centre: np.ndarray, max_m: float, max_rad: float) -> np.ndarray:
+    """Pose ``a`` moved toward ``b`` by at most ``max_m`` at ``centre`` and ``max_rad`` of turn."""
+    c = np.append(centre, 1.0)
+    dist = float(np.linalg.norm((b @ c)[:3] - (a @ c)[:3]))
+    ang = math.radians(core.pose_residual(a, b)[1])
+    f = 1.0
+    if dist > max_m:
+        f = min(f, max_m / dist)
+    if ang > max_rad:
+        f = min(f, max_rad / ang)
+    return b.copy() if f >= 1.0 else core.interp_rigid(a, b, f)
+
+
 class Engine:
     """One act: the control loop's world, task and motion steps (act_execution.md, "The loops, and who writes what").
     ``world`` holds the act's objects' poses and noise; ``perturb``, when given, may change a command on its way to
@@ -220,6 +233,11 @@ class Engine:
         self._unreachable = ""
         self.stretched_s = 0.0  # demo seconds the joint bound slowed
         self.anchors: dict[int, np.ndarray] = {}  # legs held in START, from where each began
+        # Each object's pose as the commands use it: the world's, followed at no more than the walk speed during a leg,
+        # so an object that moves becomes motion of the arm, not a jump between two commands; a new path (going back,
+        # backing out) starts from the world's poses as they are, being a move from where the arm is (E26).
+        self.aims: dict[str, np.ndarray] = {}
+        self.moves_recorded: dict[str, float] = {}
 
     # ── records ──
 
@@ -260,7 +278,7 @@ class Engine:
         leg = self.tl.legs[leg_n]
         if leg.obj == START:  # the demo's gripper motion from where the leg began: any hold rides along
             return self._anchor(leg_n) @ d
-        out = (self.world.motion(leg.obj) if motion is None else motion) @ d
+        out = (self.aims.get(leg.obj, self.world.motion(leg.obj)) if motion is None else motion) @ d
         if leg.held is not None and leg.held in self.holds:
             out = out @ self._fix(leg.held)
         return out
@@ -683,6 +701,7 @@ class Engine:
 
     def _place(self, target: tuple[int, float], now: float, cause: str) -> None:
         last = self.cmds[self.sent]
+        self.aims.clear()  # a new path: to where the objects are now
         for m in self.milestones:
             if m.status != "ahead" and (m.event.leg, m.event.s) >= target:
                 m.status, m.streak, m.closed, m.data = "ahead", 0, False, {}
@@ -737,6 +756,7 @@ class Engine:
                 return  # the gripper has acted on it in this follow: the composition follows it
             self._on_sent(now)
             self._cancel()
+            self.aims.pop(obj, None)  # backing out is a new path: in again to where it is now
             last = self.cmds[self.sent]
             s_here = last.s if last.leg == run.leg and last.kind == "leg" else run.s0
             seconds = s_here * leg.span
@@ -783,6 +803,26 @@ class Engine:
         if dt > 0:
             self.step_gaps = [*self.step_gaps[-99:], dt]
         self.world.update()
+        for name, (t_move, before) in self.world.moves.items():  # the act's record: every move the world saw
+            if t_move > self.moves_recorded.get(name, -np.inf):
+                self.moves_recorded[name] = t_move
+                _, deg = core.pose_residual(before, self.world.motion(name))
+                apart = np.linalg.norm(
+                    self.world.centre(name, before) - self.world.centre(name, self.world.motion(name))
+                )
+                self._record(
+                    "object moved",
+                    now,
+                    obj=name,
+                    frame=t_move,
+                    mm=round(float(apart) * 1000, 1),
+                    deg=round(deg, 1),
+                )
+        for name, pose in self.world.pose.items():  # the motion step's targets follow the world's poses
+            aim = self.aims.get(name, pose)
+            self.aims[name] = _toward(
+                aim, pose, self.world.centres[name], self.arm.walk_m_s * dt, self.arm.walk_rad_s * dt
+            )
         self._on_sent(now)
         self._check(now)
         if self.done:

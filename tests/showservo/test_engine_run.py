@@ -193,6 +193,40 @@ def test_a_block_that_slips_in_the_gripper_is_put_down_where_it_now_sits():
     assert _on_ring(sim, tol_m=0.002), sim.world.events
 
 
+def test_a_target_whose_pose_jumps_mid_leg_is_followed_not_jumped_to(monkeypatch):
+    """2026-10-18 on the rig (act 20261018_135723, act_execution.md E26): as the fingers came down, the object was
+    pushed 11 mm and turned 10 deg; the world's pose of it jumped by that on one update, and the grasp's commands,
+    made from that pose, jumped with it between two ticks, further than any joint goes in one: the act gave up. Here
+    the world's pose of the block turns 20 deg about its centre at once during the grasp's descent (its centre still,
+    so the moved-target rule does not back out): the commands follow the turn as motion, and the act completes."""
+    from lerobot.showservo.engine import world as world_mod
+
+    turn_at = 1.0 + 2.3  # into the grasp's descent
+    update = world_mod.World.update
+    done = []
+
+    def jumping(self):
+        update(self)
+        if not done and self.t.get("dowel", -np.inf) >= turn_at:
+            e = self.steady["dowel"]
+            centre = self.centre("dowel", e.estimate)
+            about = pose(tuple(centre)) @ pose(rpy_deg=(0.0, 0.0, 20.0)) @ pose(tuple(-centre))
+            e.estimate = about @ e.estimate
+            e.recent = [(self.t["dowel"], e.estimate.copy())]
+            done.append(True)
+
+    monkeypatch.setattr(world_mod.World, "update", jumping)
+    demo, kf, bodies = pick_place_demo()
+    sim = run_act(demo, kf, bodies)
+    assert done
+    assert sim.engine.result["ok"], sim.engine.result
+    steps = [
+        sim.engine.arm.joint_step(a.q, b.q)
+        for a, b in zip(sim.engine.cmds, sim.engine.cmds[1:], strict=False)
+    ]
+    assert max(steps) <= sim.engine.arm.step_deg + 1e-9
+
+
 def test_a_missed_grasp_goes_back_and_grasps_again():
     demo, kf, bodies = pick_place_demo()
     sim = run_act(demo, kf, bodies, setup=lambda w: setattr(w, "misses", 1))

@@ -157,6 +157,10 @@ flowchart LR
   of this run and the gap between control ticks cover, plus one. The motor step sends whatever is due and never waits
   on a solve; on the rig it runs on its own thread at the same 30 Hz, so a slow solve can delay the motion step, never
   the servos.
+- **A moved object becomes motion, never a jump.** The pose the motion step makes commands from follows the world's
+  pose of each object at no more than the walk speed during a leg; a new path (going back after a failure, backing out
+  of a moved target) starts from the world's poses as they are, being itself a move from where the arm stands
+  ([E26](#e26)).
 - **One clock** stamps capture times, joint reads and due times. The world step pairs a measurement with the joint
   reading at its capture time, interpolated between two reads and never extrapolated.
 - **A failure or a moved target takes effect at once:** the task step moves Progress, the commands not yet sent are
@@ -550,3 +554,13 @@ through, none once the arm approached it. Of the 207 it turned away, 163 failed 
 chosen on 5 replayed acts because tracked points slid onto the arm under the gripper; inlier counts; depth), 7 had no
 group pose to compare. The ring: 41 of 206 frames. The slowest IK solve in act `20261018_111834` took 299 ms; in
 `20261018_113106`, 12 ms.
+
+<a id="e26"></a>**E26. A pushed object, taken by the world and jumped to by the commands**, 2026-10-18, act
+`20261018_135723` (`7442baa2f`), replayed offline from its record (its measurements, joint readings and finds, on its
+own clock; the replay's commands within 0.1-2.2 mm of the act's, the same abort at the same leg). As the fingers came
+down for the grasp they pushed the object 11.1 mm and turned it 10.2 deg (the frames before and after differ along its
+whole body). The world took the move on the second measurement showing it, the grasp's commands — made from the
+object's pose each tick — moved by that between two ticks, no arm configuration one tick away reached it, and the act
+gave up: "the arm would have to jump to another configuration". The moved-target rule, which looks at distance only
+(threshold twice the noise, 11.3 mm), did not back out. With the commands' poses following the world at the walk
+speed, the replay goes through the descent and the grasp begins.
