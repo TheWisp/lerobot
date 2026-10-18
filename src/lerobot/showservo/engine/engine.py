@@ -525,6 +525,7 @@ class Engine:
     def _begin(self, m: Milestone, now: float) -> None:
         e = m.event
         tip = self.scene.tip_at(now)
+        info: dict[str, Any] = {"tip_from": "reading" if tip is not None else "command"}
         if tip is None:
             tip = self.cmds[self.sent].pose if self.sent >= 0 else self.cmds[0].pose
         m.status, m.t, m.seen, m.streak, m.closed, m.ref_tracks = "checking", now, now, 0, False, None
@@ -532,6 +533,8 @@ class Engine:
             motion = self.objects.motion(e.obj)
             self.hold[e.obj] = np.linalg.inv(tip) @ motion
             self.fix[e.obj] = np.linalg.inv(self.demo.tips[e.i]) @ np.linalg.inv(motion) @ tip
+            fix_m, fix_deg = core.pose_residual(np.eye(4), self.fix[e.obj])
+            info.update(fix_mm=round(fix_m * 1000.0, 2), fix_deg=round(fix_deg, 2))
             self.objects.touched(e.obj, now)
             m.data = {"tip": tip, "motion": motion}
         else:
@@ -561,7 +564,7 @@ class Engine:
                         m.allow_deg,
                     )
             self.fix.pop(e.obj, None)
-        self._record("milestone begins", now, milestone=m.name)
+        self._record("milestone begins", now, milestone=m.name, **info)
 
     # ── checks ──
 
@@ -884,6 +887,7 @@ class Engine:
             self._finish(False, f"the {failed[0].name} failed", now)
             return
         unsure = [m.name for m in open_ms]
-        self._finish(
-            True, "done" + (f"; the camera could not tell: {', '.join(unsure)}" if unsure else ""), now
-        )
+        if unsure:  # the motion is done, the outcome is not shown: never reported as a success (E24)
+            self._finish(False, f"not confirmed: the camera could not tell the {', '.join(unsure)}", now)
+            return
+        self._finish(True, "done", now)

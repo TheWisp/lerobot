@@ -1573,6 +1573,12 @@ def joints_at(at: float, max_gap_s: float) -> dict[str, float] | None:
     return None
 
 
+def latest_joints() -> tuple[float, dict[str, float]] | None:
+    """The newest checked encoder read and its perf-counter time, or None before any."""
+    with _jog.lock:
+        return _jog.pose_history[-1] if _jog.pose_history else None
+
+
 def playback_stop() -> None:
     """End the playback where it is: the arm holds the last sample sent."""
     j = _jog

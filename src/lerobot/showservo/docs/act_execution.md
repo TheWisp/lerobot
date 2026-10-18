@@ -261,7 +261,9 @@ came along, the depth image says it is still lying there — the check can't tel
 keeps running while the object is being checked, so a drop during the carry or a fall after the release is still
 caught. Only at a Milestone the operator marks final — something that cannot be undone, such as a pour — does the arm
 wait: it does not go past until every earlier Milestone has succeeded, and the act gives up if that does not come
-within a time the operator sets. ([R1](#requirements), [R3](#requirements), [R8](#requirements))
+within a time the operator sets. When the motion is over, an act whose every Milestone succeeded is done; one with a
+Milestone the camera still cannot tell is "not confirmed", never a success ([E24](#e24)). ([R1](#requirements),
+[R3](#requirements), [R8](#requirements))
 
 ### Going back, or ahead
 
@@ -514,3 +516,15 @@ within 0.2°). The line after it started from the lift's planned top, no joint's
 out and the act gave up, though both its ends were reachable (0.2 to 0.4 mm, solved from the lift's last joints).
 The demo itself had turned the forearm to 43° during its lift and to 76° before the pre-place. Fixed: a best-effort
 command's pose is where its joints get, and the run after a best-effort leg starts there.
+
+<a id="e24"></a>**E24. The hold taken from the command, and a fall reported as a success**, 2026-10-18, act
+`20261018_111834` (`6facafcb7`, speed 0.5, `white_left`: P 32, feed-forward 3.2). The grasp, lift and carry ran; the
+grasp's check said success (tracks 17-27 px from "came along", 123-132 px from "stayed"). The dowel hovered about 5 mm
+off the ring's hole (seen by the operator; the camera above cannot tell inside from above), was let go, fell over and
+rolled away, and the act ended "ok" with the release "could not tell" (no tracked point in two frames, the depth
+wandering 24 mm). At the firm grip the fingertip read 6.3-7.5 mm and 1.7-2.1° from its command, the grasp's usual
+miss (O5). The hold is measured from the fingertip at that moment, but the GUI's fingertip lookup interpolates
+between two encoder reads and none comes after "now", so the engine took the commanded pose and held the dowel as the
+demo did. The key-frame runner's acts that inserted (`20261017_130202`, `_150843`) read the fingertip after the
+gripper settled: holds of 5.9 and 4.8 mm. Fixed: "now" is the latest read, at most two ticks old; the grasp's record
+says where the fingertip came from and the hold it gave; an act whose checks cannot tell ends "not confirmed".

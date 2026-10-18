@@ -414,6 +414,24 @@ def test_a_block_dropped_where_the_lift_stopped_short_is_picked_up_again():
     assert _on_ring(sim), sim.world.events
 
 
+def test_an_act_whose_checks_cannot_tell_is_not_reported_a_success(monkeypatch):
+    """2026-10-18 on the rig (act 20261018_111834): the dowel hovered 5 mm off the ring, fell and rolled away, the
+    release's check saw none of its tracked points and a wandering depth, and the act said "ok". When the camera
+    cannot tell whether a Milestone succeeded, the act ends without claiming it did."""
+    from lerobot.showservo.engine import engine as engine_mod, predicates
+
+    monkeypatch.setattr(
+        engine_mod.pred,
+        "combine",
+        lambda verdicts: predicates.Verdict(predicates.Answer.UNKNOWN, "no evidence"),
+    )
+    demo, kf, bodies = pick_place_demo()
+    sim = run_act(demo, kf, bodies)
+    assert _on_ring(sim), sim.world.events  # the motion itself completed
+    assert not sim.engine.result["ok"]
+    assert sim.engine.result["why"].startswith("not confirmed"), sim.engine.result
+
+
 def test_the_queue_never_runs_dry_when_the_engines_steps_come_late():
     """On the rig the engine's steps come when the GUI process lets them, not every tick: with a queue sized for the
     IK solve alone, 30 of 248 moving ticks sent nothing new and the next caught up with a double step, a visible

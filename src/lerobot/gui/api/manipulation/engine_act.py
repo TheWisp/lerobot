@@ -88,7 +88,12 @@ class _ArmScene(SceneLog):
 
         q = jog.joints_at(t, 2.0 / jog.HZ)
         if q is None:
-            return None
+            # No read after ``t`` yet: ``t`` is now, and the latest read is the arm now, up to two ticks old. Without
+            # it the engine took its grasp's hold from the commanded pose (act_execution.md E24).
+            latest = jog.latest_joints()
+            if latest is None or not 0.0 <= t - latest[0] <= 2.0 / jog.HZ:
+                return None
+            q = latest[1]
         return np.asarray(self.kin.forward_kinematics(np.array([q[m] for m in self.names])), dtype=float)
 
 

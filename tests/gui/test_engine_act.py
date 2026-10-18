@@ -90,3 +90,27 @@ def test_the_engine_drives_only_the_gravity_compensated_arm(monkeypatch, connect
     monkeypatch.setattr(jog, "connected_robot_type", lambda: connected)
     reason = engine_act.arm_refusal()
     assert (reason is None) if refused is None else (refused in reason)
+
+
+def test_the_fingertip_now_is_the_latest_encoder_read(monkeypatch):
+    """The engine asks for the fingertip "now" (the grasp's hold is measured from it). The jog's history never holds a
+    read after now, so a lookup that wants two reads around the time found none, and the hold was taken from the
+    commanded pose: on the rig the fingertip stood 6.3-7.5 mm from it at the grasp and the dowel hovered 5 mm off the
+    ring (act 20261018_111834). The latest read answers for now, up to two ticks old; a past time is interpolated."""
+    from lerobot.gui.api import jog
+
+    class _Kin:
+        def forward_kinematics(self, q):
+            out = np.eye(4)
+            out[:3, 3] = np.asarray(q[:3], dtype=float)
+            return out
+
+    names = ["shoulder_pan", "shoulder_lift", "elbow_flex"]
+    j = jog._Jog()
+    j.pose_history.append((10.0, dict.fromkeys(names, 0.0)))
+    j.pose_history.append((10.0 + 1.0 / jog.HZ, dict.fromkeys(names, 3.0)))
+    monkeypatch.setattr(jog, "_jog", j)
+    scene = engine_act._ArmScene(None, _Kin(), names)
+    np.testing.assert_allclose(scene.tip_at(10.0 + 0.5 / jog.HZ)[:3, 3], 1.5)  # between two reads
+    np.testing.assert_allclose(scene.tip_at(10.0 + 1.5 / jog.HZ)[:3, 3], 3.0)  # now: the latest read
+    assert scene.tip_at(10.0 + 4.0 / jog.HZ) is None  # no read for that long: not the arm now
