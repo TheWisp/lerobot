@@ -148,3 +148,51 @@ def test_an_object_with_a_declared_turn_symmetry_is_centred_on_its_axis():
     assert symmetries["long"][0]["kind"] == "continuous" and symmetries["long"][0].get("end_swap")
     assert abs(abs(symmetries["long"][1] @ [1.0, 0.0, 0.0]) - 1.0) < 1e-3
     assert "plain" not in symmetries
+
+
+def test_the_feed_measures_only_what_its_estimator_takes(monkeypatch):
+    """Which tracker output is a measurement is the estimator's (lerobot.showservo.estimation): the feed hands it every
+    object's candidate with its tracker's verdict, adds what it takes, and counts what it refuses for the act's
+    record."""
+    from lerobot.showservo.estimation import Estimate
+
+    monkeypatch.setattr(engine_act.planning, "_delta_base", lambda d, delta, t_bc: np.asarray(delta))
+    monkeypatch.setattr(engine_act.planning, "_pose_frame", lambda d, name: 1)
+    monkeypatch.setattr(engine_act.holds, "_demo_control_pose", lambda d, name, f: (np.eye(4), ""))
+    monkeypatch.setattr(
+        runtime._state,
+        "targets",
+        {"ring": types.SimpleNamespace(anchor=np.eye(4)), "cup": types.SimpleNamespace(anchor=np.eye(4))},
+    )
+    seen = []
+
+    class OnlyTheDowel:
+        def estimate(self, t, candidates):
+            seen.append({n: [(c.source, c.ok, c.why) for c in cs] for n, cs in candidates.items()})
+            return {
+                n: Estimate(cs[0].motion, "taken") if n == "dowel" else Estimate(None, "not this one")
+                for n, cs in candidates.items()
+            }
+
+    scene = SceneLog()
+    feed = engine_act._Feed(
+        scene, types.SimpleNamespace(), np.eye(4), "dowel", ["ring", "cup"], OnlyTheDowel()
+    )
+    r = {
+        "ok": True,
+        "delta": np.eye(4),
+        "others": [{"name": "cup", "ok": True, "lost": True}, {"name": "ring", "ok": True, "lost": False}],
+        "other_delta_0": np.eye(4),
+        "other_delta_1": np.eye(4),
+    }
+    feed(_job(3.0), r, None)
+    assert seen == [
+        {
+            "dowel": [("point2pose", True, "")],
+            "ring": [("point2pose", True, "")],
+            "cup": [("point2pose", False, "lost")],
+        }
+    ]
+    assert [m.t for m in scene.measurements("dowel")] == [3.0]
+    assert scene.measurements("ring") == [] and scene.measurements("cup") == []
+    assert feed.refused == {"ring: not this one": 1, "cup: not this one": 1}

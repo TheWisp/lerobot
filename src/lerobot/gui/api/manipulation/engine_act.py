@@ -24,6 +24,7 @@ places: each object's 2D tracks, the frame's depth, and the views the pose rule 
 from __future__ import annotations
 
 import asyncio
+import collections
 import contextlib
 import copy
 import functools
@@ -39,6 +40,7 @@ from lerobot.showservo.engine.perturb import Perturbations
 from lerobot.showservo.engine.scene import Camera, Measurement, SceneLog
 from lerobot.showservo.engine.timeline import Demo, Timeline
 from lerobot.showservo.engine.world import World
+from lerobot.showservo.estimation import Candidate, PoseEstimator, TrackerVerdict
 
 from . import acquisition, camera, holds, planning, recording, runtime
 
@@ -109,18 +111,26 @@ class _ArmScene(SceneLog):
 
 class _Feed:
     """Each tracked frame, into the scene log (act_execution.md, "The loops, and who writes what"): the frame's time,
-    and every object's pose as the trackers measured it whenever they were confident in it, by their own verdict
-    (Point2Pose's fit found, the object not lost). Nothing else gates a measurement: not how much of the object is
-    seen, not whether it is held, not which object it is."""
+    and each object's pose the estimator takes (:mod:`lerobot.showservo.estimation`). The feed only turns the trackers'
+    output into candidates, base frame, with each tracker's own verdict (Point2Pose's fit found, the object not lost);
+    which of them is a measurement is the estimator's."""
 
     def __init__(
-        self, scene: SceneLog, demo: runtime._Demo, t_bc: np.ndarray, session: str, others: list[str]
+        self,
+        scene: SceneLog,
+        demo: runtime._Demo,
+        t_bc: np.ndarray,
+        session: str,
+        others: list[str],
+        estimator: PoseEstimator | None = None,
     ):
         self.scene, self.demo, self.t_bc, self.session, self.others = scene, demo, t_bc, session, others
+        self.estimator = TrackerVerdict() if estimator is None else estimator
         self.reference: dict[
             str, np.ndarray | None
         ] = {}  # each other object's demo pose its measurement is against
         self.frames = 0
+        self.refused: collections.Counter[str] = collections.Counter()  # "object: why", for the act's record
 
     def _other_motion(self, name: str, delta: np.ndarray) -> np.ndarray | None:
         """``name``'s motion since the demo, base frame, from the tracker's delta for it (as ``planning._object_motion``
@@ -138,26 +148,38 @@ class _Feed:
         cam = np.asarray(delta, dtype=float) @ target.anchor @ np.linalg.inv(reference)
         return self.t_bc @ cam @ np.linalg.inv(self.t_bc)
 
+    def _candidates(self, r: dict[str, Any]) -> dict[str, list[Candidate]]:
+        out = {}
+        if r.get("delta") is not None:
+            motion = planning._delta_base(self.demo, np.asarray(r["delta"], dtype=float), self.t_bc)
+            out[self.session] = [
+                Candidate("point2pose", motion, bool(r.get("ok")), "" if r.get("ok") else "no fit")
+            ]
+        names = [o.get("name") for o in r.get("others") or ()]
+        for name in self.others:
+            if name not in names or r.get(f"other_delta_{names.index(name)}") is None:
+                continue
+            k = names.index(name)
+            share = r["others"][k]
+            motion = self._other_motion(name, r[f"other_delta_{k}"])
+            if motion is None:
+                continue
+            ok = bool(share.get("ok")) and not share.get("lost")
+            why = "" if ok else ("lost" if share.get("lost") else "no fit")
+            out[name] = [Candidate("point2pose", motion, ok, why)]
+        return out
+
     def __call__(self, job: runtime._Job, r: dict[str, Any], result: dict[str, Any] | None) -> None:
         t = job.camera_stamp_mono
         if t is None:
             return
         self.frames += 1
         self.scene.add_frame(t)
-        if r.get("ok") and r.get("delta") is not None:
-            motion = planning._delta_base(self.demo, np.asarray(r["delta"], dtype=float), self.t_bc)
-            self.scene.add_measurement(self.session, Measurement(t=t, motion=motion))
-        names = [o.get("name") for o in r.get("others") or ()]
-        for name in self.others:
-            if name not in names:
-                continue
-            k = names.index(name)
-            share = r["others"][k]
-            if not share.get("ok") or share.get("lost") or r.get(f"other_delta_{k}") is None:
-                continue
-            motion = self._other_motion(name, r[f"other_delta_{k}"])
-            if motion is not None:
-                self.scene.add_measurement(name, Measurement(t=t, motion=motion))
+        for name, e in self.estimator.estimate(t, self._candidates(r)).items():
+            if e.motion is not None:
+                self.scene.add_measurement(name, Measurement(t=t, motion=e.motion))
+            else:
+                self.refused[f"{name}: {e.why}"] += 1
 
 
 def _camera(teach: runtime._Teach, t_bc: np.ndarray, shape: tuple[int, ...]) -> Camera:
@@ -429,6 +451,7 @@ async def _act_engine_task(
                     "stretched_s": engine.stretched_s,
                     "records": engine.records,
                     "frames_fed": None if feed is None else feed.frames,
+                    "refused": None if feed is None else dict(feed.refused),
                     "slowest_solve_ms": engine.solve_s * 1000.0,
                 }
             samples: list[dict[str, Any]] = []

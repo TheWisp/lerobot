@@ -121,31 +121,39 @@ Two loops. Perception runs at the camera's pace, about 10 frames a second; every
 a fixed 30 Hz. Data flows one way — measurements and joint readings, then the world, then the task, then commands, then
 the servos — and each piece of data has exactly one writer.
 
-| Data           | Holds                                                                                                                              | Written by      | Read by                   |
-| -------------- | ---------------------------------------------------------------------------------------------------------------------------------- | --------------- | ------------------------- |
-| Measurements   | each object's pose from the trackers (SAM, Point2Pose, point groups) with the trackers' confidence, per frame, at its capture time | perception      | the world step            |
-| Joint readings | the joint angles the servos report, and the fingertip computed from them, at their read time                                       | the motor step  | world, task, motion steps |
-| World          | each object's pose, and the time of the measurement it came from                                                                   | the world step  | task and motion steps     |
-| Task state     | Progress, each Milestone's state, how each held object sits in the gripper                                                         | the task step   | the motion step           |
-| Commands       | timed joint commands, each with the pose it came from                                                                              | the motion step | the motor step            |
+| Data           | Holds                                                                                                                                 | Written by                     | Read by                   |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------ | ------------------------- |
+| Measurements   | each object's pose the pose estimator takes from the trackers' output (SAM, Point2Pose, point groups), per frame, at its capture time | perception: the pose estimator | the world step            |
+| Joint readings | the joint angles the servos report, and the fingertip computed from them, at their read time                                          | the motor step                 | world, task, motion steps |
+| World          | each object's pose, and the time of the measurement it came from                                                                      | the world step                 | task and motion steps     |
+| Task state     | Progress, each Milestone's state, how each held object sits in the gripper                                                            | the task step                  | the motion step           |
+| Commands       | timed joint commands, each with the pose it came from                                                                                 | the motion step                | the motor step            |
 
 ```mermaid
 flowchart LR
     subgraph PER["Perception, every camera frame (about 10 a second)"]
         P1["The trackers: each object's pose, and their confidence in it"]
+        P2["The pose estimator: which of those poses is a measurement"]
+        P1 --> P2
     end
     subgraph CTL["Control loop, 30 times a second"]
         C1["Motor step: read the joints; send the command due now"]
-        C2["World step: each new measurement the trackers are confident in becomes that object's pose"]
+        C2["World step: each new measurement becomes that object's pose"]
         C3["Task step: Progress from what was sent; each Milestone answered from the world; the leg's target"]
         C4["Motion step: top the command queue up, each command the demo's pose at its tick moved with the target's pose, then IK"]
         C1 --> C2 --> C3 --> C4
     end
-    P1 -- "measurements" --> C2
+    P2 -- "measurements" --> C2
     C4 -- "commands" --> C1
 ```
 
-- **One rule for every object.** A new measurement the trackers are confident in replaces the object's pose. No rule
+- **Which tracker output is a measurement is its own layer:** the pose estimator (`lerobot.showservo.estimation`)
+  takes each frame's candidates, a pose per tracker with that tracker's own verdict, and says per object which pose
+  to take, or none and why; the act's record counts the refusals. Neither the world nor the engine sees a tracker, so
+  a better estimator replaces the one in use without touching either. The one in use takes the trackers' own verdicts
+  (Point2Pose's fit found, the object not lost), which pass views every other check rejects ([E30](#e30)).
+  **NOT IMPLEMENTED:** an estimator that refuses them, tried on the recorded acts first.
+- **One rule for every object.** A new measurement replaces the object's pose. No rule
   names an object, or depends on its role (the one picked up, the one placed onto) or its state (held, touched,
   moving). Between measurements an object is where it was last measured. ([R4](#requirements))
 - **A turn its symmetry cannot show is not a move.** Of the poses an object's declared symmetry makes look the same,
@@ -371,7 +379,7 @@ turn is taken only before its leg begins, and only when it is clearly better. ([
 The engine (`lerobot.showservo.engine`) holds no GUI state. It reads three things: the arm (kinematics, joint names,
 which gripper column closes which way, joint ranges, workspace, joint speed limit), the servo I/O's queue (what was
 sent; add to it; cancel what is not sent; its clock), and a log that perception and the joint readings write into
-(each object's measured pose with the trackers' confidence, per frame; the fingertip from the joints; the camera). The GUI fills them in, and the act request
+(each object's pose the pose estimator takes, per frame; the fingertip from the joints; the camera). The GUI fills them in, and the act request
 says which runner to use. The act's record holds every check result with what it was based on, every move of
 Progress with its cause, and every command sent; at the end it says which Milestones succeeded, which failed and why,
 and which were passed while the camera couldn't tell, apart from a fault that stopped the act. ([R10](#requirements),
