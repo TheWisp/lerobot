@@ -23,8 +23,9 @@ goes on from there.
 In: one act on one arm, first key frame to last: legs, Progress, the command queue, the checks, going back or ahead,
 the allowed turns (symmetry and landing), speed, the act's record, and how the engine sits beside the current runner.
 
-Out, and why: working out object poses ([act_loop.md](act_loop.md) designs it; this design uses it); the motor loop
-(`gui/api/jog.py`), which already sends the newest due command each tick; two arms at once, whose Progress would have
+Out, and why: the trackers that measure object poses (SAM, Point2Pose and the point groups, [act_loop.md](act_loop.md));
+this design takes their measurements as they come. The servo I/O (`gui/api/jog.py`), which already sends the newest
+due command each tick; two arms at once, whose Progress would have
 to be tied together; failures that need a model of cause ("the arm knocked something over") or a law fitted to the
 demo (how far a screw goes in per turn); what is pinched in a cloth grasp, which takes touch
 ([state_check_research.md](state_check_research.md)). Not goals: collision checking beyond the workspace box and the
@@ -34,21 +35,21 @@ floor; deciding what to do after the act gives up, which belongs to whatever run
 
 Safety first: the act must not act on a state that is not there. Then the motion should look like the demo's.
 
-| #   | Pri | Requirement                                                                                                                                               | Target                                                                                                         | Why                                                                                                        | Checked by                                                                  |
-| --- | --- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| R1  | P0  | The act never goes on past a failed Milestone, nor past a final one before every earlier Milestone has succeeded                                          | Never                                                                                                          | A missed grasp is followed by a carry today ([O2](#o2)); what cannot be undone must not be done on a guess | Unit tests; every act's record                                              |
-| R2  | P0  | A failure sends Progress back, and a moved object back or ahead, to the nearest point of the demo that matches what the camera sees                       | The cases in [Going back, or ahead](#going-back-or-ahead)                                                      | The user's cases of 2026-10-17; finding a failure and recovering from it are one mechanism                 | A simulated act per case                                                    |
-| R3  | P0  | A check reports success only when the camera can tell success from failure                                                                                | No success on the recorded misses, nor on made-up misses (a frame from before a lift paired with one after it) | A false success is R1's carry, approved                                                                    | Unit tests; a replay of the act records                                     |
-| R4  | P0  | Only views the pose rule accepts move an object, or Progress                                                                                              | No update from a view it turns away                                                                            | The tracker accepted views 7.6 to 29.8 mm off ([act_loop.md](act_loop.md) O3)                              | A test that feeds such views                                                |
-| R5  | P0  | No check, moved object or choice of turn holds up a command                                                                                               | No stop longer than one tick from any of them                                                                  | The arm stood 0.06 to 2.5 s while the act planned again ([O1](#o1))                                        | Simulated acts with moving objects; the rig                                 |
-| R6  | P1  | An undisturbed act takes the demo's time divided by the speed, whatever rate the demo was recorded at                                                     | At most 1.15 × that, for demos at 15 to 60 frames/s, key frames one demo frame apart included                  | 1.38 × today ([E7](#e7)); the arm runs about 0.1 s behind its commands ([O4](#o4))                         | A simulated act per frame rate and speed; the rig                           |
-| R7  | P1  | The arm stops only where the demo stopped, at a final Milestone, while the gripper opens before going back, or while the arm catches up with its commands | No other stop longer than 100 ms                                                                               | 12 to 16 stops per act today, most at key frames ([O1](#o1))                                               | The act's command record                                                    |
-| R8  | P1  | A failed grasp is acted on soon after the camera can see it                                                                                               | Decided within 1 s of the lift making it visible; Progress moved within two camera frames of that              | The demo's lift rises 35 mm in 0.57 s ([E16](#e16)); the camera gives 9.5 frames/s ([E8](#e8))             | A replay of the act records; simulated acts                                 |
-| R9  | P1  | Every threshold a check uses is measured during the act or set by the operator; none is a constant in the code                                            | Each threshold in the act's record, with the measurement or setting it came from                               | How far the rig's views of an object at rest wander is 15 mm in one act and 45 mm in another ([E14](#e14)) | A test: the same scene with noisier views reads "can't tell", not "failure" |
-| R10 | P1  | One engine drives the SO-107 and the OpenArm 2                                                                                                            | The same arm interface                                                                                         | The runner names the SO-107's motors ([O10](#o10))                                                         | The engine's tests on both arms' kinematics                                 |
-| R11 | P1  | The engine runs beside the current runner, chosen per act, and leaves it unchanged                                                                        | Either from the same page and API; the current runner's tests pass unchanged                                   | Acts with both on the same scene decide the switch                                                         | The existing tests; the record names its runner                             |
-| R12 | P2  | Joint speed is limited by the arm and the motor loop, not by the slow ready/park speed                                                                    | 90 °/s on the SO-107; where a step would be faster, the act slows down there                                   | The limit is 30 °/s; the demo moved at up to 158 °/s ([O4](#o4))                                           | A simulated act faster than the limit                                       |
-| R13 | P2  | Every check result and every jump of Progress is in the act's record, with what it was based on                                                           | One record per decision                                                                                        | Failures are diagnosed from the act's own record ([E7](#e7))                                               | A test of the record                                                        |
+| #   | Pri | Requirement                                                                                                                                                        | Target                                                                                                         | Why                                                                                                             | Checked by                                                                  |
+| --- | --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| R1  | P0  | The act never goes on past a failed Milestone, nor past a final one before every earlier Milestone has succeeded                                                   | Never                                                                                                          | A missed grasp is followed by a carry today ([O2](#o2)); what cannot be undone must not be done on a guess      | Unit tests; every act's record                                              |
+| R2  | P0  | A failure sends Progress back, and a moved object back or ahead, to the nearest point of the demo that matches what the camera sees                                | The cases in [Going back, or ahead](#going-back-or-ahead)                                                      | The user's cases of 2026-10-17; finding a failure and recovering from it are one mechanism                      | A simulated act per case                                                    |
+| R3  | P0  | A check reports success only when the camera can tell success from failure                                                                                         | No success on the recorded misses, nor on made-up misses (a frame from before a lift paired with one after it) | A false success is R1's carry, approved                                                                         | Unit tests; a replay of the act records                                     |
+| R4  | P0  | Every camera frame, every object's pose is updated from the trackers' measurement when the trackers are confident in it; no rule by object, role or state gates it | No measurement the trackers are confident in is dropped                                                        | A rule that dropped views of a covered object left the held dowel unmeasured on 207 of 214 frames ([E25](#e25)) | A test feeding measurements of a covered, held object                       |
+| R5  | P0  | No check, moved object or choice of turn holds up a command                                                                                                        | No stop longer than one tick from any of them                                                                  | The arm stood 0.06 to 2.5 s while the act planned again ([O1](#o1))                                             | Simulated acts with moving objects; the rig                                 |
+| R6  | P1  | An undisturbed act takes the demo's time divided by the speed, whatever rate the demo was recorded at                                                              | At most 1.15 × that, for demos at 15 to 60 frames/s, key frames one demo frame apart included                  | 1.38 × today ([E7](#e7)); the arm runs about 0.1 s behind its commands ([O4](#o4))                              | A simulated act per frame rate and speed; the rig                           |
+| R7  | P1  | The arm stops only where the demo stopped, at a final Milestone, while the gripper opens before going back, or while the arm catches up with its commands          | No other stop longer than 100 ms                                                                               | 12 to 16 stops per act today, most at key frames ([O1](#o1))                                                    | The act's command record                                                    |
+| R8  | P1  | A failed grasp is acted on soon after the camera can see it                                                                                                        | Decided within 1 s of the lift making it visible; Progress moved within two camera frames of that              | The demo's lift rises 35 mm in 0.57 s ([E16](#e16)); the camera gives 9.5 frames/s ([E8](#e8))                  | A replay of the act records; simulated acts                                 |
+| R9  | P1  | Every threshold a check uses is measured during the act or set by the operator; none is a constant in the code                                                     | Each threshold in the act's record, with the measurement or setting it came from                               | How far the rig's views of an object at rest wander is 15 mm in one act and 45 mm in another ([E14](#e14))      | A test: the same scene with noisier views reads "can't tell", not "failure" |
+| R10 | P1  | One engine drives the SO-107 and the OpenArm 2                                                                                                                     | The same arm interface                                                                                         | The runner names the SO-107's motors ([O10](#o10))                                                              | The engine's tests on both arms' kinematics                                 |
+| R11 | P1  | The engine runs beside the current runner, chosen per act, and leaves it unchanged                                                                                 | Either from the same page and API; the current runner's tests pass unchanged                                   | Acts with both on the same scene decide the switch                                                              | The existing tests; the record names its runner                             |
+| R12 | P2  | Joint speed is limited by the arm and the motor loop, not by the slow ready/park speed                                                                             | 90 °/s on the SO-107; where a step would be faster, the act slows down there                                   | The limit is 30 °/s; the demo moved at up to 158 °/s ([O4](#o4))                                                | A simulated act faster than the limit                                       |
+| R13 | P2  | Every check result and every jump of Progress is in the act's record, with what it was based on                                                                    | One record per decision                                                                                        | Failures are diagnosed from the act's own record ([E7](#e7))                                                    | A test of the record                                                        |
 
 Conditions: the SO-107 (left arm) and its RealSense camera on this desktop; the insertion demo of 2026-10-17 and the
 acts of 2026-10-15 to 17 with saved frames.
@@ -114,37 +115,52 @@ the joint speed limit, and which gripper column closes which way, nothing else.
 
 ## Design
 
-### The two loops
+### The loops, and who writes what
 
-The engine runs two loops at two rates, drawn the way game engines draw their threads. The motor loop makes and sends
-the motion; the camera loop checks the result. Neither waits for the other: a failure reaches the motion by moving
-Progress.
+Two loops. Perception runs at the camera's pace, about 10 frames a second; everything else runs on one control loop at
+a fixed 30 Hz. Data flows one way — measurements and joint readings, then the world, then the task, then commands, then
+the servos — and each piece of data has exactly one writer.
+
+| Data           | Holds                                                                                                                              | Written by      | Read by                   |
+| -------------- | ---------------------------------------------------------------------------------------------------------------------------------- | --------------- | ------------------------- |
+| Measurements   | each object's pose from the trackers (SAM, Point2Pose, point groups) with the trackers' confidence, per frame, at its capture time | perception      | the world step            |
+| Joint readings | the joint angles the servos report, and the fingertip computed from them, at their read time                                       | the motor step  | world, task, motion steps |
+| World          | each object's pose, and the time of the measurement it came from                                                                   | the world step  | task and motion steps     |
+| Task state     | Progress, each Milestone's state, how each held object sits in the gripper                                                         | the task step   | the motion step           |
+| Commands       | timed joint commands, each with the pose it came from                                                                              | the motion step | the motor step            |
 
 ```mermaid
 flowchart LR
-    subgraph TICK["Every motor tick, 30 times a second"]
-        T1["The arm is sent its next command"]
-        T2["Progress = where that command is in the demo"]
-        T3["Make the command for 4 ticks later: the demo's pose at that moment, moved with the object the arm is heading for"]
-        T4["IK: turn the pose into joint angles; check joint speed, workspace and joint ranges"]
-        T5["Queue it for the arm"]
-        T1 --> T2 --> T3 --> T4 --> T5
+    subgraph PER["Perception, every camera frame (about 10 a second)"]
+        P1["The trackers: each object's pose, and their confidence in it"]
     end
-    subgraph FRAME["Every camera frame, about 9.5 times a second"]
-        F1["Camera: where each object is, its tracked points, depth"]
-        F2["Update each object's pose, never faster than the walk speed"]
-        F3["For the object being checked: did the demo's result happen? yes, no, or can't tell yet"]
-        F1 --> F2 --> F3
+    subgraph CTL["Control loop, 30 times a second"]
+        C1["Motor step: read the joints; send the command due now"]
+        C2["World step: each new measurement the trackers are confident in becomes that object's pose"]
+        C3["Task step: Progress from what was sent; each Milestone answered from the world; the leg's target"]
+        C4["Motion step: top the command queue up, each command the demo's pose at its tick moved with the target's pose, then IK"]
+        C1 --> C2 --> C3 --> C4
     end
-    U["Go back, or ahead: cancel the queued commands, move Progress to the point of the demo that matches what the camera sees, move the arm there"]
-    F3 -- "no; or an object moved more than its noise" --> U
-    U --> T3
-    F2 -. "object poses" .-> T3
+    P1 -- "measurements" --> C2
+    C4 -- "commands" --> C1
 ```
 
-Commands are made 4 ticks ahead so each is ready before its tick even when IK is slow: the engine keeps as many ticks
-queued as the slowest solve it has measured in this run needs, plus one — 4 on the rig, where the slowest took 75 ms
-([O3](#o3)).
+- **One rule for every object.** A new measurement the trackers are confident in replaces the object's pose. No rule
+  names an object, or depends on its role (the one picked up, the one placed onto) or its state (held, touched,
+  moving). Between measurements an object is where it was last measured. ([R4](#requirements))
+- **The gripper is the only special thing,** and it is in the joint readings, not the world. A held object's pose
+  between its measurements is the fingertip now times how it sits in the gripper. How it sits is taken at the grasp,
+  from the object's pose and the fingertip at that moment, and replaced by each later measurement that the grasp's
+  check answers "still held". Whether it is held is the task's question, never the world's.
+- **The motion step solves ahead.** IK takes 1.7 ms at the median and up to 75 and 299 ms on the rig ([E1](#e1),
+  [E25](#e25)), so commands are solved a few ticks before they are due and queued: as many ticks as the slowest solve
+  of this run and the gap between control ticks cover, plus one. The motor step sends whatever is due and never waits
+  on a solve; on the rig it runs on its own thread at the same 30 Hz, so a slow solve can delay the motion step, never
+  the servos.
+- **One clock** stamps capture times, joint reads and due times. The world step pairs a measurement with the joint
+  reading at its capture time, interpolated between two reads and never extrapolated.
+- **A failure or a moved target takes effect at once:** the task step moves Progress, the commands not yet sent are
+  cancelled, and the motion step fills the queue again from there.
 
 ### Legs: the path between two key frames
 
@@ -169,10 +185,10 @@ What this does:
   (`w = 1`): inside a ring, the arm must move with the ring. Only if the arm starts away from the leg's start (after a
   best-effort stop) does `w` rise over the first part, to close the gap.
 - With nothing moved, both sides are the demo's own pose.
-- While an object is held, the pose is corrected for how it sits in the gripper, measured at the grasp ([O5](#o5)),
-  so the held object, not the fingertip, goes where the demo's went.
-- A new view of an object reaches the commands no faster than the walk speed the operator set, so a jumpy view cannot
-  jerk the arm. Commands already queued, at most 4 ticks, keep the pose they were made with.
+- While an object is held, the pose is corrected for how it sits in the gripper ([O5](#o5)), as the task state has
+  it, so the held object, not the fingertip, goes where the demo's went.
+- A new measurement of the target reaches every command made after it; commands already queued keep the pose they
+  were made with.
 
 ### The demo's clock
 
@@ -234,28 +250,26 @@ moment ([O7](#o7)).
 - **Can't tell:** the camera cannot see the object, or the gripper has not moved far enough yet for the two outcomes
   to look different. A grasp can't be told until the lift; a release, until the gripper has moved off.
 
-A failure counts once two camera frames in a row show it. If the clues disagree — the tracked points say the object
-came along, the depth image says it is still lying there — the check can't tell, and a later frame decides.
+Every answer comes from the world: the object's measured pose, against two predictions of it, one for each
+outcome. After a grasp: with the gripper (the fingertip at the measurement's moment times how it sat at the grasp), or
+where it lay. After a release: where it was put (relative to what it was put on), or with the gripper. The nearer
+prediction wins once the two are further apart than the object's noise; a measurement far from both — it fell
+somewhere else — is a failure; no new measurement, or the two still too close, is can't tell. A failure counts once
+two measurements in a row show it.
 
 **How close counts.** No threshold is a number written into the engine ([R9](#requirements)):
 
-- _The noise is measured, per object, in this act._ For every object standing untouched — before the arm reaches it,
-  and all act long for those it never touches — the engine records how far its views, its tracked points and the
-  depth on its surface wander. On the rig the views wandered 15 mm in one act and 45 mm in another ([O6](#o6)).
-- _A check compares two predictions, not a fixed ratio._ For a grasp it predicts where the object's tracked points and
-  surface would be if it came along with the gripper, and where if it stayed, and takes the one the camera is nearer
-  to, once the two are further apart than the measured noise; until then it can't tell.
+- _The noise is measured, per object, in this act:_ how far its measurements wander while it stands untouched —
+  before the arm reaches it, and all act long for those it never touches. On the rig its views wandered 15 mm in one
+  act and 45 mm in another ([O6](#o6)).
 - _Where the object should be is the demo's:_ relative to what it was put on, as the demo left it.
 - _How far off the task allows is set by the operator,_ per Milestone in the demo editor, the way the landing freedom
   is set today: one demo cannot say whether a place needs a millimetre or a few centimetres. By default there is no
   allowance, so the check is as strict as the camera can see, and no stricter.
 - _Equivalent poses pass:_ the object's declared symmetry (its repeating turns, a continuous axis, swapped ends) and
   the landing freedom of the leg (exact, the target's symmetric turns, any turn about its axis).
-- _The depth check fits the object's surface to the depth near where it should be,_ and passes when a fit within the
-  noise and the allowance exists. Testing one exact pose would fail on the grasp's own error of 4.6 to 7.4 mm
-  ([O5](#o5)).
-- _Two are choices, not measurements:_ "most of the object's visible surface points" for the depth check, and two
-  frames in a row for a failure. Each is the least that ignores a single bad frame or a few bad pixels.
+- _One is a choice, not a measurement:_ two measurements in a row for a failure, the least that ignores a single bad
+  frame.
 
 **What it does to Progress.** A failure sends Progress back. Success or can't tell lets the act go on, and the check
 keeps running while the object is being checked, so a drop during the carry or a fall after the release is still
@@ -344,9 +358,9 @@ turn is taken only before its leg begins, and only when it is clearly better. ([
 ### What the engine connects to
 
 The engine (`lerobot.showservo.engine`) holds no GUI state. It reads three things: the arm (kinematics, joint names,
-which gripper column closes which way, joint ranges, workspace, joint speed limit), the motor loop's queue (what was
-sent; add to it; cancel what is not sent; its clock), and a log that perception writes into (object views, tracked
-points, depth frames, the fingertip from the arm's joints, the camera). The GUI fills them in, and the act request
+which gripper column closes which way, joint ranges, workspace, joint speed limit), the servo I/O's queue (what was
+sent; add to it; cancel what is not sent; its clock), and a log that perception and the joint readings write into
+(each object's measured pose with the trackers' confidence, per frame; the fingertip from the joints; the camera). The GUI fills them in, and the act request
 says which runner to use. The act's record holds every check result with what it was based on, every move of
 Progress with its cause, and every command sent; at the end it says which Milestones succeeded, which failed and why,
 and which were passed while the camera couldn't tell, apart from a fault that stopped the act. ([R10](#requirements),
@@ -369,10 +383,10 @@ and which were passed while the camera couldn't tell, apart from a fault that st
   task.
 
 What it costs. Two runners exist until the switch. Running ahead of the checks spends motion that a failure undoes:
-about a third of a second, plus the move back. A grasp whose tracked points the gripper hides goes on unconfirmed, and
+about a third of a second, plus the move back. A grasp whose object the trackers cannot measure goes on unconfirmed, and
 a miss is then caught only where the object turns out not to be: where it lay, once the arm uncovers it, or at the
 release. IK solved tick by tick notices a change of arm configuration only when it comes. Every update depends on the
-views the pose rule lets through.
+trackers' own confidence in their measurements.
 
 ## Open questions
 
@@ -385,8 +399,7 @@ was clear of the object. Leaning: straight there. In contact the question does n
 always backs the arm out along the demo's path (see [Going back, or ahead](#going-back-or-ahead)).
 
 To measure: the checks on the act records, with real and made-up misses ([R3](#requirements), [R8](#requirements));
-what the depth fit costs per frame; how much each object's views, tracked points and depth wander at rest on the rig,
-per act; the OpenArm 2's following error and gripper readings; how long the command queue takes to fill on the rig
+how much each object's measurements wander at rest on the rig, per act; the OpenArm 2's following error and gripper readings; how long the command queue takes to fill on the rig
 under load; how long ranking the ring's allowed turns takes.
 
 ## Glossary
@@ -529,3 +542,11 @@ between two encoder reads and none comes after "now", so the engine took the com
 demo did. The key-frame runner's acts that inserted (`20261017_130202`, `_150843`) read the fingertip after the
 gripper settled: holds of 5.9 and 4.8 mm. Fixed: "now" is the latest read, at most two ticks old; the grasp's record
 says where the fingertip came from and the hold it gave; an act whose checks cannot tell ends "not confirmed".
+
+<a id="e25"></a>**E25. What reached the engine of the trackers' measurements, and its slowest solves**, 2026-10-18.
+Act `20261018_113106`: Point2Pose measured the dowel on all 214 frames; the old runner's acceptance chain let 7
+through, none once the arm approached it. Of the 207 it turned away, 163 failed its point-group agreement (3 mm, 3°),
+37 had agreeing groups and failed its other rules (share of tracked points seen, 97%, `runtime.TRUST_SHARE_DEFAULT`,
+chosen on 5 replayed acts because tracked points slid onto the arm under the gripper; inlier counts; depth), 7 had no
+group pose to compare. The ring: 41 of 206 frames. The slowest IK solve in act `20261018_111834` took 299 ms; in
+`20261018_113106`, 12 ms.
