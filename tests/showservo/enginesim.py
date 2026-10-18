@@ -154,7 +154,9 @@ class Motor:
     where the gripper starts, stops or turns back, and moves each arm joint at most ``step_deg`` from the command
     before. The arm follows its command a share ``follow`` of the way each tick."""
 
-    def __init__(self, q0, hz=30.0, step_deg=3.0, follow=0.5, gripper=FakeKin.GRIPPER):
+    def __init__(
+        self, q0, hz=30.0, step_deg=3.0, follow=0.5, gripper=FakeKin.GRIPPER, stick=None, trim_ticks=9
+    ):
         self.samples, self.due = [np.asarray(q0, dtype=float).copy()], [0.0]
         self.sent_i, self.t0, self.now = -1, 0.0, 0.0
         self.q_cmd = np.asarray(q0, dtype=float).copy()
@@ -162,12 +164,24 @@ class Motor:
         self.hz, self.step_deg, self.follow, self.gi = hz, step_deg, follow, gripper
         self.log = []  # (t, sent index, q_cmd, q_obs)
         self.clamped = 0.0  # the most a command was held back by the per-tick bound
+        # The jog's guard: a joint more than STOP_LAG behind holds the playback, and a hold of HOLD_MAX freezes the arm.
+        self.stop_lag, self.hold_max = 5.0, 0.5
+        self.blocked_since, self.halted = None, False
+        # A joint that sticks under load (index -> breakaway degrees): while ``loaded`` and driven up (its command
+        # above its reading), it moves only once its error passes the breakaway, or its goal has stood still for
+        # TRIM_TICKS (the jog's trim then frees it). The world sets ``loaded`` while the gripper holds something.
+        self.stick = dict(stick or {})
+        self.loaded = False
+        self.trim_ticks, self.still = trim_ticks, 0
 
     def start(self, now):
         self.t0 = self.now = now
 
     def sent(self):
         return self.sent_i
+
+    def observed(self):
+        return self.q_obs.copy()
 
     def clock(self):
         return self.now - self.t0
@@ -201,21 +215,45 @@ class Motor:
         return way[0] != way[1]
 
     def tick(self, now):
+        dt = now - self.now
         self.now = now
+        if self.halted:
+            self.log.append((now, self.sent_i, self.q_cmd.copy(), self.q_obs.copy()))
+            return
+        arm = np.arange(len(self.q_cmd)) != self.gi
+        behind = float(np.max(np.abs(self.q_cmd - self.q_obs)[arm]))
+        if behind > self.stop_lag:
+            self.blocked_since = now if self.blocked_since is None else self.blocked_since
+            self.t0 += dt  # the samples still to come wait as long
+            if now - self.blocked_since >= self.hold_max:
+                self.halted = True
+        else:
+            self.blocked_since = None
         rel = now - self.t0
         k = self.sent_i + 1
-        if k < len(self.samples) and self.due[k] <= rel + 1e-9:
+        if self.blocked_since is None and k < len(self.samples) and self.due[k] <= rel + 1e-9:
             while k + 1 < len(self.samples) and self.due[k + 1] <= rel + 1e-9 and not self._turns(k):
                 k += 1
             self.sent_i = k
+        before = self.q_cmd.copy()
         if self.sent_i >= 0:
             target = self.samples[self.sent_i]
-            arm = np.arange(len(target)) != self.gi
             step = np.clip(target - self.q_cmd, -self.step_deg, self.step_deg)
             new = np.where(arm, self.q_cmd + step, target)
             self.clamped = max(self.clamped, float(np.max(np.abs(target - new)[arm])))
             self.q_cmd = new
-        self.q_obs = self.q_obs + (self.q_cmd - self.q_obs) * self.follow
+        self.still = self.still + 1 if np.allclose(before, self.q_cmd) else 0
+        moved = self.q_obs + (self.q_cmd - self.q_obs) * self.follow
+        for j, breakaway in self.stick.items():
+            up = self.q_cmd[j] > self.q_obs[j]
+            if (
+                self.loaded
+                and up
+                and self.q_cmd[j] - self.q_obs[j] <= breakaway
+                and self.still < self.trim_ticks
+            ):
+                moved[j] = self.q_obs[j]  # stuck
+        self.q_obs = moved
         self.log.append((now, self.sent_i, self.q_cmd.copy(), self.q_obs.copy()))
 
 
@@ -495,6 +533,9 @@ def run_act(
     gripper=FakeKin.GRIPPER,
     seed_q=None,
     work=None,
+    stick=None,
+    trim_ticks=9,
+    lag_deg=3.0,
 ):
     """One act in the simulated world: the arm starts where the demo did, the camera has seen the objects at rest for
     a second, and the engine steps once per 30 Hz tick before the motor loop does."""
@@ -520,8 +561,16 @@ def run_act(
         world.perceive(t, scene, kin.forward_kinematics(q0))
         scene.add_tip(t, kin.forward_kinematics(q0))
         t += dt
-    motor = Motor(q0, step_deg=step_deg, gripper=gripper)
-    arm = Arm(kin, gripper=gripper, step_deg=step_deg, hz=30.0, walk_m_s=0.04, walk_rad_s=np.radians(30.0))
+    motor = Motor(q0, step_deg=step_deg, gripper=gripper, stick=stick, trim_ticks=trim_ticks)
+    arm = Arm(
+        kin,
+        gripper=gripper,
+        step_deg=step_deg,
+        hz=30.0,
+        walk_m_s=0.04,
+        walk_rad_s=np.radians(30.0),
+        lag_deg=lag_deg,
+    )
     objects = Objects(
         scene,
         {n: b.motion.copy() for n, b in bodies.items()},
@@ -542,7 +591,7 @@ def run_act(
     motor.start(t)
     engine.start(q0, t)
     started = t
-    while not engine.done and t < started + until_s:
+    while not engine.done and not motor.halted and t < started + until_s:
         t += dt
         tip = kin.forward_kinematics(motor.q_obs)
         world.perceive(t, scene, tip)
@@ -550,4 +599,5 @@ def run_act(
         engine.step(t)
         motor.tick(t)
         world.physics(t, motor.q_obs)
+        motor.loaded = world.held is not None
     return Sim(engine, world, motor, scene, started)

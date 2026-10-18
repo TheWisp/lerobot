@@ -55,6 +55,9 @@ class Arm:
     walk_m_s: float = 0.04
     walk_rad_s: float = math.radians(30.0)
     grip_units_s: float = 80.0
+    lag_deg: float | None = (
+        None  # the motor loop's catch-up budget: a joint further behind than this is waited for
+    )
 
     def fk(self, q: np.ndarray) -> np.ndarray:
         return np.asarray(self.kin.forward_kinematics(np.asarray(q, dtype=float)), dtype=float)
@@ -89,6 +92,9 @@ class Playback(Protocol):
 
     def cancel(self, expected_sent: int) -> bool: ...
 
+    def observed(self) -> np.ndarray | None:
+        """The arm's newest checked joint reading, or None without one."""
+
 
 @dataclasses.dataclass
 class Cmd:
@@ -100,6 +106,9 @@ class Cmd:
     s: float
     kind: str  # "start", "leg" or "transition"
     td: float | None = None
+    state: tuple[Run, float] | None = (
+        None  # the generator's run and time once it was made: where a cancel rewinds to
+    )
 
 
 @dataclasses.dataclass
@@ -210,6 +219,8 @@ class Engine:
         self.result: dict[str, Any] | None = None
         self._last_now: float | None = None
         self._over = False  # the generator has made the act's last command
+        self.waiting_arm: float | None = None  # since when the arm trails by more than its catch-up budget
+        self.waited_s = 0.0
         self._unreachable = ""
         self.stretched_s = 0.0  # demo seconds the joint bound slowed
 
@@ -234,6 +245,7 @@ class Engine:
             ],
             "commands": len(self.cmds),
             "stretched_s": self.stretched_s,
+            "waited_for_arm_s": self.waited_s,
         }
         self._record("end", now, ok=ok, why=why)
 
@@ -452,6 +464,7 @@ class Engine:
                     self.stretched_s += self.speed / self.arm.hz - dtau
                 self.run, self.tau = run, tau
                 leg = self.tl.legs[run.leg]
+                state = (run, tau)
                 if (
                     err_m > core.ACT_REACH_TOL_M or err_deg > core.ACT_REACH_TOL_DEG
                 ) and leg.constraint != "best_effort":
@@ -462,7 +475,7 @@ class Engine:
                     lo, hi = (np.asarray(b, dtype=float) for b in self.arm.workspace)
                     if np.any(pose[:3, 3] < lo) or np.any(pose[:3, 3] > hi):
                         self._unreachable = f"{leg.label}: outside the workspace"
-                return Cmd(q, pose, grip, 0.0, run.leg, s, run.kind, td)
+                return Cmd(q, pose, grip, 0.0, run.leg, s, run.kind, td, state)
             dtau /= 2.0
         self._unreachable = (
             f"{self.tl.legs[self.run.leg].label}: the arm would have to jump to another configuration"
@@ -682,6 +695,9 @@ class Engine:
             if self.pb.cancel(sent):
                 del self.cmds[sent + 1 :]
                 self.sent = sent
+                if self.cmds[sent].state is not None:
+                    self.run, self.tau = self.cmds[sent].state
+                self._over = False
                 return
         raise RuntimeError("could not cancel the motor loop's queue")
 
@@ -817,14 +833,40 @@ class Engine:
         self.run, self.tau = nxt, 0.0
         self._record("line re-aimed", now, cause=cause, seconds=nxt.seconds)
 
+    def _trailing(self, now: float) -> bool:
+        """Whether to wait for the arm: a joint trails the last command sent by more than the motor loop's catch-up
+        budget. The queue is cancelled so the goal stands still, which lets the motor loop's trim free a sticking
+        joint, instead of running on into the loop's own freeze (act_execution.md E21); the clock resumes from the last
+        command sent once every joint is back within the budget."""
+        observed = getattr(self.pb, "observed", None)
+        if self.arm.lag_deg is None or observed is None or self.sent < 0:
+            return False
+        q = observed()
+        if q is None:
+            return False
+        lag = np.abs(np.asarray(q, dtype=float) - self.cmds[self.sent].q)
+        lag[self.arm.gripper] = 0.0
+        worst = float(lag.max())
+        if worst > self.arm.lag_deg:
+            if self.waiting_arm is None:
+                self.waiting_arm = now
+                self._cancel()
+                self._record("waiting for the arm", now, joint=int(np.argmax(lag)), lag_deg=worst)
+            return True
+        if self.waiting_arm is not None:
+            self.waited_s += now - self.waiting_arm
+            self._record("the arm caught up", now, waited_s=now - self.waiting_arm)
+            self.waiting_arm = None
+        return False
+
     # ── the step ──
 
     def start(self, q_now: np.ndarray, now: float) -> None:
         """Begin from the arm's present joints ``q_now``, which the motor loop holds as command 0."""
         q = np.asarray(q_now, dtype=float).copy()
         pose = self.arm.fk(q)
-        self.cmds = [Cmd(q, pose, float(q[self.arm.gripper]), 0.0, 0, 0.0, "start")]
         self.run, self.tau = self._leg_run(0, 0.0, pose, float(q[self.arm.gripper])), 0.0
+        self.cmds = [Cmd(q, pose, float(q[self.arm.gripper]), 0.0, 0, 0.0, "start", state=(self.run, 0.0))]
         self._record("start", now, speed=self.speed)
 
     def step(self, now: float) -> None:
@@ -845,6 +887,8 @@ class Engine:
             if self.done or self.waiting is not None:
                 return
         self._watch_moves(now)
+        if self._trailing(now):
+            return
         if not self._over:
             self._fill(now)
             if self.done:

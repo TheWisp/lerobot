@@ -348,3 +348,20 @@ def test_the_arm_does_not_drift_with_a_moved_target_while_in_contact():
     for c in during:
         expected = ring0 @ sim.engine.demo.pose_at(c.td) @ sim.engine.fix.get("dowel", np.eye(4))
         assert np.linalg.norm(c.pose[:3, 3] - expected[:3, 3]) < 0.0005
+
+
+def test_a_sticking_joint_is_waited_for_instead_of_driven_into_the_motor_loops_freeze():
+    """The lift's joint sticks under load until it is 6 degrees behind or its goal has stood still for 0.6 s, the
+    jog's trim then freeing it (on the rig the shoulder was still stuck 0.33 s into a still goal, E21). Run on, the
+    motor loop holds at 5 degrees behind and freezes the arm 0.5 s later; waited for whenever a joint trails by more
+    than the loop's 3 degree catch-up budget, the goal stands still before the hold and the act completes."""
+    demo, kf, bodies = pick_place_demo()
+    stuck = run_act(demo, kf, bodies, speed=0.5, stick={2: 6.0}, trim_ticks=18, lag_deg=None)
+    assert stuck.motor.halted  # the control: the motor loop freezes the arm
+    sim = run_act(demo, kf, pick_place_demo()[2], speed=0.5, stick={2: 6.0}, trim_ticks=18)
+    assert not sim.motor.halted
+    assert sim.engine.result["ok"], sim.engine.result
+    assert _on_ring(sim), sim.world.events
+    assert _records(sim, "waiting for the arm")
+    lags = [float(np.max(np.abs(q_cmd - q_obs)[:6])) for _, _, q_cmd, q_obs in sim.motor.log]
+    assert max(lags) < sim.motor.stop_lag
