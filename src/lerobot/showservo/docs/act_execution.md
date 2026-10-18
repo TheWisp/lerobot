@@ -465,3 +465,12 @@ to the fingertip (`held_0`).
 <a id="e19"></a>**E19. What a check costs.** On a rig-sized synthetic frame (848 × 480, the rig's intrinsics and camera
 pose), mean of 200 calls on this desktop, idle: depth at 1,372 surface points 0.18 ms; 60 tracks against the gripper's
 motion 0.06 ms (`lerobot.showservo.engine.predicates`, working tree on `eb29ecba7`).
+
+<a id="e20"></a>**E20. The first engine act on the rig**, 2026-10-18, `d66681568`, the insertion demo at speed 0.5 (act
+`20261018_005946`). The grasp's follow was sent over 0.93 s, the demo's time over the speed exactly; the two lines
+before it over 1.13 s and 1.20 s against the demo's 1.67 s and 1.61 s, their straight share. Joints trailed their
+commands by 1.5° at the median and 3.0° at most, at up to 40 °/s; the motor loop never held the playback. The grasp's
+check said success from the tracked points: 3.1 px from "came along" against 21.1 px from "stayed". The straight line
+the demo marks after the grasp then drove the held dowel's free end into the ring's side in this layout (the dowel
+pointing at the ring); the shoulder's load rose to its maximum and the jog froze the arm. The demo's own path went up
+before over; a lift key frame or a follow from the dowel's frame into the ring's would replay that.

@@ -359,6 +359,12 @@ async def _act_engine_task(
             if engine is not None:
                 run.meta["engine"] = {
                     "result": engine.result,
+                    "progress": list(engine.progress),
+                    "milestones": [
+                        {"name": m.name, "status": m.status, "failures": m.failures}
+                        for m in engine.milestones
+                    ],
+                    "stretched_s": engine.stretched_s,
                     "records": engine.records,
                     "frames_fed": None if feed is None else feed.frames,
                     "slowest_solve_ms": engine.solve_s * 1000.0,
