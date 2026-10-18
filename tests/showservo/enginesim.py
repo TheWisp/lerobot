@@ -536,6 +536,7 @@ def run_act(
     stick=None,
     trim_ticks=9,
     lag_deg=3.0,
+    skip_steps=None,
 ):
     """One act in the simulated world: the arm starts where the demo did, the camera has seen the objects at rest for
     a second, and the engine steps once per 30 Hz tick before the motor loop does."""
@@ -596,7 +597,11 @@ def run_act(
         tip = kin.forward_kinematics(motor.q_obs)
         world.perceive(t, scene, tip)
         scene.add_tip(t, tip)
-        engine.step(t)
+        tick = int(round((t - started) * 30.0))
+        if skip_steps is None or not skip_steps(
+            tick
+        ):  # the engine's step missing ticks, as on a busy process
+            engine.step(t)
         motor.tick(t)
         world.physics(t, motor.q_obs)
         motor.loaded = world.held is not None

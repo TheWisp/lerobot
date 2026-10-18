@@ -211,6 +211,7 @@ class Engine:
         self.fix: dict[str, np.ndarray] = {}  # the gripper-side correction that follows from it
         self.records: list[dict[str, Any]] = []
         self.solve_s = 0.0  # the slowest solve so far
+        self.step_gaps: list[float] = []  # the time between the engine's own steps, newest last
         self.waiting: dict[str, Any] | None = None
         self.moved_views: dict[str, int] = {}
         self.ended: float | None = None
@@ -435,7 +436,10 @@ class Engine:
     # ── the command stage ──
 
     def _lead(self) -> int:
-        return max(2, int(math.ceil(self.solve_s * self.arm.hz)) + 1)
+        """How many commands to keep queued: enough to cover the slowest solve and the time until the engine's next
+        step (the 95th percentile of the gaps between its recent steps), plus one."""
+        gap = float(np.percentile(self.step_gaps, 95)) if self.step_gaps else 1.0 / self.arm.hz
+        return max(2, int(math.ceil((self.solve_s + gap) * self.arm.hz)) + 1)
 
     def _next(self, prev: Cmd) -> Cmd | None:
         """The next tick's command after ``prev``, or None when the act's motion is over. Advances the timeline by one
@@ -874,6 +878,8 @@ class Engine:
             return
         dt = 0.0 if self._last_now is None else max(0.0, now - self._last_now)
         self._last_now = now
+        if dt > 0:
+            self.step_gaps = [*self.step_gaps[-99:], dt]
         hold = set()
         if self.run is not None and self.run.kind == "leg" and self.tl.legs[self.run.leg].move == "follow":
             hold = {self.tl.legs[self.run.leg].obj}

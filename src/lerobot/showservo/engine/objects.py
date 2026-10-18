@@ -24,6 +24,7 @@ from .scene import SceneLog
 from .timeline import BASE
 
 PIXEL = 1.0  # what a tracked point is measured in: the noise of a perfectly steady one is one pixel, not zero
+STEADY_S = 1.0  # a choice: the views of a still object that its pose is the median of (about ten on the rig)
 
 
 def _toward(a: np.ndarray, b: np.ndarray, centre: np.ndarray, max_m: float, max_rad: float) -> np.ndarray:
@@ -63,6 +64,10 @@ class Objects:
         self.walk_m_s, self.walk_rad_s = walk_m_s, walk_rad_s
         self.depth_unit_m = depth_unit_m
         self.rest = {n: [-np.inf, np.inf] for n in self.used}  # [since, until): what counts toward its noise
+        self.recent: dict[str, list] = {
+            n: [] for n in self.used
+        }  # its views since it last moved, the last STEADY_S
+        self.beyond: dict[str, int] = dict.fromkeys(self.used, 0)  # views in a row further than its noise
         self.camera = scene.camera
         self._at_touch: dict[
             str, dict[str, object]
@@ -73,18 +78,42 @@ class Objects:
         object in ``hold`` (one the arm is in contact with) takes only corrections within its noise: a larger one is
         for the engine to decide, not to drift into."""
         for n in self.used:
-            views = self.scene.views(n, since=self.latest_t[n] + 1e-9)
-            if views:
-                self.latest[n], self.latest_t[n] = views[-1].motion, views[-1].t
+            for v in self.scene.views(n, since=self.latest_t[n] + 1e-9):
+                self.latest[n], self.latest_t[n] = v.motion, v.t
+                self._steady(n, v.t, v.motion)
             if n in hold and self.off(n) > self.move_threshold(n):
                 continue
+            target = self._centre_of(n) if self.recent[n] else self.latest[n]
             self.used[n] = _toward(
                 self.used[n],
-                self.latest[n],
+                target,
                 self.centres.get(n, np.zeros(3)),
                 self.walk_m_s * dt,
                 self.walk_rad_s * dt,
             )
+
+    def _steady(self, name: str, t: float, motion: np.ndarray) -> None:
+        """Keep the views of the object since it last moved: a view further than its noise from where the commands
+        have it, twice in a row, is a move, and the views before it are dropped."""
+        c = np.append(self.centres.get(name, np.zeros(3)), 1.0)
+        far = float(np.linalg.norm((motion @ c)[:3] - (self.used[name] @ c)[:3])) > self.move_threshold(name)
+        self.beyond[name] = self.beyond[name] + 1 if far else 0
+        if self.beyond[name] >= 2:
+            self.recent[name] = self.recent[name][-1:]
+            self.beyond[name] = 0
+        self.recent[name] = [(tv, m) for tv, m in self.recent[name] if tv >= t - STEADY_S] + [(t, motion)]
+
+    def _centre_of(self, name: str) -> np.ndarray:
+        """The object's pose from its recent views: its centre at their median, turned as their mean."""
+        from scipy.spatial.transform import Rotation
+
+        c = self.centres.get(name, np.zeros(3))
+        ms = np.stack([m for _, m in self.recent[name]])
+        p = np.median(ms[:, :3, :3] @ c + ms[:, :3, 3], axis=0)
+        rot = Rotation.from_matrix(ms[:, :3, :3]).mean().as_matrix()
+        out = np.eye(4)
+        out[:3, :3], out[:3, 3] = rot, p - rot @ c
+        return out
 
     def off(self, name: str) -> float:
         """How far the newest view puts the object's centre from where the commands have it, metres."""
@@ -100,6 +129,8 @@ class Objects:
     def snap(self, name: str) -> None:
         """Use the newest view at once: after a failure, when the arm is about to move anew toward the object."""
         self.used[name] = self.latest[name].copy()
+        self.recent[name] = [(self.latest_t[name], self.latest[name].copy())]
+        self.beyond[name] = 0
 
     def motion(self, name: str) -> np.ndarray:
         return np.eye(4) if name == BASE or name not in self.used else self.used[name]

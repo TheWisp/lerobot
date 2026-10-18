@@ -365,3 +365,22 @@ def test_a_sticking_joint_is_waited_for_instead_of_driven_into_the_motor_loops_f
     assert _records(sim, "waiting for the arm")
     lags = [float(np.max(np.abs(q_cmd - q_obs)[:6])) for _, _, q_cmd, q_obs in sim.motor.log]
     assert max(lags) < sim.motor.stop_lag
+
+
+def test_the_queue_never_runs_dry_when_the_engines_steps_come_late():
+    """On the rig the engine's steps come when the GUI process lets them, not every tick: with a queue sized for the
+    IK solve alone, 30 of 248 moving ticks sent nothing new and the next caught up with a double step, a visible
+    stutter. Steps missing two ticks in every three: once the engine has timed its own steps (its first ten ticks,
+    the arm starting from standing), the queue covers the gaps and no tick stutters."""
+    demo, kf, bodies = pick_place_demo()
+    sim = run_act(demo, kf, bodies, skip_steps=lambda tick: tick % 3 != 0)
+    assert sim.engine.result["ok"], sim.engine.result
+    sent = [k for _, k, _, _ in sim.motor.log]
+    cmds = sim.engine.cmds
+    stutters = 0
+    for i in range(10, len(sent)):
+        a, b, c = sent[i - 2], sent[i - 1], sent[i]
+        moving = a != c and b >= 0 and core.pose_residual(cmds[a].pose, cmds[c].pose)[0] > 1e-5
+        if moving and b == a:  # a tick that sent nothing new, between ticks that moved
+            stutters += 1
+    assert stutters == 0, stutters
