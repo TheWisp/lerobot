@@ -664,3 +664,33 @@ def test_replay_labels_prediction_only_after_it_was_selected(tmp_path, monkeypat
     assert (
         any("grasp prediction" in s and "no post-lift visual verification" in s for s in labels) is expected
     )
+
+
+def test_an_engine_acts_replay_draws_each_object_where_the_engine_believed_it(tmp_path):
+    """What the act engine believed, beside what the camera saw: each object's demo surface where the engine's estimate
+    at the newest camera frame by then put it, and a line saying by what; an estimate older than the frame by more than
+    REPLAY_ENGINE_MAX_AGE_S is not drawn on it."""
+    act = _act(tmp_path, groups=False)
+    meta = json.loads((act / "act.json").read_text())
+    meta["frames"][0]["t_capture_mono"] = 5.0
+    moved = np.eye(4)
+    moved[0, 3] = 0.03  # 40 px right at 0.45 m
+    meta["engine"] = {
+        "estimates": [{"t": 4.9, "objects": {"cube": {"motion": moved.tolist(), "by": "its views"}}}]
+    }
+    surface = np.array(
+        [
+            [(u - 424) * 0.45 / 600, (v - 240) * 0.45 / 600, 0.45]
+            for u in range(300, 361, 5)
+            for v in range(200, 261, 5)
+        ]
+    )
+    engine = manipulation.runtime.REPLAY_ENGINE
+    img = manipulation.replay._replay_draw(act, meta, 0, {}, base={"cube": surface})
+    assert _has(img, range(338, 343), 230, engine) and _has(img, range(398, 403), 230, engine), "moved 40 px"
+    assert not _has(img, range(305, 330), 230, engine), "not where the demo had it"
+    blank = np.zeros((H, W, 3), np.uint8)
+    line = manipulation.replay._draw_engine_estimates(blank, meta, 5.0, {"cube": surface})
+    assert line == "engine, 0.10 s before: cube by its views"
+    late = manipulation.replay._draw_engine_estimates(blank * 0, meta, 5.0 + 1.0, {"cube": surface})
+    assert late == "engine: none of a frame in the 0.5 s before"

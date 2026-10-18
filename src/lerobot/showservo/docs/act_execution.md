@@ -383,7 +383,9 @@ which gripper column closes which way, joint ranges, workspace, joint speed limi
 sent; add to it; cancel what is not sent; its clock), and a log that perception and the joint readings write into
 (each object's pose the pose estimator takes, per frame; the fingertip from the joints; the camera). The GUI fills them in, and the act request
 says which runner to use. The act's record holds every check result with what it was based on, every move of
-Progress with its cause, and every command sent; at the end it says which Milestones succeeded, which failed and why,
+Progress with its cause, every command sent, and on each camera frame every object where the engine
+believed it (a held one where the gripper carries it), which the act's replay draws over the camera image
+([E32](#e32)); at the end it says which Milestones succeeded, which failed and why,
 and which were passed while the camera couldn't tell, apart from a fault that stopped the act. ([R10](#requirements),
 [R11](#requirements), [R13](#requirements), [O10](#o10))
 
@@ -636,3 +638,14 @@ object's mask (median 3.6-8.1 mm against 4.3-5.0 mm).
 In 113106 the checks certified 7 of the object's 214 views, all in the first 0.5 s, before the arm moved (its views
 carried in the gripper are right: E27), and 41 of the ring's 112 before the insertion, none of its 102 after. They avoid E30 by refusing nearly
 every view: the act then runs on the poses it had at the grasp, as the live act did, and checks nothing.
+
+<a id="e32"></a>**E32. Confidently wrong, and the record could not say why**, 2026-10-18, rig act `20261018_162243`
+(`ae25eece4`, speed 0.5). The fingers pushed the object 6 mm on the way down and the arm backed out and came in again;
+the grasp's check answered no failure; the carry recorded the object moving in the gripper four times (5.2 mm
+2.4 deg, 7.0 mm 3.4 deg, 11.5 mm 8.9 deg, 15.1 mm 23.5 deg). The act stopped 39% into key frame 6 ("the arm reaches
+only within 3.2 mm"), the wrist at its bound, holding the object north of the ring, off the hole; at the same point
+the demo's own camera has it over the hole. Just before the stop the object stood upright in the gripper and
+Point2Pose's view, which the engine took, had it lying diagonally. The record held the trackers' views, the commands
+and the size of each change the engine made, not where it believed the object was, so which views moved the
+commands, and by how much, could not be read from it. The object was dropped afterwards by the recovery (lowered and
+opened above the table), not by the act.

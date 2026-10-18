@@ -242,6 +242,9 @@ class Engine:
             str, np.ndarray
         ] = {}  # the gripper-side change each released object had when let go
         self.moves_recorded: dict[str, float] = {}
+        # The act's record of what the engine believed: on each new camera frame, every object's pose as it had it.
+        self.estimates: list[dict[str, Any]] = []
+        self._estimated_t = -np.inf
 
     # ── records ──
 
@@ -861,6 +864,7 @@ class Engine:
         if self.done:
             return
         self._follow(dt)
+        self._note_estimates()
         if self.waiting is not None:
             self._resume(now)
             if self.done or self.waiting is not None:
@@ -875,6 +879,23 @@ class Engine:
             self._record("motion ends", now)
         if self.ended is not None:
             self._end(now)
+
+    def _note_estimates(self) -> None:
+        """On each new camera frame, every object's pose as the engine has it then (motion since the demo, base frame):
+        a held one where the gripper carries it, from the fingertip at that frame and how it sits; any other where
+        the world has it. What the act believed, for a replay to draw beside what the camera saw."""
+        frames = self.scene.frames(since=self._estimated_t + 1e-9)
+        if not frames:
+            return
+        t = self._estimated_t = frames[-1]
+        objects = {}
+        for name in self.world.pose:
+            hold, tip = self.holds.get(name), self.scene.tip_at(t)
+            if hold is not None and tip is not None:
+                objects[name] = {"motion": (tip @ hold.estimate).round(5).tolist(), "by": "the gripper"}
+            else:
+                objects[name] = {"motion": self.world.motion(name).round(5).tolist(), "by": "its views"}
+        self.estimates.append({"t": t, "objects": objects})
 
     def _follow(self, dt: float) -> None:
         """The motion step's inputs follow their estimates at no more than the walk speed: each object's pose and how

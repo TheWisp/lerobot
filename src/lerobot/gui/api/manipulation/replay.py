@@ -30,7 +30,7 @@ import numpy as np
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
 
-from . import camera, groups, recording, rendering, runtime, tracking
+from . import camera, groups, planning, recording, rendering, runtime, tracking
 
 router = APIRouter()
 
@@ -100,6 +100,7 @@ def _replay_draw(
     camera_bgr: np.ndarray | None = None,
     at: float | None = None,
     mono_at: float | None = None,
+    base: dict[str, np.ndarray] | None = None,
 ) -> np.ndarray:
     """Frame ``i`` of the act recorded in ``run`` (``meta`` its act.json) with what the act had then, every value as the
     run recorded it, each of the act's objects (:func:`_replay_objects`) in its colour of REPLAY_COLOURS: its mask
@@ -108,8 +109,9 @@ def _replay_draw(
     (drawn like the live view's outline of it, from ``points``, its surface from the demo's view, by name) and what
     carried it in the point groups; the fingertip and, while the act walked the arm, where it was told to go, and what
     each object's view was judged on; underneath, the point groups painted as the live view painted them
-    (:func:`_paint_picture`). What the act did not record is said, not rebuilt. Raises HTTPException for a frame the
-    record does not have."""
+    (:func:`_paint_picture`); and, for an act the engine ran, each object where the engine believed it at the newest
+    camera frame it had then (its demo surface from ``base``, base frame, by name). What the act did not record is
+    said, not rebuilt. Raises HTTPException for a frame the record does not have."""
     import cv2
 
     frames = meta.get("frames") or []
@@ -215,6 +217,9 @@ def _replay_draw(
                 cv2.circle(bgr, p, 10, runtime.REPLAY_TOLD, 2, cv2.LINE_AA)
     if camera_bgr is not None:
         _draw_timeline_groups(bgr, meta, at, intr)
+    engine_line = _draw_engine_estimates(
+        bgr, meta, float(f.get("t_capture_mono", 0.0)) if mono_at is None else mono_at, base or {}
+    )
     lines = [
         f"+{at - t0:.1f} s  frame {i} of {len(frames)}  {f['step']}",
         f"{first}: {f.get('state')}, following {'accepted' if f.get('used') else 'rejected'}  "
@@ -257,7 +262,7 @@ def _replay_draw(
         lines.insert(0, "HOLD: position measured against held demo views; rotation remains predicted")
     elif selection.get("source") == "held-view registration":
         lines.insert(0, "HOLD: measured against held demo views")
-    lines += held_lines + carried_lines
+    lines += held_lines + carried_lines + ([engine_line] if engine_line else [])
     for k, s in enumerate(lines):
         _replay_text(bgr, s, (8, 18 + 17 * k))
     legend = [(f"{first}: mask edge, points (filled seen)", colour[first])]
@@ -277,12 +282,54 @@ def _replay_draw(
             (200, 200, 200),
         ),
     ]
+    if (meta.get("engine") or {}).get("estimates"):
+        legend.append(
+            (
+                "each object where the engine believed it (a held one where the gripper carries it)",
+                runtime.REPLAY_ENGINE,
+            )
+        )
     for k, (s, c) in enumerate(legend):
         _replay_text(bgr, s, (8, bgr.shape[0] - 10 - 15 * (len(legend) - 1 - k)), c, 0.4)
     if any("pose_verification" in frame for frame in frames):
         slots = max(len(names), max(len(frame.get("pose_verification") or []) for frame in frames))
         bgr = rendering._pose_verification_panel(bgr, f.get("pose_verification"), slots)
     return bgr
+
+
+def _draw_engine_estimates(
+    bgr: np.ndarray, meta: dict[str, Any], mono_at: float, base: dict[str, np.ndarray]
+) -> str | None:
+    """Each object where the act engine believed it at its newest camera frame by ``mono_at`` (the act's
+    ``engine.estimates``): its demo surface (``base``, base frame) moved by that pose, as dots. The line saying what
+    each was believed by; None for an act without them."""
+    import cv2
+
+    estimates = (meta.get("engine") or {}).get("estimates") or []
+    k = bisect.bisect_right([e["t"] for e in estimates], mono_at + 1e-6) - 1
+    if k < 0 or mono_at - estimates[k]["t"] > runtime.REPLAY_ENGINE_MAX_AGE_S:
+        return (
+            None
+            if not estimates
+            else f"engine: none of a frame in the {runtime.REPLAY_ENGINE_MAX_AGE_S:.1f} s before"
+        )
+    t_bc, intr = np.asarray(meta["t_bc"], dtype=float), meta["intr"]
+    cam_from_base = np.linalg.inv(t_bc)
+    said = []
+    for name, e in estimates[k]["objects"].items():
+        said.append(f"{name} by {e['by']}")
+        points = base.get(name)
+        if points is None:
+            continue
+        motion = cam_from_base @ np.asarray(e["motion"], dtype=float)
+        cam = points @ motion[:3, :3].T + motion[:3, 3]
+        cam = cam[cam[:, 2] > 0]
+        for x, y, zc in cam[:: max(1, len(cam) // 300)]:
+            u, v = int(round(intr["fx"] * x / zc + intr["cx"])), int(round(intr["fy"] * y / zc + intr["cy"]))
+            if 0 <= u < bgr.shape[1] and 0 <= v < bgr.shape[0]:
+                cv2.circle(bgr, (u, v), 2, runtime.REPLAY_ENGINE, -1, cv2.LINE_AA)
+    drawn = "" if base else " (load the act's demo to draw them)"
+    return f"engine, {mono_at - estimates[k]['t']:.2f} s before: " + ", ".join(said) + drawn
 
 
 def _draw_timeline_groups(bgr: np.ndarray, meta: dict[str, Any], at: float, intr: dict) -> None:
@@ -328,6 +375,21 @@ def _replay_points(meta: dict[str, Any], demo: runtime._Demo | None) -> dict[str
     return out
 
 
+def _replay_base_points(meta: dict[str, Any], demo: runtime._Demo | None) -> dict[str, np.ndarray]:
+    """Each of the act's objects, by name: its surface at its demo pose, base frame (the frame the engine's poses move),
+    when the act's demo is the one loaded; otherwise none."""
+    out: dict[str, np.ndarray] = {}
+    if demo is None or demo.name != meta.get("demo") or not meta.get("t_bc"):
+        return out
+    for name in _replay_objects(meta):
+        if name in demo.objects:
+            with contextlib.suppress(OSError, KeyError, ValueError):
+                out[name] = np.asarray(
+                    planning._object_points(demo, name, np.asarray(meta["t_bc"], dtype=float))
+                )
+    return out
+
+
 def _replay_jpeg(trial: int, i: int, demo: runtime._Demo | None, pair: bool = False) -> bytes:
     """Fixed-clock slot ``i`` of an act, alone or beside its camera image, as a JPEG."""
     import cv2
@@ -338,7 +400,7 @@ def _replay_jpeg(trial: int, i: int, demo: runtime._Demo | None, pair: bool = Fa
     rows = timeline["rows"]
     if not 0 <= i < len(rows):
         raise HTTPException(404, "no such frame")
-    picture = _timeline_pair(run, meta, rows[i], points)
+    picture = _timeline_pair(run, meta, rows[i], points, _replay_base_points(meta, demo))
     drawn = picture if pair else picture[:, picture.shape[1] // 2 :]
     ok, buf = cv2.imencode(".jpg", drawn)
     assert ok, "a drawn frame encodes"
@@ -346,7 +408,11 @@ def _replay_jpeg(trial: int, i: int, demo: runtime._Demo | None, pair: bool = Fa
 
 
 def _timeline_pair(
-    run: pathlib.Path, meta: dict[str, Any], row: dict, points: dict[str, np.ndarray | None]
+    run: pathlib.Path,
+    meta: dict[str, Any],
+    row: dict,
+    points: dict[str, np.ndarray | None],
+    base: dict[str, np.ndarray] | None = None,
 ) -> np.ndarray:
     """One fixed-clock replay slot: its actual camera image and the asynchronous estimates known by then."""
     import cv2
@@ -366,7 +432,9 @@ def _timeline_pair(
         # Project the arm at the image's host publication time, not the later
         # replay slot. The slot still determines which async results were known.
         image_mono = row.get("camera_mono") or row["t_mono"]
-        drawn = _replay_draw(run, meta, i, points, camera_bgr=raw, at=at, mono_at=float(image_mono))
+        drawn = _replay_draw(
+            run, meta, i, points, camera_bgr=raw, at=at, mono_at=float(image_mono), base=base
+        )
     else:
         drawn = raw.copy()
         _draw_timeline_groups(drawn, meta, at, meta["intr"])
@@ -386,12 +454,16 @@ def _timeline_pair(
 
 
 def _timeline_video_file(
-    run: pathlib.Path, meta: dict[str, Any], points: dict[str, np.ndarray | None], timeline: dict
+    run: pathlib.Path,
+    meta: dict[str, Any],
+    points: dict[str, np.ndarray | None],
+    timeline: dict,
+    base: dict[str, np.ndarray] | None = None,
 ) -> pathlib.Path:
     """Encode the fixed-rate observation timeline, never substituting P2P's variable result cadence."""
     rows = timeline["rows"]
     fps = float(timeline["fps"])
-    picture = _timeline_pair(run, meta, rows[0], points)
+    picture = _timeline_pair(run, meta, rows[0], points, base)
     h, w = picture.shape[:2]
     out = run / "replay.mp4"
     cmd = [
@@ -421,7 +493,7 @@ def _timeline_video_file(
     try:
         assert proc.stdin is not None
         for row in rows:
-            picture = _timeline_pair(run, meta, row, points)
+            picture = _timeline_pair(run, meta, row, points, base)
             proc.stdin.write(np.ascontiguousarray(picture).tobytes())
         _out, err = proc.communicate(timeout=runtime.REPLAY_VIDEO_TIMEOUT_S)
     except BaseException:
@@ -434,16 +506,19 @@ def _timeline_video_file(
 
 
 def _replay_video_file(
-    run: pathlib.Path, meta: dict[str, Any], points: dict[str, np.ndarray | None]
+    run: pathlib.Path,
+    meta: dict[str, Any],
+    points: dict[str, np.ndarray | None],
+    base: dict[str, np.ndarray] | None = None,
 ) -> pathlib.Path:
     """Export only the fixed-rate observation timeline as H.264."""
-    return _timeline_video_file(run, meta, points, _replay_timeline(run))
+    return _timeline_video_file(run, meta, points, _replay_timeline(run), base)
 
 
 def _replay_video(trial: int, demo: runtime._Demo | None) -> pathlib.Path:
     """Trial ``trial``'s act as a video (:func:`_replay_video_file`). Called off the event loop."""
     run, meta = _replay_run(trial)
-    return _replay_video_file(run, meta, _replay_points(meta, demo))
+    return _replay_video_file(run, meta, _replay_points(meta, demo), _replay_base_points(meta, demo))
 
 
 @router.get("/replay")

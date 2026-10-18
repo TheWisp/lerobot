@@ -647,3 +647,35 @@ def test_the_queue_never_runs_dry_when_the_engines_steps_come_late():
         if moving and b == a:  # a tick that sent nothing new, between ticks that moved
             stutters += 1
     assert stutters == 0, stutters
+
+
+def test_the_act_records_where_the_engine_believed_each_object_at_each_frame():
+    """2026-10-18 on the rig (act 20261018_162243): the act put the held object a few centimetres off, and its record
+    could not say where the engine had believed the object to be. Now, on each camera frame, every object's pose as
+    the engine had it: the held one where the gripper carries it, by how the engine has it sitting there; the others
+    where the world has them. Here each such belief is checked against where the block really was."""
+    truth = []
+
+    def log(world):
+        def go(w, t):
+            truth.append((t, w.bodies["dowel"].motion.copy(), w.held is not None))
+            w.at.append((t + 1.0 / 30.0, go))
+
+        world.at.append((0.0, go))
+
+    demo, kf, bodies = pick_place_demo()
+    sim = run_act(demo, kf, bodies, setup=log)
+    estimates = sim.engine.estimates
+    assert estimates and [e["t"] for e in estimates] == sorted({e["t"] for e in estimates})
+    centre = bodies["dowel"].points.mean(axis=0)
+    by = {"its views": 0, "the gripper": 0}
+    times = np.array([t for t, _, _ in truth])
+    for e in estimates:
+        o = e["objects"]["dowel"]
+        by[o["by"]] += 1
+        t, real, held = truth[int(np.argmin(np.abs(times - e["t"])))]
+        believed = np.asarray(o["motion"]) @ np.append(centre, 1.0)
+        assert np.linalg.norm(believed[:3] - (real @ np.append(centre, 1.0))[:3]) < 0.003, (e["t"], o["by"])
+        if o["by"] == "the gripper":
+            assert held
+    assert by["its views"] and by["the gripper"], by

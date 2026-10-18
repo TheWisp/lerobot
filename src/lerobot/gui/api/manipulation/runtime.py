@@ -605,6 +605,10 @@ REPLAY_COLOURS = ((0, 220, 255), (255, 255, 0), (120, 230, 120), (240, 110, 200)
 REPLAY_TOLD = (0, 0, 255)
 
 
+REPLAY_ENGINE = (255, 0, 255)  # BGR magenta: each object where the act engine believed it
+REPLAY_ENGINE_MAX_AGE_S = 0.5  # an engine estimate older than this at a frame is not drawn on it
+
+
 REPLAY_VIDEO_TIMEOUT_S = 120.0
 
 

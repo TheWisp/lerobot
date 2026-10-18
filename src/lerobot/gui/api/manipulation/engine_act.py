@@ -479,6 +479,7 @@ async def _act_engine_task(
                     "records": engine.records,
                     "frames_fed": None if feed is None else feed.frames,
                     "refused": None if feed is None else dict(feed.refused),
+                    "estimates": engine.estimates,
                     "slowest_solve_ms": engine.solve_s * 1000.0,
                 }
             samples: list[dict[str, Any]] = []
