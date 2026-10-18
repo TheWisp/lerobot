@@ -130,3 +130,21 @@ def test_only_the_engine_acts_a_key_frame_held_where_its_leg_begins():
     assert "act engine only" in execution._runner_problem("key_frames", marks)
     assert execution._runner_problem("engine", marks) == ""
     assert execution._runner_problem("key_frames", marks[:1]) == ""
+
+
+def test_an_object_with_a_declared_turn_symmetry_is_centred_on_its_axis():
+    """The world measures a symmetric object at a point its symmetry's turns keep still: a point on the axis measured
+    from its demo surface, not the visible surface's mean, which a turn about the axis would move."""
+    rng = np.random.default_rng(0)
+    along = rng.uniform(-0.05, 0.05, 2000)
+    angle = rng.uniform(0.0, np.pi, 2000)  # the half a camera above sees
+    half_cylinder = np.c_[along, 0.01 * np.cos(angle), 0.01 * np.sin(angle)] + np.array([0.1, -0.2, 0.01])
+    spec = {"kind": "continuous", "axis": "long_axis", "end_swap": True}
+    centres, symmetries = engine_act.object_geometry(
+        {"long": {"symmetry": spec}, "plain": {}}, {"long": half_cylinder, "plain": half_cylinder}
+    )
+    np.testing.assert_allclose(centres["long"][1:], [-0.2, 0.01], atol=0.001)
+    np.testing.assert_allclose(centres["plain"], half_cylinder.mean(axis=0))
+    assert symmetries["long"][0]["kind"] == "continuous" and symmetries["long"][0].get("end_swap")
+    assert abs(abs(symmetries["long"][1] @ [1.0, 0.0, 0.0]) - 1.0) < 1e-3
+    assert "plain" not in symmetries

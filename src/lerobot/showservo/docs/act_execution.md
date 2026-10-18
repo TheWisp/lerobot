@@ -148,6 +148,9 @@ flowchart LR
 - **One rule for every object.** A new measurement the trackers are confident in replaces the object's pose. No rule
   names an object, or depends on its role (the one picked up, the one placed onto) or its state (held, touched,
   moving). Between measurements an object is where it was last measured. ([R4](#requirements))
+- **A turn its symmetry cannot show is not a move.** Of the poses an object's declared symmetry makes look the same,
+  the world keeps the one nearest its demo pose, and how it sits in the gripper the one nearest the demo's grip; a
+  symmetric object is measured at a point on its axis, which those turns leave still ([E29](#e29)).
 - **The gripper is the only special thing,** and it is in the joint readings, not the world. A held object's pose
   between its measurements is the fingertip now times how it sits in the gripper. How it sits is taken at the grasp,
   from the object's pose and the fingertip at that moment, and estimated from then on like any pose, from every
@@ -266,9 +269,10 @@ two measurements in a row show it.
 
 **How close counts.** No threshold is a number written into the engine ([R9](#requirements)):
 
-- _The noise is measured, per object, in this act:_ how far its measurements wander while it stands untouched —
-  before the arm reaches it, and all act long for those it never touches. On the rig its views wandered 15 mm in one
-  act and 45 mm in another ([O6](#o6)).
+- _The noise is measured, per object, in this act:_ how far each view lands from the pose the views before it make,
+  while it stands untouched — before the arm reaches it, and all act long for those it never touches — counting only
+  the views the world took as still: a view that shows a move is not noise ([E28](#e28)). On the rig its views
+  wandered 15 mm in one act and 45 mm in another ([O6](#o6)).
 - _Where the object should be is the demo's:_ relative to what it was put on, as the demo left it.
 - _How far off the task allows is set by the operator,_ per Milestone in the demo editor, the way the landing freedom
   is set today: one demo cannot say whether a place needs a millimetre or a few centimetres. By default there is no
@@ -354,7 +358,7 @@ sequenceDiagram
 | Its constraint: pose, orientation                             | the whole pose; or only the rotation, the position staying where the leg started                                                                                          |
 | Its constraint: best effort                                   | the key frame is a target: when the arm stops short, the leg ends where the arm is and the next starts from there ([E23](#e23))                                           |
 | A held object, from the grasp to the release                  | the legs between allow for how it sits in the gripper; the grasp and the release are Milestones                                                                           |
-| An object's symmetry: repeating turns, an axis, swapped ends  | turns its legs may take, chosen beside the motion; poses the checks count as the same                                                                                     |
+| An object's symmetry: repeating turns, an axis, swapped ends  | poses that look the same: the world and the hold keep the one nearest the demo's ([E29](#e29)). **NOT IMPLEMENTED:** ranking them by reach, beside the motion             |
 | The demo's landing: exact, symmetric turns, any turn          | turns the legs onto the target may take, chosen beside the motion; poses the checks count as the same                                                                     |
 | The point groups carrying objects between views               | another source of object poses                                                                                                                                            |
 
@@ -580,3 +584,33 @@ once. At 12.1-13.3 s, turned upright for the insertion, the object slid and turn
 medians of its views carried lying (7.9-11.8 s) and standing (14.0-21.5 s, 95% of them within 3.1 mm of theirs); how it sits changed 18.4 mm and
 12.9 deg on one update, the commands carrying it jumped by that, and the act gave up at key frame 5. The live act, on
 the pose taken at the grasp, put the object in the ring.
+
+<a id="e28"></a>**E28. A push counted as noise**, 2026-10-18, acts `20261018_113106` and `20261018_135723`, replayed
+offline. An object's noise was the spread of every view of it until the act touched it, and a view counted toward
+that noise before the move test ran on it. The fingers coming down pushed the object 14 mm and 11.1 mm; the push's own
+views raised the noise (4.5 to 6.6 mm, 4.9 to 5.7 mm) and with it the move threshold (13.3 mm, 11.3 mm), just past the
+push, and no move was seen. Counting only the views taken as still, each by its distance from the pose the views
+before it made, the first act's noise is 2.4 mm before the push and the push is a move at 7.47 s, before the grasp; in
+the second the push is seen during the grasp's descent, and the arm backs out and comes in again.
+
+<a id="e29"></a>**E29. A turn no view can tell, driving the wrist**, 2026-10-18, act `20261018_113106`, replayed
+offline with E27's changes. The object is declared round about its long axis with interchangeable ends. Of the 20.8
+deg between how it sat carried lying and standing (E27), its long axis tilted 5.7 deg; the rest was a turn about that
+axis, which the fit of a half-seen round surface leaves free. How it sits took the whole turn, and to stand the
+object as the demo did the gripper turned against it until the wrist's bend reached its bound (-93.31 of -93.32 deg):
+"key frame 7: the arm reaches only within 5.4 mm". Keeping, of the equivalent poses, the one nearest the demo's grip,
+the first move in the gripper falls from 11.0 to 3.8 deg, the wrist stays off its bound, and the act goes on into key
+frame 7, where the ring's views stop it ([E30](#e30)).
+
+<a id="e30"></a>**E30. Views every other check rejected, taken**, 2026-10-18, act `20261018_113106`, replayed offline
+with E27-E29. Once the object is in the ring's hole and the gripper covers part of the ring, Point2Pose's fit of the
+ring is left with 14-31 points (50 at rest), sitting 10-13 mm higher than before, and the pose that fits them is
+tilted 45-70 deg and 7-16 mm higher; the ring's own visible surface in the depth image rose 2-3 mm, the frames show it
+flat, and the tilted views go on with the arm gone (44 deg at 25.9 s). Point2Pose marked them "ok", which is all the
+engine's feed reads; the check recorded beside it (Point2Pose against the point groups, within 3 mm and 3 deg) and the
+old runner's trust rejected them, and the point groups, not seeing enough of the ring, kept it where it was. That
+check also rejects every view of a held object, the right ones included: the point groups carry a held object with
+the table. The world moved the ring, the moved-target rule backed out, and the way out needed a joint jump. Two
+checks tried on the act do not separate these views from the held object's good ones: model points the depth sees
+past (0-10% of the ring's against 4-33% of the object's), and the posed demo surface against the depth inside the
+object's mask (median 3.6-8.1 mm against 4.3-5.0 mm).

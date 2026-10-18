@@ -45,14 +45,3 @@ def test_decide_scales_with_the_noise_not_with_a_constant():
     obs, new, old = np.array([18.0, 0.0]), np.array([20.0, 0.0]), np.zeros(2)
     assert p.decide(obs, new=new, old=old, noise=2.0, unit="mm").answer is Answer.YES
     assert p.decide(obs, new=new, old=old, noise=12.0, unit="mm").answer is Answer.UNKNOWN
-
-
-# ── moves_with: tracks against two predictions ──
-
-
-def test_spread_is_the_95th_percentile_from_the_median():
-    rng = np.random.default_rng(0)
-    xyz = rng.normal(0.0, 0.004, size=(400, 3)) + np.array([0.1, 0.2, 0.3])
-    spread = p.spread(xyz)
-    assert 0.010 < spread < 0.016  # 95th percentile of a 3D normal's radius with sigma 4 mm: about 11 mm
-    assert p.spread(xyz[:2]) is None  # too few to measure

@@ -584,10 +584,10 @@ class Engine:
             # How it sits: its pose and the fingertip now, until its measurements replace it (_sits).
             self.held_aims.pop(e.obj, None)
             self.let_go.pop(e.obj, None)
-            self.holds[e.obj] = Steady(
-                np.linalg.inv(tip) @ motion, self.world.centres.get(e.obj, np.zeros(3))
-            )
             self.grasp_i[e.obj] = e.i
+            self.holds[e.obj] = Steady(
+                self._as_held(e.obj, tip, motion), self.world.centres.get(e.obj, np.zeros(3))
+            )
             fix_m, fix_deg = core.pose_residual(np.eye(4), self._fix(e.obj))
             info.update(fix_mm=round(fix_m * 1000.0, 2), fix_deg=round(fix_deg, 2))
             self.world.touched(e.obj, now)
@@ -660,7 +660,7 @@ class Engine:
         if hold is None or tip is None:
             return
         before = hold.estimate
-        if hold.add(x.t, np.linalg.inv(tip) @ x.motion, self.world.move_threshold(obj)):
+        if hold.add(x.t, self._as_held(obj, tip, x.motion), self.world.move_threshold(obj)):
             apart = np.linalg.norm(self.world.centre(obj, hold.estimate) - self.world.centre(obj, before))
             self._record(
                 "moved in the gripper",
@@ -670,6 +670,13 @@ class Engine:
                 mm=round(float(apart) * 1000, 1),
                 deg=round(core.pose_residual(before, hold.estimate)[1], 1),
             )
+
+    def _as_held(self, obj: str, tip: np.ndarray, motion: np.ndarray) -> np.ndarray:
+        """How ``obj`` at ``motion`` sits in the gripper at ``tip``: of the ways its symmetry makes look the same, the
+        one nearest how the demo held it."""
+        return self.world.equivalent(
+            obj, np.linalg.inv(tip) @ motion, np.linalg.inv(self.demo.tips[self.grasp_i[obj]])
+        )
 
     # ── going back, or ahead ──
 

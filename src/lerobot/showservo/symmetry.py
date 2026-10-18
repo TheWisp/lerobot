@@ -146,3 +146,43 @@ def turn_about(axis: np.ndarray, point: np.ndarray, angle_deg: float) -> np.ndar
     out[:3, :3] = rot
     out[:3, 3] = point - rot @ point
     return out
+
+
+def nearest_equivalent(
+    motion: np.ndarray,
+    spec: dict[str, Any],
+    axis: np.ndarray,
+    point: np.ndarray,
+    ref: np.ndarray | None = None,
+) -> np.ndarray:
+    """Of the poses ``motion @ T`` that look the same under ``spec`` — T a turn about the line (``axis``, ``point``):
+    any for a continuous symmetry, a multiple of 360/order for a discrete one, and with ``end_swap`` each of those with
+    the ends swapped — the one whose rotation is nearest ``ref``'s (the identity when None). The line is in the frame
+    ``motion`` maps from. Ends swap by a half turn about a line square to the axis through ``point``: exact for a
+    continuous symmetry, where every such line gives the same set, and not offered for the others."""
+    spec = normalise(spec)
+    motion = np.asarray(motion, float)
+    r_ref = np.eye(3) if ref is None else np.asarray(ref, float)[:3, :3]
+    a = np.asarray(axis, float) / np.linalg.norm(axis)
+    k = np.array([[0, -a[2], a[1]], [a[2], 0, -a[0]], [-a[1], a[0], 0]])
+    flips = [np.eye(4)]
+    if spec.get("end_swap") and spec["kind"] == "continuous":
+        flips.append(turn_about(np.cross(a, np.eye(3)[int(np.argmin(np.abs(a)))]), point, 180.0))
+    best, best_angle = motion, np.inf
+    for flip in flips:
+        m = motion @ flip
+        if (
+            spec["kind"] == "continuous"
+        ):  # the turn that maximises trace(ref^T m R(a, t)): its angle to ref is least
+            q = r_ref.T @ m[:3, :3]
+            turns = [float(np.degrees(np.arctan2(np.trace(q @ k), np.trace(q) - a @ q @ a)))]
+        elif spec["kind"] == "discrete":
+            turns = [360.0 * i / spec["order"] for i in range(spec["order"])]
+        else:
+            turns = [0.0]
+        for deg in turns:
+            out = m @ turn_about(a, point, deg)
+            angle = float(np.arccos(np.clip((np.trace(r_ref.T @ out[:3, :3]) - 1.0) / 2.0, -1.0, 1.0)))
+            if angle < best_angle - 1e-12:
+                best, best_angle = out, angle
+    return best

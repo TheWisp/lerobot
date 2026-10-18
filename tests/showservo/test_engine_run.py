@@ -259,6 +259,38 @@ def test_a_block_that_turns_in_the_gripper_is_followed_not_jumped_to():
     assert _on_ring(sim, tol_m=0.002), sim.world.events
 
 
+def test_a_turn_the_objects_symmetry_cannot_show_moves_nothing():
+    """2026-10-18 on the rig (act 20261018_113106, act_execution.md E29): the object is round about its long axis, as
+    the operator declared; the views of it held turned about that axis by about 20 deg, a turn no view can tell, and
+    the commands turned the gripper to undo it until the wrist reached its bound. Here the views of the held block
+    turn 25 deg about its long axis, declared a continuous symmetry: the block is set down as in the undisturbed act."""
+    from lerobot.showservo import symmetry
+
+    demo, kf, bodies = pick_place_demo()
+    points = bodies["dowel"].points
+    centre = points.mean(axis=0)
+    axis = np.linalg.svd(points - centre)[2][0]
+
+    def spin(world):
+        def go(w, t):
+            if w.held is None:
+                w.at.append((t + 0.1, go))
+                return
+            w.view_turn["dowel"] = symmetry.turn_about(axis, centre, 25.0)
+            w.events.append((t, "the views turn 25 deg about its axis"))
+
+        world.at.append((1.0, go))
+
+    sim = run_act(
+        demo, kf, bodies, setup=spin, symmetry={"dowel": ({"kind": "continuous", "axis": "long_axis"}, axis)}
+    )
+    plain = run_act(*pick_place_demo())
+    assert any("views turn" in e for _, e in sim.world.events), sim.world.events
+    assert sim.engine.result["ok"], sim.engine.result
+    assert core.pose_residual(sim.world.bodies["dowel"].motion, plain.world.bodies["dowel"].motion)[1] <= 1.0
+    assert _on_ring(sim, tol_m=0.002), sim.world.events
+
+
 def test_a_target_whose_pose_jumps_mid_leg_is_followed_not_jumped_to(monkeypatch):
     """2026-10-18 on the rig (act 20261018_135723, act_execution.md E26): as the fingers came down, the object was
     pushed 11 mm and turned 10 deg; the world's pose of it jumped by that on one update, and the grasp's commands,

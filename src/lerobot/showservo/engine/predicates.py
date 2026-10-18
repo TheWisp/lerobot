@@ -20,7 +20,6 @@ import enum
 from typing import Any
 
 import numpy as np
-from scipy.spatial.transform import Rotation
 
 
 class Answer(enum.Enum):
@@ -49,25 +48,6 @@ def _unknown(why: str, **evidence: Any) -> Verdict:
 
 
 MEDIAN_MIN = 3  # a choice: the fewest values whose median ignores one wrong one
-
-
-def spread(values: np.ndarray) -> float | None:
-    """How far a set of measurements of one still thing wanders: the 95th percentile of their distances from their
-    median, None with fewer than MEDIAN_MIN of them."""
-    v = np.asarray(values, dtype=float)
-    v = v.reshape(len(v), -1)
-    if len(v) < MEDIAN_MIN:
-        return None
-    return float(np.percentile(np.linalg.norm(v - np.median(v, axis=0), axis=1), 95))
-
-
-def spread_deg(rotations: np.ndarray) -> float | None:
-    """The same for orientations (N, 3, 3): the 95th percentile of their angles from their mean, in degrees."""
-    r = np.asarray(rotations, dtype=float)
-    if len(r) < MEDIAN_MIN:
-        return None
-    rot = Rotation.from_matrix(r)
-    return float(np.percentile(np.degrees((rot * rot.mean().inv()).magnitude()), 95))
 
 
 def decide(obs: np.ndarray, new: np.ndarray, old: np.ndarray, noise: float, unit: str) -> Verdict:

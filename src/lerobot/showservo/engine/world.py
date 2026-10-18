@@ -9,13 +9,17 @@
 
 One rule for every object: its pose is the median of its measurements since it last moved (:class:`Steady`); between
 measurements it is where they put it. Nothing here knows which object is held, touched or moving; how a held object
-sits in the gripper is the task's, estimated the same way. Each object's noise, how far its measurements wander while
-it stands untouched, is measured here for the checks and for telling a move from noise, never set.
+sits in the gripper is the task's, estimated the same way. Each object's noise, how far a view of it lands from the
+pose the views before it make while it stands untouched, is measured here for the checks and for telling a move from
+noise, never set; a view that shows a move is not noise.
 """
 
 from __future__ import annotations
 
 import numpy as np
+from scipy.spatial.transform import Rotation
+
+from lerobot.showservo import symmetry as sym
 
 from . import predicates
 from .scene import SceneLog
@@ -29,17 +33,24 @@ STEADY_S = (
 class Steady:
     """An estimate of a pose that stands still until it moves: the median of its measurements since it last moved
     (their centres' median, their turns' mean), over the last STEADY_S. A move is two measurements in a row further
-    than the threshold from the estimate; the measurements before it are dropped."""
+    than the threshold from the estimate; the measurements before it are dropped. ``still`` keeps, for each measurement
+    within the threshold, when and how far it landed from the estimate the ones before it made: metres at the centre,
+    and degrees."""
 
     def __init__(self, pose: np.ndarray, centre: np.ndarray):
         self.estimate = np.asarray(pose, dtype=float).copy()
         self.centre = np.append(np.asarray(centre, dtype=float), 1.0)
         self.recent: list[tuple[float, np.ndarray]] = []
         self.beyond = 0
+        self.still: list[tuple[float, float, float]] = []
 
     def add(self, t: float, pose: np.ndarray, threshold: float) -> bool:
         """Take one measurement; whether it completed a move."""
-        far = float(np.linalg.norm((pose @ self.centre)[:3] - (self.estimate @ self.centre)[:3])) > threshold
+        apart = float(np.linalg.norm((pose @ self.centre)[:3] - (self.estimate @ self.centre)[:3]))
+        far = apart > threshold
+        if self.recent and not far:  # the first one replaces the start, made of no measurement
+            turn = Rotation.from_matrix(pose[:3, :3] @ self.estimate[:3, :3].T).magnitude()
+            self.still.append((t, apart, float(np.degrees(turn))))
         self.beyond = self.beyond + 1 if far else 0
         moved = self.beyond >= 2
         if moved:
@@ -51,8 +62,6 @@ class Steady:
         return moved
 
     def _median(self) -> np.ndarray:
-        from scipy.spatial.transform import Rotation
-
         c = self.centre[:3]
         ms = np.stack([m for _, m in self.recent])
         p = np.median(ms[:, :3, :3] @ c + ms[:, :3, 3], axis=0)
@@ -65,7 +74,9 @@ class Steady:
 class World:
     """Each named object's pose and its measured noise. ``start`` is each one's motion since the demo as the act found
     it; ``centres`` its centre at its demo pose (base frame), where its position is measured; ``floor_m`` the least a
-    measurement can be trusted to (the depth image's own step)."""
+    measurement can be trusted to (the depth image's own step); ``symmetry`` each declared symmetry and its axis's
+    direction (base frame, demo pose), the axis passing through the object's centre: of the poses that look the same,
+    the world keeps the one nearest the demo's, so a turn no view can tell apart moves nothing."""
 
     def __init__(
         self,
@@ -73,10 +84,12 @@ class World:
         start: dict[str, np.ndarray],
         centres: dict[str, np.ndarray],
         floor_m: float = 0.001,
+        symmetry: dict[str, tuple[dict, np.ndarray]] | None = None,
     ):
         self.scene = scene
         self.centres = {n: np.asarray(centres.get(n, np.zeros(3)), dtype=float) for n in start}
-        self.steady = {n: Steady(m, self.centres[n]) for n, m in start.items()}
+        self.symmetry = dict(symmetry or {})
+        self.steady = {n: Steady(self.equivalent(n, m), self.centres[n]) for n, m in start.items()}
         self.t = dict.fromkeys(self.steady, -np.inf)  # when its newest measurement was taken
         self.moves: dict[
             str, tuple[float, np.ndarray]
@@ -94,9 +107,17 @@ class World:
         for n, e in self.steady.items():
             for m in self.scene.measurements(n, since=self.t[n] + 1e-9):
                 before = e.estimate
-                if e.add(m.t, m.motion, self.move_threshold(n)):
+                if e.add(m.t, self.equivalent(n, m.motion), self.move_threshold(n)):
                     self.moves[n] = (m.t, before)
                 self.t[n] = m.t
+
+    def equivalent(self, name: str, motion: np.ndarray, ref: np.ndarray | None = None) -> np.ndarray:
+        """``motion``, or of the poses ``name``'s symmetry makes look the same the one nearest ``ref`` (its demo pose
+        when None)."""
+        if name not in self.symmetry:
+            return motion
+        spec, axis = self.symmetry[name]
+        return sym.nearest_equivalent(motion, spec, axis, self.centres[name], ref)
 
     def move_threshold(self, name: str) -> float:
         """How far a measurement must be from an object's pose to say it moved: twice its noise (the two each wander
@@ -125,17 +146,15 @@ class World:
             self._noise_at_touch.pop(name, None)
 
     def noise(self, name: str) -> tuple[float, float] | None:
-        """How far its measurements wandered while it stood untouched: metres at its centre and degrees, or None with
-        too few; never under ``floor_m``."""
+        """How far its views landed from the pose the ones before them made while it stood untouched, counting those it
+        took as still (95th percentile): metres at its centre and degrees, or None with too few; never under
+        ``floor_m``."""
         return self._noise_at_touch[name] if name in self._noise_at_touch else self._noise(name)
 
     def _noise(self, name: str) -> tuple[float, float] | None:
         since, until = self.rest.get(name, (-np.inf, np.inf))
-        ms = [m for m in self.scene.measurements(name) if since <= m.t < until]
-        if not ms:
+        still = np.array([(m, d) for t, m, d in self.steady[name].still if since <= t < until]).reshape(-1, 2)
+        if len(still) < predicates.MEDIAN_MIN:
             return None
-        m = predicates.spread(np.array([self.centre(name, x.motion) for x in ms]))
-        d = predicates.spread_deg(np.array([x.motion[:3, :3] for x in ms]))
-        if m is None or d is None:
-            return None
-        return max(m, self.floor_m), d
+        m, d = np.percentile(still, 95, axis=0)
+        return max(float(m), self.floor_m), float(d)

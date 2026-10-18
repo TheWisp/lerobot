@@ -214,6 +214,9 @@ class World:
         self.held, self.hold = None, None
         self.misses = 0
         self.view_noise_m = 0.0
+        self.view_turn: dict[
+            str, np.ndarray
+        ] = {}  # what the views add to an object's motion, as a fit of its look may
         self.hidden: set[str] = set()
         self.rng = np.random.default_rng(seed)
         self.last_grip = None
@@ -279,7 +282,7 @@ class World:
         for name, b in self.bodies.items():
             if name in self.hidden:
                 continue
-            m = b.motion.copy()
+            m = b.motion @ self.view_turn.get(name, np.eye(4))
             if self.view_noise_m:
                 m[:3, 3] += self.rng.normal(0.0, self.view_noise_m, 3)
             scene.add_measurement(name, Measurement(t=t, motion=m))
@@ -445,6 +448,7 @@ def run_act(
     skip_steps=None,
     lo=None,
     hi=None,
+    symmetry=None,
 ):
     """One act in the simulated world: the arm starts where the demo did, the camera has seen the objects at rest for
     a second, and the engine steps once per 30 Hz tick before the motor loop does."""
@@ -485,6 +489,7 @@ def run_act(
         scene,
         {n: b.motion.copy() for n, b in bodies.items()},
         {n: b.points.mean(axis=0) for n, b in bodies.items()},
+        symmetry=symmetry,
     )
     engine = Engine(
         Timeline(demo, key_frames),

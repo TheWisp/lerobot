@@ -33,7 +33,7 @@ from typing import Any
 
 import numpy as np
 
-from lerobot.showservo import motion as core
+from lerobot.showservo import motion as core, symmetry
 from lerobot.showservo.engine.engine import Arm, Engine
 from lerobot.showservo.engine.perturb import Perturbations
 from lerobot.showservo.engine.scene import Camera, Measurement, SceneLog
@@ -194,6 +194,29 @@ async def _find_objects(demo: runtime._Demo, obj: str | None, others: list[str],
     return ""
 
 
+def object_geometry(
+    objects: dict[str, dict[str, Any]], surfaces: dict[str, np.ndarray]
+) -> tuple[dict[str, np.ndarray], dict[str, tuple[dict, np.ndarray]]]:
+    """Each object's centre and declared symmetry for the world, from its demo surface points (base frame): with a
+    symmetry the centre is a point on its measured axis, so a turn about the axis moves no centre; otherwise the
+    points' mean. ``objects`` are the demo's, by the same names as ``surfaces``."""
+    centres, symmetries = {}, {}
+    for name, points in surfaces.items():
+        centres[name] = np.asarray(points).mean(axis=0)
+        spec = symmetry.normalise(objects.get(name, {}).get("symmetry"))
+        if spec["kind"] == "none":
+            continue
+        try:
+            axis, point = symmetry.observed_axis(points, spec["axis"])
+        except ValueError as exc:
+            logger.warning(
+                "%s: its declared symmetry has no measurable axis, so it is not used: %s", name, exc
+            )
+            continue
+        centres[name], symmetries[name] = point, (spec, axis)
+    return centres, symmetries
+
+
 def arm_refusal() -> str | None:
     """Why the act engine cannot drive the connected arm, or None. It commands joints from the calibrated kinematics
     without watching the fingertip, so it drives only the arm held on its commanded pose against gravity: the
@@ -305,7 +328,10 @@ async def _act_engine_task(
             q=np.asarray(demo.q_obs, dtype=float),
         )
         timeline = Timeline(demo_record, frames, session_object=session)
-        world = World(scene, starts, {n: np.asarray(pts).mean(axis=0) for n, pts in surfaces.items()})
+        centres, symmetries = object_geometry(
+            {n: demo.objects.get(n if n != session else obj, {}) for n in surfaces}, surfaces
+        )
+        world = World(scene, starts, centres, symmetry=symmetries)
         engine = Engine(
             timeline,
             arm,
