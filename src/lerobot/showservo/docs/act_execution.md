@@ -322,17 +322,17 @@ sequenceDiagram
 
 ### What the engine keeps of the key frames
 
-| Today                                                         | In the engine                                                                                                     |
-| ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| A key frame's object: an object, the taught object, the world | the object the leg arriving at it is heading for                                                                  |
-| Its move: line, follow, lift                                  | line: straight from where the arm is; follow: the demo's own path; lift: straight up by `up_mm` from where it is  |
-| Its gripper: first, along                                     | on a line, the gripper moves before the arm, or with it                                                           |
-| Its constraint: pose, orientation                             | the whole pose; or only the rotation, the position staying where the leg started                                  |
-| Its constraint: best effort                                   | the key frame is a target: when the arm stops short, the leg ends where the arm is and the next starts from there |
-| A held object, from the grasp to the release                  | the legs between allow for how it sits in the gripper; the grasp and the release are Milestones                   |
-| An object's symmetry: repeating turns, an axis, swapped ends  | turns its legs may take, chosen beside the motion; poses the checks count as the same                             |
-| The demo's landing: exact, symmetric turns, any turn          | turns the legs onto the target may take, chosen beside the motion; poses the checks count as the same             |
-| The point groups carrying objects between views               | another source of object poses                                                                                    |
+| Today                                                         | In the engine                                                                                                                   |
+| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| A key frame's object: an object, the taught object, the world | the object the leg arriving at it is heading for                                                                                |
+| Its move: line, follow, lift                                  | line: straight from where the arm is; follow: the demo's own path; lift: straight up by `up_mm` from where it is                |
+| Its gripper: first, along                                     | on a line, the gripper moves before the arm, or with it                                                                         |
+| Its constraint: pose, orientation                             | the whole pose; or only the rotation, the position staying where the leg started                                                |
+| Its constraint: best effort                                   | the key frame is a target: when the arm stops short, the leg ends where the arm is and the next starts from there ([E23](#e23)) |
+| A held object, from the grasp to the release                  | the legs between allow for how it sits in the gripper; the grasp and the release are Milestones                                 |
+| An object's symmetry: repeating turns, an axis, swapped ends  | turns its legs may take, chosen beside the motion; poses the checks count as the same                                           |
+| The demo's landing: exact, symmetric turns, any turn          | turns the legs onto the target may take, chosen beside the motion; poses the checks count as the same                           |
+| The point groups carrying objects between views               | another source of object poses                                                                                                  |
 
 Allowed turns are ranked again when their object moves — IK of the leg's key frames and a few of its points, from the
 arm's present joints, by whether the arm reaches them and how close its joints stay to the demo's — and a different
@@ -505,3 +505,12 @@ shoulder lift trailed its command by 1.5 to 1.9° at the median and 7.8 to 12.5�
 behind on 17 to 29% of frames, and the arm followed. Its joints turned at 42 to 161 °/s at the 99.9th percentile; in
 the jog's act records (2026-10-05 to 18, 106,545 ticks) at 56 to 136 °/s, 224 °/s at most. Neither act of 2026-10-18
 was slowed by the engine's 3° joint bound (`stretched_s` 0.0).
+
+<a id="e23"></a>**E23. A lift stopped short by a joint's range**, 2026-10-18, act `20261018_094848` (speed 0.5, P 16, no
+hold): the grasp and the lift went through. The dowel lay near the arm's base, so lifting it straight up at the grasp's
+turn folded the wrist: wrist flex reached its servo range (−93.3°) 58 mm into the 100 mm lift, with the forearm roll
+at −2°. The lift is best effort, so it went on with its commands below their poses, 30.4 mm at the top (orientation
+within 0.2°). The line after it started from the lift's planned top, no joint's reach: its first sample was 31.9 mm
+out and the act gave up, though both its ends were reachable (0.2 to 0.4 mm, solved from the lift's last joints).
+The demo itself had turned the forearm to 43° during its lift and to 76° before the pre-place. Fixed: a best-effort
+command's pose is where its joints get, and the run after a best-effort leg starts there.

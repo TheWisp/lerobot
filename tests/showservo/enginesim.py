@@ -514,6 +514,8 @@ def run_act(
     work=None,
     stick=None,
     skip_steps=None,
+    lo=None,
+    hi=None,
 ):
     """One act in the simulated world: the arm starts where the demo did, the camera has seen the objects at rest for
     a second, and the engine steps once per 30 Hz tick before the motor loop does."""
@@ -543,6 +545,8 @@ def run_act(
     arm = Arm(
         kin,
         gripper=gripper,
+        lo=lo,
+        hi=hi,
         step_deg=step_deg,
         hz=30.0,
         walk_m_s=0.04,

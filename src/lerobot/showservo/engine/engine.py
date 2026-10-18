@@ -405,8 +405,12 @@ class Engine:
             grip = run.g0 + (run.g1 - run.g0) * grip_u
         return pose, grip, s, td
 
-    def _next_run(self, run: Run) -> Run | None:
+    def _next_run(self, run: Run, q: np.ndarray) -> Run | None:
+        """The run after ``run``, starting where it ends; ``q`` is the arm's last commanded joints."""
         pose, grip, _, _ = self._sample(run, run.total)
+        if run.kind == "leg" and self.tl.legs[run.leg].constraint == "best_effort":
+            # Its end may be out of reach: the next run starts where the joints get there (act_execution.md E23).
+            pose = self.arm.fk(self.arm.solve(q, pose, grip, np.zeros_like(q))[0])
         if run.kind == "transition":
             return self._leg_run(run.leg, run.s0, pose, grip)
         if run.kind == "retrace":
@@ -415,9 +419,9 @@ class Engine:
             return None
         return self._leg_run(run.leg + 1, 0.0, pose, grip)
 
-    def _advance(self, run: Run, tau: float) -> tuple[Run | None, float]:
+    def _advance(self, run: Run, tau: float, q: np.ndarray) -> tuple[Run | None, float]:
         while tau > run.total + 1e-12:
-            nxt = self._next_run(run)
+            nxt = self._next_run(run, q)
             if nxt is None:
                 return None, 0.0
             tau -= run.total
@@ -437,7 +441,7 @@ class Engine:
         tick times the speed, or less where a joint would move faster than its bound."""
         dtau = self.speed / self.arm.hz
         for _ in range(6):
-            run, tau = self._advance(self.run, self.tau + dtau)
+            run, tau = self._advance(self.run, self.tau + dtau, prev.q)
             if run is None:
                 self._over = True
                 return None
@@ -460,12 +464,12 @@ class Engine:
                 self.run, self.tau = run, tau
                 leg = self.tl.legs[run.leg]
                 state = (run, tau)
-                if (
-                    err_m > core.ACT_REACH_TOL_M or err_deg > core.ACT_REACH_TOL_DEG
-                ) and leg.constraint != "best_effort":
-                    self._unreachable = (
-                        f"{leg.label}: the arm reaches only within {err_m * 1000:.1f} mm, {err_deg:.1f} deg"
-                    )
+                if err_m > core.ACT_REACH_TOL_M or err_deg > core.ACT_REACH_TOL_DEG:
+                    if leg.constraint != "best_effort":
+                        self._unreachable = f"{leg.label}: the arm reaches only within {err_m * 1000:.1f} mm, {err_deg:.1f} deg"
+                    # A best-effort command is where its joints get: the leg after it starts there, not at a pose
+                    # no joint reached (a lift stopped short by a joint's range, act_execution.md E23).
+                    pose = self.arm.fk(q)
                 if self.arm.workspace is not None:
                     lo, hi = (np.asarray(b, dtype=float) for b in self.arm.workspace)
                     if np.any(pose[:3, 3] < lo) or np.any(pose[:3, 3] > hi):

@@ -372,6 +372,48 @@ def test_a_joint_bound_below_the_demos_speed_slows_the_clock_by_what_the_engine_
     assert sim.motor.clamped < 1e-6
 
 
+def _capped_lift():
+    """The demo with a 200 mm lift, and its height joint stopped 5 mm above every pose the demo holds."""
+    demo, kf, bodies = pick_place_demo()
+    kf = [{**k, "up_mm": 200.0} if k["move"] == "lift" else k for k in kf]
+    top = float(demo.tips[:, 2, 3].max()) + 0.005
+    lo, hi = np.full(7, np.nan), np.full(7, np.nan)
+    hi[2] = top * FakeKin.PER_M
+    return demo, kf, bodies, lo, hi, top
+
+
+def test_a_lift_a_joint_cannot_finish_hands_the_next_leg_where_the_arm_got():
+    """2026-10-18 on the rig (act 20261018_094848): lifting a dowel grasped near the base, the wrist reached its servo
+    range 58 mm into a 100 mm lift; the best-effort lift went on with its commands 30 mm below their poses, and the
+    line after it, starting from the lift's planned top, was 31.9 mm out of reach at once and the act gave up. Here
+    the height joint stops 70 mm above the table, below the 200 mm lift's top but above every pose the demo holds:
+    the line after the lift must start from where the arm got, and the act completes."""
+    demo, kf, bodies, lo, hi, top = _capped_lift()
+    sim = run_act(demo, kf, bodies, lo=lo, hi=hi)
+    assert sim.engine.result["ok"], sim.engine.result
+    assert _on_ring(sim), sim.world.events
+    lift = next(n for n, leg in enumerate(sim.engine.tl.legs) if leg.move == "lift")
+    after = next(c for c in sim.engine.cmds if c.kind == "leg" and c.leg == lift + 1)
+    assert after.pose[2, 3] <= top + 1e-6, "the next leg starts where the arm got, not 200 mm up"
+
+
+def test_a_block_dropped_where_the_lift_stopped_short_is_picked_up_again():
+    """Going back starts from the last command: a best-effort command's pose is where its joints got, so the way back
+    from a lift stopped short by a joint's range starts at the arm, not at the planned top no joint reached."""
+    from lerobot.showservo.engine.perturb import OpenGripper, Perturbations
+
+    demo, kf, bodies, lo, hi, _ = _capped_lift()
+    drop = Perturbations([OpenGripper(leg="lift 1", s=0.65, seconds=0.6)])
+    sim = run_act(demo, kf, bodies, speed=0.3, lo=lo, hi=hi, perturb=drop, until_s=90.0)
+    assert any("let go" in e for _, e in sim.world.events[:3]), sim.world.events
+    (failure,) = _records(sim, "failure")
+    assert failure["milestone"] == "grasp of dowel"
+    lift = next(n for n, leg in enumerate(sim.engine.tl.legs) if leg.move == "lift")
+    assert failure["progress"][0] == lift, "the drop is found while the lift still stands short"
+    assert sim.engine.result["ok"], sim.engine.result
+    assert _on_ring(sim), sim.world.events
+
+
 def test_the_queue_never_runs_dry_when_the_engines_steps_come_late():
     """On the rig the engine's steps come when the GUI process lets them, not every tick: with a queue sized for the
     IK solve alone, 30 of 248 moving ticks sent nothing new and the next caught up with a double step, a visible
