@@ -316,6 +316,10 @@ class RecorderWorker:
         self._error: Exception | None = None
         self._thread = Thread(target=self._run, name="flash-dataset-writer", daemon=False)
 
+    @property
+    def error(self) -> Exception | None:
+        return self._error
+
     def start(self) -> None:
         self._thread.start()
 

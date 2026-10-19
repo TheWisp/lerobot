@@ -53,6 +53,11 @@ The executable core already separates:
   generated connection's clock across ordinary refills, retargets from the
   committed joint prefix when a reference changes, and interrupts if a pose
   is lost or moves beyond explicit replanning limits;
+- a synchronous attempt host that composes those services outside the GUI
+  event loop: it waits for an observed first object pose in the demonstrated
+  frame before resetting the motor epoch, passes pose changes and milestone
+  verdicts to the session, runs bounded steps, and saves an explicit outcome.
+  Finishing motion without an independent verifier remains `unknown`;
 - a selected-joint adapter that runs the SO-107's seven-joint FK/IK model
   while the planner controls six arm joints and the gripper separately;
 - a camera-independent motor read/dispatch tick through `Robot`;
@@ -93,8 +98,9 @@ measurement nor a fit to matched points establishes independent pose accuracy
 under occlusion. Multi-view reference preparation, evidence/observability
 gates and asynchronous publication to the controller remain necessary.
 Other milestone types, such as grasp verification, still need independent
-evidence. The planner worker, milestone publisher and recorder also need
-wiring into a hardware launch path.
+evidence. The attempt host wires the planner worker, milestone publisher and
+recorder, but Run → FLASH still lacks the hardware/configuration launch path
+and the present insertion recording lacks a compiled skill/reference bundle.
 A real process smoke test loaded the cached models and published the ring pose.
 The first SAM3 seed still cost about 1.5 seconds after worker readiness, so
 hardware launch must wait for a valid first observation rather than treating
