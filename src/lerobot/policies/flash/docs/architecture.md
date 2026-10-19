@@ -86,7 +86,9 @@ flowchart TD
 
 ### Episodes and skill representation
 
-A demonstration, an autonomous attempt and a human correction are all dataset episodes. Raw observation/action data remain usable without FLASH. Variable-size geometry, object associations and execution events live in versioned sidecars joined by episode and frame identifiers; stable numeric features may also be exposed through normal dataset features. ([R1](#r1), [R2](#r2), [R8](#r8).)
+A demonstration, an autonomous attempt and a human correction are all ordinary `LeRobotDataset` episodes. A saved rollout inspected as a replay is the same dataset, with additional recorded evidence. Standard camera, robot-state, action, timestamp and episode metadata use the existing dataset writer and schemas; FLASH does not introduce a parallel recording format. Standard loading, replay and training operate on these features without interpreting the FLASH additions. ([R1](#r1), [R2](#r2), [R8](#r8).)
+
+Stable numeric additions can use normal dataset features. Variable-size geometry, object associations, annotations and execution events use versioned extension artifacts joined by dataset, episode and frame identifiers, with source timestamps for asynchronous observations. A dataset-level manifest identifies these artifacts and their schema/model/calibration versions; paths are relative and included when the dataset is copied or uploaded. An extension cannot be the only copy of observations or actions required by standard replay. A record-load-replay round trip through the ordinary LeRobot consumers verifies this boundary, with FLASH additions both present and ignored. ([R1](#r1), [R2](#r2).)
 
 | Record              | Required contents                                                                                                                                                   |
 | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

@@ -18,6 +18,8 @@ Optional learning from one or multiple datasets is supported through versioned m
 
 Live inference must support responsive asynchronous publication, independently of the fixed 30 Hz robot loop. The motor loop never waits for a tracker result; lower-rate perception updates timestamped state consumed by the controller. Backend evaluation must include result age and resource contention, not require that every model itself run at 30 Hz. Reference building and training can run offline without that live deadline. The [runtime contract](architecture.md#runtime-and-lerobot-boundaries) retains this separation from the sealed act engine.
 
+Demonstrations and recorded rollouts are regular `LeRobotDataset` episodes. Pose estimates, reference associations and annotations are additional features or versioned dataset extensions linked to the standard frames. Tracker training and evaluation consume these datasets; standard replay and downstream policy training can ignore the extensions. See the [dataset contract](architecture.md#episodes-and-skill-representation).
+
 This differs from three related problems: maintaining an object's segmentation mask, tracking arbitrary pixels through a completed video, and estimating pose with a known CAD mesh. Those methods can provide components, but their benchmark scores are not interchangeable.
 
 ## Findings from the earlier research
