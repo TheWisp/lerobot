@@ -44,6 +44,52 @@ class RGBDFrame:
         return self.depth.astype(np.float32) * self.depth_m_per_unit
 
 
+class LatestRGBDFrameStore:
+    """Retain a capture-thread snapshot for asynchronous episode recording.
+
+    The capture thread copies frame buffers before publication so a camera
+    driver may reuse its next read buffer. Readers only take a short lock and
+    receive immutable-by-convention arrays; they never wait for the sensor.
+    """
+
+    def __init__(self) -> None:
+        self._lock = Lock()
+        self._latest: RGBDFrame | None = None
+
+    def publish(self, frame: RGBDFrame) -> None:
+        rgb = frame.rgb.copy()
+        depth = frame.depth.copy()
+        rgb.setflags(write=False)
+        depth.setflags(write=False)
+        snapshot = RGBDFrame(
+            frame.frame_id,
+            rgb,
+            depth,
+            frame.intrinsics.copy(),
+            frame.depth_m_per_unit,
+            frame.base_from_camera.copy(),
+            frame.source_time_s,
+            frame.available_time_s,
+            frame.calibration_version,
+        )
+        snapshot.intrinsics.setflags(write=False)
+        snapshot.base_from_camera.setflags(write=False)
+        with self._lock:
+            if self._latest is not None and (
+                snapshot.frame_id <= self._latest.frame_id
+                or snapshot.source_time_s <= self._latest.source_time_s
+            ):
+                raise ValueError("camera frame IDs and capture times must increase")
+            self._latest = snapshot
+
+    def snapshot(self, *, no_later_than_s: float | None = None) -> RGBDFrame | None:
+        with self._lock:
+            frame = self._latest
+        if frame is not None and no_later_than_s is not None and frame.source_time_s > no_later_than_s:
+            return None
+        return frame
+
+
 @dataclass(frozen=True)
 class ReferenceSnippet:
     """One annotated view registered into a stable object frame."""

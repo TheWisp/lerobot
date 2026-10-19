@@ -35,7 +35,8 @@ The executable core already separates:
   to a short-lock store outside the motor loop;
 - a live perception service that owns camera capture and result collection,
   waits for actual seeded object observations before motion, and exposes
-  camera/estimator failures instead of reusing stale poses;
+  camera/estimator failures instead of reusing stale poses; its latest aligned
+  RGB-D frame is retained separately for a nonblocking motor-tick recorder;
 - kinematics-neutral short IK chunks and atomic future-queue replacement;
 - an asynchronous IK producer that supersedes pending replan requests while
   the motor owner keeps consuming the already accepted queue; a solve made
@@ -62,6 +63,8 @@ The executable core already separates:
   Missed motor deadlines are explicit in the trace; such an episode has
   `timing_regular=false` because LeRobot's ordinary dataset timestamp remains
   based on its nominal FPS and must not be treated as exact physical timing.
+  A tick assembler joins the latest available RGB-D frame and pose evidence
+  before the recorder worker performs disk/video encoding.
 
 The annotation points to a source LeRobot dataset episode. Dense transform
 samples are derived geometry; the original RGB-D, robot observations and

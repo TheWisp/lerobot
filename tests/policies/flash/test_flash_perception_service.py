@@ -6,7 +6,13 @@ from threading import Event
 import numpy as np
 import pytest
 
-from lerobot.policies.flash.perception import LatestPoseStore, ObjectReference, ReferenceSnippet, RGBDFrame
+from lerobot.policies.flash.perception import (
+    LatestPoseStore,
+    LatestRGBDFrameStore,
+    ObjectReference,
+    ReferenceSnippet,
+    RGBDFrame,
+)
 from lerobot.policies.flash.perception_service import PerceptionService, PerceptionServiceError
 from lerobot.policies.flash.perception_worker import PoseProcess
 from lerobot.policies.flash.trajectory import Evidence, PoseEstimate
@@ -57,6 +63,19 @@ class FakeCameraSource:
         return frame
 
 
+def test_latest_frame_survives_camera_buffer_reuse():
+    rgb = np.zeros((2, 2, 3), dtype=np.uint8)
+    depth = np.ones((2, 2), dtype=np.uint16)
+    frame = RGBDFrame(1, rgb, depth, np.eye(3), 0.001, np.eye(4), 1.0, 1.0, "camera-v1")
+    store = LatestRGBDFrameStore()
+    store.publish(frame)
+    rgb[:] = 255
+    depth[:] = 5
+    saved = store.snapshot()
+    assert saved.rgb.max() == 0
+    assert saved.depth.max() == 1
+
+
 def test_perception_service_waits_for_real_pose_from_spawned_worker():
     snippet = ReferenceSnippet("recorded", 0, 0, "item", np.eye(4), "mask", "camera-v1")
     reference = ObjectReference("item", "item-v1", (snippet,))
@@ -80,6 +99,11 @@ def test_perception_service_waits_for_real_pose_from_spawned_worker():
         assert service.captured > 0
         assert store.snapshot()[1]["item"].evidence == Evidence.OBSERVED
         assert published.wait(5)
+        recorded_frame = service.frames.snapshot()
+        assert recorded_frame is not None
+        assert recorded_frame.rgb.shape == (2, 2, 3)
+        assert not recorded_frame.rgb.flags.writeable
+        assert service.frames.snapshot(no_later_than_s=recorded_frame.source_time_s - 0.001) is None
         assert service.error is None
     finally:
         service.close()

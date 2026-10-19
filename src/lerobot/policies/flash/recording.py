@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import math
 import os
+import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from queue import Full, Queue
@@ -15,6 +17,7 @@ from lerobot.utils.constants import ACTION, OBS_STR
 from lerobot.utils.feature_utils import build_dataset_frame
 
 from .execution import ActionReceipt, MotorTick
+from .perception import LatestPoseStore, LatestRGBDFrameStore
 from .pose_disagreement import PoseComparison, PoseComparisonVerdict, SurfaceSupport
 from .trajectory import Evidence, PoseEstimate
 
@@ -39,6 +42,66 @@ class RecordedTick:
     pose_estimates: dict[str, PoseEstimate] = field(default_factory=dict)
     pose_comparisons: dict[str, PoseComparison] = field(default_factory=dict)
     motor_tick: MotorTick | None = None
+
+
+class TickRecordAssembler:
+    """Join one motor tick to already captured camera and pose snapshots.
+
+    This runs in the motor owner's callback, so it only reads short-lock
+    snapshots and submits references to immutable camera arrays. Dataset
+    encoding remains in ``RecorderWorker``. A missing or stale RGB-D frame
+    fails the episode instead of writing a training row without its image.
+    """
+
+    def __init__(
+        self,
+        frames: LatestRGBDFrameStore,
+        poses: LatestPoseStore,
+        *,
+        rgb_feature: str,
+        depth_feature: str | None,
+        max_camera_age_s: float,
+        progress_events: Callable[[], list[dict]],
+        clock: Callable[[], float] = time.perf_counter,
+    ) -> None:
+        if not rgb_feature or (depth_feature is not None and not depth_feature):
+            raise ValueError("camera feature names must be nonempty")
+        if not math.isfinite(max_camera_age_s) or max_camera_age_s <= 0:
+            raise ValueError("maximum camera age must be finite and positive")
+        self.frames = frames
+        self.poses = poses
+        self.rgb_feature = rgb_feature
+        self.depth_feature = depth_feature
+        self.max_camera_age_s = max_camera_age_s
+        self.progress_events = progress_events
+        self.clock = clock
+        self._event_cursor = 0
+
+    def assemble(self, tick: MotorTick) -> RecordedTick:
+        now_s = self.clock()
+        frame = self.frames.snapshot(no_later_than_s=now_s)
+        if frame is None or not 0 <= now_s - frame.source_time_s <= self.max_camera_age_s:
+            raise RuntimeError("no fresh aligned RGB-D frame for motor tick recording")
+        version, poses = self.poses.snapshot()
+        visible_poses = {
+            role: estimate for role, estimate in poses.items() if estimate.available_time_s <= now_s
+        }
+        events = self.progress_events()
+        delta = tuple(events[self._event_cursor :])
+        self._event_cursor = len(events)
+        camera = {self.rgb_feature: frame.rgb}
+        if self.depth_feature is not None:
+            camera[self.depth_feature] = frame.depth
+        return RecordedTick(
+            receipt=tick.receipt,
+            camera_observation=camera,
+            camera_source_time_s=frame.source_time_s,
+            pose_version=version,
+            progress_events=delta,
+            camera_frame_id=frame.frame_id,
+            pose_estimates=visible_poses,
+            motor_tick=tick,
+        )
 
 
 class FlashEpisodeWriter:

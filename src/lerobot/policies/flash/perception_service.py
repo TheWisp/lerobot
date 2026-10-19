@@ -7,7 +7,7 @@ from collections.abc import Callable
 from threading import Event, Lock, Thread
 from typing import Protocol
 
-from .perception import LatestPoseStore, RGBDFrame
+from .perception import LatestPoseStore, LatestRGBDFrameStore, RGBDFrame
 from .perception_worker import PoseProcess
 from .trajectory import Evidence, PoseEstimate
 
@@ -46,6 +46,7 @@ class PerceptionService:
         self.source = source
         self.worker = worker
         self.store = store
+        self.frames = LatestRGBDFrameStore()
         self.clock = clock
         self.collector_period_s = collector_period_s
         self.on_pose_update = on_pose_update
@@ -80,6 +81,7 @@ class PerceptionService:
         try:
             while not self._stop.is_set():
                 frame = self.source.read()
+                self.frames.publish(frame)
                 self.captured += 1
                 if not self.worker.submit(frame) and not self.worker.alive:
                     raise PerceptionServiceError("pose process stopped during camera capture")

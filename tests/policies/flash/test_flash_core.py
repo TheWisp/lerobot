@@ -18,6 +18,7 @@ from lerobot.policies.flash.geometry import held_object_goal
 from lerobot.policies.flash.perception import (
     AttachmentEstimate,
     LatestPoseStore,
+    LatestRGBDFrameStore,
     RGBDFrame,
     TimedEndEffectorHistory,
 )
@@ -28,6 +29,7 @@ from lerobot.policies.flash.recording import (
     FlashEpisodeWriter,
     RecordedTick,
     RecorderWorker,
+    TickRecordAssembler,
     load_pose_comparisons,
     load_pose_estimates,
 )
@@ -599,6 +601,54 @@ def test_rgbd_alignment_and_pose_handoff_preserve_source_time():
     assert store.publish((fresh,)) == 1
     assert store.publish((stale,)) == 1
     assert store.snapshot()[1]["target"].source_time_s == 1.0
+
+
+def test_tick_record_uses_only_camera_and_pose_evidence_available_at_that_time():
+    frames = LatestRGBDFrameStore()
+    frames.publish(
+        RGBDFrame(
+            7,
+            np.zeros((2, 2, 3), dtype=np.uint8),
+            np.ones((2, 2), dtype=np.uint16),
+            np.eye(3),
+            0.001,
+            pose(),
+            1.0,
+            1.0,
+            "camera-v1",
+        )
+    )
+    poses = LatestPoseStore()
+    poses.publish(
+        (
+            PoseEstimate("target", pose(), 1.0, 1.05, Evidence.OBSERVED, "v1", (True,) * 3, (True,) * 3),
+            PoseEstimate("held", pose(), 1.0, 1.2, Evidence.OBSERVED, "v1", (True,) * 3, (True,) * 3),
+        )
+    )
+    events = [{"type": "interval_start"}]
+    now = [1.1]
+    assembler = TickRecordAssembler(
+        frames,
+        poses,
+        rgb_feature="observation.images.overhead",
+        depth_feature="observation.depth.overhead",
+        max_camera_age_s=0.2,
+        progress_events=lambda: events,
+        clock=lambda: now[0],
+    )
+    tick = MotorTick(0, 1.1, {"arm.pos": 0.0}, 0.001, {"arm.pos": 0.0}, None)
+    recorded = assembler.assemble(tick)
+    assert recorded.camera_frame_id == 7
+    assert set(recorded.camera_observation) == {
+        "observation.images.overhead",
+        "observation.depth.overhead",
+    }
+    assert set(recorded.pose_estimates) == {"target"}
+    assert recorded.progress_events == ({"type": "interval_start"},)
+    assert assembler.assemble(tick).progress_events == ()
+    now[0] = 1.3
+    with pytest.raises(RuntimeError, match="no fresh aligned RGB-D"):
+        assembler.assemble(tick)
 
 
 def test_regular_lerobot_frame_and_flash_trace_are_written_together(tmp_path):
