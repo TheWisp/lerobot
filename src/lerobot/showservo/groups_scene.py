@@ -694,6 +694,31 @@ def drawing(
     return out
 
 
+def recorded_picture(fields: dict, arrays) -> dict | None:
+    """A picture as a record keeps it (an act's frame, a recording's perception): its fields (``base``, ``quiet``,
+    ``surfaces``, ``scale``, ``depth_range``) and its arrays (``groups_points``, and with the wireframe
+    ``groups_links``, ``groups_joins``, ``groups_depth``) as :func:`paint_groups` takes it; None without its points."""
+    if not fields or "groups_points" not in arrays:
+        return None
+    picture = {k: fields.get(k) for k in ("base", "quiet", "surfaces", "scale", "depth_range")}
+    picture["points"] = np.asarray(arrays["groups_points"])
+    if "groups_links" in arrays:
+        picture.update(
+            links=np.asarray(arrays["groups_links"]),
+            joins=np.asarray(arrays["groups_joins"]) if "groups_joins" in arrays else None,
+            depth=np.asarray(arrays["groups_depth"]),
+        )
+    return picture
+
+
+def paint_act_view(img: np.ndarray, d: dict) -> np.ndarray:
+    """A picture on a camera frame as the act's views paint it, live and replayed alike: the surfaces that move
+    differently tinted, each group's wireframe by depth with its scale (a picture from before the wireframes: its
+    tracks as dots, the still world's faint, those in no group not at all); not the groups' outlines, which the act's
+    view draws its own pose of each object over."""
+    return paint_groups(img, d, radius=2, world_radius=1, free=False, outlines=False)
+
+
 def paint_groups(
     img: np.ndarray,
     d: dict,

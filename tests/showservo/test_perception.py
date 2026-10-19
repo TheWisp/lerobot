@@ -73,7 +73,7 @@ def _demo(root, n):
     return mask
 
 
-def _groups_run(group_live, n, moved_from):
+def _groups_run(group_live, n, moved_from, t0=T0):
     """The point groups over the demo: a table and the block's top, the block's points sliding along x at 2 mm a
     frame from frame ``moved_from`` (the depth frames never show it move). Its dump frames and pictures, as the script
     makes them."""
@@ -95,7 +95,7 @@ def _groups_run(group_live, n, moved_from):
         shift = np.array([0.002 * max(k - moved_from, 0), 0.0, 0.0])
         xyz = np.vstack([table, block + shift]) + rng.normal(0.0, 0.0015, (230, 3))
         t.update(xyz, np.ones(230, bool))
-        frames.append(group_live.groups_frame(T0 + k / FPS, t, groups_scene_matrix()))
+        frames.append(group_live.groups_frame(t0 + k / FPS, t, groups_scene_matrix()))
         pictures.append(groups_scene.drawing(K, t, xyz, np.ones(230, bool), objects))
     return t, frames, pictures
 

@@ -26,6 +26,7 @@ from fastapi import APIRouter
 from . import (
     acquisition,
     camera,
+    compare,
     demos,
     execution,
     groups,
@@ -53,6 +54,7 @@ for module in (
     demos,
     groups,
     worker,
+    compare,
 ):
     router.include_router(module.router)
 

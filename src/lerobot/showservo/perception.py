@@ -93,7 +93,11 @@ class Perception:
 
 def load(recording: Recording) -> Perception | None:
     """The recording's perception by the pipeline as it is now, or None when it has not been processed by it."""
-    d = cache_dir(recording)
+    return load_dir(cache_dir(recording))
+
+
+def load_dir(d: pathlib.Path) -> Perception | None:
+    """The perception cached in ``d``, whichever version made it; None when there is none there."""
     if not (d / RECORD).exists():
         return None
     record = json.loads((d / RECORD).read_text())
@@ -201,7 +205,7 @@ def estimate(recording: Recording, d: pathlib.Path) -> list[dict[str, Any]]:
         if f"mask_{i}" not in z.files:
             continue
         k0 = recording.frame_at(float(t[0]))
-        surfaces[name] = _surface(np.asarray(z[f"mask_{i}"]), recording.depth(k0), recording.K)
+        surfaces[name] = surface(np.asarray(z[f"mask_{i}"]), recording.depth(k0), recording.K)
     est = SeenThrough(GROUPS, surfaces)
     rows = []
     for k in range(len(t)):
@@ -226,7 +230,7 @@ def estimate(recording: Recording, d: pathlib.Path) -> list[dict[str, Any]]:
     return rows
 
 
-def _surface(mask: np.ndarray, depth_m: np.ndarray, K: np.ndarray) -> np.ndarray:  # noqa: N803
+def surface(mask: np.ndarray, depth_m: np.ndarray, K: np.ndarray) -> np.ndarray:  # noqa: N803
     """An object's surface at its designation, camera frame: the depth under its mask, every SURFACE_STEP-th pixel."""
     ys, xs = np.nonzero(np.asarray(mask, dtype=bool) & (depth_m > 0))
     ys, xs = ys[::SURFACE_STEP], xs[::SURFACE_STEP]

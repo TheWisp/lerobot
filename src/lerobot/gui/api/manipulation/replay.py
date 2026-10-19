@@ -30,6 +30,8 @@ import numpy as np
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
 
+from lerobot.showservo import groups_scene
+
 from . import camera, groups, planning, recording, rendering, runtime, tracking
 
 router = APIRouter()
@@ -136,17 +138,10 @@ def _replay_draw(
         held[others[0]] = (z["onto_held"], f.get("onto_held_from") or {})
     recorded_groups = f.get("groups") or {}
     wired = bool(recorded_groups) and "groups_links" in z
-    if recorded_groups and "groups_points" in z:
-        # The picture as the live view painted it (_paint_picture): its tint, its wireframe, or for an act recorded
-        # before the wireframes its tracks as dots.
-        picture = {k: recorded_groups.get(k) for k in ("base", "quiet", "surfaces", "scale", "depth_range")}
-        picture["points"] = np.asarray(z["groups_points"])
-        if wired:
-            picture.update(
-                links=np.asarray(z["groups_links"]),
-                joins=np.asarray(z["groups_joins"]) if "groups_joins" in z else None,
-                depth=np.asarray(z["groups_depth"]),
-            )
+    # The picture as the live view painted it (_paint_picture): its tint, its wireframe, or for an act recorded before
+    # the wireframes its tracks as dots.
+    picture = groups_scene.recorded_picture(recorded_groups, z)
+    if picture is not None:
         bgr = groups._paint_picture(bgr, picture)
     mask = cv2.imread(str(d / f"{i:06d}_mask.png"), cv2.IMREAD_UNCHANGED)
     if mask is not None:

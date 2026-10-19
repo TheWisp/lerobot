@@ -578,6 +578,7 @@ async def _act_engine_task(
                     pose=c.pose,
                     joints=c.q,
                     at=stamps[k] if k < len(stamps) else None,
+                    td=c.td,
                 )
                 act.step = f"{leg.label}" if c.kind == "leg" else f"going back to {leg.label}"
                 act.progress = (c.leg + c.s) / len(engine.tl.legs)

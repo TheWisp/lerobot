@@ -331,8 +331,10 @@ class _Run:
         phase: int | None = None,
         hold_revision: int | None = None,
         composition: dict | None = None,
+        td: float | None = None,
     ) -> None:
-        """A target the act gave the arm, at ``at`` (wall clock) when it went out, or now."""
+        """A target the act gave the arm, at ``at`` (wall clock) when it went out, or now; ``td`` the demo's time it
+        plays, when the runner knows it (the engine does)."""
         entry: dict[str, Any] = {"t": time.time() if at is None else at, "step": step}
         if pose is not None:
             entry["pose"] = np.asarray(pose, dtype=float).tolist()
@@ -344,6 +346,8 @@ class _Run:
             entry["hold_revision"] = hold_revision
         if composition is not None:
             entry["composition"] = composition
+        if td is not None:
+            entry["td"] = float(td)
         self.targets.append(entry)
 
 

@@ -80,6 +80,7 @@ class Recording:
     # Each object as the recording designated it: the camera frame and its mask there. A demo's are its annotations';
     # an act's, the masks its own run started tracking from (its first tracker frame).
     designations: dict[str, dict[str, Any]] = dataclasses.field(default_factory=dict)
+    origin: float | None = None  # a demo's start (wall clock): its key frames' times count from it
 
     def __len__(self) -> int:
         return len(self.times)
@@ -138,6 +139,7 @@ def _open_demo(root: pathlib.Path) -> Recording:
         base_from_camera=None,
         annotations=(annotations := _demo_annotations(root)),
         designations={n: {"frame": o["frame"], "mask": o["mask"]} for n, o in annotations.objects.items()},
+        origin=float(z["t0"]),
     )
 
 

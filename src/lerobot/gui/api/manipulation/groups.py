@@ -363,10 +363,11 @@ def _paint_picture(bgr: np.ndarray, d: dict) -> np.ndarray:
     replay (:func:`_replay_draw`) alike (lerobot.showservo.groups_scene.paint_groups): the surfaces that move
     differently tinted, each group's wireframe by depth with its scale (a picture from before the wireframes: its
     tracks as dots, the still world's faint, those in no group not at all). The act's view draws its own pose of
-    each object over this, so not the groups' outlines. Pre: called off the event loop."""
+    each object over this, so not the groups' outlines (groups_scene.paint_act_view). Pre: called off the event
+    loop."""
     from lerobot.showservo import groups_scene
 
-    return groups_scene.paint_groups(bgr, d, radius=2, world_radius=1, free=False, outlines=False)
+    return groups_scene.paint_act_view(bgr, d)
 
 
 def _paint_groups(bgr: np.ndarray) -> np.ndarray:
