@@ -50,6 +50,9 @@ The executable core already separates:
   records the accepted actuator target, which may include gravity compensation
   or a robot-side limit. The pose layer and candidate/prior disagreements can
   be read back by episode and frame index for replay and skill compilation.
+  Missed motor deadlines are explicit in the trace; such an episode has
+  `timing_regular=false` because LeRobot's ordinary dataset timestamp remains
+  based on its nominal FPS and must not be treated as exact physical timing.
 
 The annotation points to a source LeRobot dataset episode. Dense transform
 samples are derived geometry; the original RGB-D, robot observations and

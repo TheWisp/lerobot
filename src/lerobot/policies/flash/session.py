@@ -9,6 +9,7 @@ from queue import Empty, Full, Queue
 from .execution import (
     ActionQueue,
     ActionReceipt,
+    MissedEventError,
     MotorLoop,
     MotorTick,
     PlanRejectedError,
@@ -96,11 +97,25 @@ class FlashSession:
             else:
                 self.progress.invalidate_changed_roles(set(item.roles), item.source_id, item.source_time_s)
 
+    def _idle_tick(self, reason: str) -> ActionReceipt | None:
+        try:
+            return self.motor.tick(idle_reason=reason)
+        except MissedEventError as exc:
+            self.actions.cancel_unissued(str(exc))
+            self.progress.fail(self.motor.clock(), str(exc))
+            return None
+
     def step(self) -> ActionReceipt | None:
         self._take_evidence()
         now_s = self.motor.clock()
         if self.progress.phase == Phase.VERIFYING:
             self.progress.advance(now_s)
+        try:
+            self.motor.align_to_clock()
+        except MissedEventError as exc:
+            self.actions.cancel_unissued(str(exc))
+            self.progress.fail(now_s, str(exc))
+            return self._idle_tick("missed required action")
         tick = self.motor.metrics.ticks
         if self.progress.phase == Phase.WAITING:
             if self.progress.can_begin() and self.actions.has_tick(tick):
@@ -112,15 +127,19 @@ class FlashSession:
                     self.progress.events.append(
                         {"type": "plan_cancelled", "reason": reason, "events": events}
                     )
-                return self.motor.tick(idle_reason="awaiting interval entry")
+                return self._idle_tick("awaiting interval entry")
         if self.progress.phase != Phase.MOVING:
             if self.actions.has_due(tick):
                 reason = f"no motion permitted in {self.progress.phase.value}"
                 events = self.actions.cancel_unissued(reason)
                 self.progress.events.append({"type": "plan_cancelled", "reason": reason, "events": events})
-            return self.motor.tick(idle_reason=self.progress.phase.value)
+            return self._idle_tick(self.progress.phase.value)
         try:
             receipt = self.motor.tick()
+        except MissedEventError as exc:
+            self.actions.cancel_unissued(str(exc))
+            self.progress.fail(self.motor.clock(), str(exc))
+            return None
         except PlanRejectedError as exc:
             self.progress.interrupt(self.motor.clock(), str(exc))
             return None

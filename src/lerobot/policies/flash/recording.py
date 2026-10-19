@@ -60,6 +60,7 @@ class FlashEpisodeWriter:
         self.partial_path = self.extension_dir / f"episode_{episode_index:06d}.jsonl.partial"
         self.path = self.extension_dir / f"episode_{episode_index:06d}.jsonl"
         self._trace = self.partial_path.open("w", encoding="utf-8")
+        self.timing_regular = True
 
     def write(self, record: RecordedTick) -> None:
         tick = record.motor_tick
@@ -76,6 +77,7 @@ class FlashEpisodeWriter:
             "episode_index": self.episode_index,
             "frame_index": self.frame_index,
             "motor_tick": tick.tick if tick is not None else receipt.tick,
+            "skipped_before": tick.skipped_before if tick is not None else 0,
             "scheduled_s": tick.scheduled_s if tick is not None else receipt.scheduled_s,
             "dispatched_s": receipt.dispatched_s if receipt is not None else None,
             "camera_source_time_s": record.camera_source_time_s,
@@ -117,6 +119,8 @@ class FlashEpisodeWriter:
             "progress_events": record.progress_events,
         }
         self._trace.write(json.dumps(trace, default=_json_value) + "\n")
+        if tick is not None and tick.skipped_before:
+            self.timing_regular = False
         self.frame_index += 1
 
     def save(self, outcome: str, reason: str) -> None:
@@ -134,6 +138,7 @@ class FlashEpisodeWriter:
         manifest["episodes"][str(self.episode_index)] = {
             "trace": self.path.name,
             "frames": self.frame_index,
+            "timing_regular": self.timing_regular,
             "outcome": outcome,
             "reason": reason,
         }

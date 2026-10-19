@@ -11,6 +11,7 @@ import time
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
+from math import floor
 from threading import Lock
 from typing import Protocol
 
@@ -29,6 +30,7 @@ class TimedAction:
     interval_complete: bool = False
     event_id: str | None = None
     requires_milestone: str | None = None
+    may_skip_if_late: bool = False
 
 
 @dataclass(frozen=True)
@@ -56,6 +58,7 @@ class MotorTick:
     receipt: ActionReceipt | None
     idle_reason: str | None = None
     action_source: str = "commanded"
+    skipped_before: int = 0
 
 
 class PlanRejectedError(RuntimeError):
@@ -168,10 +171,7 @@ class ActionQueue:
         with self._lock:
             if tick <= self._last_tick:
                 raise ValueError("motor ticks must increase")
-            while self._actions and self._actions[0][1].tick < tick:
-                _, expired = self._actions.popleft()
-                if expired.event_id:
-                    raise MissedEventError(f"missed required event {expired.event_id} at tick {expired.tick}")
+            self._expire_locked(tick)
             self._last_tick = tick
             if not self._actions or self._actions[0][1].tick > tick:
                 return None, self._revision
@@ -181,6 +181,40 @@ class ActionQueue:
                     raise MissedEventError(f"duplicate semantic event {action.event_id}")
                 self._issued_events.add(action.event_id)
             return action, revision
+
+    def expire_before(self, tick: int) -> int:
+        """Drop only stale, explicitly skippable free-space samples."""
+        with self._lock:
+            return self._expire_locked(tick)
+
+    def _expire_locked(self, tick: int) -> int:
+        expired = []
+        survivor = None
+        for _, action in self._actions:
+            if action.tick >= tick:
+                survivor = action
+                break
+            expired.append(action)
+        for action in expired:
+            if action.event_id or action.interval_complete or not action.may_skip_if_late:
+                raise MissedEventError(
+                    f"missed required {action.event_id or action.interval} sample at tick {action.tick}"
+                )
+        if expired:
+            if survivor is None or survivor.tick != tick:
+                raise MissedEventError("no current free-space command survives the missed deadlines")
+            if self._last_issued is None or self._max_splice_delta is None:
+                raise MissedEventError("cannot skip motor deadlines without an issued continuity boundary")
+            for joint, value in survivor.action.items():
+                if (
+                    joint not in self._last_issued
+                    or joint not in self._max_splice_delta
+                    or abs(value - self._last_issued[joint]) > self._max_splice_delta[joint]
+                ):
+                    raise MissedEventError(f"skipping deadlines would jump at {joint}")
+        for _ in expired:
+            self._actions.popleft()
+        return len(expired)
 
     def skip(self, tick: int) -> None:
         """Account for a scheduled idle tick without issuing an action."""
@@ -217,6 +251,7 @@ class MotorMetrics:
     starved: int = 0
     idle: int = 0
     late_ticks: int = 0
+    skipped_ticks: int = 0
     max_dispatch_gap_s: float = 0.0
     read_s: list[float] = field(default_factory=list)
     write_s: list[float] = field(default_factory=list)
@@ -256,6 +291,7 @@ class MotorLoop:
         self.epoch_s: float | None = None
         self._last_dispatch_s: float | None = None
         self._last_issued: dict[str, float] | None = None
+        self._skipped_since_record = 0
 
     def _record_tick(
         self,
@@ -266,6 +302,8 @@ class MotorLoop:
         receipt: ActionReceipt | None,
         idle_reason: str | None = None,
     ) -> None:
+        skipped_before = self._skipped_since_record
+        self._skipped_since_record = 0
         if self.on_tick is None:
             return
         # Save the replayable robot-API action, not a downstream actuator goal
@@ -276,16 +314,36 @@ class MotorLoop:
         )
         self.on_tick(
             MotorTick(
-                tick, deadline, observed, read_duration_s, dict(effective), receipt, idle_reason, source
+                tick,
+                deadline,
+                observed,
+                read_duration_s,
+                dict(effective),
+                receipt,
+                idle_reason,
+                source,
+                skipped_before,
             )
         )
 
     def start(self) -> None:
         self.epoch_s = self.clock()
 
-    def tick(self, *, idle_reason: str | None = None) -> ActionReceipt | None:
+    def align_to_clock(self) -> int:
+        """Skip stale deadlines rather than bursting their commands later."""
         if self.epoch_s is None:
             self.start()
+        current = max(0, floor((self.clock() - self.epoch_s) / self.period_s))
+        skipped = max(0, current - self.metrics.ticks)
+        if skipped:
+            self.actions.expire_before(current)
+            self.metrics.ticks = current
+            self.metrics.skipped_ticks += skipped
+            self._skipped_since_record += skipped
+        return skipped
+
+    def tick(self, *, idle_reason: str | None = None) -> ActionReceipt | None:
+        self.align_to_clock()
         tick = self.metrics.ticks
         deadline = self.epoch_s + tick * self.period_s
         delay = deadline - self.clock()
@@ -297,6 +355,12 @@ class MotorLoop:
         read_start = self.clock()
         observed = self.robot.get_state_observation()
         read_end = self.clock()
+        # A slow state read can cross another deadline after the initial clock
+        # alignment. Do not dispatch the now-stale action after that read.
+        if read_end >= deadline + self.period_s:
+            self.align_to_clock()
+            tick = self.metrics.ticks
+            deadline = self.epoch_s + tick * self.period_s
         if idle_reason is not None:
             self.actions.skip(tick)
             self.metrics.ticks += 1

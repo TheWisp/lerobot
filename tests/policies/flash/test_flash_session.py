@@ -114,3 +114,18 @@ def test_release_gate_rejection_keeps_tick_but_never_sends_release():
     assert [tick.action_source for tick in ticks] == ["commanded", "held_goal"]
     assert ticks[1].idle_reason == "milestone gate rejected"
     assert robot.calls.count("send") == 1
+
+
+def test_late_contact_tick_fails_instead_of_bursting_old_commands():
+    now = [0.0]
+    robot = FakeRobot()
+    session = FlashSession(
+        skill(), robot, clock=lambda: now[0], sleep=lambda dt: now.__setitem__(0, now[0] + dt)
+    )
+    session.publish_plan(0, [TimedAction(i, {"arm.pos": float(i)}, "contact") for i in range(4)])
+    now[0] = 0.085  # two 30 Hz deadlines have already passed
+    assert session.step() is None
+    assert session.progress.phase == Phase.FAILED
+    assert session.motor.metrics.commanded == 0
+    assert "send" not in robot.calls
+    assert "missed required" in session.progress.events[-1]["reason"]

@@ -8,7 +8,9 @@ import pytest
 from lerobot.policies.flash.execution import (
     ActionQueue,
     ActionReceipt,
+    MissedEventError,
     MotorLoop,
+    MotorTick,
     PlanRejectedError,
     TimedAction,
 )
@@ -218,6 +220,86 @@ def test_queue_snapshot_exposes_future_splice_seed_without_mutating_live_queue()
     assert snapshot.boundary_before(3) == {"joint.pos": 0.3}
     snapshot.pending[1].action["joint.pos"] = 99
     assert queue.take(1)[0].action["joint.pos"] == 0.2
+
+
+def test_motor_overrun_skips_only_explicit_free_space_samples():
+    class FakeRobot:
+        def get_state_observation(self):
+            return {"joint.pos": 0.0}
+
+        def send_action(self, action):
+            return action
+
+    now = [0.0]
+    queue = ActionQueue(max_splice_delta={"joint.pos": 0.31})
+    queue.publish(
+        0,
+        [TimedAction(i, {"joint.pos": i * 0.1}, "carry", may_skip_if_late=True) for i in range(6)],
+    )
+    ticks = []
+    loop = MotorLoop(
+        FakeRobot(),
+        queue,
+        lambda receipt: None,
+        on_tick=ticks.append,
+        clock=lambda: now[0],
+        sleep=lambda dt: None,
+    )
+    loop.start()
+    assert loop.tick().tick == 0
+    now[0] = 0.12
+    receipt = loop.tick()
+    assert receipt.tick == 3
+    assert loop.metrics.skipped_ticks == 2
+    assert loop.metrics.commanded == 2
+    assert ticks[-1].skipped_before == 2
+
+
+def test_motor_overrun_rejects_an_unsafe_free_space_jump():
+    queue = ActionQueue(max_splice_delta={"joint.pos": 0.1})
+    queue.publish(
+        0,
+        [
+            TimedAction(i, {"joint.pos": value}, "carry", may_skip_if_late=True)
+            for i, value in enumerate((0, 0.1, 0.5))
+        ],
+    )
+    queue.take(0)
+    queue.note_issued({"joint.pos": 0})
+    with pytest.raises(MissedEventError, match="would jump"):
+        queue.expire_before(2)
+
+
+def test_motor_does_not_send_contact_after_a_state_read_crosses_its_deadline():
+    now = [0.0]
+
+    class SlowReadRobot:
+        def __init__(self):
+            self.sent = []
+
+        def get_state_observation(self):
+            now[0] += 0.08
+            return {"joint.pos": 0.0}
+
+        def send_action(self, action):
+            self.sent.append(action)
+            return action
+
+    robot = SlowReadRobot()
+    queue = ActionQueue()
+    queue.publish(0, [TimedAction(i, {"joint.pos": float(i)}, "contact") for i in range(4)])
+    loop = MotorLoop(robot, queue, lambda receipt: None, clock=lambda: now[0], sleep=lambda dt: None)
+    loop.start()
+    with pytest.raises(MissedEventError, match="missed required contact sample"):
+        loop.tick()
+    assert robot.sent == []
+
+
+def test_direct_queue_take_cannot_drop_a_required_contact_sample():
+    queue = ActionQueue()
+    queue.publish(0, [TimedAction(i, {"joint.pos": float(i)}, "contact") for i in range(4)])
+    with pytest.raises(MissedEventError, match="missed required contact sample"):
+        queue.take(2)
 
 
 def test_motor_tick_reads_state_and_records_accepted_action_without_camera_wait():
@@ -489,6 +571,15 @@ def test_regular_lerobot_frame_and_flash_trace_are_written_together(tmp_path):
             7,
             pose_estimates={"target": estimate},
             pose_comparisons={"target": comparison},
+            motor_tick=MotorTick(
+                1,
+                1.0,
+                {"joint.pos": 0.0},
+                0.001,
+                {"joint.pos": 2.0},
+                receipt,
+                skipped_before=1,
+            ),
         )
     )
     worker.finish("unknown", "no post-release observation")
@@ -499,8 +590,10 @@ def test_regular_lerobot_frame_and_flash_trace_are_written_together(tmp_path):
     assert '"pose_version": 7' in trace
     assert '"reference_version": "ref1"' in trace
     assert '"pose_comparisons": {"target": {"verdict": "ambiguous"' in trace
+    assert '"skipped_before": 1' in trace
     assert '"accepted": {"joint.pos": 1.0}' in trace
     assert '"outcome": "unknown"' in (tmp_path / "flash/v1/manifest.json").read_text()
+    assert '"timing_regular": false' in (tmp_path / "flash/v1/manifest.json").read_text()
     loaded = load_pose_estimates(tmp_path, 0, expected_frames=1)
     assert loaded[0]["target"].reference_version == "ref1"
     np.testing.assert_allclose(loaded[0]["target"].pose, pose(0.1))

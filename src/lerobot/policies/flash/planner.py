@@ -152,7 +152,15 @@ class JointPlanner:
             }
             if grip is not None:
                 command[f"{self.gripper_joint_name}.pos"] = float(grip)
-            actions.append(TimedAction(tick, command, interval.name, interval_complete=complete))
+            actions.append(
+                TimedAction(
+                    tick,
+                    command,
+                    interval.name,
+                    interval_complete=complete,
+                    may_skip_if_late=interval.mode == MotionMode.CONNECTION,
+                )
+            )
             seed = solved
             if complete:
                 break
