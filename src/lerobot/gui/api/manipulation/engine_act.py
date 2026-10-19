@@ -150,6 +150,9 @@ class _Feed:
         ] = {}  # each other object's demo pose its measurement is against
         self.frames = 0
         self.refused: collections.Counter[str] = collections.Counter()  # "object: why", for the act's record
+        # Per frame, for the act's record: each object's candidates, each with its source's verdict, and what the
+        # estimator made of them (taken or not, why, how much of the surface the camera saw past).
+        self.log: list[dict[str, Any]] = []
 
     def _other_motion(self, name: str, delta: np.ndarray) -> np.ndarray | None:
         """``name``'s motion since the demo, base frame, from the tracker's delta for it (as ``planning._object_motion``
@@ -263,11 +266,22 @@ class _Feed:
         candidates = self._candidates(r, result, job.created)
         for name, c in self._groups_candidates(t).items():
             candidates.setdefault(name, []).append(c)
+        row: dict[str, Any] = {"t": t, "objects": {}}
         for name, e in self.estimator.estimate(t, candidates, frame).items():
+            row["objects"][name] = {
+                "candidates": [
+                    {"source": c.source, "ok": c.ok, "why": c.why, "motion": np.round(c.motion, 4).tolist()}
+                    for c in candidates.get(name, ())
+                ],
+                "taken": e.motion is not None,
+                "why": e.why,
+                "seen_through": None if e.seen_through is None else round(e.seen_through, 4),
+            }
             if e.motion is not None:
                 self.scene.add_measurement(name, Measurement(t=t, motion=e.motion))
             else:
                 self.refused[f"{name}: {e.why}"] += 1
+        self.log.append(row)
 
 
 def _camera(teach: runtime._Teach, t_bc: np.ndarray, shape: tuple[int, ...]) -> Camera:
@@ -604,6 +618,7 @@ async def _act_engine_task(
                     "records": engine.records,
                     "frames_fed": None if feed is None else feed.frames,
                     "refused": None if feed is None else dict(feed.refused),
+                    "feed": None if feed is None else feed.log,
                     "estimates": engine.estimates,
                     "slowest_solve_ms": engine.solve_s * 1000.0,
                 }

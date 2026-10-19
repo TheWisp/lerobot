@@ -202,6 +202,29 @@ def test_the_feed_measures_only_what_its_estimator_takes(monkeypatch):
     assert [m.t for m in scene.measurements("dowel")] == [3.0]
     assert scene.measurements("ring") == [] and scene.measurements("cup") == []
     assert feed.refused == {"ring: not this one": 1, "cup: not this one": 1}
+    # The act's record of the frame: each object's candidates and what the estimator made of them.
+    (row,) = feed.log
+    assert row["t"] == 3.0
+    dowel, cup = row["objects"]["dowel"], row["objects"]["cup"]
+    assert (
+        dowel["taken"]
+        and dowel["why"] == "taken"
+        and cup
+        == {
+            "candidates": [
+                {"source": "point2pose", "ok": False, "why": "lost", "motion": np.eye(4).tolist()},
+                {
+                    "source": "old runner checks",
+                    "ok": False,
+                    "why": "not certified",
+                    "motion": np.eye(4).tolist(),
+                },
+            ],
+            "taken": False,
+            "why": "not this one",
+            "seen_through": None,
+        }
+    )
 
 
 def test_the_old_runners_checks_are_a_candidate_beside_point2pose(monkeypatch):

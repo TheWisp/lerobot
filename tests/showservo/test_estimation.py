@@ -72,11 +72,13 @@ def test_a_pose_the_camera_sees_through_is_refused_and_one_it_cannot_see_is_not(
         out = est.estimate(k / 10, view(np.eye(4)), frame())["block"]
         assert out.motion is not None
     assert "block" in est.limits
-    assert est.estimate(1.3, view(np.eye(4)), frame())["block"].motion is not None
+    taken = est.estimate(1.3, view(np.eye(4)), frame())["block"]
+    assert taken.motion is not None and taken.seen_through == 0.0, "the record says how much it saw past"
     # 80 mm to the side and 30 mm nearer the camera: where the camera sees the table, 40 mm farther than that surface
     phantom = _shifted(0.08, -0.03)
     refused = est.estimate(1.4, view(phantom), frame())["block"]
     assert refused.motion is None and "sees through" in refused.why
+    assert refused.seen_through > est.limits["block"][1], "and on a refusal, how much beyond the cut-off"
     # the same pose behind something nearer than it: hidden, not contradicted
     u = (np.array([0.03, 0.13]) / (TOP_M - 0.03) * FX + CX).astype(int)
     hidden = est.estimate(1.5, view(phantom), frame((u[0] - 20, u[1] + 20, 200, 280)))["block"]

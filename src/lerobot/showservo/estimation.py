@@ -48,10 +48,12 @@ class Frame:
 
 @dataclasses.dataclass(frozen=True)
 class Estimate:
-    """An object's pose in one frame, to take as a measurement; None when there is none to take. ``why`` says which."""
+    """An object's pose in one frame, to take as a measurement; None when there is none to take. ``why`` says which;
+    ``seen_through``, when the camera was checked against it, the share of its surface the camera saw past."""
 
     motion: np.ndarray | None
     why: str
+    seen_through: float | None = None
 
 
 class PoseEstimator(Protocol):
@@ -163,7 +165,9 @@ class SeenThrough:
             tol, cut = self.limits[name]
             share = float(np.mean(gaps > tol))
             if share > cut:
-                out[name] = Estimate(None, "the camera sees through more of its surface than its cut-off")
+                out[name] = Estimate(
+                    None, "the camera sees through more of its surface than its cut-off", share
+                )
             else:
-                out[name] = Estimate(e.motion, f"{e.why}; {share:.0%} of its surface seen through")
+                out[name] = Estimate(e.motion, f"{e.why}; {share:.0%} of its surface seen through", share)
         return out
