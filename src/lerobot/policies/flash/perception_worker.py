@@ -107,6 +107,10 @@ class PoseProcess:
         self._started = False
         self._failure: str | None = None
 
+    @property
+    def alive(self) -> bool:
+        return self._started and self._process.is_alive() and self._failure is None
+
     def start(self, timeout_s: float = 60.0) -> None:
         if self._started or timeout_s <= 0:
             raise ValueError("pose worker already started or timeout is invalid")
@@ -127,7 +131,7 @@ class PoseProcess:
 
     def submit(self, frame: RGBDFrame) -> bool:
         """Copy one camera snapshot; replace a pending older frame if necessary."""
-        if not self._started or not self._process.is_alive() or self._failure:
+        if not self.alive:
             return False
         snapshot = replace(
             frame,

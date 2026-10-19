@@ -29,6 +29,9 @@ The executable core already separates:
 - a spawn-isolated perception process that loads GPU models in the child,
   accepts the latest aligned camera snapshot and publishes timestamped poses
   to a short-lock store outside the motor loop;
+- a live perception service that owns camera capture and result collection,
+  waits for actual seeded object observations before motion, and exposes
+  camera/estimator failures instead of reusing stale poses;
 - kinematics-neutral short IK chunks and atomic future-queue replacement;
 - a selected-joint adapter that runs the SO-107's seven-joint FK/IK model
   while the planner controls six arm joints and the gripper separately;
