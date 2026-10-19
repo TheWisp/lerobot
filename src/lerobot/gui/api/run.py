@@ -245,6 +245,11 @@ class FlashDatasetInspectRequest(BaseModel):
     episode: int
 
 
+class FlashRunRequest(FlashDatasetInspectRequest):
+    bundle_path: str
+    config_path: str
+
+
 class HVLARunRequest(BaseModel):
     robot: dict[str, Any]
     s1_checkpoint: str
@@ -951,6 +956,41 @@ async def inspect_flash_dataset(req: FlashDatasetInspectRequest) -> dict:
     return await _inspect_flash_subprocess("--dataset-root", req.dataset_root, "--episode", str(req.episode))
 
 
+@router.post("/flash/run")
+async def start_flash(req: FlashRunRequest) -> dict:
+    """Launch a prepared spatial skill through the shared Run process owner."""
+    async with _launch_lock:
+        _ensure_no_active_process()
+        inspection = await _inspect_flash_subprocess(
+            "--dataset-root", req.dataset_root, "--episode", str(req.episode)
+        )
+        bundle = Path(req.bundle_path).expanduser().resolve()
+        if not any(
+            item["kind"] == "prepared"
+            and Path(item["path"]).resolve() == bundle
+            and item["inspection"]["runtime_bindings_complete"]
+            for item in inspection["skills"]
+        ):
+            raise HTTPException(400, "Select a complete prepared FLASH skill from this dataset episode")
+        config = Path(req.config_path).expanduser().resolve()
+        if not config.is_file():
+            raise HTTPException(400, "Select an existing local robot/camera trial config")
+        await _release_preview_cameras()
+        args = [
+            sys.executable,
+            "-u",
+            "-m",
+            "lerobot.policies.flash.live_trial",
+            str(bundle),
+            str(config),
+            "--auto-output",
+            "--source-dataset-root",
+            str(Path(req.dataset_root).expanduser().resolve()),
+        ]
+        await _launch_subprocess(args, command="flash", config=req.model_dump())
+        return {"status": "started", "command": "flash", "pid": _active_process.pid}
+
+
 async def _inspect_flash_subprocess(*args: str) -> dict:
     process = await asyncio.create_subprocess_exec(
         sys.executable,
@@ -1346,6 +1386,18 @@ async def stop_process() -> dict:
             graceful = True
         except (*_TIMEOUT_EXCS, BrokenPipeError, ConnectionResetError, OSError) as e:
             logger.warning(f"Graceful stop failed for PID {pid} ({e}); escalating to SIGINT")
+        finally:
+            _graceful_stop_inflight = False
+
+    if _active_command == "flash" and proc.returncode is None and not _graceful_stop_inflight:
+        _graceful_stop_inflight = True
+        try:
+            proc.send_signal(signal.SIGINT)
+            _append_output(f"\n--- Stop requested: saving FLASH trial (PID {pid}) ---\n")
+            await asyncio.wait_for(proc.wait(), timeout=STOP_GRACE_S)
+            graceful = True
+        except (*_TIMEOUT_EXCS, ProcessLookupError) as e:
+            logger.warning(f"Graceful FLASH stop failed for PID {pid} ({e}); escalating")
         finally:
             _graceful_stop_inflight = False
 

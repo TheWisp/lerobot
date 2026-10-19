@@ -156,9 +156,11 @@ def inspect_dataset(root: str, episode: int) -> dict:
         missing.append("No FLASH spatial skill is stored for this episode")
     elif not any(skill["kind"] == "prepared" for skill in skills):
         missing.append("No prepared RGB-D object references are stored for this episode")
-    # The current Run worker has no physical FLASH launcher. Keep that visible
-    # even if a complete prepared bundle is found.
-    missing.append("Live robot launch is not connected in this build")
+    launchable = any(
+        skill["kind"] == "prepared" and skill["inspection"]["runtime_bindings_complete"] for skill in skills
+    )
+    if skills and not launchable and not missing:
+        missing.append("Prepared FLASH skill has unresolved runtime bindings")
     return {
         "dataset_root": str(dataset_root),
         "episode": episode,
@@ -166,7 +168,7 @@ def inspect_dataset(root: str, episode: int) -> dict:
         "skills": skills,
         "missing": missing,
         "warnings": warnings,
-        "can_launch": False,
+        "can_launch": launchable,
     }
 
 
