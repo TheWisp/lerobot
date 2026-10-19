@@ -22,6 +22,9 @@ The executable core already separates:
 - an initial SAM3-mask/DINOv2-patch matcher that constructs a metric object
   point-and-appearance bank from annotated RGB-D demo views, then submits
   live correspondences to the common pose backend;
+- a spawn-isolated perception process that loads GPU models in the child,
+  accepts the latest aligned camera snapshot and publishes timestamped poses
+  to a short-lock store outside the motor loop;
 - kinematics-neutral short IK chunks and atomic future-queue replacement;
 - a selected-joint adapter that runs the SO-107's seven-joint FK/IK model
   while the planner controls six arm joints and the gripper separately;
@@ -53,5 +56,9 @@ under occlusion. Multi-view reference preparation, evidence/observability
 gates and asynchronous publication to the controller remain necessary.
 The planner worker, milestone verifiers and recorder also need wiring into
 a hardware launch path.
+A real process smoke test loaded the cached models and published the ring pose.
+The first SAM3 seed still cost about 1.5 seconds after worker readiness, so
+hardware launch must wait for a valid first observation rather than treating
+process startup as pose readiness.
 A physical rollout cannot be claimed from the core unit tests or
 skill-inspection UI alone.

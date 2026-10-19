@@ -1,0 +1,100 @@
+"""Heavy pose estimation must not run in or block the motor owner."""
+
+import time
+
+import numpy as np
+import pytest
+
+from lerobot.policies.flash.perception import LatestPoseStore, ObjectReference, ReferenceSnippet, RGBDFrame
+from lerobot.policies.flash.perception_worker import PoseProcess, PoseProcessError
+from lerobot.policies.flash.trajectory import Evidence, PoseEstimate
+
+
+class EchoBackend:
+    def initialize(self, references):
+        self.reference = references[0]
+
+    def update(self, frame):
+        pose = np.eye(4)
+        pose[2, 3] = float(frame.depth[0, 0]) * frame.depth_m_per_unit
+        return (
+            PoseEstimate(
+                self.reference.role,
+                pose,
+                frame.source_time_s,
+                time.monotonic(),
+                Evidence.OBSERVED,
+                self.reference.version,
+                (True, True, True),
+                (True, True, True),
+            ),
+        )
+
+
+class FailingBackend(EchoBackend):
+    def update(self, frame):
+        raise RuntimeError("injected perception failure")
+
+
+def echo_factory():
+    return EchoBackend()
+
+
+def failing_factory():
+    return FailingBackend()
+
+
+def setup():
+    snippet = ReferenceSnippet("recorded", 0, 0, "item", np.eye(4), "mask", "camera-v1")
+    reference = ObjectReference("item", "item-v1", (snippet,))
+    frame = RGBDFrame(
+        1,
+        np.zeros((4, 4, 3), dtype=np.uint8),
+        np.full((4, 4), 1000, dtype=np.uint16),
+        np.eye(3),
+        0.001,
+        np.eye(4),
+        1.0,
+        1.0,
+        "camera-v1",
+    )
+    return reference, frame
+
+
+def poll_until(worker, predicate):
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        worker.poll()
+        if predicate():
+            return
+        time.sleep(0.01)
+    pytest.fail("pose process did not deliver result")
+
+
+def test_spawned_pose_worker_publishes_copied_snapshot():
+    reference, frame = setup()
+    store = LatestPoseStore()
+    worker = PoseProcess(echo_factory, (reference,), store)
+    try:
+        worker.start(timeout_s=10)
+        assert worker.submit(frame)
+        frame.depth[0, 0] = 3000  # camera buffer reuse must not alter the queued frame
+        poll_until(worker, lambda: store.snapshot()[0] == 1)
+        version, poses = store.snapshot()
+        assert version == 1
+        assert poses["item"].pose[2, 3] == pytest.approx(1.0)
+        assert worker.metrics.delivered == 1
+    finally:
+        worker.close()
+
+
+def test_spawned_pose_worker_reports_backend_failure():
+    reference, frame = setup()
+    worker = PoseProcess(failing_factory, (reference,), LatestPoseStore())
+    try:
+        worker.start(timeout_s=10)
+        assert worker.submit(frame)
+        with pytest.raises(PoseProcessError, match="injected perception failure"):
+            poll_until(worker, lambda: False)
+    finally:
+        worker.close()

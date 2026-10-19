@@ -8,7 +8,7 @@ from typing import Protocol
 
 import numpy as np
 
-from .matched_rgbd import ObjectPointModel, PixelMatches
+from .matched_rgbd import MatchedRGBDPoseBackend, ObjectPointModel, PixelMatches
 from .perception import ObjectReference, ReferenceSnippet, RGBDFrame
 from .registration import transform_points, unproject_pixels, valid_depth_pixels
 
@@ -202,3 +202,50 @@ class AppearancePixelMatcher:
                 )
             )
         return tuple(out)
+
+
+@dataclass(frozen=True)
+class AppearanceBackendFactory:
+    """Spawn-safe construction of the first live RGB-D pose backend.
+
+    Keep only reference data and configuration in the parent. SAM3 and DINO
+    weights load when this factory runs inside :class:`PoseProcess`.
+    """
+
+    models: tuple[AppearanceModel, ...]
+    prompts_by_role: dict[str, str]
+    camera_id: str
+    min_similarity: float
+    threshold_m: float
+    min_inliers: int
+    trials: int
+    device: str = "cuda"
+    sam_resolution: int | None = None
+    dino_model_id: str = "facebook/dinov2-small"
+
+    def __post_init__(self) -> None:
+        if set(self.prompts_by_role) != {model.points.role for model in self.models}:
+            raise ValueError("one text prompt is needed for each appearance model role")
+
+    def __call__(self) -> MatchedRGBDPoseBackend:
+        from .dino_features import DinoPatchExtractor
+
+        source = Sam3MaskSource(
+            self.prompts_by_role,
+            camera_id=self.camera_id,
+            device=self.device,
+            resolution=self.sam_resolution,
+        )
+        matcher = AppearancePixelMatcher(
+            self.models,
+            DinoPatchExtractor(model_id=self.dino_model_id, device=self.device),
+            source,
+            min_similarity=self.min_similarity,
+        )
+        return MatchedRGBDPoseBackend(
+            tuple(model.points for model in self.models),
+            matcher,
+            threshold_m=self.threshold_m,
+            min_inliers=self.min_inliers,
+            trials=self.trials,
+        )

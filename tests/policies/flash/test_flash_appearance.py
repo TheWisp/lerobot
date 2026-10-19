@@ -1,14 +1,18 @@
 """Multiview appearance matches feed the common metric pose estimator."""
 
+import pickle
+
 import numpy as np
 
 from lerobot.policies.flash.appearance import (
+    AppearanceBackendFactory,
+    AppearanceModel,
     AppearancePixelMatcher,
     ReferenceAppearanceFrame,
     Sam3MaskSource,
     build_appearance_model,
 )
-from lerobot.policies.flash.matched_rgbd import MatchedRGBDPoseBackend
+from lerobot.policies.flash.matched_rgbd import MatchedRGBDPoseBackend, ObjectPointModel
 from lerobot.policies.flash.perception import ObjectReference, ReferenceSnippet, RGBDFrame
 from lerobot.policies.flash.trajectory import Evidence
 
@@ -118,3 +122,11 @@ def test_sam3_mask_source_shares_one_adapter_and_resets_on_discontinuity():
     assert len(made) == 1
     assert made[0].calls.count(("segment",)) == 3
     assert made[0].calls.count(("reset",)) == 1
+
+
+def test_appearance_factory_can_cross_spawn_boundary_without_loaded_models():
+    model = AppearanceModel(ObjectPointModel("object", "v1", POINTS), np.eye(len(POINTS)))
+    factory = AppearanceBackendFactory((model,), {"object": "wooden tool"}, "overhead", 0.75, 0.005, 3, 100)
+    restored = pickle.loads(pickle.dumps(factory))
+    assert restored.prompts_by_role == {"object": "wooden tool"}
+    np.testing.assert_allclose(restored.models[0].points.points_object_m, POINTS)
