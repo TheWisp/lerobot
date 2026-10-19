@@ -1,0 +1,242 @@
+"""Prepare future FLASH chunks while the fixed-rate session owns the robot."""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from dataclasses import dataclass, replace
+from math import floor
+
+import numpy as np
+
+from .perception import LatestPoseStore
+from .planner import CartesianKinematics
+from .planner_worker import PlanFailureKind, PlannerWorker, PlanRequest
+from .progress import Phase
+from .session import FlashSession
+from .skill import MotionMode, Relation
+from .trajectory import AttachmentState, ConnectionTrajectory, PoseEstimate
+
+
+@dataclass(frozen=True)
+class PlanBufferConfig:
+    lead_ticks: int
+    horizon_ticks: int
+    refill_at_ticks: int
+    max_reference_shift_m: float
+    max_reference_turn_rad: float
+
+    def __post_init__(self) -> None:
+        if (
+            self.lead_ticks < 1
+            or self.horizon_ticks <= self.lead_ticks + 1
+            or not 0 < self.refill_at_ticks < self.horizon_ticks
+            or not np.isfinite(self.max_reference_shift_m)
+            or self.max_reference_shift_m <= 0
+            or not np.isfinite(self.max_reference_turn_rad)
+            or self.max_reference_turn_rad <= 0
+        ):
+            raise ValueError("invalid FLASH planning buffer or reference-change limits")
+
+
+class PlanningCoordinator:
+    """Submit short future IK chunks after each motor tick, without solving IK.
+
+    The caller starts the PlannerWorker separately and calls ``step`` at the
+    motor cadence. The worker's publication callback must be the session's
+    ``publish_plan``. A changed reference inside the configured envelope
+    replans the unissued suffix; a larger jump interrupts instead of sending
+    the known-stale queue. The coordinator does not claim to verify grasp,
+    configure cameras, or record an episode.
+    """
+
+    def __init__(
+        self,
+        session: FlashSession,
+        worker: PlannerWorker,
+        poses: LatestPoseStore,
+        kinematics: CartesianKinematics,
+        arm_joint_names: tuple[str, ...],
+        config: PlanBufferConfig,
+        attachment_at: Callable[[float], AttachmentState | None],
+    ) -> None:
+        self.session = session
+        self.worker = worker
+        self.poses = poses
+        self.kinematics = kinematics
+        self.arm_joint_names = arm_joint_names
+        self.config = config
+        self.attachment_at = attachment_at
+        self._next_revision = 0
+        self._pending_revision: int | None = None
+        self._planned_reference: PoseEstimate | None = None
+        self._planned_attachment_time_s: float | None = None
+        self._planned_interval_index: int | None = None
+        self._connection: ConnectionTrajectory | None = None
+
+    def step(self):
+        """Check live evidence, execute one motor tick, then refill the future queue."""
+        # Re-read evidence before dispatch so a newly known large target move
+        # can invalidate the old queue without sending one more stale action.
+        self.schedule()
+        receipt = self.session.step()
+        self.schedule()
+        return receipt
+
+    def schedule(self) -> None:
+        if self.worker.fatal_error is not None:
+            self._fail(f"IK worker failed: {self.worker.fatal_error}")
+            return
+        phase = self.session.progress.phase
+        if phase not in (Phase.WAITING, Phase.MOVING):
+            return
+        result = self.worker.last_result
+        if (
+            self._pending_revision is not None
+            and result is not None
+            and result.revision == self._pending_revision
+        ):
+            self._pending_revision = None
+            if result.error:
+                if result.failure in (
+                    PlanFailureKind.MISSING_EVIDENCE,
+                    PlanFailureKind.INFEASIBLE,
+                    PlanFailureKind.INVALID,
+                ):
+                    self._fail(f"IK plan failed: {result.error}")
+                    return
+                self._planned_reference = None
+        interval = self.session.progress.interval
+        _, live_poses = self.poses.snapshot()
+        reference = live_poses.get(interval.reference_role)
+        now_s = self.session.motor.clock()
+        limits = self.worker.planner.limits
+        if reference is None or not reference.usable(
+            now_s, limits.max_pose_age_s, limits.allow_predicted_reference
+        ):
+            if phase == Phase.MOVING:
+                self._fail(f"{interval.reference_role} lost its usable pose during motion")
+            return
+        if interval.reference_version != reference.reference_version:
+            self._fail(f"{interval.reference_role} pose uses the wrong object frame")
+            return
+        attachment = self.attachment_at(now_s) if interval.relation == Relation.HELD_TO_TARGET else None
+        if interval.relation == Relation.HELD_TO_TARGET and attachment is None:
+            if phase == Phase.MOVING:
+                self._fail("held-object attachment expired during motion")
+            return
+        if attachment is not None and attachment.reference_version != interval.held_reference_version:
+            self._fail("held-object attachment uses the wrong object frame")
+            return
+        changed_interval = self._planned_interval_index != self.session.progress.interval_index
+        new_image = (
+            changed_interval
+            or self._planned_reference is None
+            or self._planned_reference.source_time_s != reference.source_time_s
+            or self._planned_attachment_time_s != (attachment.source_time_s if attachment else None)
+        )
+        if (
+            phase == Phase.MOVING
+            and new_image
+            and not changed_interval
+            and self._planned_reference is not None
+            and self._reference_changed_too_far(self._planned_reference, reference)
+        ):
+            self._fail(f"{interval.reference_role} moved beyond the configured replanning envelope")
+            return
+        snapshot = self.session.actions.snapshot()
+        next_tick = self.session.motor.metrics.ticks
+        pending = [
+            action
+            for action in snapshot.pending
+            if action.tick >= next_tick and action.interval == interval.name
+        ]
+        if phase == Phase.WAITING and pending and not new_image:
+            return
+        if phase == Phase.MOVING and len(pending) > self.config.refill_at_ticks and not new_image:
+            return
+        if self._pending_revision is not None and not new_image:
+            return
+        if phase == Phase.WAITING and pending and new_image:
+            self.session.actions.cancel_unissued("reference changed before interval entry")
+            snapshot = self.session.actions.snapshot()
+            pending = []
+        if phase == Phase.WAITING:
+            start_tick = next_tick + self.config.lead_ticks
+            boundary = None
+            interval_start_s = self.session.motor.epoch_s + start_tick * self.session.motor.period_s
+        else:
+            start_tick = next_tick + self.config.lead_ticks
+            if pending and pending[-1].tick < start_tick - 1:
+                start_tick = pending[-1].tick + 1
+            boundary = snapshot.boundary_before(start_tick)
+            interval_start_s = self.session.progress.interval_start_s
+            if boundary is None or interval_start_s is None:
+                self._fail("no continuous joint boundary for an active interval replan")
+                return
+        state = boundary if boundary is not None else self.session.motor.last_observed
+        if state is None or any(f"{name}.pos" not in state for name in self.arm_joint_names):
+            return
+        seed = np.array([float(state[f"{name}.pos"]) for name in self.arm_joint_names])
+        if not np.isfinite(seed).all():
+            self._fail("motor observation has non-finite joint state")
+            return
+        due_s = self.session.motor.epoch_s + start_tick * self.session.motor.period_s
+        evidence_deadline_s = reference.source_time_s + limits.max_pose_age_s
+        if attachment is not None:
+            evidence_deadline_s = min(evidence_deadline_s, attachment.source_time_s + limits.max_pose_age_s)
+        evidence_ticks = floor((evidence_deadline_s - due_s) / self.session.motor.period_s) + 1
+        if evidence_ticks <= 0:
+            if phase == Phase.MOVING:
+                self._fail("no fresh pose can support the next future action")
+            return
+        count = min(self.config.horizon_ticks, evidence_ticks)
+        connection = None
+        if interval.mode == MotionMode.CONNECTION:
+            connection = (
+                ConnectionTrajectory.begin(
+                    interval,
+                    self.kinematics.forward_kinematics(seed),
+                    reference.pose,
+                    attachment.gripper_from_object if attachment is not None else None,
+                    due_s,
+                )
+                if new_image or self._connection is None
+                else self._connection
+            )
+        revision = max(self._next_revision, snapshot.revision + 1)
+        request = PlanRequest(
+            revision=revision,
+            interval=interval,
+            start_tick=start_tick,
+            count=count,
+            epoch_s=self.session.motor.epoch_s,
+            period_s=self.session.motor.period_s,
+            interval_start_s=interval_start_s,
+            seed_deg=seed,
+            reference=replace(reference, pose=reference.pose.copy()),
+            attachment=(
+                replace(attachment, gripper_from_object=attachment.gripper_from_object.copy())
+                if attachment is not None
+                else None
+            ),
+            connection=connection,
+            issued_events=snapshot.issued_events,
+        )
+        self.worker.submit(request)
+        self._next_revision = revision + 1
+        self._pending_revision = revision
+        self._planned_reference = reference
+        self._planned_attachment_time_s = attachment.source_time_s if attachment else None
+        self._planned_interval_index = self.session.progress.interval_index
+        self._connection = connection
+
+    def _reference_changed_too_far(self, prior: PoseEstimate, current: PoseEstimate) -> bool:
+        if prior.reference_version != current.reference_version or current.pose is None:
+            return True
+        shift = np.linalg.norm(prior.pose[:3, 3] - current.pose[:3, 3])
+        turn = np.arccos(np.clip((np.trace(prior.pose[:3, :3].T @ current.pose[:3, :3]) - 1) / 2, -1, 1))
+        return shift > self.config.max_reference_shift_m or turn > self.config.max_reference_turn_rad
+
+    def _fail(self, reason: str) -> None:
+        self.session.actions.cancel_unissued(reason)
+        self.session.progress.interrupt(self.session.motor.clock(), reason)

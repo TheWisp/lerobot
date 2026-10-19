@@ -41,6 +41,10 @@ The executable core already separates:
   the motor owner keeps consuming the already accepted queue; a solve made
   stale by a newer request is discarded before publication. The producer
   can snapshot the committed prefix and seed IK at a future splice tick;
+- a planning coordinator that fills that queue ahead of the motor, retains a
+  generated connection's clock across ordinary refills, retargets from the
+  committed joint prefix when a reference changes, and interrupts if a pose
+  is lost or moves beyond explicit replanning limits;
 - a selected-joint adapter that runs the SO-107's seven-joint FK/IK model
   while the planner controls six arm joints and the gripper separately;
 - a camera-independent motor read/dispatch tick through `Robot`;

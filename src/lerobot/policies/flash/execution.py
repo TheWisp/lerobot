@@ -316,6 +316,7 @@ class MotorLoop:
         self.epoch_s: float | None = None
         self._last_dispatch_s: float | None = None
         self._last_issued: dict[str, float] | None = None
+        self.last_observed: dict | None = None
         self._skipped_since_record = 0
 
     def _record_tick(
@@ -379,6 +380,7 @@ class MotorLoop:
                 self.metrics.late_ticks += 1
         read_start = self.clock()
         observed = self.robot.get_state_observation()
+        self.last_observed = dict(observed)
         read_end = self.clock()
         # A slow state read can cross another deadline after the initial clock
         # alignment. Do not dispatch the now-stale action after that read.

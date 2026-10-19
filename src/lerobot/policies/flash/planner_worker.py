@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
+from enum import Enum
 from queue import Empty, Full, Queue
 from threading import Lock, Thread
 
@@ -57,6 +58,15 @@ class PlanResult:
     revision: int
     issued_actions: int
     error: str | None
+    failure: PlanFailureKind | None = None
+
+
+class PlanFailureKind(str, Enum):
+    SUPERSEDED = "superseded"
+    MISSING_EVIDENCE = "missing_evidence"
+    INFEASIBLE = "infeasible"
+    REJECTED = "rejected"
+    INVALID = "invalid"
 
 
 class PlannerWorker:
@@ -137,12 +147,23 @@ class PlannerWorker:
                 )
                 with self._lock:
                     if request.revision < self._newest_requested:
-                        result = PlanResult(request.revision, 0, "superseded by a newer pose or plan")
+                        result = PlanResult(
+                            request.revision,
+                            0,
+                            "superseded by a newer pose or plan",
+                            PlanFailureKind.SUPERSEDED,
+                        )
                     else:
                         self.publish(request.revision, actions)
                         result = PlanResult(request.revision, len(actions), None)
-            except (MissingEvidenceError, InfeasibleTrajectoryError, PlanRejectedError, ValueError) as exc:
-                result = PlanResult(request.revision, 0, str(exc))
+            except MissingEvidenceError as exc:
+                result = PlanResult(request.revision, 0, str(exc), PlanFailureKind.MISSING_EVIDENCE)
+            except InfeasibleTrajectoryError as exc:
+                result = PlanResult(request.revision, 0, str(exc), PlanFailureKind.INFEASIBLE)
+            except PlanRejectedError as exc:
+                result = PlanResult(request.revision, 0, str(exc), PlanFailureKind.REJECTED)
+            except ValueError as exc:
+                result = PlanResult(request.revision, 0, str(exc), PlanFailureKind.INVALID)
             except Exception as exc:
                 with self._lock:
                     self._fatal = exc
