@@ -327,6 +327,46 @@ def object_geometry(
     return centres, symmetries
 
 
+async def _designate(
+    demo: runtime._Demo,
+    teach: runtime._Teach,
+    test: runtime._Test,
+    session: str,
+    others: list[str],
+    server: str | None,
+    stopped,
+) -> tuple[str, float | None]:
+    """The act's objects designated in the point groups where the act found them, before anything moves: the session
+    object where its find saw it, each other where its locate did. ``("", when)`` with the wall-clock time from which
+    every frame the groups draw has them, or why not."""
+    seen_mask = test.result.get("live_mask")
+    clicks = {
+        session: acquisition._deepest_pixel(
+            seen_mask if seen_mask is not None else teach.keypoints.get("mask"), teach.rgb.shape
+        )
+    }
+    for name in others:
+        mask = (acquisition._located(demo, name) or {}).get("mask")
+        clicks[name] = None if mask is None else acquisition._deepest_pixel(mask, mask.shape)
+    unknown = [n for n, c in clicks.items() if c is None]
+    if unknown:
+        return f"where {' and '.join(unknown)} is, for the point groups: click it in the camera view", None
+    runtime._state.act.step = f"designating {' and '.join(clicks)} in the point groups"
+    why, since = await groups._designate_in_groups(clicks, server or runtime._state.server_url, stopped)
+    return why, (None if why else since)
+
+
+def _groups_stopped(designated_at: float) -> str:
+    """Why the act must stop for the point groups, or "": a view that drew no frame for GROUPS_STALE_S since the
+    objects were designated (``designated_at``, monotonic) holds every object it carries still, whatever happens to
+    it."""
+    with runtime._state.lock:
+        fresh = runtime._state.groups_feed.fresh
+    if time.monotonic() - max(fresh, designated_at) > runtime.GROUPS_STALE_S:
+        return f"the point groups view drew no frame for {runtime.GROUPS_STALE_S:g} s"
+    return ""
+
+
 def arm_refusal() -> str | None:
     """Why the act engine cannot drive the connected arm, or None. It commands joints from the calibrated kinematics
     without watching the fingertip, so it drives only the arm held on its commanded pose against gravity: the
@@ -456,24 +496,7 @@ async def _act_engine_task(
         with runtime._state.lock:
             with_groups = runtime._state.groups_with_acts
         if with_groups:
-            # The point groups carry the objects; designated where the act found them, before anything moves.
-            seen_mask = test.result.get("live_mask")
-            clicks = {
-                session: acquisition._deepest_pixel(
-                    seen_mask if seen_mask is not None else teach.keypoints.get("mask"), teach.rgb.shape
-                )
-            }
-            for name in others:
-                mask = (acquisition._located(demo, name) or {}).get("mask")
-                clicks[name] = None if mask is None else acquisition._deepest_pixel(mask, mask.shape)
-            unknown = [n for n, c in clicks.items() if c is None]
-            if unknown:
-                fail(f"where {' and '.join(unknown)} is, for the point groups: click it in the camera view")
-                return
-            act.step = f"designating {' and '.join(clicks)} in the point groups"
-            why, groups_from = await groups._designate_in_groups(
-                clicks, server or runtime._state.server_url, stopped
-            )
+            why, groups_from = await _designate(demo, teach, test, session, others, server, stopped)
             if why:
                 fail(why)
                 return
@@ -513,8 +536,6 @@ async def _act_engine_task(
         recorded = 0
         while not engine.done:
             st = jog.current_status()
-            with runtime._state.lock:
-                groups_fresh = runtime._state.groups_feed.fresh
             why = (
                 "stopped"
                 if act.stop_requested
@@ -522,10 +543,8 @@ async def _act_engine_task(
                 if not st.get("connected")
                 else f"arm frozen: {st.get('reason')}"
                 if st.get("halted")
-                # Without new frames from the groups their objects would stand still whatever happened to them.
-                else f"the point groups view drew no frame for {runtime.GROUPS_STALE_S:g} s"
+                else _groups_stopped(designated_at)
                 if groups_from is not None
-                and time.monotonic() - max(groups_fresh, designated_at) > runtime.GROUPS_STALE_S
                 else ""
             )
             if why:

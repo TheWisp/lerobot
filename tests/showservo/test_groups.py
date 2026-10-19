@@ -388,6 +388,32 @@ def test_what_a_body_moved_before_it_was_told_apart_moves_the_object_it_holds_to
     assert np.linalg.norm(moved - [0.002 * 34, 0.0, 0.0]) < 0.003, moved
 
 
+def test_an_object_a_moving_gripper_picks_up_moves_from_where_it_lay_when_picked_up():
+    """The gripper's group is born as the gripper comes in (from frame 10, 2 mm a frame along x) and, without a pause
+    that would merge it into the tray's, carries the stick off along y from frame 40. The stick moved with the gripper
+    only from frame 40: its pose is where it lay, moved by what the gripper did since then. Taken from the gripper
+    group's birth instead, it would also make the gripper's 60 mm approach (act 20261018_191804: 15 mm at the lift)."""
+    tray = _cloud(200, (0.0, 0.0, 0.45), (0.5, 0.35, 0.002))
+    gripper = _cloud(60, (0.06, 0.05, 0.40), (0.04, 0.04, 0.04))
+    xs = np.linspace(-0.05, 0.05, 30)
+    centre = np.array([0.10, 0.05, 0.42])
+    stick = centre + np.stack([xs, 0.008 * np.cos(xs * 300), 0.008 * np.sin(xs * 300)], axis=1)
+    t = GroupTracker()
+    t.add_object("stick", np.arange(260, 290), _pose(centre))
+    for k in range(75):
+        come = np.array([0.002 * min(max(k - 10, 0), 30), 0.0, 0.0])  # the approach, frames 10-40
+        lift = np.array([0.0, 0.002 * max(k - 40, 0), 0.0])  # the carry, from frame 40
+        seen = np.ones(290, bool)
+        if k >= 30:
+            seen[260:282] = False  # the fingers over all but the 8 at its end
+        _run(t, [(np.vstack([tray, gripper + come + lift, stick + lift]), seen)])
+    obj = t.objects["stick"]
+    assert obj.group == t.group_of[200], "it moves with the gripper's group"
+    assert t.groups[obj.group].born < 30, "a group older than the pick-up"
+    moved = t.pose("stick")[:3, 3] - centre
+    assert np.linalg.norm(moved - [0.0, 0.002 * 34, 0.0]) < 0.003, moved
+
+
 def test_a_body_displaced_once_does_not_split_off():
     """The cube's points jump 15 mm in one frame and stay there (a tracker glitch, a hand brushing past), well past
     the split's trigger: they hold their new offset rather than keep moving, so no body splits off at once (without

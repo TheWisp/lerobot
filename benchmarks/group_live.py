@@ -60,6 +60,51 @@ RESEED_EVERY = 30  # frames between checks that each object still has borrowed p
 POSES_KEPT = 900  # frames of the objects' poses GET /poses serves: minutes at the view's rate
 
 
+def follow_points(
+    stable_points,
+    gray: np.ndarray,
+    pts: np.ndarray,
+    uv: np.ndarray,
+    seen: np.ndarray,
+    owned: np.ndarray,
+    own,
+    n_ring: int,
+) -> tuple[np.ndarray, int]:
+    """Following an object: around where its own points (``own``) are seen now, as many tracked points as it borrows
+    (``n_ring``, within RING_PX[1] of them), on any surface with depth, still or moving, so whatever moves with it
+    (the fingers holding it) is tracked and can join its group. The borrowed points are seeded on surfaces still for a
+    while, which a lifted object and the fingers holding it are not; at rest they are around it already and nothing
+    is added, so the count bounds it. Borrowed, not its own: a point joins its group only by moving with it.
+    ``(corners as (x, y), how many points stood around it)``; none while none of its points is seen."""
+    own = np.asarray(own, dtype=int)
+    mine = own[own < len(uv)]
+    mine = mine[seen[mine]]
+    if not len(mine):
+        return np.zeros((0, 2), np.float32), 0
+    at = np.median(uv[mine], axis=0)
+    others = np.flatnonzero(seen & ~owned[: len(seen)])
+    near = int((np.hypot(*(uv[others] - at).T) <= RING_PX[1]).sum())
+    if near >= n_ring:
+        return np.zeros((0, 2), np.float32), near
+    field = np.isfinite(pts).all(axis=2)
+    vv, uu = np.mgrid[0 : field.shape[0], 0 : field.shape[1]]
+    field &= np.hypot(uu - at[0], vv - at[1]) <= RING_PX[1]
+    for u, v in uv[seen].astype(int):  # nor where a track already is
+        cv2.circle(field.view(np.uint8), (int(u), int(v)), 6, 0, -1)
+    return stable_points(gray, field, n_ring - near, 48, near=at), near
+
+
+def groups_frame(stamp: float, tracker, matrix) -> tuple:
+    """One frame of the groups as ``tracker`` has them, for --dump: (stamp, each track's group, each group's motion,
+    each object's pose), the motions and poses as 4x4 lists (``matrix`` turns a group's motion into one)."""
+    return (
+        stamp,
+        tracker.group_of.copy(),
+        {gid: matrix(g.motion).tolist() for gid, g in tracker.groups.items()},
+        {o.name: np.asarray(o.pose).tolist() for o in tracker.objects.values()},
+    )
+
+
 def segment_clicks(rgb: np.ndarray, clicks) -> list[np.ndarray]:
     """Each clicked object's mask from SAM 2.1 (Point2Pose's checkpoint), prompted by the click alone: the image
     decides where the object ends, nothing about planes or heights. The model is freed after."""
@@ -720,14 +765,7 @@ def main() -> None:
             tracker.update(xyz, seen)
             t_group = (time.time() - t0) * 1000
             if args.dump:
-                dumped_groups.append(
-                    (
-                        stamp,
-                        tracker.group_of.copy(),
-                        {gid: groups._matrix(g.motion).tolist() for gid, g in tracker.groups.items()},
-                        {o.name: np.asarray(o.pose).tolist() for o in tracker.objects.values()},
-                    )
-                )
+                dumped_groups.append(groups_frame(stamp, tracker, groups._matrix))
             base = world.update(tracker)
             for (
                 gid
@@ -787,31 +825,20 @@ def main() -> None:
                             f"frame {n}: {name} had {standing} borrowed points standing; {len(fresh)} added",
                             flush=True,
                         )
-                # Following: around where each object's own points are seen now, as many points as it borrows
-                # (n_ring, within RING_PX[1] of them), on any surface with depth, still or moving, so whatever moves
-                # with it (the fingers holding it) is tracked and can join its group. The borrowed points above are
-                # seeded on surfaces still for a while, which a lifted object and the fingers holding it are not; at
-                # rest they are around it already and nothing is added. Borrowed, not its own: a point joins its
-                # group only by moving with it.
+                # Following each object, wherever it is (follow_points).
+                if gray is None:
+                    gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
                 for name in names:
-                    obj = tracker.objects[name]
-                    mine = obj.tracks[obj.tracks < len(uv)]
-                    mine = mine[seen[mine]]
-                    if not len(mine):
-                        continue
-                    at = np.median(uv[mine], axis=0)
-                    others = np.flatnonzero(seen & ~tracker.owned[: len(seen)])
-                    near = int((np.hypot(*(uv[others] - at).T) <= RING_PX[1]).sum())
-                    if near >= n_ring:
-                        continue
-                    if gray is None:
-                        gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
-                    field = np.isfinite(pts).all(axis=2)
-                    vv, uu = np.mgrid[0 : field.shape[0], 0 : field.shape[1]]
-                    field &= np.hypot(uu - at[0], vv - at[1]) <= RING_PX[1]
-                    for u, v in uv[seen].astype(int):  # nor where a track already is
-                        cv2.circle(field.view(np.uint8), (int(u), int(v)), 6, 0, -1)
-                    fresh = scene.stable_points(gray, field, n_ring - near, 48, near=at)
+                    fresh, near = follow_points(
+                        scene.stable_points,
+                        gray,
+                        pts,
+                        uv,
+                        seen,
+                        tracker.owned,
+                        tracker.objects[name].tracks,
+                        n_ring,
+                    )
                     if len(fresh):
                         rings[name] = np.concatenate(
                             [rings[name], np.asarray(tapir.add(rgb, fresh), dtype=int)]

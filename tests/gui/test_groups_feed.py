@@ -354,3 +354,73 @@ def test_only_the_demos_objects_found_are_designated_not_a_teach_by_name(tmp_pat
         loop.close()
         with manipulation.runtime._state.lock:
             manipulation.runtime._state.teach = manipulation.runtime._state.test = None
+
+
+def test_a_frame_in_which_the_view_says_an_object_is_moving_to_another_group_is_not_taken(
+    tmp_path,
+    monkeypatch,
+    group_live,  # noqa: F811
+):
+    """The view says, per frame, which objects have most of their seen points in a group they have not moved to yet
+    (their pose is still the old group's); the GUI's feed keeps it beside the pose, and an engine act does not take
+    the groups' pose of that object in that frame, but does in the next."""
+    import types
+
+    from lerobot.gui.api.manipulation import engine_act
+    from lerobot.showservo.engine.scene import SceneLog
+    from lerobot.showservo.estimation import GROUPS, SourceVerdict
+
+    port = _free_port()
+    monkeypatch.setattr(manipulation.runtime, "GROUPS_VIEW", ("127.0.0.1", port))
+    monkeypatch.setattr(manipulation.runtime._state, "groups", manipulation.runtime._GroupsView())
+    monkeypatch.setattr(manipulation.runtime._state, "groups_feed", manipulation.runtime._GroupsFeed())
+    monkeypatch.setattr(manipulation.runtime._state, "groups_with_acts", True)
+    monkeypatch.setattr(manipulation.runtime._state, "targets", {})
+    monkeypatch.setattr(engine_act.planning, "_delta_base", lambda d, delta, t_bc: np.asarray(delta))
+    view = group_live.MjpegView(port, tmp_path / "recordings")
+    picture = {
+        "points": [],
+        "surfaces": None,
+        "scale": 4,
+        "base": 0,
+        "quiet": [],
+        "objects": {"cube": {"own": False}},
+    }
+    loop = _ViewLoop(view, lambda: _pose(0.1, 0.0, 0.43))
+
+    async def run():
+        why, since = await manipulation.groups._designate_in_groups({"cube": [425, 250]}, None, lambda: False)
+        assert why == "", why
+        loop.drawing = False
+        t1 = time.time() + 0.1
+        view.add_poses(t1, {"cube": _pose(0.1, 0.0, 0.43).ravel().tolist()}, picture, {"cube"})
+        view.add_poses(t1 + 0.1, {"cube": _pose(0.1, 0.0, 0.43).ravel().tolist()}, picture)
+        for _ in range(200):
+            await asyncio.sleep(0.02)
+            ev = manipulation.runtime._state.groups_feed.evidence.get("cube") or []
+            if ev and ev[-1][0] == t1 + 0.1:
+                break
+        return since, t1
+
+    try:
+        since, t1 = asyncio.run(run())
+    finally:
+        loop.close()
+    evidence = dict(manipulation.runtime._state.groups_feed.evidence["cube"])
+    assert evidence[t1]["moving"] is True and evidence[t1 + 0.1]["moving"] is False
+    scene = SceneLog()
+    feed = engine_act._Feed(
+        scene,
+        types.SimpleNamespace(),
+        np.eye(4),
+        "cube",
+        [],
+        SourceVerdict(GROUPS),
+        groups_from=since,
+        starts={"cube": np.eye(4)},
+    )
+    feed.wall_offset = lambda: 0.0  # the camera's stamps here are the wall clock's
+    for t in (t1, t1 + 0.1):
+        feed(types.SimpleNamespace(camera_stamp_mono=t, created=t), {"ok": True, "delta": np.eye(4)}, None)
+    assert [m.t for m in scene.measurements("cube")] == [t1 + 0.1]
+    assert feed.refused == {"cube: point groups: moving to another group": 1}

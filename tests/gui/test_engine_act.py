@@ -10,6 +10,7 @@ engine's scene log, and how an act asks for the engine and its injected faults."
 
 from __future__ import annotations
 
+import time
 import types
 
 import numpy as np
@@ -18,6 +19,7 @@ import pytest
 from lerobot.gui.api.manipulation import engine_act, execution, runtime
 from lerobot.showservo.engine.perturb import OpenGripper, Perturbations
 from lerobot.showservo.engine.scene import SceneLog
+from tests.gui.test_act_with_groups import group_live  # noqa: F401  (a fixture)
 
 
 def _job(stamp):
@@ -322,3 +324,71 @@ def test_an_object_moving_to_another_group_has_no_confident_groups_pose(monkeypa
     feed(_job(0.2), r, None)  # the frame after
     assert [m.t for m in scene.measurements("dowel")] == [0.2]
     assert feed.refused == {"dowel: point groups: moving to another group": 1}
+
+
+def _engine_view(tmp_path, monkeypatch, group_live):  # noqa: F811
+    """The real point groups view's server on a free port, its live loop played (tests/gui/test_act_with_groups.py)."""
+    from tests.gui.test_act_with_groups import _free_port, _ViewLoop
+
+    port = _free_port()
+    monkeypatch.setattr(runtime, "GROUPS_VIEW", ("127.0.0.1", port))
+    monkeypatch.setattr(runtime._state, "groups", runtime._GroupsView())  # a view started elsewhere
+    monkeypatch.setattr(runtime._state, "groups_feed", runtime._GroupsFeed())
+    monkeypatch.setattr(runtime._state, "groups_with_acts", True)
+    view = group_live.MjpegView(port, tmp_path / "recordings")
+    return view, _ViewLoop(view, lambda: np.eye(4))
+
+
+def _masked(x0, y0):
+    mask = np.zeros((480, 848), bool)
+    mask[y0 : y0 + 40, x0 : x0 + 60] = True
+    return mask
+
+
+@pytest.mark.parametrize("ring_found", [True, False])
+def test_an_engine_act_designates_its_objects_in_the_point_groups_where_it_found_them(
+    tmp_path,
+    monkeypatch,
+    group_live,  # noqa: F811
+    ring_found,
+):
+    """Before the arm moves, the session object is designated where its find saw it and each other object where its
+    locate did; the act gets the time from which the groups' frames have them. An object with no place to click is
+    not guessed: the act is told to click it."""
+    import asyncio
+
+    view, loop = _engine_view(tmp_path, monkeypatch, group_live)
+    located = {"ring": {"mask": _masked(300, 280)}} if ring_found else {}
+    monkeypatch.setattr(engine_act.acquisition, "_located", lambda demo, name: located.get(name))
+    teach = types.SimpleNamespace(
+        keypoints={"mask": _masked(100, 260)}, rgb=np.zeros((480, 848, 3), np.uint8)
+    )
+    test = types.SimpleNamespace(result={"live_mask": _masked(120, 270)})
+    try:
+        before = time.time()
+        why, since = asyncio.run(
+            engine_act._designate(
+                types.SimpleNamespace(), teach, test, "dowel", ["ring"], None, lambda: False
+            )
+        )
+    finally:
+        loop.close()
+    if ring_found:
+        assert why == "" and since is not None and since >= before, why
+        assert set(view.designated) == {"dowel", "ring"}
+    else:
+        assert why == "where ring is, for the point groups: click it in the camera view" and since is None
+        assert view.designated == {}
+
+
+def test_an_engine_act_stops_when_the_point_groups_view_draws_nothing(monkeypatch):
+    """A view that draws no frame for GROUPS_STALE_S holds every object it carries still, whatever happens to it."""
+    monkeypatch.setattr(runtime, "GROUPS_STALE_S", 0.3)
+    monkeypatch.setattr(runtime._state, "groups_feed", runtime._GroupsFeed())
+    now = time.monotonic()
+    runtime._state.groups_feed.fresh = now
+    assert engine_act._groups_stopped(now - 5.0) == "", "a fresh frame"
+    runtime._state.groups_feed.fresh = 0.0
+    assert engine_act._groups_stopped(now) == "", "designated just now: its first frame may still come"
+    runtime._state.groups_feed.fresh = now - 1.0
+    assert engine_act._groups_stopped(now - 1.0) == "the point groups view drew no frame for 0.3 s"
