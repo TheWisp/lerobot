@@ -55,8 +55,9 @@ def test_planner_worker_supersedes_pending_request_without_blocking_motor_owner(
         while worker.last_result is None or worker.last_result.revision != 3:
             assert time.monotonic() < deadline
             time.sleep(0.01)
-        assert published == [1, 3]
+        assert published == [3]
         assert solved == [1, 3]
+        assert worker.last_result.error is None
     finally:
         release.set()
         worker.close()

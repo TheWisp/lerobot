@@ -62,10 +62,11 @@ class PlanResult:
 class PlannerWorker:
     """Replan off the motor owner and atomically replace only unissued ticks.
 
-    A newer pending request supersedes an older one; a request already being
-    solved may finish, but the queue's tick and revision checks reject an
-    obsolete result. Infeasible geometry, missing evidence and a stale splice
-    are reported to the host, not turned into a successful action.
+    A newer pending request supersedes an older one. If a request already
+    being solved becomes stale, its result is discarded before publication;
+    the motor keeps the last accepted queue while the newer solve runs.
+    Infeasible geometry, missing evidence and a stale splice are reported
+    to the host, not turned into a successful action.
     """
 
     def __init__(
@@ -80,6 +81,7 @@ class PlannerWorker:
         self._lock = Lock()
         self._last_result: PlanResult | None = None
         self._fatal: Exception | None = None
+        self._newest_requested = -1
         self.superseded = 0
         self._started = False
 
@@ -102,16 +104,20 @@ class PlannerWorker:
     def submit(self, request: PlanRequest) -> None:
         if not self._started or self.fatal_error is not None:
             raise RuntimeError("planner worker is not running")
-        try:
-            self._requests.put_nowait(request)
-        except Full:
-            with suppress(Empty):
-                self._requests.get_nowait()
-                self.superseded += 1
+        with self._lock:
+            if request.revision <= self._newest_requested:
+                raise ValueError("planner requests must have increasing revisions")
             try:
                 self._requests.put_nowait(request)
-            except Full as exc:
-                raise RuntimeError("planner request handoff is busy") from exc
+            except Full:
+                with suppress(Empty):
+                    self._requests.get_nowait()
+                    self.superseded += 1
+                try:
+                    self._requests.put_nowait(request)
+                except Full as exc:
+                    raise RuntimeError("planner request handoff is busy") from exc
+            self._newest_requested = request.revision
 
     def _run(self) -> None:
         while (request := self._requests.get()) is not None:
@@ -129,15 +135,18 @@ class PlannerWorker:
                     connection=request.connection,
                     issued_events=request.issued_events,
                 )
-                self.publish(request.revision, actions)
+                with self._lock:
+                    if request.revision < self._newest_requested:
+                        result = PlanResult(request.revision, 0, "superseded by a newer pose or plan")
+                    else:
+                        self.publish(request.revision, actions)
+                        result = PlanResult(request.revision, len(actions), None)
             except (MissingEvidenceError, InfeasibleTrajectoryError, PlanRejectedError, ValueError) as exc:
                 result = PlanResult(request.revision, 0, str(exc))
             except Exception as exc:
                 with self._lock:
                     self._fatal = exc
                 return
-            else:
-                result = PlanResult(request.revision, len(actions), None)
             with self._lock:
                 self._last_result = result
 
