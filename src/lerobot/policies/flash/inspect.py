@@ -24,7 +24,23 @@ def inspect_skill(path: str) -> dict:
         "schema_version": skill.schema_version,
         "source_repo_id": skill.source_repo_id,
         "source_episode": skill.source_episode,
-        "milestones": [{"name": m.name, "depends_on_roles": m.depends_on_roles} for m in skill.milestones],
+        "milestones": [
+            {
+                "name": m.name,
+                "depends_on_roles": m.depends_on_roles,
+                "pose_relation": (
+                    {
+                        "moving_role": m.pose_relation.moving_role,
+                        "reference_role": m.pose_relation.reference_role,
+                        "translation_tolerance_m": m.pose_relation.translation_tolerance_m,
+                        "rotation_tolerance_rad": m.pose_relation.rotation_tolerance_rad,
+                    }
+                    if m.pose_relation is not None
+                    else None
+                ),
+            }
+            for m in skill.milestones
+        ],
         "reference_frames_declared": not missing,
         "missing": missing,
         "intervals": [

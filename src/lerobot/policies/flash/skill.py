@@ -72,13 +72,45 @@ class Interval:
 
 
 @dataclass(frozen=True)
+class PoseRelationCriterion:
+    """Observed moving-object pose required relative to a reference object."""
+
+    moving_role: str
+    reference_role: str
+    reference_from_moving: np.ndarray
+    moving_version: str
+    reference_version: str
+    translation_tolerance_m: float
+    rotation_tolerance_rad: float | None
+    max_pose_age_s: float
+
+    def __post_init__(self) -> None:
+        if not all((self.moving_role, self.reference_role, self.moving_version, self.reference_version)):
+            raise ValueError("pose relation needs two named roles and object-frame versions")
+        if self.moving_role == self.reference_role:
+            raise ValueError("pose relation needs distinct object roles")
+        object.__setattr__(self, "reference_from_moving", transform(self.reference_from_moving))
+        limits = (self.translation_tolerance_m, self.max_pose_age_s)
+        if self.rotation_tolerance_rad is not None:
+            limits += (self.rotation_tolerance_rad,)
+        if any(not np.isfinite(value) or value <= 0 for value in limits):
+            raise ValueError("pose relation tolerances and maximum age must be finite and positive")
+
+
+@dataclass(frozen=True)
 class MilestoneSpec:
     name: str
     depends_on_roles: tuple[str, ...]
+    pose_relation: PoseRelationCriterion | None = None
 
     def __post_init__(self) -> None:
         if not self.name or not self.depends_on_roles or any(not role for role in self.depends_on_roles):
             raise ValueError("milestone needs a name and dependent object roles")
+        if self.pose_relation is not None and not {
+            self.pose_relation.moving_role,
+            self.pose_relation.reference_role,
+        } <= set(self.depends_on_roles):
+            raise ValueError("pose relation roles must be milestone dependencies")
 
 
 @dataclass(frozen=True)
@@ -145,7 +177,11 @@ class FlashSkill:
                 )
             )
         milestones = tuple(
-            MilestoneSpec(item["name"], tuple(item["depends_on_roles"]))
+            MilestoneSpec(
+                item["name"],
+                tuple(item["depends_on_roles"]),
+                PoseRelationCriterion(**item["pose_relation"]) if item.get("pose_relation") else None,
+            )
             for item in data.get("milestones", [])
         )
         return cls(
@@ -162,7 +198,24 @@ class FlashSkill:
             "source_repo_id": self.source_repo_id,
             "source_episode": self.source_episode,
             "milestones": [
-                {"name": milestone.name, "depends_on_roles": list(milestone.depends_on_roles)}
+                {
+                    "name": milestone.name,
+                    "depends_on_roles": list(milestone.depends_on_roles),
+                    "pose_relation": (
+                        {
+                            "moving_role": milestone.pose_relation.moving_role,
+                            "reference_role": milestone.pose_relation.reference_role,
+                            "reference_from_moving": milestone.pose_relation.reference_from_moving.tolist(),
+                            "moving_version": milestone.pose_relation.moving_version,
+                            "reference_version": milestone.pose_relation.reference_version,
+                            "translation_tolerance_m": milestone.pose_relation.translation_tolerance_m,
+                            "rotation_tolerance_rad": milestone.pose_relation.rotation_tolerance_rad,
+                            "max_pose_age_s": milestone.pose_relation.max_pose_age_s,
+                        }
+                        if milestone.pose_relation is not None
+                        else None
+                    ),
+                }
                 for milestone in self.milestones
             ],
             "intervals": [

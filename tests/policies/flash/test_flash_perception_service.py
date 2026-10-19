@@ -1,6 +1,7 @@
 """A live perception host must wait for seeded evidence before motion."""
 
 import time
+from threading import Event
 
 import numpy as np
 import pytest
@@ -60,12 +61,25 @@ def test_perception_service_waits_for_real_pose_from_spawned_worker():
     snippet = ReferenceSnippet("recorded", 0, 0, "item", np.eye(4), "mask", "camera-v1")
     reference = ObjectReference("item", "item-v1", (snippet,))
     store = LatestPoseStore()
-    service = PerceptionService(FakeCameraSource(), PoseProcess(echo_factory, (reference,), store), store)
+    published = Event()
+
+    def on_pose_update(version, poses):
+        if version > 0:
+            assert poses["item"].evidence == Evidence.OBSERVED
+            published.set()
+
+    service = PerceptionService(
+        FakeCameraSource(),
+        PoseProcess(echo_factory, (reference,), store),
+        store,
+        on_pose_update=on_pose_update,
+    )
     try:
         service.start(timeout_s=10)
         service.wait_ready(("item",), max_pose_age_s=1, timeout_s=10)
         assert service.captured > 0
         assert store.snapshot()[1]["item"].evidence == Evidence.OBSERVED
+        assert published.wait(5)
         assert service.error is None
     finally:
         service.close()

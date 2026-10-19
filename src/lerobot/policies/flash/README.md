@@ -9,7 +9,9 @@ The executable core already separates:
 
 - demonstrated contact intervals, sampled on their own 1× local clock;
 - generated connections, timed from live path length and configured speed;
-- milestone verdicts and explicit, bounded recovery transitions;
+- explicit pose-relation milestone tolerances, observed true/false/unknown
+  verdicts from the perception collector (including expiry when frames stop),
+  and bounded recovery transitions;
 - metric RGB-D and pose evidence with source and availability times;
 - one aligned RGB-D frameset from LeRobot's RealSense camera with an atomic
   host capture-time estimate and capture-time camera calibration;
@@ -44,7 +46,7 @@ The executable core already separates:
 - a session state machine that consumes asynchronous evidence before each tick
   and gates semantic actions on current milestone verdicts;
 - standard LeRobot episode frames, with a `flash/v1` trace joined by episode
-  and frame index. Every motor tick is retained, including waits; the trace
+  and frame index. Every executed motor tick is retained, including waits; the trace
   distinguishes a new command, the servo's held goal and an observed hold.
   The regular dataset stores replayable robot-API actions; the trace also
   records the accepted actuator target, which may include gravity compensation
@@ -67,8 +69,9 @@ but the single tray view loses the dowel after lift and turn. Neither this
 measurement nor a fit to matched points establishes independent pose accuracy
 under occlusion. Multi-view reference preparation, evidence/observability
 gates and asynchronous publication to the controller remain necessary.
-The planner worker, milestone verifiers and recorder also need wiring into
-a hardware launch path.
+Other milestone types, such as grasp verification, still need independent
+evidence. The planner worker, milestone publisher and recorder also need
+wiring into a hardware launch path.
 A real process smoke test loaded the cached models and published the ring pose.
 The first SAM3 seed still cost about 1.5 seconds after worker readiness, so
 hardware launch must wait for a valid first observation rather than treating

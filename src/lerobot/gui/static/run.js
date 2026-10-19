@@ -1393,7 +1393,10 @@ async function launchRun() {
                 appendTerminalLine(`${interval.name}: ${interval.mode}, ${interval.relation} to ${interval.reference_role}, ${interval.samples} samples, demo ${interval.demo_duration_s.toFixed(2)}s`);
             }
             for (const milestone of data.milestones) {
-                appendTerminalLine(`Milestone ${milestone.name}: depends on ${milestone.depends_on_roles.join(', ')}`);
+                const rule = milestone.pose_relation;
+                appendTerminalLine(rule
+                    ? `Milestone ${milestone.name}: verify ${rule.moving_role} relative to ${rule.reference_role} within ${rule.translation_tolerance_m} m${rule.rotation_tolerance_rad == null ? '' : ` and ${rule.rotation_tolerance_rad} rad`}`
+                    : `Milestone ${milestone.name}: external verifier needed (${milestone.depends_on_roles.join(', ')})`);
             }
             for (const missing of data.missing) appendTerminalLine(`Needs ${missing}`);
             showToast('FLASH skill', 'Spatial annotation validated', 'success');

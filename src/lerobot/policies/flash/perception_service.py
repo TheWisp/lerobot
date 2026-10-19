@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from threading import Event, Lock, Thread
 from typing import Protocol
 
 from .perception import LatestPoseStore, RGBDFrame
 from .perception_worker import PoseProcess
-from .trajectory import Evidence
+from .trajectory import Evidence, PoseEstimate
 
 
 class RGBDSource(Protocol):
@@ -36,6 +37,7 @@ class PerceptionService:
         *,
         clock=time.perf_counter,
         collector_period_s: float = 0.01,
+        on_pose_update: Callable[[int, dict[str, PoseEstimate]], None] | None = None,
     ) -> None:
         if collector_period_s <= 0:
             raise ValueError("collector period must be positive")
@@ -46,6 +48,7 @@ class PerceptionService:
         self.store = store
         self.clock = clock
         self.collector_period_s = collector_period_s
+        self.on_pose_update = on_pose_update
         self.captured = 0
         self._stop = Event()
         self._lock = Lock()
@@ -87,6 +90,8 @@ class PerceptionService:
         try:
             while not self._stop.is_set():
                 self.worker.poll()
+                if self.on_pose_update is not None:
+                    self.on_pose_update(*self.store.snapshot())
                 self._stop.wait(self.collector_period_s)
         except Exception as exc:
             self._fail(exc)
