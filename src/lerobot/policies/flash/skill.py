@@ -133,6 +133,8 @@ class FlashSkill:
         if len(names) != len(set(names)):
             raise ValueError("interval names must be unique")
         milestone_names = {milestone.name for milestone in self.milestones}
+        if len(milestone_names) != len(self.milestones):
+            raise ValueError("milestone names must be unique")
         referenced = {
             name
             for interval in self.intervals

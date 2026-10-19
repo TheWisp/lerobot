@@ -61,7 +61,9 @@ samples are derived geometry; the original RGB-D, robot observations and
 actions remain in the regular episode. Each interval identifies its object
 role and reference-frame version. A held-to-target interval also declares the
 held object's reference-frame version. Missing versions are shown in skill
-inspection and rejected by the joint planner.
+inspection and rejected by the joint planner. A pose-relation milestone can
+select an observed demo frame to define its target object relationship, while
+the task tolerances and maximum evidence age are supplied explicitly.
 
 The first matcher is measured on a recorded insertion scene in
 [the RGB-D replay note](docs/rgbd_replay.md). It follows a static target well,

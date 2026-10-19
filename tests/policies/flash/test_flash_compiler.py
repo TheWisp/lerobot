@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from lerobot.policies.flash.compiler import IntervalAnnotation, compile_skill
+from lerobot.policies.flash.compiler import IntervalAnnotation, PoseRelationAnnotation, compile_skill
 from lerobot.policies.flash.skill import FlashSkill, MotionMode, Relation
 from lerobot.policies.flash.trajectory import Evidence, PoseEstimate
 
@@ -148,3 +148,57 @@ def test_predicted_demo_pose_requires_explicit_annotation():
     )
     skill = compile_skill(**args, annotations=(approved,))
     assert skill.intervals[0].samples[1].reference_evidence == "predicted"
+
+
+def test_compiles_a_pose_milestone_from_an_observed_demo_frame():
+    poses = tracks()
+    poses[2]["target"] = PoseEstimate(
+        "target", pose(0.4), 1.0, 1.0, Evidence.OBSERVED, "target-v1", (True,) * 3, (True,) * 3
+    )
+    poses[2]["held"] = PoseEstimate(
+        "held", pose(0.5), 1.0, 1.0, Evidence.OBSERVED, "held-v1", (True,) * 3, (False,) * 3
+    )
+    annotation = PoseRelationAnnotation("placed", 2, "held", "target", 0.005, None, 0.2)
+    skill = compile_skill(
+        dataset=FakeDataset(),
+        source_repo_id="demo/data",
+        source_episode=1,
+        kinematics=FakeKinematics(),
+        arm_joint_names=("arm",),
+        gripper_joint_name="gripper",
+        poses_by_frame=poses,
+        annotations=(
+            IntervalAnnotation(
+                "place",
+                0,
+                2,
+                MotionMode.DEMONSTRATED,
+                Relation.EE_TO_OBJECT,
+                "object",
+                completion_milestone="placed",
+            ),
+        ),
+        pose_relation_annotations=(annotation,),
+    )
+    criterion = skill.milestones[0].pose_relation
+    assert criterion.reference_from_moving[0, 3] == pytest.approx(0.1)
+    assert criterion.moving_version == "held-v1"
+    assert criterion.rotation_tolerance_rad is None
+
+    poses[2]["held"] = PoseEstimate(
+        "held", pose(0.5), 1.0, 1.0, Evidence.PREDICTED, "held-v1", (True,) * 3, (False,) * 3
+    )
+    with pytest.raises(ValueError, match="not observed"):
+        compile_skill(
+            dataset=FakeDataset(),
+            source_repo_id="demo/data",
+            source_episode=1,
+            kinematics=FakeKinematics(),
+            arm_joint_names=("arm",),
+            gripper_joint_name="gripper",
+            poses_by_frame=poses,
+            annotations=(
+                IntervalAnnotation("place", 0, 2, MotionMode.DEMONSTRATED, Relation.EE_TO_OBJECT, "object"),
+            ),
+            pose_relation_annotations=(annotation,),
+        )

@@ -7,8 +7,16 @@ from typing import Any, Protocol
 
 import numpy as np
 
-from .geometry import transform
-from .skill import FlashSkill, Interval, MilestoneSpec, MotionMode, Relation, SpatialSample
+from .geometry import inverse, transform
+from .skill import (
+    FlashSkill,
+    Interval,
+    MilestoneSpec,
+    MotionMode,
+    PoseRelationCriterion,
+    Relation,
+    SpatialSample,
+)
 from .trajectory import Evidence, PoseEstimate
 
 
@@ -46,12 +54,35 @@ class IntervalAnnotation:
             raise ValueError("held-to-target interval needs a held object role")
 
 
+@dataclass(frozen=True)
+class PoseRelationAnnotation:
+    """Human-selected demo frame and explicit task tolerance for one milestone."""
+
+    name: str
+    frame_index: int
+    moving_role: str
+    reference_role: str
+    translation_tolerance_m: float
+    rotation_tolerance_rad: float | None
+    max_pose_age_s: float
+    allow_predicted_demo_pose: bool = False
+
+    def __post_init__(self) -> None:
+        if not self.name or self.frame_index < 0 or not self.moving_role or not self.reference_role:
+            raise ValueError("pose milestone annotation needs a name, frame and two roles")
+
+
 def _measured_pose(
-    estimates: dict[str, PoseEstimate], role: str, frame_index: int, allow_prediction: bool
+    estimates: dict[str, PoseEstimate],
+    role: str,
+    frame_index: int,
+    allow_prediction: bool,
+    *,
+    require_rotation: bool = True,
 ) -> PoseEstimate:
     estimate = estimates.get(role)
-    if estimate is None or estimate.pose is None or not estimate.supports():
-        raise ValueError(f"frame {frame_index}: {role} has no full metric pose")
+    if estimate is None or estimate.pose is None or not estimate.supports(rotation=(require_rotation,) * 3):
+        raise ValueError(f"frame {frame_index}: {role} has no required metric pose axes")
     if estimate.evidence == Evidence.LOST or (
         estimate.evidence == Evidence.PREDICTED and not allow_prediction
     ):
@@ -79,6 +110,7 @@ def compile_skill(
     poses_by_frame: dict[int, dict[str, PoseEstimate]],
     annotations: tuple[IntervalAnnotation, ...],
     milestones: tuple[MilestoneSpec, ...] = (),
+    pose_relation_annotations: tuple[PoseRelationAnnotation, ...] = (),
     joint_units: str = "degrees",
 ) -> FlashSkill:
     """Use measured robot state, accepted gripper action and pose sidecars.
@@ -159,4 +191,38 @@ def compile_skill(
                 held_reference_version=versions.get(annotation.held_role) if annotation.held_role else None,
             )
         )
-    return FlashSkill(source_repo_id, source_episode, tuple(intervals), milestones=milestones)
+    compiled_milestones = list(milestones)
+    for annotation in pose_relation_annotations:
+        if annotation.frame_index >= episode_length:
+            raise ValueError(f"{annotation.name}: milestone frame exceeds episode {source_episode}")
+        frame_poses = poses_by_frame.get(annotation.frame_index, {})
+        reference = _measured_pose(
+            frame_poses,
+            annotation.reference_role,
+            annotation.frame_index,
+            annotation.allow_predicted_demo_pose,
+        )
+        moving = _measured_pose(
+            frame_poses,
+            annotation.moving_role,
+            annotation.frame_index,
+            annotation.allow_predicted_demo_pose,
+            require_rotation=annotation.rotation_tolerance_rad is not None,
+        )
+        compiled_milestones.append(
+            MilestoneSpec(
+                annotation.name,
+                (annotation.moving_role, annotation.reference_role),
+                PoseRelationCriterion(
+                    annotation.moving_role,
+                    annotation.reference_role,
+                    inverse(reference.pose) @ moving.pose,
+                    moving.reference_version,
+                    reference.reference_version,
+                    annotation.translation_tolerance_m,
+                    annotation.rotation_tolerance_rad,
+                    annotation.max_pose_age_s,
+                ),
+            )
+        )
+    return FlashSkill(source_repo_id, source_episode, tuple(intervals), milestones=tuple(compiled_milestones))
