@@ -141,6 +141,11 @@ def main() -> None:
             if estimate.evidence == Evidence.OBSERVED
             else [float("nan")] * 3
         )
+        rotation_deg = (
+            float(np.degrees(np.arccos(np.clip((np.trace(estimate.pose[:3, :3]) - 1) / 2, -1, 1))))
+            if estimate.evidence == Evidence.OBSERVED
+            else float("nan")
+        )
         rows.append(
             {
                 "frame": index,
@@ -151,6 +156,7 @@ def main() -> None:
                 "center_x_m": center[0],
                 "center_y_m": center[1],
                 "center_z_m": center[2],
+                "rotation_from_reference_deg": rotation_deg,
                 "duration_ms": round(duration_ms, 2),
                 "failure": backend.last_failure.get(args.role, ""),
             }

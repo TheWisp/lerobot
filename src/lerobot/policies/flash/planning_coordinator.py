@@ -14,7 +14,7 @@ from .planner_worker import PlanFailureKind, PlannerWorker, PlanRequest
 from .progress import Phase
 from .session import FlashSession
 from .skill import MotionMode, Relation
-from .trajectory import AttachmentState, ConnectionTrajectory, PoseEstimate
+from .trajectory import AttachmentState, ConnectionTrajectory, Evidence, PoseEstimate, spatial_goal
 
 
 @dataclass(frozen=True)
@@ -72,6 +72,8 @@ class PlanningCoordinator:
         self._planned_attachment_time_s: float | None = None
         self._planned_interval_index: int | None = None
         self._connection: ConnectionTrajectory | None = None
+        self._start_anchor_interval_index: int | None = None
+        self._start_anchor_pose: np.ndarray | None = None
 
     def step(self):
         """Check live evidence, execute one motor tick, then refill the future queue."""
@@ -107,12 +109,37 @@ class PlanningCoordinator:
                 self._planned_reference = None
         interval = self.session.progress.interval
         _, live_poses = self.poses.snapshot()
-        reference = live_poses.get(interval.reference_role)
         now_s = self.session.motor.clock()
+        if interval.relation == Relation.EE_TO_START:
+            interval_index = self.session.progress.interval_index
+            if self._start_anchor_interval_index != interval_index:
+                observed = self.session.motor.last_observed
+                if observed is None or any(f"{name}.pos" not in observed for name in self.arm_joint_names):
+                    return
+                joints = np.array([float(observed[f"{name}.pos"]) for name in self.arm_joint_names])
+                self._start_anchor_pose = self.kinematics.forward_kinematics(joints)
+                self._start_anchor_interval_index = interval_index
+            reference = PoseEstimate(
+                interval.reference_role,
+                self._start_anchor_pose,
+                now_s,
+                now_s,
+                Evidence.OBSERVED,
+                interval.reference_version,
+                (True, True, True),
+                (True, True, True),
+            )
+        else:
+            reference = live_poses.get(interval.reference_role)
         limits = self.worker.planner.limits
         if reference is None or not reference.usable(
             now_s, limits.max_pose_age_s, limits.allow_predicted_reference
         ):
+            # A queued first command must not start after the evidence that
+            # produced it has disappeared while the interval waits to enter.
+            if phase == Phase.WAITING and self.session.actions.snapshot().pending:
+                self.session.actions.cancel_unissued("reference lost before interval entry")
+                self._planned_reference = None
             if phase == Phase.MOVING:
                 self._fail(f"{interval.reference_role} lost its usable pose during motion")
             return
@@ -131,18 +158,12 @@ class PlanningCoordinator:
         new_image = (
             changed_interval
             or self._planned_reference is None
-            or self._planned_reference.source_time_s != reference.source_time_s
+            or (
+                interval.relation != Relation.EE_TO_START
+                and self._planned_reference.source_time_s != reference.source_time_s
+            )
             or self._planned_attachment_time_s != (attachment.source_time_s if attachment else None)
         )
-        if (
-            phase == Phase.MOVING
-            and new_image
-            and not changed_interval
-            and self._planned_reference is not None
-            and self._reference_changed_too_far(self._planned_reference, reference)
-        ):
-            self._fail(f"{interval.reference_role} moved beyond the configured replanning envelope")
-            return
         snapshot = self.session.actions.snapshot()
         next_tick = self.session.motor.metrics.ticks
         pending = [
@@ -150,16 +171,39 @@ class PlanningCoordinator:
             for action in snapshot.pending
             if action.tick >= next_tick and action.interval == interval.name
         ]
-        if phase == Phase.WAITING and pending and not new_image:
-            return
+        if phase == Phase.WAITING and pending:
+            if (
+                not changed_interval
+                and self._planned_reference is not None
+                and self._reference_changed_too_far(self._planned_reference, reference, interval, attachment)
+            ):
+                self.session.actions.cancel_unissued("reference changed before interval entry")
+                pending = []
+            else:
+                # Preserve a complete first chunk until its scheduled tick.
+                # Replanning on every camera timestamp can otherwise cancel
+                # it indefinitely when lead time exceeds perception period.
+                return
         if phase == Phase.MOVING and len(pending) > self.config.refill_at_ticks and not new_image:
             return
-        if self._pending_revision is not None and not new_image:
+        if (
+            phase == Phase.MOVING
+            and new_image
+            and not changed_interval
+            and self._planned_reference is not None
+            and self._reference_changed_too_far(self._planned_reference, reference, interval, attachment)
+        ):
+            self._fail(
+                f"{interval.reference_role} changed the demonstrated goal beyond the replanning envelope"
+            )
             return
-        if phase == Phase.WAITING and pending and new_image:
-            self.session.actions.cancel_unissued("reference changed before interval entry")
-            snapshot = self.session.actions.snapshot()
-            pending = []
+        # A fresh camera frame must not repeatedly supersede an IK solve
+        # before it can publish its first usable chunk. The current request
+        # retains a bounded pose snapshot; a large change was rejected above.
+        # Once that solve completes, the next step can replan from the newer
+        # observation without ever emptying the motor queue.
+        if self._pending_revision is not None:
+            return
         if phase == Phase.WAITING:
             start_tick = next_tick + self.config.lead_ticks
             boundary = None
@@ -168,6 +212,11 @@ class PlanningCoordinator:
             start_tick = next_tick + self.config.lead_ticks
             if pending and pending[-1].tick < start_tick - 1:
                 start_tick = pending[-1].tick + 1
+            if any(action.event_id and action.tick < start_tick for action in pending):
+                # The old chunk already carries an imminent grasp/release.
+                # Solving a suffix beyond it before the event is dispatched
+                # would falsely classify that still-queued event as missed.
+                return
             boundary = snapshot.boundary_before(start_tick)
             interval_start_s = self.session.progress.interval_start_s
             if boundary is None or interval_start_s is None:
@@ -230,12 +279,20 @@ class PlanningCoordinator:
         self._planned_interval_index = self.session.progress.interval_index
         self._connection = connection
 
-    def _reference_changed_too_far(self, prior: PoseEstimate, current: PoseEstimate) -> bool:
+    def _reference_changed_too_far(
+        self, prior: PoseEstimate, current: PoseEstimate, interval, attachment: AttachmentState | None
+    ) -> bool:
         if prior.reference_version != current.reference_version or current.pose is None:
             return True
-        shift = np.linalg.norm(prior.pose[:3, 3] - current.pose[:3, 3])
-        turn = np.arccos(np.clip((np.trace(prior.pose[:3, :3].T @ current.pose[:3, :3]) - 1) / 2, -1, 1))
-        return shift > self.config.max_reference_shift_m or turn > self.config.max_reference_turn_rad
+        held = attachment.gripper_from_object if attachment is not None else None
+        for sample in interval.samples:
+            old_goal = spatial_goal(interval, sample, prior.pose, held)
+            new_goal = spatial_goal(interval, sample, current.pose, held)
+            shift = np.linalg.norm(old_goal[:3, 3] - new_goal[:3, 3])
+            turn = np.arccos(np.clip((np.trace(old_goal[:3, :3].T @ new_goal[:3, :3]) - 1) / 2, -1, 1))
+            if shift > self.config.max_reference_shift_m or turn > self.config.max_reference_turn_rad:
+                return True
+        return False
 
     def _fail(self, reason: str) -> None:
         self.session.actions.cancel_unissued(reason)

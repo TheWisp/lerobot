@@ -12,6 +12,7 @@ from .appearance import AppearanceModel
 from .matched_rgbd import ObjectPointModel
 from .perception import ObjectReference, ReferenceSnippet
 from .skill import FlashSkill
+from .symmetry import AxialSymmetry
 
 
 @dataclass(frozen=True)
@@ -28,6 +29,7 @@ class PreparedFlashSkill:
     appearance_models: tuple[AppearanceModel, ...]
     prompts_by_role: dict[str, str]
     descriptor_model_id: str
+    axial_symmetries: tuple[AxialSymmetry, ...] = ()
 
     def __post_init__(self) -> None:
         refs = {reference.role: reference for reference in self.references}
@@ -44,6 +46,10 @@ class PreparedFlashSkill:
             raise ValueError("object prompts must be nonempty and distinct")
         if not self.descriptor_model_id.strip():
             raise ValueError("prepared appearance descriptors need their model identity")
+        if len({item.role for item in self.axial_symmetries}) != len(self.axial_symmetries) or not {
+            item.role for item in self.axial_symmetries
+        } <= set(refs):
+            raise ValueError("axial symmetries must name distinct prepared object roles")
         if any(
             not snippet.mask_artifact
             or Path(snippet.mask_artifact).is_absolute()
@@ -53,7 +59,9 @@ class PreparedFlashSkill:
         ):
             raise ValueError("reference masks must use dataset-relative artifact paths")
         required = {
-            (interval.reference_role, interval.reference_version) for interval in self.skill.intervals
+            (interval.reference_role, interval.reference_version)
+            for interval in self.skill.intervals
+            if interval.relation.value != "ee_to_start"
         }
         required.update(
             (interval.held_role, interval.held_reference_version)
@@ -101,6 +109,17 @@ class PreparedFlashSkill:
             "references": references,
             "prompts_by_role": self.prompts_by_role,
             "descriptor_model_id": self.descriptor_model_id,
+            "axial_symmetries": [
+                {
+                    "role": item.role,
+                    "axis_object": item.axis_object.tolist(),
+                    "center_object_m": item.center_object_m.tolist(),
+                    "baseline_base_from_object": item.baseline_base_from_object.tolist(),
+                    "lock_to_baseline": item.lock_to_baseline,
+                    "max_observed_tilt_rad": item.max_observed_tilt_rad,
+                }
+                for item in self.axial_symmetries
+            ],
         }
         (root / "bundle.json").write_text(json.dumps(manifest, indent=2) + "\n")
         return root / "bundle.json"
@@ -144,4 +163,5 @@ class PreparedFlashSkill:
             tuple(appearance_models),
             manifest["prompts_by_role"],
             manifest["descriptor_model_id"],
+            tuple(AxialSymmetry(**item) for item in manifest.get("axial_symmetries", [])),
         )

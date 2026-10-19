@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from queue import Empty, Full, Queue
+from threading import Lock
 
 from .execution import (
     ActionQueue,
@@ -53,6 +54,7 @@ class FlashSession:
         if max_starved_ticks < 1:
             raise ValueError("max_starved_ticks must be positive")
         self.actions = ActionQueue(max_splice_delta=max_splice_delta)
+        self._plan_gate_lock = Lock()
         self._evidence: Queue[MilestoneUpdate | PoseChange] = Queue(maxsize=128)
         self._receipt_sink = on_receipt
         self._starved_in_a_row = 0
@@ -74,7 +76,14 @@ class FlashSession:
             raise RuntimeError("FLASH evidence queue overflow") from exc
 
     def publish_plan(self, revision: int, commands: list[TimedAction]) -> None:
-        self.actions.publish(revision, commands)
+        with self._plan_gate_lock:
+            if (
+                not commands
+                or self.progress.phase not in (Phase.WAITING, Phase.MOVING)
+                or any(command.interval != self.progress.interval.name for command in commands)
+            ):
+                raise PlanRejectedError("planner result belongs to an interval that is no longer active")
+            self.actions.publish(revision, commands)
 
     def _allow_action(self, action: TimedAction) -> bool:
         return action.interval == self.progress.interval.name and self.progress.allows_milestone(
@@ -105,11 +114,19 @@ class FlashSession:
             self.progress.fail(self.motor.clock(), str(exc))
             return None
 
+    def _advance_verified(self, now_s: float) -> None:
+        with self._plan_gate_lock:
+            if self.progress.advance(now_s):
+                # Advance and clear as one operation relative to asynchronous
+                # plan publication, including when the receipt itself finishes
+                # an interval in this very tick.
+                self.actions.cancel_unissued("interval completed")
+
     def step(self) -> ActionReceipt | None:
         self._take_evidence()
         now_s = self.motor.clock()
         if self.progress.phase == Phase.VERIFYING:
-            self.progress.advance(now_s)
+            self._advance_verified(now_s)
         try:
             self.motor.align_to_clock()
         except MissedEventError as exc:
@@ -150,7 +167,7 @@ class FlashSession:
             return None
         self._starved_in_a_row = 0
         if self.progress.phase == Phase.VERIFYING:
-            self.progress.advance(receipt.dispatched_s)
+            self._advance_verified(receipt.dispatched_s)
         return receipt
 
     def finish(self, verdict: Verdict, reason: str) -> None:

@@ -1,8 +1,9 @@
 """End-to-end state transitions through the fixed motor dispatcher."""
 
 import numpy as np
+import pytest
 
-from lerobot.policies.flash.execution import TimedAction
+from lerobot.policies.flash.execution import PlanRejectedError, TimedAction
 from lerobot.policies.flash.planner import JointPlanner, PlannerLimits
 from lerobot.policies.flash.progress import MilestoneUpdate, Phase, Verdict
 from lerobot.policies.flash.session import FlashSession, PoseChange
@@ -134,8 +135,10 @@ def test_release_gate_rejection_keeps_tick_but_never_sends_release():
     assert [tick.action_source for tick in ticks] == ["commanded", "held_goal"]
     assert ticks[1].idle_reason == "milestone gate rejected"
     assert robot.calls.count("send") == 1
-    # A rejected release was never sent, so an explicit recovery may replan it.
-    session.publish_plan(1, [TimedAction(2, {"arm.pos": 0.2}, "contact", event_id="release")])
+    # A rejected release was never sent, but an interrupted attempt cannot
+    # accept a late chunk without an explicitly permitted recovery transition.
+    with pytest.raises(PlanRejectedError, match="no longer active"):
+        session.publish_plan(1, [TimedAction(2, {"arm.pos": 0.2}, "contact", event_id="release")])
 
 
 def test_late_contact_tick_fails_instead_of_bursting_old_commands():

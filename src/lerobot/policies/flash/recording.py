@@ -30,6 +30,8 @@ class DatasetWriter(Protocol):
 
     def save_episode(self) -> None: ...
 
+    def finalize(self) -> None: ...
+
 
 @dataclass(frozen=True)
 class RecordedTick:
@@ -91,7 +93,7 @@ class TickRecordAssembler:
         self._event_cursor = len(events)
         camera = {self.rgb_feature: frame.rgb}
         if self.depth_feature is not None:
-            camera[self.depth_feature] = frame.depth
+            camera[self.depth_feature] = frame.depth[:, :, None]
         return RecordedTick(
             receipt=tick.receipt,
             camera_observation=camera,
@@ -191,6 +193,7 @@ class FlashEpisodeWriter:
         if outcome not in {"success", "failure", "unknown", "interrupted"}:
             raise ValueError("outcome must be explicit")
         self.dataset.save_episode()
+        self.dataset.finalize()
         self._trace.close()
         os.replace(self.partial_path, self.path)
         manifest_path = self.extension_dir / "manifest.json"

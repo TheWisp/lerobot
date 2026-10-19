@@ -609,9 +609,9 @@ def test_held_attachment_uses_postgrasp_observation_and_stops_on_conflict():
         )
     assert kinematics.calls == 0
     pregrasp = PoseEstimate(
-        "held", pose(0.115), 0.015, 0.04, Evidence.OBSERVED, "held-v1", (True,) * 3, (True,) * 3
+        "held", pose(0.142), 0.015, 0.04, Evidence.OBSERVED, "held-v1", (True,) * 3, (True,) * 3
     )
-    assert updater.activate(0.04, pregrasp)
+    assert updater.activate(0.04, pregrasp, np.array([0.04]))
     assert updater.state(0.06) is not None
     assert not updater.has_postgrasp_observation
     assert not updater.on_pose_update(1, {"held": pregrasp})
@@ -691,7 +691,7 @@ def test_demonstrated_attachment_events_bind_and_release_live_object():
     assert not updater.has_postgrasp_observation
     lifecycle.on_motor_tick(tick(0.09))
     held = PoseEstimate(
-        "object", pose(0.177), 0.075, 0.1, Evidence.OBSERVED, "object-v1", (True,) * 3, (True,) * 3
+        "object", pose(0.132), 0.075, 0.1, Evidence.OBSERVED, "object-v1", (True,) * 3, (True,) * 3
     )
     assert lifecycle.on_pose_update(2, {"object": held})
     assert updater.has_postgrasp_observation
@@ -786,12 +786,16 @@ def test_regular_lerobot_frame_and_flash_trace_are_written_together(tmp_path):
         def __init__(self):
             self.frames = []
             self.saved = False
+            self.finalized = False
 
         def add_frame(self, frame):
             self.frames.append(frame)
 
         def save_episode(self):
             self.saved = True
+
+        def finalize(self):
+            self.finalized = True
 
     dataset = FakeDataset()
     writer = FlashEpisodeWriter(dataset, 0, "insert object")
@@ -840,6 +844,7 @@ def test_regular_lerobot_frame_and_flash_trace_are_written_together(tmp_path):
     )
     worker.finish("unknown", "no post-release observation")
     assert dataset.saved
+    assert dataset.finalized
     assert dataset.frames[0]["action"].tolist() == [2.0]
     assert dataset.frames[0]["task"] == "insert object"
     trace = (tmp_path / "flash/v1/episode_000000.jsonl").read_text()
@@ -874,6 +879,9 @@ def test_idle_motor_ticks_remain_in_regular_dataset_timeline(tmp_path):
             self.frames.append(frame)
 
         def save_episode(self):
+            pass
+
+        def finalize(self):
             pass
 
     class Robot:

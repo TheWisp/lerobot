@@ -224,6 +224,19 @@ class AttachmentEstimate:
         self._reference_version = held.reference_version
         return True
 
+    def seed_prediction(self, base_from_ee: np.ndarray, held: PoseEstimate, grasp_time_s: float) -> bool:
+        """Assume a rigid grasp using the latest pregrasp object pose and grasp-time EE.
+
+        This is a fallback, not a held-object measurement. The source time is
+        the grasp event so its bounded lifetime starts when the assumption is made.
+        """
+        if held.pose is None or held.evidence == Evidence.LOST or not held.supports():
+            return False
+        self._attachment = inverse(base_from_ee) @ held.pose
+        self._source_time_s = grasp_time_s
+        self._reference_version = held.reference_version
+        return True
+
     def update_from_history(self, history: TimedEndEffectorHistory, held: PoseEstimate) -> bool:
         """Fuse held evidence only when the motor history brackets its image time."""
         if held.evidence != Evidence.OBSERVED:
@@ -368,7 +381,12 @@ class HeldAttachmentUpdater:
         first = self.kinematics.forward_kinematics(left)
         return first if alpha == 0 else interpolate(first, self.kinematics.forward_kinematics(right), alpha)
 
-    def activate(self, grasp_time_s: float, pregrasp: PoseEstimate | None = None) -> bool:
+    def activate(
+        self,
+        grasp_time_s: float,
+        pregrasp: PoseEstimate | None = None,
+        grasp_joints_deg: np.ndarray | None = None,
+    ) -> bool:
         if not np.isfinite(grasp_time_s):
             raise ValueError("grasp activation time must be finite")
         with self._lock:
@@ -380,16 +398,17 @@ class HeldAttachmentUpdater:
             self.last_rejection = None
             return bool(
                 pregrasp is not None
+                and pregrasp.role == self.role
+                and pregrasp.reference_version == self.reference_version
                 and pregrasp.source_time_s <= grasp_time_s
                 and pregrasp.available_time_s <= grasp_time_s
-                and self._accept_seed(pregrasp)
+                and grasp_joints_deg is not None
+                and self._estimate.seed_prediction(
+                    self.kinematics.forward_kinematics(np.asarray(grasp_joints_deg, dtype=float)),
+                    pregrasp,
+                    grasp_time_s,
+                )
             )
-
-    def _accept_seed(self, estimate: PoseEstimate) -> bool:
-        if estimate.role != self.role or estimate.reference_version != self.reference_version:
-            return False
-        ee = self._ee_at(estimate.source_time_s)
-        return ee is not None and self._estimate.update(ee, estimate)
 
     def on_pose_update(self, _version: int, poses: dict[str, PoseEstimate]) -> bool:
         held = poses.get(self.role)

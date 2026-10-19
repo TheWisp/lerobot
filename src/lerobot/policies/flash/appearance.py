@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Protocol
 
 import numpy as np
 
+from .continuity import PoseCoastLimit, PoseContinuityBackend
 from .matched_rgbd import MatchedRGBDPoseBackend, ObjectPointModel, PixelMatches
-from .perception import ObjectReference, ReferenceSnippet, RGBDFrame
+from .perception import ObjectReference, PoseBackend, ReferenceSnippet, RGBDFrame
 from .registration import transform_points, unproject_pixels, valid_depth_pixels
+from .symmetry import AxialSymmetry
 
 
 class PatchExtractor(Protocol):
@@ -35,6 +37,7 @@ class Sam3MaskSource:
         camera_id: str,
         device: str = "cuda",
         resolution: int | None = None,
+        seed_points_by_role: dict[str, tuple[float, float]] | None = None,
         adapter_factory: Callable[..., object] | None = None,
     ) -> None:
         if (
@@ -51,6 +54,9 @@ class Sam3MaskSource:
         self.device = device
         self.resolution = resolution
         self.adapter_factory = adapter_factory
+        self.seed_points_by_role = dict(seed_points_by_role or {})
+        if set(self.seed_points_by_role) - set(self.prompts):
+            raise ValueError("point-seeded role lacks an object prompt")
         self._adapter = None
         self._last_frame_id: int | None = None
         self._calibration_version: str | None = None
@@ -65,7 +71,25 @@ class Sam3MaskSource:
                 factory = self.adapter_factory
             self._adapter = factory(device=self.device, resolution=self.resolution)
             self._adapter.set_camera(self.camera_id)
-            self._adapter.set_control({"prompt": " . ".join(self.prompts.values())})
+            text_prompts = [
+                prompt for role, prompt in self.prompts.items() if role not in self.seed_points_by_role
+            ]
+            self._adapter.set_control(
+                {"prompt": " . ".join(text_prompts), "text_detection": bool(text_prompts)}
+            )
+            for sequence, (role, (x, y)) in enumerate(self.seed_points_by_role.items(), start=1):
+                if not 0 <= x < frame.depth.shape[1] or not 0 <= y < frame.depth.shape[0]:
+                    raise ValueError(f"{role}: point seed lies outside the aligned frame")
+                self._adapter.set_control(
+                    {
+                        "click_seq": sequence,
+                        "click_name": {self.camera_id: self.prompts[role]},
+                        "clicks": {self.camera_id: [[x, y, 1]]},
+                    }
+                )
+                # Each point has its own name. Apply it to this frame before
+                # queuing the next seed, as the adapter stores one pending name.
+                self._adapter.segment(np.ascontiguousarray(frame.rgb))
         if self._last_frame_id is not None and (
             frame.frame_id <= self._last_frame_id or frame.calibration_version != self._calibration_version
         ):
@@ -222,12 +246,17 @@ class AppearanceBackendFactory:
     device: str = "cuda"
     sam_resolution: int | None = None
     dino_model_id: str = "facebook/dinov2-small"
+    axial_symmetries: tuple[AxialSymmetry, ...] = ()
+    pose_coast_limits: tuple[PoseCoastLimit, ...] = ()
+    seed_points_by_role: dict[str, tuple[float, float]] | None = None
 
     def __post_init__(self) -> None:
         if set(self.prompts_by_role) != {model.points.role for model in self.models}:
             raise ValueError("one text prompt is needed for each appearance model role")
+        if {limit.role for limit in self.pose_coast_limits} - set(self.prompts_by_role):
+            raise ValueError("pose-coasting role lacks an appearance model")
 
-    def __call__(self) -> MatchedRGBDPoseBackend:
+    def __call__(self) -> PoseBackend:
         from .dino_features import DinoPatchExtractor
 
         source = Sam3MaskSource(
@@ -235,6 +264,7 @@ class AppearanceBackendFactory:
             camera_id=self.camera_id,
             device=self.device,
             resolution=self.sam_resolution,
+            seed_points_by_role=self.seed_points_by_role,
         )
         matcher = AppearancePixelMatcher(
             self.models,
@@ -242,10 +272,26 @@ class AppearanceBackendFactory:
             source,
             min_similarity=self.min_similarity,
         )
-        return MatchedRGBDPoseBackend(
+        backend = MatchedRGBDPoseBackend(
             tuple(model.points for model in self.models),
             matcher,
             threshold_m=self.threshold_m,
             min_inliers=self.min_inliers,
             trials=self.trials,
         )
+        if self.axial_symmetries:
+            from .symmetry import SymmetryCanonicalizingBackend
+
+            backend = SymmetryCanonicalizingBackend(backend, self.axial_symmetries)
+        if self.pose_coast_limits:
+            model_centers = {
+                model.points.role: np.median(model.points.points_object_m, axis=0) for model in self.models
+            }
+            backend = PoseContinuityBackend(
+                backend,
+                tuple(
+                    replace(limit, center_object_m=model_centers[limit.role])
+                    for limit in self.pose_coast_limits
+                ),
+            )
+        return backend

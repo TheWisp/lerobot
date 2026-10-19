@@ -1,7 +1,9 @@
 """The motor consumes future chunks while pose changes revise only unissued ticks."""
 
 import numpy as np
+import pytest
 
+from lerobot.policies.flash.execution import PlanRejectedError, TimedAction
 from lerobot.policies.flash.perception import LatestPoseStore
 from lerobot.policies.flash.planner import JointPlanner, PlannerLimits
 from lerobot.policies.flash.planner_worker import PlanResult
@@ -67,7 +69,7 @@ class InlineWorker:
         self.last_result = PlanResult(request.revision, len(actions), None)
 
 
-def make_runtime(*, mode=MotionMode.DEMONSTRATED, max_pose_age_s=10.0):
+def make_runtime(*, mode=MotionMode.DEMONSTRATED, max_pose_age_s=10.0, event_at_end=False):
     now = [0.0]
     robot = FakeRobot()
     interval = Interval(
@@ -77,7 +79,7 @@ def make_runtime(*, mode=MotionMode.DEMONSTRATED, max_pose_age_s=10.0):
         "target",
         (
             SpatialSample(0.0, pose(), pose()),
-            SpatialSample(0.2, pose(0.1), pose()),
+            SpatialSample(0.2, pose(0.1), pose(), event_id="close" if event_at_end else None),
         ),
         speed_m_s=0.2 if mode == MotionMode.CONNECTION else None,
         reference_version="target-v1",
@@ -157,7 +159,7 @@ def test_coordinator_interrupts_when_target_exits_explicit_replanning_envelope()
     coordinator.schedule()
     assert session.progress.phase == Phase.INTERRUPTED
     assert session.actions.snapshot().pending == ()
-    assert "configured replanning envelope" in session.progress.events[-1]["reason"]
+    assert "demonstrated goal beyond the replanning envelope" in session.progress.events[-1]["reason"]
 
 
 def test_generated_connection_retargets_and_extends_duration_for_live_distance():
@@ -197,3 +199,109 @@ def test_future_chunk_stops_at_camera_evidence_age_boundary():
     coordinator.step()
     assert worker.requests[0].count == 1
     assert [action.tick for action in session.actions.snapshot().pending] == [3]
+
+
+def test_fresh_equivalent_pose_does_not_cancel_first_future_chunk():
+    now, robot, session, poses, worker, coordinator = make_runtime()
+    coordinator.step()
+    pending = session.actions.snapshot().pending
+    assert pending
+    now[0] += 0.001
+    poses.publish((target(0.2, now[0]),))
+    coordinator.schedule()
+    assert session.actions.snapshot().pending == pending
+    assert len(worker.requests) == 1
+    for _ in range(3):
+        coordinator.step()
+    assert robot.sent
+
+
+def test_lost_pose_cancels_queued_first_command():
+    now, robot, session, poses, worker, coordinator = make_runtime()
+    coordinator.step()
+    assert session.actions.snapshot().pending
+    now[0] += 0.001
+    poses.publish(
+        (
+            PoseEstimate(
+                "target",
+                None,
+                now[0],
+                now[0],
+                Evidence.LOST,
+                "target-v1",
+                (False,) * 3,
+                (False,) * 3,
+            ),
+        )
+    )
+    coordinator.step()
+    assert not robot.sent
+    assert not session.actions.snapshot().pending
+
+
+def test_new_camera_frame_waits_for_inflight_ik_to_publish():
+    now, robot, session, poses, worker, coordinator = make_runtime()
+    requests = []
+    worker.submit = requests.append
+    coordinator.step()
+    assert len(requests) == 1
+    now[0] += 0.001
+    poses.publish((target(0.201, now[0]),))
+    coordinator.schedule()
+    assert len(requests) == 1
+
+
+def test_interval_completion_clears_tail_and_rejects_late_old_plan():
+    first = Interval(
+        "first",
+        MotionMode.DEMONSTRATED,
+        Relation.EE_TO_OBJECT,
+        "target",
+        (SpatialSample(0, pose(), pose()), SpatialSample(0.1, pose(), pose())),
+        reference_version="target-v1",
+    )
+    second = Interval(
+        "second",
+        MotionMode.DEMONSTRATED,
+        Relation.EE_TO_OBJECT,
+        "target",
+        (SpatialSample(0, pose(), pose()), SpatialSample(0.1, pose(), pose())),
+        reference_version="target-v1",
+    )
+    now = [0.0]
+    session = FlashSession(
+        FlashSkill("demo", 0, (first, second)),
+        FakeRobot(),
+        clock=lambda: now[0],
+        sleep=lambda dt: now.__setitem__(0, now[0] + dt),
+    )
+    session.publish_plan(
+        0,
+        [
+            TimedAction(0, {"arm.pos": 0.0}, "first", interval_complete=True),
+            TimedAction(1, {"arm.pos": 0.1}, "first"),
+        ],
+    )
+    session.step()
+    assert session.progress.phase == Phase.WAITING
+    assert session.progress.interval.name == "second"
+    assert session.actions.snapshot().pending == ()
+    with pytest.raises(PlanRejectedError, match="no longer active"):
+        session.publish_plan(2, [TimedAction(1, {"arm.pos": 0.1}, "first")])
+
+
+def test_lookahead_waits_for_still_queued_semantic_event():
+    now, robot, session, poses, worker, coordinator = make_runtime(event_at_end=True)
+    coordinator.step()
+    event_tick = next(
+        action.tick for action in session.actions.snapshot().pending if action.event_id == "close"
+    )
+    while session.motor.metrics.ticks < event_tick:
+        coordinator.step()
+    assert "close" not in session.actions.snapshot().issued_events
+    before = len(worker.requests)
+    coordinator.schedule()
+    assert len(worker.requests) == before
+    coordinator.step()
+    assert "close" in session.actions.snapshot().issued_events

@@ -58,7 +58,10 @@ class AttachmentLifecycle:
                 seed, transition.reference_version, receipt.dispatched_s
             ):
                 seed = None
-            self.updaters[transition.role].activate(receipt.dispatched_s, seed)
+            grasp_joints = [
+                float(tick.observed[f"{name}.pos"]) for name in self.updaters[transition.role].arm_joint_names
+            ]
+            self.updaters[transition.role].activate(receipt.dispatched_s, seed, grasp_joints)
             self.active_role = transition.role
         else:
             if self.active_role != transition.role:
@@ -70,7 +73,7 @@ class AttachmentLifecycle:
     def _fresh_seed(self, pose: PoseEstimate, version: str, at_s: float) -> bool:
         return (
             pose.reference_version == version
-            and pose.evidence == Evidence.OBSERVED
+            and pose.evidence in (Evidence.OBSERVED, Evidence.PREDICTED)
             and pose.pose is not None
             and pose.supports()
             and pose.available_time_s <= at_s

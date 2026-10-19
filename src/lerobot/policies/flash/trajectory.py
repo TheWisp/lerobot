@@ -133,7 +133,7 @@ def spatial_goal(
     live_reference: np.ndarray,
     live_attachment: np.ndarray | None,
 ) -> np.ndarray:
-    if interval.relation == Relation.EE_TO_OBJECT:
+    if interval.relation in (Relation.EE_TO_OBJECT, Relation.EE_TO_START):
         return pregrasp_goal(sample.demo_ee, sample.demo_reference, live_reference)
     if live_attachment is None or sample.demo_held is None:
         raise MissingEvidenceError("held-to-target motion needs a live gripper-to-object attachment")

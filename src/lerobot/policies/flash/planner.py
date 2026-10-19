@@ -9,7 +9,7 @@ import numpy as np
 
 from .execution import TimedAction
 from .geometry import transform
-from .skill import Interval, MotionMode
+from .skill import Interval, MotionMode, Relation
 from .trajectory import (
     AttachmentState,
     ConnectionTrajectory,
@@ -37,6 +37,7 @@ class PlannerLimits:
     rotation_error_rad: float
     max_pose_age_s: float
     allow_predicted_reference: bool = False
+    ik_refinement_attempts: int = 1
 
     def __post_init__(self) -> None:
         values = (
@@ -47,6 +48,12 @@ class PlannerLimits:
         )
         if not values or not all(np.isfinite(v) and v > 0 for v in values):
             raise ValueError("planner limits must be finite and positive")
+        if (
+            isinstance(self.ik_refinement_attempts, bool)
+            or not isinstance(self.ik_refinement_attempts, int)
+            or self.ik_refinement_attempts < 1
+        ):
+            raise ValueError("IK refinement attempts must be a positive integer")
 
 
 class JointPlanner:
@@ -129,7 +136,11 @@ class JointPlanner:
                     interval,
                     local_time_s,
                     reference.pose,
-                    self._attachment_pose(attachment, due_s, interval.held_reference_version),
+                    (
+                        self._attachment_pose(attachment, due_s, interval.held_reference_version)
+                        if interval.relation == Relation.HELD_TO_TARGET
+                        else None
+                    ),
                 )
                 complete = due_s >= interval_start_s + interval.demo_duration_s
                 matching_events = [
@@ -146,7 +157,11 @@ class JointPlanner:
             else:
                 if connection is None:
                     raise ValueError("generated interval requires a connection trajectory")
-                live_attachment = self._attachment_pose(attachment, due_s, interval.held_reference_version)
+                live_attachment = (
+                    self._attachment_pose(attachment, due_s, interval.held_reference_version)
+                    if interval.relation == Relation.HELD_TO_TARGET
+                    else None
+                )
                 current_endpoint = spatial_goal(
                     interval, interval.samples[-1], reference.pose, live_attachment
                 )
@@ -173,9 +188,22 @@ class JointPlanner:
                     if not complete and interval.samples[-1].event_id is not None
                     else interval.samples[-1].gripper
                 )
-            solved = np.asarray(self.kinematics.inverse_kinematics(seed, transform(pose)), dtype=float)
-            if solved.shape != seed.shape or not np.isfinite(solved).all():
-                raise InfeasibleTrajectoryError(f"IK returned an invalid solution at tick {tick}")
+            refinement_seed = seed
+            for _ in range(self.limits.ik_refinement_attempts):
+                solved = np.asarray(
+                    self.kinematics.inverse_kinematics(refinement_seed, transform(pose)), dtype=float
+                )
+                if solved.shape != seed.shape or not np.isfinite(solved).all():
+                    raise InfeasibleTrajectoryError(f"IK returned an invalid solution at tick {tick}")
+                reached = transform(self.kinematics.forward_kinematics(solved))
+                translation_error = np.linalg.norm(reached[:3, 3] - pose[:3, 3])
+                angle_error = np.arccos(np.clip((np.trace(reached[:3, :3].T @ pose[:3, :3]) - 1) / 2, -1, 1))
+                if (
+                    translation_error <= self.limits.position_error_m
+                    and angle_error <= self.limits.rotation_error_rad
+                ):
+                    break
+                refinement_seed = solved
             speed = np.abs(solved - seed) / period_s
             if np.any(speed > self.limits.joint_speed_deg_s):
                 raise InfeasibleTrajectoryError(f"joint speed exceeds configured limit at tick {tick}")

@@ -19,6 +19,7 @@ class MotionMode(str, Enum):
 
 class Relation(str, Enum):
     EE_TO_OBJECT = "ee_to_object"
+    EE_TO_START = "ee_to_start"
     HELD_TO_TARGET = "held_to_target"
 
 

@@ -169,7 +169,11 @@ class FlashRuntime:
     @staticmethod
     def _validate_bindings(skill: FlashSkill, references: tuple[ObjectReference, ...]) -> None:
         available = {(reference.role, reference.version) for reference in references}
-        required = {(interval.reference_role, interval.reference_version) for interval in skill.intervals}
+        required = {
+            (interval.reference_role, interval.reference_version)
+            for interval in skill.intervals
+            if interval.relation != Relation.EE_TO_START
+        }
         for interval in skill.intervals:
             if interval.relation != Relation.HELD_TO_TARGET:
                 continue
