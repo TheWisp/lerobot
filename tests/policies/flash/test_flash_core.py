@@ -17,6 +17,7 @@ from lerobot.policies.flash.execution import (
 from lerobot.policies.flash.geometry import held_object_goal
 from lerobot.policies.flash.perception import (
     AttachmentEstimate,
+    HeldAttachmentUpdater,
     LatestPoseStore,
     LatestRGBDFrameStore,
     RGBDFrame,
@@ -329,6 +330,7 @@ def test_motor_tick_reads_state_and_records_accepted_action_without_camera_wait(
 
     calls = []
     receipts = []
+    ticks = []
     now = [0.0]
     queue = ActionQueue()
     queue.publish(0, [TimedAction(0, {"joint.pos": 2.0}, "move")])
@@ -336,6 +338,7 @@ def test_motor_tick_reads_state_and_records_accepted_action_without_camera_wait(
         FakeRobot(),
         queue,
         receipts.append,
+        on_tick=ticks.append,
         clock=lambda: now[0],
         sleep=lambda dt: now.__setitem__(0, now[0] + dt),
     )
@@ -343,6 +346,7 @@ def test_motor_tick_reads_state_and_records_accepted_action_without_camera_wait(
     assert calls == ["state", "send"]
     assert receipt.accepted["joint.pos"] == 1.0
     assert receipts == [receipt]
+    assert ticks[0].observed_at_s == 0.0
     assert loop.metrics.commanded == 1
     assert loop.tick() is None
     assert now[0] == pytest.approx(1 / 30)
@@ -576,6 +580,47 @@ def test_delayed_held_observation_uses_gripper_pose_at_camera_capture():
     assert not AttachmentEstimate().update_from_history(sparse, held)
 
 
+def test_held_attachment_uses_postgrasp_observation_and_stops_on_conflict():
+    class LinearKinematics:
+        def forward_kinematics(self, joints):
+            return pose(joints[0])
+
+    updater = HeldAttachmentUpdater(
+        "held",
+        "held-v1",
+        LinearKinematics(),
+        ("arm",),
+        history_capacity=5,
+        max_motor_sample_gap_s=0.04,
+        max_attachment_age_s=1.0,
+        max_update_shift_m=0.01,
+        max_update_turn_rad=0.1,
+    )
+    for time_s in (0.0, 0.03, 0.06):
+        updater.on_motor_tick(
+            MotorTick(0, time_s, {"arm.pos": time_s}, 0.0, {"arm.pos": time_s}, None, observed_at_s=time_s)
+        )
+    pregrasp = PoseEstimate(
+        "held", pose(0.115), 0.015, 0.04, Evidence.OBSERVED, "held-v1", (True,) * 3, (True,) * 3
+    )
+    assert updater.activate(0.04, pregrasp)
+    assert updater.state(0.06) is not None
+    assert not updater.has_postgrasp_observation
+    assert not updater.on_pose_update(1, {"held": pregrasp})
+    observed = PoseEstimate(
+        "held", pose(0.147), 0.045, 0.07, Evidence.OBSERVED, "held-v1", (True,) * 3, (True,) * 3
+    )
+    assert updater.on_pose_update(2, {"held": observed})
+    assert updater.has_postgrasp_observation
+    assert updater.state(0.08).gripper_from_object[0, 3] == pytest.approx(0.102)
+    conflicting = PoseEstimate(
+        "held", pose(0.25), 0.055, 0.09, Evidence.OBSERVED, "held-v1", (True,) * 3, (True,) * 3
+    )
+    assert not updater.on_pose_update(3, {"held": conflicting})
+    assert updater.state(0.09) is None
+    assert "disagrees" in updater.last_rejection
+
+
 def test_rgbd_alignment_and_pose_handoff_preserve_source_time():
     frame = RGBDFrame(
         1,
@@ -710,6 +755,7 @@ def test_regular_lerobot_frame_and_flash_trace_are_written_together(tmp_path):
                 {"joint.pos": 2.0},
                 receipt,
                 skipped_before=1,
+                observed_at_s=1.001,
             ),
         )
     )
@@ -722,6 +768,7 @@ def test_regular_lerobot_frame_and_flash_trace_are_written_together(tmp_path):
     assert '"reference_version": "ref1"' in trace
     assert '"pose_comparisons": {"target": {"verdict": "ambiguous"' in trace
     assert '"skipped_before": 1' in trace
+    assert '"observed_at_s": 1.001' in trace
     assert '"accepted": {"joint.pos": 1.0}' in trace
     assert '"outcome": "unknown"' in (tmp_path / "flash/v1/manifest.json").read_text()
     assert '"timing_regular": false' in (tmp_path / "flash/v1/manifest.json").read_text()

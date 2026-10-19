@@ -9,6 +9,7 @@ from typing import Protocol
 
 import numpy as np
 
+from .execution import MotorTick
 from .geometry import interpolate, inverse, transform
 from .trajectory import AttachmentState, Evidence, PoseEstimate
 
@@ -262,3 +263,129 @@ class AttachmentEstimate:
         ):
             return None
         return AttachmentState(self._attachment, self._source_time_s, now_s, self._reference_version or "")
+
+
+class EndEffectorKinematics(Protocol):
+    def forward_kinematics(self, joint_pos_deg: np.ndarray) -> np.ndarray: ...
+
+
+class HeldAttachmentUpdater:
+    """Update a rigid gripper-object relation from capture-time observations.
+
+    A pregrasp observation may seed a fallback once grasp is activated; it is
+    not treated as proof that the object followed the gripper. Later independent
+    held observations correct the relation if they agree with configured jump
+    bounds. A conflicting update withdraws the attachment until resolved,
+    rather than snapping the commanded gripper goal to an ambiguous pose.
+    """
+
+    def __init__(
+        self,
+        role: str,
+        reference_version: str,
+        kinematics: EndEffectorKinematics,
+        arm_joint_names: tuple[str, ...],
+        *,
+        history_capacity: int,
+        max_motor_sample_gap_s: float,
+        max_attachment_age_s: float,
+        max_update_shift_m: float,
+        max_update_turn_rad: float,
+    ) -> None:
+        if not role or not reference_version or not arm_joint_names:
+            raise ValueError("held attachment needs a role, object frame and arm joints")
+        values = (max_attachment_age_s, max_update_shift_m, max_update_turn_rad)
+        if any(not np.isfinite(value) or value <= 0 for value in values):
+            raise ValueError("held attachment limits must be finite and positive")
+        self.role = role
+        self.reference_version = reference_version
+        self.kinematics = kinematics
+        self.arm_joint_names = arm_joint_names
+        self.history = TimedEndEffectorHistory(
+            capacity=history_capacity, max_sample_gap_s=max_motor_sample_gap_s
+        )
+        self.max_attachment_age_s = max_attachment_age_s
+        self.max_update_shift_m = max_update_shift_m
+        self.max_update_turn_rad = max_update_turn_rad
+        self._lock = Lock()
+        self._estimate = AttachmentEstimate()
+        self._active = False
+        self._activation_time_s: float | None = None
+        self._conflicted = False
+        self.has_postgrasp_observation = False
+        self.last_rejection: str | None = None
+
+    def on_motor_tick(self, tick: MotorTick) -> None:
+        if tick.observed_at_s is None:
+            raise ValueError("held attachment needs a timestamped motor observation")
+        try:
+            joints = np.array([float(tick.observed[f"{name}.pos"]) for name in self.arm_joint_names])
+        except KeyError as exc:
+            raise ValueError("motor observation lacks a held-attachment arm joint") from exc
+        self.history.append(tick.observed_at_s, self.kinematics.forward_kinematics(joints))
+
+    def activate(self, grasp_time_s: float, pregrasp: PoseEstimate | None = None) -> bool:
+        if not np.isfinite(grasp_time_s):
+            raise ValueError("grasp activation time must be finite")
+        with self._lock:
+            self._estimate = AttachmentEstimate()
+            self._active = True
+            self._activation_time_s = grasp_time_s
+            self._conflicted = False
+            self.has_postgrasp_observation = False
+            self.last_rejection = None
+            return bool(pregrasp is not None and self._accept_seed(pregrasp))
+
+    def _accept_seed(self, estimate: PoseEstimate) -> bool:
+        return (
+            estimate.role == self.role
+            and estimate.reference_version == self.reference_version
+            and self._estimate.update_from_history(self.history, estimate)
+        )
+
+    def on_pose_update(self, _version: int, poses: dict[str, PoseEstimate]) -> bool:
+        held = poses.get(self.role)
+        if held is None or held.reference_version != self.reference_version:
+            return False
+        with self._lock:
+            if (
+                not self._active
+                or held.source_time_s < self._activation_time_s
+                or held.evidence != Evidence.OBSERVED
+                or held.pose is None
+                or not held.supports()
+            ):
+                return False
+            ee = self.history.at(held.source_time_s)
+            if ee is None:
+                self.last_rejection = "held image is not bracketed by motor observations"
+                return False
+            candidate = inverse(ee) @ held.pose
+            prior = self._estimate.gripper_from_object
+            if prior is not None:
+                relative = inverse(prior) @ candidate
+                shift = float(np.linalg.norm(relative[:3, 3]))
+                turn = float(np.arccos(np.clip((np.trace(relative[:3, :3]) - 1) / 2, -1, 1)))
+                if shift > self.max_update_shift_m or turn > self.max_update_turn_rad:
+                    self._conflicted = True
+                    self.last_rejection = f"held attachment disagrees by {shift:.4f} m, {turn:.4f} rad"
+                    return False
+            if not self._estimate.update(ee, held):
+                return False
+            self._conflicted = False
+            self.has_postgrasp_observation = True
+            self.last_rejection = None
+            return True
+
+    def state(self, now_s: float) -> AttachmentState | None:
+        with self._lock:
+            if not self._active or self._conflicted:
+                return None
+            return self._estimate.state(now_s, self.max_attachment_age_s)
+
+    def deactivate(self) -> None:
+        with self._lock:
+            self._active = False
+            self._activation_time_s = None
+            self._estimate = AttachmentEstimate()
+            self._conflicted = False

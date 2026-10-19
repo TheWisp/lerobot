@@ -142,6 +142,7 @@ class FlashEpisodeWriter:
             "motor_tick": tick.tick if tick is not None else receipt.tick,
             "skipped_before": tick.skipped_before if tick is not None else 0,
             "scheduled_s": tick.scheduled_s if tick is not None else receipt.scheduled_s,
+            "observed_at_s": tick.observed_at_s if tick is not None else None,
             "dispatched_s": receipt.dispatched_s if receipt is not None else None,
             "camera_source_time_s": record.camera_source_time_s,
             "camera_frame_id": record.camera_frame_id,

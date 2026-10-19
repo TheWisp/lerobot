@@ -19,7 +19,9 @@ The executable core already separates:
   host capture-time estimate and capture-time camera calibration;
 - held-object world pose from the gripper-to-object attachment;
 - capture-time interpolation of measured end-effector poses before accepting
-  delayed held-object evidence into that attachment;
+  delayed held-object evidence into that attachment; a held attachment updater
+  can seed a pregrasp fallback, marks whether it has a postgrasp observation,
+  and withdraws the attachment on a large observed disagreement;
 - skill compilation from ordinary LeRobot state/action/timestamp columns plus
   versioned object-pose annotations;
 - metric cross-episode object-frame registration from RGB-D correspondences,
@@ -63,6 +65,8 @@ The executable core already separates:
   Missed motor deadlines are explicit in the trace; such an episode has
   `timing_regular=false` because LeRobot's ordinary dataset timestamp remains
   based on its nominal FPS and must not be treated as exact physical timing.
+  Motor observations also retain their actual read time for capture-time
+  gripper interpolation.
   A tick assembler joins the latest available RGB-D frame and pose evidence
   before the recorder worker performs disk/video encoding.
 

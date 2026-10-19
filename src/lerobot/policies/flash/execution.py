@@ -59,6 +59,7 @@ class MotorTick:
     idle_reason: str | None = None
     action_source: str = "commanded"
     skipped_before: int = 0
+    observed_at_s: float | None = None
 
 
 class PlanRejectedError(RuntimeError):
@@ -327,6 +328,7 @@ class MotorLoop:
         read_duration_s: float,
         receipt: ActionReceipt | None,
         idle_reason: str | None = None,
+        observed_at_s: float | None = None,
     ) -> None:
         skipped_before = self._skipped_since_record
         self._skipped_since_record = 0
@@ -349,6 +351,7 @@ class MotorLoop:
                 idle_reason,
                 source,
                 skipped_before,
+                observed_at_s,
             )
         )
 
@@ -393,20 +396,22 @@ class MotorLoop:
             self.metrics.ticks += 1
             self.metrics.idle += 1
             self.metrics.read_s.append(read_end - read_start)
-            self._record_tick(tick, deadline, observed, read_end - read_start, None, idle_reason)
+            self._record_tick(tick, deadline, observed, read_end - read_start, None, idle_reason, read_end)
             return None
         action, revision = self.actions.take(tick)
         self.metrics.ticks += 1
         self.metrics.read_s.append(read_end - read_start)
         if action is None:
             self.metrics.starved += 1
-            self._record_tick(tick, deadline, observed, read_end - read_start, None, "action queue starved")
+            self._record_tick(
+                tick, deadline, observed, read_end - read_start, None, "action queue starved", read_end
+            )
             return None
         if self.allow_action is not None and not self.allow_action(action):
             self.actions.note_rejected(action.event_id)
             self.metrics.idle += 1
             self._record_tick(
-                tick, deadline, observed, read_end - read_start, None, "milestone gate rejected"
+                tick, deadline, observed, read_end - read_start, None, "milestone gate rejected", read_end
             )
             raise PlanRejectedError(
                 f"milestone gate for {action.event_id or action.interval} is not satisfied"
@@ -438,5 +443,5 @@ class MotorLoop:
             revision,
         )
         self.on_receipt(receipt)
-        self._record_tick(tick, deadline, observed, read_end - read_start, receipt)
+        self._record_tick(tick, deadline, observed, read_end - read_start, receipt, observed_at_s=read_end)
         return receipt
