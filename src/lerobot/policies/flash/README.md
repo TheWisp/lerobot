@@ -12,6 +12,8 @@ The executable core already separates:
 - milestone verdicts and explicit, bounded recovery transitions;
 - metric RGB-D and pose evidence with source and availability times;
 - held-object world pose from the gripper-to-object attachment;
+- capture-time interpolation of measured end-effector poses before accepting
+  delayed held-object evidence into that attachment;
 - skill compilation from ordinary LeRobot state/action/timestamp columns plus
   versioned object-pose annotations;
 - metric cross-episode object-frame registration from RGB-D correspondences,

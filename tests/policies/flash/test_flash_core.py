@@ -13,7 +13,12 @@ from lerobot.policies.flash.execution import (
     TimedAction,
 )
 from lerobot.policies.flash.geometry import held_object_goal
-from lerobot.policies.flash.perception import AttachmentEstimate, LatestPoseStore, RGBDFrame
+from lerobot.policies.flash.perception import (
+    AttachmentEstimate,
+    LatestPoseStore,
+    RGBDFrame,
+    TimedEndEffectorHistory,
+)
 from lerobot.policies.flash.planner import InfeasibleTrajectoryError, JointPlanner, PlannerLimits
 from lerobot.policies.flash.progress import MilestoneUpdate, Phase, Progress, Verdict
 from lerobot.policies.flash.recording import (
@@ -364,6 +369,25 @@ def test_attachment_updates_from_observation_but_not_its_own_prediction():
     np.testing.assert_allclose(prediction.pose[:3, 3], [0.4, 0, 0])
     assert not relation.update(pose(0.3, 0, 0), prediction)
     assert relation.predict(pose(0.3, 0, 0), 2.2, 1.0, "held") is None
+
+
+def test_delayed_held_observation_uses_gripper_pose_at_camera_capture():
+    history = TimedEndEffectorHistory(capacity=4, max_sample_gap_s=0.04)
+    history.append(1.00, pose(0.00))
+    history.append(1.03, pose(0.03))
+    history.append(1.06, pose(0.06))
+    held = PoseEstimate(
+        "held", pose(0.115), 1.015, 1.100, Evidence.OBSERVED, "ref1", (True,) * 3, (True,) * 3
+    )
+    attachment = AttachmentEstimate()
+    assert attachment.update_from_history(history, held)
+    np.testing.assert_allclose(attachment.gripper_from_object[:3, 3], [0.1, 0, 0])
+    assert history.at(1.07) is None  # never extrapolate beyond the latest motor read
+
+    sparse = TimedEndEffectorHistory(capacity=3, max_sample_gap_s=0.01)
+    sparse.append(1.0, pose())
+    sparse.append(1.03, pose(0.03))
+    assert not AttachmentEstimate().update_from_history(sparse, held)
 
 
 def test_rgbd_alignment_and_pose_handoff_preserve_source_time():

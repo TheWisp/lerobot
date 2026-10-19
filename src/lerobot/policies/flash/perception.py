@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass
 from threading import Lock
 from typing import Protocol
 
 import numpy as np
 
-from .geometry import inverse, transform
+from .geometry import interpolate, inverse, transform
 from .trajectory import AttachmentState, Evidence, PoseEstimate
 
 
@@ -112,6 +113,46 @@ class LatestPoseStore:
             return self._version, dict(self._poses)
 
 
+class TimedEndEffectorHistory:
+    """Interpolate measured EE poses onto camera capture times, without extrapolation.
+
+    A pose published after a slow perception pass still belongs to its source
+    image. Using the newest servo position to update the attachment would
+    turn perception latency into a spurious gripper-to-object offset.
+    """
+
+    def __init__(self, *, capacity: int, max_sample_gap_s: float) -> None:
+        if capacity < 2 or not np.isfinite(max_sample_gap_s) or max_sample_gap_s <= 0:
+            raise ValueError("EE history needs capacity >= 2 and a positive sample-gap bound")
+        self._samples: deque[tuple[float, np.ndarray]] = deque(maxlen=capacity)
+        self._lock = Lock()
+        self.max_sample_gap_s = max_sample_gap_s
+
+    def append(self, source_time_s: float, base_from_ee: np.ndarray) -> None:
+        if not np.isfinite(source_time_s):
+            raise ValueError("EE sample time must be finite")
+        pose = transform(base_from_ee)
+        with self._lock:
+            if self._samples and source_time_s <= self._samples[-1][0]:
+                raise ValueError("EE history times must strictly increase")
+            self._samples.append((source_time_s, pose.copy()))
+
+    def at(self, source_time_s: float) -> np.ndarray | None:
+        if not np.isfinite(source_time_s):
+            return None
+        with self._lock:
+            samples = tuple(self._samples)
+        for time_s, pose in samples:
+            if source_time_s == time_s:
+                return pose.copy()
+        for (left_time, left), (right_time, right) in zip(samples, samples[1:], strict=False):
+            if left_time < source_time_s < right_time:
+                if right_time - left_time > self.max_sample_gap_s:
+                    return None
+                return interpolate(left, right, (source_time_s - left_time) / (right_time - left_time))
+        return None
+
+
 class AttachmentEstimate:
     """Gripper-to-object relation updated only by independent held evidence.
 
@@ -126,6 +167,7 @@ class AttachmentEstimate:
         self._reference_version: str | None = None
 
     def update(self, base_from_ee: np.ndarray, held: PoseEstimate) -> bool:
+        """Accept independently observed held pose and a capture-time EE pose."""
         if held.evidence != Evidence.OBSERVED or held.pose is None or not held.supports():
             return False
         if self._source_time_s is not None and held.source_time_s <= self._source_time_s:
@@ -134,6 +176,13 @@ class AttachmentEstimate:
         self._source_time_s = held.source_time_s
         self._reference_version = held.reference_version
         return True
+
+    def update_from_history(self, history: TimedEndEffectorHistory, held: PoseEstimate) -> bool:
+        """Fuse held evidence only when the motor history brackets its image time."""
+        if held.evidence != Evidence.OBSERVED:
+            return False
+        ee_at_capture = history.at(held.source_time_s)
+        return ee_at_capture is not None and self.update(ee_at_capture, held)
 
     def predict(
         self, base_from_ee: np.ndarray, now_s: float, max_age_s: float, role: str
