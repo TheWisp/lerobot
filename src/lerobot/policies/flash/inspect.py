@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from collections import Counter
 from pathlib import Path
 
 from .skill import FlashSkill
@@ -31,6 +32,12 @@ def inspect_skill(path: str) -> dict:
         ):
             missing.append(f"{interval.name}: matching demonstrated attachment event")
     missing = missing_frames + missing
+    warnings = []
+    for interval in skill.intervals:
+        if interval.relation.value == "held_to_target" and not any(
+            sample.held_evidence == "observed" for sample in interval.samples
+        ):
+            warnings.append(f"{interval.name}: no independently observed held-object demo pose")
     return {
         "schema_version": skill.schema_version,
         "source_repo_id": skill.source_repo_id,
@@ -64,6 +71,7 @@ def inspect_skill(path: str) -> dict:
         "reference_frames_declared": not missing_frames,
         "runtime_bindings_complete": not missing,
         "missing": missing,
+        "warnings": warnings,
         "intervals": [
             {
                 "name": interval.name,
@@ -71,6 +79,12 @@ def inspect_skill(path: str) -> dict:
                 "relation": interval.relation.value,
                 "reference_role": interval.reference_role,
                 "held_role": interval.held_role,
+                "reference_evidence": dict(Counter(sample.reference_evidence for sample in interval.samples)),
+                "held_evidence": dict(
+                    Counter(
+                        sample.held_evidence for sample in interval.samples if sample.demo_held is not None
+                    )
+                ),
                 "samples": len(interval.samples),
                 "demo_duration_s": interval.demo_duration_s,
                 "entry_milestone": interval.entry_milestone,

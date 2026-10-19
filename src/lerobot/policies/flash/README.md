@@ -89,7 +89,10 @@ inspection and rejected by the joint planner. A pose-relation milestone can
 select an observed demo frame to define its target object relationship, while
 the task tolerances and maximum evidence age are supplied explicitly.
 Held-to-target intervals also name the held role; skill inspection reports a
-missing role or a missing matching attach event before live integration.
+missing role or a missing matching attach event before live integration. It
+also counts observed and predicted demo poses and warns when a held interval
+has no independently observed held pose, rather than presenting predicted
+contact geometry as a measurement.
 
 The first matcher is measured on a recorded insertion scene in
 [the RGB-D replay note](docs/rgbd_replay.md). It follows a static target well,

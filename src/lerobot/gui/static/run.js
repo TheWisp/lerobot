@@ -1391,6 +1391,7 @@ async function launchRun() {
             appendTerminalLine(`FLASH skill: ${data.source_repo_id} episode ${data.source_episode}`);
             for (const interval of data.intervals) {
                 appendTerminalLine(`${interval.name}: ${interval.mode}, ${interval.relation} to ${interval.reference_role}${interval.held_role ? ` with ${interval.held_role} held` : ''}, ${interval.samples} samples, demo ${interval.demo_duration_s.toFixed(2)}s`);
+                if (interval.held_role) appendTerminalLine(`  held demo poses: ${JSON.stringify(interval.held_evidence)}`);
             }
             for (const transition of data.attachment_transitions) {
                 appendTerminalLine(`${transition.event_id}: ${transition.action} ${transition.role} (${transition.reference_version})`);
@@ -1402,6 +1403,7 @@ async function launchRun() {
                     : `Milestone ${milestone.name}: external verifier needed (${milestone.depends_on_roles.join(', ')})`);
             }
             for (const missing of data.missing) appendTerminalLine(`Needs ${missing}`);
+            for (const warning of data.warnings) appendTerminalLine(`Evidence warning: ${warning}`);
             showToast('FLASH skill', 'Spatial annotation validated', 'success');
         } catch (e) { showToast('FLASH inspect failed', e.message, 'error'); }
         return;

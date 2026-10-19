@@ -69,8 +69,8 @@ def test_inspection_flags_held_interval_without_an_attachment_event(tmp_path):
                 Relation.HELD_TO_TARGET,
                 "target",
                 (
-                    SpatialSample(0, identity, identity, identity),
-                    SpatialSample(1, identity, identity, identity),
+                    SpatialSample(0, identity, identity, identity, held_evidence="predicted"),
+                    SpatialSample(1, identity, identity, identity, held_evidence="predicted"),
                 ),
                 reference_version="target-v1",
                 held_reference_version="held-v1",
@@ -84,6 +84,8 @@ def test_inspection_flags_held_interval_without_an_attachment_event(tmp_path):
     assert "place: matching demonstrated attachment event" in inspected["missing"]
     assert inspected["reference_frames_declared"]
     assert not inspected["runtime_bindings_complete"]
+    assert inspected["intervals"][0]["held_evidence"] == {"predicted": 2}
+    assert inspected["warnings"] == ["place: no independently observed held-object demo pose"]
 
 
 @pytest.mark.requires_playwright
