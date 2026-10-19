@@ -86,3 +86,31 @@ def test_target_change_invalidates_release_gate_before_motor_send():
     assert session.motor.metrics.idle == 1
     assert "send" not in robot.calls
     assert any(e["type"] == "plan_cancelled" and e["events"] == ("release",) for e in session.progress.events)
+
+
+def test_release_gate_rejection_keeps_tick_but_never_sends_release():
+    now = [0.0]
+    robot = FakeRobot()
+    ticks = []
+    session = FlashSession(
+        skill(gate="aligned"),
+        robot,
+        on_tick=ticks.append,
+        clock=lambda: now[0],
+        sleep=lambda dt: now.__setitem__(0, now[0] + dt),
+    )
+    session.post_evidence(MilestoneUpdate("aligned", Verdict.TRUE, "camera:1", 0.0))
+    session.publish_plan(
+        0,
+        [
+            TimedAction(0, {"arm.pos": 0.1}, "contact"),
+            TimedAction(1, {"arm.pos": 0.2}, "contact", event_id="release", requires_milestone="aligned"),
+        ],
+    )
+    assert session.step() is not None
+    session.post_evidence(PoseChange(frozenset({"target"}), "camera:2", 0.01))
+    assert session.step() is None
+    assert session.progress.phase == Phase.INTERRUPTED
+    assert [tick.action_source for tick in ticks] == ["commanded", "held_goal"]
+    assert ticks[1].idle_reason == "milestone gate rejected"
+    assert robot.calls.count("send") == 1

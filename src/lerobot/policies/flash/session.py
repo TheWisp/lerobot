@@ -6,7 +6,15 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from queue import Empty, Full, Queue
 
-from .execution import ActionQueue, ActionReceipt, MotorLoop, PlanRejectedError, RobotIO, TimedAction
+from .execution import (
+    ActionQueue,
+    ActionReceipt,
+    MotorLoop,
+    MotorTick,
+    PlanRejectedError,
+    RobotIO,
+    TimedAction,
+)
 from .progress import MilestoneUpdate, Phase, Progress, Verdict
 from .skill import FlashSkill
 
@@ -33,6 +41,7 @@ class FlashSession:
         robot: RobotIO,
         *,
         on_receipt: Callable[[ActionReceipt], None] | None = None,
+        on_tick: Callable[[MotorTick], None] | None = None,
         fps: float = 30.0,
         max_starved_ticks: int = 2,
         max_splice_delta: dict[str, float] | None = None,
@@ -52,7 +61,9 @@ class FlashSession:
             kwargs["clock"] = clock
         if sleep is not None:
             kwargs["sleep"] = sleep
-        self.motor = MotorLoop(robot, self.actions, self._on_receipt, self._allow_action, fps=fps, **kwargs)
+        self.motor = MotorLoop(
+            robot, self.actions, self._on_receipt, self._allow_action, on_tick=on_tick, fps=fps, **kwargs
+        )
         self.motor.start()
 
     def post_evidence(self, item: MilestoneUpdate | PoseChange) -> None:

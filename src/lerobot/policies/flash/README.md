@@ -26,7 +26,11 @@ The executable core already separates:
 - a session state machine that consumes asynchronous evidence before each tick
   and gates semantic actions on current milestone verdicts;
 - standard LeRobot episode frames, with a `flash/v1` trace joined by episode
-  and frame index. The trace records intended and robot-accepted actions.
+  and frame index. Every motor tick is retained, including waits; the trace
+  distinguishes a new command, the servo's held goal and an observed hold.
+  The regular dataset stores replayable robot-API actions; the trace also
+  records the accepted actuator target, which may include gravity compensation
+  or a robot-side limit.
 
 The annotation points to a source LeRobot dataset episode. Dense transform
 samples are derived geometry; the original RGB-D, robot observations and

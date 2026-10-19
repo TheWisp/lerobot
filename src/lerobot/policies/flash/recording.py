@@ -13,7 +13,7 @@ from typing import Any, Protocol
 from lerobot.utils.constants import ACTION, OBS_STR
 from lerobot.utils.feature_utils import build_dataset_frame
 
-from .execution import ActionReceipt
+from .execution import ActionReceipt, MotorTick
 from .trajectory import PoseEstimate
 
 
@@ -28,13 +28,14 @@ class DatasetWriter(Protocol):
 
 @dataclass(frozen=True)
 class RecordedTick:
-    receipt: ActionReceipt
+    receipt: ActionReceipt | None
     camera_observation: dict[str, Any]
     camera_source_time_s: float | None
     pose_version: int | None
     progress_events: tuple[dict, ...] = ()
     camera_frame_id: int | None = None
     pose_estimates: dict[str, PoseEstimate] = field(default_factory=dict)
+    motor_tick: MotorTick | None = None
 
 
 class FlashEpisodeWriter:
@@ -58,17 +59,22 @@ class FlashEpisodeWriter:
         self._trace = self.partial_path.open("w", encoding="utf-8")
 
     def write(self, record: RecordedTick) -> None:
-        receipt = record.receipt
-        observation = {**receipt.observed, **record.camera_observation}
+        tick = record.motor_tick
+        receipt = record.receipt if record.receipt is not None else (tick.receipt if tick else None)
+        if tick is None and receipt is None:
+            raise ValueError("record needs a motor tick or action receipt")
+        observed = tick.observed if tick is not None else receipt.observed
+        effective_action = tick.effective_action if tick is not None else receipt.requested.action
+        observation = {**observed, **record.camera_observation}
         obs_frame = build_dataset_frame(self.dataset.features, observation, prefix=OBS_STR)
-        action_frame = build_dataset_frame(self.dataset.features, receipt.accepted, prefix=ACTION)
+        action_frame = build_dataset_frame(self.dataset.features, effective_action, prefix=ACTION)
         self.dataset.add_frame({**obs_frame, **action_frame, "task": self.task})
         trace = {
             "episode_index": self.episode_index,
             "frame_index": self.frame_index,
-            "motor_tick": receipt.tick,
-            "scheduled_s": receipt.scheduled_s,
-            "dispatched_s": receipt.dispatched_s,
+            "motor_tick": tick.tick if tick is not None else receipt.tick,
+            "scheduled_s": tick.scheduled_s if tick is not None else receipt.scheduled_s,
+            "dispatched_s": receipt.dispatched_s if receipt is not None else None,
             "camera_source_time_s": record.camera_source_time_s,
             "camera_frame_id": record.camera_frame_id,
             "pose_version": record.pose_version,
@@ -84,14 +90,17 @@ class FlashEpisodeWriter:
                 }
                 for role, estimate in record.pose_estimates.items()
             },
-            "interval": receipt.requested.interval,
-            "interval_complete": receipt.requested.interval_complete,
-            "plan_revision": receipt.revision,
-            "event_id": receipt.requested.event_id,
-            "requested": receipt.requested.action,
-            "accepted": receipt.accepted,
-            "read_duration_s": receipt.read_duration_s,
-            "write_duration_s": receipt.write_duration_s,
+            "interval": receipt.requested.interval if receipt is not None else None,
+            "interval_complete": receipt.requested.interval_complete if receipt is not None else False,
+            "plan_revision": receipt.revision if receipt is not None else None,
+            "event_id": receipt.requested.event_id if receipt is not None else None,
+            "requested": receipt.requested.action if receipt is not None else None,
+            "accepted": receipt.accepted if receipt is not None else None,
+            "effective_action": effective_action,
+            "action_source": tick.action_source if tick is not None else "commanded",
+            "idle_reason": tick.idle_reason if tick is not None else None,
+            "read_duration_s": tick.read_duration_s if tick is not None else receipt.read_duration_s,
+            "write_duration_s": receipt.write_duration_s if receipt is not None else 0.0,
             "progress_events": record.progress_events,
         }
         self._trace.write(json.dumps(trace, default=_json_value) + "\n")

@@ -1,5 +1,7 @@
 """Behavioral invariants for direct spatial imitation."""
 
+import json
+
 import numpy as np
 import pytest
 
@@ -176,11 +178,11 @@ def test_retarget_keeps_future_prefix_and_required_event():
     assert prefix_queue.take(1)[1] == 5
 
 
-def test_queue_rejects_a_retarget_jump_from_robot_accepted_boundary():
+def test_queue_rejects_a_retarget_jump_in_robot_api_action_space():
     queue = ActionQueue(max_splice_delta={"joint.pos": 0.5})
     queue.publish(0, [TimedAction(0, {"joint.pos": 0.2}, "carry")])
     assert queue.take(0)[0] is not None
-    queue.note_accepted({"joint.pos": 0.1})
+    queue.note_issued({"joint.pos": 0.1})
     with pytest.raises(PlanRejectedError, match="jumps"):
         queue.publish(1, [TimedAction(1, {"joint.pos": 1.0}, "carry")])
     queue.publish(1, [TimedAction(1, {"joint.pos": 0.4}, "carry")])
@@ -425,9 +427,65 @@ def test_regular_lerobot_frame_and_flash_trace_are_written_together(tmp_path):
     worker.submit(RecordedTick(receipt, {}, None, 7, pose_estimates={"target": estimate}))
     worker.finish("unknown", "no post-release observation")
     assert dataset.saved
-    assert dataset.frames[0]["action"].tolist() == [1.0]
+    assert dataset.frames[0]["action"].tolist() == [2.0]
     assert dataset.frames[0]["task"] == "insert object"
     trace = (tmp_path / "flash/v1/episode_000000.jsonl").read_text()
     assert '"pose_version": 7' in trace
     assert '"reference_version": "ref1"' in trace
+    assert '"accepted": {"joint.pos": 1.0}' in trace
     assert '"outcome": "unknown"' in (tmp_path / "flash/v1/manifest.json").read_text()
+
+
+def test_idle_motor_ticks_remain_in_regular_dataset_timeline(tmp_path):
+    class FakeDataset:
+        root = tmp_path
+        features = {
+            "observation.state": {"dtype": "float32", "shape": (1,), "names": ["joint.pos"]},
+            "action": {"dtype": "float32", "shape": (1,), "names": ["joint.pos"]},
+        }
+
+        def __init__(self):
+            self.frames = []
+
+        def add_frame(self, frame):
+            self.frames.append(frame)
+
+        def save_episode(self):
+            pass
+
+    class Robot:
+        def get_state_observation(self):
+            return {"joint.pos": 0.1}
+
+        def send_action(self, action):
+            return dict(action)
+
+    now = [0.0]
+    captured = []
+    queue = ActionQueue()
+    loop = MotorLoop(
+        Robot(),
+        queue,
+        lambda _receipt: None,
+        on_tick=captured.append,
+        clock=lambda: now[0],
+        sleep=lambda delay: now.__setitem__(0, now[0] + delay),
+    )
+    assert loop.tick() is None
+    queue.publish(0, [TimedAction(1, {"joint.pos": 0.8}, "move")])
+    assert loop.tick() is not None
+    assert loop.tick() is None
+    assert [tick.action_source for tick in captured] == ["observed_hold", "commanded", "held_goal"]
+    dataset = FakeDataset()
+    writer = FlashEpisodeWriter(dataset, 0, "motion")
+    worker = RecorderWorker(writer)
+    worker.start()
+    for tick in captured:
+        worker.submit(RecordedTick(None, {}, None, None, motor_tick=tick))
+    worker.finish("unknown", "unverified")
+    np.testing.assert_allclose([frame["action"].tolist() for frame in dataset.frames], [[0.1], [0.8], [0.8]])
+    trace = [
+        json.loads(line) for line in (tmp_path / "flash/v1/episode_000000.jsonl").read_text().splitlines()
+    ]
+    assert [entry["motor_tick"] for entry in trace] == [0, 1, 2]
+    assert [entry["action_source"] for entry in trace] == ["observed_hold", "commanded", "held_goal"]

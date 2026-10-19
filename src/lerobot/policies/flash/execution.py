@@ -44,6 +44,20 @@ class ActionReceipt:
     revision: int
 
 
+@dataclass(frozen=True)
+class MotorTick:
+    """Every scheduled tick, including a tick that issues no new command."""
+
+    tick: int
+    scheduled_s: float
+    observed: dict
+    read_duration_s: float
+    effective_action: dict[str, float]
+    receipt: ActionReceipt | None
+    idle_reason: str | None = None
+    action_source: str = "commanded"
+
+
 class PlanRejectedError(RuntimeError):
     pass
 
@@ -63,7 +77,7 @@ class ActionQueue:
         self._revision = -1
         self._last_tick = -1
         self._issued_events: set[str] = set()
-        self._last_accepted: dict[str, float] | None = None
+        self._last_issued: dict[str, float] | None = None
         self._max_splice_delta = max_splice_delta
 
     def publish(
@@ -97,7 +111,7 @@ class ActionQueue:
                 raise PlanRejectedError("replacement leaves a gap at the splice")
             if not prefix and first_tick > self._last_tick + 1:
                 raise PlanRejectedError("replacement leaves an empty command interval")
-            boundary = prefix[-1][1].action if prefix else self._last_accepted
+            boundary = prefix[-1][1].action if prefix else self._last_issued
             if boundary is not None and self._max_splice_delta is not None:
                 for joint, limit in self._max_splice_delta.items():
                     if (
@@ -109,9 +123,10 @@ class ActionQueue:
             self._actions = deque(prefix + [(revision, command) for command in future])
             self._revision = revision
 
-    def note_accepted(self, action: dict[str, float]) -> None:
+    def note_issued(self, action: dict[str, float]) -> None:
+        """Track continuity in the action space the robot API receives."""
         with self._lock:
-            self._last_accepted = dict(action)
+            self._last_issued = dict(action)
 
     @property
     def revision(self) -> int:
@@ -190,6 +205,7 @@ class MotorLoop:
         actions: ActionQueue,
         on_receipt: Callable[[ActionReceipt], None],
         allow_action: Callable[[TimedAction], bool] | None = None,
+        on_tick: Callable[[MotorTick], None] | None = None,
         *,
         fps: float = 30.0,
         clock: Callable[[], float] = time.monotonic,
@@ -200,6 +216,7 @@ class MotorLoop:
         self.robot = robot
         self.actions = actions
         self.on_receipt = on_receipt
+        self.on_tick = on_tick
         self.allow_action = allow_action
         self.period_s = 1.0 / fps
         self.clock = clock
@@ -207,6 +224,30 @@ class MotorLoop:
         self.metrics = MotorMetrics()
         self.epoch_s: float | None = None
         self._last_dispatch_s: float | None = None
+        self._last_issued: dict[str, float] | None = None
+
+    def _record_tick(
+        self,
+        tick: int,
+        deadline: float,
+        observed: dict,
+        read_duration_s: float,
+        receipt: ActionReceipt | None,
+        idle_reason: str | None = None,
+    ) -> None:
+        if self.on_tick is None:
+            return
+        # Save the replayable robot-API action, not a downstream actuator goal
+        # that a gravity-compensated robot would compensate a second time.
+        effective = self._last_issued or {k: float(v) for k, v in observed.items() if k.endswith(".pos")}
+        source = (
+            "commanded" if receipt else ("held_goal" if self._last_issued is not None else "observed_hold")
+        )
+        self.on_tick(
+            MotorTick(
+                tick, deadline, observed, read_duration_s, dict(effective), receipt, idle_reason, source
+            )
+        )
 
     def start(self) -> None:
         self.epoch_s = self.clock()
@@ -230,19 +271,26 @@ class MotorLoop:
             self.metrics.ticks += 1
             self.metrics.idle += 1
             self.metrics.read_s.append(read_end - read_start)
+            self._record_tick(tick, deadline, observed, read_end - read_start, None, idle_reason)
             return None
         action, revision = self.actions.take(tick)
         self.metrics.ticks += 1
         self.metrics.read_s.append(read_end - read_start)
         if action is None:
             self.metrics.starved += 1
+            self._record_tick(tick, deadline, observed, read_end - read_start, None, "action queue starved")
             return None
         if self.allow_action is not None and not self.allow_action(action):
+            self.metrics.idle += 1
+            self._record_tick(
+                tick, deadline, observed, read_end - read_start, None, "milestone gate rejected"
+            )
             raise PlanRejectedError(
                 f"milestone gate for {action.event_id or action.interval} is not satisfied"
             )
         accepted = self.robot.send_action(action.action)
-        self.actions.note_accepted(accepted)
+        self._last_issued = dict(action.action)
+        self.actions.note_issued(action.action)
         dispatched = self.clock()
         if self._last_dispatch_s is not None:
             self.metrics.max_dispatch_gap_s = max(
@@ -263,4 +311,5 @@ class MotorLoop:
             revision,
         )
         self.on_receipt(receipt)
+        self._record_tick(tick, deadline, observed, read_end - read_start, receipt)
         return receipt
