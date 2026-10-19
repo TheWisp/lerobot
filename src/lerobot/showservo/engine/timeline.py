@@ -28,13 +28,25 @@ START = core.START_FRAME  # where the leg begins: the demo's motion since its ke
 @dataclasses.dataclass(frozen=True)
 class Demo:
     """What the engine takes of a recorded demo: its clock, the fingertip's pose (base frame), the gripper's command
-    and reading, and the arm's joints."""
+    and reading, and the arm's joints; and ``grips``, per object it held, how the object sat in the gripper at each
+    sample, as the demo's own perception had it (engine.demo_beliefs). Without them, the object sat as it lay at the
+    grasp, all the way."""
 
     t: np.ndarray
     tips: np.ndarray
     grip: np.ndarray
     grip_obs: np.ndarray
     q: np.ndarray
+    grips: dict[str, np.ndarray] = dataclasses.field(default_factory=dict)
+
+    def grip_of(self, obj: str, td: float) -> np.ndarray | None:
+        """How ``obj`` sat in the demo's gripper at demo time ``td`` (its motion since the demo, in the fingertip's
+        frame); None without the demo's perception of it."""
+        grips = self.grips.get(obj)
+        if grips is None:
+            return None
+        k, u = self._bracket(td)
+        return core.interp_rigid(grips[k], grips[k + 1], u)
 
     def _bracket(self, td: float) -> tuple[int, float]:
         k = int(np.clip(np.searchsorted(self.t, td, side="right") - 1, 0, len(self.t) - 2))

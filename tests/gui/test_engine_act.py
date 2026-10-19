@@ -415,3 +415,57 @@ def test_an_engine_act_stops_when_the_point_groups_view_draws_nothing(monkeypatc
     assert engine_act._groups_stopped(now) == "", "designated just now: its first frame may still come"
     runtime._state.groups_feed.fresh = now - 1.0
     assert engine_act._groups_stopped(now - 1.0) == "the point groups view drew no frame for 0.3 s"
+
+
+def test_an_engine_act_takes_the_demos_grips_from_its_perception_or_says_why_not(
+    tmp_path,
+    monkeypatch,
+    group_live,  # noqa: F811
+):
+    """At an engine act's start, how the demo's objects sat in its gripper comes from the demo's perception by the
+    pipeline as it is now: every pose it took, on the demo's clock and in the base frame, goes to the same rule an act
+    keeps its own hold by. A demo not saved, or not processed by this pipeline, is said, and the act holds its objects
+    as they lay at the grasp."""
+    from lerobot.showservo import perception
+    from lerobot.showservo.engine import demo_beliefs
+    from lerobot.showservo.recordings import open_recording
+    from tests.showservo.test_perception import T0, _demo, _groups_run
+
+    timeline = types.SimpleNamespace(demo="the demo", events=["the events"])
+    t_bc = np.eye(4)
+    t_bc[:3, 3] = (0.1, 0.2, 0.3)
+    assert engine_act._demo_grips(None, timeline, t_bc, {}, {})[1] == {
+        "used": False,
+        "why": "the demo is not saved",
+    }
+    mask = _demo(tmp_path / "demo", 40)
+    used = engine_act._demo_grips(str(tmp_path / "demo"), timeline, t_bc, {}, {})[1]
+    assert not used["used"] and perception.version() in used["why"]
+    rec = open_recording(tmp_path / "demo")
+    tracker, frames, pictures = _groups_run(group_live, 40, 100)
+    d = perception.cache_dir(rec)
+    d.mkdir(parents=True)
+    group_live.write_groups_dump(
+        d / "tracks.npz", frames, pictures, {"block": mask}, {"block": tracker.objects["block"].tracks}
+    )
+    p = perception.finish(rec, d)
+    seen = {}
+
+    def grips(demo, events, views, centres, symmetry=None):
+        seen.update(demo=demo, events=events, views=views)
+        return {"block": "its grips"}, {"block": {"views_held": 0}}
+
+    monkeypatch.setattr(demo_beliefs, "grips", grips)
+    out, info = engine_act._demo_grips(str(tmp_path / "demo"), timeline, t_bc, {"block": np.zeros(3)}, {})
+    assert out == {"block": "its grips"} and info == {
+        "used": True,
+        "version": p.version,
+        "objects": {"block": {"views_held": 0}},
+    }
+    assert seen["demo"] == "the demo" and seen["events"] == ["the events"]
+    taken = [(r["t"], r["objects"]["block"]) for r in p.rows if r["objects"]["block"]["taken"]]
+    assert len(seen["views"]["block"]) == len(taken) > 0
+    (t, row), (td, motion) = taken[-1], seen["views"]["block"][-1]
+    assert td == pytest.approx(t - T0), "on the demo's clock"
+    cam = np.asarray(row["candidates"][0]["motion"])
+    np.testing.assert_allclose(motion, t_bc @ cam @ np.linalg.inv(t_bc), err_msg="in the base frame")

@@ -381,6 +381,38 @@ def _groups_stopped(designated_at: float) -> str:
     return ""
 
 
+def _demo_grips(
+    root: str | None,
+    timeline: Timeline,
+    t_bc: np.ndarray,
+    centres: dict[str, np.ndarray],
+    symmetries: dict[str, tuple[dict, np.ndarray]],
+) -> tuple[dict[str, np.ndarray], dict[str, Any]]:
+    """How each object the demo held sat in its gripper, sample by sample, from the demo's perception by the pipeline
+    as it is now (lerobot.showservo.engine.demo_beliefs), and what that was made of; none, and why, without it: the
+    act then has each as it lay at the grasp. Pre: off the event loop (it reads the demo's files)."""
+    from lerobot.showservo import perception
+    from lerobot.showservo.engine import demo_beliefs
+    from lerobot.showservo.recordings import open_recording
+
+    if root is None:
+        return {}, {"used": False, "why": "the demo is not saved"}
+    try:
+        rec = open_recording(root)
+    except ValueError as e:
+        return {}, {"used": False, "why": str(e)}
+    p = perception.load(rec)
+    if p is None:
+        return {}, {
+            "used": False,
+            "why": f"the demo is not processed by the perception pipeline {perception.version()}",
+        }
+    origin = rec.origin if rec.origin is not None else float(rec.arm.t[0])
+    views = demo_beliefs.views_from(p, origin, t_bc)
+    grips, info = demo_beliefs.grips(timeline.demo, timeline.events, views, centres, symmetries)
+    return grips, {"used": True, "version": p.version, "objects": info}
+
+
 def arm_refusal() -> str | None:
     """Why the act engine cannot drive the connected arm, or None. It commands joints from the calibrated kinematics
     without watching the fingertip, so it drives only the arm held on its commanded pose against gravity: the
@@ -495,6 +527,11 @@ async def _act_engine_task(
         centres, symmetries = object_geometry(
             {n: demo.objects.get(n if n != session else obj, {}) for n in surfaces}, surfaces
         )
+        # How the demo's objects sat in its gripper, by its own perception under the runtime's rules (E35).
+        grips, demo_beliefs_info = await asyncio.get_running_loop().run_in_executor(
+            runtime._PLAN_EXECUTOR, _demo_grips, demo.root, timeline, t_bc, centres, symmetries
+        )
+        demo_record.grips.update(grips)
         world = World(scene, starts, centres, symmetry=symmetries)
         engine = Engine(
             timeline,
@@ -539,6 +576,7 @@ async def _act_engine_task(
         )
         run.meta["runner"] = "engine"
         run.meta["pose_source"] = source
+        run.meta["demo_beliefs"] = demo_beliefs_info
         run.meta["perturb"] = perturb
         q0 = np.array([float(cur[2][m]) for m in names])
         act.step = "starting"

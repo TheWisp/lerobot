@@ -280,29 +280,36 @@ class Engine:
         before = self._state_pose(leg_n - 1, 1.0) if leg_n > 0 else self.cmds[0].pose
         return before @ np.linalg.inv(self.demo.pose_at(self.tl.legs[leg_n].t0))
 
-    def _compose(self, leg_n: int, d: np.ndarray, motion: np.ndarray | None = None) -> np.ndarray:
-        """The demo's pose ``d`` carried by the leg's object, at its estimate or at ``motion``."""
+    def _compose(
+        self, leg_n: int, d: np.ndarray, motion: np.ndarray | None = None, td: float | None = None
+    ) -> np.ndarray:
+        """The demo's pose ``d`` (at demo time ``td``) carried by the leg's object, at its estimate or at ``motion``."""
         leg = self.tl.legs[leg_n]
         if leg.obj == START:  # the demo's gripper motion from where the leg began: any hold rides along
             return self._anchor(leg_n) @ d
         out = (self.aims.get(leg.obj, self.world.motion(leg.obj)) if motion is None else motion) @ d
-        return out @ self._held_fix(leg.held)
+        return out @ self._held_fix(leg.held, td)
 
-    def _held_fix(self, held: str | None) -> np.ndarray:
+    def _held_fix(self, held: str | None, td: float | None = None) -> np.ndarray:
         """The gripper-side change for the object a leg began holding: while it is held, from how it sits; once let
         go in the leg, as it was then, so the gripper goes on from where it let go."""
         if held is None:
             return np.eye(4)
-        return self._fix(held) if held in self.holds else self.let_go.get(held, np.eye(4))
+        return self._fix(held, td) if held in self.holds else self.let_go.get(held, np.eye(4))
 
-    def _fix(self, obj: str) -> np.ndarray:
-        """The gripper-side change that puts the held ``obj`` where the demo had it: the demo's fingertip at the grasp
-        against how the object sits in the gripper, as the commands follow it."""
+    def _fix(self, obj: str, td: float | None = None) -> np.ndarray:
+        """The gripper-side change that puts the held ``obj`` where the demo had it at demo time ``td``: how it sat in
+        the demo's gripper then (Demo.grip_of; as it lay at the grasp, without the demo's perception of it) against
+        how it sits in this one, as the commands follow it."""
         sits = self.held_aims.get(obj, self.holds[obj].estimate)
-        return np.linalg.inv(self.demo.tips[self.grasp_i[obj]]) @ np.linalg.inv(sits)
+        demo_sits = None if td is None else self.demo.grip_of(obj, td)
+        if demo_sits is None:
+            demo_sits = np.linalg.inv(self.demo.tips[self.grasp_i[obj]])
+        return demo_sits @ np.linalg.inv(sits)
 
     def _state_pose(self, leg_n: int, s: float) -> np.ndarray:
-        return self._compose(leg_n, self.demo.pose_at(self.tl.time(leg_n, s)))
+        td = self.tl.time(leg_n, s)
+        return self._compose(leg_n, self.demo.pose_at(td), td=td)
 
     def _line_end(self, leg_n: int, c0: np.ndarray, motion: np.ndarray | None = None) -> np.ndarray:
         leg = self.tl.legs[leg_n]
@@ -310,7 +317,7 @@ class Engine:
             end = c0.copy()
             end[2, 3] += leg.up_m
             return end
-        end = self._compose(leg_n, self.demo.pose_at(leg.t1), motion)
+        end = self._compose(leg_n, self.demo.pose_at(leg.t1), motion, td=leg.t1)
         if leg.constraint == "orientation":
             end[:3, 3] = c0[:3, 3]
         return end
@@ -356,7 +363,7 @@ class Engine:
             self.anchors[leg_n] = c0 @ np.linalg.inv(self.demo.pose_at(td0))
         if leg.move == "follow":
             d0 = self.demo.pose_at(td0)
-            m, deg = core.pose_residual(c0, self._compose(leg_n, d0))
+            m, deg = core.pose_residual(c0, self._compose(leg_n, d0, td=td0))
             close = m <= core.ACT_SOLVE_TOL_M and deg <= core.ACT_SOLVE_TOL_DEG
             return Run(
                 "leg",
@@ -433,13 +440,13 @@ class Engine:
         if run.kind == "retrace":
             s = run.s0 * (1.0 - motion_u)
             td = self.tl.time(run.leg, s)
-            pose = run.d0 @ self.demo.pose_at(td) @ self._held_fix(leg.held)
+            pose = run.d0 @ self.demo.pose_at(td) @ self._held_fix(leg.held, td)
             return pose, run.g0, s, td
         s = run.s0 + motion_u * (1.0 - run.s0)
         td = self.tl.time(run.leg, s)
         if leg.move == "follow":
             d = self.demo.pose_at(td)
-            end = self._compose(run.leg, d)
+            end = self._compose(run.leg, d, td=td)
             if run.blend:
                 start = run.c0 @ np.linalg.inv(run.d0) @ d
                 end = core.interp_rigid(start, end, _smooth(motion_u))
@@ -591,7 +598,7 @@ class Engine:
             self.holds[e.obj] = Steady(
                 self._as_held(e.obj, tip, motion), self.world.centres.get(e.obj, np.zeros(3))
             )
-            fix_m, fix_deg = core.pose_residual(np.eye(4), self._fix(e.obj))
+            fix_m, fix_deg = core.pose_residual(np.eye(4), self._fix(e.obj, float(self.demo.t[e.i])))
             info.update(fix_mm=round(fix_m * 1000.0, 2), fix_deg=round(fix_deg, 2))
             self.world.touched(e.obj, now)
             m.data = {"tip": tip, "motion": motion}
@@ -600,7 +607,7 @@ class Engine:
                 if g.event.kind == "grasp" and g.event.obj == e.obj and g.event.i == e.grasp_i:
                     g.closed = True
             if e.obj in self.holds:
-                self.let_go[e.obj] = self._fix(e.obj)
+                self.let_go[e.obj] = self._fix(e.obj, float(self.demo.t[e.i]))
             hold = self.holds.pop(e.obj, None)
             ref = self.world.motion(e.ref)
             put = tip @ hold.estimate if hold is not None else None
