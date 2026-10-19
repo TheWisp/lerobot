@@ -112,6 +112,12 @@ class ActionQueue:
         with self._lock:
             if revision <= self._revision:
                 raise PlanRejectedError("stale plan revision")
+            expired = [command for command in commands if command.tick <= self._last_tick]
+            if any(
+                command.event_id or command.interval_complete or not command.may_skip_if_late
+                for command in expired
+            ):
+                raise PlanRejectedError("replacement expired before required samples could be published")
             future = [command for command in commands if command.tick > self._last_tick]
             if not future:
                 raise PlanRejectedError("replacement expired while being computed")
@@ -133,8 +139,9 @@ class ActionQueue:
                 raise PlanRejectedError("replacement silently drops a required semantic event")
             if prefix and prefix[-1][1].tick + 1 != first_tick:
                 raise PlanRejectedError("replacement leaves a gap at the splice")
-            if not prefix and first_tick > self._last_tick + 1:
-                raise PlanRejectedError("replacement leaves an empty command interval")
+            # A new interval may deliberately begin on a later deadline. The
+            # session idles until then and starts its local demo clock there.
+            # A gap inside a queued moving interval is still forbidden above.
             boundary = prefix[-1][1].action if prefix else self._last_issued
             if boundary is not None and self._max_splice_delta is not None:
                 for joint, limit in self._max_splice_delta.items():

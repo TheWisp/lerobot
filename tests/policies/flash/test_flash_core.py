@@ -192,6 +192,19 @@ def test_retarget_keeps_future_prefix_and_required_event():
     assert prefix_queue.take(1)[1] == 5
 
 
+def test_delayed_replan_cannot_lose_the_start_of_a_demonstrated_interval():
+    queue = ActionQueue()
+    queue.skip(0)
+    with pytest.raises(PlanRejectedError, match="expired before required samples"):
+        queue.publish(
+            0,
+            [TimedAction(i, {"joint.pos": float(i)}, "contact") for i in range(4)],
+        )
+    assert queue.revision == -1
+    queue.publish(0, [TimedAction(i, {"joint.pos": float(i)}, "contact") for i in range(1, 4)])
+    assert queue.take(1)[0].action["joint.pos"] == 1.0
+
+
 def test_queue_rejects_a_retarget_jump_in_robot_api_action_space():
     queue = ActionQueue(max_splice_delta={"joint.pos": 0.5})
     queue.publish(0, [TimedAction(0, {"joint.pos": 0.2}, "carry")])

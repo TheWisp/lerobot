@@ -70,6 +70,24 @@ def test_session_runs_at_fixed_ticks_and_requires_explicit_outcome():
     assert session.progress.phase == Phase.SUCCEEDED
 
 
+def test_future_contact_chunk_waits_to_start_its_own_demo_clock():
+    now = [0.0]
+    robot = FakeRobot()
+    session = FlashSession(
+        skill(), robot, clock=lambda: now[0], sleep=lambda dt: now.__setitem__(0, now[0] + dt)
+    )
+    session.publish_plan(
+        0,
+        [TimedAction(i, {"arm.pos": float(i)}, "contact", interval_complete=i == 5) for i in range(2, 6)],
+    )
+    assert session.step() is None
+    assert session.step() is None
+    assert session.progress.phase == Phase.WAITING
+    assert session.step().tick == 2
+    assert session.progress.interval_start_s == 2 / 30
+    assert robot.calls.count("send") == 1
+
+
 def test_target_change_invalidates_release_gate_before_motor_send():
     now = [0.0]
     robot = FakeRobot()
