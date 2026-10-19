@@ -20,6 +20,8 @@ The executable core already separates:
   any number of annotated demo views and reports loss when depth or geometry
   cannot support a pose;
 - kinematics-neutral short IK chunks and atomic future-queue replacement;
+- a selected-joint adapter that runs the SO-107's seven-joint FK/IK model
+  while the planner controls six arm joints and the gripper separately;
 - a camera-independent motor read/dispatch tick through `Robot`;
 - the separately configured SO-107 gravity-compensated robot controller used
   in the sealed rig measurements, with its measured gains and URDF inertias;
@@ -30,7 +32,8 @@ The executable core already separates:
   distinguishes a new command, the servo's held goal and an observed hold.
   The regular dataset stores replayable robot-API actions; the trace also
   records the accepted actuator target, which may include gravity compensation
-  or a robot-side limit.
+  or a robot-side limit. The pose layer can be read back by episode and frame
+  index for subsequent skill compilation.
 
 The annotation points to a source LeRobot dataset episode. Dense transform
 samples are derived geometry; the original RGB-D, robot observations and

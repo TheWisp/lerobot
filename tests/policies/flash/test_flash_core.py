@@ -16,7 +16,12 @@ from lerobot.policies.flash.geometry import held_object_goal
 from lerobot.policies.flash.perception import AttachmentEstimate, LatestPoseStore, RGBDFrame
 from lerobot.policies.flash.planner import InfeasibleTrajectoryError, JointPlanner, PlannerLimits
 from lerobot.policies.flash.progress import MilestoneUpdate, Phase, Progress, Verdict
-from lerobot.policies.flash.recording import FlashEpisodeWriter, RecordedTick, RecorderWorker
+from lerobot.policies.flash.recording import (
+    FlashEpisodeWriter,
+    RecordedTick,
+    RecorderWorker,
+    load_pose_estimates,
+)
 from lerobot.policies.flash.skill import (
     FlashSkill,
     Interval,
@@ -434,6 +439,9 @@ def test_regular_lerobot_frame_and_flash_trace_are_written_together(tmp_path):
     assert '"reference_version": "ref1"' in trace
     assert '"accepted": {"joint.pos": 1.0}' in trace
     assert '"outcome": "unknown"' in (tmp_path / "flash/v1/manifest.json").read_text()
+    loaded = load_pose_estimates(tmp_path, 0, expected_frames=1)
+    assert loaded[0]["target"].reference_version == "ref1"
+    np.testing.assert_allclose(loaded[0]["target"].pose, pose(0.1))
 
 
 def test_idle_motor_ticks_remain_in_regular_dataset_timeline(tmp_path):

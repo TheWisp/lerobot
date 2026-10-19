@@ -14,7 +14,7 @@ from lerobot.utils.constants import ACTION, OBS_STR
 from lerobot.utils.feature_utils import build_dataset_frame
 
 from .execution import ActionReceipt, MotorTick
-from .trajectory import PoseEstimate
+from .trajectory import Evidence, PoseEstimate
 
 
 class DatasetWriter(Protocol):
@@ -127,6 +127,42 @@ class FlashEpisodeWriter:
         staged = manifest_path.with_suffix(".json.tmp")
         staged.write_text(json.dumps(manifest, indent=2) + "\n")
         os.replace(staged, manifest_path)
+
+
+def load_pose_estimates(
+    dataset_root: str | Path, episode_index: int, *, expected_frames: int | None = None
+) -> dict[int, dict[str, PoseEstimate]]:
+    """Read the pose layer joined to an ordinary LeRobot episode by frame index."""
+    extension_dir = Path(dataset_root) / "flash" / "v1"
+    manifest = json.loads((extension_dir / "manifest.json").read_text())
+    if manifest.get("schema_version") != 1:
+        raise ValueError("unsupported FLASH pose trace version")
+    item = manifest["episodes"][str(episode_index)]
+    name = item["trace"]
+    if Path(name).name != name:
+        raise ValueError("FLASH trace name must be local to its extension directory")
+    result = {}
+    with (extension_dir / name).open(encoding="utf-8") as stream:
+        for expected_index, line in enumerate(stream):
+            entry = json.loads(line)
+            if entry["episode_index"] != episode_index or entry["frame_index"] != expected_index:
+                raise ValueError("FLASH trace is not aligned with its LeRobot episode")
+            estimates = {}
+            for role, pose in entry.get("poses", {}).items():
+                estimates[role] = PoseEstimate(
+                    role=role,
+                    pose=pose["pose"],
+                    source_time_s=pose["source_time_s"],
+                    available_time_s=pose["available_time_s"],
+                    evidence=Evidence(pose["evidence"]),
+                    reference_version=pose["reference_version"],
+                    translation_supported=tuple(pose["translation_supported"]),
+                    rotation_supported=tuple(pose["rotation_supported"]),
+                )
+            result[expected_index] = estimates
+    if len(result) != item["frames"] or (expected_frames is not None and len(result) != expected_frames):
+        raise ValueError("FLASH trace frame count differs from its LeRobot episode")
+    return result
 
 
 def _json_value(value: Any) -> Any:
