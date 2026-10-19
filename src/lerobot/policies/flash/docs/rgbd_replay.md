@@ -49,3 +49,14 @@ and 1.8 mm median surface residual. It refit a second time after admitting
 boundary points and then rejected the shifted boundary. The fit now retains
 the first consensus refit and reports its measured inliers. A compact
 correspondence fixture from frames 100→101 protects this correction.
+
+An additional held-view reference at frame 300, registered by the recorded
+point-group transform, restored a fit at frame 305. By frame 315 the patch fit
+and point-group proposal diverged: their **object-centre positions** were
+3.6 cm apart. The patch fit had a lower 90th-percentile depth residual on
+points projected into the SAM3 mask (1.1 cm versus 6.9 cm), but covered less
+of the mask (about 37% versus 65%). Neither source dominates both checks;
+`pose_disagreement.py` reports this as ambiguous. The group transform is not
+ground truth, and the depth comparison covers only visible projected points.
+This case remains a held-pose limitation and must not become an automatic
+observed attachment correction without further evidence.

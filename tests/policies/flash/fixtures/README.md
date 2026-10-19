@@ -5,3 +5,9 @@ and aligned millimetre depth was unprojected using that recording's `cam_K.txt`.
 The source array is in the frame-100 camera/object coordinate system; target
 is in frame-101 camera coordinates. No raw RGB or depth is included. It
 captures a real false rejection caused by an extra post-consensus refit.
+
+`dowel_held_frame_315.npz` contains a registered two-view dowel point model,
+its frame-315 SAM3 mask and aligned depth, the frame-315 matched-patch pose,
+and the same frame's point-group pose. The two reference views were frames
+100 and 300, joined using the recorded group transforms. This fixture
+documents a disagreement, not an independently measured ground-truth pose.
