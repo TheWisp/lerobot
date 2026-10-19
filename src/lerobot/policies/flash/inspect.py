@@ -7,6 +7,7 @@ import json
 from collections import Counter
 from pathlib import Path
 
+from .prepared import PreparedFlashSkill
 from .skill import FlashSkill
 
 
@@ -14,7 +15,9 @@ def inspect_skill(path: str) -> dict:
     source = Path(path)
     if not source.is_file() or source.stat().st_size > 16 * 1024 * 1024:
         raise ValueError("skill file must exist and be at most 16 MiB")
-    skill = FlashSkill.load(source)
+    metadata = json.loads(source.read_text())
+    prepared = PreparedFlashSkill.load(source) if "models" in metadata and "references" in metadata else None
+    skill = prepared.skill if prepared is not None else FlashSkill.load(source)
     missing = []
     missing_frames = []
     for interval in skill.intervals:
@@ -32,6 +35,8 @@ def inspect_skill(path: str) -> dict:
         ):
             missing.append(f"{interval.name}: matching demonstrated attachment event")
     missing = missing_frames + missing
+    if prepared is None:
+        missing.append("prepared RGB-D object references")
     warnings = []
     for interval in skill.intervals:
         if interval.relation.value == "held_to_target" and not any(
@@ -70,6 +75,20 @@ def inspect_skill(path: str) -> dict:
         ],
         "reference_frames_declared": not missing_frames,
         "runtime_bindings_complete": not missing,
+        "prepared_references": (
+            [
+                {
+                    "role": reference.role,
+                    "version": reference.version,
+                    "views": len(reference.snippets),
+                    "model_points": len(model.points.points_object_m),
+                }
+                for reference, model in zip(prepared.references, prepared.appearance_models, strict=True)
+            ]
+            if prepared is not None
+            else []
+        ),
+        "descriptor_model_id": prepared.descriptor_model_id if prepared is not None else None,
         "missing": missing,
         "warnings": warnings,
         "intervals": [

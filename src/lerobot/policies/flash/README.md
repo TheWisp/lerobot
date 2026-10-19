@@ -37,6 +37,10 @@ The executable core already separates:
 - an initial SAM3-mask/DINOv2-patch matcher that constructs a metric object
   point-and-appearance bank from annotated RGB-D demo views, then submits
   live correspondences to the common pose backend;
+- a versioned prepared-skill extension that saves the spatial skill, stable
+  multi-view object references and derived metric point/descriptors beside
+  the regular dataset. Run → FLASH can inspect either a raw skill annotation
+  or this prepared bundle, and reports when a raw skill still lacks references;
 - a spawn-isolated perception process that loads GPU models in the child,
   accepts the latest aligned camera snapshot and publishes timestamped poses
   to a short-lock store outside the motor loop;

@@ -1298,8 +1298,8 @@ function renderRunForm() {
     // versioned spatial skill before a live tracker or motor can be started.
     html += `<div id="run-section-flash" style="${selectedWorkflow === 'flash' ? '' : 'display:none'}">`;
     html += '<div class="form-grid">';
-    html += `<label>Skill file${_REQ}</label>`;
-    html += '<input id="run-flash-skill" type="text" placeholder="/absolute/path/to/flash_skill.json">';
+    html += `<label>Prepared bundle${_REQ}</label>`;
+    html += '<input id="run-flash-skill" type="text" placeholder="/absolute/path/to/flash/v1/prepared/name/bundle.json">';
     html += '</div>';
     html += '<div class="form-hint">Inspect the source episode, spatial relations, timing and milestones. Live execution appears here after the pose source and recorder are connected.</div>';
     html += '</div>';
@@ -1395,6 +1395,9 @@ async function launchRun() {
             }
             for (const transition of data.attachment_transitions) {
                 appendTerminalLine(`${transition.event_id}: ${transition.action} ${transition.role} (${transition.reference_version})`);
+            }
+            for (const reference of data.prepared_references) {
+                appendTerminalLine(`Reference ${reference.role}: ${reference.views} views, ${reference.model_points} surface points (${reference.version})`);
             }
             for (const milestone of data.milestones) {
                 const rule = milestone.pose_relation;
