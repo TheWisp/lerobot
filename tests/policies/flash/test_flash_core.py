@@ -110,6 +110,48 @@ def test_connection_duration_adapts_to_distance_without_stretching_next_contact(
     assert near.start_time_s == 11
 
 
+def test_generated_connection_retimes_short_cartesian_move_with_large_joint_travel():
+    class AmplifiedKinematics:
+        def inverse_kinematics(self, _seed, target):
+            return np.array([target[0, 3] * 10_000])
+
+        def forward_kinematics(self, joints):
+            return pose(joints[0] / 10_000)
+
+    interval = Interval(
+        "approach",
+        MotionMode.CONNECTION,
+        Relation.EE_TO_OBJECT,
+        "object",
+        (sample(0, (0, 0, 0), (0, 0, 0)), sample(1, (0, 0, 0), (0, 0, 0))),
+        speed_m_s=0.04,
+        reference_version="object-v1",
+    )
+    reference = PoseEstimate(
+        "object", pose(0.01), 0, 0, Evidence.OBSERVED, "object-v1", (True,) * 3, (True,) * 3
+    )
+    connection = ConnectionTrajectory.begin(interval, pose(), reference.pose, None, 0)
+    assert connection.duration_s == pytest.approx(0.25)
+    planner = JointPlanner(
+        AmplifiedKinematics(), ("arm",), "gripper", PlannerLimits((180.0,), 0.001, 0.01, 10.0)
+    )
+    actions = planner.plan(
+        interval,
+        start_tick=0,
+        count=8,
+        epoch_s=0,
+        period_s=1 / 30,
+        interval_start_s=0,
+        seed_deg=np.array([0.0]),
+        reference=reference,
+        attachment=None,
+        connection=connection,
+    )
+    assert connection.joint_retimed
+    assert connection.duration_s > 100 / 180
+    assert max(np.diff([0.0, *(action.action["arm.pos"] for action in actions)])) <= 180 / 30
+
+
 def test_milestone_requires_fresh_evidence_and_motion_is_not_success():
     interaction = Interval(
         "grasp",

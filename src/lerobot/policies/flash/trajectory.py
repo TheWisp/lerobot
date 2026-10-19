@@ -154,7 +154,7 @@ def demonstrated_goal(
 
 @dataclass
 class ConnectionTrajectory:
-    """A generated free-space connection with a distance-derived duration.
+    """A generated free-space connection with distance and joint-speed timing.
 
     Retargeting starts a *remaining* path at the measured EE pose; downstream
     demonstrated intervals begin their own clock only after this path ends.
@@ -165,6 +165,7 @@ class ConnectionTrajectory:
     goal_pose: np.ndarray
     start_time_s: float
     duration_s: float
+    joint_retimed: bool = False
 
     @classmethod
     def begin(
@@ -191,6 +192,7 @@ class ConnectionTrajectory:
         replacement = self.begin(self.interval, current_ee, live_reference, live_attachment, now_s)
         self.start_pose, self.goal_pose = replacement.start_pose, replacement.goal_pose
         self.start_time_s, self.duration_s = replacement.start_time_s, replacement.duration_s
+        self.joint_retimed = False
 
     def at(self, now_s: float) -> np.ndarray:
         progress = 1.0 if self.duration_s == 0 else (now_s - self.start_time_s) / self.duration_s

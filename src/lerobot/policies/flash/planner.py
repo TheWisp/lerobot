@@ -8,7 +8,7 @@ from typing import Protocol
 import numpy as np
 
 from .execution import TimedAction
-from .geometry import transform
+from .geometry import interpolate, transform
 from .skill import Interval, MotionMode, Relation
 from .trajectory import (
     AttachmentState,
@@ -30,6 +30,12 @@ class InfeasibleTrajectoryError(RuntimeError):
     pass
 
 
+class _ConnectionSpeedExceededError(InfeasibleTrajectoryError):
+    def __init__(self, tick: int, ratio: float) -> None:
+        super().__init__(f"joint speed exceeds configured limit at tick {tick}")
+        self.ratio = ratio
+
+
 @dataclass(frozen=True)
 class PlannerLimits:
     joint_speed_deg_s: tuple[float, ...]
@@ -39,6 +45,8 @@ class PlannerLimits:
     allow_predicted_reference: bool = False
     ik_refinement_attempts: int = 1
     max_attachment_age_s: float | None = None
+    max_connection_ik_samples: int = 128
+    max_connection_retimings: int = 8
 
     def __post_init__(self) -> None:
         values = (
@@ -59,6 +67,18 @@ class PlannerLimits:
             not np.isfinite(self.max_attachment_age_s) or self.max_attachment_age_s <= 0
         ):
             raise ValueError("maximum attachment age must be finite and positive")
+        if (
+            isinstance(self.max_connection_ik_samples, bool)
+            or not isinstance(self.max_connection_ik_samples, int)
+            or self.max_connection_ik_samples < 2
+        ):
+            raise ValueError("maximum connection IK samples must be an integer of at least two")
+        if (
+            isinstance(self.max_connection_retimings, bool)
+            or not isinstance(self.max_connection_retimings, int)
+            or self.max_connection_retimings < 1
+        ):
+            raise ValueError("maximum connection retimings must be a positive integer")
 
     @property
     def effective_attachment_age_s(self) -> float:
@@ -102,6 +122,57 @@ class JointPlanner:
         connection: ConnectionTrajectory | None = None,
         issued_events: frozenset[str] = frozenset(),
     ) -> list[TimedAction]:
+        kwargs = {
+            "start_tick": start_tick,
+            "count": count,
+            "epoch_s": epoch_s,
+            "period_s": period_s,
+            "interval_start_s": interval_start_s,
+            "seed_deg": seed_deg,
+            "reference": reference,
+            "attachment": attachment,
+            "connection": connection,
+            "issued_events": issued_events,
+        }
+        if interval.mode != MotionMode.CONNECTION or connection is None:
+            return self._plan_once(interval, **kwargs)
+        for attempt in range(self.limits.max_connection_retimings):
+            try:
+                return self._plan_once(interval, **kwargs)
+            except _ConnectionSpeedExceededError as exc:
+                if attempt + 1 == self.limits.max_connection_retimings:
+                    raise InfeasibleTrajectoryError(
+                        "generated connection could not be timed within joint speed limits"
+                    ) from exc
+                first_due_s = epoch_s + start_tick * period_s
+                if first_due_s > connection.start_time_s + 1e-9:
+                    assert interval.speed_m_s is not None
+                    remaining_s = max(0.0, connection.start_time_s + connection.duration_s - first_due_s)
+                    connection.start_pose = transform(
+                        self.kinematics.forward_kinematics(np.asarray(seed_deg, dtype=float))
+                    )
+                    connection.start_time_s = first_due_s
+                    distance_m = np.linalg.norm(connection.goal_pose[:3, 3] - connection.start_pose[:3, 3])
+                    connection.duration_s = max(remaining_s, distance_m / interval.speed_m_s)
+                    connection.joint_retimed = False
+                connection.duration_s *= exc.ratio
+        raise AssertionError("connection retiming loop did not return")
+
+    def _plan_once(
+        self,
+        interval: Interval,
+        *,
+        start_tick: int,
+        count: int,
+        epoch_s: float,
+        period_s: float,
+        interval_start_s: float,
+        seed_deg: np.ndarray,
+        reference: PoseEstimate,
+        attachment: AttachmentState | None,
+        connection: ConnectionTrajectory | None = None,
+        issued_events: frozenset[str] = frozenset(),
+    ) -> list[TimedAction]:
         if count <= 0 or start_tick < 0 or period_s <= 0:
             raise ValueError("invalid chunk timing")
         seed = np.asarray(seed_deg, dtype=float).copy()
@@ -129,6 +200,8 @@ class JointPlanner:
             raise InfeasibleTrajectoryError(
                 f"required semantic event was not issued: {interval.samples[-1].event_id}"
             )
+        if interval.mode == MotionMode.CONNECTION and connection is not None:
+            self._retime_connection(connection, seed, period_s)
         actions = []
         for tick in range(start_tick, start_tick + count):
             due_s = epoch_s + tick * period_s
@@ -215,6 +288,10 @@ class JointPlanner:
                 refinement_seed = solved
             speed = np.abs(solved - seed) / period_s
             if np.any(speed > self.limits.joint_speed_deg_s):
+                if interval.mode == MotionMode.CONNECTION:
+                    raise _ConnectionSpeedExceededError(
+                        tick, float(np.max(speed / self.limits.joint_speed_deg_s))
+                    )
                 raise InfeasibleTrajectoryError(f"joint speed exceeds configured limit at tick {tick}")
             reached = transform(self.kinematics.forward_kinematics(solved))
             translation_error = np.linalg.norm(reached[:3, 3] - pose[:3, 3])
@@ -244,6 +321,68 @@ class JointPlanner:
             if complete:
                 break
         return actions
+
+    def _retime_connection(
+        self, connection: ConnectionTrajectory, seed_deg: np.ndarray, period_s: float
+    ) -> None:
+        """Bound joint speed along a generated spatial path before publishing its first tick.
+
+        Adaptive IK samples follow the same spatial interpolation that the
+        motor ticks will use. A sample advances only when every joint moves no
+        farther than it could in one motor period. The measured joint travel
+        per fraction of the path supplies a lower bound on total duration.
+        The finite sample budget rejects discontinuous or costly IK paths.
+        """
+        if connection.joint_retimed:
+            return
+        joint_speeds = np.asarray(self.limits.joint_speed_deg_s, dtype=float)
+        max_step = joint_speeds * period_s
+        previous = seed_deg.copy()
+        fraction = 0.0
+        step = 1.0
+        required_duration_s = 0.0
+        for _ in range(self.limits.max_connection_ik_samples):
+            next_fraction = min(1.0, fraction + step)
+            target = interpolate(connection.start_pose, connection.goal_pose, next_fraction)
+            refinement_seed = previous
+            for _ in range(self.limits.ik_refinement_attempts):
+                solved = np.asarray(self.kinematics.inverse_kinematics(refinement_seed, target), dtype=float)
+                if solved.shape != previous.shape or not np.isfinite(solved).all():
+                    raise InfeasibleTrajectoryError("generated connection IK returned an invalid solution")
+                reached = transform(self.kinematics.forward_kinematics(solved))
+                translation_error = np.linalg.norm(reached[:3, 3] - target[:3, 3])
+                rotation_error = np.arccos(
+                    np.clip((np.trace(reached[:3, :3].T @ target[:3, :3]) - 1) / 2, -1, 1)
+                )
+                if (
+                    translation_error <= self.limits.position_error_m
+                    and rotation_error <= self.limits.rotation_error_rad
+                ):
+                    break
+                refinement_seed = solved
+            if (
+                translation_error > self.limits.position_error_m
+                or rotation_error > self.limits.rotation_error_rad
+            ):
+                raise InfeasibleTrajectoryError("generated connection IK exceeds pose tolerance")
+            joint_step = np.abs(solved - previous)
+            if np.any(joint_step > max_step + 1e-9):
+                step /= 2
+                continue
+            actual_fraction = next_fraction - fraction
+            required_duration_s = max(
+                required_duration_s,
+                float(np.max(joint_step / (joint_speeds * actual_fraction))),
+            )
+            previous = solved
+            fraction = next_fraction
+            if fraction >= 1.0 - 1e-9:
+                # One motor period covers discretization at the sampled peaks.
+                connection.duration_s = max(connection.duration_s, required_duration_s + period_s)
+                connection.joint_retimed = True
+                return
+            step = min(1.0 - fraction, step * 2)
+        raise InfeasibleTrajectoryError("generated connection has no bounded continuous IK path")
 
     def _attachment_pose(
         self, attachment: AttachmentState | None, due_s: float, required_version: str | None
