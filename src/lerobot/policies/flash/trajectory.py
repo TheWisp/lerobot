@@ -115,9 +115,13 @@ def _interpolated_sample(interval: Interval, local_time_s: float) -> SpatialSamp
                     else None
                 ),
                 gripper=(
-                    (1 - u) * left.gripper + u * right.gripper
-                    if left.gripper is not None and right.gripper is not None
-                    else None
+                    left.gripper
+                    if right.event_id is not None and absolute < right.time_s
+                    else (
+                        (1 - u) * left.gripper + u * right.gripper
+                        if left.gripper is not None and right.gripper is not None
+                        else None
+                    )
                 ),
             )
     return samples[-1]

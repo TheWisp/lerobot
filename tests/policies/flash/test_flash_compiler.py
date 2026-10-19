@@ -3,7 +3,12 @@
 import numpy as np
 import pytest
 
-from lerobot.policies.flash.compiler import IntervalAnnotation, PoseRelationAnnotation, compile_skill
+from lerobot.policies.flash.compiler import (
+    ActionEventAnnotation,
+    IntervalAnnotation,
+    PoseRelationAnnotation,
+    compile_skill,
+)
 from lerobot.policies.flash.skill import FlashSkill, MotionMode, Relation
 from lerobot.policies.flash.trajectory import Evidence, PoseEstimate
 
@@ -150,7 +155,7 @@ def test_predicted_demo_pose_requires_explicit_annotation():
     assert skill.intervals[0].samples[1].reference_evidence == "predicted"
 
 
-def test_compiles_a_pose_milestone_from_an_observed_demo_frame():
+def test_compiles_a_pose_milestone_from_an_observed_demo_frame(tmp_path):
     poses = tracks()
     poses[2]["target"] = PoseEstimate(
         "target", pose(0.4), 1.0, 1.0, Evidence.OBSERVED, "target-v1", (True,) * 3, (True,) * 3
@@ -176,6 +181,7 @@ def test_compiles_a_pose_milestone_from_an_observed_demo_frame():
                 Relation.EE_TO_OBJECT,
                 "object",
                 completion_milestone="placed",
+                events=(ActionEventAnnotation(2, "release"),),
             ),
         ),
         pose_relation_annotations=(annotation,),
@@ -184,6 +190,11 @@ def test_compiles_a_pose_milestone_from_an_observed_demo_frame():
     assert criterion.reference_from_moving[0, 3] == pytest.approx(0.1)
     assert criterion.moving_version == "held-v1"
     assert criterion.rotation_tolerance_rad is None
+    assert skill.intervals[0].samples[-1].event_id == "release"
+    assert skill.intervals[0].samples[-1].requires_milestone is None
+    path = tmp_path / "skill.json"
+    skill.save(path)
+    assert FlashSkill.load(path).intervals[0].samples[-1].event_id == "release"
 
     poses[2]["held"] = PoseEstimate(
         "held", pose(0.5), 1.0, 1.0, Evidence.PREDICTED, "held-v1", (True,) * 3, (False,) * 3

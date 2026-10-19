@@ -77,6 +77,7 @@ class ActionQueueSnapshot:
     last_tick: int
     last_issued: dict[str, float] | None
     pending: tuple[TimedAction, ...]
+    issued_events: frozenset[str] = frozenset()
 
     def boundary_before(self, tick: int) -> dict[str, float] | None:
         """Action a new chunk must continue from immediately before ``tick``."""
@@ -101,6 +102,7 @@ class ActionQueue:
         self._revision = -1
         self._last_tick = -1
         self._issued_events: set[str] = set()
+        self._in_flight_events: set[str] = set()
         self._last_issued: dict[str, float] | None = None
         self._max_splice_delta = max_splice_delta
 
@@ -122,7 +124,11 @@ class ActionQueue:
             if not future:
                 raise PlanRejectedError("replacement expired while being computed")
             first_tick = future[0].tick
-            if any(command.event_id in self._issued_events for command in future if command.event_id):
+            if any(
+                command.event_id in self._issued_events | self._in_flight_events
+                for command in future
+                if command.event_id
+            ):
                 raise PlanRejectedError("replacement repeats an issued semantic event")
             prefix = [
                 (old_revision, command)
@@ -154,10 +160,21 @@ class ActionQueue:
             self._actions = deque(prefix + [(revision, command) for command in future])
             self._revision = revision
 
-    def note_issued(self, action: dict[str, float]) -> None:
+    def note_issued(self, action: dict[str, float], event_id: str | None = None) -> None:
         """Track continuity in the action space the robot API receives."""
         with self._lock:
             self._last_issued = dict(action)
+            if event_id:
+                self._in_flight_events.discard(event_id)
+                self._issued_events.add(event_id)
+
+    def note_rejected(self, event_id: str | None, *, may_have_dispatched: bool = False) -> None:
+        """Release a gated event; retain an uncertain motor write as issued."""
+        if event_id:
+            with self._lock:
+                self._in_flight_events.discard(event_id)
+                if may_have_dispatched:
+                    self._issued_events.add(event_id)
 
     @property
     def revision(self) -> int:
@@ -172,6 +189,7 @@ class ActionQueue:
                 self._last_tick,
                 None if self._last_issued is None else dict(self._last_issued),
                 tuple(replace(action, action=dict(action.action)) for _, action in self._actions),
+                frozenset(self._issued_events),
             )
 
     def take(self, tick: int) -> tuple[TimedAction | None, int]:
@@ -184,9 +202,9 @@ class ActionQueue:
                 return None, self._revision
             revision, action = self._actions.popleft()
             if action.event_id:
-                if action.event_id in self._issued_events:
+                if action.event_id in self._issued_events | self._in_flight_events:
                     raise MissedEventError(f"duplicate semantic event {action.event_id}")
-                self._issued_events.add(action.event_id)
+                self._in_flight_events.add(action.event_id)
             return action, revision
 
     def expire_before(self, tick: int) -> int:
@@ -383,6 +401,7 @@ class MotorLoop:
             self._record_tick(tick, deadline, observed, read_end - read_start, None, "action queue starved")
             return None
         if self.allow_action is not None and not self.allow_action(action):
+            self.actions.note_rejected(action.event_id)
             self.metrics.idle += 1
             self._record_tick(
                 tick, deadline, observed, read_end - read_start, None, "milestone gate rejected"
@@ -390,9 +409,13 @@ class MotorLoop:
             raise PlanRejectedError(
                 f"milestone gate for {action.event_id or action.interval} is not satisfied"
             )
-        accepted = self.robot.send_action(action.action)
+        try:
+            accepted = self.robot.send_action(action.action)
+        except Exception:
+            self.actions.note_rejected(action.event_id, may_have_dispatched=True)
+            raise
         self._last_issued = dict(action.action)
-        self.actions.note_issued(action.action)
+        self.actions.note_issued(action.action, action.event_id)
         dispatched = self.clock()
         if self._last_dispatch_s is not None:
             self.metrics.max_dispatch_gap_s = max(

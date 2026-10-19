@@ -32,6 +32,8 @@ class SpatialSample:
     source_frame_index: int | None = None
     reference_evidence: str = "unverified"
     held_evidence: str | None = None
+    event_id: str | None = None
+    requires_milestone: str | None = None
 
     def __post_init__(self) -> None:
         if not np.isfinite(self.time_s) or self.time_s < 0:
@@ -40,6 +42,8 @@ class SpatialSample:
         object.__setattr__(self, "demo_reference", transform(self.demo_reference))
         if self.demo_held is not None:
             object.__setattr__(self, "demo_held", transform(self.demo_held))
+        if self.requires_milestone is not None and not self.event_id:
+            raise ValueError("sample milestone gate needs a semantic event")
 
 
 @dataclass(frozen=True)
@@ -65,6 +69,11 @@ class Interval:
             raise ValueError("held-to-target samples require held-object poses")
         if self.mode == MotionMode.CONNECTION and (self.speed_m_s is None or self.speed_m_s <= 0):
             raise ValueError("generated connections need a positive reference speed")
+        events = [sample.event_id for sample in self.samples if sample.event_id]
+        if len(events) != len(set(events)):
+            raise ValueError("semantic event IDs must be unique within an interval")
+        if self.mode == MotionMode.CONNECTION and any(sample.event_id for sample in self.samples[:-1]):
+            raise ValueError("generated connection events may occur only at its endpoint")
 
     @property
     def demo_duration_s(self) -> float:
@@ -132,13 +141,25 @@ class FlashSkill:
         names = [interval.name for interval in self.intervals]
         if len(names) != len(set(names)):
             raise ValueError("interval names must be unique")
+        event_ids = [
+            sample.event_id
+            for interval in self.intervals
+            for sample in interval.samples
+            if sample.event_id is not None
+        ]
+        if len(event_ids) != len(set(event_ids)):
+            raise ValueError("semantic event IDs must be unique across the skill")
         milestone_names = {milestone.name for milestone in self.milestones}
         if len(milestone_names) != len(self.milestones):
             raise ValueError("milestone names must be unique")
         referenced = {
             name
             for interval in self.intervals
-            for name in (interval.entry_milestone, interval.completion_milestone)
+            for name in (
+                interval.entry_milestone,
+                interval.completion_milestone,
+                *(sample.requires_milestone for sample in interval.samples),
+            )
             if name is not None
         }
         if not referenced <= milestone_names:
@@ -160,6 +181,8 @@ class FlashSkill:
                     source_frame_index=sample.get("source_frame_index"),
                     reference_evidence=sample.get("reference_evidence", "unverified"),
                     held_evidence=sample.get("held_evidence"),
+                    event_id=sample.get("event_id"),
+                    requires_milestone=sample.get("requires_milestone"),
                 )
                 for sample in item["samples"]
             )
@@ -242,6 +265,8 @@ class FlashSkill:
                             "source_frame_index": sample.source_frame_index,
                             "reference_evidence": sample.reference_evidence,
                             "held_evidence": sample.held_evidence,
+                            "event_id": sample.event_id,
+                            "requires_milestone": sample.requires_milestone,
                         }
                         for sample in interval.samples
                     ],

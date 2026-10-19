@@ -3,6 +3,7 @@
 import numpy as np
 
 from lerobot.policies.flash.execution import TimedAction
+from lerobot.policies.flash.planner import JointPlanner, PlannerLimits
 from lerobot.policies.flash.progress import MilestoneUpdate, Phase, Verdict
 from lerobot.policies.flash.session import FlashSession, PoseChange
 from lerobot.policies.flash.skill import (
@@ -13,6 +14,7 @@ from lerobot.policies.flash.skill import (
     Relation,
     SpatialSample,
 )
+from lerobot.policies.flash.trajectory import Evidence, PoseEstimate
 
 
 def pose():
@@ -132,6 +134,8 @@ def test_release_gate_rejection_keeps_tick_but_never_sends_release():
     assert [tick.action_source for tick in ticks] == ["commanded", "held_goal"]
     assert ticks[1].idle_reason == "milestone gate rejected"
     assert robot.calls.count("send") == 1
+    # A rejected release was never sent, so an explicit recovery may replan it.
+    session.publish_plan(1, [TimedAction(2, {"arm.pos": 0.2}, "contact", event_id="release")])
 
 
 def test_late_contact_tick_fails_instead_of_bursting_old_commands():
@@ -147,3 +151,63 @@ def test_late_contact_tick_fails_instead_of_bursting_old_commands():
     assert session.motor.metrics.commanded == 0
     assert "send" not in robot.calls
     assert "missed required" in session.progress.events[-1]["reason"]
+
+
+def test_compiled_release_gate_blocks_first_gripper_opening_tick():
+    class StaticKinematics:
+        def inverse_kinematics(self, seed, target):
+            return np.array([0.0])
+
+        def forward_kinematics(self, joints):
+            return pose()
+
+    class CaptureRobot(FakeRobot):
+        def __init__(self):
+            super().__init__()
+            self.sent = []
+
+        def send_action(self, action):
+            self.sent.append(dict(action))
+            return super().send_action(action)
+
+    interval = Interval(
+        "place",
+        MotionMode.DEMONSTRATED,
+        Relation.EE_TO_OBJECT,
+        "target",
+        (
+            SpatialSample(0.0, pose(), pose(), gripper=10.0),
+            SpatialSample(
+                0.05, pose(), pose(), gripper=20.0, event_id="release", requires_milestone="aligned"
+            ),
+            SpatialSample(0.1, pose(), pose(), gripper=20.0),
+        ),
+        reference_version="target-v1",
+    )
+    annotated = FlashSkill("demo/source", 0, (interval,), milestones=(MilestoneSpec("aligned", ("target",)),))
+    reference = PoseEstimate(
+        "target", pose(), 0.0, 0.0, Evidence.OBSERVED, "target-v1", (True,) * 3, (True,) * 3
+    )
+    planner = JointPlanner(StaticKinematics(), ("arm",), "gripper", PlannerLimits((100.0,), 0.001, 0.01, 2.0))
+    commands = planner.plan(
+        interval,
+        start_tick=0,
+        count=4,
+        epoch_s=0.0,
+        period_s=1 / 30,
+        interval_start_s=0.0,
+        seed_deg=np.array([0.0]),
+        reference=reference,
+        attachment=None,
+    )
+    now = [0.0]
+    robot = CaptureRobot()
+    session = FlashSession(
+        annotated, robot, clock=lambda: now[0], sleep=lambda dt: now.__setitem__(0, now[0] + dt)
+    )
+    session.publish_plan(0, commands)
+    assert session.step() is not None
+    assert session.step() is not None
+    assert session.step() is None
+    assert [action["gripper.pos"] for action in robot.sent] == [10.0, 10.0]
+    assert session.progress.phase == Phase.INTERRUPTED

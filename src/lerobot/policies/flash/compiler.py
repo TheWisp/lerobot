@@ -33,6 +33,17 @@ class ForwardKinematics(Protocol):
 
 
 @dataclass(frozen=True)
+class ActionEventAnnotation:
+    frame_index: int
+    event_id: str
+    requires_milestone: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.frame_index < 0 or not self.event_id:
+            raise ValueError("action event needs a frame and ID")
+
+
+@dataclass(frozen=True)
 class IntervalAnnotation:
     name: str
     first_frame: int
@@ -46,12 +57,17 @@ class IntervalAnnotation:
     completion_milestone: str | None = None
     recovery_intervals: tuple[str, ...] = ()
     allow_predicted_demo_pose: bool = False
+    events: tuple[ActionEventAnnotation, ...] = ()
 
     def __post_init__(self) -> None:
         if self.first_frame < 0 or self.last_frame <= self.first_frame:
             raise ValueError("interval annotation needs ordered frame bounds")
         if self.relation == Relation.HELD_TO_TARGET and not self.held_role:
             raise ValueError("held-to-target interval needs a held object role")
+        if any(not self.first_frame <= event.frame_index <= self.last_frame for event in self.events):
+            raise ValueError("action events must lie within their interval")
+        if len({event.frame_index for event in self.events}) != len(self.events):
+            raise ValueError("only one semantic event may be annotated per demo frame")
 
 
 @dataclass(frozen=True)
@@ -131,6 +147,7 @@ def compile_skill(
     for annotation in annotations:
         samples = []
         versions: dict[str, str] = {}
+        events_by_frame = {event.frame_index: event for event in annotation.events}
         if annotation.last_frame >= episode_length:
             raise ValueError(f"{annotation.name}: frame bound exceeds episode {source_episode}")
         for frame_index in range(annotation.first_frame, annotation.last_frame + 1):
@@ -155,6 +172,7 @@ def compile_skill(
             state = np.asarray(frame["observation.state"], dtype=float).reshape(-1)
             action = np.asarray(frame["action"], dtype=float).reshape(-1)
             joints = state[joint_indices]
+            event = events_by_frame.get(frame_index)
             samples.append(
                 SpatialSample(
                     time_s=float(frame["timestamp"]),
@@ -165,6 +183,8 @@ def compile_skill(
                     source_frame_index=frame_index,
                     reference_evidence=reference.evidence.value,
                     held_evidence=held.evidence.value if held is not None else None,
+                    event_id=event.event_id if event is not None else None,
+                    requires_milestone=event.requires_milestone if event is not None else None,
                 )
             )
         speed = annotation.speed_m_s

@@ -84,12 +84,35 @@ class JointPlanner:
         reference: PoseEstimate,
         attachment: AttachmentState | None,
         connection: ConnectionTrajectory | None = None,
+        issued_events: frozenset[str] = frozenset(),
     ) -> list[TimedAction]:
         if count <= 0 or start_tick < 0 or period_s <= 0:
             raise ValueError("invalid chunk timing")
         seed = np.asarray(seed_deg, dtype=float).copy()
         if seed.shape != (len(self.arm_joint_names),) or not np.isfinite(seed).all():
             raise ValueError("invalid joint seed")
+        if interval.mode == MotionMode.DEMONSTRATED:
+            first_local_s = epoch_s + start_tick * period_s - interval_start_s
+            missed = [
+                sample.event_id
+                for sample in interval.samples
+                if sample.event_id
+                and sample.time_s - interval.samples[0].time_s <= first_local_s - period_s + 1e-9
+                and sample.event_id not in issued_events
+            ]
+            if missed:
+                raise InfeasibleTrajectoryError(
+                    f"required semantic event was not issued: {', '.join(missed)}"
+                )
+        elif (
+            connection is not None
+            and interval.samples[-1].event_id
+            and interval.samples[-1].event_id not in issued_events
+            and connection.finished(epoch_s + (start_tick - 1) * period_s)
+        ):
+            raise InfeasibleTrajectoryError(
+                f"required semantic event was not issued: {interval.samples[-1].event_id}"
+            )
         actions = []
         for tick in range(start_tick, start_tick + count):
             due_s = epoch_s + tick * period_s
@@ -101,13 +124,25 @@ class JointPlanner:
             ):
                 raise MissingEvidenceError("live reference does not share the demonstrated object frame")
             if interval.mode == MotionMode.DEMONSTRATED:
+                local_time_s = due_s - interval_start_s
                 pose, grip = demonstrated_goal(
                     interval,
-                    due_s - interval_start_s,
+                    local_time_s,
                     reference.pose,
                     self._attachment_pose(attachment, due_s, interval.held_reference_version),
                 )
                 complete = due_s >= interval_start_s + interval.demo_duration_s
+                matching_events = [
+                    sample
+                    for sample in interval.samples
+                    if sample.event_id
+                    and local_time_s - period_s
+                    < sample.time_s - interval.samples[0].time_s
+                    <= local_time_s + 1e-9
+                ]
+                if len(matching_events) > 1:
+                    raise InfeasibleTrajectoryError(f"multiple semantic events fall on tick {tick}")
+                event = matching_events[0] if matching_events else None
             else:
                 if connection is None:
                     raise ValueError("generated interval requires a connection trajectory")
@@ -131,8 +166,13 @@ class JointPlanner:
                         "connection target changed; retarget from current measured pose"
                     )
                 pose = connection.at(due_s)
-                grip = interval.samples[-1].gripper
                 complete = connection.finished(due_s)
+                event = interval.samples[-1] if complete else None
+                grip = (
+                    interval.samples[0].gripper
+                    if not complete and interval.samples[-1].event_id is not None
+                    else interval.samples[-1].gripper
+                )
             solved = np.asarray(self.kinematics.inverse_kinematics(seed, transform(pose)), dtype=float)
             if solved.shape != seed.shape or not np.isfinite(solved).all():
                 raise InfeasibleTrajectoryError(f"IK returned an invalid solution at tick {tick}")
@@ -158,6 +198,8 @@ class JointPlanner:
                     command,
                     interval.name,
                     interval_complete=complete,
+                    event_id=event.event_id if event is not None else None,
+                    requires_milestone=event.requires_milestone if event is not None else None,
                     may_skip_if_late=interval.mode == MotionMode.CONNECTION,
                 )
             )

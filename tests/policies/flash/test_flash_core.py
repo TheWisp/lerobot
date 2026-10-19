@@ -402,6 +402,74 @@ def test_kinematics_planner_seeds_from_previous_solution_and_rejects_bad_path():
         )
 
 
+def test_planner_places_semantic_event_on_first_tick_after_demo_frame():
+    class StaticKinematics:
+        def inverse_kinematics(self, seed, target):
+            return np.array([0.0])
+
+        def forward_kinematics(self, joints):
+            return pose()
+
+    interval = Interval(
+        "place",
+        MotionMode.DEMONSTRATED,
+        Relation.EE_TO_OBJECT,
+        "target",
+        (
+            SpatialSample(0.0, pose(), pose(), gripper=10.0),
+            SpatialSample(
+                0.05, pose(), pose(), gripper=20.0, event_id="release", requires_milestone="aligned"
+            ),
+            SpatialSample(0.1, pose(), pose(), gripper=20.0),
+        ),
+        reference_version="v1",
+    )
+    estimate = PoseEstimate("target", pose(), 0, 0, Evidence.OBSERVED, "v1", (True,) * 3, (True,) * 3)
+    planner = JointPlanner(StaticKinematics(), ("arm",), "gripper", PlannerLimits((100.0,), 0.001, 0.01, 2.0))
+    actions = planner.plan(
+        interval,
+        start_tick=0,
+        count=5,
+        epoch_s=0,
+        period_s=1 / 30,
+        interval_start_s=0,
+        seed_deg=np.array([0.0]),
+        reference=estimate,
+        attachment=None,
+    )
+    assert [action.tick for action in actions if action.event_id] == [2]
+    assert [action.action["gripper.pos"] for action in actions[:2]] == [10.0, 10.0]
+    assert actions[2].event_id == "release"
+    assert actions[2].requires_milestone == "aligned"
+    assert actions[2].action["gripper.pos"] == 20.0
+    assert actions[-1].interval_complete
+    with pytest.raises(InfeasibleTrajectoryError, match="required semantic event was not issued"):
+        planner.plan(
+            interval,
+            start_tick=3,
+            count=1,
+            epoch_s=0,
+            period_s=1 / 30,
+            interval_start_s=0,
+            seed_deg=np.array([0.0]),
+            reference=estimate,
+            attachment=None,
+        )
+    replanned = planner.plan(
+        interval,
+        start_tick=3,
+        count=1,
+        epoch_s=0,
+        period_s=1 / 30,
+        interval_start_s=0,
+        seed_deg=np.array([0.0]),
+        reference=estimate,
+        attachment=None,
+        issued_events=frozenset({"release"}),
+    )
+    assert replanned[0].event_id is None
+
+
 def test_partial_pose_is_represented_but_cannot_satisfy_strict_six_dof_goal():
     estimate = PoseEstimate(
         "held", pose(), 0, 0, Evidence.OBSERVED, "v1", (True, True, True), (True, False, False)

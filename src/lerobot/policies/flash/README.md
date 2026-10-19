@@ -8,6 +8,8 @@ by the demonstration before the spatial equation can produce safe goals.
 The executable core already separates:
 
 - demonstrated contact intervals, sampled on their own 1× local clock;
+- sample-bound semantic events that survive replanning, with an optional
+  milestone gate before the associated gripper change;
 - generated connections, timed from live path length and configured speed;
 - explicit pose-relation milestone tolerances, observed true/false/unknown
   verdicts from the perception collector (including expiry when frames stop),

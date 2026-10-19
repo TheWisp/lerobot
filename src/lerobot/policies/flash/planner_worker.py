@@ -29,6 +29,7 @@ class PlanRequest:
     reference: PoseEstimate
     attachment: AttachmentState | None
     connection: ConnectionTrajectory | None = None
+    issued_events: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
         seed = np.asarray(self.seed_deg, dtype=float).copy()
@@ -126,6 +127,7 @@ class PlannerWorker:
                     reference=request.reference,
                     attachment=request.attachment,
                     connection=request.connection,
+                    issued_events=request.issued_events,
                 )
                 self.publish(request.revision, actions)
             except (MissingEvidenceError, InfeasibleTrajectoryError, PlanRejectedError, ValueError) as exc:
