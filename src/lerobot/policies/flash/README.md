@@ -40,8 +40,8 @@ The executable core already separates:
   distinguishes a new command, the servo's held goal and an observed hold.
   The regular dataset stores replayable robot-API actions; the trace also
   records the accepted actuator target, which may include gravity compensation
-  or a robot-side limit. The pose layer can be read back by episode and frame
-  index for subsequent skill compilation.
+  or a robot-side limit. The pose layer and candidate/prior disagreements can
+  be read back by episode and frame index for replay and skill compilation.
 
 The annotation points to a source LeRobot dataset episode. Dense transform
 samples are derived geometry; the original RGB-D, robot observations and

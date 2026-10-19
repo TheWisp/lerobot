@@ -20,11 +20,13 @@ from lerobot.policies.flash.perception import (
     TimedEndEffectorHistory,
 )
 from lerobot.policies.flash.planner import InfeasibleTrajectoryError, JointPlanner, PlannerLimits
+from lerobot.policies.flash.pose_disagreement import PoseComparison, PoseComparisonVerdict, SurfaceSupport
 from lerobot.policies.flash.progress import MilestoneUpdate, Phase, Progress, Verdict
 from lerobot.policies.flash.recording import (
     FlashEpisodeWriter,
     RecordedTick,
     RecorderWorker,
+    load_pose_comparisons,
     load_pose_estimates,
 )
 from lerobot.policies.flash.skill import (
@@ -453,7 +455,23 @@ def test_regular_lerobot_frame_and_flash_trace_are_written_together(tmp_path):
     estimate = PoseEstimate(
         "target", pose(0.1), 0.9, 1.0, Evidence.OBSERVED, "ref1", (True, True, True), (True, True, True)
     )
-    worker.submit(RecordedTick(receipt, {}, None, 7, pose_estimates={"target": estimate}))
+    comparison = PoseComparison(
+        PoseComparisonVerdict.AMBIGUOUS,
+        0.036,
+        0.2,
+        SurfaceSupport(100, 40, 0.4, 0.01),
+        SurfaceSupport(100, 60, 0.6, 0.06),
+    )
+    worker.submit(
+        RecordedTick(
+            receipt,
+            {},
+            None,
+            7,
+            pose_estimates={"target": estimate},
+            pose_comparisons={"target": comparison},
+        )
+    )
     worker.finish("unknown", "no post-release observation")
     assert dataset.saved
     assert dataset.frames[0]["action"].tolist() == [2.0]
@@ -461,11 +479,15 @@ def test_regular_lerobot_frame_and_flash_trace_are_written_together(tmp_path):
     trace = (tmp_path / "flash/v1/episode_000000.jsonl").read_text()
     assert '"pose_version": 7' in trace
     assert '"reference_version": "ref1"' in trace
+    assert '"pose_comparisons": {"target": {"verdict": "ambiguous"' in trace
     assert '"accepted": {"joint.pos": 1.0}' in trace
     assert '"outcome": "unknown"' in (tmp_path / "flash/v1/manifest.json").read_text()
     loaded = load_pose_estimates(tmp_path, 0, expected_frames=1)
     assert loaded[0]["target"].reference_version == "ref1"
     np.testing.assert_allclose(loaded[0]["target"].pose, pose(0.1))
+    comparisons = load_pose_comparisons(tmp_path, 0, expected_frames=1)
+    assert comparisons[0]["target"].verdict == PoseComparisonVerdict.AMBIGUOUS
+    assert comparisons[0]["target"].candidate.depth_residual_p90_m == pytest.approx(0.01)
 
 
 def test_idle_motor_ticks_remain_in_regular_dataset_timeline(tmp_path):

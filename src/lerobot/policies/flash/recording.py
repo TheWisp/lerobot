@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -14,6 +15,7 @@ from lerobot.utils.constants import ACTION, OBS_STR
 from lerobot.utils.feature_utils import build_dataset_frame
 
 from .execution import ActionReceipt, MotorTick
+from .pose_disagreement import PoseComparison, PoseComparisonVerdict, SurfaceSupport
 from .trajectory import Evidence, PoseEstimate
 
 
@@ -35,6 +37,7 @@ class RecordedTick:
     progress_events: tuple[dict, ...] = ()
     camera_frame_id: int | None = None
     pose_estimates: dict[str, PoseEstimate] = field(default_factory=dict)
+    pose_comparisons: dict[str, PoseComparison] = field(default_factory=dict)
     motor_tick: MotorTick | None = None
 
 
@@ -90,6 +93,16 @@ class FlashEpisodeWriter:
                 }
                 for role, estimate in record.pose_estimates.items()
             },
+            "pose_comparisons": {
+                role: {
+                    "verdict": comparison.verdict.value,
+                    "object_center_difference_m": comparison.object_center_difference_m,
+                    "rotation_difference_rad": comparison.rotation_difference_rad,
+                    "candidate": _surface_support_json(comparison.candidate),
+                    "prior": _surface_support_json(comparison.prior),
+                }
+                for role, comparison in record.pose_comparisons.items()
+            },
             "interval": receipt.requested.interval if receipt is not None else None,
             "interval_complete": receipt.requested.interval_complete if receipt is not None else False,
             "plan_revision": receipt.revision if receipt is not None else None,
@@ -129,10 +142,9 @@ class FlashEpisodeWriter:
         os.replace(staged, manifest_path)
 
 
-def load_pose_estimates(
+def _trace_entries(
     dataset_root: str | Path, episode_index: int, *, expected_frames: int | None = None
-) -> dict[int, dict[str, PoseEstimate]]:
-    """Read the pose layer joined to an ordinary LeRobot episode by frame index."""
+) -> list[dict]:
     extension_dir = Path(dataset_root) / "flash" / "v1"
     manifest = json.loads((extension_dir / "manifest.json").read_text())
     if manifest.get("schema_version") != 1:
@@ -141,27 +153,62 @@ def load_pose_estimates(
     name = item["trace"]
     if Path(name).name != name:
         raise ValueError("FLASH trace name must be local to its extension directory")
-    result = {}
+    entries = []
     with (extension_dir / name).open(encoding="utf-8") as stream:
         for expected_index, line in enumerate(stream):
             entry = json.loads(line)
             if entry["episode_index"] != episode_index or entry["frame_index"] != expected_index:
                 raise ValueError("FLASH trace is not aligned with its LeRobot episode")
-            estimates = {}
-            for role, pose in entry.get("poses", {}).items():
-                estimates[role] = PoseEstimate(
-                    role=role,
-                    pose=pose["pose"],
-                    source_time_s=pose["source_time_s"],
-                    available_time_s=pose["available_time_s"],
-                    evidence=Evidence(pose["evidence"]),
-                    reference_version=pose["reference_version"],
-                    translation_supported=tuple(pose["translation_supported"]),
-                    rotation_supported=tuple(pose["rotation_supported"]),
-                )
-            result[expected_index] = estimates
-    if len(result) != item["frames"] or (expected_frames is not None and len(result) != expected_frames):
+            entries.append(entry)
+    if len(entries) != item["frames"] or (expected_frames is not None and len(entries) != expected_frames):
         raise ValueError("FLASH trace frame count differs from its LeRobot episode")
+    return entries
+
+
+def load_pose_estimates(
+    dataset_root: str | Path, episode_index: int, *, expected_frames: int | None = None
+) -> dict[int, dict[str, PoseEstimate]]:
+    """Read the pose layer joined to an ordinary LeRobot episode by frame index."""
+    result = {}
+    for frame_index, entry in enumerate(
+        _trace_entries(dataset_root, episode_index, expected_frames=expected_frames)
+    ):
+        estimates = {}
+        for role, pose in entry.get("poses", {}).items():
+            estimates[role] = PoseEstimate(
+                role=role,
+                pose=pose["pose"],
+                source_time_s=pose["source_time_s"],
+                available_time_s=pose["available_time_s"],
+                evidence=Evidence(pose["evidence"]),
+                reference_version=pose["reference_version"],
+                translation_supported=tuple(pose["translation_supported"]),
+                rotation_supported=tuple(pose["rotation_supported"]),
+            )
+        result[frame_index] = estimates
+    return result
+
+
+def load_pose_comparisons(
+    dataset_root: str | Path, episode_index: int, *, expected_frames: int | None = None
+) -> dict[int, dict[str, PoseComparison]]:
+    """Replay candidate/prior conflicts alongside the regular episode frames."""
+    result = {}
+    for frame_index, entry in enumerate(
+        _trace_entries(dataset_root, episode_index, expected_frames=expected_frames)
+    ):
+        comparisons = {}
+        for role, item in entry.get("pose_comparisons", {}).items():
+            candidate = item["candidate"]
+            prior = item["prior"]
+            comparisons[role] = PoseComparison(
+                PoseComparisonVerdict(item["verdict"]),
+                item["object_center_difference_m"],
+                item["rotation_difference_rad"],
+                _surface_support_from_json(candidate),
+                _surface_support_from_json(prior),
+            )
+        result[frame_index] = comparisons
     return result
 
 
@@ -169,6 +216,26 @@ def _json_value(value: Any) -> Any:
     if hasattr(value, "tolist"):
         return value.tolist()
     raise TypeError(f"cannot serialize {type(value).__name__}")
+
+
+def _surface_support_json(support: SurfaceSupport) -> dict[str, int | float | None]:
+    return {
+        "projected_points": support.projected_points,
+        "masked_depth_points": support.masked_depth_points,
+        "projected_point_mask_fraction": support.projected_point_mask_fraction,
+        "depth_residual_p90_m": (
+            support.depth_residual_p90_m if math.isfinite(support.depth_residual_p90_m) else None
+        ),
+    }
+
+
+def _surface_support_from_json(item: dict) -> SurfaceSupport:
+    return SurfaceSupport(
+        item["projected_points"],
+        item["masked_depth_points"],
+        item["projected_point_mask_fraction"],
+        item["depth_residual_p90_m"] if item["depth_residual_p90_m"] is not None else float("inf"),
+    )
 
 
 class RecorderWorker:
