@@ -77,6 +77,9 @@ class Recording:
     base_from_camera: np.ndarray | None  # None where the recording did not keep it
     annotations: Annotations | None
     demo: pathlib.Path | None = None  # the demo an act played
+    # Each object as the recording designated it: the camera frame and its mask there. A demo's are its annotations';
+    # an act's, the masks its own run started tracking from (its first tracker frame).
+    designations: dict[str, dict[str, Any]] = dataclasses.field(default_factory=dict)
 
     def __len__(self) -> int:
         return len(self.times)
@@ -133,7 +136,8 @@ def _open_demo(root: pathlib.Path) -> Recording:
         K=np.loadtxt(cam / "cam_K.txt").reshape(3, 3),
         arm=arm,
         base_from_camera=None,
-        annotations=_demo_annotations(root),
+        annotations=(annotations := _demo_annotations(root)),
+        designations={n: {"frame": o["frame"], "mask": o["mask"]} for n, o in annotations.objects.items()},
     )
 
 
@@ -195,4 +199,31 @@ def _open_act(root: pathlib.Path) -> Recording:
         base_from_camera=np.asarray(meta["t_bc"], dtype=float) if meta.get("t_bc") else None,
         annotations=None,
         demo=pathlib.Path(meta["demo_root"]) if meta.get("demo_root") else None,
+        designations=_act_designations(root, meta, np.asarray(times, dtype=float)),
     )
+
+
+def _act_designations(
+    root: pathlib.Path, meta: dict[str, Any], times: np.ndarray
+) -> dict[str, dict[str, Any]]:
+    """The masks an act's own run started tracking from: its first tracker frame's, the session object's in its mask
+    image and each other's in the frame's arrays, at the camera frame captured nearest it."""
+    frames = meta.get("frames") or []
+    names = meta.get("objects") or []
+    if not frames or not names or not len(times):
+        return {}
+    import cv2
+
+    first, d = frames[0], root / "frames"
+    at = int(np.argmin(np.abs(times - float(first.get("t_capture", first.get("t_frame", times[0]))))))
+    out: dict[str, dict[str, Any]] = {}
+    mask = cv2.imread(str(d / f"{int(first['i']):06d}_mask.png"), cv2.IMREAD_UNCHANGED)
+    if mask is not None:
+        out[names[0]] = {"frame": at, "mask": mask > 0}
+    arrays = d / f"{int(first['i']):06d}.npz"
+    if arrays.exists():
+        z = np.load(arrays, allow_pickle=False)
+        for k, name in enumerate(first.get("others") or []):
+            if f"other_mask_{k}" in z.files:
+                out[name] = {"frame": at, "mask": np.asarray(z[f"other_mask_{k}"], dtype=bool)}
+    return out

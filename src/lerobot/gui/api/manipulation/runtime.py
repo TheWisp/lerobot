@@ -21,7 +21,6 @@ from __future__ import annotations
 import asyncio
 import collections
 import concurrent.futures
-import os
 import pathlib
 import subprocess
 import threading
@@ -32,7 +31,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 from pydantic import BaseModel, Field
 
-from lerobot.p2p_runtime import checkout_path
+from lerobot.p2p_runtime import checkout_path, python_path as p2p_python_path
 from lerobot.showservo import motion as core, pose_verification
 
 if TYPE_CHECKING:
@@ -681,9 +680,7 @@ _GROUPS_SCRIPT = _REPO / "benchmarks" / "group_live.py"
 
 
 # The view runs in Point2Pose's environment, where TAPIR and its checkpoint live, as the worker's bridge does.
-P2P_PYTHON = os.environ.get(
-    "LEROBOT_P2P_PYTHON", str(pathlib.Path.home() / ".cache/point2pose/venv/bin/python")
-)
+P2P_PYTHON = p2p_python_path()
 
 
 P2P_REPO = str(checkout_path())

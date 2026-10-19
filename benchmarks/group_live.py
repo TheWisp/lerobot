@@ -30,7 +30,6 @@ import http.server
 import importlib.util
 import json
 import pathlib
-import pickle
 import queue
 import signal
 import socketserver
@@ -96,13 +95,68 @@ def follow_points(
 
 def groups_frame(stamp: float, tracker, matrix) -> tuple:
     """One frame of the groups as ``tracker`` has them, for --dump: (stamp, each track's group, each group's motion,
-    each object's pose), the motions and poses as 4x4 lists (``matrix`` turns a group's motion into one)."""
+    each object's pose, the objects moving to another group), the motions and poses as 4x4 lists (``matrix`` turns a
+    group's motion into one)."""
     return (
         stamp,
         tracker.group_of.copy(),
         {gid: matrix(g.motion).tolist() for gid, g in tracker.groups.items()},
         {o.name: np.asarray(o.pose).tolist() for o in tracker.objects.values()},
+        sorted(o.name for o in tracker.objects.values() if o.pending is not None),
     )
+
+
+# A frame's picture as an act's record keeps it (lerobot.gui.api.manipulation.recording._Run.frame): its arrays under
+# these names in the frame's .npz, the rest in the frame's "groups" entry; the act replay paints either alike.
+PICTURE_ARRAYS = {
+    "groups_points": "points",
+    "groups_links": "links",
+    "groups_joins": "joins",
+    "groups_depth": "depth",
+}
+PICTURE_FIELDS = ("base", "quiet", "objects", "groups", "depth_range", "surfaces", "scale")
+
+
+def write_groups_dump(path, frames: list[tuple], pictures: list[dict], masks: dict, own: dict) -> None:
+    """The groups of every frame beside the tracks dumped at ``path``: ``<path>.groups.npz`` (times, each track's
+    group per frame, -2 before it existed, each object's pose and whether it was moving to another group, its own
+    tracks and designation mask, each group's motion and each frame's picture fields as JSON) and
+    ``<path>.frames/%06d.npz``, each frame's picture arrays. ``frames`` are :func:`groups_frame`'s, ``pictures`` each
+    frame's :func:`groups_scene.drawing`, ``masks`` and ``own`` by object name."""
+    assert len(frames) == len(pictures), (len(frames), len(pictures))
+    names = sorted(own)
+    n_max = max(len(f[1]) for f in frames)
+    group_of = np.full((len(frames), n_max), -2, np.int32)
+    for k, f in enumerate(frames):
+        group_of[k, : len(f[1])] = f[1]
+    arrays = {
+        "t": np.array([f[0] for f in frames], dtype=float),
+        "group_of": group_of,
+        "names": np.array(json.dumps(names)),
+        "poses": np.array([[f[3][n] for n in names] for f in frames], dtype=float).reshape(
+            len(frames), len(names), 4, 4
+        ),
+        "moving": np.array([[n in f[4] for n in names] for f in frames], dtype=bool).reshape(
+            len(frames), len(names)
+        ),
+        "motions": np.array(json.dumps([{str(g): m for g, m in f[2].items()} for f in frames])),
+        "pictures": np.array(json.dumps([{k: p.get(k) for k in PICTURE_FIELDS} for p in pictures])),
+    }
+    for i, n in enumerate(names):
+        arrays[f"own_{i}"] = np.asarray(own[n], dtype=np.int64)
+        if n in masks:
+            arrays[f"mask_{i}"] = np.asarray(masks[n], dtype=bool)
+    np.savez_compressed(str(path) + ".groups.npz", **arrays)
+    folder = pathlib.Path(str(path) + ".frames")
+    folder.mkdir(parents=True, exist_ok=True)
+    for k, p in enumerate(pictures):
+        np.savez_compressed(
+            folder / f"{k:06d}.npz",
+            **{
+                key: np.asarray(p.get(field) or [], dtype=np.int32 if key != "groups_depth" else np.uint16)
+                for key, field in PICTURE_ARRAYS.items()
+            },
+        )
 
 
 def segment_clicks(rgb: np.ndarray, clicks) -> list[np.ndarray]:
@@ -581,7 +635,8 @@ class MjpegView:
         self.recorded += 1
 
 
-def main() -> None:
+def parser() -> argparse.ArgumentParser:
+    """The view's options: the live GUI and the offline pipeline (lerobot.showservo.perception) both run it."""
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--live", action="store_true")
     ap.add_argument(
@@ -594,8 +649,8 @@ def main() -> None:
     ap.add_argument("--out")
     ap.add_argument(
         "--dump",
-        help="replay: save every frame's 3D tracks (xyz, seen, t) to this .npz, and beside it (.groups.pkl) each "
-        "frame's groups (membership, each group's motion, the objects' poses) and each object's own tracks",
+        help="replay: save every frame's 3D tracks (xyz, seen, t) to this .npz, and beside it each frame's groups and "
+        "picture (write_groups_dump)",
     )
     ap.add_argument("--object", action="append", default=[], help="name=u,v on the start frame")
     ap.add_argument(
@@ -612,6 +667,11 @@ def main() -> None:
     ap.add_argument("--pips", type=int, default=4)
     ap.add_argument("--own-share", type=float, default=0.97)
     ap.add_argument("--borrowed-points", type=int, default=N_RING)
+    return ap
+
+
+def main() -> None:
+    ap = parser()
     args = ap.parse_args()
     signal.signal(
         signal.SIGTERM, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt())
@@ -653,6 +713,8 @@ def main() -> None:
     lag_ms: list[float] = []
     dumped: list = []
     dumped_groups: list = []
+    dumped_pictures: list = []
+    designated_masks: dict[str, np.ndarray] = {}
 
     def designate(rgb, pts, asked: dict, taken=None) -> dict[str, dict]:
         """Each asked object (name -> click) designated on this frame: SAM 2.1's mask for its click, its own corners,
@@ -689,6 +751,7 @@ def main() -> None:
             pose = np.eye(4)
             pose[:3, 3] = centre
             tracker.add_object(name, idx_own, pose)
+            designated_masks[name] = mask
             if previous_ring is not None:
                 tracker.retire_unowned(previous_ring)
             rings[name] = new_ring
@@ -929,6 +992,8 @@ def main() -> None:
             )
             t0 = time.time()
             picture = scene.drawing(k, tracker, xyz, seen, objects, surfaces, base, world.quiet, wire=wire)
+            if args.dump:
+                dumped_pictures.append(picture)
             row["ms"]["picture"] = round((time.time() - t0) * 1000, 1)  # the picture with its wireframe
             picture["perf"] = {
                 **row["ms"],
@@ -1002,14 +1067,13 @@ def main() -> None:
             xyz_all[f, : len(x)], seen_all[f, : len(v)] = x, v
         np.savez_compressed(args.dump, xyz=xyz_all, seen=seen_all, t=np.array([t for t, _, _ in dumped]))
         print(f"dumped {len(dumped)} frames x {n_max} tracks to {args.dump}", flush=True)
-        with open(str(args.dump) + ".groups.pkl", "wb") as fh:
-            pickle.dump(
-                {
-                    "frames": dumped_groups,
-                    "own": {o.name: np.asarray(o.tracks).tolist() for o in tracker.objects.values()},
-                },
-                fh,
-            )
+        write_groups_dump(
+            args.dump,
+            dumped_groups,
+            dumped_pictures,
+            designated_masks,
+            {o.name: o.tracks for o in tracker.objects.values()},
+        )
     if out:
         (out / "timeline.json").write_text(json.dumps(timeline))
         span = max(1e-3, timeline[-1]["t"] - timeline[0]["t"]) if len(timeline) > 1 else 1.0

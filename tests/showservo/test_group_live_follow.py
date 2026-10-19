@@ -79,8 +79,8 @@ def test_following_adds_points_only_where_the_camera_measured_depth(group_live):
 
 
 def test_the_dump_keeps_each_frames_groups_as_the_tracker_has_them(group_live):
-    """A tray and a cube on it, the cube lifted off: each dumped frame keeps every track's group, each group's motion
-    and each object's pose, as the tracker has them that frame."""
+    """A tray and a cube on it, the cube lifted off: each dumped frame keeps every track's group, each group's motion,
+    each object's pose and which objects are moving to another group, as the tracker has them that frame."""
     rng = np.random.default_rng(3)
     tray = np.column_stack([rng.uniform(-0.2, 0.2, 200), rng.uniform(-0.12, 0.12, 200), np.full(200, 0.45)])
     cube = np.column_stack([rng.uniform(0.04, 0.08, 30), rng.uniform(0.0, 0.03, 30), np.full(30, 0.42)])
@@ -92,9 +92,10 @@ def test_the_dump_keeps_each_frames_groups_as_the_tracker_has_them(group_live):
         lift = np.array([0.0, 0.0, -0.0015 * max(k - 20, 0)])
         xyz = np.vstack([tray, cube + lift])
         t.update(xyz + rng.normal(0.0, 0.0015, xyz.shape), np.ones(230, bool))
-    stamp, group_of, motions, poses = group_live.groups_frame(12.5, t, groups_mod._matrix)
+    stamp, group_of, motions, poses, moving = group_live.groups_frame(12.5, t, groups_mod._matrix)
     assert stamp == 12.5 and np.array_equal(group_of, t.group_of) and group_of is not t.group_of
     assert set(motions) == set(t.groups) and len(t.groups) == 2, "the tray's group and the cube's"
     for gid, g in t.groups.items():
         np.testing.assert_allclose(motions[gid], groups_mod._matrix(g.motion))
     np.testing.assert_allclose(poses["cube"], t.pose("cube"))
+    assert moving == sorted(o.name for o in t.objects.values() if o.pending is not None)

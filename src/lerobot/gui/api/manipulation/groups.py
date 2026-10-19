@@ -32,6 +32,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
 
 from lerobot.showservo import motion as core
+from lerobot.showservo.perception import GROUP_VIEW_ARGS
 
 from . import acquisition, camera, runtime
 
@@ -161,8 +162,7 @@ def _start_groups(server: str, record: bool = False) -> None:
             server,
             "--port",
             str(runtime.GROUPS_VIEW[1]),
-            "--pips",
-            "2",
+            *GROUP_VIEW_ARGS,
         ]
         try:
             proc = subprocess.Popen(

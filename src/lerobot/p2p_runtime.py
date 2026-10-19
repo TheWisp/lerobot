@@ -31,6 +31,13 @@ def load_lock(path: pathlib.Path = MANIFEST) -> dict:
     return lock
 
 
+def python_path() -> str:
+    """The interpreter of P2P's own environment, which runs its models (the point groups' view among them)."""
+    return os.environ.get(
+        "LEROBOT_P2P_PYTHON", str(pathlib.Path.home() / ".cache/point2pose/venv/bin/python")
+    )
+
+
 def checkout_path() -> pathlib.Path:
     override = os.environ.get("LEROBOT_P2P_REPO")
     if override:
