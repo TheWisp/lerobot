@@ -1,0 +1,120 @@
+# Model free tracking for FLASH
+
+Research reviewed on 2026-10-19. This is a component selection proposal, not a new tracker benchmark. The local host reports an RTX 5090 with 32 GB of GPU memory; published results on other hardware are not local performance estimates.
+
+**Recommendation:** retain current upstream Point2Pose and the sealed local configuration as distinct complete-system baselines. Compare BundleSDF for geometric tracking accuracy. For a new tracker, evaluate a shared causal point frontend, beginning with TAPNext++, together with measured RGB-D, persistent partial object maps and explicit object/environment relationships. Compare SAM2.1 against SAM3.1 for segmentation and recovery. Treat VGGT-family inference and generated shape as optional supporting evidence until their incremental benefit is measured.
+
+Point2Pose is the closest released starting point to the full operating contract found in this review. That does not make it the most accurate method on every benchmark, or establish that it meets our contact requirements. “Best” here is a measured tradeoff between usable pose information, erroneous acceptance, recovery and observation age.
+
+## The operating contract
+
+An object is designated in an RGB-D view without a supplied mesh, scan, category model or object-specific network training. Geometry accumulated from the demonstration or live observations is allowed. The tracker must support multiple rigid objects and environment motion, partial visibility, changing grasp attachment, recovery after occlusion, and causal outputs suitable for feedback. The controller needs metric object-object and object-gripper relations, with uncertainty and source timestamps.
+
+This differs from three related problems: maintaining an object's segmentation mask, tracking arbitrary pixels through a completed video, and estimating pose with a known CAD mesh. Those methods can provide components, but their benchmark scores are not interchangeable.
+
+## Findings from the earlier research
+
+The [earlier architecture](https://github.com/TheWisp/lerobot/blob/80d90b7836031c6e53d665a541200b5d8d2f23fd/src/lerobot/showservo/docs/rigid_tracker_architecture.md) already proposed shared point tracks, persistent maps, group relationships, geometric checks and bounded background work. It explicitly recorded that this integrated tracker was not implemented. The redesign should consolidate that proposal instead of treating the full design as a failed experiment.
+
+Its local evidence remains relevant:
+
+- Wrong visible-face orientation involved depth near an occluding wrist and the fitting/history path, not only segmentation. A mask-model swap is therefore an experiment, not an established fix.
+- More points do not correct a shared depth bias. Point distribution, depth validity and which motion dimensions they constrain matter.
+- A surface check can reject a wrong pose without supplying a replacement. It also cannot verify arbitrary hidden dimensions.
+- Group propagation sometimes worked through occlusion, but slow-motion merging and foreground tracks could carry objects incorrectly. Semantic identity must survive temporary co-motion and physical contact.
+- Predictions during occlusion are useful assumptions. They are not measurements of slip.
+
+These findings motivate the interfaces in the [system design](architecture.md#common-object-estimation-and-relationships). They do not identify one universally superior visual model.
+
+## Complete pose trackers and challengers
+
+| Method             | What it provides                                                                                                             | Fit for this project                                                                                                                                                                                                                                                                                                                   |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Point2Pose**     | Causal multi-object RGB-D pose tracking and online geometry without supplied CAD; official project reports 30 Hz on RTX 4090 | Closest complete baseline. Its contact failures on our rig remain part of the evaluation, even if another dataset score is strong. [Project](https://point2pose.github.io/), [code](https://github.com/tzuyuan/point-to-pose)                                                                                                          |
+| **BundleSDF**      | RGB-D tracking with concurrent neural object reconstruction, initialized with a mask                                         | Important geometry/accuracy baseline; measure per-object scaling and recovery rather than infer them from single-object tests. [Official implementation](https://github.com/NVlabs/BundleSDF)                                                                                                                                          |
+| **FoundationPose** | Novel-object pose estimation and tracking using supplied geometry or a reconstructed object field                            | Useful once enough reference geometry exists. Its model-free setup explicitly fits an object field from reference views, unlike immediate tracking from one observed partial surface. [Official workflow](https://github.com/NVlabs/FoundationPose/blob/main/readme.md)                                                                |
+| **STORM**          | Reference-conditioned segmentation, SAM3D reconstruction, FoundationPose tracking and a learned drift verifier               | A relevant newer challenger for “no supplied CAD.” Test generated-shape accuracy and whole-pipeline initialization/recovery latency. The reported SOM/TOM component timings alone are not total pose latency. [ICML 2026 paper](https://proceedings.mlr.press/v306/deng26a.html), [implementation](https://github.com/YuDeng321/STORM) |
+| **RRTrack**        | Segmentation/pose consistency and recovery using offline templates and online anchors                                        | Useful memory-protection/recovery ideas, but its pose path uses CAD geometry, so it is not a direct baseline under identical inputs. [Paper](https://arxiv.org/html/2607.23669v1)                                                                                                                                                      |
+| **ProxyPose**      | Video diffusion converts a marked region's motion into a synthetic proxy whose pose can be solved                            | Interesting for offline demonstrations and difficult materials. The video-to-video formulation does not establish causal per-frame feedback at our required latency. [Paper](https://arxiv.org/abs/2607.06555)                                                                                                                         |
+
+Point2Pose's [published comparison](https://arxiv.org/html/2604.10415v2) reports higher mean ADD-S AUC than BundleSDF on HO3D, but lower mean ADD and ADD-S AUC on YCBInEOAT. Its recovery/multi-object strengths do not establish the best single-object precision. Those AUCs integrate errors up to 10 cm; they do not certify insertion-scale accuracy. Its FoundationPose comparison uses supplied CAD, an explicitly different input condition.
+
+The latest upstream Point2Pose commit returned by GitHub on the review date was [`5185622`](https://github.com/tzuyuan/point-to-pose/commit/51856226610df75e5c06e8de545bd27f7c4ba99c), dated September 24, 2026, introducing the real-time path. It should be pinned for the upstream baseline. Local wrapper changes, masks, reference construction and estimator policies must be recorded separately from that revision.
+
+## Segmentation and correspondence models
+
+**SAM2.1 remains a necessary baseline.** Its released predictors support video object segmentation and compilation. Our experiment must compare initialization, masks and pose quality under an equal budget, not assume that a larger newer model wins. [Official repository](https://github.com/facebookresearch/sam2).
+
+**SAM3.1 is the preferred SAM3 candidate.** The March 27, 2026 update adds joint multi-object processing. Its roughly sevenfold speedup is reported at 128 objects on H100 against the initial SAM3 release; that says little about two objects on this rig. SAM3 also offers text/exemplar-based detection and recovery. Segmentation still gives object support, not persistent metric material-point correspondences or a full rigid pose. [Release notes](https://github.com/facebookresearch/sam3/blob/main/RELEASE_SAM3p1.md), [SAM3 capabilities](https://ai.meta.com/sam3/).
+
+Compare complete input masks where supported. The old wrapper's reduction of a mask to sparse clicks changes the initialization problem. Compare masks at finger contact, thin boundaries, object-object overlap and reappearance. Preserve an object's identity even when its visible mask vanishes, and never promote an inferred hidden silhouette to measured depth.
+
+**TAPNext++ is the first new point frontend to evaluate.** It is recurrent and causal, and the released VOTSp2026 adapter exposes frame-by-frame inference. The paper reports about 5.2 ms latency for its per-frame configurations on H100; that is a point-model measurement, not an RGB-D pose pipeline measurement on the RTX 5090. The higher-resolution challenge adapter also adds local support queries, changing its workload. Validate persistent state, new query insertion, retirement and long-sequence memory before substituting it. [Paper](https://arxiv.org/html/2604.10582v1), [released adapter](https://github.com/google-deepmind/tapnet/blob/main/tapnet/tapnextpp/votsp2026/README.md).
+
+BootsTAPIR remains the controlled reference. CoTracker3 and other online/windowed trackers are useful comparison frontends, but “online” does not necessarily mean no frame-buffer delay. The TAPNext++ paper's speed table explicitly separates throughput from result latency. These frontends must be compared through the same pose fitter as well as independently, so a change in geometric fitting is not credited to the point model.
+
+## VGGT and dense 3D tracking
+
+**VGGT and VGGT-Omega are geometry backbones, not direct replacements for the full tracker.** They estimate camera/scene geometry from views. With calibrated RealSense depth available, the first use should be a proposal for missing geometry, camera-motion initialization or offline reference improvement. Learned geometry must be metrically aligned and checked against sensor observations. Dynamic objects must be separated from camera motion; reconstructing a whole moving scene as though it were static can corrupt both. These are proposed uses, not measured improvements. [VGGT](https://github.com/facebookresearch/vggt), [VGGT-Omega](https://github.com/facebookresearch/vggt-omega).
+
+Omega has released checkpoints and training code. Its maintainers distinguish the September 2026 reproduction checkpoint for benchmark comparisons from the earlier checkpoint recommended for general use. Pin the intended checkpoint when reporting results; “VGGT” alone is not an adequate experiment identity. Do not put a repeated multi-view reconstruction into the motor-critical path merely because a batch has high average FPS.
+
+**SpatialTrackerV2 and TAPIP3D** are useful 3D correspondence baselines, especially for demo processing and camera-motion separation. SpatialTrackerV2's repository still marks its online release as pending and documents an offline path, including RGB-D plus camera-pose inputs. TAPIP3D explicitly uses geometry and camera motion to track in persistent 3D coordinates. Streaming delay and object-pose fitting still need separate treatment. [SpatialTrackerV2 code](https://github.com/henry123-boy/SpaTrackerV2), [TAPIP3D paper](https://arxiv.org/abs/2504.14717).
+
+**TrackEverything** is especially relevant to the group-tracker idea: persistent 3D scene tracks avoid repeatedly representing the same surfaces. Its paper uses 16-frame windows and reports 23.1 FPS for tracking alone versus 7.2 FPS including its geometry estimator in the cited average. At 30 Hz capture, the first-to-last frame of a 16-frame window spans 500 ms, before processing; throughput is therefore not per-frame response time. The official repository had only a README/assets and the project still advertised code forthcoming on the review date. [Paper](https://arxiv.org/html/2609.30222v1), [project](https://trackeverything.github.io/), [repository](https://github.com/ayushjain1144/trackeverything).
+
+Its memory and compute ideas are worth adapting. For manipulation, preserve reversible object associations when nearby surfaces touch; spatial co-location alone is insufficient to merge identities. A low-speed object also needs retained motion sensitivity. A custom causal adaptation of those ideas would require its own validation rather than inheriting the published scores.
+
+**D4RT, Any4D and fast visual-geometry tracking** broaden the research comparison. They offer joint geometry/motion or efficient trajectory prediction, but video-wide inference speed is not evidence of causal metric pose updates. D4RT's official project did not link released model weights/code in the inspected material. Any4D and the CVPR 2026 fast spatial tracker are worth assessing for offline references or a future causal frontend. They are not reasons to replace reliable measured depth with an unverified prediction. [D4RT](https://d4rt-paper.github.io/), [Any4D](https://any-4d.github.io/), [fast spatial tracking paper](https://openaccess.thecvf.com/content/CVPR2026/html/Huang_Fast_Spatial_Tracking_with_Visual_Geometry_Transformer_CVPR_2026_paper.html).
+
+## A tracker we could build
+
+The proposed tracker specializes in causal rigid-object estimation under contact and partial visibility. It is not implemented. It uses pretrained components and geometry before considering new network training.
+
+```mermaid
+flowchart TD
+    IN[Synchronized RGB-D and calibration] --> PT[Shared causal point tracks]
+    IN --> DG[Measured surface and depth validity]
+    IN --> SM[SAM masks and reference retrieval]
+    PT --> GR[Environment motion and relationship hypotheses]
+    PT --> FIT[Robust object pose and partial constraints]
+    DG --> FIT
+    SM --> FIT
+    GR --> FIT
+    MAP[Verified partial object maps] --> FIT
+    FIT --> OUT[Pose alternatives, uncertainty, evidence time]
+    FIT -->|Only supported new surfaces| MAP
+    GEO[Optional asynchronous geometry proposals] --> FIT
+```
+
+The fast path shares point tracking across task objects and environment groups, lifts reliable visible tracks with current metric depth, and estimates rigid motion against persistent object maps. Background segmentation refresh, reference retrieval and map refinement have bounded budgets. Sharing points across objects is feasible without retraining; sharing the internal encoders of independently trained SAM and point models is a separate research project.
+
+Use 2D correspondence residuals and 3D surface residuals where supported. When depth is missing, visible 2D observations of established 3D map points can still constrain pose through reprojection; they must pass conditioning and ambiguity checks. Local depth-edge mixtures should not be treated as a single precise 3D sample. Use spatially spread support and assess observability near the actual interaction point, where orientation error may create a large displacement.
+
+Relationship hypotheses let a tray, gripper or another moving group predict an occluded object's motion. Direct object evidence can revise or break the relationship. The same update applies to held and unheld objects. Gripper motion is not evidence that a hidden object did not slip, and group identity is not semantic object identity.
+
+Persistent maps accumulate measured geometry under well-supported poses. Provisional surfaces remain reversible until verified; an incorrect pose must not permanently teach the map a distorted object. Predictions and generated geometry retain their own provenance. A generated backside may help propose a view or candidate pose, but it must not count as a sensor observation that verifies itself.
+
+The output should expose the best estimate plus unresolved alternatives and per-dimension evidence. A flat patch can constrain some motion while leaving in-plane motion ambiguous. A ring can have reliable position and axis while yaw is irrelevant or unobservable. The planner consumes the information it actually needs rather than treating every frame as either a perfect 6D pose or total blindness. The [spatial objective](architecture.md#spatial-objective-and-task-progress) projects that uncertainty into the demonstrated interaction.
+
+The plausible research contribution is making these partial constraints, reversible relationships and map updates reliable under manipulation while maintaining low latency. SAM3 plus VGGT alone is not a novelty claim. State-of-the-art performance would require an implemented method and matched comparisons on public data and held-out physical trials.
+
+## Comparison protocol
+
+Use the same recordings, timestamps, depth preprocessing, object initialization and compute allocation across comparable systems. Distinguish a complete-system comparison from a component ablation. A method using CAD or extra reference views is reported in a separate input category. Causal evaluation must withhold future frames and account for output availability, rather than score an offline estimate as if it had been available live.
+
+| Comparison                                                                | Question it answers                                                                 |
+| ------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| Sealed configuration versus pinned upstream Point2Pose                    | Which changes come from our wrapper/estimator rather than upstream?                 |
+| SAM2.1 versus SAM3.1, otherwise unchanged                                 | Do better masks improve pose during contact and recovery at an acceptable cost?     |
+| BootsTAPIR versus TAPNext++, same geometry path                           | Do better causal correspondences reduce loss and response delay?                    |
+| Current fitting versus visible-surface/partial-constraint fitting         | Is the main error geometric bias or insufficient point tracking?                    |
+| Relationship prediction on/off, including slow motion and deliberate slip | Does environmental context help without hiding independent object movement?         |
+| Measured depth alone versus additional learned geometry                   | Does VGGT/SAM3D provide useful information beyond what the sensor already supplies? |
+| Single reference versus verified multi-demo references                    | Does additional data improve held-out matching and relocalization?                  |
+
+Score relative task-point position, axis/orientation error modulo valid symmetry, wrong-pose acceptance, unknown/rejection rates, recovery delay, identity switches, map contamination and long-run memory. Report source-to-output p50/p95/p99 latency and total resource use, alongside pose accuracy. A tracker that rejects everything cannot win by having no accepted wrong poses.
+
+Use YCBInEOAT/HO3D and appropriate point-tracking benchmarks with their stated assumptions, plus held-out local trials covering grasp, carry, slow insertion, release, tray movement, occlusion and perturbation. Public benchmark meshes or evaluator-only markers may be used for ground truth without being supplied to a CAD-free tracker. Threshold calibration and reference selection use training/calibration episodes, never the held-out test labels.
+
+The first useful result is a causal comparison harness and a viewer that exposes the failure mechanisms. It can establish whether segmentation, correspondences or geometric estimation is the best next investment. The runtime controller remains independently testable with known object state. Physical trials then determine whether improved estimation changes task outcomes rather than merely making the outline look steadier.
