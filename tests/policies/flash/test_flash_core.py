@@ -201,6 +201,25 @@ def test_queue_rejects_a_retarget_jump_in_robot_api_action_space():
     assert queue.take(1)[0].action["joint.pos"] == 0.4
 
 
+def test_queue_snapshot_exposes_future_splice_seed_without_mutating_live_queue():
+    queue = ActionQueue()
+    queue.publish(
+        0,
+        [
+            TimedAction(0, {"joint.pos": 0.1}, "carry"),
+            TimedAction(1, {"joint.pos": 0.2}, "carry"),
+            TimedAction(2, {"joint.pos": 0.3}, "carry"),
+        ],
+    )
+    queue.take(0)
+    queue.note_issued({"joint.pos": 0.1})
+    snapshot = queue.snapshot()
+    assert snapshot.boundary_before(1) == {"joint.pos": 0.1}
+    assert snapshot.boundary_before(3) == {"joint.pos": 0.3}
+    snapshot.pending[1].action["joint.pos"] = 99
+    assert queue.take(1)[0].action["joint.pos"] == 0.2
+
+
 def test_motor_tick_reads_state_and_records_accepted_action_without_camera_wait():
     class FakeRobot:
         def get_state_observation(self):

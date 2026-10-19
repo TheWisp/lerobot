@@ -34,7 +34,8 @@ The executable core already separates:
   camera/estimator failures instead of reusing stale poses;
 - kinematics-neutral short IK chunks and atomic future-queue replacement;
 - an asynchronous IK producer that supersedes pending replan requests while
-  the motor owner keeps consuming the already accepted queue;
+  the motor owner keeps consuming the already accepted queue; the producer
+  can snapshot the committed prefix and seed IK at a future splice tick;
 - a selected-joint adapter that runs the SO-107's seven-joint FK/IK model
   while the planner controls six arm joints and the gripper separately;
 - a camera-independent motor read/dispatch tick through `Robot`;

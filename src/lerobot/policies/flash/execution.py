@@ -10,7 +10,7 @@ from __future__ import annotations
 import time
 from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from threading import Lock
 from typing import Protocol
 
@@ -64,6 +64,27 @@ class PlanRejectedError(RuntimeError):
 
 class MissedEventError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True)
+class ActionQueueSnapshot:
+    """Immutable view of the last dispatched API action and unissued suffix."""
+
+    revision: int
+    last_tick: int
+    last_issued: dict[str, float] | None
+    pending: tuple[TimedAction, ...]
+
+    def boundary_before(self, tick: int) -> dict[str, float] | None:
+        """Action a new chunk must continue from immediately before ``tick``."""
+        if tick <= self.last_tick:
+            raise ValueError("planning boundary must be in the future")
+        if tick == self.last_tick + 1:
+            return None if self.last_issued is None else dict(self.last_issued)
+        for action in self.pending:
+            if action.tick == tick - 1:
+                return dict(action.action)
+        return None
 
 
 class ActionQueue:
@@ -132,6 +153,16 @@ class ActionQueue:
     def revision(self) -> int:
         with self._lock:
             return self._revision
+
+    def snapshot(self) -> ActionQueueSnapshot:
+        """Let an asynchronous producer seed IK from the committed prefix."""
+        with self._lock:
+            return ActionQueueSnapshot(
+                self._revision,
+                self._last_tick,
+                None if self._last_issued is None else dict(self._last_issued),
+                tuple(replace(action, action=dict(action.action)) for _, action in self._actions),
+            )
 
     def take(self, tick: int) -> tuple[TimedAction | None, int]:
         with self._lock:
