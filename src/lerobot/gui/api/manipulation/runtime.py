@@ -246,11 +246,6 @@ class _Demo:
     landing_axis: str = "surface_normal"  # task turn axis; independent of visual pose symmetry
     video: list[bytes] | None = None  # the saved video decoded once for the editor, one JPEG per sample
     taught: bool = False  # recorded with an object taught first; unnamed marks follow that object
-    hold_index: int = 0  # transient execution context; each grasp has its own attachment correction
-    interaction_span: tuple[int, int] | None = None  # transient range of key frames being executed
-    holds: dict[str, Any] = field(
-        default_factory=dict
-    )  # how the demo held the picked object, by the marks it was measured for
     view_points: dict[str, Any] = field(
         default_factory=dict
     )  # each object's surface on its clicked frame, read once
@@ -272,25 +267,9 @@ class _Act:
     progress: float = 0.0
     speed: float = 1.0
     task: asyncio.Task | None = None
-    plan: dict[str, Any] | None = (
-        None  # what the last act judged before moving: per mark reach, the path's worst
-    )
-    place: dict[str, Any] | None = (
-        None  # what the last act measured for its place: the grasp check, the holds
-    )
-    inject: dict[str, Any] | None = None  # an error the operator asked this act to inject, for testing
-    find_error: np.ndarray | None = (
-        None  # while it runs: the injected error in the object's found pose, base frame
-    )
-    correct_hold: bool = True  # False replays the place uncorrected for the hold, as a baseline
-    allow_grasp_prediction: bool = False  # explicitly allow an unchanged-grip prediction when vision fails
-    queue_horizon_s: float = 1.0
     force_recovered_pose: bool = False  # operator confirmed the current ambiguous grasp assignment
     recovered_pose_token: str | None = None
     recovered_pose_object: str | None = None
-    runner: str = (
-        "key_frames"  # which runner plays the act: "key_frames" or "engine" (showservo/docs/act_execution.md)
-    )
     perturb: list[dict[str, Any]] | None = None  # faults the engine injects on purpose (engine.perturb)
     # Each object's find the act started from, with its ends settled, camera frame (planning._same_place).
     start_poses: dict[str, np.ndarray] = field(default_factory=dict)
@@ -374,9 +353,6 @@ class _State:
         default_factory=dict
     )  # objects found against the demo's view of them, by name, each moved by its track
     targets: dict[str, _TargetTrack] = field(default_factory=dict)  # the session's other objects, by name
-    reach_landing: dict[str, Any] = field(
-        default_factory=dict
-    )  # the reach preview's landing turn and what it was searched for: one search per find of the target
 
 
 _state = _State()
@@ -627,47 +603,10 @@ DEMO_FILE = "showservo_demo.npz"
 HISTORY_MATCH_S = 0.2  # a tracker frame this close in time to a joint sample is that sample's object pose
 
 
-ACT_ARRIVE_M = 0.004  # within this of a target counts as arrived: the servo's stiction band
-
-
 ACT_STEP_TIMEOUT_S = 20.0
 
 
-ACT_SETTLE_DEG = 2.0  # arm joints this close to the last target have arrived: the servo's own band
-
-
-# A joint held short under load stops there and waits do not close it: right after the grasp's lift, with the gamepad
-# in the gripper, the worst joint of five pick-and-place acts sat 1.2 to 3.4 deg off its last target, the 3.4 holding
-# for 20 s (2026-10-07). Stopped (no joint moving ACT_STILL_DEG over ACT_STILL_S) within this, the arm has arrived.
-ACT_STALL_DEG = 6.0
-
-
-ACT_STILL_DEG = 0.3
-
-
-ACT_STILL_S = 0.5
-
-
 ACT_TICK_S = 0.05
-
-
-LANDING_EVERY_S = (
-    0.25  # a landing turn is judged on the place's samples this far apart, as well as its pre-places
-)
-
-
-LANDING_TOP_M = 0.004  # the top of the object placed onto: its surface within this of its highest points
-
-
-GRIP_SETTLE_S = 1.0  # the grasp check waits at most this long for the gripper to stop closing
-
-
-HOLD_VIEW_GAP_S = (
-    0.1  # views of the held object at the grip are this far apart, so each is a new camera frame
-)
-
-
-HOLD_TRACK_WAIT_S = 5.0  # the live track's views of a held object are waited for this long, about 25 frames
 
 
 GROUPS_VIEW = (
@@ -711,9 +650,6 @@ GROUPS_FRAMES_KEPT = 1800  # each object's poses kept in the feed: minutes at th
 GROUPS_DRAW_MAX_AGE_S = 1.0  # the camera view paints the groups' picture only while it is this fresh
 
 
-GROUPS_HELD_S = 0.1  # how often an act tells the point groups where the arm has the object it holds
-
-
 _groups_follows: set[asyncio.Task] = set()  # the designations a find started, kept until they end
 
 
@@ -739,9 +675,3 @@ POSE_AXIS_M = 0.04  # the drawn x and y axes' length
 
 
 POSE_UP_M = 0.08  # up and true vertical, longer: seen from above, a tilt barely moves a short one
-
-
-INJECT_MAX_MM = 30.0  # an injected error stays a test of the grasp, not a way to drive the arm elsewhere
-
-
-INJECT_MAX_DEG = 20.0

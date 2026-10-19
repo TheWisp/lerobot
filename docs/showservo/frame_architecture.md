@@ -130,6 +130,8 @@ manipulation accuracy or motor smoothness.
 
 ## Common pose interface and the attachment layer
 
+**REMOVED 2026-10-19** with the key-frame runner (the act engine replaced it: `src/lerobot/showservo/docs/act_execution.md`).
+
 `pose_updates.PoseObservation` names the object and reference view, provides
 its reference-to-current-camera transform, source, and capture timestamp.
 Regular verified tracking and reference registration use the same attachment
@@ -218,10 +220,10 @@ hand cannot be used as independent evidence that it did not slip.
 - Worker lanes and transport: `gui/api/manipulation/worker.py` and
   `benchmarks/manipulation_worker.py`.
 - Point groups: `benchmarks/group_live.py` and `gui/api/manipulation/groups.py`.
-- Acceptance and common observations: `tracking.py`, `pose_updates.py`.
-- Reference evidence and attachment adapter: `held_views.py`.
-- Relative goals, asynchronous planning, and queue replacement:
-  `execution.py`, `live_execution.py`, `reactive.py`.
+- Acceptance: `tracking.py`.
+- The act: `engine_act.py` and `lerobot.showservo.engine`. **REMOVED 2026-10-19:** the common observations
+  (`pose_updates.py`), the attachment adapter (`held_views.py`), and the key-frame runner's relative goals,
+  asynchronous planning and queue replacement (`execution.py`'s runner, `live_execution.py`, `reactive.py`).
 - Motor playback and encoder history: `gui/api/jog.py`.
 
 ## Recorded quality comparison (16 October)

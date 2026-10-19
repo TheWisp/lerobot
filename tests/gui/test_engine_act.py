@@ -32,7 +32,7 @@ def _target(anchor):
 
 def test_every_object_the_trackers_are_confident_in_is_measured_every_frame(monkeypatch):
     """The feed passes each object's tracker measurement on every frame, by the trackers' own verdict only: a frame
-    the key-frame runner's acceptance rules turned away (``result`` None) still measures every object; a lost or
+    the tracker's pose checks turned away (``result`` None) still measures every object; a lost or
     failed one is not measured; the frame's time is kept either way (act_execution.md R4)."""
     scene = SceneLog()
     monkeypatch.setattr(engine_act.planning, "_delta_base", lambda d, delta, t_bc: np.asarray(delta) + 1.0)
@@ -70,16 +70,15 @@ def test_a_frame_without_a_camera_stamp_is_not_fed():
     assert scene.frames() == [] and scene.measurements("dowel") == []
 
 
-def test_an_act_asks_for_the_engine_and_its_faults():
-    body = execution.ActBody(
-        runner="engine", perturb=[{"kind": "open_gripper", "leg": "pre-place 1", "s": 0.4}]
-    )
-    assert body.runner == "engine"
+def test_an_act_takes_its_speed_and_the_engines_faults_and_nothing_else():
+    """The engine plays every act: the request has no runner to choose, and none of the removed key-frame runner's
+    options (injected errors, the hold baseline, the grasp-pose fallback, the queue horizon) is taken."""
+    body = execution.ActBody(speed=0.5, perturb=[{"kind": "open_gripper", "leg": "pre-place 1", "s": 0.4}])
     p = Perturbations.from_spec(body.perturb)
     assert isinstance(p.items[0], OpenGripper) and p.items[0].leg == "pre-place 1"
-    assert execution.ActBody().runner == "key_frames"
-    with pytest.raises(ValueError):
-        execution.ActBody(runner="planner")
+    for old in ({"runner": "engine"}, {"inject": None}, {"correct_hold": True}, {"queue_horizon_s": 1.0}):
+        with pytest.raises(ValueError):
+            execution.ActBody(**old)
     with pytest.raises(ValueError):
         Perturbations.from_spec([{"kind": "teleport"}])
 
@@ -124,18 +123,6 @@ def test_the_fingertip_now_is_the_latest_encoder_read(monkeypatch):
     np.testing.assert_allclose(scene.tip_at(10.0 + 0.5 / jog.HZ)[:3, 3], 1.5)  # between two reads
     np.testing.assert_allclose(scene.tip_at(10.0 + 1.5 / jog.HZ)[:3, 3], 3.0)  # now: the latest read
     assert scene.tip_at(10.0 + 4.0 / jog.HZ) is None  # no read for that long: not the arm now
-
-
-def test_only_the_engine_acts_a_key_frame_held_where_its_leg_begins():
-    from lerobot.showservo import motion as core
-
-    marks = [
-        {"t": 1.0, "kind": "key", "frame": "dowel", "move": "line", "grip": "first"},
-        {"t": 2.0, "kind": "key", "frame": core.START_FRAME, "move": "follow", "grip": "first"},
-    ]
-    assert "act engine only" in execution._runner_problem("key_frames", marks)
-    assert execution._runner_problem("engine", marks) == ""
-    assert execution._runner_problem("key_frames", marks[:1]) == ""
 
 
 def test_an_object_with_a_declared_turn_symmetry_is_centred_on_its_axis():
@@ -227,11 +214,11 @@ def test_the_feed_measures_only_what_its_estimator_takes(monkeypatch):
     )
 
 
-def test_the_old_runners_checks_are_a_candidate_beside_point2pose(monkeypatch):
-    """The key-frame runner's checks run on every frame before the feed (lerobot.gui.api.manipulation.tracking): the
+def test_the_trackers_pose_checks_are_a_candidate_beside_point2pose(monkeypatch):
+    """The tracker's pose checks run on every frame before the feed (lerobot.gui.api.manipulation.tracking): the
     session object's view they certified comes as the feed's ``result``, another object's as its track's newest view
     of this frame. Each is a candidate of its own, so an estimator may take them instead of Point2Pose's verdict."""
-    from lerobot.showservo.estimation import old_runner_checks
+    from lerobot.showservo.estimation import OLD_RUNNER, SourceVerdict
 
     monkeypatch.setattr(engine_act.planning, "_delta_base", lambda d, delta, t_bc: np.asarray(delta))
     monkeypatch.setattr(engine_act.planning, "_pose_frame", lambda d, name: 1)
@@ -247,7 +234,7 @@ def test_the_old_runners_checks_are_a_candidate_beside_point2pose(monkeypatch):
     certified_dowel[:3, 3] = (0.01, 0.0, 0.0)
     scene = SceneLog()
     feed = engine_act._Feed(
-        scene, types.SimpleNamespace(), np.eye(4), "dowel", ["ring", "cup"], old_runner_checks()
+        scene, types.SimpleNamespace(), np.eye(4), "dowel", ["ring", "cup"], SourceVerdict(OLD_RUNNER)
     )
     r = {
         "ok": True,
@@ -263,7 +250,7 @@ def test_the_old_runners_checks_are_a_candidate_beside_point2pose(monkeypatch):
     assert feed.refused == {"cup: old runner checks: only 56% of its points are seen": 1}
     feed(
         _job(4.0), r, None
-    )  # the runner refused this view of the dowel; its view of the ring is not of this frame
+    )  # the checks refused this view of the dowel; their view of the ring is not of this frame
     assert len(scene.measurements("dowel")) == 1 and len(scene.measurements("ring")) == 1
 
 

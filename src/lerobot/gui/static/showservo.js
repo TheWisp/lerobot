@@ -1091,24 +1091,18 @@ async function pgTrialsRefresh(force = false) {
         const box = document.getElementById('pg-trials');
         if (!rows.length) { box.innerHTML = ''; return; }
         // What each act did, from its own record: nothing here asks the operator for a verdict.
-        const f = (v, d = 1) => (v == null ? '–' : Number(v).toFixed(d));
         // The newest act first, dated: a row from yesterday must not read as one from today.
         const last = rows.map((x, index) => ({...x, index})).slice(-12).reverse();
         const td = 'padding:3px 10px 3px 0; vertical-align:top;';
         const nowrap = td + ' white-space:nowrap;';
         box.innerHTML = `<table style="border-collapse:collapse; width:100%;"><thead><tr style="color:#aaa; text-align:left;">
             <th style="${nowrap}">#</th><th style="${nowrap}">when</th><th style="${nowrap}">demo</th><th style="${td}">result</th>` +
-            `<th style="${td}">hold used for the place</th><th></th></tr></thead><tbody>` +
-            last.map(x => {
-                const p = x.place || {};
-                const hold = (p.hold_used === 'unverified' ? 'Unverified: placement stopped' :
-                    p.hold_used ? `${p.hold_used}, corrected ${f(p.shift_mm)} mm ${f(p.shift_deg)}°` : '') +
-                    (x.inject || x.correct_hold === false ? ` (${apInjectSummary({at: 'aim', ...Object.fromEntries(AP_INJECT_AXES.map(([k]) => [k, 0])), ...(x.inject || {}), correct_hold: x.correct_hold !== false})})` : '');
-                return `<tr style="border-top:1px solid #333;"><td style="${nowrap}">${x.index}</td><td style="${nowrap}">${x.at.slice(5)}</td>` +
+            `<th></th></tr></thead><tbody>` +
+            last.map(x => `<tr style="border-top:1px solid #333;"><td style="${nowrap}">${x.index}</td><td style="${nowrap}">${x.at.slice(5)}</td>` +
                     `<td style="${nowrap}">${x.demo || ''}</td>` +
-                    `<td style="${td} color:${x.result === 'done' ? '#7c7' : '#e55'}">${x.result}${x.reason ? ': ' + x.reason : ''}</td><td style="${td}">${hold}</td>` +
-                    `<td style="${nowrap}">${x.run ? `<button class="btn-small" onclick="pgReplay(${x.index})">replay</button>` : ''}</td></tr>`;
-            }).join('') + '</tbody></table>';
+                    `<td style="${td} color:${x.result === 'done' ? '#7c7' : '#e55'}">${x.result}${x.reason ? ': ' + x.reason : ''}</td>` +
+                    `<td style="${nowrap}">${x.run ? `<button class="btn-small" onclick="pgReplay(${x.index})">replay</button>` : ''}</td></tr>`
+            ).join('') + '</tbody></table>';
     } catch (e) { /* no server */ }
 }
 
@@ -1222,7 +1216,6 @@ async function demoNew() {
         apDetailsToggle(true); apSub('teach');
         demoStatus('New demo: record the whole interaction, then name its objects on the recording.');
         de.curve = null; de.objects = []; de.kps = []; de.check = null; de.loadedFor = null;
-        apInjectClear();
         await pgState();
     } catch (e) { demoStatus(e.message, true); }
 }
@@ -1317,10 +1310,7 @@ async function actForceRecovered() {
 
 async function actGo(confirmation = null) {
     try {
-        const options = apInjectBody();
-        await pgPost('/api/pregrasp/act', {speed: Number(document.getElementById('act-speed').value || 1), ...options,
-            queue_horizon_s: Number(document.getElementById('act-queue-horizon').value),
-            allow_grasp_prediction: options.correct_hold && apAllowGraspPrediction,
+        await pgPost('/api/pregrasp/act', {speed: Number(document.getElementById('act-speed').value || 1),
             confirm_recovered_pose: confirmation});
         actWarningDismiss();
         const tile = document.getElementById('jog-tile');
@@ -1472,7 +1462,7 @@ function apSub(name) {
     document.querySelectorAll('#tab-approach .ap-subtab').forEach(b => b.classList.toggle('active', b.dataset.sub === name));
     try { localStorage.setItem('ap-sub', name); } catch (e) { /* storage may be unavailable */ }
     if (name === 'calib') calibRefresh();
-    if (name === 'demo' && !folded) { deLoad(); deReachStart(); } else deReachStop();
+    if (name === 'demo' && !folded) deLoad();
     grpShow(name === 'groups' && !folded);
 }
 
@@ -1647,83 +1637,7 @@ async function pgDepth() {
 // existing handlers do the work; the guide only decides which of them is next.
 const apGuide = {timer: null, action: null, busy: false};
 
-// This experimental UI defaults to the grasp prediction requested for live trials. Keep the choice visible,
-// separate from injected errors, and send it explicitly; API callers retain strict verification by default.
-let apAllowGraspPrediction = true;
-try { apAllowGraspPrediction = localStorage.getItem('ap-hold-prediction') !== '0'; } catch (e) { /* storage may be unavailable */ }
-
-function apHoldPredictionFill() {
-    const input = document.getElementById('ap-hold-prediction');
-    if (!input) return;
-    input.checked = apAllowGraspPrediction;
-    input.disabled = !apInjectRead().correct_hold;
-    document.getElementById('ap-hold-prediction-note').textContent = input.disabled ? 'Hold correction is off.' :
-        apAllowGraspPrediction ? 'Uses the grasp-time pose if vision cannot verify the held object; assumes no slip.' :
-            'Requires verified demo and live held-object poses; stops if either is unavailable.';
-}
-
-function apHoldPredictionSave() {
-    apAllowGraspPrediction = document.getElementById('ap-hold-prediction').checked;
-    try { localStorage.setItem('ap-hold-prediction', apAllowGraspPrediction ? '1' : '0'); } catch (e) { /* storage may be unavailable */ }
-    apHoldPredictionFill();
-}
-
-// ── error injection: test how the act absorbs a grasp aimed off or an object found wrong. Off unless set, kept in this
-// browser; whenever one is set the fold's summary names it, so it is not left on unnoticed. ──
-const AP_INJECT_AXES = [['dx_mm', 'x', ' mm'], ['dy_mm', 'y', ' mm'], ['dz_mm', 'z', ' mm'], ['rx_deg', 'about x', '°'], ['ry_deg', 'about y', '°'], ['rz_deg', 'about z', '°']];
-
-function apInjectRead() {
-    let v = {};
-    try { v = JSON.parse(localStorage.getItem('ap-inject') || '{}') || {}; } catch (e) { /* storage may be unavailable */ }
-    const out = {at: v.at === 'find' ? 'find' : 'aim', correct_hold: v.correct_hold !== false};
-    for (const [k] of AP_INJECT_AXES) out[k] = Number(v[k]) || 0;
-    return out;
-}
-
-function apInjectSummary(v) {
-    const parts = AP_INJECT_AXES.filter(([k]) => v[k]).map(([k, name, unit]) => `${name} ${v[k]}${unit}`);
-    return [parts.length ? `injecting ${v.at === 'find' ? 'a wrong find' : 'a missed aim'}: ${parts.join(', ')}` : '',
-        v.correct_hold ? '' : 'the hold not corrected'].filter(Boolean).join('; ');
-}
-
-function apInjectFill() {
-    const v = apInjectRead();
-    const at = document.getElementById('ap-inject-at');
-    if (!at) return;
-    at.value = v.at;
-    for (const [k] of AP_INJECT_AXES) document.getElementById(`ap-inject-${k}`).value = v[k];
-    document.getElementById('ap-inject-hold').checked = v.correct_hold;
-    const on = apInjectSummary(v), sum = document.getElementById('ap-inject-summary');
-    sum.textContent = on || 'inject an error';
-    sum.style.color = on ? '#e9a23b' : '#888';
-    apHoldPredictionFill();
-}
-
-function apInjectSave() {
-    const v = {at: document.getElementById('ap-inject-at').value, correct_hold: document.getElementById('ap-inject-hold').checked};
-    for (const [k] of AP_INJECT_AXES) v[k] = Number(document.getElementById(`ap-inject-${k}`).value) || 0;
-    try { localStorage.setItem('ap-inject', JSON.stringify(v)); } catch (e) { /* storage may be unavailable */ }
-    apInjectFill();
-}
-
-function apInjectClear() {
-    try { localStorage.removeItem('ap-inject'); } catch (e) { /* storage may be unavailable */ }
-    apInjectFill();
-}
-
-function apInjectToggle(open) {
-    try { localStorage.setItem('ap-inject-open', open ? '1' : '0'); } catch (e) { /* storage may be unavailable */ }
-}
-
-function apInjectBody() {
-    const v = apInjectRead();
-    const inject = AP_INJECT_AXES.some(([k]) => v[k]) ? Object.fromEntries([['at', v.at], ...AP_INJECT_AXES.map(([k]) => [k, v[k]])]) : null;
-    return {inject, correct_hold: v.correct_hold};
-}
-
 function apGuideShow(step, text, label, action, extraHtml = '') {
-    const fold = document.getElementById('ap-inject');
-    if (fold) fold.style.display = step === 'Act' ? '' : 'none';
     document.getElementById('ap-guide-step').textContent = step;
     document.getElementById('ap-guide-text').textContent = text;
     const btn = document.getElementById('ap-guide-btn');
@@ -1860,7 +1774,7 @@ function apDetailsToggle(force) {
 
 
 // ── demo editor: play the recording, mark its key frames ──
-const de = {curve: null, i: 0, playing: false, timer: null, kps: [], loadedFor: null, loadSeq: 0, loading: false, frameBusy: false, framePending: null, reachTimer: null, dirty: false, objects: [], objTimer: null, pathArm: null, check: null, checkSeq: 0, problemShown: false};
+const de = {curve: null, i: 0, playing: false, timer: null, kps: [], loadedFor: null, loadSeq: 0, loading: false, frameBusy: false, framePending: null, dirty: false, objects: [], objTimer: null, pathArm: null, check: null, checkSeq: 0, problemShown: false};
 const DE_WORLD = '#c792ea', DE_HELD = '#e5c07b', DE_TAUGHT = '#ffaa00';
 
 function deStatus(text, isError = false) {
@@ -1957,7 +1871,6 @@ async function deLoad(force = false) {
 function deSync(st) {
     // Called by the guide's poll: a new or reloaded demo replaces the editor's copy when the editor is open.
     if (!deVisible() || !st.demo || de.loading) return;
-    de.hold = st.demo.hold || null;
     const changed = !de.curve || de.curve.name !== st.demo.name;
     if (changed || (!de.dirty && deKey(st.demo.name, st.demo.n, st.demo.keypoints || []) !== de.loadedFor)) { deLoad(); return; }
     // The fingertip path is drawn through the connected arm's camera calibration: fetch it again when an arm comes
@@ -1973,7 +1886,7 @@ async function deRefreshPath() {
         const c = await r.json();
         if (c.name !== de.curve.name) return;
         de.curve.uv = c.uv; de.curve.image_size = c.image_size; de.curve.seen = c.seen; de.curve.grip_t = c.grip_t;  // the marks stay as edited
-        deDrawStrip(); deSeek(de.i, true); deReach();
+        deDrawStrip(); deSeek(de.i, true); deNote();
     } catch (e) { /* no server */ }
 }
 
@@ -2020,7 +1933,7 @@ function deIndexAt(t) { // the sample nearest a time
 function deEdited(text = 'not saved yet: press Save when the list is right') {
     de.dirty = true;
     deStatus(text);
-    deRenderList(); deDrawStrip(); deDrawOverlay(); deReach(); deCheck();
+    deRenderList(); deDrawStrip(); deDrawOverlay(); deNote(); deCheck();
 }
 
 function deAddKey(move) {
@@ -2080,7 +1993,7 @@ function dePoseReset(name) {
     de.kps = de.kps.filter(k => !(k.kind === 'pose' && k.object === name));
     de.dirty = true;
     deStatus(`${name}'s pose is read where it was clicked again: press Save to keep that`);
-    deObjShow(de.objects); deDrawStrip(); deDrawOverlay(); deReach(); deCheck();
+    deObjShow(de.objects); deDrawStrip(); deDrawOverlay(); deNote(); deCheck();
 }
 
 function deRemove(i) { de.kps.splice(i, 1); deEdited('not saved yet'); }
@@ -2222,7 +2135,7 @@ async function deSave() {
         de.dirty = false; de.kps = d.keypoints.map(k => ({...k})); de.curve.keypoints = d.keypoints.map(k => ({...k}));
         de.loadedFor = deKey(d.name, d.n, d.keypoints);
         deStatus(d.keypoints.length ? `saved${d.root ? ' beside the demo' : ' (save the demo to keep it)'}` : 'cleared');
-        deRenderList(); deDrawStrip(); deDrawOverlay(); deReach(); deRefreshPath(); deObjRefresh(); deCheck();
+        deRenderList(); deDrawStrip(); deDrawOverlay(); deNote(); deRefreshPath(); deObjRefresh(); deCheck();
         if (typeof apGuideTick === 'function') apGuideTick();
     } catch (e) { deStatus(e.message, true); }
 }
@@ -2243,41 +2156,19 @@ async function deLanding(value) {
         if (de.curve) { de.curve.landing = d.landing; de.curve.landing_axis = d.landing_axis; }
         deLandingShow();
         const onto = (de.check && de.check.landing_object) || 'its object';
-        deStatus(value === 'turn' ? `the key frames made holding may land turned any way about the middle of ${onto}: each act takes the turn the arm reaches with joints nearest the demo's`
-            : value === 'symmetry' ? `the key frames made holding may land at any of ${onto}'s symmetric turns: each act takes the one the arm reaches with joints nearest the demo's`
-            : `the key frames made holding land on ${onto} as shown`);
-        deReach();
+        deStatus(value === 'turn' ? `kept with the demo: the key frames made holding may land turned any way about the middle of ${onto}. The act engine does not use it yet`
+            : value === 'symmetry' ? `kept with the demo: the key frames made holding may land at any of ${onto}'s symmetric turns. The act engine does not use it yet`
+            : `kept with the demo: the key frames made holding land on ${onto} as shown`);
+        deNote();
     } catch (e) { deStatus(e.message, true); }
 }
 
-function deLandingNote(landing) {
-    if (!landing) return '';
-    if (landing.turn_deg === null || landing.turn_deg === undefined) return ' · no landing turn the arm reaches';
-    const turn = ((landing.turn_deg + 180) % 360 + 360) % 360 - 180;
-    return ` · lands turned ${turn.toFixed(0)}° about ${(de.check && de.check.landing_object) || 'its object'} (${landing.reachable} of the allowed turns within reach)`;
-}
-
-async function deReach() {
-    const el = document.getElementById('de-reach');
+// What the editor notes under the strip: what it cannot draw yet.
+function deNote() {
+    const el = document.getElementById('de-note');
     if (!el || !deVisible()) return;
-    const notes = [];
-    if (de.curve && !de.curve.uv) notes.push('connect the arm to see the fingertip path over the frames');
-    if (!de.curve || !de.curve.keypoints.length || de.dirty) {
-        if (de.dirty) notes.push('save to check whether the arm can reach these');
-        el.textContent = notes.join(' · ');
-        return;
-    }
-    try {
-        const r = await fetch('/api/pregrasp/demo/reach');
-        const d = await r.json();
-        if (!r.ok) { el.textContent = [...notes, `reach: ${d.detail || 'unknown'}`].join(' · '); return; }
-        const hold = de.hold ? ` · the demo's hold, measured on ${de.hold.n} still views: within ${de.hold.spread_mm.toFixed(1)} mm and ${de.hold.spread_deg.toFixed(1)}°` : '';
-        el.innerHTML = 'as the objects lie now: ' + d.marks.map(m => `<span style="color:${m.ok ? '#6c6' : '#e55'};">${m.label} ${m.ok ? '&#10003;' : '&#10007; ' + m.residual_mm.toFixed(0) + ' mm short'}</span>`).join(' · ') +
-            `<span style="color:#777;"> · ${d.summary.seconds.toFixed(1)} s of motion at speed 1${deLandingNote(d.landing)}${d.ok ? '' : ' · ' + d.reason}${d.place_problem ? ' · not found yet: ' + d.place_problem : ''}${hold}</span>`;
-    } catch (e) { el.textContent = ''; }
+    el.textContent = de.curve && !de.curve.uv ? 'connect the arm to see the fingertip path over the frames' : '';
 }
-function deReachStart() { deReachStop(); deReach(); de.reachTimer = setInterval(deReach, 3000); }
-function deReachStop() { if (de.reachTimer) { clearInterval(de.reachTimer); de.reachTimer = null; } }
 
 // ── objects designated on the recording: a click on the frame, then tracked through the whole stream ──
 function deNextObjectName() {
@@ -2404,9 +2295,4 @@ function deObjShow(objects) {
     let show = false;
     try { show = localStorage.getItem('ap-details') === '1'; } catch (e) { /* storage may be unavailable */ }
     apDetailsToggle(show);
-    apInjectFill();
-    let injectOpen = false;
-    try { injectOpen = localStorage.getItem('ap-inject-open') === '1'; } catch (e) { /* storage may be unavailable */ }
-    const fold = document.getElementById('ap-inject');
-    if (fold) fold.open = injectOpen;
 })();

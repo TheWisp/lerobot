@@ -66,7 +66,9 @@ class PoseEstimator(Protocol):
 
 
 POINT2POSE = "point2pose"  # the session tracker's fit, by its own verdict (found, the object not lost)
-OLD_RUNNER = "old runner checks"  # the views the key-frame runner's checks certify, surface-corrected where they correct
+# The views the tracker's pose checks certify, surface-corrected where they correct: the removed key-frame runner's
+# checks, by the name act records spell them.
+OLD_RUNNER = "old runner checks"
 GROUPS = "point groups"  # the point groups' pose: carried by the group the object moves with, placed by its own points
 
 
@@ -95,13 +97,6 @@ def tracker_verdict() -> SourceVerdict:
     """The rule the engine started with: Point2Pose's own verdict. It passes views every other check rejects
     (act_execution.md E30)."""
     return SourceVerdict(POINT2POSE)
-
-
-def old_runner_checks() -> SourceVerdict:
-    """The key-frame runner's checks: enough of the object's tracks seen with a depth that agrees, its fit pinning its
-    middle, its surface agreeing (lerobot.gui.api.manipulation.tracking). Not the runner's carrying between views by
-    the point groups, which needs to know what the gripper holds."""
-    return SourceVerdict(OLD_RUNNER)
 
 
 REST_S = 1.0  # a choice: each object's first second of views, which its tolerances are measured on (as the world's)

@@ -23,7 +23,6 @@ Legacy demo mark formats are normalized into the same key-frame representation.
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from typing import Any
 
 import numpy as np
@@ -645,9 +644,6 @@ ACT_REACH_TOL_DEG = 3.0
 ACT_SOLVE_TOL_M = 0.0005  # the solve keeps going to this; the reach tolerance above only judges the result
 ACT_SOLVE_TOL_DEG = 0.5
 ACT_IK_CALLS = 40  # the IK moves a bounded step per call; the first solve from far away needs several
-ACT_MAX_JOINT_STEP_DEG = (
-    10.0  # a larger change between two samples is a change of arm configuration, not a motion
-)
 # A tracker view moves an object's pose only when it places the object: enough of it seen, and the points seen
 # pinning the pose (src/lerobot/showservo/docs/act_loop.md). The second half: the rigid fit's error at the object's
 # middle for this much noise on each point in 3D, within the reach tolerance. With the wrist over all but a corner of
@@ -958,23 +954,6 @@ def keypoints_problem(keypoints: list[dict[str, Any]], t_start: float, t_end: fl
 GRASP_HELD_SHORT = 0.7
 
 
-def grasp_held(
-    cmd: float, obs: float, demo_cmd: float, demo_obs: float, closing: float
-) -> tuple[bool | None, float]:
-    """Closure proxy for a grasp: ``(fingers blocked, shortfall from command)``.
-
-    ``closing`` is the sign of the demo's closing: +1 when closing raises the gripper's
-    reading. A shortfall above :data:`GRASP_HELD_SHORT` says the fingers met an
-    obstruction; it cannot establish that the designated object is held or clear
-    of the tray. None when the demo's own grasp stopped no further short than
-    that, so this reading cannot distinguish contact from no contact.
-    """
-    short = float(closing * (cmd - obs))
-    if closing * (demo_cmd - demo_obs) <= GRASP_HELD_SHORT:
-        return None, short
-    return short > GRASP_HELD_SHORT, short
-
-
 # The gripper's reading has stopped when it moves less than this over GRIP_STILL_S.
 GRIP_STILL_UNITS = 0.3
 GRIP_STILL_S = 0.1
@@ -1161,13 +1140,6 @@ def _key_marks_problem(marks: list[dict[str, Any]], t_start: float, t_end: float
     return ""
 
 
-def demo_holding(
-    t: np.ndarray, cmd: np.ndarray, obs: np.ndarray, frames: list[dict[str, Any]]
-) -> dict[str, Any] | None:
-    """The first recorded attachment, for callers inspecting a single grasp."""
-    return next(iter(demo_holdings(t, cmd, obs, frames)), None)
-
-
 def demo_holdings(
     t: np.ndarray, cmd: np.ndarray, obs: np.ndarray, frames: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
@@ -1249,11 +1221,6 @@ def held_at(holding: dict[str, Any] | None, t: np.ndarray, frames: list[dict[str
     return holding["grip"] <= i and (holding["release"] is None or i < holding["release"])
 
 
-# The held object's pose in the gripper is measured with the arm standing still. On the gamepad demo the track's
-# hold agreed with itself to 0.6 deg and 0.1 mm (median) over 119 still frames, and was off by a median of 19 mm over
-# the 47 frames the arm moved; one-shot finds of the demo's view on those still frames were all strong and agreed to
-# 1.0 deg and 0.4 mm. A view further than the limits below from the rest is a bad find, not a slip in the grip.
-HOLD_STILL_M_S = 0.005
 HOLD_VIEWS = 5
 HOLD_MIN_VIEWS = 3
 HOLD_AGREE_M = 0.005
@@ -1596,29 +1563,6 @@ LANDINGS = (
     "symmetry",
     "turn",
 )  # as shown; any of the target's symmetric turns; any turn about its middle
-LANDING_STEP_DEG = (
-    5.0  # "turn" is tried every this many degrees; the turn taken is within half a step of the best
-)
-LANDING_TRIES = 4  # the cheapest landings planned in full before the act gives up
-
-
-def landing_turns(landing: str, order: int | dict[str, Any]) -> list[float]:
-    """Permitted landing turns about the object's observed axis.
-
-    Exact permits zero, symmetry the declared discrete or continuous turns,
-    and turn samples all directions every ``LANDING_STEP_DEG``. The sampled
-    turns still need full-path reach and task clearance checks.
-    """
-    assert landing in LANDINGS, f"a landing is one of {LANDINGS}"
-    from lerobot.showservo import symmetry
-
-    spec = symmetry.normalise(order)
-    if landing == "turn" or (landing == "symmetry" and spec["kind"] == "continuous"):
-        return [float(a) for a in np.arange(0.0, 360.0, LANDING_STEP_DEG)]
-    if landing == "symmetry":
-        n = spec["order"]
-        return [360.0 * k / n for k in range(n)]
-    return [0.0]
 
 
 def turn_about(centre: np.ndarray, deg: float, axis: np.ndarray | None = None) -> np.ndarray:
@@ -1626,59 +1570,3 @@ def turn_about(centre: np.ndarray, deg: float, axis: np.ndarray | None = None) -
     from lerobot.showservo import symmetry
 
     return symmetry.turn_about(np.array([0.0, 0.0, 1.0]) if axis is None else axis, centre, deg)
-
-
-def landed(motion: np.ndarray, centre: np.ndarray, deg: float, axis: np.ndarray | None = None) -> np.ndarray:
-    """The motion that lands a place turned by ``deg`` about the object it goes onto: ``motion`` (that object's since
-    the demo, base frame) and then the turn about its observed axis through where ``motion`` puts ``centre`` (the
-    object's axis point in the demo), so the turn goes with the object wherever its track moves it."""
-    motion = np.asarray(motion, dtype=float)
-    direction = np.array([0.0, 0.0, 1.0]) if axis is None else motion[:3, :3] @ np.asarray(axis, float)
-    return (
-        turn_about(motion[:3, :3] @ np.asarray(centre, dtype=float) + motion[:3, 3], deg, direction) @ motion
-    )
-
-
-def rank_landings(
-    kin: Any,
-    turns: list[float],
-    poses_at: Callable[[float], np.ndarray],
-    q_demo: np.ndarray,
-    lo: np.ndarray | None,
-    hi: np.ndarray | None,
-    grip_index: int,
-) -> list[tuple[float, float]]:
-    """The landing turns the arm can make, as (cost, turn), cheapest first.
-
-    ``poses_at(turn)`` gives the place's judged samples landed by that turn (M, 4, 4), and ``q_demo`` (M, J) the
-    demo's own joints at them. Each turn's samples are solved from the demo's joints at the first, with the demo's
-    joint changes between them as hints, so the solve stays on the demo's arm configuration, and no joint past its
-    servo's range [``lo``, ``hi``] (held there). A turn is dropped when a sample is out of reach as solved; the cost of
-    the rest is the mean square of their arm joints' distance from the demo's (motor deg^2).
-    Reject a turn at its first unreachable sample: solving the rest cannot make that turn admissible.
-    """
-    q_demo = np.asarray(q_demo, dtype=float)
-    arm = [k for k in range(q_demo.shape[1]) if k != grip_index]
-    hints = np.vstack([np.zeros(q_demo.shape[1]), np.diff(q_demo, axis=0)])
-    ranked = []
-    for turn in turns:
-        poses = poses_at(turn)
-        previous, joints = q_demo[0], []
-        for i in range(len(q_demo)):
-            sol = solve_plan_joints(
-                kin,
-                poses[i : i + 1],
-                q_demo[i : i + 1, grip_index],
-                hints[i : i + 1],
-                previous,
-                grip_index,
-                lo,
-                hi,
-            )
-            if sol["residual_m"][0] > ACT_REACH_TOL_M or sol["residual_deg"][0] > ACT_REACH_TOL_DEG:
-                break
-            previous = sol["q"][0]
-            joints.append(previous)
-        else:
-            ranked.append((float(np.mean((np.asarray(joints)[:, arm] - q_demo[:, arm]) ** 2)), float(turn)))
-    return sorted(ranked)

@@ -19,7 +19,8 @@ object-relative targets, equivalent landing selection, attachment correction,
 group propagation and playback progress. Its
 [concurrency contract](manipulation_architecture.md#waiting-parallel-work-and-servo-freezes)
 connects perception to the single key-frame runner without treating a delayed
-measurement as current or confusing observation waits with servo faults.
+measurement as current or confusing observation waits with servo faults. **REMOVED 2026-10-19:** the key-frame
+runner; the act engine ([act_execution.md](act_execution.md)) plays acts now.
 
 ## Proposed architecture
 

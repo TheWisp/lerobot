@@ -80,8 +80,8 @@ This is logged and rendered as position measured, rotation predicted; it cannot
 satisfy a request that forbids predicted orientation. Inconclusive checks retain
 their individual find IDs and reasons. A shared hold wait budget bounds retries.
 
-The selected demo planning references are also measured before the key-frame runner
-can dispatch. Planning inverts these checked reference poses; inverting a raw,
+The selected demo planning references are also measured before an act
+can dispatch (the key-frame runner's, **REMOVED 2026-10-19**; the act engine's preflight measures them too). Planning inverts these checked reference poses; inverting a raw,
 tilted demo pose would otherwise reintroduce its error into a corrected live pose.
 Rejection or a changed reference selection prevents using that reference.
 `act.json` preserves both versions in `demo_reference_constraints` without

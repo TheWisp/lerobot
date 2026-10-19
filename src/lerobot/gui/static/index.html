@@ -544,24 +544,6 @@
                     <span style="font-size:12px; color:#d6b8a3;">Forcing keeps the arm's reach, workspace and stop checks; it does not check gripper or tray collisions.</span>
                 </div>
             </div>
-            <div style="margin-top:6px; padding:0 14px; font-size:12px; color:#aaa;">
-                <label><input id="ap-hold-prediction" type="checkbox" checked onchange="apHoldPredictionSave()"> Allow grasp-pose fallback</label>
-                <span id="ap-hold-prediction-note">Uses the grasp-time pose if vision cannot verify the held object; assumes no slip.</span>
-            </div>
-            <details id="ap-inject" style="display:none; margin-top:6px; padding:0 14px; font-size:12px;" ontoggle="apInjectToggle(this.open)">
-                <summary id="ap-inject-summary" style="cursor:pointer; color:#888;">inject an error</summary>
-                <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:6px; color:#888;" title="the arm's base frame, z up; turns are about the grasp point (the aim) or the object's centre (the find)">
-                    <label>into <select id="ap-inject-at" onchange="apInjectSave()"><option value="aim" title="the arm misses where it aimed; the act knows its aim">the aim</option><option value="find" title="the object's found pose is wrong; the act believes it">the find</option></select></label>
-                    <label>x <input id="ap-inject-dx_mm" type="number" step="1" min="-30" max="30" value="0" style="width:46px;" onchange="apInjectSave()"> mm</label>
-                    <label>y <input id="ap-inject-dy_mm" type="number" step="1" min="-30" max="30" value="0" style="width:46px;" onchange="apInjectSave()"> mm</label>
-                    <label>z <input id="ap-inject-dz_mm" type="number" step="1" min="-30" max="30" value="0" style="width:46px;" onchange="apInjectSave()"> mm</label>
-                    <label>about x <input id="ap-inject-rx_deg" type="number" step="1" min="-20" max="20" value="0" style="width:46px;" onchange="apInjectSave()"> °</label>
-                    <label>about y <input id="ap-inject-ry_deg" type="number" step="1" min="-20" max="20" value="0" style="width:46px;" onchange="apInjectSave()"> °</label>
-                    <label>about z <input id="ap-inject-rz_deg" type="number" step="1" min="-20" max="20" value="0" style="width:46px;" onchange="apInjectSave()"> °</label>
-                    <label title="off: the place replays the demo against the target without correcting for how the object is held, as a baseline"><input id="ap-inject-hold" type="checkbox" checked onchange="apInjectSave()"> correct for the hold</label>
-                    <button class="btn-small" onclick="apInjectClear()">clear</button>
-                </div>
-            </details>
             <div style="text-align:right; margin-top:4px;"><a id="ap-details-btn" href="#" onclick="apDetailsToggle(); return false;" style="color:#666; font-size:12px; text-decoration:none;" title="the Setup, Teach, Act and Calibrate panels">show details</a></div>
             <div id="ap-subtabs" style="display:flex; gap:4px; margin-top:14px; border-bottom:1px solid #333;">
                 <button class="tab ap-subtab" data-sub="setup" onclick="apSub('setup')">Setup</button>
@@ -669,8 +651,7 @@
                     <b>Follow the demo</b>: from the key frame before, the demo's own path is replayed exactly, gripper
                     included. <b>Lift</b>: straight up from wherever the key frame before left the arm, by the height
                     given, so what it holds clears the scene before a straight line carries it across. The gripper is not marked: while the demo holds something, read from its gripper, the
-                    act keeps the grip and aims the held object rather than the fingers, measuring how it sits in the
-                    gripper at the last straight line before it follows the demo again.
+                    act keeps the grip and aims the held object rather than the fingers, by how it sits in the gripper.
                 </div>
                 <div style="display:flex; gap:14px; flex-wrap:wrap; align-items:flex-start;">
                     <div style="flex:1 1 420px; min-width:300px;">
@@ -710,7 +691,7 @@
                             <button class="btn-small" onclick="deSave()">Save</button>
                             <span id="de-status" style="color:#888; font-size:12px;"></span>
                         </div>
-                        <div id="de-reach" style="color:#aaa; font-size:12px; margin-top:8px;"></div>
+                        <div id="de-note" style="color:#aaa; font-size:12px; margin-top:8px;"></div>
                     </div>
                 </div>
             </div>
@@ -727,7 +708,6 @@
                     <span id="act-demo" style="color:#aaa; font-size:12px;">no demo</span>
                     <button class="btn-small" onclick="pgFind()" title="one find; tracking live works too">Find object</button>
                     <label title="time scale of the replay; the jog's speed limit still caps the walk">speed <input id="act-speed" type="number" step="0.25" value="1" style="width:52px;"></label>
-                    <label title="seconds of checked joint commands buffered ahead of the 30 Hz motor loop; new observations can replace unsent commands">queue s <input id="act-queue-horizon" type="number" min="0.5" max="5" step="0.5" value="1" style="width:48px;"></label>
                     <button class="btn-small" onclick="actGo()">Go</button>
                     <button class="btn-small" onclick="actStop()">Stop</button>
                     <span id="act-status" style="color:#888; font-size:12px;"></span>
@@ -1278,7 +1258,7 @@ nebius iam auth-public-key generate \
     <script src="/static/bug_report.js?v=1"></script>
     <script src="/static/bridge.js?v=1"></script>
     <script src="/static/bridge_consumers.js?v=1"></script>
-    <script src="/static/showservo.js?v=99"></script>
+    <script src="/static/showservo.js?v=100"></script>
     <script src="/static/live_video.js?v=4"></script>
 </body>
 </html>

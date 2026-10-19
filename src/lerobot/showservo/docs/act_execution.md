@@ -57,7 +57,7 @@ acts of 2026-10-15 to 17 with saved frames.
 ## Observations
 
 <a id="o1"></a>**O1. The act stops at every key frame and plans again with the arm standing.** Each key frame is sent
-and waited on until the arm is within 2° of it (`_act_key_frames_task`, `live_execution.stream`), and a line slows
+and waited on until the arm is within 2° of it (`_act_key_frames_task`, `live_execution.stream`, both removed 2026-10-19 with the key-frame runner), and a line slows
 into the key frame it ends on: from 26 °/s down to 3 and back up ([E3](#e3)). The arm stood 0.06 to 0.8 s at the end
 of each stage, and 2.5 s after a grasp while the carry was planned twice ([E4](#e4)). So the stops come from how the
 act is cut up, and following a moved object must not mean planning again.
@@ -152,7 +152,8 @@ flowchart LR
   to take, or none and why; the act's record counts the refusals. Neither the world nor the engine sees a tracker, so
   a better estimator replaces the one in use without touching either. Two sources today: Point2Pose's own verdict
   (its fit found, the object not lost), which passes views every other check rejects ([E30](#e30)); and the
-  key-frame runner's checks, which refuse nearly every view instead ([E31](#e31)). The one in use takes Point2Pose's
+  key-frame runner's checks (they run in the tracker; the runner itself was removed 2026-10-19), which refuse nearly
+  every view instead ([E31](#e31)). The one in use takes Point2Pose's
   view unless the camera sees through it: the camera's ray to a point of the object's surface, at that pose, met
   something farther than the point, so the surface the pose puts there is not there (a point the ray met something
   nearer on is only hidden). A view is refused when more of the surface is seen through than the object's cut-off;
@@ -364,18 +365,18 @@ sequenceDiagram
 
 ### What the engine keeps of the key frames
 
-| Today                                                         | In the engine                                                                                                                                                             |
-| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| A key frame's object: an object, the taught object, the world | the object the leg arriving at it is heading for                                                                                                                          |
-| (new) Its frame: start, where its leg begins                  | the demo's motion since the key frame before, from wherever the arm began the leg: C0·D(t0)⁻¹·D(t); a lift that turns as the demo turned. The key-frame runner refuses it |
-| Its move: line, follow, lift                                  | line: straight from where the arm is; follow: the demo's own path; lift: straight up by `up_mm` from where it is                                                          |
-| Its gripper: first, along                                     | on a line, the gripper moves before the arm, or with it                                                                                                                   |
-| Its constraint: pose, orientation                             | the whole pose; or only the rotation, the position staying where the leg started                                                                                          |
-| Its constraint: best effort                                   | the key frame is a target: when the arm stops short, the leg ends where the arm is and the next starts from there ([E23](#e23))                                           |
-| A held object, from the grasp to the release                  | the legs between allow for how it sits in the gripper; the grasp and the release are Milestones                                                                           |
-| An object's symmetry: repeating turns, an axis, swapped ends  | poses that look the same: the world and the hold keep the one nearest the demo's ([E29](#e29)). **NOT IMPLEMENTED:** ranking them by reach, beside the motion             |
-| The demo's landing: exact, symmetric turns, any turn          | turns the legs onto the target may take, chosen beside the motion; poses the checks count as the same                                                                     |
-| The point groups carrying objects between views               | another source of object poses                                                                                                                                            |
+| The key-frame runner (removed 2026-10-19)                     | In the engine                                                                                                                                                                              |
+| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| A key frame's object: an object, the taught object, the world | the object the leg arriving at it is heading for                                                                                                                                           |
+| (new) Its frame: start, where its leg begins                  | the demo's motion since the key frame before, from wherever the arm began the leg: C0·D(t0)⁻¹·D(t); a lift that turns as the demo turned. The key-frame runner refuses it                  |
+| Its move: line, follow, lift                                  | line: straight from where the arm is; follow: the demo's own path; lift: straight up by `up_mm` from where it is                                                                           |
+| Its gripper: first, along                                     | on a line, the gripper moves before the arm, or with it                                                                                                                                    |
+| Its constraint: pose, orientation                             | the whole pose; or only the rotation, the position staying where the leg started                                                                                                           |
+| Its constraint: best effort                                   | the key frame is a target: when the arm stops short, the leg ends where the arm is and the next starts from there ([E23](#e23))                                                            |
+| A held object, from the grasp to the release                  | the legs between allow for how it sits in the gripper; the grasp and the release are Milestones                                                                                            |
+| An object's symmetry: repeating turns, an axis, swapped ends  | poses that look the same: the world and the hold keep the one nearest the demo's ([E29](#e29)). **NOT IMPLEMENTED:** ranking them by reach, beside the motion                              |
+| The demo's landing: exact, symmetric turns, any turn          | turns the legs onto the target may take, chosen beside the motion; poses the checks count as the same. **NOT IMPLEMENTED:** the engine does not read it; the editor keeps it with the demo |
+| The point groups carrying objects between views               | another source of object poses                                                                                                                                                             |
 
 Allowed turns are ranked again when their object moves — IK of the leg's key frames and a few of its points, from the
 arm's present joints, by whether the arm reaches them and how close its joints stay to the demo's — and a different
@@ -461,7 +462,8 @@ match: see [Q3](#q3).
 - **A state machine written per task:** every task would carry its own recovery; the engine stays the same for every
   task.
 
-What it costs. Two runners exist until the switch. Running ahead of the checks spends motion that a failure undoes:
+What it costs. The key-frame runner was removed on 2026-10-19, so there is nothing left to compare acts against but
+the records of its acts. Running ahead of the checks spends motion that a failure undoes:
 about a third of a second, plus the move back. A grasp whose object the trackers cannot measure goes on unconfirmed, and
 a miss is then caught only where the object turns out not to be: where it lay, once the arm uncovers it, or at the
 release. IK solved tick by tick notices a change of arm configuration only when it comes. Every update depends on the

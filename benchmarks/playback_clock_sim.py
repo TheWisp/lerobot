@@ -7,7 +7,7 @@ No IK, servo dynamics or contact; the producer is assumed to keep up (queue star
 Producers:
   ceil   each sample gets max(1, ceil(dt * hz - 1e-8)) ticks (the producer of 2026-10-16)
   round  each sample gets max(1, round(dt * hz)) ticks
-  clock  as live_execution.stream: a step takes the ticks between its two samples' ticks on the demo's clock
+  clock  as live_execution.stream (removed 2026-10-19): a step takes the ticks between its two samples' ticks on the demo's clock
          (rounded half up); samples sharing a tick are merged while the gripper keeps its direction (still,
          opening or closing); ticks between samples are interpolated
 Consumers:

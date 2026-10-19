@@ -9,48 +9,6 @@ import pytest
 
 from lerobot.gui.api.manipulation import groups, runtime, tracking
 from lerobot.showservo import motion as core, pose_verification
-from lerobot.showservo.pose import rotation_matrix
-
-
-@pytest.mark.parametrize("name", ["arbitrary-source", "arbitrary-target"])
-@pytest.mark.parametrize("rotation", [False, True])
-def test_visual_override_blocks_double_motion_until_new_consistent_observation(monkeypatch, name, rotation):
-    feed = runtime._GroupsFeed()
-    monkeypatch.setattr(runtime._state, "groups_feed", feed)
-    monkeypatch.setattr(runtime._state, "groups_with_acts", True)
-    old, moved = np.eye(4), np.eye(4)
-    moved[:3, 3] = [0.02, -0.01, 0.03]
-    if rotation:
-        moved[:3, :3] = rotation_matrix(np.array([0.2, -0.1, 0.3]))
-    feed.frames[name] = deque([(1.0, old), (2.0, moved)])
-    check = {
-        "object": name,
-        "constraint": {"group_override": {"pose_support": 0.9}},
-        "corrected_groups": {"state": "disagreement"},
-    }
-    groups._accept_transport(check, 1.0)
-    np.testing.assert_array_equal(groups._carried(name, 1.0), np.eye(4))
-    np.testing.assert_array_equal(
-        groups._carried(name, 1.0, (np.array([0, 0, 1]), np.zeros(3)), True), np.eye(4)
-    )
-    assert "withheld" in check["group_transport"]
-    assert not groups._motion_supported(name)
-    # An unrelated object still follows group motion.
-    feed.frames["other"] = feed.frames[name]
-    np.testing.assert_allclose(groups._carried("other", 1.0), moved)
-    check["constraint"] = {}
-    check["corrected_groups"] = {"state": "unavailable"}
-    groups._accept_transport(check, 1.5)
-    np.testing.assert_array_equal(groups._carried(name, 1.5), np.eye(4))
-    check["corrected_groups"] = {"state": "consistent"}
-    groups._accept_transport(check, 2.0)
-    later = moved.copy()
-    later[1, 3] += 0.01
-    feed.frames[name].append((3.0, later))
-    expected = np.eye(4)
-    expected[1, 3] = 0.01
-    np.testing.assert_allclose(groups._carried(name, 2.0), expected, atol=1e-12)
-
 
 FIXTURES = Path(__file__).parents[1] / "fixtures/showservo/transport_20261016"
 

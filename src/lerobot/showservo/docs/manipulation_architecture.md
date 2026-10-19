@@ -1,9 +1,14 @@
 # Key-frame manipulation runtime
 
 The manipulation API has one execution architecture. Every act validates its demo
-reference poses, then executes the key-frame runner. `line`, `follow` and `lift`
-are key-frame movement modes within that runner. The old marks runner and the
-separate grasp/place/world planners have been removed.
+reference poses, then runs the act engine (`engine_act`, `lerobot.showservo.engine`;
+the design is [act_execution.md](act_execution.md)). `line`, `follow` and `lift` are
+key-frame movement modes within it.
+
+**REMOVED 2026-10-19:** the key-frame runner that played acts before the engine, with
+its planner and reach preview, landing search, held-view matching, grasp-pose fallback
+and error injection. The sections below that describe it are marked; they stay as its
+record. The old marks runner and the separate grasp/place/world planners went before.
 
 Older recordings can still contain named marks such as `pregrasp`, `grasp_end`
 and `preplace`. `showservo.motion.key_frames` converts that saved representation
@@ -58,18 +63,20 @@ supplied poses; a new physical task still needs its own observed trial.
 `lerobot.gui.api.manipulation` assembles the endpoint routers. Code imports the
 owning module explicitly; there is no `pregrasp.py` forwarding facade.
 
-| Module                  | Responsibility                                                                         |
-| ----------------------- | -------------------------------------------------------------------------------------- |
-| `runtime`               | Shared session data, configuration and dedicated executors                             |
-| `session`, `camera`     | State readout, frames and calibration from the GUI-owned camera                        |
-| `acquisition`, `worker` | Object registration, reacquisition and worker job transport                            |
-| `tracking`              | Geometry verification, acceptance, accepted pose history and following                 |
-| `holds`, `held_views`   | Checked demo references, object-to-gripper relationships and direct held-view matching |
-| `planning`              | Object-relative key-frame composition, reach checks and landing choices                |
-| `execution`             | Reference preflight, the key-frame runner and manual approach controls                 |
-| `demos`                 | Demo persistence, object designation and key-frame editing                             |
-| `recording`, `replay`   | Raw/control evidence, trial records, playback and exports                              |
-| `rendering`, `groups`   | Overlays and conditional environment-group propagation                                 |
+| Module                  | Responsibility                                                             |
+| ----------------------- | -------------------------------------------------------------------------- |
+| `runtime`               | Shared session data, configuration and dedicated executors                 |
+| `session`, `camera`     | State readout, frames and calibration from the GUI-owned camera            |
+| `acquisition`, `worker` | Object registration, reacquisition and worker job transport                |
+| `tracking`              | Geometry verification, acceptance, accepted pose history and following     |
+| `holds`                 | Checked demo references                                                    |
+| `planning`              | The demo's objects and their poses, finds, key-frame previews              |
+| `execution`             | Reference preflight, starting and stopping an act, manual approach control |
+| `engine_act`            | The act engine run from the GUI: its arm, scene log, feed and record       |
+| `compare`               | A demo beside one of its acts, from their perception caches                |
+| `demos`                 | Demo persistence, object designation and key-frame editing                 |
+| `recording`, `replay`   | Raw/control evidence, trial records, playback and exports                  |
+| `rendering`, `groups`   | Overlays and conditional environment-group propagation                     |
 
 Pure registration, rigid-motion calculations and key-frame sample planning live
 in `lerobot.showservo.motion`, outside the GUI API. The worker entrypoint is
@@ -158,6 +165,8 @@ ambiguity and active inspection remain unresolved. The adaptation mechanisms
 below distinguish accepted measurements from predictions and proposed work.
 
 ## Adaptation mechanisms and their limits
+
+**REMOVED 2026-10-19** with the key-frame runner: the act engine replaced it ([act_execution.md](act_execution.md)). Kept as the record of what it did.
 
 This is the review map for consolidating adaptation within the single key-frame
 architecture. Status describes the reactive implementation of October 14, 2026. Object names in the evidence identify experiments, not policy branches.
@@ -476,6 +485,8 @@ not bundled with this document.
 
 ### Per-cycle execution and attachment updates
 
+**REMOVED 2026-10-19** with the key-frame runner: the act engine replaced it ([act_execution.md](act_execution.md)). Kept as the record of what it did.
+
 Every planned sample retains its object frame, local pose, held flag, gripper
 command, joint hint and floor reference. The live executor composes
 `object_motion @ local_pose @ attachment_correction` (the correction only when
@@ -715,6 +726,8 @@ last visual timestamp and own-group-fit refusal reason.
 
 ## Waiting, parallel work and servo freezes
 
+**REMOVED 2026-10-19** with the key-frame runner: the act engine replaced it ([act_execution.md](act_execution.md)). Kept as the record of what it did.
+
 The main stationary command gap in `20261014_075438` was 7.18 seconds: approximately
 five seconds of held-view matching, then 1.64 seconds between hold selection and
 the next command, including correction planning and landing reselection, plus
@@ -761,6 +774,8 @@ during motion without degrading control-loop latency. Replay accuracy alone
 does not validate this scheduling or the physical correction.
 
 ## Regression coverage
+
+**REMOVED 2026-10-19** with the key-frame runner: the act engine replaced it ([act_execution.md](act_execution.md)). Kept as the record of what it did.
 
 The key-frame runner is tested against expected grasp, carry, placement, drop,
 reach, occlusion and hold-correction behavior. Planner tests verify reference

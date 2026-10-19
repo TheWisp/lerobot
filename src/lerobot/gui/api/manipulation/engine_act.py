@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The act engine run from the GUI, beside the key-frame runner and chosen per act (``runner="engine"``).
+"""The act engine run from the GUI: every act the Act button starts.
 
 What the engine reads, filled from the GUI (src/lerobot/showservo/docs/act_execution.md, "What the engine connects
 to"): the arm from the jog, the motor loop's live playback, and a scene log the tracker writes into on every frame it
@@ -122,7 +122,7 @@ class _Feed:
     """Each tracked frame, into the scene log (act_execution.md, "The loops, and who writes what"): the frame's time,
     and each object's pose the estimator takes (:mod:`lerobot.showservo.estimation`). The feed only turns the trackers'
     output into candidates, base frame, each with its source's verdict: Point2Pose's own (its fit found, the object not
-    lost) and the key-frame runner's checks on that view, which ran on the frame before the feed is called; and with
+    lost) and the tracker's pose checks on that view, which ran on the frame before the feed is called; and with
     the objects designated in the point groups at ``groups_from`` (wall clock), the groups' pose of each in the same
     camera frame, as its motion since then applied to where the act found it (``starts``, base frame). Which of them
     is a measurement is the estimator's."""
@@ -291,7 +291,7 @@ def _camera(teach: runtime._Teach, t_bc: np.ndarray, shape: tuple[int, ...]) -> 
 
 
 async def _find_objects(demo: runtime._Demo, obj: str | None, others: list[str], stopped) -> str:
-    """Find every object of the act afresh before the arm moves, as the key-frame runner does: the others first,
+    """Find every object of the act afresh before the arm moves: the others first,
     then the session object, whose find restarts the live session with the others joining it. "" or why not."""
     act = runtime._state.act
     relocate = {
@@ -433,7 +433,7 @@ async def _act_engine_task(
     speed: float, server: str | None = None, perturb: list[dict[str, Any]] | None = None
 ) -> None:
     """One act run by the engine: find the objects, build the engine from the demo, play it on the jog's live
-    playback while the tracker feeds the scene log, and record it as the key-frame runner records its acts."""
+    playback while the tracker feeds the scene log, and record it in the act's folder beside the demo."""
     from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
 
     from .. import jog
@@ -453,6 +453,11 @@ async def _act_engine_task(
     feed: _Feed | None = None
     engine: Engine | None = None
     try:
+        with runtime._state.lock:
+            finish_view = runtime._state.groups.running and not runtime._state.groups_with_acts
+        if finish_view:  # the switch is off: the act's tracker gets the GPU and the camera to itself
+            act.step = "finishing the point groups view"
+            await groups._finish_groups()
         with runtime._state.lock:
             demo, teach = runtime._state.demo, runtime._state.teach
         if demo is None:
@@ -572,7 +577,6 @@ async def _act_engine_task(
             speed,
             np.asarray(test.result["delta_cam"], dtype=float),
             t_bc,
-            {"ok": True, "summary": "act engine"},
         )
         run.meta["runner"] = "engine"
         run.meta["pose_source"] = source

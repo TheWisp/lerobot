@@ -75,9 +75,6 @@ async def state() -> dict:
             "reason": s.act.reason,
             "progress": s.act.progress,
             "speed": s.act.speed,
-            "queue_horizon_s": s.act.queue_horizon_s,
-            "plan": s.act.plan,
-            "place": s.act.place,
         },
         "located": {}
         if s.demo is None

@@ -1258,9 +1258,10 @@ def test_a_page_older_than_the_server_asks_to_be_reloaded_and_the_trials_ask_not
     assert errors == [], f"the page threw: {errors}"
 
 
-def test_act_controls_keep_injection_and_grasp_prediction_independent(gui_page, tmp_path):
-    """The operator tests how the act absorbs a grasp aimed off: a fold under the Act row takes the error, keeps it
-    across reloads, names it in its summary while it is on, and the Act button sends it."""
+def test_the_act_buttons_send_only_what_the_act_request_takes(gui_page, tmp_path):
+    """The guide's Act button and the Act tab's Go send the act request the server takes (execution.ActBody, which
+    refuses any other field with a 422): the speed and the operator's confirmation, nothing of the removed key-frame
+    runner's options."""
     import json
     import pathlib
     import time
@@ -1309,7 +1310,7 @@ def test_act_controls_keep_injection_and_grasp_prediction_independent(gui_page, 
         ),
     )
     demo = _demo_with_object(tmp_path, time.time())
-    demo.root = str(tmp_path / "demos" / "inject")
+    demo.root = str(tmp_path / "demos" / "act")
     pathlib.Path(demo.root).mkdir(parents=True)
     demo.keypoints = [
         {"t": float(demo.t[6]), "kind": "pregrasp", "object": "gamepad"},
@@ -1317,93 +1318,25 @@ def test_act_controls_keep_injection_and_grasp_prediction_independent(gui_page, 
     ]
     with manipulation.runtime._state.lock:
         manipulation.runtime._state.demo = demo
-
-    def to_act_row():
+    try:
+        page.reload()
         page.wait_for_function("typeof switchTab === 'function'", timeout=15_000)
         page.click('button[data-tab="approach"]')
         page.wait_for_function(
             "document.getElementById('ap-guide-step').textContent === 'Act'", timeout=10_000
         )
-
-    try:
-        page.reload()
-        page.evaluate(
-            "localStorage.removeItem('ap-inject'); localStorage.removeItem('ap-inject-open'); localStorage.removeItem('ap-hold-prediction')"
-        )
-        page.reload()
-        to_act_row()
-        summary = page.locator("#ap-inject-summary")
-        assert summary.is_visible() and summary.inner_text() == "inject an error"
         page.click("#ap-guide-btn")
         page.wait_for_function("document.getElementById('ap-guide-btn').disabled === false")
-        assert sent[-1]["inject"] is None and sent[-1]["correct_hold"] is True, "off unless set"
-        fallback = page.locator("#ap-hold-prediction")
-        assert fallback.is_visible() and fallback.is_checked()
-        assert "assumes no slip" in page.locator("#ap-hold-prediction-note").inner_text()
-        assert sent[-1]["allow_grasp_prediction"] is True, "the UI sends the experimental default explicitly"
-
-        fallback.uncheck()
-        page.reload()
-        to_act_row()
-        assert not fallback.is_checked(), "strict verification survives a reload"
-        assert "stops if either is unavailable" in page.locator("#ap-hold-prediction-note").inner_text()
-        page.click("#ap-guide-btn")
-        page.wait_for_function("document.getElementById('ap-guide-btn').disabled === false")
-        assert sent[-1]["allow_grasp_prediction"] is False
-
-        summary.click()
-        page.select_option("#ap-inject-at", "aim")
-        page.fill("#ap-inject-dx_mm", "5")
-        page.press("#ap-inject-dx_mm", "Tab")
-        page.fill("#ap-inject-rz_deg", "10")
-        page.press("#ap-inject-rz_deg", "Tab")
-        page.uncheck("#ap-inject-hold")
-        assert summary.inner_text() == "injecting a missed aim: x 5 mm, about z 10°; the hold not corrected"
-        page.reload()
-        to_act_row()
-        assert (
-            summary.inner_text() == "injecting a missed aim: x 5 mm, about z 10°; the hold not corrected"
-        ), "kept across a reload, and named while on"
-        assert page.locator("#ap-inject-dx_mm").is_visible(), "the fold stays open as it was left"
-        page.click("#ap-guide-btn")
-        page.wait_for_function("document.getElementById('ap-guide-btn').disabled === false")
-        assert sent[-1]["inject"] == {
-            "at": "aim",
-            "dx_mm": 5,
-            "dy_mm": 0,
-            "dz_mm": 0,
-            "rx_deg": 0,
-            "ry_deg": 0,
-            "rz_deg": 10,
-        }
-        assert sent[-1]["correct_hold"] is False
-        assert sent[-1]["allow_grasp_prediction"] is False and fallback.is_disabled()
-        page.click("#ap-inject button")
-        assert summary.inner_text() == "inject an error"
-        assert fallback.is_enabled() and not fallback.is_checked(), "clearing injection keeps the hold policy"
-        fallback.check()
-        page.reload()
-        to_act_row()
-        assert fallback.is_checked(), "fallback survives a reload"
-        page.click("#ap-guide-btn")
-        page.wait_for_function("document.getElementById('ap-guide-btn').disabled === false")
-        assert sent[-1]["correct_hold"] is True and sent[-1]["allow_grasp_prediction"] is True
-        assert sent[-1]["inject"] is None
         page.click("#ap-details-btn")
         page.click('button.ap-subtab[data-sub="act"]')
-        count = len(sent)
         page.locator("#act-panel button").filter(has_text="Go").click()
-        assert len(sent) == count + 1 and sent[-1]["allow_grasp_prediction"] is True
-        page.uncheck("#ap-inject-hold")
-        assert fallback.is_checked() and fallback.is_disabled()
-        page.click("#ap-guide-btn")
-        page.wait_for_function("document.getElementById('ap-guide-btn').disabled === false")
-        assert sent[-1]["correct_hold"] is False and sent[-1]["allow_grasp_prediction"] is False
+        page.wait_for_function("document.getElementById('act-status') !== null")
+        assert len(sent) == 2, sent
+        for body in sent:
+            manipulation.execution.ActBody(**body)  # raises on any field the server would refuse
+            assert body["speed"] > 0 and body["confirm_recovered_pose"] is None, body
         assert errors == [], f"the page threw: {errors}"
     finally:
-        page.evaluate(
-            "localStorage.removeItem('ap-inject'); localStorage.removeItem('ap-inject-open'); localStorage.removeItem('ap-hold-prediction')"
-        )
         with manipulation.runtime._state.lock:
             manipulation.runtime._state.demo = None
 

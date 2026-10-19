@@ -241,7 +241,6 @@ class _FakeProc:
 def test_worker_protocol_round_trips_a_teach_and_a_find(client):
     """The server side of the worker protocol, with the worker played by the test."""
     import io
-    import json
 
     manipulation.runtime._state.worker.proc = _FakeProc()  # "running" without spawning anything
     try:
@@ -537,7 +536,6 @@ def test_a_clicked_pixel_teaches_without_a_name_and_rides_on_the_job(client, mon
 def test_a_successful_teach_starts_the_track_when_the_camera_is_live(client, monkeypatch):
     """The guided flow has no "start tracking" step: a taught object is tracked from that moment."""
     import io
-    import json
 
     from lerobot.gui.api import showservo
 
@@ -591,7 +589,6 @@ def test_a_successful_teach_starts_the_track_when_the_camera_is_live(client, mon
 
 def test_track_results_update_the_live_pose_and_an_occluded_frame_holds_it(client):
     import io
-    import json
 
     manipulation.runtime._state.worker.proc = _FakeProc()
     try:
@@ -675,7 +672,6 @@ def test_track_results_update_the_live_pose_and_an_occluded_frame_holds_it(clien
 def test_an_act_recording_keeps_every_tracker_frame_with_the_points_its_pose_was_fitted_on(client, tmp_path):
     """The live tracker flipped the cube's orientation mid-act and its log could not say on which points."""
     import io
-    import json
 
     manipulation.runtime._state.worker.proc = _FakeProc()
     try:
@@ -1377,25 +1373,6 @@ def test_grasp_adjust_changes_only_the_selected_object_relative_approach():
     assert np.allclose(plan["poses"][plan["arrive"][1]], tips[60])
 
 
-def test_the_grasp_check_tells_a_held_object_from_a_closing_on_nothing():
-    held = core.grasp_held
-    # Measured on the rig's acts: held ones stopped 0.89 to 10.56 short of the closing command, misses -0.06 to 0.48.
-    assert held(100.0, 98.1, 100.0, 95.5, 1.0) == (True, pytest.approx(1.9))
-    assert held(83.26, 82.37, 83.26, 82.03, 1.0)[0] is True, (
-        "the pick-and-place demo squeezed the gamepad 1.23 short at its firm grip, and an act held it 0.89 short"
-    )
-    assert held(100.0, 99.52, 100.0, 95.4, 1.0)[0] is False, (
-        "the widest-stopping closing on nothing, the cube left lying"
-    )
-    assert held(97.2, 90.3, 97.2, 90.3, 1.0)[0] is True
-    assert held(100.0, 99.6, 100.0, 95.5, 1.0)[0] is False
-    assert held(97.2, 96.9, 97.2, 90.3, 1.0)[0] is False
-    assert held(100.0, 99.6, 100.0, 99.5, 1.0) == (None, pytest.approx(0.4)), (
-        "a demo that barely squeezed cannot tell the two apart"
-    )
-    assert held(10.0, 13.0, 10.0, 14.0, -1.0)[0] is True, "a gripper that closes toward smaller readings"
-
-
 def test_the_grip_is_firm_where_the_gripper_stops_short_of_its_command():
     """The stacking demo's closing, every third sample: the command rises from 62 to 95.1 over 7.63-8.23 s, the
     reading follows and stops at 90.3 at 8.33 s, 4.8 short, while the grasp's end mark comes at 9.16 s after a lift."""
@@ -1500,7 +1477,6 @@ def test_a_held_pose_requires_a_majority_not_an_arbitrarily_selected_small_clust
 
 
 def test_recorded_held_rotation_jumps_leave_the_consistent_majority_usable():
-    import json
     from pathlib import Path
 
     data = json.loads((Path(__file__).parent / "fixtures/held_rotation_outliers_20261012.json").read_text())
@@ -1953,145 +1929,6 @@ def test_orientation_key_frame_rotates_in_place_then_strict_pose_moves_to_target
     assert np.allclose(plan["poses"][-1], tips[2]), "the next strict frame restores position and orientation"
 
 
-def test_best_effort_waypoint_stops_at_reachable_prefix_and_replans_next_exact_frame():
-    from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
-
-    class ShortArm(_StepKinematics):
-        def inverse_kinematics(self, seed, pose):
-            q = super().inverse_kinematics(seed, pose)
-            q[:3] = np.clip(q[:3], -50.0, 50.0)
-            return q
-
-    samples, history = _samples_and_history(n=30)
-
-    def fk(q):
-        pose = np.eye(4)
-        pose[0, 3] = q["shoulder_pan"] / 1000
-        return pose
-
-    demo = manipulation.demos._demo_from_samples("d", "object", samples, history, fk, t0=1000.0)
-    demo.taught = True
-    demo.tips[9, 0, 3] = 0.08
-    demo.tips[18, 0, 3] = 0.02
-    demo.keypoints = [
-        {
-            "t": float(demo.t[9]),
-            "kind": "key",
-            "frame": "world",
-            "move": "line",
-            "grip": "first",
-            "constraint": "best_effort",
-        },
-        {
-            "t": float(demo.t[18]),
-            "kind": "key",
-            "frame": "world",
-            "move": "line",
-            "grip": "first",
-            "constraint": "pose",
-        },
-    ]
-    q_now = np.zeros(len(MOTOR_NAMES))
-    q_now[-1] = 10
-    result = manipulation.planning._plan_act_once(
-        demo,
-        None,
-        np.eye(4),
-        ShortArm(),
-        q_now,
-        (0.04, np.radians(30)),
-        ((-1, -1, -1), (1, 1, 1)),
-        1.0,
-    )
-    assert result["ok"], result["reason"]
-    assert 0 < result["marks"][0]["best_effort_fraction"] < 1
-    assert result["marks"][1]["best_effort_fraction"] is None
-    np.testing.assert_allclose(result["live_path"]["local"][-1, 0, 3], 0.02, atol=1e-6)
-    online = manipulation.planning._plan_act_once(
-        demo,
-        None,
-        np.eye(4),
-        ShortArm(),
-        q_now,
-        (0.04, np.radians(30)),
-        ((-1, -1, -1), (1, 1, 1)),
-        1.0,
-        part=(0, 1),
-    )
-    assert online["ok"] and not online["marks"][0]["ok"], "the final hover may be unreachable"
-    assert online["marks"][0]["best_effort_fraction"] is None, "do not shorten before trying the arm"
-    np.testing.assert_allclose(online["live_path"]["local"][-1, 0, 3], 0.08, atol=1e-6)
-    nearly_set_grip = q_now.copy()
-    nearly_set_grip[-1] = demo.q_cmd[9, -1] - 0.05
-    near = manipulation.planning._plan_act_once(
-        demo,
-        None,
-        np.eye(4),
-        ShortArm(),
-        nearly_set_grip,
-        (0.04, np.radians(30)),
-        ((-1, -1, -1), (1, 1, 1)),
-        1.0,
-    )
-    assert near["ok"] and 0 < near["marks"][0]["best_effort_fraction"] < 1, (
-        "sub-resolution gripper settling is not a contact event"
-    )
-    demo.q_cmd[9, -1] = 70.0
-    contact = manipulation.planning._plan_act_once(
-        demo,
-        None,
-        np.eye(4),
-        ShortArm(),
-        q_now,
-        (0.04, np.radians(30)),
-        ((-1, -1, -1), (1, 1, 1)),
-        1.0,
-    )
-    assert not contact["ok"] and contact["marks"][0]["best_effort_fraction"] is None, (
-        "a gripper change cannot be moved to an arbitrary shortened waypoint"
-    )
-
-
-def test_unreachable_follow_reports_pose_residual_instead_of_crashing():
-    from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
-
-    class ShortArm(_StepKinematics):
-        def inverse_kinematics(self, seed, pose):
-            q = super().inverse_kinematics(seed, pose)
-            q[:3] = np.clip(q[:3], -50.0, 50.0)
-            return q
-
-    samples, history = _samples_and_history(n=30)
-
-    def fk(q):
-        pose = np.eye(4)
-        pose[0, 3] = q["shoulder_pan"] / 1000
-        return pose
-
-    demo = manipulation.demos._demo_from_samples("d", "object", samples, history, fk, t0=1000.0)
-    demo.taught = True
-    demo.tips[9:19, 0, 3] = np.linspace(0.01, 0.08, 10)
-    demo.keypoints = [
-        {"t": float(demo.t[9]), "kind": "key", "frame": "world", "move": "line", "grip": "first"},
-        {"t": float(demo.t[18]), "kind": "key", "frame": "world", "move": "follow", "grip": "first"},
-    ]
-    q_now = np.zeros(len(MOTOR_NAMES))
-    q_now[-1] = 10
-    result = manipulation.planning._plan_act_once(
-        demo,
-        None,
-        np.eye(4),
-        ShortArm(),
-        q_now,
-        (0.04, np.radians(30)),
-        ((-1, -1, -1), (1, 1, 1)),
-        1.0,
-    )
-    assert not result["ok"]
-    assert "pose residual" in result["reason"]
-    assert all("residual_deg" in mark for mark in result["marks"])
-
-
 def _with_lift(marks, t_lift, up_mm):
     """``marks`` as the key frames they make ("key" marks), with a lift at ``t_lift``."""
     keys = [
@@ -2161,43 +1998,6 @@ def test_a_lift_rises_straight_up_from_where_the_key_frame_before_left_the_arm()
         "planned from where the arm stands, the carry rises from there"
     )
     assert np.all(carry["grips"][first] == 80.0), "the gripper as it stands, not the demo's command (85 then)"
-
-
-def test_the_demo_holds_from_the_firm_grip_until_its_command_opens_past_the_fingers():
-    demo = _place_demo(PICK_PLACE_MARKS)
-    frames = core.key_frames(demo.keypoints)
-    holding = manipulation.planning._holding(demo)
-    assert holding["frame"] == "cube" and holding["begins"] == 2, (
-        "it began in the grasp, held in the cube's frame"
-    )
-    assert demo.t[holding["grip"]] == pytest.approx(3.5, abs=0.04) and holding["closing"] == 1.0
-    assert demo.t[holding["release"]] == pytest.approx(9.0, abs=0.04), (
-        "held while the squeeze eased under GRASP_HELD_SHORT, until the command opened past the fingers"
-    )
-    held = [core.held_at(holding, demo.t, frames, n) for n in range(len(frames))]
-    assert held == [False, False, False, True, True, True, False, False], (
-        "the pre-places and the place begin holding; the grasp begins before the grip, the waypoints after the release"
-    )
-    assert manipulation.holds._firm_grip(demo) == holding["grip"]
-    grip, carry = (
-        manipulation.holds._hold_window(demo, "grip"),
-        manipulation.holds._hold_window(demo, "carry"),
-    )
-    assert grip[0] == demo.t[holding["grip"]] and grip[1] <= 4.5, "from the firm grip, within the grasp"
-    assert carry[0] == 4.5 and carry[1] >= 7.5, (
-        "from the grasp's end to the last pre-place, or the pause after it"
-    )
-    step = max(1, round(manipulation.runtime.LANDING_EVERY_S * demo.fps))
-    assert manipulation.planning._landing_samples(demo, "box") == [
-        (i, True) for i in [180, 225, *range(225 + step, 315, step), 315]
-    ], "each pre-place, then the place sampled to its end, all made holding"
-    empty = _place_demo(PICK_PLACE_MARKS)
-    empty.q_obs[:, 6] = empty.q_cmd[:, 6]  # the fingers closed on nothing: the reading reached the command
-    assert (
-        manipulation.planning._holding(empty) is None
-        and manipulation.holds._hold_window(empty, "carry") is None
-    )
-    assert manipulation.execution._grasp_index(empty) == 135, "no firm grip: the grasp's end"
 
 
 def _rigid(rng, turn_deg, shift_m):
@@ -2305,19 +2105,6 @@ class _YawKinematics(_StepKinematics):
         return q
 
 
-def test_a_landing_rule_names_the_turns_that_count_as_the_same_place():
-    assert core.landing_turns("exact", 4) == [0.0]
-    assert core.landing_turns("symmetry", 4) == [0.0, 90.0, 180.0, 270.0]
-    assert core.landing_turns("symmetry", 1) == [0.0], "an object without symmetry lands only as shown"
-    continuous = {"kind": "continuous", "axis": "long_axis", "order": 1}
-    assert core.landing_turns("symmetry", continuous) == core.landing_turns("turn", 1)
-    turns = core.landing_turns("turn", 4)
-    assert len(turns) == round(360.0 / core.LANDING_STEP_DEG) and turns[0] == 0.0
-    assert np.allclose(np.diff(turns), core.LANDING_STEP_DEG)
-    with pytest.raises(AssertionError):
-        core.landing_turns("anyhow", 1)
-
-
 def test_a_visible_round_object_supplies_a_long_axis_without_a_cad_model():
     rng = np.random.default_rng(4)
     xx, aa = np.meshgrid(np.linspace(-0.05, 0.05, 100), np.linspace(0, np.pi, 25))
@@ -2340,22 +2127,6 @@ def test_continuous_pose_symmetry_folds_about_the_observed_axis():
     folded = fold_turn(pose, axis, point, None)
     assert np.allclose(folded.rot, np.eye(3), atol=1e-8)
     assert np.allclose(folded.trans, np.zeros(3), atol=1e-8)
-
-
-def test_a_landing_turns_about_the_object_where_its_motion_put_it():
-    centre = np.array([0.10, -0.20, 0.03])
-    turn = core.turn_about(centre, 90.0)
-    assert np.allclose(turn @ np.r_[centre, 1.0], np.r_[centre, 1.0]), "the middle stays"
-    assert np.allclose((turn @ np.r_[centre + [0.05, 0.0, 0.0], 1.0])[:3], centre + [0.0, 0.05, 0.0])
-    motion = np.eye(4)
-    motion[:3, :3] = Rotation.from_euler("z", 30.0, degrees=True).as_matrix()
-    motion[:3, 3] = [0.02, 0.01, 0.0]
-    landed = core.landed(motion, centre, 90.0)
-    assert np.allclose(landed[:3, :3] @ centre + landed[:3, 3], motion[:3, :3] @ centre + motion[:3, 3]), (
-        "the turn is about where the object is now, so its middle lands where the object's motion put it"
-    )
-    assert Rotation.from_matrix(landed[:3, :3]).as_euler("xyz", degrees=True)[2] == pytest.approx(120.0)
-    assert np.allclose(core.landed(motion, centre, 0.0), motion)
 
 
 def test_a_solve_holds_a_joint_at_its_servo_range_and_says_what_that_costs():
@@ -2385,90 +2156,6 @@ def test_a_solve_holds_a_joint_at_its_servo_range_and_says_what_that_costs():
     )
 
 
-def test_the_landing_taken_is_within_the_servos_with_joints_nearest_the_demos():
-    """The demo set an object down with its wrist at 80 deg, near the servo's 93. The object it goes onto has turned 40
-    deg about its middle since: landed as shown the wrist needs 120. Of the turns about that middle, the one that undoes
-    the object's turn puts the arm back on the demo's joints."""
-    kin = _YawKinematics()
-    centre = np.array([0.15, 0.0, 0.0])
-    demo_q = np.array([[150.0, 30.0, 40.0, 0.0, 80.0, 0.0, 85.0], [150.0, 30.0, 20.0, 0.0, 80.0, 0.0, 60.0]])
-    tips = np.stack([kin.forward_kinematics(q) for q in demo_q])
-    moved = core.turn_about(centre, 40.0)
-    hi = np.array([np.nan, np.nan, np.nan, np.nan, 93.3, np.nan, np.nan])
-    lo = -hi
-
-    def poses_at(deg):
-        return np.stack([core.landed(moved, centre, deg) @ tip for tip in tips])
-
-    assert core.rank_landings(kin, [0.0], poses_at, demo_q, lo, hi, 6) == [], (
-        "as shown the wrist goes past its servo"
-    )
-    assert len(core.rank_landings(kin, [0.0], poses_at, demo_q, None, None, 6)) == 1, (
-        "the model alone reaches it"
-    )
-    ranked = core.rank_landings(kin, core.landing_turns("turn", 1), poses_at, demo_q, lo, hi, 6)
-    cost, best = ranked[0]
-    assert best == pytest.approx(320.0) and cost == pytest.approx(0.0, abs=0.1), (
-        "the turn undoing the object's"
-    )
-    assert all(
-        abs((120.0 + t + 180.0) % 360.0 - 180.0) <= 93.3 + core.ACT_REACH_TOL_DEG for _c, t in ranked
-    ), "every turn kept is reached with the wrist held within its range"
-    assert any(abs((120.0 + t + 180.0) % 360.0 - 180.0) > 93.3 for _c, t in ranked), (
-        "a turn needing the wrist just past its range is kept, held there"
-    )
-    quarter = core.rank_landings(kin, core.landing_turns("symmetry", 4), poses_at, demo_q, lo, hi, 6)
-    assert [t for _c, t in quarter] == [270.0, 180.0], (
-        "the quarter turns the wrist reaches, the nearer to the demo first"
-    )
-
-
-@pytest.mark.parametrize("failure", ["position", "rotation"])
-def test_landing_search_stops_at_first_bad_sample_and_preserves_feasible_ranking(monkeypatch, failure):
-    """An invalid prefix cannot be repaired by later samples; viable candidates keep their full cost."""
-    kin = _YawKinematics()
-    demo_q = np.array(
-        [
-            [150.0, 30.0, 40.0, 0.0, 80.0, 0.0, 85.0],
-            [151.0, 30.0, 30.0, 0.0, 82.0, 0.0, 70.0],
-            [152.0, 30.0, 20.0, 0.0, 84.0, 0.0, 60.0],
-        ]
-    )
-    tips = np.stack([kin.forward_kinematics(q) for q in demo_q])
-    hi = np.array([155.0, np.nan, np.nan, np.nan, 93.3, np.nan, np.nan])
-    lo = -hi
-
-    def poses_at(turn):
-        poses = tips.copy()
-        if failure == "position":
-            poses[:, 0, 3] += turn / 1000.0
-        else:
-            poses = core.turn_about(np.zeros(3), turn) @ poses
-        return poses
-
-    turns = [0.0, 2.0, 40.0]
-    hints = np.vstack([np.zeros(7), np.diff(demo_q, axis=0)])
-    expected = []
-    solve = core.solve_plan_joints
-    for turn in turns:
-        sol = solve(kin, poses_at(turn), demo_q[:, 6], hints, demo_q[0], 6, lo, hi)
-        if np.all(sol["residual_m"] <= core.ACT_REACH_TOL_M) and np.all(
-            sol["residual_deg"] <= core.ACT_REACH_TOL_DEG
-        ):
-            expected.append((float(np.mean((sol["q"][:, :6] - demo_q[:, :6]) ** 2)), turn))
-    assert len(expected) == 2
-    calls = []
-
-    def counted(*args, **kwargs):
-        calls.append(len(args[1]))
-        return solve(*args, **kwargs)
-
-    monkeypatch.setattr(core, "solve_plan_joints", counted)
-    actual = core.rank_landings(kin, turns, poses_at, demo_q, lo, hi, 6)
-    np.testing.assert_allclose(actual, sorted(expected), atol=1e-12)
-    assert sum(calls) == 7, "two complete valid paths and only the first sample of the invalid path"
-
-
 def test_the_solve_continues_from_the_arm_and_reports_what_it_cannot_reach():
     kin = _StepKinematics()
     n = 40
@@ -2491,60 +2178,6 @@ def test_the_solve_continues_from_the_arm_and_reports_what_it_cannot_reach():
     assert out["residual_m"][-1] > core.ACT_REACH_TOL_M and np.all(
         out["residual_m"][:-1] <= core.ACT_REACH_TOL_M
     )
-
-
-@pytest.mark.skipif(
-    not __import__("lerobot.utils.import_utils", fromlist=["_pin_pink_available"])._pin_pink_available,
-    reason="pin-pink (optional) not installed",
-)
-def test_on_the_so107_a_turned_object_keeps_the_grasp_reachable_without_a_jump():
-    from lerobot.robots.so107_description.cartesian_ik import make_so107_arm_kinematics
-    from lerobot.robots.so107_description.joint_alignment import LEFT_ARM_ALIGNMENT, MOTOR_NAMES
-
-    kin = make_so107_arm_kinematics(LEFT_ARM_ALIGNMENT)
-    ready = {
-        "shoulder_pan": 0.0,
-        "shoulder_lift": -45.0,
-        "elbow_flex": 74.0,
-        "forearm_roll": 0.0,
-        "wrist_flex": -41.0,
-        "wrist_roll": 0.0,
-        "gripper": 95.0,
-    }
-    q0 = np.array([ready[m] for m in MOTOR_NAMES])
-    n = 60
-    t = np.arange(n) / 30.0
-    q_demo = np.tile(q0, (n, 1))
-    q_demo[:, MOTOR_NAMES.index("wrist_flex")] += np.linspace(0.0, -15.0, n)  # the demo lowers the wrist
-    q_demo[:, MOTOR_NAMES.index("gripper")] = np.where(t < 1.5, 60.0, 85.0)
-    tips = np.stack([kin.forward_kinematics(qd) for qd in q_demo])
-    delta = np.eye(4)  # the object turned 15 deg about the vertical through the grasp and slid 20 mm
-    delta[:3, :3] = Rotation.from_euler("z", 15, degrees=True).as_matrix()
-    delta[:3, 3] = tips[30, :3, 3] - delta[:3, :3] @ tips[30, :3, 3] + np.array([0.02, 0.0, 0.0])
-    gi = MOTOR_NAMES.index("gripper")
-    kps = [{"t": float(t[20]), "kind": "pregrasp"}, {"t": float(t[59]), "kind": "grasp_end"}]
-    plan = core.plan_key_frames(
-        _resolved_steps(kps, delta),
-        t,
-        tips,
-        q_demo[:, gi],
-        q_demo,
-        kin.forward_kinematics(q0),
-        95.0,
-        0.04,
-        np.radians(30),
-        80.0,
-        1.0,
-        30.0,
-    )
-    out = core.solve_plan_joints(kin, plan["poses"], plan["grips"], plan["hints"], q0, gi)
-    assert np.all(out["residual_m"] <= core.ACT_REACH_TOL_M) and np.all(
-        out["residual_deg"] <= core.ACT_REACH_TOL_DEG
-    )
-    assert np.all(out["step_deg"] <= core.ACT_MAX_JOINT_STEP_DEG), (
-        "no change of configuration between samples"
-    )
-    assert np.array_equal(out["q"][:, gi], plan["grips"])
 
 
 def test_marks_are_validated_saved_beside_the_demo_and_loaded_back(client, tmp_path, monkeypatch):
@@ -2630,56 +2263,6 @@ def test_marks_are_validated_saved_beside_the_demo_and_loaded_back(client, tmp_p
             manipulation.runtime._state.teach_job = None
             manipulation.runtime._state.worker.pending.clear()
             manipulation.runtime._state.worker.jobs.clear()
-
-
-def test_the_act_plan_names_what_it_cannot_do():
-    from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
-
-    kin = _StepKinematics()
-    samples, history = _samples_and_history(n=30)
-
-    def fk(q):
-        pose = np.eye(4)
-        pose[0, 3] = q["shoulder_pan"] / 1000.0  # the fake arm's tip: pan is x in millimetres
-        return pose
-
-    demo = manipulation.demos._demo_from_samples("d", "green cube", samples, history, fk, t0=1000.0)
-    demo.taught = True
-    gi = MOTOR_NAMES.index("gripper")
-    demo.q_obs = np.zeros((30, 7))
-    demo.q_obs[:, 0] = [s["obs"]["shoulder_pan"] for s in samples]
-    demo.q_obs[:, gi] = [s["obs"]["gripper"] for s in samples]
-    demo.q_cmd = demo.q_obs.copy()
-    demo.keypoints = [
-        {"t": float(demo.t[9]), "kind": "pregrasp"},
-        {"t": float(demo.t[18]), "kind": "grasp_end"},
-    ]
-    q_now = np.zeros(7)
-    q_now[2] = 50.0  # the fake arm stands 50 mm up
-    box = ((-1.0, -1.0, -1.0), (1.0, 1.0, 1.0))
-    delta = np.eye(4)
-    delta[0, 3] = 0.02  # the object slid 20 mm: reachable
-    plan = manipulation.planning._plan_act(
-        demo, delta, np.eye(4), kin, q_now, (0.04, np.radians(30)), box, 1.0
-    )
-    assert plan["ok"], plan["reason"]
-    assert [m["label"] for m in plan["marks"]] == ["pre-grasp 1", "grasp"] and all(
-        m["ok"] for m in plan["marks"]
-    )
-    assert plan["stage"][-1] == "grasp" and plan["q"].shape == (len(plan["times"]), 7)
-    delta[0, 3] = 2.0  # two metres: past the fake arm's reach
-    plan = manipulation.planning._plan_act(
-        demo, delta, np.eye(4), kin, q_now, (0.04, np.radians(30)), box, 1.0
-    )
-    assert not plan["ok"] and plan["reason"].startswith(
-        "the planned approach to pre-grasp 1 has no solved joint path"
-    )
-    delta[0, 3] = 0.02
-    floor = ((-1.0, -1.0, 0.01), (1.0, 1.0, 1.0))  # a table 10 mm above where the demo's fingertip went
-    plan = manipulation.planning._plan_act(
-        demo, delta, np.eye(4), kin, q_now, (0.04, np.radians(30)), floor, 1.0
-    )
-    assert not plan["ok"] and plan["reason"] == "pre-grasp 1 would go 10 mm below the table"
 
 
 def _gamepad_top(n_x=5, n_y=5, size=(0.072, 0.040), at=(0.0, 0.0, 0.43)):
@@ -2821,431 +2404,6 @@ def test_the_object_placed_onto_moves_only_on_a_view_that_places_it(monkeypatch)
 
 
 @pytest.mark.usefixtures("act_simulation")
-def test_the_act_follows_an_object_moved_during_the_approach_and_grasps_where_it_settled(
-    tmp_path, monkeypatch
-):
-    import asyncio
-    import time as _time
-
-    from lerobot.gui.api import jog
-    from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
-
-    gi = MOTOR_NAMES.index("gripper")
-    kin = _StepKinematics()
-    n = 30
-    t = np.arange(n) / 30.0
-    q_obs = np.zeros((n, 7))
-    q_obs[:, 0] = 100.0 + np.arange(n)  # the demo's fingertip slides 1 mm per sample in x
-    q_obs[:, 2] = np.linspace(60.0, 20.0, n)  # and comes down
-    q_obs[:, gi] = np.where(np.arange(n) < 20, 60.0, 85.0)  # closing on the object two thirds in
-    tips = np.stack([kin.forward_kinematics(q) for q in q_obs])
-    demo = manipulation.runtime._Demo(
-        name="d",
-        concept="gamepad",
-        fps=30.0,
-        t=t,
-        tips=tips,
-        grippers=q_obs[:, gi],
-        q_obs=q_obs,
-        q_cmd=q_obs.copy(),
-        deltas=np.tile(np.eye(4), (n, 1, 1)),
-        seen=np.ones(n, dtype=bool),
-        delta0=np.eye(4),
-        taught=True,
-    )
-    demo.keypoints = [{"t": float(t[10]), "kind": "pregrasp"}, {"t": float(t[25]), "kind": "grasp_end"}]
-    rgb, depth = _rect_scene(0.0)
-    teach = manipulation.runtime._Teach(
-        at="t",
-        box=(0, 0, 0, 0),
-        rgb=rgb,
-        depth_m=depth,
-        intr=INTR,
-        keypoints={
-            "mode": "features",
-            "concept": "gamepad",
-            "n_points": 40,
-            "xyz": np.tile([0.11, 0.0, 0.03], (40, 1)),
-        },
-    )
-    moved = np.eye(4)
-    moved[:3, 3] = [0.020, 0.010, 0.0]  # the operator slides the gamepad 22 mm while the arm comes in
-
-    sim = {
-        "q": np.array([80.0, -20.0, 90.0, 0, 0, 0, 60.0]),
-        "grip": 60.0,
-        "targets": [],
-        "streamed": [],
-        "limits": [],
-        "stopped": False,
-    }
-
-    def set_target_pose(pose):
-        sim["targets"].append(np.array(pose))
-        pytest.fail("Act must execute its checked joint plan, not a separate Cartesian walk")
-
-    async def joints_start(q_first):
-        sim["q"] = np.array([q_first[m] for m in MOTOR_NAMES])
-
-    async def joints_stop():
-        sim["stopped"] = True
-
-    def set_target_joints(q):
-        sim["q"] = np.array([q[m] for m in MOTOR_NAMES])
-        sim["streamed"].append(sim["q"].copy())
-
-    monkeypatch.setattr(jog, "kinematics", lambda: kin)
-    monkeypatch.setattr(
-        jog,
-        "current_tip_and_anchor",
-        lambda: (
-            kin.forward_kinematics(sim["q"]),
-            np.eye(4),
-            {m: float(sim["q"][k]) for k, m in enumerate(MOTOR_NAMES)},
-        ),
-    )
-    monkeypatch.setattr(jog, "set_target_pose", set_target_pose)
-    monkeypatch.setattr(jog, "current_status", lambda: {"connected": True, "halted": False, "holding": False})
-    monkeypatch.setattr(jog, "current_gripper", lambda: sim["grip"])
-    monkeypatch.setattr(jog, "set_gripper", lambda g: sim.__setitem__("grip", g))
-    monkeypatch.setattr(jog, "walk_limits", lambda: (0.04, np.radians(30)))
-    monkeypatch.setattr(jog, "set_walk_limits", lambda lin, ang: sim["limits"].append((lin, ang)))
-    monkeypatch.setattr(jog, "workspace_box", lambda: ((-1.0, -1.0, -1.0), (1.0, 1.0, 1.0)))
-    monkeypatch.setattr(jog, "joints_start", joints_start)
-    monkeypatch.setattr(jog, "joints_stop", joints_stop)
-    monkeypatch.setattr(jog, "set_target_joints", set_target_joints)
-    from tests.gui.test_stream_objects import fake_playback
-
-    fake_playback(monkeypatch, set_target_joints)
-    monkeypatch.setattr(manipulation.camera, "_t_base_cam", lambda: np.eye(4))
-    monkeypatch.setattr(
-        manipulation.runtime._state, "groups_with_acts", False
-    )  # held poses: no point groups view here
-    monkeypatch.setattr(manipulation.runtime, "ACT_TICK_S", 0.002)
-    monkeypatch.setattr(manipulation.runtime, "ACT_STEP_TIMEOUT_S", 5.0)
-    monkeypatch.setattr(manipulation.runtime, "TRIALS_PATH", tmp_path / "trials.jsonl")
-    monkeypatch.setattr(manipulation.runtime, "_trials", None)
-    monkeypatch.setattr(manipulation.demos, "_demos_root", lambda: tmp_path / "demos")
-    arm_t0 = _time.time()
-    monkeypatch.setattr(jog, "start_record", lambda: arm_t0)
-    q_rec = {m: float(v) for m, v in zip(MOTOR_NAMES, sim["q"], strict=True)}
-    monkeypatch.setattr(jog, "stop_record", lambda: [{"t": 0.0, "obs": q_rec, "cmd": q_rec}] * 3)
-    monkeypatch.setattr(jog, "fk_tip", lambda q: np.eye(4))
-    with manipulation.runtime._state.lock:
-        manipulation.runtime._state.demo, manipulation.runtime._state.teach = demo, teach
-        manipulation.runtime._state.test = manipulation.runtime._Test(
-            at="now",
-            rgb=rgb,
-            result={
-                "ok": True,
-                "delta_cam": np.eye(4),
-                "table_teach": [0.0, 0.0, 1.0],
-                "table_find": [0.0, 0.0, 1.0],
-            },
-        )
-        manipulation.runtime._state.track.on = True
-        manipulation.runtime._state.track.history = [(_time.time() - 1.0, True, np.eye(4))]
-        manipulation.runtime._state.track.last = {"state": "tracking"}
-        manipulation.runtime._state.act = manipulation.runtime._Act(on=True, speed=4.0)
-
-    async def run():
-        async def tracker():  # the camera keeps seeing the gamepad where it was left
-            while True:
-                await asyncio.sleep(0.01)
-                if len(sim["streamed"]) >= 3:
-                    with manipulation.runtime._state.lock:
-                        manipulation.runtime._state.track.history.append((_time.time(), True, moved))
-
-        feed = asyncio.create_task(tracker())
-        try:
-            await asyncio.wait_for(manipulation.execution._act_task(4.0), timeout=20.0)
-        finally:
-            feed.cancel()
-
-    try:
-        asyncio.run(run())
-        act = manipulation.runtime._state.act
-        assert act.ok, act.reason
-        assert not sim["targets"]
-        end = kin.forward_kinematics(sim["streamed"][-1])
-        assert np.linalg.norm(end[:3, 3] - (moved @ tips[25])[:3, 3]) <= core.ACT_SOLVE_TOL_M, (
-            "the grasp is replayed on the moved object"
-        )
-        assert sim["streamed"][-1][gi] == 85.0, "with the demo's closing"
-        assert sim["limits"] == [(0.16, np.radians(30) * 4.0), (0.04, np.radians(30))], (
-            "the walk sped up for the act, then restored"
-        )
-        assert sim["stopped"]
-        # The act's recording: kept for analysis, named by its trial row.
-        row = json.loads((tmp_path / "trials.jsonl").read_text().splitlines()[-1])
-        rec = pathlib.Path(row["run"])
-        assert rec.parent == tmp_path / "demos" / ".acts", "an unsaved demo's acts go under the demos folder"
-        summary = json.loads((rec / "act.json").read_text())
-        assert summary["result"]["ok"] and summary["demo"] == demo.name
-        approach_targets = [x for x in summary["targets"] if x["step"] == "pre-grasp 1" and x.get("pose")]
-        assert approach_targets and any("joints" in x for x in approach_targets), (
-            "the approach's checked joint commands keep their live pose targets"
-        )
-        assert np.allclose(approach_targets[-1]["pose"], moved @ tips[10]), (
-            "the checked approach follows the object after it moves"
-        )
-        arm = np.load(rec / "arm.npz")
-        assert arm["q_obs"].shape == (3, 7) and arm["tip_obs"].shape == (3, 4, 4)
-        assert manipulation.runtime._state.run is None
-    finally:
-        with manipulation.runtime._state.lock:
-            manipulation.runtime._state.demo = manipulation.runtime._state.teach = (
-                manipulation.runtime._state.test
-            ) = None
-            manipulation.runtime._state.track.on = False
-            manipulation.runtime._state.track.history = []
-            manipulation.runtime._state.track.last = {}
-            manipulation.runtime._state.act = manipulation.runtime._Act()
-
-
-@pytest.mark.usefixtures("act_simulation")
-def test_views_of_a_covered_object_move_neither_the_arm_nor_the_grasp(tmp_path, monkeypatch):
-    """At 20:35 on 2026-10-09 the wrist covered all but a corner of the gamepad; the tracker's views of that corner,
-    each fitted on all its points, were tens of degrees off, and the act moved the arm after every one and pushed the
-    gamepad. Such views go through the tracker's own check here (enough points agree) and are turned away by the
-    act's rule: the arm's every target and the grasp stay on the pose held."""
-    import asyncio
-    import time as _time
-
-    from lerobot.gui.api import jog
-    from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
-
-    gi = MOTOR_NAMES.index("gripper")
-    kin = _StepKinematics()
-    n = 30
-    t = np.arange(n) / 30.0
-    q_obs = np.zeros((n, 7))
-    q_obs[:, 0] = 100.0 + np.arange(n)
-    q_obs[:, 2] = np.linspace(60.0, 20.0, n)
-    q_obs[:, gi] = np.where(np.arange(n) < 20, 60.0, 85.0)
-    tips = np.stack([kin.forward_kinematics(q) for q in q_obs])
-    demo = manipulation.runtime._Demo(
-        name="d",
-        concept="gamepad",
-        fps=30.0,
-        t=t,
-        tips=tips,
-        grippers=q_obs[:, gi],
-        q_obs=q_obs,
-        q_cmd=q_obs.copy(),
-        deltas=np.tile(np.eye(4), (n, 1, 1)),
-        seen=np.ones(n, dtype=bool),
-        delta0=np.eye(4),
-        taught=True,
-    )
-    demo.keypoints = [{"t": float(t[10]), "kind": "pregrasp"}, {"t": float(t[25]), "kind": "grasp_end"}]
-    rgb, depth = _rect_scene(0.0)
-    teach = manipulation.runtime._Teach(
-        at="t",
-        box=(0, 0, 0, 0),
-        rgb=rgb,
-        depth_m=depth,
-        intr=INTR,
-        keypoints={
-            "mode": "features",
-            "concept": "gamepad",
-            "n_points": 40,
-            "xyz": _gamepad_top(at=(0.004, 0.007, 0.43)),
-        },
-    )
-    wrong = np.eye(4)  # what the corner's fit said: turned 20 degrees about x and 30 mm along it
-    c, s = np.cos(np.radians(20.0)), np.sin(np.radians(20.0))
-    wrong[:3, :3] = [[1.0, 0.0, 0.0], [0.0, c, -s], [0.0, s, c]]
-    wrong[:3, 3] = [0.030, 0.0, 0.0]
-    corner = np.array([[x, y] for x in (466, 468, 470, 472) for y in (266, 268, 270, 272)], np.float32)
-    corner_view = {
-        "ok": True,
-        "state": "tracking",
-        "algo": "p2p",
-        "ms": 20.0,
-        "n_inliers": 30,  # the tracker's own check passes: enough points agree
-        "n_matches": 30,
-        "n_tracks": 30,
-        "delta": wrong,
-        "fit_uv": corner,
-        "fit_inlier": np.ones(len(corner), bool),
-        "live_uv": np.zeros((len(corner), 2), np.float32),
-    }
-    sim = {"q": np.array([80.0, -20.0, 90.0, 0, 0, 0, 60.0]), "grip": 60.0, "targets": [], "streamed": []}
-
-    def set_target_pose(pose):
-        sim["targets"].append(np.array(pose))
-        pytest.fail("Act must execute its checked joint plan, not a separate Cartesian walk")
-
-    async def joints_start(q_first):
-        sim["q"] = np.array([q_first[m] for m in MOTOR_NAMES])
-
-    async def joints_stop():
-        pass
-
-    def set_target_joints(q):
-        sim["q"] = np.array([q[m] for m in MOTOR_NAMES])
-        sim["streamed"].append(sim["q"].copy())
-
-    monkeypatch.setattr(jog, "kinematics", lambda: kin)
-    monkeypatch.setattr(
-        jog,
-        "current_tip_and_anchor",
-        lambda: (
-            kin.forward_kinematics(sim["q"]),
-            np.eye(4),
-            {m: float(sim["q"][k]) for k, m in enumerate(MOTOR_NAMES)},
-        ),
-    )
-    monkeypatch.setattr(jog, "set_target_pose", set_target_pose)
-    monkeypatch.setattr(jog, "current_status", lambda: {"connected": True, "halted": False, "holding": False})
-    monkeypatch.setattr(jog, "current_gripper", lambda: sim["grip"])
-    monkeypatch.setattr(jog, "set_gripper", lambda g: sim.__setitem__("grip", g))
-    monkeypatch.setattr(jog, "walk_limits", lambda: (0.04, np.radians(30)))
-    monkeypatch.setattr(jog, "set_walk_limits", lambda lin, ang: None)
-    monkeypatch.setattr(jog, "workspace_box", lambda: ((-1.0, -1.0, -1.0), (1.0, 1.0, 1.0)))
-    monkeypatch.setattr(jog, "joints_start", joints_start)
-    monkeypatch.setattr(jog, "joints_stop", joints_stop)
-    monkeypatch.setattr(jog, "set_target_joints", set_target_joints)
-    from tests.gui.test_stream_objects import fake_playback
-
-    fake_playback(monkeypatch, set_target_joints)
-    monkeypatch.setattr(manipulation.camera, "_t_base_cam", lambda: np.eye(4))
-    monkeypatch.setattr(
-        manipulation.runtime._state, "groups_with_acts", False
-    )  # held poses: no point groups view here
-    monkeypatch.setattr(manipulation.runtime, "ACT_TICK_S", 0.002)
-    monkeypatch.setattr(manipulation.runtime, "ACT_STEP_TIMEOUT_S", 5.0)
-    monkeypatch.setattr(manipulation.runtime, "TRIALS_PATH", tmp_path / "trials.jsonl")
-    monkeypatch.setattr(manipulation.runtime, "_trials", None)
-    monkeypatch.setattr(manipulation.demos, "_demos_root", lambda: tmp_path / "demos")
-    monkeypatch.setattr(jog, "start_record", lambda: _time.time())
-    monkeypatch.setattr(jog, "stop_record", lambda: [])
-    monkeypatch.setattr(jog, "fk_tip", lambda q: np.eye(4))
-    with manipulation.runtime._state.lock:
-        manipulation.runtime._state.demo, manipulation.runtime._state.teach = demo, teach
-        manipulation.runtime._state.test = manipulation.runtime._Test(
-            at="now", rgb=rgb, result={"ok": True, "delta_cam": np.eye(4)}
-        )
-        manipulation.runtime._state.track.on = True
-        manipulation.runtime._state.track.history = [(_time.time() - 1.0, True, np.eye(4))]
-        manipulation.runtime._state.track.last = {"state": "tracking"}
-        manipulation.runtime._state.trust_share = manipulation.runtime.TRUST_SHARE_DEFAULT
-        manipulation.runtime._state.act = manipulation.runtime._Act(on=True, speed=4.0)
-    reasons: list[str] = []
-
-    async def run():
-        async def tracker():  # once the arm is over it, the camera sees only the corner the wrist leaves
-            while True:
-                await asyncio.sleep(0.005)
-                if len(sim["streamed"]) < 2:
-                    continue
-                job = manipulation.runtime._Job(
-                    id=f"corner-{len(reasons)}",
-                    kind="track",
-                    concept="gamepad",
-                    rgb=rgb,
-                    depth_m=depth,
-                    intr=INTR,
-                    created=_time.time(),
-                    result=dict(corner_view),
-                )
-                with manipulation.runtime._state.lock:
-                    manipulation.runtime._state.track.job = job.id
-                await manipulation.tracking._apply_track_result(job)
-                reasons.append(manipulation.runtime._state.track.last.get("reason") or "")
-
-        feed = asyncio.create_task(tracker())
-        try:
-            await asyncio.wait_for(manipulation.execution._act_task(4.0), timeout=20.0)
-        finally:
-            feed.cancel()
-
-    try:
-        asyncio.run(run())
-        act = manipulation.runtime._state.act
-        assert act.ok, act.reason
-        assert reasons and all("place its middle only to" in why for why in reasons), reasons[:3]
-        assert all(not ok for _w, ok, _d in manipulation.runtime._state.track.history[1:]), (
-            "none of them became the pose"
-        )
-        assert not sim["targets"]
-        end = kin.forward_kinematics(sim["streamed"][-1])
-        assert np.linalg.norm(end[:3, 3] - tips[25][:3, 3]) <= core.ACT_SOLVE_TOL_M, (
-            "the grasp, on the pose held"
-        )
-    finally:
-        with manipulation.runtime._state.lock:
-            manipulation.runtime._state.demo = manipulation.runtime._state.teach = (
-                manipulation.runtime._state.test
-            ) = None
-            manipulation.runtime._state.track.on = False
-            manipulation.runtime._state.track.history = []
-            manipulation.runtime._state.track.last = {}
-            manipulation.runtime._state.track.job = None
-            manipulation.runtime._state.act = manipulation.runtime._Act()
-
-
-@pytest.mark.usefixtures("act_simulation")
-def test_the_act_refuses_to_start_while_the_tracker_has_lost_the_object(tmp_path, monkeypatch):
-    import asyncio
-
-    from lerobot.gui.api import jog
-    from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
-
-    kin = _StepKinematics()
-    samples, history = _samples_and_history(n=30)
-    demo = manipulation.demos._demo_from_samples(
-        "d", "gamepad", samples, history, lambda q: np.eye(4), t0=1000.0
-    )
-    demo.keypoints = [{"t": float(demo.t[9]), "kind": "pregrasp"}]
-    rgb, depth = _rect_scene(0.0)
-    teach = manipulation.runtime._Teach(
-        at="t",
-        box=(0, 0, 0, 0),
-        rgb=rgb,
-        depth_m=depth,
-        intr=INTR,
-        keypoints={"mode": "features", "concept": "gamepad", "n_points": 40, "xyz": np.zeros((40, 3))},
-    )
-    moves = []
-    monkeypatch.setattr(jog, "kinematics", lambda: kin)
-    monkeypatch.setattr(
-        jog, "current_tip_and_anchor", lambda: (np.eye(4), np.eye(4), dict.fromkeys(MOTOR_NAMES, 0.0))
-    )
-    monkeypatch.setattr(jog, "set_target_pose", lambda pose: moves.append(pose))
-    monkeypatch.setattr(manipulation.camera, "_t_base_cam", lambda: np.eye(4))
-    monkeypatch.setattr(
-        manipulation.runtime._state, "groups_with_acts", False
-    )  # held poses: no point groups view here
-    with manipulation.runtime._state.lock:
-        manipulation.runtime._state.demo, manipulation.runtime._state.teach = demo, teach
-        manipulation.runtime._state.test = manipulation.runtime._Test(
-            at="a while ago", rgb=rgb, result={"ok": True, "delta_cam": np.eye(4)}
-        )
-        manipulation.runtime._state.track.on = True
-        manipulation.runtime._state.track.last = {"state": "lost"}
-        manipulation.runtime._state.act = manipulation.runtime._Act(on=True)
-    try:
-        asyncio.run(manipulation.execution._act_task(1.0))
-        act = manipulation.runtime._state.act
-        assert (
-            act.ok is False
-            and "does not see the object (lost)" in act.reason
-            and "load the demo again" in act.reason
-        )
-        assert moves == [], "the arm did not move on the stale pose"
-    finally:
-        with manipulation.runtime._state.lock:
-            manipulation.runtime._state.demo = manipulation.runtime._state.teach = (
-                manipulation.runtime._state.test
-            ) = None
-            manipulation.runtime._state.track.on = False
-            manipulation.runtime._state.track.last = {}
-            manipulation.runtime._state.act = manipulation.runtime._Act()
-
-
-@pytest.mark.usefixtures("act_simulation")
 def test_an_act_after_an_act_starts_by_finding_the_object_afresh(client, monkeypatch):
     """After an act the track it kept holds the points it added while the object was carried, more than a view of the
     object at rest shows, so no view is trusted again and the found pose stays empty. Act still starts, and finds the
@@ -3279,6 +2437,9 @@ def test_an_act_after_an_act_starts_by_finding_the_object_afresh(client, monkeyp
         return "the find, stopped here"
 
     monkeypatch.setattr(jog, "current_robot_id", lambda: "white_left")
+    from lerobot.gui.api.manipulation import engine_act
+
+    monkeypatch.setattr(engine_act, "arm_refusal", lambda: None)  # the arm the engine drives
     monkeypatch.setattr(manipulation.runtime._state, "groups_with_acts", False)
     with manipulation.runtime._state.lock:
         (
@@ -3650,7 +2811,6 @@ def test_a_view_of_the_picked_object_counts_only_the_points_whose_depth_agrees(c
     why; the next view whose depth agrees is taken. Each frame comes through the worker's result endpoint, as live:
     the server once dropped the picked object's tracks there, and the check never ran on it."""
     import io
-    import json
 
     rgb, depth = _rect_scene(0.0)
     uv = _box_tracks()

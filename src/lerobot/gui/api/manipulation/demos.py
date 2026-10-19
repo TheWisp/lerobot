@@ -66,28 +66,8 @@ def _demo_info(demo: runtime._Demo) -> dict[str, Any]:
         ),  # the object whose find starts the session first, then the others
         "landing": demo.landing,
         "landing_axis": demo.landing_axis,
-        "hold": _demo_hold_info(demo),
         "reference_constraints": dict(demo.reference_constraints),
     }
-
-
-def _demo_hold_info(demo: runtime._Demo) -> dict[str, Any] | None:
-    """The demo's measured hold of the object it holds for its current marks, as the page shows it; None until an
-    act has measured it."""
-    holding = planning._holding(demo)
-    obj = None if holding is None else holding["frame"]
-    o = demo.objects.get(obj) if obj else None
-    if o is None or not demo.holds:
-        return None
-    out = {}
-    for window in ("grip", "carry"):
-        span = json.loads(json.dumps(holds._hold_window(demo, window)))  # as the key holds it
-        for key, avg in demo.holds.items():
-            if "problem" in avg:  # a failure kept so it is not asked again: nothing measured to show
-                continue
-            if json.loads(key)[:4] == [obj, int(o["frame"]), window, span]:
-                out[window] = {k: avg[k] for k in ("n", "views", "spread_mm", "spread_deg")}
-    return out or None
 
 
 def _demo_from_samples(name: str, concept: str, samples: list, history: list, fk, t0: float) -> runtime._Demo:
@@ -393,7 +373,6 @@ def _video_source(demo: runtime._Demo, stream: pathlib.Path | None) -> tuple[np.
 
     The reader keeps the last frame, since consecutive arm samples usually fall on the same camera frame.
     """
-    import functools
 
     if stream is not None and (stream / "times.txt").exists():
 
@@ -1161,101 +1140,3 @@ async def demo_landing(body: LandingBody) -> dict:
             demo.landing_axis,
         )
     return _demo_info(demo)
-
-
-@router.get("/demo/reach")
-async def demo_reach() -> dict:
-    """Can the arm do the marked pre-grasp and grasp on the object where it is now? The act's own judgement, without moving.
-
-    Not while an act runs. This preview searches once per find of the target and caches its turn; the act can search
-    again if that turn no longer plans after the grasp or after measuring the hold.
-    The search is a second of CPU-bound solving in this process: polled every 3 s by the editor, it held the arm's
-    loop up for a second at a time (2026-10-08: 0.9-1.1 s stalls every 3 s while the arm stood still; in an act the
-    release reached the arm together with the lift and the gamepad was pulled over).
-    """
-    from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
-
-    from .. import jog
-
-    with runtime._state.lock:
-        demo, test, acting = runtime._state.demo, runtime._state.test, runtime._state.act.on
-    if acting:
-        raise HTTPException(409, "an act is running")
-    if demo is None:
-        raise HTTPException(409, "record or load a demo first")
-    if not planning._has_key_frames(demo):
-        raise HTTPException(409, "no key frame marked yet")
-    if test is None or not test.result.get("ok"):
-        raise HTTPException(409, "the object is not found")
-    kin, cur = jog.kinematics(), jog.current_tip_and_anchor()
-    if kin is None or cur is None:
-        raise HTTPException(409, "connect the arm first")
-    with runtime._state.lock:
-        teach = runtime._state.teach
-    problem = planning._reference_motion(demo, teach)[1]
-    if problem:
-        raise HTTPException(409, problem)
-    t_bc = camera._t_base_cam()
-    q_now = np.array([float(cur[2][m]) for m in MOTOR_NAMES])
-    motions, problems = {}, []
-    for name in planning._other_objects(demo):
-        motion, why = planning._object_motion(demo, name, t_bc)
-        if motion is not None:
-            motions[name] = motion
-        else:
-            problems.append(why)
-    place_problem = "; ".join(problems)
-    onto = planning._landing_object(demo)
-    landing, aim, key, kept = demo.landing, motions, None, None
-    if onto in motions and landing != "exact":
-        found = acquisition._located(demo, onto) or {}
-        key = [
-            demo.name,
-            json.dumps(demo.keypoints, sort_keys=True),
-            landing,
-            demo.landing_axis,
-            json.dumps(symmetry.normalise(demo.objects[onto].get("symmetry")), sort_keys=True),
-            found.get("at"),
-        ]
-        with runtime._state.lock:
-            kept = (
-                dict(runtime._state.reach_landing) if runtime._state.reach_landing.get("key") == key else None
-            )
-        if kept is not None:  # searched for this find already: plan that turn alone
-            landing = "exact"
-            if kept["turn_deg"] is not None:
-                aim = {
-                    **motions,
-                    onto: core.landed(motions[onto], kept["centre"], kept["turn_deg"], kept["axis"]),
-                }
-    plan = await asyncio.get_event_loop().run_in_executor(
-        runtime._ACT_EXECUTOR,
-        functools.partial(planning._plan_act, landing=landing, ranges=jog.servo_ranges()),
-        demo,
-        test.result["delta_cam"],
-        t_bc,
-        kin,
-        q_now,
-        jog.walk_limits(),
-        jog.workspace_box(),
-        1.0,
-        0,
-        aim,
-    )
-    if kept is not None:
-        plan = {**plan, "landing": kept["landing"]}
-        if kept["turn_deg"] is None:
-            plan = {**plan, "ok": False, "reason": kept["reason"]}
-    elif key is not None and "landing" in plan:
-        with runtime._state.lock:
-            runtime._state.reach_landing = {
-                "key": key,
-                "turn_deg": plan["landing"]["turn_deg"],
-                "centre": plan.get("landing_centre"),
-                "axis": plan.get("landing_axis"),
-                "landing": plan["landing"],
-                "reason": plan["reason"],
-            }
-    return {k: plan[k] for k in ("ok", "reason", "marks", "summary", "landing") if k in plan} | {
-        "place_problem": place_problem
-    }

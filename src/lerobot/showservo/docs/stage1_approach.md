@@ -1,5 +1,10 @@
 # Stage 1: the calibrated approach
 
+**REMOVED 2026-10-19:** the key-frame runner this document designed, with the planner, landing search, held-view
+matching and hold rules its appendix records. The act engine replaced it
+([act_execution.md](act_execution.md)). This document stays as the record of what it did and why; the functions it
+names may no longer exist.
+
 One demonstration teaches where the gripper should be relative to an object.
 Later, with the object somewhere else on the table, the arm goes there. This
 document is the design for doing that with the calibrated arm and the top

@@ -1,6 +1,5 @@
 """The act with the point groups (src/lerobot/showservo/docs/act_loop.md): the objects it follows designated in the
-view before the arm moves, and an object no view places moved on with what it rests on, from the frame of the view
-that last placed it to the groups' newest frame.
+view before the arm moves, and an act whose object the view cannot take refused before anything moves.
 
 The view is the real one's server (benchmarks/group_live.py, ``MjpegView``) with its live loop played here: requests
 taken between frames, a pose per object on every frame, stamped with the time the frame was drawn."""
@@ -19,7 +18,6 @@ import pytest
 from scipy.spatial.transform import Rotation
 
 from lerobot.gui.api import manipulation
-from lerobot.showservo import motion as core
 from tests.gui.test_manipulation_motion import INTR, _rect_scene, _YawKinematics
 
 MIDDLE = np.array(
@@ -224,46 +222,6 @@ def _run_act(
 
 
 @pytest.mark.usefixtures("act_simulation")
-@pytest.mark.parametrize("with_groups", [True, False])
-def test_a_covered_object_moves_with_what_it_rests_on_and_the_grasp_follows(
-    tmp_path, monkeypatch, group_live, with_groups
-):
-    """The wrist covers the gamepad as the arm comes in, so the act's tracker places it no more, and the tray it lies
-    on is pushed: turned 10 degrees about the tray's middle and slid 20 mm. The point groups see the tray move and
-    carry the gamepad with it; the act's pose is its last view moved on by that, and the walk and the grasp go where it
-    now lies. Off, the act holds the last view, as it did before the groups were there."""
-    resting = np.eye(4)
-    resting[:3, 3] = MIDDLE  # the gamepad's pose in the view: its own frame at its middle
-    pushed = _turned(0.020, 10.0, about=np.array([0.05, 0.08, 0.0]))  # about the tray's middle
-
-    def pose(sim):
-        return pushed @ resting if "pushed_at" in sim else resting
-
-    def arm_moves(
-        sim,
-    ):  # the push comes with the third target; the arm, slower than the view, waits 0.3 s on it
-        if len(sim["targets"]) >= 3:
-            sim.setdefault("pushed_at", time.time())
-        return time.time() - sim.get("pushed_at", np.inf) > 0.3
-
-    act, sim, tips, found, loop = _run_act(
-        tmp_path, monkeypatch, group_live, with_groups=with_groups, pose=pose, arm_moves=arm_moves
-    )
-    assert act.ok, act.reason
-    lies = pushed @ found if with_groups else found
-    m, deg = core.pose_residual(sim["targets"][0], found @ tips[10])
-    assert m < 1e-6 and deg < 1e-3, "it first aims at the last view"
-    m, deg = core.pose_residual(sim["targets"][-1], lies @ tips[10])
-    assert m < 1e-6 and deg < 1e-3, "then where the object lies now"
-    end = _YawKinematics().forward_kinematics(sim["streamed"][-1])
-    m, deg = core.pose_residual(end, lies @ tips[25])
-    assert m <= core.ACT_SOLVE_TOL_M and deg <= core.ACT_SOLVE_TOL_DEG, "the grasp, on it"
-    assert set(loop.view.designated) == ({"gamepad"} if with_groups else set()), (
-        "designated only with the groups"
-    )
-
-
-@pytest.mark.usefixtures("act_simulation")
 def test_an_act_whose_object_the_view_cannot_take_does_not_move(tmp_path, monkeypatch, group_live):
     act, sim, *_ = _run_act(
         tmp_path,
@@ -277,23 +235,3 @@ def test_an_act_whose_object_the_view_cannot_take_does_not_move(tmp_path, monkey
         "the point groups did not take gamepad: 3 own and 0 borrowed corners; click it again"
     )
     assert sim["targets"] == [], "nothing moved"
-
-
-@pytest.mark.usefixtures("act_simulation")
-def test_the_act_stops_when_the_view_stops_drawing(tmp_path, monkeypatch, group_live):
-    """A view that draws nothing more would hold every object it carries still, whatever happens to them."""
-    monkeypatch.setattr(manipulation.runtime, "GROUPS_STALE_S", 0.3)
-
-    def stop_drawing(loop):
-        loop.drawing = False
-
-    act, sim, *_ = _run_act(
-        tmp_path,
-        monkeypatch,
-        group_live,
-        with_groups=True,
-        pose=lambda sim: np.eye(4),
-        arm_moves=lambda sim: False,  # the walk would never end on its own
-        first_target=stop_drawing,
-    )
-    assert not act.ok and act.reason == "the point groups view drew no frame for 0.3 s", act.reason

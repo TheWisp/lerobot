@@ -326,38 +326,6 @@ def _carried(
     return core.carried_motion(frames, since, symmetry_line, end_swap)
 
 
-def _motion_supported(name: str) -> bool:
-    """Whether the carried pose has fresh object or supporting-group evidence.
-
-    Occlusion of the object's own points does not invalidate a measured support
-    group's motion. An unsupported/stale group, or an arm prediction for a held
-    object, is not independent evidence for following a moving pick target.
-    """
-    with runtime._state.lock:
-        feed = runtime._state.groups_feed
-        if name in feed.transport_blocked:
-            return False
-        drawing = feed.drawing or {}
-        context = (drawing.get("objects") or {}).get(name) or {}
-        group = (drawing.get("groups") or {}).get(str(context.get("group"))) or {}
-        frames = feed.frames.get(name)
-        if not runtime._state.groups_with_acts or not frames:
-            return False
-        evidence = feed.evidence.get(name)
-        if evidence and evidence[-1][0] == frames[-1][0]:
-            context = evidence[-1][1]
-            supported = bool(context.get("group_supported"))
-            fresh = time.time() - frames[-1][0]
-        else:  # compatibility with a view that has not supplied per-frame evidence
-            supported = bool(group.get("supported"))
-            fresh = time.time() - min(float(drawing.get("stamp") or 0), frames[-1][0])
-        return (
-            fresh <= runtime.GROUPS_DRAW_MAX_AGE_S
-            and context.get("why") != "held"
-            and (bool(context.get("own")) or supported)
-        )
-
-
 def _paint_picture(bgr: np.ndarray, d: dict) -> np.ndarray:
     """A point groups' picture on a camera frame as the act's views paint it, live (:func:`_paint_groups`) and in a
     replay (:func:`_replay_draw`) alike (lerobot.showservo.groups_scene.paint_groups): the surfaces that move
@@ -378,22 +346,6 @@ def _paint_groups(bgr: np.ndarray) -> np.ndarray:
     if not on or d is None or time.time() - float(d.get("stamp") or 0.0) > runtime.GROUPS_DRAW_MAX_AGE_S:
         return bgr
     return _paint_picture(bgr, d)
-
-
-async def _feed_held(name: str, tip_obj: np.ndarray, t_bc: np.ndarray) -> None:
-    """While the gripper holds ``name``: its pose by the arm's joints, the fingertip times how it sat in the fingers
-    when they closed (``tip_obj``, or a callback returning the current accepted attachment), sent to the point groups every GROUPS_HELD_S (GroupTracker.hold). The fingers hide
-    it from the camera, and its hidden points stay with what it lay on; the arm does not lose it."""
-    from .. import jog
-
-    inv_bc = np.linalg.inv(t_bc)
-    while True:
-        cur = jog.current_tip_and_anchor()
-        if cur is not None:
-            attachment = tip_obj() if callable(tip_obj) else tip_obj
-            pose = inv_bc @ np.asarray(cur[0], dtype=float) @ attachment
-            await _groups_call("POST", "/objects/held", {name: np.round(pose, 6).ravel().tolist()})
-        await asyncio.sleep(runtime.GROUPS_HELD_S)
 
 
 def _groups_follow(objects: dict[str, np.ndarray | None]) -> None:

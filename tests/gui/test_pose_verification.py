@@ -385,7 +385,7 @@ def test_held_reference_geometry_uses_the_same_refreshed_mask_as_matching(monkey
     assert job.arrays["ref_mask"] is original, "the saved segmentation stays intact"
 
 
-def test_unverified_demo_reference_aborts_before_the_runner_can_move(monkeypatch, tmp_path):
+def test_unverified_demo_reference_aborts_before_the_act_can_move(monkeypatch, tmp_path):
     job, teach, _, _ = setup_case(monkeypatch, tmp_path)
     demo = SimpleNamespace(
         objects={"cube": {"deltas": [job.result["delta"]], "seen": [True]}}, reference_constraints={}
@@ -411,7 +411,9 @@ def test_unverified_demo_reference_aborts_before_the_runner_can_move(monkeypatch
     async def motion(*args):
         started.append(True)
 
-    monkeypatch.setattr(p.execution, "_act_key_frames_task", motion)
+    from lerobot.gui.api.manipulation import engine_act
+
+    monkeypatch.setattr(engine_act, "_act_engine_task", motion)
     asyncio.run(p.execution._act_task(1.0))
     assert started == [True]
     assert demo.reference_constraints["cube"]["state"] == "corrected"

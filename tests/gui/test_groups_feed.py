@@ -276,43 +276,6 @@ def test_the_camera_view_draws_the_acts_pose_of_an_object_no_view_places_carried
     assert yellow_at(img, xyz[::3]) < yellow_at(img, moved[::3]), "not where it was last seen"
 
 
-def test_the_act_tells_the_view_where_the_arm_has_the_object_it_holds(tmp_path, monkeypatch, group_live):  # noqa: F811
-    """From the grip until the place lets go, the point groups cannot see the gamepad in the fingers; the act sends
-    where the arm has it, the fingertip by the joints times how it sat in the fingers when they closed, and the view
-    takes the newest word on it, a release included."""
-    from lerobot.gui.api import jog
-
-    port = _free_port()
-    monkeypatch.setattr(manipulation.runtime, "GROUPS_VIEW", ("127.0.0.1", port))
-    monkeypatch.setattr(manipulation.runtime, "GROUPS_HELD_S", 0.01)
-    view = group_live.MjpegView(port, tmp_path / "recordings")
-    t_bc = _pose(0.1, -0.2, 0.5)  # camera to base
-    tip = {"pose": _pose(0.2, 0.0, 0.1)}
-    monkeypatch.setattr(jog, "current_tip_and_anchor", lambda: (tip["pose"], np.eye(4), {}))
-    tip_obj = _pose(0.0, 0.0, -0.02)  # the gamepad 20 mm below the fingertip
-
-    async def run():
-        task = asyncio.create_task(manipulation.groups._feed_held("gamepad", tip_obj, t_bc))
-        await asyncio.sleep(0.1)
-        first = view.take_held()
-        tip["pose"] = _pose(0.25, 0.05, 0.15)  # the arm carries it
-        await asyncio.sleep(0.1)
-        second = view.take_held()
-        task.cancel()
-        await manipulation.groups._groups_call("POST", "/objects/held", {"gamepad": None})
-        return first, second, view.take_held()
-
-    try:
-        first, second, released = asyncio.run(run())
-    finally:
-        view.server.shutdown()
-        view.server.server_close()
-    to_cam = np.linalg.inv(t_bc)
-    assert np.allclose(first["gamepad"], to_cam @ _pose(0.2, 0.0, 0.1) @ tip_obj, atol=1e-6)
-    assert np.allclose(second["gamepad"], to_cam @ _pose(0.25, 0.05, 0.15) @ tip_obj, atol=1e-6)
-    assert released == {"gamepad": None}
-
-
 def test_only_the_demos_objects_found_are_designated_not_a_teach_by_name(tmp_path, monkeypatch, group_live):  # noqa: F811
     """A demo's load teaches its concept by name (object_1), and SAM 3's mask for that covered half the camera view
     on 2026-10-10: designated, it drew an outline across the whole tray. Only a teach against one of the demo's

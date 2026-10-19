@@ -165,16 +165,11 @@ def _record_trial(run_dir: str | None = None) -> dict[str, Any]:
         "arm_lean_deg": r.get("arm_lean_deg"),
         "demo": None if demo is None else demo.name,
         "speed": act.speed,
-        "queue_horizon_s": act.queue_horizon_s,
         "result": "done" if act.ok else act.step,
         "reason": act.reason,
         "progress": act.progress,
         "verdict": None,
         "run": run_dir,
-        "place": act.place,
-        "inject": act.inject,
-        "correct_hold": act.correct_hold,
-        "allow_grasp_prediction": act.allow_grasp_prediction,
     }
     if teach is not None and r.get("ok") and r.get("delta_cam") is not None:
         d = np.asarray(r["delta_cam"])
@@ -371,9 +366,7 @@ def _write_run_frame(
     np.savez_compressed(d / f"{i:06d}.npz", **arrays)
 
 
-def _begin_run(
-    demo: runtime._Demo, speed: float, delta: np.ndarray, t_bc: np.ndarray, plan: dict[str, Any]
-) -> _Run:
+def _begin_run(demo: runtime._Demo, speed: float, delta: np.ndarray, t_bc: np.ndarray) -> _Run:
     """Start the fixed-rate Act recording before motion. Post: ``_state.run`` owns it."""
     from .. import jog, showservo
 
@@ -392,7 +385,6 @@ def _begin_run(
         "keypoints": list(demo.keypoints),
         "demo_reference_constraints": dict(demo.reference_constraints),
         "speed": speed,
-        "queue_horizon_s": runtime._state.act.queue_horizon_s,
         "started": time.strftime("%Y-%m-%d %H:%M:%S"),
         "t_started": time.time(),
         "t_bc": np.asarray(t_bc, dtype=float).tolist(),
@@ -409,7 +401,6 @@ def _begin_run(
         "controller_at_start": {
             k: controller.get(k) for k in ("robot_id", "gains", "limits", "settle_on", "mode")
         },
-        "plan": {k: plan.get(k) for k in ("ok", "reason", "marks", "summary")},
         "finds": runtime._state.act.finds,  # the same list: what it finds from here on is added
     }
     run = _Run(root=base / time.strftime("%Y%m%d_%H%M%S"), meta=meta)

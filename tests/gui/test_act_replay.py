@@ -438,7 +438,7 @@ def test_act_recorder_rejects_missing_camera_before_recording(monkeypatch):
     monkeypatch.setattr(showservo, "live_camera", lambda: None)
     monkeypatch.setattr(jog, "start_record", lambda: pytest.fail("arm recording started without a camera"))
     with pytest.raises(RuntimeError, match="fixed-rate Act recorder needs a live camera"):
-        manipulation.recording._begin_run(None, 1.0, np.eye(4), np.eye(4), {})
+        manipulation.recording._begin_run(None, 1.0, np.eye(4), np.eye(4))
 
 
 def _second_frame(act: pathlib.Path, t: float) -> None:
