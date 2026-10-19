@@ -843,6 +843,12 @@ class Engine:
         self._last_now = now
         if dt > 0:
             self.step_gaps = [*self.step_gaps[-99:], dt]
+        # One belief per object: a held one is where the gripper carries it, in the world too, so nothing the world
+        # had of it before the grasp outlives the grasp; let go, it stays where the gripper left it.
+        tip = self.scene.tip_now()
+        if tip is not None:
+            for name, hold in self.holds.items():
+                self.world.carry(name, tip @ hold.estimate, now)
         self.world.update()
         for name, (t_move, before) in self.world.moves.items():  # the act's record: every move the world saw
             if t_move > self.moves_recorded.get(name, -np.inf):
@@ -883,7 +889,7 @@ class Engine:
     def _note_estimates(self) -> None:
         """On each new camera frame, every object's pose as the engine has it then (motion since the demo, base frame):
         a held one where the gripper carries it, from the fingertip at that frame and how it sits; any other where
-        the world has it. What the act believed, for a replay to draw beside what the camera saw."""
+        the world has it: where it was carried, until a view of it after. What the act believed, for a replay to draw beside what the camera saw."""
         frames = self.scene.frames(since=self._estimated_t + 1e-9)
         if not frames:
             return
@@ -894,7 +900,8 @@ class Engine:
             if hold is not None and tip is not None:
                 objects[name] = {"motion": (tip @ hold.estimate).round(5).tolist(), "by": "the gripper"}
             else:
-                objects[name] = {"motion": self.world.motion(name).round(5).tolist(), "by": "its views"}
+                by = "where it was carried" if name in self.world.carried else "its views"
+                objects[name] = {"motion": self.world.motion(name).round(5).tolist(), "by": by}
         self.estimates.append({"t": t, "objects": objects})
 
     def _follow(self, dt: float) -> None:

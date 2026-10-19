@@ -679,3 +679,37 @@ def test_the_act_records_where_the_engine_believed_each_object_at_each_frame():
         if o["by"] == "the gripper":
             assert held
     assert by["its views"] and by["the gripper"], by
+
+
+def test_an_object_the_camera_never_sees_again_after_the_grasp_stays_where_the_gripper_left_it():
+    """2026-10-19 on the rig (act 20261019_005211): no view of the dowel was taken from the grasp on, the engine
+    carried it with the gripper, and at the release it put the dowel back where it had lain before the grasp: the
+    world still held its last view of it, from the tray. One belief per object: carried, the world's pose is where the
+    gripper has it, and let go it stays where the gripper left it until a view says otherwise. The release cannot be
+    confirmed without a view, and is not."""
+    truth = []
+
+    def hide_once_held(world):
+        def go(w, t):
+            if w.held is not None:
+                w.hidden.add("dowel")
+            truth.append((t, w.bodies["dowel"].motion.copy(), w.held is not None))
+            w.at.append((t + 1.0 / 30.0, go))
+
+        world.at.append((0.0, go))
+
+    demo, kf, bodies = pick_place_demo()
+    sim = run_act(demo, kf, bodies, setup=hide_once_held)
+    assert _on_ring(sim), sim.world.events
+    assert sim.engine.result["why"].startswith("not confirmed"), sim.engine.result
+    centre = np.append(bodies["dowel"].points.mean(axis=0), 1.0)
+    times = np.array([t for t, _, _ in truth])
+    released = max(t for t, _, held in truth if held)
+    after = [e for e in sim.engine.estimates if e["t"] > released + 0.1]
+    assert after, "frames after the release"
+    for e in after:
+        o = e["objects"]["dowel"]
+        t, real, _ = truth[int(np.argmin(np.abs(times - e["t"])))]
+        believed = (np.asarray(o["motion"]) @ centre)[:3]
+        assert np.linalg.norm(believed - (real @ centre)[:3]) < 0.003, (e["t"], o["by"], believed)
+        assert o["by"] == "where it was carried", o["by"]

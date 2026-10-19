@@ -159,7 +159,9 @@ flowchart LR
   the tolerance and the cut-off are measured on the object's own views in its first second ([E33](#e33)).
 - **One rule for every object.** A new measurement replaces the object's pose. No rule
   names an object, or depends on its role (the one picked up, the one placed onto) or its state (held, touched,
-  moving). Between measurements an object is where it was last measured. ([R4](#requirements))
+  moving). Between measurements an object is where it was last measured, or where the gripper carried it, whichever
+  came last: while the act holds it, its one pose is where the gripper has it, in the world too, and let go it stays
+  where the gripper left it until a view of it ([E34](#e34)). ([R4](#requirements))
 - **A turn its symmetry cannot show is not a move.** Of the poses an object's declared symmetry makes look the same,
   the world keeps the one nearest its demo pose, and how it sits in the gripper the one nearest the demo's grip; a
   symmetric object is measured at a point on its axis, which those turns leave still ([E29](#e29)).
@@ -667,3 +669,15 @@ release (its check then answers "neither", 15 mm from staying put and 19 from go
 leaned in the ring's hole, and the ring's pose stood where its last view before the insertion put it, while the frames
 show the insertion pushed it); `20261018_191804` no longer drifts its grip, and stops in key frame 6 with the wrist at its
 bound (the demo holds it 0.6 deg from it there), 3 mm short.
+
+<a id="e34"></a>**E34. The first insertion, and a belief left on the tray**, 2026-10-19, rig act `20261019_005211`
+(speed 0.5), the engine taking the point groups' poses. It ran all nine key frames and the object stood upright in
+the ring after it. No view of the object was taken from the grasp on: the world's pose of it stood at its last view,
+from before the grasp, to the end (a view taken would have replaced it). Of the act's 219 frames, 100 had no groups
+pose yet (the groups run behind the camera), 76 were refused as seen through (the cut-off measured on the object
+lying still: 0.3% of its points), 6 were in a switch of group. So the engine carried the object by how it sat at the
+grasp, never corrected, and the insertion came from that grip holding. At the release it went back to the world's
+pose, on the tray, and the release could not be told. Replayed with the act's frames and the groups run offline, the
+groups' poses taken were 57 of 64 lying, 21 of 38 carried, 1 of 65 upright and 0 of 36 after the release (median 46%
+and 91% seen through there). Since then one belief per object: carried, the world's pose is where the gripper has it
+(`test_an_object_the_camera_never_sees_again_after_the_grasp_stays_where_the_gripper_left_it`).

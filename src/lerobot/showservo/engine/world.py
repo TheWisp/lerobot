@@ -97,6 +97,7 @@ class World:
         self.floor_m = floor_m
         self.rest = {n: [-np.inf, np.inf] for n in self.pose}  # [since, until): what counts toward its noise
         self._noise_at_touch: dict[str, tuple[float, float] | None] = {}
+        self.carried: set[str] = set()  # where something carried them (carry), with no view of them since
 
     @property
     def pose(self) -> dict[str, np.ndarray]:
@@ -110,6 +111,16 @@ class World:
                 if e.add(m.t, self.equivalent(n, m.motion), self.move_threshold(n)):
                     self.moves[n] = (m.t, before)
                 self.t[n] = m.t
+                self.carried.discard(n)
+
+    def carry(self, name: str, pose: np.ndarray, t: float) -> None:
+        """``name`` is where something carries it (the gripper holding it): its one pose from now, ``pose``, with no
+        view behind it. Where it was before is gone, views of it until ``t`` included; the first view after replaces
+        it."""
+        e = self.steady[name]
+        e.estimate, e.recent, e.beyond = np.asarray(pose, dtype=float).copy(), [], 0
+        self.t[name] = max(self.t[name], t)
+        self.carried.add(name)
 
     def equivalent(self, name: str, motion: np.ndarray, ref: np.ndarray | None = None) -> np.ndarray:
         """``motion``, or of the poses ``name``'s symmetry makes look the same the one nearest ``ref`` (its demo pose
