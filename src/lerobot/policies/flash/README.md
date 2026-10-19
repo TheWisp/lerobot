@@ -11,6 +11,8 @@ The executable core already separates:
 - generated connections, timed from live path length and configured speed;
 - milestone verdicts and explicit, bounded recovery transitions;
 - metric RGB-D and pose evidence with source and availability times;
+- one aligned RGB-D frameset from LeRobot's RealSense camera with an atomic
+  host capture-time estimate and capture-time camera calibration;
 - held-object world pose from the gripper-to-object attachment;
 - capture-time interpolation of measured end-effector poses before accepting
   delayed held-object evidence into that attachment;

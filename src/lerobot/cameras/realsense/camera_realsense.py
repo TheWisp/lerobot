@@ -507,6 +507,19 @@ class RealSenseCamera(Camera):
             DeviceNotConnectedError: If the camera is not connected.
             RuntimeError: If depth is not enabled or no frames are available.
         """
+        color, depth, _ = self.read_color_and_aligned_depth_with_timestamp(color_mode, timeout_ms)
+        return color, depth
+
+    def read_color_and_aligned_depth_with_timestamp(
+        self, color_mode: ColorMode | None = None, timeout_ms: int = 200
+    ) -> tuple[NDArray[Any], NDArray[Any], float]:
+        """Return one aligned frameset and its monotonic capture-time estimate.
+
+        All three values are read under the same frame lock. The timestamp is
+        taken just after the synchronized hardware frameset becomes available,
+        before alignment and image filtering. It is a host-clock upper bound
+        on sensor exposure time, not a hardware exposure timestamp.
+        """
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
         if not self.use_depth:
@@ -528,12 +541,13 @@ class RealSenseCamera(Camera):
         with self.frame_lock:
             color_frame = self.latest_color_frame
             depth_frame = self.latest_depth_frame
+            timestamp = self.latest_timestamp
             self.new_frame_event.clear()
 
-        if color_frame is None or depth_frame is None:
+        if color_frame is None or depth_frame is None or timestamp is None:
             raise RuntimeError(f"No aligned frames available for {self}.")
 
-        return color_frame, depth_frame
+        return color_frame, depth_frame, timestamp
 
     @check_if_not_connected
     def read(self, color_mode: ColorMode | None = None, timeout_ms: int = 0) -> NDArray[Any]:
@@ -640,6 +654,7 @@ class RealSenseCamera(Camera):
         while not stop_event.is_set():
             try:
                 frameset = self._read_from_hardware()
+                capture_time = time.perf_counter()
 
                 if self.use_rgb and self.use_depth and self.align_to_color is not None:
                     # Align depth to color coordinate system (single frameset,
@@ -698,8 +713,6 @@ class RealSenseCamera(Camera):
                         )
                     # Depth has been consumed; don't cache it for consumers.
                     processed_depth_frame = None
-
-                capture_time = time.perf_counter()
 
                 with self.frame_lock:
                     if self.use_rgb:
