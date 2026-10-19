@@ -1390,7 +1390,10 @@ async function launchRun() {
             clearTerminal('run-terminal');
             appendTerminalLine(`FLASH skill: ${data.source_repo_id} episode ${data.source_episode}`);
             for (const interval of data.intervals) {
-                appendTerminalLine(`${interval.name}: ${interval.mode}, ${interval.relation} to ${interval.reference_role}, ${interval.samples} samples, demo ${interval.demo_duration_s.toFixed(2)}s`);
+                appendTerminalLine(`${interval.name}: ${interval.mode}, ${interval.relation} to ${interval.reference_role}${interval.held_role ? ` with ${interval.held_role} held` : ''}, ${interval.samples} samples, demo ${interval.demo_duration_s.toFixed(2)}s`);
+            }
+            for (const transition of data.attachment_transitions) {
+                appendTerminalLine(`${transition.event_id}: ${transition.action} ${transition.role} (${transition.reference_version})`);
             }
             for (const milestone of data.milestones) {
                 const rule = milestone.pose_relation;

@@ -9,7 +9,13 @@ from lerobot.policies.flash.compiler import (
     PoseRelationAnnotation,
     compile_skill,
 )
-from lerobot.policies.flash.skill import FlashSkill, MotionMode, Relation
+from lerobot.policies.flash.skill import (
+    AttachmentAction,
+    AttachmentTransition,
+    FlashSkill,
+    MotionMode,
+    Relation,
+)
 from lerobot.policies.flash.trajectory import Evidence, PoseEstimate
 
 
@@ -185,6 +191,7 @@ def test_compiles_a_pose_milestone_from_an_observed_demo_frame(tmp_path):
             ),
         ),
         pose_relation_annotations=(annotation,),
+        attachment_transitions=(AttachmentTransition("release", AttachmentAction.DETACH, "held", "held-v1"),),
     )
     criterion = skill.milestones[0].pose_relation
     assert criterion.reference_from_moving[0, 3] == pytest.approx(0.1)
@@ -195,6 +202,7 @@ def test_compiles_a_pose_milestone_from_an_observed_demo_frame(tmp_path):
     path = tmp_path / "skill.json"
     skill.save(path)
     assert FlashSkill.load(path).intervals[0].samples[-1].event_id == "release"
+    assert FlashSkill.load(path).attachment_transitions == skill.attachment_transitions
 
     poses[2]["held"] = PoseEstimate(
         "held", pose(0.5), 1.0, 1.0, Evidence.PREDICTED, "held-v1", (True,) * 3, (False,) * 3

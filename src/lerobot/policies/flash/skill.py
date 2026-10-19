@@ -22,6 +22,26 @@ class Relation(str, Enum):
     HELD_TO_TARGET = "held_to_target"
 
 
+class AttachmentAction(str, Enum):
+    ATTACH = "attach"
+    DETACH = "detach"
+
+
+@dataclass(frozen=True)
+class AttachmentTransition:
+    """Meaning of one demonstrated gripper event for a tracked object."""
+
+    event_id: str
+    action: AttachmentAction
+    role: str
+    reference_version: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "action", AttachmentAction(self.action))
+        if not all((self.event_id, self.role, self.reference_version)):
+            raise ValueError("attachment transition needs event, object role and frame version")
+
+
 @dataclass(frozen=True)
 class SpatialSample:
     time_s: float
@@ -59,6 +79,7 @@ class Interval:
     recovery_intervals: tuple[str, ...] = ()
     reference_version: str | None = None
     held_reference_version: str | None = None
+    held_role: str | None = None
 
     def __post_init__(self) -> None:
         if not self.name or not self.reference_role or len(self.samples) < 2:
@@ -67,6 +88,8 @@ class Interval:
             raise ValueError("sample times must increase within an interval")
         if self.relation == Relation.HELD_TO_TARGET and any(s.demo_held is None for s in self.samples):
             raise ValueError("held-to-target samples require held-object poses")
+        if self.held_role is not None and self.relation != Relation.HELD_TO_TARGET:
+            raise ValueError("held object role only applies to held-to-target intervals")
         if self.mode == MotionMode.CONNECTION and (self.speed_m_s is None or self.speed_m_s <= 0):
             raise ValueError("generated connections need a positive reference speed")
         events = [sample.event_id for sample in self.samples if sample.event_id]
@@ -129,6 +152,7 @@ class FlashSkill:
     intervals: tuple[Interval, ...]
     schema_version: int = 1
     milestones: tuple[MilestoneSpec, ...] = ()
+    attachment_transitions: tuple[AttachmentTransition, ...] = ()
 
     def __post_init__(self) -> None:
         if (
@@ -149,6 +173,9 @@ class FlashSkill:
         ]
         if len(event_ids) != len(set(event_ids)):
             raise ValueError("semantic event IDs must be unique across the skill")
+        transition_ids = [transition.event_id for transition in self.attachment_transitions]
+        if len(transition_ids) != len(set(transition_ids)) or not set(transition_ids) <= set(event_ids):
+            raise ValueError("attachment transitions must bind distinct demonstrated events")
         milestone_names = {milestone.name for milestone in self.milestones}
         if len(milestone_names) != len(self.milestones):
             raise ValueError("milestone names must be unique")
@@ -199,6 +226,7 @@ class FlashSkill:
                     recovery_intervals=tuple(item.get("recovery_intervals", [])),
                     reference_version=item.get("reference_version"),
                     held_reference_version=item.get("held_reference_version"),
+                    held_role=item.get("held_role"),
                 )
             )
         milestones = tuple(
@@ -209,12 +237,22 @@ class FlashSkill:
             )
             for item in data.get("milestones", [])
         )
+        attachment_transitions = tuple(
+            AttachmentTransition(
+                item["event_id"],
+                AttachmentAction(item["action"]),
+                item["role"],
+                item["reference_version"],
+            )
+            for item in data.get("attachment_transitions", [])
+        )
         return cls(
             data["source_repo_id"],
             data["source_episode"],
             tuple(intervals),
             data["schema_version"],
             milestones,
+            attachment_transitions,
         )
 
     def to_dict(self) -> dict:
@@ -222,6 +260,15 @@ class FlashSkill:
             "schema_version": self.schema_version,
             "source_repo_id": self.source_repo_id,
             "source_episode": self.source_episode,
+            "attachment_transitions": [
+                {
+                    "event_id": transition.event_id,
+                    "action": transition.action.value,
+                    "role": transition.role,
+                    "reference_version": transition.reference_version,
+                }
+                for transition in self.attachment_transitions
+            ],
             "milestones": [
                 {
                     "name": milestone.name,
@@ -251,6 +298,7 @@ class FlashSkill:
                     "reference_role": interval.reference_role,
                     "reference_version": interval.reference_version,
                     "held_reference_version": interval.held_reference_version,
+                    "held_role": interval.held_role,
                     "speed_m_s": interval.speed_m_s,
                     "entry_milestone": interval.entry_milestone,
                     "completion_milestone": interval.completion_milestone,

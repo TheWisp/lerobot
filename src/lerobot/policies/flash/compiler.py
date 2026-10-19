@@ -9,6 +9,7 @@ import numpy as np
 
 from .geometry import inverse, transform
 from .skill import (
+    AttachmentTransition,
     FlashSkill,
     Interval,
     MilestoneSpec,
@@ -127,6 +128,7 @@ def compile_skill(
     annotations: tuple[IntervalAnnotation, ...],
     milestones: tuple[MilestoneSpec, ...] = (),
     pose_relation_annotations: tuple[PoseRelationAnnotation, ...] = (),
+    attachment_transitions: tuple[AttachmentTransition, ...] = (),
     joint_units: str = "degrees",
 ) -> FlashSkill:
     """Use measured robot state, accepted gripper action and pose sidecars.
@@ -209,6 +211,7 @@ def compile_skill(
                 recovery_intervals=annotation.recovery_intervals,
                 reference_version=versions[annotation.reference_role],
                 held_reference_version=versions.get(annotation.held_role) if annotation.held_role else None,
+                held_role=annotation.held_role,
             )
         )
     compiled_milestones = list(milestones)
@@ -245,4 +248,10 @@ def compile_skill(
                 ),
             )
         )
-    return FlashSkill(source_repo_id, source_episode, tuple(intervals), milestones=tuple(compiled_milestones))
+    return FlashSkill(
+        source_repo_id,
+        source_episode,
+        tuple(intervals),
+        milestones=tuple(compiled_milestones),
+        attachment_transitions=attachment_transitions,
+    )

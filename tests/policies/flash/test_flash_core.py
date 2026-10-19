@@ -5,6 +5,7 @@ import json
 import numpy as np
 import pytest
 
+from lerobot.policies.flash.attachment_lifecycle import AttachmentLifecycle
 from lerobot.policies.flash.execution import (
     ActionQueue,
     ActionReceipt,
@@ -35,6 +36,8 @@ from lerobot.policies.flash.recording import (
     load_pose_estimates,
 )
 from lerobot.policies.flash.skill import (
+    AttachmentAction,
+    AttachmentTransition,
     FlashSkill,
     Interval,
     MilestoneSpec,
@@ -582,13 +585,17 @@ def test_delayed_held_observation_uses_gripper_pose_at_camera_capture():
 
 def test_held_attachment_uses_postgrasp_observation_and_stops_on_conflict():
     class LinearKinematics:
+        calls = 0
+
         def forward_kinematics(self, joints):
+            self.calls += 1
             return pose(joints[0])
 
+    kinematics = LinearKinematics()
     updater = HeldAttachmentUpdater(
         "held",
         "held-v1",
-        LinearKinematics(),
+        kinematics,
         ("arm",),
         history_capacity=5,
         max_motor_sample_gap_s=0.04,
@@ -600,6 +607,7 @@ def test_held_attachment_uses_postgrasp_observation_and_stops_on_conflict():
         updater.on_motor_tick(
             MotorTick(0, time_s, {"arm.pos": time_s}, 0.0, {"arm.pos": time_s}, None, observed_at_s=time_s)
         )
+    assert kinematics.calls == 0
     pregrasp = PoseEstimate(
         "held", pose(0.115), 0.015, 0.04, Evidence.OBSERVED, "held-v1", (True,) * 3, (True,) * 3
     )
@@ -619,6 +627,77 @@ def test_held_attachment_uses_postgrasp_observation_and_stops_on_conflict():
     assert not updater.on_pose_update(3, {"held": conflicting})
     assert updater.state(0.09) is None
     assert "disagrees" in updater.last_rejection
+
+
+def test_demonstrated_attachment_events_bind_and_release_live_object():
+    class LinearKinematics:
+        def forward_kinematics(self, joints):
+            return pose(joints[0])
+
+    first = SpatialSample(0, pose(), pose(), event_id="close")
+    last = SpatialSample(1, pose(), pose(), event_id="open")
+    skill = FlashSkill(
+        "demo",
+        0,
+        (Interval("move", MotionMode.DEMONSTRATED, Relation.EE_TO_OBJECT, "object", (first, last)),),
+        attachment_transitions=(
+            AttachmentTransition("close", AttachmentAction.ATTACH, "object", "object-v1"),
+            AttachmentTransition("open", AttachmentAction.DETACH, "object", "object-v1"),
+        ),
+    )
+    updater = HeldAttachmentUpdater(
+        "object",
+        "object-v1",
+        LinearKinematics(),
+        ("arm",),
+        history_capacity=8,
+        max_motor_sample_gap_s=0.04,
+        max_attachment_age_s=1,
+        max_update_shift_m=0.01,
+        max_update_turn_rad=0.1,
+    )
+    poses = LatestPoseStore()
+    pregrasp = PoseEstimate(
+        "object", pose(0.115), 0.015, 0.04, Evidence.OBSERVED, "object-v1", (True,) * 3, (True,) * 3
+    )
+    poses.publish((pregrasp,))
+    lifecycle = AttachmentLifecycle(skill, poses, {"object": updater}, max_pregrasp_age_s=0.1)
+
+    def tick(time_s, event_id=None):
+        receipt = (
+            ActionReceipt(
+                0,
+                time_s,
+                time_s + 0.01,
+                0,
+                0,
+                {"arm.pos": time_s},
+                TimedAction(0, {"arm.pos": time_s}, "move", event_id=event_id),
+                {"arm.pos": time_s},
+                1,
+            )
+            if event_id
+            else None
+        )
+        return MotorTick(
+            0, time_s, {"arm.pos": time_s}, 0, {"arm.pos": time_s}, receipt, observed_at_s=time_s
+        )
+
+    lifecycle.on_motor_tick(tick(0))
+    lifecycle.on_motor_tick(tick(0.03))
+    lifecycle.on_motor_tick(tick(0.06, "close"))
+    assert lifecycle.active_role == "object"
+    assert lifecycle.state(0.08) is not None
+    assert not updater.has_postgrasp_observation
+    lifecycle.on_motor_tick(tick(0.09))
+    held = PoseEstimate(
+        "object", pose(0.177), 0.075, 0.1, Evidence.OBSERVED, "object-v1", (True,) * 3, (True,) * 3
+    )
+    assert lifecycle.on_pose_update(2, {"object": held})
+    assert updater.has_postgrasp_observation
+    lifecycle.on_motor_tick(tick(0.12, "open"))
+    assert lifecycle.state(0.13) is None
+    assert lifecycle.last_event == "open"
 
 
 def test_rgbd_alignment_and_pose_handoff_preserve_source_time():

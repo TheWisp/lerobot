@@ -15,11 +15,22 @@ def inspect_skill(path: str) -> dict:
         raise ValueError("skill file must exist and be at most 16 MiB")
     skill = FlashSkill.load(source)
     missing = []
+    missing_frames = []
     for interval in skill.intervals:
         if not interval.reference_version:
-            missing.append(f"{interval.name}: reference object frame version")
+            missing_frames.append(f"{interval.name}: reference object frame version")
         if interval.relation.value == "held_to_target" and not interval.held_reference_version:
-            missing.append(f"{interval.name}: held object frame version")
+            missing_frames.append(f"{interval.name}: held object frame version")
+        if interval.relation.value == "held_to_target" and not interval.held_role:
+            missing.append(f"{interval.name}: held object role")
+        if interval.relation.value == "held_to_target" and not any(
+            transition.action.value == "attach"
+            and transition.role == interval.held_role
+            and transition.reference_version == interval.held_reference_version
+            for transition in skill.attachment_transitions
+        ):
+            missing.append(f"{interval.name}: matching demonstrated attachment event")
+    missing = missing_frames + missing
     return {
         "schema_version": skill.schema_version,
         "source_repo_id": skill.source_repo_id,
@@ -41,7 +52,17 @@ def inspect_skill(path: str) -> dict:
             }
             for m in skill.milestones
         ],
-        "reference_frames_declared": not missing,
+        "attachment_transitions": [
+            {
+                "event_id": transition.event_id,
+                "action": transition.action.value,
+                "role": transition.role,
+                "reference_version": transition.reference_version,
+            }
+            for transition in skill.attachment_transitions
+        ],
+        "reference_frames_declared": not missing_frames,
+        "runtime_bindings_complete": not missing,
         "missing": missing,
         "intervals": [
             {
@@ -49,6 +70,7 @@ def inspect_skill(path: str) -> dict:
                 "mode": interval.mode.value,
                 "relation": interval.relation.value,
                 "reference_role": interval.reference_role,
+                "held_role": interval.held_role,
                 "samples": len(interval.samples),
                 "demo_duration_s": interval.demo_duration_s,
                 "entry_milestone": interval.entry_milestone,

@@ -269,6 +269,44 @@ class EndEffectorKinematics(Protocol):
     def forward_kinematics(self, joint_pos_deg: np.ndarray) -> np.ndarray: ...
 
 
+class TimedJointHistory:
+    """Keep measured joints in the motor callback; do FK on the pose worker."""
+
+    def __init__(self, *, capacity: int, max_sample_gap_s: float) -> None:
+        if capacity < 2 or not np.isfinite(max_sample_gap_s) or max_sample_gap_s <= 0:
+            raise ValueError("joint history needs capacity >= 2 and a positive sample-gap bound")
+        self._samples: deque[tuple[float, np.ndarray]] = deque(maxlen=capacity)
+        self._lock = Lock()
+        self.max_sample_gap_s = max_sample_gap_s
+
+    def append(self, source_time_s: float, joints_deg: np.ndarray) -> None:
+        joints = np.asarray(joints_deg, dtype=float)
+        if not np.isfinite(source_time_s) or joints.ndim != 1 or not np.isfinite(joints).all():
+            raise ValueError("joint history needs finite time and joint values")
+        with self._lock:
+            if self._samples and (
+                source_time_s <= self._samples[-1][0] or joints.shape != self._samples[-1][1].shape
+            ):
+                raise ValueError("joint history times must increase with a fixed joint layout")
+            self._samples.append((source_time_s, joints.copy()))
+
+    def bracket(self, source_time_s: float) -> tuple[np.ndarray, np.ndarray, float] | None:
+        if not np.isfinite(source_time_s):
+            return None
+        with self._lock:
+            samples = tuple(self._samples)
+        for time_s, joints in samples:
+            if source_time_s == time_s:
+                return joints.copy(), joints.copy(), 0.0
+        for (left_time, left), (right_time, right) in zip(samples, samples[1:], strict=False):
+            if left_time < source_time_s < right_time:
+                if right_time - left_time > self.max_sample_gap_s:
+                    return None
+                alpha = (source_time_s - left_time) / (right_time - left_time)
+                return left.copy(), right.copy(), alpha
+        return None
+
+
 class HeldAttachmentUpdater:
     """Update a rigid gripper-object relation from capture-time observations.
 
@@ -301,9 +339,7 @@ class HeldAttachmentUpdater:
         self.reference_version = reference_version
         self.kinematics = kinematics
         self.arm_joint_names = arm_joint_names
-        self.history = TimedEndEffectorHistory(
-            capacity=history_capacity, max_sample_gap_s=max_motor_sample_gap_s
-        )
+        self.history = TimedJointHistory(capacity=history_capacity, max_sample_gap_s=max_motor_sample_gap_s)
         self.max_attachment_age_s = max_attachment_age_s
         self.max_update_shift_m = max_update_shift_m
         self.max_update_turn_rad = max_update_turn_rad
@@ -322,7 +358,15 @@ class HeldAttachmentUpdater:
             joints = np.array([float(tick.observed[f"{name}.pos"]) for name in self.arm_joint_names])
         except KeyError as exc:
             raise ValueError("motor observation lacks a held-attachment arm joint") from exc
-        self.history.append(tick.observed_at_s, self.kinematics.forward_kinematics(joints))
+        self.history.append(tick.observed_at_s, joints)
+
+    def _ee_at(self, source_time_s: float) -> np.ndarray | None:
+        bracket = self.history.bracket(source_time_s)
+        if bracket is None:
+            return None
+        left, right, alpha = bracket
+        first = self.kinematics.forward_kinematics(left)
+        return first if alpha == 0 else interpolate(first, self.kinematics.forward_kinematics(right), alpha)
 
     def activate(self, grasp_time_s: float, pregrasp: PoseEstimate | None = None) -> bool:
         if not np.isfinite(grasp_time_s):
@@ -334,14 +378,18 @@ class HeldAttachmentUpdater:
             self._conflicted = False
             self.has_postgrasp_observation = False
             self.last_rejection = None
-            return bool(pregrasp is not None and self._accept_seed(pregrasp))
+            return bool(
+                pregrasp is not None
+                and pregrasp.source_time_s <= grasp_time_s
+                and pregrasp.available_time_s <= grasp_time_s
+                and self._accept_seed(pregrasp)
+            )
 
     def _accept_seed(self, estimate: PoseEstimate) -> bool:
-        return (
-            estimate.role == self.role
-            and estimate.reference_version == self.reference_version
-            and self._estimate.update_from_history(self.history, estimate)
-        )
+        if estimate.role != self.role or estimate.reference_version != self.reference_version:
+            return False
+        ee = self._ee_at(estimate.source_time_s)
+        return ee is not None and self._estimate.update(ee, estimate)
 
     def on_pose_update(self, _version: int, poses: dict[str, PoseEstimate]) -> bool:
         held = poses.get(self.role)
@@ -356,7 +404,7 @@ class HeldAttachmentUpdater:
                 or not held.supports()
             ):
                 return False
-            ee = self.history.at(held.source_time_s)
+            ee = self._ee_at(held.source_time_s)
             if ee is None:
                 self.last_rejection = "held image is not bracketed by motor observations"
                 return False

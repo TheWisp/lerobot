@@ -22,6 +22,11 @@ The executable core already separates:
   delayed held-object evidence into that attachment; a held attachment updater
   can seed a pregrasp fallback, marks whether it has a postgrasp observation,
   and withdraws the attachment on a large observed disagreement;
+- demonstrated gripper events can declare an attach or detach transition with
+  an object role and frame version. A lifecycle adapter applies those only
+  after the motor accepts the event, seeds a recent observed pregrasp pose as
+  an assumption, and retires that assumption on release. Release success still
+  requires independent milestone evidence;
 - skill compilation from ordinary LeRobot state/action/timestamp columns plus
   versioned object-pose annotations;
 - metric cross-episode object-frame registration from RGB-D correspondences,
@@ -78,6 +83,8 @@ held object's reference-frame version. Missing versions are shown in skill
 inspection and rejected by the joint planner. A pose-relation milestone can
 select an observed demo frame to define its target object relationship, while
 the task tolerances and maximum evidence age are supplied explicitly.
+Held-to-target intervals also name the held role; skill inspection reports a
+missing role or a missing matching attach event before live integration.
 
 The first matcher is measured on a recorded insertion scene in
 [the RGB-D replay note](docs/rgbd_replay.md). It follows a static target well,

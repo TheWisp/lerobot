@@ -8,6 +8,8 @@ import numpy as np
 import pytest
 
 from lerobot.gui.api.run import FlashInspectRequest, inspect_flash_skill
+from lerobot.policies.flash.inspect import inspect_skill
+from lerobot.policies.flash.skill import FlashSkill, Interval, MotionMode, Relation, SpatialSample
 
 
 def test_flash_inspect_subprocess_returns_spatial_intervals(tmp_path):
@@ -53,6 +55,35 @@ def test_flash_inspect_subprocess_returns_spatial_intervals(tmp_path):
     assert inspected["source_repo_id"] == "example/dataset"
     assert inspected["intervals"][0]["demo_duration_s"] == 1.0
     assert inspected["milestones"][0]["pose_relation"]["translation_tolerance_m"] == 0.01
+
+
+def test_inspection_flags_held_interval_without_an_attachment_event(tmp_path):
+    identity = np.eye(4)
+    skill = FlashSkill(
+        "example/dataset",
+        0,
+        (
+            Interval(
+                "place",
+                MotionMode.DEMONSTRATED,
+                Relation.HELD_TO_TARGET,
+                "target",
+                (
+                    SpatialSample(0, identity, identity, identity),
+                    SpatialSample(1, identity, identity, identity),
+                ),
+                reference_version="target-v1",
+                held_reference_version="held-v1",
+                held_role="held",
+            ),
+        ),
+    )
+    path = tmp_path / "skill.json"
+    skill.save(path)
+    inspected = inspect_skill(str(path))
+    assert "place: matching demonstrated attachment event" in inspected["missing"]
+    assert inspected["reference_frames_declared"]
+    assert not inspected["runtime_bindings_complete"]
 
 
 @pytest.mark.requires_playwright
