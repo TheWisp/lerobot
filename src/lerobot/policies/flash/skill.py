@@ -29,6 +29,9 @@ class SpatialSample:
     demo_reference: np.ndarray
     demo_held: np.ndarray | None = None
     gripper: float | None = None
+    source_frame_index: int | None = None
+    reference_evidence: str = "unverified"
+    held_evidence: str | None = None
 
     def __post_init__(self) -> None:
         if not np.isfinite(self.time_s) or self.time_s < 0:
@@ -120,6 +123,9 @@ class FlashSkill:
                     demo_reference=sample["demo_reference"],
                     demo_held=sample.get("demo_held"),
                     gripper=sample.get("gripper"),
+                    source_frame_index=sample.get("source_frame_index"),
+                    reference_evidence=sample.get("reference_evidence", "unverified"),
+                    held_evidence=sample.get("held_evidence"),
                 )
                 for sample in item["samples"]
             )
@@ -149,3 +155,45 @@ class FlashSkill:
             data["schema_version"],
             milestones,
         )
+
+    def to_dict(self) -> dict:
+        return {
+            "schema_version": self.schema_version,
+            "source_repo_id": self.source_repo_id,
+            "source_episode": self.source_episode,
+            "milestones": [
+                {"name": milestone.name, "depends_on_roles": list(milestone.depends_on_roles)}
+                for milestone in self.milestones
+            ],
+            "intervals": [
+                {
+                    "name": interval.name,
+                    "mode": interval.mode.value,
+                    "relation": interval.relation.value,
+                    "reference_role": interval.reference_role,
+                    "reference_version": interval.reference_version,
+                    "held_reference_version": interval.held_reference_version,
+                    "speed_m_s": interval.speed_m_s,
+                    "entry_milestone": interval.entry_milestone,
+                    "completion_milestone": interval.completion_milestone,
+                    "recovery_intervals": list(interval.recovery_intervals),
+                    "samples": [
+                        {
+                            "time_s": sample.time_s,
+                            "demo_ee": sample.demo_ee.tolist(),
+                            "demo_reference": sample.demo_reference.tolist(),
+                            "demo_held": sample.demo_held.tolist() if sample.demo_held is not None else None,
+                            "gripper": sample.gripper,
+                            "source_frame_index": sample.source_frame_index,
+                            "reference_evidence": sample.reference_evidence,
+                            "held_evidence": sample.held_evidence,
+                        }
+                        for sample in interval.samples
+                    ],
+                }
+                for interval in self.intervals
+            ],
+        }
+
+    def save(self, path: str | Path) -> None:
+        Path(path).write_text(json.dumps(self.to_dict(), indent=2) + "\n")

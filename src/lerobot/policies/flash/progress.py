@@ -92,7 +92,7 @@ class Progress:
         )
 
     def begin(self, now_s: float) -> bool:
-        if self.phase != Phase.WAITING or not self._satisfied(self.interval.entry_milestone):
+        if not self.can_begin():
             return False
         self.interval_start_s = now_s
         self.phase = Phase.MOVING
@@ -100,6 +100,12 @@ class Progress:
             {"type": "interval_start", "interval": self.interval.name, "at": now_s, "attempt": self.attempt}
         )
         return True
+
+    def can_begin(self) -> bool:
+        return self.phase == Phase.WAITING and self._satisfied(self.interval.entry_milestone)
+
+    def allows_milestone(self, name: str | None) -> bool:
+        return self._satisfied(name)
 
     def receipt(self, at_s: float, interval_complete: bool) -> None:
         """Progress follows accepted motor commands, never planned samples."""

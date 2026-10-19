@@ -176,6 +176,17 @@ def test_retarget_keeps_future_prefix_and_required_event():
     assert prefix_queue.take(1)[1] == 5
 
 
+def test_queue_rejects_a_retarget_jump_from_robot_accepted_boundary():
+    queue = ActionQueue(max_splice_delta={"joint.pos": 0.5})
+    queue.publish(0, [TimedAction(0, {"joint.pos": 0.2}, "carry")])
+    assert queue.take(0)[0] is not None
+    queue.note_accepted({"joint.pos": 0.1})
+    with pytest.raises(PlanRejectedError, match="jumps"):
+        queue.publish(1, [TimedAction(1, {"joint.pos": 1.0}, "carry")])
+    queue.publish(1, [TimedAction(1, {"joint.pos": 0.4}, "carry")])
+    assert queue.take(1)[0].action["joint.pos"] == 0.4
+
+
 def test_motor_tick_reads_state_and_records_accepted_action_without_camera_wait():
     class FakeRobot:
         def get_state_observation(self):
