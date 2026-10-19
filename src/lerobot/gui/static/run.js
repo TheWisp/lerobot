@@ -198,7 +198,7 @@ function _updateLaunchButton() {
     if (!btn) return;
     const { ready, reason } = _validateLaunch();
     btn.disabled = !ready;
-    btn.textContent = selectedWorkflow === 'flash' ? 'Inspect skill' : 'Launch';
+    btn.textContent = selectedWorkflow === 'flash' ? 'Inspect bundle' : 'Launch';
     // Native `title` shows on hover; gives the missing-field hint without
     // needing extra inline text below the button.
     btn.title = reason;
@@ -1301,7 +1301,7 @@ function renderRunForm() {
     html += `<label>Prepared bundle${_REQ}</label>`;
     html += '<input id="run-flash-skill" type="text" placeholder="/absolute/path/to/flash/v1/prepared/name/bundle.json">';
     html += '</div>';
-    html += '<div class="form-hint">Inspect the source episode, spatial relations, timing and milestones. Live execution appears here after the pose source and recorder are connected.</div>';
+    html += '<div class="form-hint">Inspect source frames, spatial relations, timing, milestones and pose evidence. Live launch still needs a prepared bundle and calibrated robot/camera configuration.</div>';
     html += '</div>';
 
     // ---- Episode control (active while a record subprocess runs) ----
