@@ -174,6 +174,7 @@ def trial(bundle_path: Path, config_path: Path, *, preflight: bool) -> dict:
                 settings["max_pose_age_s"],
                 allow_predicted_reference=True,
                 ik_refinement_attempts=settings["ik_refinement_attempts"],
+                max_attachment_age_s=settings["max_attachment_age_s"],
             ),
             buffer_config=PlanBufferConfig(
                 settings["lead_ticks"],
@@ -218,6 +219,18 @@ def trial(bundle_path: Path, config_path: Path, *, preflight: bool) -> dict:
                 ),
                 "planner_superseded": runtime.planner.superseded,
                 "planner_pending_revision": runtime.coordinator._pending_revision,
+                "attachment": {
+                    "active_role": runtime.attachment.active_role,
+                    "last_event": runtime.attachment.last_event,
+                    "state_available": runtime.attachment.state(runtime.session.motor.clock()) is not None,
+                    "roles": {
+                        role: {
+                            "has_postgrasp_observation": updater.has_postgrasp_observation,
+                            "last_rejection": updater.last_rejection,
+                        }
+                        for role, updater in runtime.attachment.updaters.items()
+                    },
+                },
             }
         )
         return report

@@ -38,6 +38,7 @@ class PlannerLimits:
     max_pose_age_s: float
     allow_predicted_reference: bool = False
     ik_refinement_attempts: int = 1
+    max_attachment_age_s: float | None = None
 
     def __post_init__(self) -> None:
         values = (
@@ -54,6 +55,14 @@ class PlannerLimits:
             or self.ik_refinement_attempts < 1
         ):
             raise ValueError("IK refinement attempts must be a positive integer")
+        if self.max_attachment_age_s is not None and (
+            not np.isfinite(self.max_attachment_age_s) or self.max_attachment_age_s <= 0
+        ):
+            raise ValueError("maximum attachment age must be finite and positive")
+
+    @property
+    def effective_attachment_age_s(self) -> float:
+        return self.max_pose_age_s if self.max_attachment_age_s is None else self.max_attachment_age_s
 
 
 class JointPlanner:
@@ -241,7 +250,7 @@ class JointPlanner:
     ) -> np.ndarray | None:
         if attachment is None:
             return None
-        if not attachment.usable(due_s, self.limits.max_pose_age_s):
+        if not attachment.usable(due_s, self.limits.effective_attachment_age_s):
             raise MissingEvidenceError("held object attachment is stale or lost")
         if required_version is None or attachment.reference_version != required_version:
             raise MissingEvidenceError("held attachment does not share the demonstrated object frame")

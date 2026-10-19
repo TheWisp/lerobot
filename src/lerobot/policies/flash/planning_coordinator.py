@@ -24,6 +24,7 @@ class PlanBufferConfig:
     refill_at_ticks: int
     max_reference_shift_m: float
     max_reference_turn_rad: float
+    max_wait_for_attachment_s: float = 2.0
 
     def __post_init__(self) -> None:
         if (
@@ -34,6 +35,8 @@ class PlanBufferConfig:
             or self.max_reference_shift_m <= 0
             or not np.isfinite(self.max_reference_turn_rad)
             or self.max_reference_turn_rad <= 0
+            or not np.isfinite(self.max_wait_for_attachment_s)
+            or self.max_wait_for_attachment_s <= 0
         ):
             raise ValueError("invalid FLASH planning buffer or reference-change limits")
 
@@ -74,6 +77,8 @@ class PlanningCoordinator:
         self._connection: ConnectionTrajectory | None = None
         self._start_anchor_interval_index: int | None = None
         self._start_anchor_pose: np.ndarray | None = None
+        self._missing_attachment_interval_index: int | None = None
+        self._missing_attachment_since_s: float | None = None
 
     def step(self):
         """Check live evidence, execute one motor tick, then refill the future queue."""
@@ -150,7 +155,17 @@ class PlanningCoordinator:
         if interval.relation == Relation.HELD_TO_TARGET and attachment is None:
             if phase == Phase.MOVING:
                 self._fail("held-object attachment expired during motion")
+            elif self._missing_attachment_interval_index != self.session.progress.interval_index:
+                self._missing_attachment_interval_index = self.session.progress.interval_index
+                self._missing_attachment_since_s = now_s
+            elif (
+                self._missing_attachment_since_s is not None
+                and now_s - self._missing_attachment_since_s >= self.config.max_wait_for_attachment_s
+            ):
+                self._fail("held-object attachment unavailable at interval entry")
             return
+        self._missing_attachment_interval_index = None
+        self._missing_attachment_since_s = None
         if attachment is not None and attachment.reference_version != interval.held_reference_version:
             self._fail("held-object attachment uses the wrong object frame")
             return
@@ -232,7 +247,10 @@ class PlanningCoordinator:
         due_s = self.session.motor.epoch_s + start_tick * self.session.motor.period_s
         evidence_deadline_s = reference.source_time_s + limits.max_pose_age_s
         if attachment is not None:
-            evidence_deadline_s = min(evidence_deadline_s, attachment.source_time_s + limits.max_pose_age_s)
+            evidence_deadline_s = min(
+                evidence_deadline_s,
+                attachment.source_time_s + limits.effective_attachment_age_s,
+            )
         evidence_ticks = floor((evidence_deadline_s - due_s) / self.session.motor.period_s) + 1
         if evidence_ticks <= 0:
             if phase == Phase.MOVING:

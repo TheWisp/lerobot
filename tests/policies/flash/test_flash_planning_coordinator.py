@@ -11,7 +11,7 @@ from lerobot.policies.flash.planning_coordinator import PlanBufferConfig, Planni
 from lerobot.policies.flash.progress import Phase
 from lerobot.policies.flash.session import FlashSession
 from lerobot.policies.flash.skill import FlashSkill, Interval, MotionMode, Relation, SpatialSample
-from lerobot.policies.flash.trajectory import Evidence, PoseEstimate
+from lerobot.policies.flash.trajectory import AttachmentState, Evidence, PoseEstimate
 
 
 def pose(x=0.0):
@@ -199,6 +199,96 @@ def test_future_chunk_stops_at_camera_evidence_age_boundary():
     coordinator.step()
     assert worker.requests[0].count == 1
     assert [action.tick for action in session.actions.snapshot().pending] == [3]
+
+
+def test_coordinator_uses_attachment_age_separately_from_camera_pose_age():
+    now = [2.0]
+    robot = FakeRobot()
+    interval = Interval(
+        "carry",
+        MotionMode.DEMONSTRATED,
+        Relation.HELD_TO_TARGET,
+        "target",
+        (
+            SpatialSample(0, pose(), pose(0.1), pose()),
+            SpatialSample(0.2, pose(), pose(0.1), pose()),
+        ),
+        reference_version="target-v1",
+        held_reference_version="held-v1",
+    )
+    session = FlashSession(
+        FlashSkill("demo/source", 0, (interval,)),
+        robot,
+        clock=lambda: now[0],
+        sleep=lambda dt: now.__setitem__(0, now[0] + dt),
+    )
+    poses = LatestPoseStore()
+    poses.publish((target(0.2, 2.0),))
+    kinematics = LinearKinematics()
+    planner = JointPlanner(
+        kinematics,
+        ("arm",),
+        "gripper",
+        PlannerLimits((1000.0,), 0.001, 0.01, 0.8, max_attachment_age_s=20),
+    )
+    worker = InlineWorker(planner, session.publish_plan)
+    coordinator = PlanningCoordinator(
+        session,
+        worker,
+        poses,
+        kinematics,
+        ("arm",),
+        PlanBufferConfig(2, 8, 3, 0.02, 0.1),
+        lambda at_s: AttachmentState(pose(0.02), 0.0, at_s, "held-v1"),
+    )
+    coordinator.step()
+    assert worker.requests[0].count == 8
+    assert session.actions.snapshot().pending
+
+
+def test_missing_held_attachment_interrupts_instead_of_waiting_indefinitely():
+    now = [2.0]
+    interval = Interval(
+        "carry",
+        MotionMode.DEMONSTRATED,
+        Relation.HELD_TO_TARGET,
+        "target",
+        (
+            SpatialSample(0, pose(), pose(0.1), pose()),
+            SpatialSample(0.2, pose(), pose(0.1), pose()),
+        ),
+        reference_version="target-v1",
+        held_reference_version="held-v1",
+    )
+    session = FlashSession(
+        FlashSkill("demo/source", 0, (interval,)),
+        FakeRobot(),
+        clock=lambda: now[0],
+        sleep=lambda dt: now.__setitem__(0, now[0] + dt),
+    )
+    poses = LatestPoseStore()
+    poses.publish((target(0.2, 2.0),))
+    kinematics = LinearKinematics()
+    worker = InlineWorker(
+        JointPlanner(kinematics, ("arm",), "gripper", PlannerLimits((1000.0,), 0.001, 0.01, 0.8)),
+        session.publish_plan,
+    )
+    coordinator = PlanningCoordinator(
+        session,
+        worker,
+        poses,
+        kinematics,
+        ("arm",),
+        PlanBufferConfig(2, 8, 3, 0.02, 0.1, max_wait_for_attachment_s=2),
+        lambda _at_s: None,
+    )
+    coordinator.step()
+    assert session.progress.phase == Phase.WAITING
+    now[0] += 2.1
+    poses.publish((target(0.2, now[0]),))
+    coordinator.schedule()
+    assert session.progress.phase == Phase.INTERRUPTED
+    assert "attachment unavailable" in session.progress.events[-1]["reason"]
 
 
 def test_fresh_equivalent_pose_does_not_cancel_first_future_chunk():

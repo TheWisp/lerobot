@@ -544,6 +544,52 @@ def test_joint_planner_uses_gripper_attachment_frame_and_checks_reference_versio
         )
 
 
+def test_joint_planner_keeps_grasp_attachment_after_observed_pose_age_expires():
+    class LinearKinematics:
+        def inverse_kinematics(self, _seed, target):
+            return np.array([target[0, 3] * 100])
+
+        def forward_kinematics(self, joints):
+            return pose(joints[0] / 100)
+
+    interval = Interval(
+        "carry",
+        MotionMode.DEMONSTRATED,
+        Relation.HELD_TO_TARGET,
+        "target",
+        (sample(0, (0, 0, 0), (0, 0, 0), (0.1, 0, 0)), sample(1, (0, 0, 0), (0, 0, 0), (0.1, 0, 0))),
+        reference_version="target-v1",
+        held_reference_version="held-v1",
+    )
+    reference = PoseEstimate(
+        "target", pose(0.4), 2, 2, Evidence.OBSERVED, "target-v1", (True, True, True), (True, True, True)
+    )
+    attachment = AttachmentState(pose(0.02), 0, 0, "held-v1")
+    kwargs = {
+        "start_tick": 0,
+        "count": 1,
+        "epoch_s": 2,
+        "period_s": 1 / 30,
+        "interval_start_s": 2,
+        "seed_deg": np.array([48.0]),
+        "reference": reference,
+        "attachment": attachment,
+    }
+    default = JointPlanner(
+        LinearKinematics(), ("arm",), "gripper", PlannerLimits((2000.0,), 0.001, 0.01, 0.8)
+    )
+    with pytest.raises(MissingEvidenceError, match="attachment is stale"):
+        default.plan(interval, **kwargs)
+
+    separate = JointPlanner(
+        LinearKinematics(),
+        ("arm",),
+        "gripper",
+        PlannerLimits((2000.0,), 0.001, 0.01, 0.8, max_attachment_age_s=20),
+    )
+    assert separate.plan(interval, **kwargs)[0].action["arm.pos"] == pytest.approx(48.0)
+
+
 def test_attachment_updates_from_observation_but_not_its_own_prediction():
     relation = AttachmentEstimate()
     observed = PoseEstimate(
