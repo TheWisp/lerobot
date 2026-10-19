@@ -170,7 +170,8 @@ flowchart LR
   from the object's pose and the fingertip at that moment, and estimated from then on like any pose, from every
   measurement but those the grasp's check answers "not held" (they say nothing about how it sits in the gripper). The
   check answers each measurement from how it sat before that measurement ([E27](#e27)). Whether it is held is the
-  task's question, never the world's.
+  task's question, never the world's. How the demo's object sat in the demo's gripper is estimated by the same rule,
+  from the demo's views ([The demo's beliefs](#the-demos-beliefs)).
 - **The motion step solves ahead.** IK takes 1.7 ms at the median and up to 75 and 299 ms on the rig ([E1](#e1),
   [E25](#e25)), so commands are solved a few ticks before they are due and queued: as many ticks as the slowest solve
   of this run and the gap between control ticks cover, plus one. The motor step sends whatever is due and never waits
@@ -393,6 +394,57 @@ believed it (a held one where the gripper carries it), which the act's replay dr
 and which were passed while the camera couldn't tell, apart from a fault that stopped the act. ([R10](#requirements),
 [R11](#requirements), [R13](#requirements), [O10](#o10))
 
+### Recordings and their perception
+
+A demo, an act's record and the live camera are the same thing: colour and depth frames, the camera's intrinsics, the
+arm's joint readings, the camera's calibration where it was kept. A demo also has its annotations: key frames, the
+objects' names and symmetries. `recordings.open_recording` reads a demo folder or an act folder as one `Recording`.
+
+Perception over a recording is one pipeline (`lerobot.showservo.perception`): the point groups over every frame in
+order, from the objects designated on its first frame, then the pose estimator on each frame, in the camera frame. Its
+output is cached beside the recording under `perception/<version>/`, the version a hash of the pipeline's source files.
+A change to any of them is a new version: a cache is read only by the pipeline that wrote it, and a recording is
+processed again on request (the compare page's Process button, or `python -m lerobot.showservo.perception
+<recording>`). A live act runs the same groups code and estimator, on the frames it gets in time; offline, every frame.
+
+```mermaid
+flowchart LR
+    subgraph REC["Recordings"]
+        R1["A demo: frames, depth, arm, key frames"]
+        R2["An act's record: frames, depth, arm, commands"]
+    end
+    subgraph PIPE["The pipeline, every frame in order"]
+        P1["Point groups, from the objects designated on the first frame"]
+        P2["Pose estimator: each object's pose taken, or refused and why"]
+        P1 --> P2
+    end
+    R1 --> P1
+    R2 --> P1
+    P2 --> C["Cache beside the recording, per pipeline version"]
+    C -- "the demo's taken views" --> E["Engine: how the demo's objects sat in its gripper"]
+    C --> V["Viewer: a demo and its act side by side"]
+```
+
+`perception_view` draws any recording from its cache: the groups, each object where the groups put it (green where
+the estimator took that pose, red where it refused it, with why), and the fingertip. The GUI's compare page
+(`/api/pregrasp/compare?demo=…&act=…`) lays an act beside its demo at the same demo time, from the demo time each
+command recorded, or for older acts from their legs.
+
+### The demo's beliefs
+
+The engine puts a held object where the demo's was. Where the demo's was is a belief, and it is made by the rule an
+act believes its own (`engine.demo_beliefs`): the engine's World and hold over the demo's taken views. At the grasp,
+the object sits where it was against the fingertip; every view of it while held updates that, against a threshold
+from the noise its views showed at rest; between views it is carried as it sat. At an engine act's start, the demo's
+perception (by the pipeline as it is now) gives how each held object sat in the demo's gripper at every demo sample
+(`Demo.grips`), and `Engine._fix` puts the act's held object where the demo's was at the command's demo time, against
+how the act's sits. A demo not processed by this pipeline leaves the act with the demo's object as it lay at the
+grasp. The act's record says which (`demo_beliefs`).
+
+On the insertion demo this moves the dowel's believed lower end at the release from 28 mm off the ring's axis to 10
+([E35](#e35)). An act whose camera takes none of its own held object's views, though, is held to a grip it cannot
+match: see [Q3](#q3).
+
 ## Alternatives, and what this costs
 
 - **Keep the runner and plan ahead of the arm** (`a3e0cf48c`, `d8d36d606`): fewer stops at the end of each stage, but
@@ -424,6 +476,15 @@ and waste more time on a task that cannot succeed. Leaning: twice.
 the gripper; or by playing the demo's motion backwards. Straight is shorter; backwards follows a path the demo showed
 was clear of the object. Leaning: straight there. In contact the question does not arise: a moved object
 always backs the arm out along the demo's path (see [Going back, or ahead](#going-back-or-ahead)).
+
+<a id="q3"></a>**Q3. What does an act assume of its held object between its own views?** Today, that it sits as at its
+last view, or the grasp; the demo's grip follows the demo's views. Where the demo's camera saw its object shift in
+the fingers and the act's saw nothing of its own, the engine moves the act's fingers to undo a shift the act is assumed
+not to have had: on the rig the dowel came down on the ring's rim ([E35](#e35)). With the rigid grip on both sides, a
+shift neither camera sees cancels, if it happens alike; that act inserted ([E34](#e34)). Two directions: between its
+own views, the act's object moves in the fingers as the demo's did, so what the act estimates from its views is how its
+grip differs from the demo's at the same demo time; or the demo's grip is taken only from the views an act gets too.
+The first keeps every view on both sides; the second throws the demo's away whenever the act cannot see.
 
 To measure: the checks on the act records, with real and made-up misses ([R3](#requirements), [R8](#requirements));
 how much each object's measurements wander at rest on the rig, per act; the OpenArm 2's following error and gripper readings; how long the command queue takes to fill on the rig
@@ -681,3 +742,27 @@ pose, on the tray, and the release could not be told. Replayed with the act's fr
 groups' poses taken were 57 of 64 lying, 21 of 38 carried, 1 of 65 upright and 0 of 36 after the release (median 46%
 and 91% seen through there). Since then one belief per object: carried, the world's pose is where the gripper has it
 (`test_an_object_the_camera_never_sees_again_after_the_grasp_stays_where_the_gripper_left_it`).
+
+<a id="e35"></a>**E35. The demo's grip, and an act that could not see its own**, 2026-10-19, the insertion demo
+processed by pipeline `9f96bc840f73`, and rig act `20261019_124410` (`f5ca3b0ac`, speed 0.5, the point groups' poses,
+strong sunlight across the tray).
+
+- **The demo's grip.** 15 views of the dowel were taken while held, all carried lying: none upright, none after the
+  release. The grip moved 13.7 mm in the first 0.5 s after the grasp and 30 mm by 1.7 s. Drawn on the demo's frames,
+  it sits on the dowel carried lying, where the rigid grip is a dowel's width off. At the release the dowel's lower
+  end is 10 mm off the ring's axis under it and 28 mm under the rigid grip; the ring's centre falls in the hole.
+- **What it started from.** From 7.44 to 7.67 s, the fingertip 21 to 28 mm away, 7 views put the dowel 9 to 10 mm
+  across its axis from where it lay; from 7.84 s, the gripper closed, within 0.4 mm of it again. The grasp at 7.77 s
+  fell in that window, so the grip started 9.7 mm across the dowel, and the act's grasp recorded a 14.8 mm difference
+  from the demo's, against 5.5 to 8.8 mm in the three acts before.
+- **The slow insertion.** From 12.6 s to the release the groups' pose of the dowel stands still while the fingertip
+  goes down 36 mm. The dowel went down: the camera's point at a pixel of its middle goes down 25 mm, and at a pixel of
+  its top the camera sees the tray from 14.6 s. The estimator refused those poses (32 to 40% seen through), rightly.
+- **The act.** None of its views of the held dowel was taken (30 seen through, 16 without a groups pose); its hold
+  moved 0.1 mm from the grasp to the release. From 12.7 s of the demo on, the engine kept the dowel's believed lower end
+  within 2 mm of the demo's believed one against the ring (6 to 15 mm off its axis in both). The real dowel came down
+  on the ring's rim and pushed the ring 39 mm, and fell over after the release; the release could not be told. The
+  fingertip went down to the same height as the demo's (within 6 mm).
+
+So the two grips were made of different views: the demo's followed a shift its camera saw, the act's saw none. In
+`20261019_005211`, both grips rigid, the dowel went in ([Q3](#q3)).
