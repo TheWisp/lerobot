@@ -2,12 +2,12 @@
 
 let runTabInitialized = false;
 let runEventSource = null;
-let selectedWorkflow = 'teleop'; // 'teleop' | 'replay' | 'policy'
+let selectedWorkflow = 'teleop'; // 'teleop' | 'replay' | 'policy' | 'flash'
 let obsStreamMeta = null; // {available, obs_scalar_keys, action_keys, image_keys}
 let obsStreamTimer = null; // interval ID for camera polling
 let liveVideo = null;      // the Low Bandwidth stream client, when that is the path
 let obsStreamGen = 0; // bumped on stop/restart to cancel an in-flight "wait for the obs-stream" loop
-let _runFormRendered = false; // true once all three workflow sections are in the DOM
+let _runFormRendered = false; // true once all workflow sections are in the DOM
 
 // ============================================================================
 // Initialization
@@ -86,7 +86,7 @@ async function selectWorkflow(workflow) {
         b.classList.toggle('active', b.dataset.workflow === workflow);
     });
     // Toggle visibility of workflow sections (no re-render)
-    for (const wf of ['teleop', 'replay', 'policy']) {
+    for (const wf of ['teleop', 'replay', 'policy', 'flash']) {
         const section = document.getElementById(`run-section-${wf}`);
         if (section) section.style.display = (wf === workflow) ? '' : 'none';
     }
@@ -168,6 +168,7 @@ const _WORKFLOW_VALIDATORS = {
         }
         return null;
     },
+    flash: () => _val('run-flash-skill') ? null : 'Select a FLASH skill annotation file.',
 };
 
 let _isRunning = false;
@@ -180,7 +181,7 @@ function _validateLaunch() {
         return { ready: false, reason: 'A process is already running — Stop it first.' };
     }
     // Robot profile is the universal prerequisite for every workflow.
-    if (!_val(_getActiveRobotSelectId())) {
+    if (selectedWorkflow !== 'flash' && !_val(_getActiveRobotSelectId())) {
         return { ready: false, reason: 'Select a robot profile.' };
     }
     const workflowValidator = _WORKFLOW_VALIDATORS[selectedWorkflow];
@@ -197,6 +198,7 @@ function _updateLaunchButton() {
     if (!btn) return;
     const { ready, reason } = _validateLaunch();
     btn.disabled = !ready;
+    btn.textContent = selectedWorkflow === 'flash' ? 'Inspect skill' : 'Launch';
     // Native `title` shows on hover; gives the missing-field hint without
     // needing extra inline text below the button.
     btn.title = reason;
@@ -1292,6 +1294,16 @@ function renderRunForm() {
     html += '</div>'; // end standard fields
     html += '</div>'; // end policy section
 
+    // FLASH is an independent Run workflow. The first slice checks the
+    // versioned spatial skill before a live tracker or motor can be started.
+    html += `<div id="run-section-flash" style="${selectedWorkflow === 'flash' ? '' : 'display:none'}">`;
+    html += '<div class="form-grid">';
+    html += `<label>Skill file${_REQ}</label>`;
+    html += '<input id="run-flash-skill" type="text" placeholder="/absolute/path/to/flash_skill.json">';
+    html += '</div>';
+    html += '<div class="form-hint">Inspect the source episode, spatial relations, timing and milestones. Live execution appears here after the pose source and recorder are connected.</div>';
+    html += '</div>';
+
     // ---- Episode control (active while a record subprocess runs) ----
     // Sends episode-transition commands to the running lerobot-record
     // subprocess via POST /api/run/control — mirrors the keyboard events
@@ -1364,6 +1376,31 @@ function _getActiveFpsInputId() {
 }
 
 async function launchRun() {
+    if (selectedWorkflow === 'flash') {
+        try {
+            const res = await fetch('/api/run/flash/inspect', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ skill_path: _val('run-flash-skill') }),
+            });
+            const data = await res.json();
+            if (!res.ok) {
+                showToast('FLASH skill invalid', data.detail || 'Unknown error', 'error');
+                return;
+            }
+            clearTerminal('run-terminal');
+            appendTerminalLine(`FLASH skill: ${data.source_repo_id} episode ${data.source_episode}`);
+            for (const interval of data.intervals) {
+                appendTerminalLine(`${interval.name}: ${interval.mode}, ${interval.relation} to ${interval.reference_role}, ${interval.samples} samples, demo ${interval.demo_duration_s.toFixed(2)}s`);
+            }
+            for (const milestone of data.milestones) {
+                appendTerminalLine(`Milestone ${milestone.name}: depends on ${milestone.depends_on_roles.join(', ')}`);
+            }
+            for (const missing of data.missing) appendTerminalLine(`Needs ${missing}`);
+            showToast('FLASH skill', 'Spatial annotation validated', 'success');
+        } catch (e) { showToast('FLASH inspect failed', e.message, 'error'); }
+        return;
+    }
+
     const robotSelect = document.getElementById(_getActiveRobotSelectId());
     if (!robotSelect || !robotSelect.value) {
         showToast('Error', 'Select a robot profile', 'error');

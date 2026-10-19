@@ -206,14 +206,18 @@ class SOFollower(Robot):
                 return dict.fromkeys(self.bus.motors, 0.0)
 
     @check_if_not_connected
-    def get_observation(self) -> RobotObservation:
-        # Read arm position
+    def get_state_observation(self) -> RobotObservation:
+        """Read motor positions without touching any camera."""
         start = time.perf_counter()
         obs_dict = self._sync_read_with_motor_fallback("Present_Position")
         obs_dict = {f"{motor}.pos": val for motor, val in obs_dict.items()}
         dt_ms = (time.perf_counter() - start) * 1e3
         logger.debug(f"{self} read state: {dt_ms:.1f}ms")
+        return obs_dict
 
+    @check_if_not_connected
+    def get_observation(self) -> RobotObservation:
+        obs_dict = self.get_state_observation()
         # Capture images from cameras
         for cam_key, cam in self.cameras.items():
             if getattr(cam, "use_rgb", True):

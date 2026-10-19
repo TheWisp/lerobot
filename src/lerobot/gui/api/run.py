@@ -236,6 +236,10 @@ class ReplayRequest(BaseModel):
     # `dataset.fps` directly, so the field is dead config.
 
 
+class FlashInspectRequest(BaseModel):
+    skill_path: str
+
+
 class HVLARunRequest(BaseModel):
     robot: dict[str, Any]
     s1_checkpoint: str
@@ -928,6 +932,29 @@ async def start_record(req: RecordRequest) -> dict:
 
         await _launch_subprocess(args, command="record", config=req.model_dump(), extra_env=extra_env)
         return {"status": "started", "command": "record", "pid": _active_process.pid}
+
+
+@router.post("/flash/inspect")
+async def inspect_flash_skill(req: FlashInspectRequest) -> dict:
+    """Inspect a local FLASH sidecar without loading it on the GUI event loop."""
+    process = await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-m",
+        "lerobot.policies.flash.inspect",
+        req.skill_path,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        out, err = await asyncio.wait_for(process.communicate(), timeout=20)
+    except _TIMEOUT_EXCS as exc:
+        process.kill()
+        await process.wait()
+        raise HTTPException(408, "FLASH skill inspection timed out") from exc
+    if process.returncode:
+        message = err.decode(errors="replace").strip().splitlines()
+        raise HTTPException(400, message[-1] if message else "Invalid FLASH skill")
+    return json.loads(out)
 
 
 @router.post("/replay")

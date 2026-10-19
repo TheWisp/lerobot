@@ -197,6 +197,15 @@ class Robot(abc.ABC):
 
         pass
 
+    def get_state_observation(self) -> RobotObservation:
+        """Read robot state without waiting for cameras.
+
+        Real-time controllers can call this on their motor tick while a separate
+        camera worker captures images. Robots supporting that split override this
+        method; the default fails explicitly rather than silently reading cameras.
+        """
+        raise NotImplementedError(f"{self.robot_type} does not support camera-independent state reads")
+
     @abc.abstractmethod
     def send_action(self, action: RobotAction | ActionChunk) -> RobotAction:
         """
