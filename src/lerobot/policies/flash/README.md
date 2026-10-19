@@ -19,6 +19,9 @@ The executable core already separates:
 - a matcher-neutral RGB-D pose backend that fits visible matched points from
   any number of annotated demo views and reports loss when depth or geometry
   cannot support a pose;
+- an initial SAM3-mask/DINOv2-patch matcher that constructs a metric object
+  point-and-appearance bank from annotated RGB-D demo views, then submits
+  live correspondences to the common pose backend;
 - kinematics-neutral short IK chunks and atomic future-queue replacement;
 - a selected-joint adapter that runs the SO-107's seven-joint FK/IK model
   while the planner controls six arm joints and the gripper separately;
@@ -42,11 +45,13 @@ role and reference-frame version. A held-to-target interval also declares the
 held object's reference-frame version. Missing versions are shown in skill
 inspection and rejected by the joint planner.
 
-The next integration must supply a pixel matcher that finds correspondences
-across the demonstration and live view (or accepts human-selected points),
-and publish registered pose snapshots asynchronously. The RGB-D backend fits
-a transform once correspondences are given; it does not discover them.
-The planner worker, robot-specific kinematics, milestone verifiers and
-recorder then need wiring into a hardware launch path.
+The first matcher is measured on a recorded insertion scene in
+[the RGB-D replay note](docs/rgbd_replay.md). It follows a static target well,
+but the single tray view loses the dowel after lift and turn. Neither this
+measurement nor a fit to matched points establishes independent pose accuracy
+under occlusion. Multi-view reference preparation, evidence/observability
+gates and asynchronous publication to the controller remain necessary.
+The planner worker, milestone verifiers and recorder also need wiring into
+a hardware launch path.
 A physical rollout cannot be claimed from the core unit tests or
 skill-inspection UI alone.

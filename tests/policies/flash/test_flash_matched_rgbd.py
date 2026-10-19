@@ -67,6 +67,23 @@ def test_failed_match_publishes_loss_without_stale_pose():
     assert backend.last_failure["tool"] == "no matched pixels"
 
 
+def test_loss_explains_match_shortage_separately_from_missing_depth():
+    model, match, frame, reference = setup()
+    provider = Provider((PixelMatches("tool", "tool-v1", match.model_indices[:2], match.live_xy[:2]),))
+    backend = MatchedRGBDPoseBackend(
+        (model,), provider, threshold_m=0.002, min_inliers=3, trials=20, clock=lambda: 5.2
+    )
+    backend.initialize((reference,))
+    assert backend.update(frame)[0].evidence == Evidence.LOST
+    assert backend.last_failure["tool"] == "too few pixel correspondences (2/3)"
+
+    provider.items = (match,)
+    for x, y in match.live_xy[:3]:
+        frame.depth[round(y), round(x)] = 0
+    assert backend.update(frame)[0].evidence == Evidence.LOST
+    assert backend.last_failure["tool"] == "too few correspondences with aligned depth (2/5)"
+
+
 def test_multiple_demo_snippets_share_one_object_frame():
     _, match, frame, _ = setup()
     first_pose = np.eye(4)

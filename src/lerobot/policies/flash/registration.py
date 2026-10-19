@@ -13,6 +13,28 @@ class DegenerateRegistrationError(RuntimeError):
     pass
 
 
+def valid_depth_pixels(depth: np.ndarray, xy: np.ndarray) -> np.ndarray:
+    """Which aligned image pixels are in bounds and have finite positive depth."""
+    pixels = np.asarray(xy, dtype=float)
+    if pixels.ndim != 2 or pixels.shape[1] != 2:
+        raise ValueError("pixels must be Nx2")
+    valid = np.isfinite(pixels).all(axis=1)
+    rounded = np.zeros(pixels.shape, dtype=int)
+    rounded[valid] = np.rint(pixels[valid]).astype(int)
+    inside = (
+        valid
+        & (rounded[:, 0] >= 0)
+        & (rounded[:, 0] < depth.shape[1])
+        & (rounded[:, 1] >= 0)
+        & (rounded[:, 1] < depth.shape[0])
+    )
+    valid[:] = False
+    valid[inside] = np.isfinite(depth[rounded[inside, 1], rounded[inside, 0]]) & (
+        depth[rounded[inside, 1], rounded[inside, 0]] > 0
+    )
+    return valid
+
+
 def unproject_pixels(
     depth: np.ndarray, intrinsics: np.ndarray, xy: np.ndarray, depth_m_per_unit: float
 ) -> np.ndarray:
@@ -126,14 +148,15 @@ def register_object(
     final_indices = np.flatnonzero(all_residual <= threshold_m)
     if len(final_indices) < min_inliers:
         raise DegenerateRegistrationError("refit left too few consistent correspondences")
-    refined = rigid_fit(source[final_indices], target[final_indices])
-    residual = np.linalg.norm(
-        transform_points(refined, source[final_indices]) - target[final_indices], axis=1
-    )
-    if float(np.max(residual)) > threshold_m:
-        raise DegenerateRegistrationError("refit exceeds registration tolerance")
+    # A second least-squares fit on the newly admitted boundary points can
+    # move some of those very points back outside the threshold. The first
+    # consensus refit already has a self-consistent, measured inlier set.
+    residual = all_residual[final_indices]
     return RegistrationResult(
-        refined, tuple(int(i) for i in final_indices), float(np.median(residual)), float(np.max(residual))
+        refined,
+        tuple(int(i) for i in final_indices),
+        float(np.median(residual)),
+        float(np.max(residual)),
     )
 
 

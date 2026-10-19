@@ -10,7 +10,13 @@ from typing import Protocol
 import numpy as np
 
 from .perception import ObjectReference, ReferenceSnippet, RGBDFrame
-from .registration import DegenerateRegistrationError, register_object, transform_points, unproject_pixels
+from .registration import (
+    DegenerateRegistrationError,
+    register_object,
+    transform_points,
+    unproject_pixels,
+    valid_depth_pixels,
+)
 from .trajectory import Evidence, PoseEstimate
 
 
@@ -177,19 +183,15 @@ class MatchedRGBDPoseBackend:
             raise ValueError("matcher returned non-finite pixels or invalid model indices")
         if len(np.unique(indices)) != len(indices):
             raise ValueError("matcher repeated a model point")
-        rounded = np.rint(pixels).astype(int)
-        inside = (
-            (rounded[:, 0] >= 0)
-            & (rounded[:, 0] < frame.depth.shape[1])
-            & (rounded[:, 1] >= 0)
-            & (rounded[:, 1] < frame.depth.shape[0])
-        )
-        valid = inside.copy()
-        valid[inside] &= np.isfinite(frame.depth[rounded[inside, 1], rounded[inside, 0]]) & (
-            frame.depth[rounded[inside, 1], rounded[inside, 0]] > 0
-        )
+        if len(indices) < self.min_inliers:
+            raise DegenerateRegistrationError(
+                f"too few pixel correspondences ({len(indices)}/{self.min_inliers})"
+            )
+        valid = valid_depth_pixels(frame.depth, pixels)
         if int(valid.sum()) < self.min_inliers:
-            raise DegenerateRegistrationError("too few matched pixels have aligned depth")
+            raise DegenerateRegistrationError(
+                f"too few correspondences with aligned depth ({int(valid.sum())}/{len(indices)})"
+            )
         source = model.points_object_m[indices[valid]]
         camera_points = unproject_pixels(frame.depth, frame.intrinsics, pixels[valid], frame.depth_m_per_unit)
         base_points = transform_points(frame.base_from_camera, camera_points)
