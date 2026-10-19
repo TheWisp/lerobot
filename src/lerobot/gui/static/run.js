@@ -8,6 +8,7 @@ let obsStreamTimer = null; // interval ID for camera polling
 let liveVideo = null;      // the Low Bandwidth stream client, when that is the path
 let obsStreamGen = 0; // bumped on stop/restart to cancel an in-flight "wait for the obs-stream" loop
 let _runFormRendered = false; // true once all workflow sections are in the DOM
+let flashDatasets = []; // opened ordinary LeRobot datasets, refreshed on FLASH selection
 
 // ============================================================================
 // Initialization
@@ -44,6 +45,7 @@ async function runTabInit() {
 
     initSplitHandle();
     renderRunForm();
+    if (selectedWorkflow === 'flash') await _loadFlashDatasets();
     _initSelectTitleSync();
     await _ensureModelDataLoaded();
     await pollRunStatus();
@@ -90,9 +92,12 @@ async function selectWorkflow(workflow) {
         const section = document.getElementById(`run-section-${wf}`);
         if (section) section.style.display = (wf === workflow) ? '' : 'none';
     }
+    const episodeControl = document.getElementById('run-episode-control');
+    if (episodeControl) episodeControl.style.display = workflow === 'flash' ? 'none' : '';
     if (workflow === 'policy' || workflow === 'teleop') {
         await _ensureModelDataLoaded();
     }
+    if (workflow === 'flash') await _loadFlashDatasets();
     _updateLaunchButton();
 }
 
@@ -168,7 +173,12 @@ const _WORKFLOW_VALIDATORS = {
         }
         return null;
     },
-    flash: () => _val('run-flash-skill') ? null : 'Select a FLASH skill annotation file.',
+    flash: () => {
+        if (!_val('run-flash-root')) return 'Select an opened dataset or enter a local dataset directory.';
+        const episode = _val('run-flash-episode');
+        if (!/^\d+$/.test(episode)) return 'Enter a nonnegative demo episode number.';
+        return null;
+    },
 };
 
 let _isRunning = false;
@@ -198,7 +208,7 @@ function _updateLaunchButton() {
     if (!btn) return;
     const { ready, reason } = _validateLaunch();
     btn.disabled = !ready;
-    btn.textContent = selectedWorkflow === 'flash' ? 'Inspect bundle' : 'Launch';
+    btn.textContent = selectedWorkflow === 'flash' ? 'Inspect FLASH data' : 'Launch';
     // Native `title` shows on hover; gives the missing-field hint without
     // needing extra inline text below the button.
     btn.title = reason;
@@ -273,6 +283,31 @@ function _episodeOptions() {
         html += '</optgroup>';
     }
     return html;
+}
+
+async function _loadFlashDatasets() {
+    const select = document.getElementById('run-flash-dataset');
+    if (!select) return;
+    const previous = select.value;
+    try {
+        const res = await fetch('/api/datasets');
+        if (!res.ok) throw new Error(`Dataset list returned ${res.status}`);
+        flashDatasets = await res.json();
+        select.innerHTML = '<option value="">Choose an opened dataset...</option>' +
+            flashDatasets.map(d => `<option value="${_esc(d.root)}">${_esc(d.repo_id)} (${d.total_episodes} episodes)</option>`).join('');
+        if (flashDatasets.some(d => d.root === previous)) select.value = previous;
+    } catch (e) {
+        select.innerHTML = '<option value="">Dataset list unavailable; enter a local directory below</option>';
+    }
+}
+
+function _onFlashDatasetChange() {
+    const root = _val('run-flash-dataset');
+    const input = document.getElementById('run-flash-root');
+    if (input && root) input.value = root;
+    const episode = document.getElementById('run-flash-episode');
+    if (episode) episode.value = '0';
+    _updateLaunchButton();
 }
 
 function _recordDatasetOptions() {
@@ -1019,6 +1054,7 @@ function refreshRunDatasetSelects() {
     // Refresh replay episode selector
     const replaySel = document.getElementById('run-replay-episode');
     if (replaySel) { const prev = replaySel.value; replaySel.innerHTML = _episodeOptions(); replaySel.value = prev; }
+    if (selectedWorkflow === 'flash') void _loadFlashDatasets();
     // Refresh teleop record dataset selector
     const recordSel = document.getElementById('run-teleop-record-dataset');
     if (recordSel) {
@@ -1294,14 +1330,23 @@ function renderRunForm() {
     html += '</div>'; // end standard fields
     html += '</div>'; // end policy section
 
-    // FLASH is an independent Run workflow. The first slice checks the
-    // versioned spatial skill before a live tracker or motor can be started.
+    // FLASH data lives beside ordinary LeRobot episodes. This Run entry
+    // reports what is available; there is no physical launch path yet.
     html += `<div id="run-section-flash" style="${selectedWorkflow === 'flash' ? '' : 'display:none'}">`;
+    html += '<div class="form-hint">FLASH live execution is not connected in this build. This screen checks the spatial data attached to a regular LeRobot episode; it does not move the robot.</div>';
     html += '<div class="form-grid">';
-    html += `<label>Prepared bundle${_REQ}</label>`;
-    html += '<input id="run-flash-skill" type="text" placeholder="/absolute/path/to/flash/v1/prepared/name/bundle.json">';
+    html += '<label>Dataset</label>';
+    html += '<select id="run-flash-dataset" onchange="_onFlashDatasetChange()"><option value="">Choose an opened dataset...</option></select>';
     html += '</div>';
-    html += '<div class="form-hint">Inspect source frames, spatial relations, timing, milestones and pose evidence. Live launch still needs a prepared bundle and calibrated robot/camera configuration.</div>';
+    html += '<div class="form-grid">';
+    html += `<label>Local dataset directory${_REQ}</label>`;
+    html += '<input id="run-flash-root" type="text" placeholder="/absolute/path/to/a/LeRobot/dataset">';
+    html += '</div>';
+    html += '<div class="form-grid">';
+    html += `<label>Demo episode${_REQ}</label>`;
+    html += '<input id="run-flash-episode" type="number" min="0" step="1" value="0">';
+    html += '</div>';
+    html += '<div id="run-flash-status" class="form-hint">Spatial skills and prepared references are stored under this dataset\'s flash/v1 directory.</div>';
     html += '</div>';
 
     // ---- Episode control (active while a record subprocess runs) ----
@@ -1312,7 +1357,7 @@ function renderRunForm() {
     // record, HVLA), so it lives outside the per-workflow sections.
     // Buttons start disabled; updateRunUI enables them while a subprocess
     // runs (the endpoint 409s otherwise).
-    html += '<div class="form-section">';
+    html += `<div class="form-section" id="run-episode-control" style="${selectedWorkflow === 'flash' ? 'display:none' : ''}">`;
     // Live phase readout sits right in the section title so the operator can
     // see what a "Next episode" click will interrupt ("recording episode 3" /
     // "resetting" / ...). Fed by pollRunStatus from /api/run/status.
@@ -1378,36 +1423,48 @@ function _getActiveFpsInputId() {
 async function launchRun() {
     if (selectedWorkflow === 'flash') {
         try {
-            const res = await fetch('/api/run/flash/inspect', {
+            const res = await fetch('/api/run/flash/dataset-inspect', {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ skill_path: _val('run-flash-skill') }),
+                body: JSON.stringify({
+                    dataset_root: _val('run-flash-root'),
+                    episode: Number(_val('run-flash-episode')),
+                }),
             });
             const data = await res.json();
             if (!res.ok) {
-                showToast('FLASH skill invalid', data.detail || 'Unknown error', 'error');
+                showToast('FLASH dataset invalid', data.detail || 'Unknown error', 'error');
                 return;
             }
             clearTerminal('run-terminal');
-            appendTerminalLine(`FLASH skill: ${data.source_repo_id} episode ${data.source_episode}`);
-            for (const interval of data.intervals) {
-                appendTerminalLine(`${interval.name}: ${interval.mode}, ${interval.relation} to ${interval.reference_role}${interval.held_role ? ` with ${interval.held_role} held` : ''}, ${interval.samples} samples, demo ${interval.demo_duration_s.toFixed(2)}s`);
-                if (interval.held_role) appendTerminalLine(`  held demo poses: ${JSON.stringify(interval.held_evidence)}`);
+            appendTerminalLine(`Dataset: ${data.dataset_root}, demo episode ${data.episode}`);
+            for (const item of data.skills) {
+                const skill = item.inspection;
+                appendTerminalLine(`${item.kind === 'prepared' ? 'Prepared skill' : 'Spatial annotation'}: ${item.path}`);
+                for (const interval of skill.intervals) {
+                    appendTerminalLine(`  ${interval.name}: ${interval.mode}, ${interval.relation} to ${interval.reference_role}${interval.held_role ? ` with ${interval.held_role} held` : ''}, ${interval.samples} samples, demo ${interval.demo_duration_s.toFixed(2)}s`);
+                }
+                for (const transition of skill.attachment_transitions) {
+                    appendTerminalLine(`  ${transition.event_id}: ${transition.action} ${transition.role} (${transition.reference_version})`);
+                }
+                for (const reference of skill.prepared_references) {
+                    appendTerminalLine(`  Reference ${reference.role}: ${reference.views} views, ${reference.model_points} surface points (${reference.version})`);
+                }
+                for (const milestone of skill.milestones) {
+                    const rule = milestone.pose_relation;
+                    appendTerminalLine(rule
+                        ? `  Milestone ${milestone.name}: verify ${rule.moving_role} relative to ${rule.reference_role} within ${rule.translation_tolerance_m} m${rule.rotation_tolerance_rad == null ? '' : ` and ${rule.rotation_tolerance_rad} rad`}`
+                        : `  Milestone ${milestone.name}: external verifier needed (${milestone.depends_on_roles.join(', ')})`);
+                }
+                for (const missing of skill.missing) appendTerminalLine(`  Needs: ${missing}`);
+                for (const warning of skill.warnings) appendTerminalLine(`  Evidence warning: ${warning}`);
             }
-            for (const transition of data.attachment_transitions) {
-                appendTerminalLine(`${transition.event_id}: ${transition.action} ${transition.role} (${transition.reference_version})`);
-            }
-            for (const reference of data.prepared_references) {
-                appendTerminalLine(`Reference ${reference.role}: ${reference.views} views, ${reference.model_points} surface points (${reference.version})`);
-            }
-            for (const milestone of data.milestones) {
-                const rule = milestone.pose_relation;
-                appendTerminalLine(rule
-                    ? `Milestone ${milestone.name}: verify ${rule.moving_role} relative to ${rule.reference_role} within ${rule.translation_tolerance_m} m${rule.rotation_tolerance_rad == null ? '' : ` and ${rule.rotation_tolerance_rad} rad`}`
-                    : `Milestone ${milestone.name}: external verifier needed (${milestone.depends_on_roles.join(', ')})`);
-            }
-            for (const missing of data.missing) appendTerminalLine(`Needs ${missing}`);
-            for (const warning of data.warnings) appendTerminalLine(`Evidence warning: ${warning}`);
-            showToast('FLASH skill', 'Spatial annotation validated', 'success');
+            for (const missing of data.missing) appendTerminalLine(`Needs: ${missing}`);
+            for (const warning of data.warnings) appendTerminalLine(`Warning: ${warning}`);
+            const status = document.getElementById('run-flash-status');
+            if (status) status.textContent = data.skills.length
+                ? `${data.skills.length} FLASH skill(s) found for this episode. ${data.missing.join('. ')}.`
+                : `${data.missing.join('. ')}.`;
+            showToast('FLASH dataset', `${data.skills.length} spatial skill(s) found`, data.skills.length ? 'success' : 'warning');
         } catch (e) { showToast('FLASH inspect failed', e.message, 'error'); }
         return;
     }

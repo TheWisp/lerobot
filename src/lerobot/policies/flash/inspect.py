@@ -114,11 +114,77 @@ def inspect_skill(path: str) -> dict:
     }
 
 
+def inspect_dataset(root: str, episode: int) -> dict:
+    """Find FLASH sidecars inside one ordinary local LeRobot dataset.
+
+    A source episode may have several skills, each with different interval or
+    reference annotations. Discovery does not invent a skill from raw video.
+    """
+    dataset_root = Path(root).expanduser().resolve()
+    info_path = dataset_root / "meta" / "info.json"
+    if not info_path.is_file():
+        raise ValueError("Select a local LeRobot dataset containing meta/info.json")
+    info = json.loads(info_path.read_text())
+    episode_count = info.get("total_episodes")
+    if not isinstance(episode_count, int) or episode_count < 0:
+        raise ValueError("LeRobot dataset metadata has no valid episode count")
+    if not 0 <= episode < episode_count:
+        raise ValueError(f"episode must be between 0 and {episode_count - 1}")
+
+    extension = dataset_root / "flash" / "v1"
+    candidates = sorted((extension / "prepared").glob("*/bundle.json"))
+    candidates += sorted((extension / "skills").glob("*.json"))
+    skills = []
+    warnings = []
+    for candidate in candidates:
+        try:
+            inspection = inspect_skill(str(candidate))
+        except (OSError, KeyError, TypeError, ValueError) as exc:
+            warnings.append(f"Cannot read {candidate.relative_to(dataset_root)}: {exc}")
+            continue
+        if inspection["source_episode"] == episode:
+            skills.append(
+                {
+                    "path": str(candidate),
+                    "kind": "prepared" if candidate.name == "bundle.json" else "annotation",
+                    "inspection": inspection,
+                }
+            )
+
+    missing = []
+    if not skills:
+        missing.append("No FLASH spatial skill is stored for this episode")
+    elif not any(skill["kind"] == "prepared" for skill in skills):
+        missing.append("No prepared RGB-D object references are stored for this episode")
+    # The current Run worker has no physical FLASH launcher. Keep that visible
+    # even if a complete prepared bundle is found.
+    missing.append("Live robot launch is not connected in this build")
+    return {
+        "dataset_root": str(dataset_root),
+        "episode": episode,
+        "has_flash_extension": extension.is_dir(),
+        "skills": skills,
+        "missing": missing,
+        "warnings": warnings,
+        "can_launch": False,
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("skill_path")
+    parser.add_argument("skill_path", nargs="?")
+    parser.add_argument("--dataset-root")
+    parser.add_argument("--episode", type=int)
     args = parser.parse_args()
-    print(json.dumps(inspect_skill(args.skill_path)))
+    if args.dataset_root is not None:
+        if args.skill_path is not None or args.episode is None:
+            parser.error("dataset inspection needs --dataset-root and --episode only")
+        result = inspect_dataset(args.dataset_root, args.episode)
+    elif args.skill_path is not None and args.episode is None:
+        result = inspect_skill(args.skill_path)
+    else:
+        parser.error("provide a skill path or a dataset root and episode")
+    print(json.dumps(result))
 
 
 if __name__ == "__main__":

@@ -240,6 +240,11 @@ class FlashInspectRequest(BaseModel):
     skill_path: str
 
 
+class FlashDatasetInspectRequest(BaseModel):
+    dataset_root: str
+    episode: int
+
+
 class HVLARunRequest(BaseModel):
     robot: dict[str, Any]
     s1_checkpoint: str
@@ -937,11 +942,21 @@ async def start_record(req: RecordRequest) -> dict:
 @router.post("/flash/inspect")
 async def inspect_flash_skill(req: FlashInspectRequest) -> dict:
     """Inspect a local FLASH sidecar without loading it on the GUI event loop."""
+    return await _inspect_flash_subprocess(req.skill_path)
+
+
+@router.post("/flash/dataset-inspect")
+async def inspect_flash_dataset(req: FlashDatasetInspectRequest) -> dict:
+    """Discover FLASH data beside an ordinary local LeRobot episode."""
+    return await _inspect_flash_subprocess("--dataset-root", req.dataset_root, "--episode", str(req.episode))
+
+
+async def _inspect_flash_subprocess(*args: str) -> dict:
     process = await asyncio.create_subprocess_exec(
         sys.executable,
         "-m",
         "lerobot.policies.flash.inspect",
-        req.skill_path,
+        *args,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )

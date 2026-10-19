@@ -7,8 +7,13 @@ import json
 import numpy as np
 import pytest
 
-from lerobot.gui.api.run import FlashInspectRequest, inspect_flash_skill
-from lerobot.policies.flash.inspect import inspect_skill
+from lerobot.gui.api.run import (
+    FlashDatasetInspectRequest,
+    FlashInspectRequest,
+    inspect_flash_dataset,
+    inspect_flash_skill,
+)
+from lerobot.policies.flash.inspect import inspect_dataset, inspect_skill
 from lerobot.policies.flash.skill import FlashSkill, Interval, MotionMode, Relation, SpatialSample
 
 
@@ -88,11 +93,53 @@ def test_inspection_flags_held_interval_without_an_attachment_event(tmp_path):
     assert inspected["warnings"] == ["place: no independently observed held-object demo pose"]
 
 
+def test_flash_inspection_uses_regular_dataset_directory(tmp_path):
+    meta = tmp_path / "meta"
+    meta.mkdir()
+    (meta / "info.json").write_text(json.dumps({"total_episodes": 2}))
+    status = asyncio.run(
+        inspect_flash_dataset(FlashDatasetInspectRequest(dataset_root=str(tmp_path), episode=1))
+    )
+    assert status["skills"] == []
+    assert not status["has_flash_extension"]
+    assert not status["can_launch"]
+    assert "No FLASH spatial skill is stored for this episode" in status["missing"]
+
+    identity = np.eye(4)
+    skill = FlashSkill(
+        "example/dataset",
+        1,
+        (
+            Interval(
+                "approach",
+                MotionMode.DEMONSTRATED,
+                Relation.EE_TO_OBJECT,
+                "target",
+                (SpatialSample(0, identity, identity), SpatialSample(1, identity, identity)),
+                reference_version="target-v1",
+            ),
+        ),
+    )
+    sidecar = tmp_path / "flash/v1/skills/episode_000001.json"
+    sidecar.parent.mkdir(parents=True)
+    skill.save(sidecar)
+    status = inspect_dataset(str(tmp_path), 1)
+    assert status["has_flash_extension"]
+    assert [item["kind"] for item in status["skills"]] == ["annotation"]
+    assert status["skills"][0]["inspection"]["source_episode"] == 1
+    assert "No prepared RGB-D object references are stored for this episode" in status["missing"]
+    assert inspect_dataset(str(tmp_path), 0)["skills"] == []
+
+
 @pytest.mark.requires_playwright
 @pytest.mark.skipif(importlib.util.find_spec("playwright") is None, reason="Playwright is not installed")
 def test_run_flash_subtab_displays_spatial_milestone_from_skill(tmp_path, gui_page):
     identity = np.eye(4).tolist()
-    path = tmp_path / "skill.json"
+    meta = tmp_path / "meta"
+    meta.mkdir()
+    (meta / "info.json").write_text(json.dumps({"total_episodes": 1}))
+    path = tmp_path / "flash/v1/skills/episode_000000.json"
+    path.parent.mkdir(parents=True)
     path.write_text(
         json.dumps(
             {
@@ -132,8 +179,11 @@ def test_run_flash_subtab_displays_spatial_milestone_from_skill(tmp_path, gui_pa
     page = gui_page
     page.evaluate("switchTab('run')")
     page.evaluate("() => selectWorkflow('flash')")
-    page.locator("#run-flash-skill").fill(str(path))
+    assert page.locator("#run-episode-control").is_hidden()
+    assert page.locator("#run-launch-btn").inner_text() == "Inspect FLASH data"
+    page.locator("#run-flash-root").fill(str(tmp_path))
     page.evaluate("() => launchRun()")
     page.wait_for_function(
         "() => document.getElementById('run-terminal').textContent.includes('Milestone placed: verify held relative to target within 0.01 m')"
     )
+    assert "Live robot launch is not connected" in page.locator("#run-terminal").inner_text()

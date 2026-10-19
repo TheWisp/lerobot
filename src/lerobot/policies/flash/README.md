@@ -1,7 +1,9 @@
 # FLASH implementation status
 
-FLASH lives at **Run → FLASH**. The current Run panel validates a versioned
-spatial skill annotation. It deliberately does not command a robot yet: the
+FLASH lives at **Run → FLASH**. The current Run panel inspects a regular local
+LeRobot dataset episode and discovers spatial skill annotations and prepared
+references under that dataset's `flash/v1` extension. A source episode can
+have multiple skills. The panel deliberately does not command a robot yet: the
 live tracker must register each object into the _same stable object frame_ used
 by the demonstration before the spatial equation can produce safe goals.
 
@@ -39,8 +41,9 @@ The executable core already separates:
   live correspondences to the common pose backend;
 - a versioned prepared-skill extension that saves the spatial skill, stable
   multi-view object references and derived metric point/descriptors beside
-  the regular dataset. Run → FLASH can inspect either a raw skill annotation
-  or this prepared bundle, and reports when a raw skill still lacks references;
+  the regular dataset. Run → FLASH discovers either a raw skill annotation
+  under `flash/v1/skills/*.json` or a prepared reference under
+  `flash/v1/prepared/*/bundle.json`, and reports what an episode still lacks;
 - a spawn-isolated perception process that loads GPU models in the child,
   accepts the latest aligned camera snapshot and publishes timestamped poses
   to a short-lock store outside the motor loop;

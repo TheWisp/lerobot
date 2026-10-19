@@ -2,7 +2,8 @@
 
 Status: proposed architecture; the first executable slice is documented in
 [implementation status](../README.md). The Run → FLASH sub-tab currently
-inspects a skill annotation and does not launch hardware motion.
+inspects spatial data attached to a local LeRobot dataset episode and does not
+launch hardware motion.
 The first recorded RGB-D matcher result and its limits are in
 [the replay note](rgbd_replay.md).
 
