@@ -91,7 +91,7 @@ def test_pose_backend_uses_measured_shape_only_when_enabled_and_appearance_fails
             assert estimate.last_direct_observation_s == frame.source_time_s
 
 
-def test_real_static_dowel_rejects_low_residual_but_wrong_object_frame():
+def test_real_static_dowel_preserves_stable_surface_despite_remote_frame_origin():
     with np.load(DRIFT_FIXTURE) as saved:
         data = {key: saved[key] for key in saved.files}
     first_shape = register_visible_shape(
@@ -116,7 +116,14 @@ def test_real_static_dowel_rejects_low_residual_but_wrong_object_frame():
     assert max(second_shape.model_p90_m, second_shape.live_p90_m) < 0.005
     assert (
         np.linalg.norm(first_shape.camera_from_object[:3, 3] - second_shape.camera_from_object[:3, 3]) > 0.02
-    )  # The real mask barely moved, but ICP slid the object frame.
+    )
+    first_surface = (
+        data["model"] @ first_shape.camera_from_object[:3, :3].T + first_shape.camera_from_object[:3, 3]
+    )
+    second_surface = (
+        data["model"] @ second_shape.camera_from_object[:3, :3].T + second_shape.camera_from_object[:3, 3]
+    )
+    assert np.max(np.linalg.norm(first_surface - second_surface, axis=1)) < 0.002
 
     provider = EmptyMatches(data["mask_0"])
     backend = MatchedRGBDPoseBackend(
@@ -149,5 +156,4 @@ def test_real_static_dowel_rejects_low_residual_but_wrong_object_frame():
     second = RGBDFrame(13, first.rgb, data["depth_13"], data["intrinsics"], 0.001, np.eye(4), 1.5, 1.5, "cal")
     assert backend.update(first)[0].evidence == Evidence.OBSERVED
     provider.last_masks["object"] = data["mask_13"]
-    assert backend.update(second)[0].evidence == Evidence.LOST
-    assert "object frame" in backend.last_failure["object"]
+    assert backend.update(second)[0].evidence == Evidence.OBSERVED

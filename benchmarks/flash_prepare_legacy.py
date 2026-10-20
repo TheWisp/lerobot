@@ -66,6 +66,37 @@ def _nearest_index(times: np.ndarray, time_s: float) -> int:
     return int(np.argmin(np.abs(times - time_s)))
 
 
+def _interval_layout(
+    times: np.ndarray,
+    keypoints: list[dict],
+    grasp: int,
+    release: int,
+    start_anchor_end: int,
+) -> list[tuple[int, int, dict, bool, bool, bool]]:
+    """Resolve annotated event times once onto the arm clock before assigning relations."""
+    bounds = sorted(
+        {
+            0,
+            grasp,
+            start_anchor_end,
+            release,
+            *(_nearest_index(times, float(item["t"])) for item in keypoints),
+        }
+    )
+    layout = []
+    for first, last in zip(bounds, bounds[1:], strict=False):
+        if last <= first:
+            continue
+        end_key = next(
+            (item for item in keypoints if _nearest_index(times, float(item["t"])) >= last), keypoints[-1]
+        )
+        demonstrated = end_key["move"] == "follow" or last == grasp
+        start_anchored = first >= grasp and last <= start_anchor_end
+        carrying = first >= grasp and last <= release and not start_anchored
+        layout.append((first, last, end_key, demonstrated, start_anchored, carrying))
+    return layout
+
+
 def _metric_pose_at(
     estimates: list[dict], role: str, camera_index: int, *, max_previous: int
 ) -> tuple[np.ndarray, str]:
@@ -140,6 +171,9 @@ def prepare(root: Path, annotation_path: Path, *, output_name: str) -> tuple[Pat
     release = _nearest_index(times, annotation["release_time_s"])
     if not 0 < grasp < release < len(times) - 1:
         raise ValueError("grasp and release must lie inside the recorded demo")
+    start_anchor_end = _nearest_index(times, float(annotation["start_anchored_until_s"]))
+    if not grasp <= start_anchor_end <= release:
+        raise ValueError("the start-anchored phase must end between grasp and release")
 
     version = hashlib.sha256(
         intrinsics.tobytes() + base_from_camera.tobytes() + str(annotation["reference_frame"]).encode()
@@ -294,18 +328,11 @@ def prepare(root: Path, annotation_path: Path, *, output_name: str) -> tuple[Pat
     grasp_held, grasp_evidence = selected.pose, "predicted from selected pre-occlusion frame"
     grip_from_held = inverse(recorded_tips[grasp]) @ grasp_held
     roles_version = {reference.role: reference.version for reference in references}
-    bounds = sorted({0, grasp, release, *(_nearest_index(times, float(item["t"])) for item in keypoints)})
     intervals = []
-    for number, (first, last) in enumerate(zip(bounds, bounds[1:], strict=False)):
-        if last <= first:
-            continue
-        end_key = next(
-            (item for item in keypoints if _nearest_index(times, float(item["t"])) >= last), keypoints[-1]
-        )
-        demonstrated = end_key["move"] == "follow" or last == grasp
+    for number, (first, last, end_key, demonstrated, start_anchored, carrying) in enumerate(
+        _interval_layout(times, keypoints, grasp, release, start_anchor_end)
+    ):
         mode = MotionMode.DEMONSTRATED if demonstrated else MotionMode.CONNECTION
-        start_anchored = first >= grasp and float(times[last]) <= float(annotation["start_anchored_until_s"])
-        carrying = first >= grasp and last <= release and not start_anchored
         reference_role = "__start__" if start_anchored else (target if first >= grasp else held)
         relation = (
             Relation.EE_TO_START
@@ -396,6 +423,7 @@ def prepare(root: Path, annotation_path: Path, *, output_name: str) -> tuple[Pat
         "grasp_sample": grasp,
         "grasp_pose_evidence": grasp_evidence,
         "release_sample": release,
+        "start_anchored_until_sample": start_anchor_end,
         "held_contact_pose": "predicted from recorded calibrated fingertip and grasp pose",
         "intervals": len(intervals),
         "calibration_version": version,

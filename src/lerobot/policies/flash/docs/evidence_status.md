@@ -6,10 +6,14 @@ listed here are not in git.
 
 ## Demonstration extraction
 
-The prepared `insertion-migrated-v6` bundle under
+The prepared `insertion-migrated-v7` bundle under
 `~/.cache/huggingface/lerobot/demos/insertion/flash/v1/prepared/` contains a
 591-frame source episode, 11 execution intervals, a grasp sample at 228 and a
-release sample at 513. Its preparation report counts 188 directly observed
+release sample at 513. The demonstrated pickup/lift through sample 290 is
+anchored to the achieved grasp; target-relative transport begins after that.
+The previous v6 bundle mistakenly made the 242–290 lift relative to the ring
+because a 9.7-second keyframe rounded to arm sample 290 at 9.71 seconds, then
+was compared against the unrounded annotation. The preparation report counts 188 directly observed
 dowel poses and zero fully observed ring poses. The ring count requires care:
 the cached evidence has 575 `predicted` and 16 `lost` ring frames. The axial
 symmetry wrapper changes a successful RGB-D pose to `predicted` when its
@@ -37,12 +41,16 @@ after lift. A held-view reference restored one fit but later disagreed with
 the group proposal by 3.6 cm at the object centre; the visible-depth checks
 did not identify a clear winner.
 
-Recorded live RGB-D from 2026-10-20 supplies a second counterexample: a
-stationary dowel produced low-residual shape fits whose object-frame origins
-differed by over 20 mm, then a partial view led to a roughly 90 mm candidate
-jump. The [fixture note](../../../../../tests/policies/flash/fixtures/README.md)
+Recorded live RGB-D from 2026-10-20 initially seemed to supply a second
+counterexample: a stationary dowel produced low-residual shape fits whose
+object-frame origins differed by 21.5 mm. Rechecking the corresponding modeled
+surface points showed at most 1.44 mm change, with a 0.46 mm change at their
+centre. The reference origin is arbitrary and remote from the visible object;
+rejecting on origin motion was a false rejection. A later partial view did
+produce a roughly 90 mm candidate jump, which still needs separate assessment.
+The [fixture note](../../../../../tests/policies/flash/fixtures/README.md)
 explains which frames were retained for regression. A surface residual alone
-therefore cannot certify the full pose.
+does not certify every task-relevant orientation or hidden contact pose.
 
 ## Physical rollouts
 
@@ -71,3 +79,20 @@ the arm and wrote standard LeRobot episodes with FLASH traces. They also show
 why no task-success claim is justified yet. The current architecture work
 targets the pose-evidence boundary exposed by those trials before another
 physical insertion attempt.
+
+The v7 bundle's first physical launch failed during startup before arm motion:
+only 10 of 12 required appearance correspondences were found, and the fallback
+shape fit was rejected on the old origin-motion check. This is not a failed
+insertion or evidence about the corrected control trajectory. The subsequent
+surface-only continuity fix has a two-frame real-RGB-D regression check; a
+fresh physical outcome remains unverified. The next v7 trial recorded 70
+stationary scene frames and 71 motor ticks, issued zero arm commands, then
+reported `dowel usable pose unavailable at interval entry`. Its dowel pose was
+last directly observed about 1.5 seconds before termination, beyond the
+configured 0.8-second age limit. The worker delivered 43 pose results with no
+reported per-role fit failures, yet the accepted scene state published only
+seven fresh dowel poses during the recorded interval. Replaying all 70 stored
+RGB-D frames through the same backend recovered a dowel pose on every frame;
+replaying every fourth or eighth frame also succeeded. That evidence narrows
+this failure to the live producer-to-scene-estimator path or earlier streaming
+state. It does not prove the final insertion pose would be accurate.

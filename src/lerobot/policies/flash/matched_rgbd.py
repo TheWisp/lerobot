@@ -178,11 +178,14 @@ class MatchedRGBDPoseBackend:
                             # only a local continuation of an established
                             # object frame, not independent evidence of a
                             # large object-frame motion.
-                            origin_shift = np.linalg.norm(pose[:3, 3] - previous[:3, 3])
                             old_surface = model.points_object_m @ previous[:3, :3].T + previous[:3, 3]
                             new_surface = model.points_object_m @ pose[:3, :3].T + pose[:3, 3]
                             surface_shift = np.max(np.linalg.norm(new_surface - old_surface, axis=1))
-                            if max(origin_shift, surface_shift) > 2 * self.threshold_m:
+                            # The reference frame origin is arbitrary and may
+                            # lie far outside the visible object. A small fit
+                            # rotation can move that origin centimetres while
+                            # every modeled surface point stays in place.
+                            if surface_shift > 2 * self.threshold_m:
                                 raise DegenerateRegistrationError(
                                     "shape fit changes the object frame without matched-point support"
                                 )

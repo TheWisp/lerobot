@@ -23,9 +23,11 @@ robot state, or complete user episode is stored in this fixture.
 aligned depth, intrinsics, and SAM3 dowel masks from frames 0 and 13 of the
 2026-10-20 11:45:32 physical FLASH trial. The dowel stayed on the tray and
 both masks covered approximately the same 150-pixel span. Independent
-nearest-surface fits each passed the 5 mm depth threshold, yet their object
-frame origins differed by more than 20 mm. It is a real partial-observability
-and shape-symmetry regression case, without RGB or motor actions.
+nearest-surface fits each passed the 5 mm depth threshold, and their object
+frame origins differed by more than 20 mm. The corresponding modeled surface
+points moved by at most 1.5 mm, however: the arbitrary reference origin is far
+from the visible surface and is not a valid continuity metric. This is a real
+false-rejection regression case, without RGB or motor actions.
 
 `ring_tray_motion_20261016.npz` contains sparse, persistent RGB-D point tracks
 from camera frames 331, 360, 390 and 422 of the 2026-10-16 11:21:49 insertion
