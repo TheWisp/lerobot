@@ -231,6 +231,56 @@ def test_delayed_absolute_proposal_is_replayed_by_the_only_pose_owner():
         service.close()
 
 
+def test_older_delayed_proposal_cannot_erase_newer_direct_observation():
+    rgb = np.random.default_rng(18).integers(0, 255, (96, 96, 3), dtype=np.uint8)
+    frames = [_camera_frame(rgb, index) for index in range(3)]
+    mask = np.zeros((96, 96), dtype=bool)
+    mask[46:48, 46:48] = True  # No object-point motion fit is possible.
+    newer = PoseEstimate(
+        "object",
+        _pose(0.04),
+        frames[1].source_time_s,
+        frames[1].available_time_s,
+        Evidence.OBSERVED,
+        "v1",
+        (True,) * 3,
+        (True,) * 3,
+    )
+    older = PoseEstimate(
+        "object",
+        _pose(0),
+        frames[0].source_time_s,
+        frames[0].available_time_s,
+        Evidence.OBSERVED,
+        "v1",
+        (True,) * 3,
+        (True,) * 3,
+    )
+    store = LatestPoseStore()
+    service = CausalPoseService(store, image_scale=1.0, static_prediction_max_s=1.0)
+    service.start()
+    try:
+        for frame in frames:
+            service.submit_frame(frame)
+        service.submit_anchor(1, (newer,), {"object": mask})
+        deadline = time.monotonic() + 3
+        while service.direct_published < 1 and service.error is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert service.error is None
+        assert service.direct_published == 1
+        service.submit_anchor(0, (older,), {"object": mask})
+        deadline = time.monotonic() + 3
+        while service.superseded_proposals < 1 and service.error is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert service.error is None
+        assert service.superseded_proposals == 1
+        estimate = store.snapshot()[1]["object"]
+        assert estimate.last_direct_observation_s == frames[1].source_time_s
+        assert estimate.pose[0, 3] == pytest.approx(0.04)
+    finally:
+        service.close()
+
+
 def test_scene_tracks_keep_identities_on_every_frame():
     image = np.random.default_rng(4).integers(0, 255, (96, 96, 3), dtype=np.uint8)
     tracker = ScenePointTracker(image_scale=1.0)

@@ -133,3 +133,12 @@ the first part of the [single scene-estimator contract](docs/architecture.md#one
 partial observability, alternative poses, and calibrated uncertainty are still
 missing. Consequently the group path is experimental, and no successful physical
 insertion has been established for this redesign.
+
+The next architecture milestone is the [scene-estimator contract](docs/architecture.md#one-scene-estimator-several-evidence-sources), independent of which tracker is best on a particular view. The current code has one publisher when causal tracking is enabled, but it still treats a backend's candidate `PoseEstimate` as an accepted six-axis observation. In particular, the RGB-D backend keeps its own previous candidate for shape-continuity checks, and the scene service has no general rule for comparing a new candidate with visible depth, point motion, a group prediction and unresolved symmetry at the same source time. The accepted pose trace does not yet retain each raw candidate and its rejection reason.
+
+Implementation should proceed in this order:
+
+1. Introduce typed source-frame evidence for identity, visible geometry, relative motion and relationship hypotheses. Allow a producer to abstain or constrain only an observable subspace; retain source/calibration/reference versions and raw support.
+2. Move candidate acceptance and event-time replay into the scene-estimator owner. Keep a bounded event history, compare proposals to the state at their original frame, replay later measurements as well as motion, publish one versioned belief, and record each decision. The interim service conservatively discards a late proposal older than a newer direct observation; that guard is not a substitute for full replay. Backends must not maintain a private notion of what the scene accepted.
+3. Make the policy check the accepted belief at its contact points against the active interval's requirements. Unknown or conflicting dimensions must lead to a declared observation/recovery choice, not a fabricated pose or a model-name-specific override.
+4. Run the same recorded disagreement, occlusion, moved-support and held-slip cases against alternate backends before another physical insertion claim. Report both pose error and source-to-decision age; a better mask alone is insufficient.

@@ -259,6 +259,7 @@ def trial(
                         "frames": runtime.causal.frames,
                         "anchors": runtime.causal.anchors,
                         "missed_anchors": runtime.causal.missed_anchors,
+                        "superseded_proposals": runtime.causal.superseded_proposals,
                         "published": runtime.causal.published,
                         "published_by_role": runtime.causal.published_by_role.copy(),
                         "direct_published": runtime.causal.direct_published,

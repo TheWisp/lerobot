@@ -130,6 +130,7 @@ class CausalPoseService:
         self.frames = 0
         self.anchors = 0
         self.missed_anchors = 0
+        self.superseded_proposals = 0
         self.published = 0
         self.published_by_role: dict[str, int] = {}
         self.direct_published = 0
@@ -283,6 +284,17 @@ class CausalPoseService:
                 or estimate.source_time_s != source.source_time_s
             ):
                 continue
+            current = self.store.snapshot()[1].get(estimate.role)
+            if current is not None:
+                last_direct_s = current.last_direct_observation_s
+                if last_direct_s is None and current.evidence == Evidence.OBSERVED:
+                    last_direct_s = current.source_time_s
+                if last_direct_s is not None and last_direct_s > estimate.source_time_s:
+                    # The full scene estimator will replay all later evidence.
+                    # Until then, replaying only point motion from this older
+                    # proposal would erase the later direct observation.
+                    self.superseded_proposals += 1
+                    continue
             if estimate.has_direct_translation:
                 self._observe_environment(estimate, scene, result.masks)
             # The pose process only submits source-frame proposals. This is
