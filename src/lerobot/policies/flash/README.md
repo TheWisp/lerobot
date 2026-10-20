@@ -8,6 +8,24 @@ panel can launch a bounded live trial and record another ordinary LeRobot
 dataset. Startup requires each needed object to register into the _same stable
 object frame_ used by the demonstration before robot motion begins.
 
+Demo preparation is currently **offline and read-only in the GUI**. For a sealed-format
+demo with `showservo_demo.npz`, edit an annotation JSON and the dataset's
+`keypoints.json`, then run:
+
+```bash
+python benchmarks/flash_prepare_legacy.py <dataset_root> <annotation.json> --output-name <new-name>
+```
+
+An unused output name creates a new bundle and forces the importer to run SAM3,
+DINO and RGB-D pose extraction again; the pose cache includes the output name.
+It does not overwrite a previous bundle. New bundles retain `annotation.json`,
+`keypoints.json` and `preparation-report.json` with cache provenance. This
+importer saves reference-frame masks only, so the current demo playback cannot
+display historical per-frame masks or rejected fits. The preparation UI and
+evidence recording specified in the [architecture](docs/architecture.md)
+are not implemented yet. A legacy bundle modified after import cannot be
+assumed reproducible from the dataset's top-level annotation file alone.
+
 The rig JSON is the single place to tune live execution and tracking limits;
 [the example configuration](docs/trial_config.example.json) lists every active
 parameter. The [attachment policy](docs/attachment_policy.md) explains the
