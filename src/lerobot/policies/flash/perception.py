@@ -147,8 +147,16 @@ class LatestPoseStore:
             changed = False
             for estimate in estimates:
                 previous = self._poses.get(estimate.role)
-                if previous is not None and estimate.source_time_s <= previous.source_time_s:
-                    continue
+                if previous is not None:
+                    if estimate.source_time_s < previous.source_time_s:
+                        continue
+                    if estimate.source_time_s == previous.source_time_s and not (
+                        estimate.reference_version == previous.reference_version
+                        and estimate.evidence == Evidence.PREDICTED
+                        and previous.evidence != Evidence.LOST
+                        and estimate.available_time_s > previous.available_time_s
+                    ):
+                        continue
                 self._poses[estimate.role] = estimate
                 changed = True
             if changed:

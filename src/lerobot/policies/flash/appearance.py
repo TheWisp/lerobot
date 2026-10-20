@@ -11,6 +11,7 @@ import numpy as np
 from .continuity import PoseCoastLimit, PoseContinuityBackend
 from .matched_rgbd import MatchedRGBDPoseBackend, ObjectPointModel, PixelMatches
 from .perception import ObjectReference, PoseBackend, ReferenceSnippet, RGBDFrame
+from .pose_gap import PoseGapBackend, PoseGapLimit
 from .registration import transform_points, unproject_pixels, valid_depth_pixels
 from .symmetry import AxialSymmetry
 
@@ -248,6 +249,7 @@ class AppearanceBackendFactory:
     dino_model_id: str = "facebook/dinov2-small"
     axial_symmetries: tuple[AxialSymmetry, ...] = ()
     pose_coast_limits: tuple[PoseCoastLimit, ...] = ()
+    pose_gap_limits: tuple[PoseGapLimit, ...] = ()
     seed_points_by_role: dict[str, tuple[float, float]] | None = None
 
     def __post_init__(self) -> None:
@@ -255,6 +257,8 @@ class AppearanceBackendFactory:
             raise ValueError("one text prompt is needed for each appearance model role")
         if {limit.role for limit in self.pose_coast_limits} - set(self.prompts_by_role):
             raise ValueError("pose-coasting role lacks an appearance model")
+        if {limit.role for limit in self.pose_gap_limits} - set(self.prompts_by_role):
+            raise ValueError("pose-gap role lacks an appearance model")
 
     def __call__(self) -> PoseBackend:
         from .dino_features import DinoPatchExtractor
@@ -283,6 +287,8 @@ class AppearanceBackendFactory:
             from .symmetry import SymmetryCanonicalizingBackend
 
             backend = SymmetryCanonicalizingBackend(backend, self.axial_symmetries)
+        if self.pose_gap_limits:
+            backend = PoseGapBackend(backend, self.pose_gap_limits)
         if self.pose_coast_limits:
             model_centers = {
                 model.points.role: np.median(model.points.points_object_m, axis=0) for model in self.models

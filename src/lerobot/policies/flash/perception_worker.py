@@ -13,7 +13,7 @@ import multiprocessing as mp
 import traceback
 from collections.abc import Callable
 from contextlib import suppress
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from queue import Empty, Full
 
 from .perception import LatestPoseStore, ObjectReference, PoseBackend, RGBDFrame
@@ -28,6 +28,7 @@ class _Ready:
 @dataclass(frozen=True)
 class _Result:
     estimates: tuple[PoseEstimate, ...]
+    failures: dict[str, str]
 
 
 @dataclass(frozen=True)
@@ -55,7 +56,8 @@ def _run_backend(
         backend.initialize(references)
         results.put(_Ready())
         while (frame := frames.get()) is not None:
-            _publish_latest(results, _Result(backend.update(frame)))
+            estimates = backend.update(frame)
+            _publish_latest(results, _Result(estimates, dict(getattr(backend, "last_failure", {}))))
     except Exception:
         _publish_latest(results, _Failure(traceback.format_exc()))
 
@@ -67,6 +69,8 @@ class PoseProcessMetrics:
     rejected: int = 0
     delivered: int = 0
     last_source_time_s: float | None = None
+    last_failures: dict[str, str] = field(default_factory=dict)
+    failure_counts: dict[str, int] = field(default_factory=dict)
 
 
 class PoseProcessError(RuntimeError):
@@ -174,6 +178,10 @@ class PoseProcess:
             if isinstance(message, _Result):
                 self.store.publish(message.estimates)
                 self.metrics.delivered += 1
+                self.metrics.last_failures = message.failures
+                for role, reason in message.failures.items():
+                    key = f"{role}: {reason}"
+                    self.metrics.failure_counts[key] = self.metrics.failure_counts.get(key, 0) + 1
                 if message.estimates:
                     self.metrics.last_source_time_s = max(e.source_time_s for e in message.estimates)
                 count += 1

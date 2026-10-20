@@ -75,12 +75,13 @@ class SymmetryCanonicalizingBackend:
     def __init__(self, inner: PoseBackend, symmetries: tuple[AxialSymmetry, ...]):
         self.inner = inner
         self.symmetries = {item.role: item for item in symmetries}
+        self._last_failure: dict[str, str] = {}
         if len(self.symmetries) != len(symmetries):
             raise ValueError("at most one axial symmetry per role")
 
     @property
     def last_failure(self):
-        return getattr(self.inner, "last_failure", {})
+        return {**getattr(self.inner, "last_failure", {}), **self._last_failure}
 
     def initialize(self, references: tuple[ObjectReference, ...]) -> None:
         if not set(self.symmetries) <= {item.role for item in references}:
@@ -89,6 +90,7 @@ class SymmetryCanonicalizingBackend:
 
     def update(self, frame: RGBDFrame) -> tuple[PoseEstimate, ...]:
         out = []
+        self._last_failure.clear()
         for estimate in self.inner.update(frame):
             symmetry = self.symmetries.get(estimate.role)
             if symmetry is None or estimate.evidence == Evidence.LOST:
@@ -102,7 +104,8 @@ class SymmetryCanonicalizingBackend:
                             evidence=Evidence.PREDICTED if symmetry.lock_to_baseline else estimate.evidence,
                         )
                     )
-                except ValueError:
+                except ValueError as exc:
+                    self._last_failure[estimate.role] = str(exc)
                     out.append(
                         replace(
                             estimate,
