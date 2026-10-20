@@ -1079,6 +1079,51 @@ async def flash_tracker_replay(dataset_root: str, episode: int = 0) -> dict:
     )
 
 
+def _flash_recordings(source_paths: tuple[Path, ...]) -> list[dict]:
+    """Find FLASH episodes under the same bounded source folders as Data."""
+    extensions: set[Path] = set()
+    for source in source_paths:
+        root = source.expanduser()
+        for depth in range(4):
+            pattern = "/".join(["*"] * depth + ["flash", "v1"])
+            extensions.update(path for path in root.glob(pattern) if path.is_dir())
+    found = []
+    for extension in extensions:
+        dataset_root = extension.parent.parent
+        if not (dataset_root / "meta" / "info.json").is_file():
+            continue
+        manifest_path = extension / "manifest.json"
+        try:
+            episodes = json.loads(manifest_path.read_text(encoding="utf-8")).get("episodes", {})
+        except (OSError, ValueError):
+            episodes = {}
+        for trace in extension.glob("episode_*.jsonl"):
+            try:
+                episode = int(trace.stem.removeprefix("episode_"))
+            except ValueError:
+                continue
+            detail = episodes.get(str(episode), {})
+            found.append(
+                {
+                    "dataset_root": str(dataset_root.resolve()),
+                    "episode": episode,
+                    "modified_at_s": trace.stat().st_mtime,
+                    "frames": detail.get("frames"),
+                    "outcome": detail.get("outcome", "recording"),
+                    "reason": detail.get("reason", ""),
+                }
+            )
+    return sorted(found, key=lambda item: item["modified_at_s"], reverse=True)
+
+
+@router.get("/flash/recordings")
+async def flash_recordings() -> list[dict]:
+    from lerobot.gui.api.datasets import _read_sources
+
+    sources = tuple(Path(item["path"]) for item in _read_sources())
+    return await asyncio.get_running_loop().run_in_executor(_flash_telemetry_pool, _flash_recordings, sources)
+
+
 async def _inspect_flash_subprocess(*args: str) -> dict:
     process = await asyncio.create_subprocess_exec(
         sys.executable,

@@ -11,6 +11,7 @@ let _runFormRendered = false; // true once all workflow sections are in the DOM
 let flashDatasets = []; // opened ordinary LeRobot datasets, refreshed on FLASH selection
 let flashPreparedSkills = [];
 let flashInspectGeneration = 0;
+let flashRecordingsGeneration = 0;
 
 // ============================================================================
 // Initialization
@@ -47,7 +48,7 @@ async function runTabInit() {
 
     initSplitHandle();
     renderRunForm();
-    if (selectedWorkflow === 'flash') await _loadFlashDatasets();
+    if (selectedWorkflow === 'flash') await Promise.all([_loadFlashDatasets(), _loadFlashRecordings()]);
     _initSelectTitleSync();
     await _ensureModelDataLoaded();
     await pollRunStatus();
@@ -99,7 +100,7 @@ async function selectWorkflow(workflow) {
     if (workflow === 'policy' || workflow === 'teleop') {
         await _ensureModelDataLoaded();
     }
-    if (workflow === 'flash') await _loadFlashDatasets();
+    if (workflow === 'flash') await Promise.all([_loadFlashDatasets(), _loadFlashRecordings()]);
     const trackerPanel = document.getElementById('flash-tracker-panel');
     if (trackerPanel) trackerPanel.hidden = workflow !== 'flash';
     if (workflow === 'flash' && _isRunning && _runCommand === 'flash') startFlashTelemetry();
@@ -551,9 +552,9 @@ function stopFlashTelemetry() {
     flashTelemetryTimer = null;
 }
 
-async function loadFlashTrackerReplay() {
-    const root = _val('run-flash-root');
-    const episode = Number(_val('run-flash-episode'));
+async function loadFlashTrackerReplay(datasetRoot, episodeIndex) {
+    const root = datasetRoot || _val('run-flash-root');
+    const episode = episodeIndex ?? Number(_val('run-flash-episode'));
     if (!root || !Number.isInteger(episode) || episode < 0) {
         showToast('Cannot inspect FLASH recording', 'Select a local dataset and episode.', 'warning'); return;
     }
@@ -580,9 +581,43 @@ async function loadFlashTrackerReplay() {
         const controls = document.getElementById('flash-tracker-replay-controls');
         controls.hidden = false;
         document.getElementById('flash-tracker-scrub').max = Math.max(0, result.frames.length - 1);
-        seekFlashReplay(0);
+        const firstTrackedFrame = result.frames.findIndex(frame =>
+            frame.snapshot?.camera && Object.keys(frame.snapshot?.accepted || {}).length);
+        seekFlashReplay(Math.max(0, firstTrackedFrame));
         if (!result.layer_history) showToast('Older FLASH recording', 'This trace contains planner poses, but predates per-tracker layer recording.', 'warning');
     } catch (error) { showToast('Cannot inspect FLASH recording', error.message, 'error'); }
+}
+
+async function _loadFlashRecordings() {
+    const list = document.getElementById('run-flash-recordings');
+    if (!list) return;
+    const generation = ++flashRecordingsGeneration;
+    list.textContent = 'Loading recordings…';
+    try {
+        const response = await fetch('/api/run/flash/recordings');
+        if (!response.ok) throw new Error(`Recordings returned ${response.status}`);
+        const recordings = await response.json();
+        if (generation !== flashRecordingsGeneration) return;
+        list.replaceChildren();
+        if (!recordings.length) { list.textContent = 'No FLASH recordings in your dataset sources.'; return; }
+        for (const recording of recordings) {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'flash-recording';
+            button.title = `${recording.dataset_root}\n${recording.reason || ''}`;
+            const label = document.createElement('strong');
+            label.textContent = recording.dataset_root.split('/').pop();
+            const meta = document.createElement('span');
+            const when = new Date(recording.modified_at_s * 1000).toLocaleString();
+            meta.textContent = `${when} · episode ${recording.episode} · ${recording.outcome}` +
+                (recording.frames == null ? '' : ` · ${recording.frames} frames`);
+            button.append(label, meta);
+            button.onclick = () => loadFlashTrackerReplay(recording.dataset_root, recording.episode);
+            list.append(button);
+        }
+    } catch (error) {
+        if (generation === flashRecordingsGeneration) list.textContent = `Cannot list recordings: ${error.message}`;
+    }
 }
 
 function seekFlashReplay(index) {
@@ -1725,6 +1760,8 @@ function renderRunForm() {
     // Demo viewing and skill inspection are read-only. The shared Run button
     // only starts a robot trial after a prepared bundle and rig are selected.
     html += `<div id="run-section-flash" style="${selectedWorkflow === 'flash' ? '' : 'display:none'}">`;
+    html += '<div class="flash-recordings-heading"><span class="form-section-title">FLASH recordings</span><button type="button" class="btn-small secondary" onclick="_loadFlashRecordings()">Refresh</button></div>';
+    html += '<div id="run-flash-recordings" class="flash-recordings">Loading recordings…</div>';
     html += '<div class="form-hint">Choose a normal LeRobot dataset episode. View its video in Data or inspect the FLASH skill stored beside it; neither moves the robot.</div>';
     html += '<div class="form-grid">';
     html += '<label>Dataset</label>';
@@ -1741,7 +1778,6 @@ function renderRunForm() {
     html += '<div class="flash-demo-actions">';
     html += '<button type="button" class="btn-small secondary" id="run-flash-view-btn" onclick="viewFlashDemo()">View demo in Data</button>';
     html += '<button type="button" class="btn-small secondary" id="run-flash-inspect-btn" onclick="inspectFlashDataset()">Inspect FLASH skills</button>';
-    html += '<button type="button" class="btn-small secondary" id="run-flash-tracker-replay-btn" onclick="loadFlashTrackerReplay()">Inspect tracker recording here</button>';
     html += '</div>';
     html += '<div class="form-section-title">Live robot trial</div>';
     html += '<div class="form-grid">';
@@ -2336,6 +2372,7 @@ function connectOutputSSE() {
                 ?.classList.contains('active') || false;
             _applyDiagBtnVisual(diagOn, false);
             pollRunStatus();
+            if (selectedWorkflow === 'flash') void _loadFlashRecordings();
             // Re-scan dataset sources and refresh opened datasets
             if (typeof window.refreshExpandedSources === 'function') {
                 window.refreshExpandedSources();

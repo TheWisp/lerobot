@@ -7,7 +7,7 @@ from pathlib import Path
 
 import numpy as np
 
-from lerobot.gui.api.run import _flash_tracker_replay
+from lerobot.gui.api.run import _flash_recordings, _flash_tracker_replay
 from lerobot.policies.flash.live_telemetry import FlashLiveTelemetry
 from lerobot.policies.flash.perception import RGBDFrame
 from lerobot.policies.flash.trajectory import Evidence, PoseEstimate
@@ -93,3 +93,27 @@ def test_older_trace_does_not_claim_unrecorded_tracker_layers(tmp_path: Path) ->
     assert not replay["layer_history"]
     assert replay["frames"][0]["snapshot"]["layers"] == {}
     assert replay["frames"][0]["snapshot"]["accepted"]["object"]["estimator"] == "object_point_motion"
+
+
+def test_flash_recordings_lists_source_datasets_with_outcomes(tmp_path: Path) -> None:
+    older = tmp_path / "demos" / "older" / "flash" / "v1"
+    latest = tmp_path / "demos" / "latest" / "flash" / "v1"
+    incomplete = tmp_path / "demos" / "incomplete" / "flash" / "v1"
+    for extension in (older, latest, incomplete):
+        extension.mkdir(parents=True)
+        (extension.parent.parent / "meta").mkdir()
+        (extension.parent.parent / "meta" / "info.json").write_text("{}")
+    for extension in (older, latest):
+        (extension / "episode_000000.jsonl").write_text("{}\n")
+    (latest / "manifest.json").write_text(
+        json.dumps({"episodes": {"0": {"frames": 42, "outcome": "interrupted", "reason": "IK failed"}}})
+    )
+    recordings = _flash_recordings((tmp_path,))
+    assert {item["dataset_root"] for item in recordings} == {
+        str(older.parent.parent),
+        str(latest.parent.parent),
+    }
+    assert (
+        next(item for item in recordings if item["dataset_root"] == str(latest.parent.parent))["reason"]
+        == "IK failed"
+    )

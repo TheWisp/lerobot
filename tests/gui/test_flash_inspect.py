@@ -276,7 +276,15 @@ def test_run_flash_subtab_inspects_without_launching_robot(tmp_path, gui_page):
 def test_run_flash_view_demo_uses_data_view_without_inspection_or_robot_launch(gui_page):
     page = gui_page
     requests = []
-    page.route("**/api/run/flash/**", lambda route: requests.append(route.request.url))
+
+    def flash_response(route):
+        if route.request.url.endswith("/recordings"):
+            route.fulfill(json=[])
+        else:
+            requests.append(route.request.url)
+            route.fulfill(status=500)
+
+    page.route("**/api/run/flash/**", flash_response)
     page.evaluate("switchTab('run')")
     page.evaluate("() => selectWorkflow('flash')")
     page.evaluate(
@@ -381,8 +389,6 @@ def test_run_flash_subtab_launches_selected_prepared_skill(gui_page):
 
 def test_run_flash_tracker_panel_reuses_view_for_recorded_layers(gui_page):
     page = gui_page
-    page.evaluate("switchTab('run')")
-    page.evaluate("() => selectWorkflow('flash')")
     page.route(
         "**/api/run/flash/telemetry/replay?*",
         lambda route: route.fulfill(
@@ -427,9 +433,26 @@ def test_run_flash_tracker_panel_reuses_view_for_recorded_layers(gui_page):
             }
         ),
     )
+    page.route(
+        "**/api/run/flash/recordings",
+        lambda route: route.fulfill(
+            json=[
+                {
+                    "dataset_root": "/tmp/tracker-run",
+                    "episode": 0,
+                    "modified_at_s": 12.0,
+                    "frames": 1,
+                    "outcome": "interrupted",
+                    "reason": "IK failed",
+                }
+            ]
+        ),
+    )
+    page.evaluate("switchTab('run')")
+    page.evaluate("() => selectWorkflow('flash')")
     page.evaluate("datasets['/tmp/tracker-run'] = {id: '/tmp/tracker-run', root: '/tmp/tracker-run'}")
-    page.locator("#run-flash-root").fill("/tmp/tracker-run")
-    page.locator("#run-flash-tracker-replay-btn").click()
+    page.wait_for_function("() => document.querySelectorAll('.flash-recording').length === 1")
+    page.locator(".flash-recording").click()
     page.wait_for_function("() => document.querySelector('#flash-tracker-mode').textContent === 'Recording'")
     panel = page.locator("#flash-tracker-panel")
     assert panel.is_visible()
