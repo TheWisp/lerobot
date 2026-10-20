@@ -418,6 +418,12 @@ def test_run_flash_lists_demos_and_shows_extracted_pose_overlay(gui_page):
     assert "/api/run/flash/demo/frame?" in page.locator("#rerun-viewer .flash-replay-grid img").get_attribute(
         "src"
     )
+    viewer = page.locator("#rerun-viewer").bounding_box()
+    controls = page.locator("#flash-tracker-replay-controls")
+    control_y = controls.bounding_box()["y"]
+    assert control_y >= viewer["y"] + viewer["height"] - 1
+    page.locator("#flash-tracker-content").evaluate("el => el.append(' extra detail '.repeat(100))")
+    assert controls.bounding_box()["y"] == control_y
 
 
 @pytest.mark.requires_playwright
@@ -602,3 +608,17 @@ def test_run_flash_tracker_panel_reuses_view_for_recorded_layers(gui_page):
     assert "flash-tracker-hover" in group.get_attribute("class")
     assert page.evaluate("flashHighlightedOverlay?.kind") == "layer"
     assert page.locator("#flash-tracker-replay-controls").is_visible()
+    viewer = page.locator("#rerun-viewer").bounding_box()
+    assert panel.bounding_box()["y"] >= viewer["y"] + 32
+    page.locator("#flash-tracker-collapse").click()
+    assert not page.locator("#flash-tracker-content").is_visible()
+    assert page.locator("#flash-tracker-replay-controls").is_visible()
+    heading = page.locator("#flash-tracker-heading").bounding_box()
+    before = panel.bounding_box()
+    page.mouse.move(heading["x"] + 20, heading["y"] + heading["height"] / 2)
+    page.mouse.down()
+    page.mouse.move(heading["x"] - 60, heading["y"] + heading["height"] / 2 + 30)
+    page.mouse.up()
+    assert panel.bounding_box()["x"] < before["x"]
+    page.locator("#flash-tracker-collapse").click()
+    assert page.locator("#flash-tracker-content").is_visible()

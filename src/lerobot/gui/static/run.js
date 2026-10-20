@@ -47,6 +47,7 @@ async function runTabInit() {
     }
 
     initSplitHandle();
+    initFlashTrackerPanelDrag();
     renderRunForm();
     if (selectedWorkflow === 'flash') await Promise.all([_loadFlashDatasets(), _loadFlashRecordings()]);
     _initSelectTitleSync();
@@ -103,6 +104,7 @@ async function selectWorkflow(workflow) {
     if (workflow === 'flash') await Promise.all([_loadFlashDatasets(), _loadFlashRecordings()]);
     const trackerPanel = document.getElementById('flash-tracker-panel');
     if (trackerPanel) trackerPanel.hidden = workflow !== 'flash';
+    document.getElementById('flash-tracker-replay-controls').hidden = workflow !== 'flash' || !flashReplay;
     if (workflow === 'flash' && _isRunning && _runCommand === 'flash') startFlashTelemetry();
     _updateLaunchButton();
 }
@@ -372,6 +374,49 @@ let flashReplay = null;
 let flashReplayTimer = null;
 let flashOverlayRows = [];
 let flashHighlightedOverlay = null;
+
+function toggleFlashTrackerPanel() {
+    const panel = document.getElementById('flash-tracker-panel');
+    const button = document.getElementById('flash-tracker-collapse');
+    const collapsed = panel.classList.toggle('is-collapsed');
+    button.textContent = collapsed ? '+' : '−';
+    button.setAttribute('aria-expanded', String(!collapsed));
+    button.setAttribute('aria-label', collapsed ? 'Expand overlay details' : 'Collapse overlay details');
+    button.title = button.getAttribute('aria-label');
+}
+
+function initFlashTrackerPanelDrag() {
+    const viewer = document.getElementById('rerun-viewer');
+    const panel = document.getElementById('flash-tracker-panel');
+    const heading = document.getElementById('flash-tracker-heading');
+    let drag = null;
+    heading.addEventListener('pointerdown', event => {
+        if (event.button !== 0 || event.target.closest('button')) return;
+        const panelRect = panel.getBoundingClientRect();
+        const viewerRect = viewer.getBoundingClientRect();
+        drag = {
+            x: event.clientX,
+            y: event.clientY,
+            left: panelRect.left - viewerRect.left,
+            top: panelRect.top - viewerRect.top,
+        };
+        heading.setPointerCapture(event.pointerId);
+    });
+    heading.addEventListener('pointermove', event => {
+        if (!drag) return;
+        const left = Math.max(0, Math.min(viewer.clientWidth - panel.offsetWidth,
+            drag.left + event.clientX - drag.x));
+        const top = Math.max(0, Math.min(viewer.clientHeight - panel.offsetHeight,
+            drag.top + event.clientY - drag.y));
+        panel.style.left = `${left}px`;
+        panel.style.right = 'auto';
+        panel.style.top = `${top}px`;
+        panel.style.maxHeight = `${Math.max(32, viewer.clientHeight - top - 8)}px`;
+    });
+    const endDrag = () => { drag = null; };
+    heading.addEventListener('pointerup', endDrag);
+    heading.addEventListener('pointercancel', endDrag);
+}
 
 function _flashSelectOverlay(next) {
     const changed = flashHighlightedOverlay?.kind !== next?.kind ||
