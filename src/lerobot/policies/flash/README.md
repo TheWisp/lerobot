@@ -8,6 +8,12 @@ panel can launch a bounded live trial and record another ordinary LeRobot
 dataset. Startup requires each needed object to register into the _same stable
 object frame_ used by the demonstration before robot motion begins.
 
+The rig JSON is the single place to tune live execution and tracking limits;
+[the example configuration](docs/trial_config.example.json) lists every active
+parameter. The [attachment policy](docs/attachment_policy.md) explains the
+grasp-specific gates. Values in the example are experimental settings for the
+current SO-107 trial, not universal object-size or safety constants.
+
 The executable core already separates:
 
 - demonstrated contact intervals, sampled on their own 1× local clock;

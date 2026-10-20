@@ -5,10 +5,11 @@ from __future__ import annotations
 import time
 from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, fields, replace
 from math import isfinite
 from queue import Full, Queue
 from threading import Lock, Thread
+from typing import Any
 
 import numpy as np
 
@@ -58,6 +59,14 @@ class CausalTrackingConfig:
     environment_prediction_max_s: float = 1.0
     environment_min_inliers: int = 12
     static_prediction_max_s: float | None = None
+
+    @classmethod
+    def from_config(cls, config: dict[str, Any]) -> CausalTrackingConfig:
+        """Require each live tracker limit to be visible in the rig configuration."""
+        expected = {field.name for field in fields(cls)}
+        if set(config) != expected:
+            raise ValueError(f"causal tracking keys differ: {sorted(set(config) ^ expected)}")
+        return cls(**config)
 
     def __post_init__(self) -> None:
         if (

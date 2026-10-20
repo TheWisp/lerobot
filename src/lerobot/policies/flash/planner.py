@@ -373,7 +373,11 @@ class JointPlanner:
                 translation_error > self.limits.position_error_m
                 or rotation_error > self.limits.rotation_error_rad
             ):
-                raise InfeasibleTrajectoryError("generated connection IK exceeds pose tolerance")
+                # A local IK solver can fail from a distant seed even when
+                # nearby poses have a continuous solution. Subdivide the
+                # spatial step before declaring the whole connection infeasible.
+                step /= 2
+                continue
             joint_step = np.abs(solved - previous)
             if np.any(joint_step > max_step + 1e-9):
                 step /= 2

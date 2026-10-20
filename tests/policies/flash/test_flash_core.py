@@ -157,6 +157,34 @@ def test_generated_connection_retimes_short_cartesian_move_with_large_joint_trav
     assert max(np.diff([0.0, *(action.action["arm.pos"] for action in actions)])) <= 180 / 30
 
 
+def test_generated_connection_subdivides_when_local_ik_cannot_jump_to_endpoint():
+    class LocalKinematics:
+        def inverse_kinematics(self, seed, target):
+            if abs(target[0, 3] - seed[0] / 10) > 0.3:
+                return seed
+            return np.array([target[0, 3] * 10])
+
+        def forward_kinematics(self, joints):
+            return pose(joints[0] / 10)
+
+    interval = Interval(
+        "carry",
+        MotionMode.CONNECTION,
+        Relation.EE_TO_OBJECT,
+        "object",
+        (sample(0, (0, 0, 0), (0, 0, 0)), sample(1, (0, 0, 0), (0, 0, 0))),
+        speed_m_s=0.5,
+        reference_version="object-v1",
+    )
+    reference = PoseEstimate(
+        "object", pose(1), 0, 0, Evidence.OBSERVED, "object-v1", (True,) * 3, (True,) * 3
+    )
+    connection = ConnectionTrajectory.begin(interval, pose(), reference.pose, None, 0)
+    planner = JointPlanner(LocalKinematics(), ("arm",), "gripper", PlannerLimits((1000,), 0.001, 0.01, 10))
+    planner._retime_connection(connection, np.array([0.0]), 1 / 30)
+    assert connection.joint_retimed
+
+
 def test_connection_retime_makes_progress_when_discrete_tick_is_just_over_speed_limit():
     class IdentityKinematics:
         def inverse_kinematics(self, _seed, target):

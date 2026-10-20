@@ -253,6 +253,8 @@ def trial(
                 allow_predicted_reference=True,
                 ik_refinement_attempts=settings["ik_refinement_attempts"],
                 max_attachment_age_s=attachment_policy.max_attachment_age_s,
+                max_connection_ik_samples=settings["max_connection_ik_samples"],
+                max_connection_retimings=settings["max_connection_retimings"],
             ),
             buffer_config=PlanBufferConfig(
                 settings["lead_ticks"],
@@ -260,7 +262,7 @@ def trial(
                 settings["refill_at_ticks"],
                 settings["max_reference_shift_m"],
                 np.deg2rad(settings["max_reference_turn_deg"]),
-                max_wait_for_evidence_s=settings.get("max_wait_for_evidence_s", 2.0),
+                max_wait_for_evidence_s=settings["max_wait_for_evidence_s"],
             ),
             attachment_limits=attachment_policy,
             recorder=recorder,
@@ -269,7 +271,7 @@ def trial(
             max_camera_age_s=settings["max_camera_age_s"],
             fps=settings["fps"],
             causal_tracking=(
-                CausalTrackingConfig(**settings["causal_tracking"])
+                CausalTrackingConfig.from_config(settings["causal_tracking"])
                 if settings.get("causal_tracking") is not None
                 else None
             ),

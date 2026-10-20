@@ -40,6 +40,21 @@ def test_causal_config_rejects_unbounded_or_invalid_tracking():
     CausalTrackingConfig(**valid, image_scale=0.5)
     with pytest.raises(ValueError, match="invalid causal tracking configuration"):
         CausalTrackingConfig(**{**valid, "image_scale": 0.0})
+    complete = {
+        **valid,
+        "image_scale": 0.5,
+        "scene_max_points": 800,
+        "environment_context_radius_m": 0.25,
+        "environment_min_motion_m": 0.008,
+        "environment_prediction_max_s": 1.0,
+        "environment_min_inliers": 12,
+        "static_prediction_max_s": None,
+    }
+    assert CausalTrackingConfig.from_config(complete).scene_max_points == 800
+    with pytest.raises(ValueError, match="causal tracking keys differ"):
+        CausalTrackingConfig.from_config(
+            {key: value for key, value in complete.items() if key != "scene_max_points"}
+        )
 
 
 def test_delayed_anchor_uses_retained_frame_and_all_intervening_motion():
