@@ -213,6 +213,21 @@ class ActionQueue:
         with self._lock:
             return self._expire_locked(tick)
 
+    def defer_pending(self, missed_tick: int) -> bool:
+        """Preserve a missed sample and its successors one motor period later.
+
+        A one-tick scheduling slip must not skip a contact event or jump over
+        multiple joint samples. The motor clock still advances; only the
+        unissued suffix moves. A planner replacement uses the same queue lock.
+        """
+        with self._lock:
+            if not self._actions or self._actions[0][1].tick != missed_tick:
+                return False
+            self._actions = deque(
+                (revision, replace(action, tick=action.tick + 1)) for revision, action in self._actions
+            )
+            return True
+
     def _expire_locked(self, tick: int) -> int:
         expired = []
         survivor = None
@@ -365,6 +380,11 @@ class MotorLoop:
         current = max(0, floor((self.clock() - self.epoch_s) / self.period_s))
         skipped = max(0, current - self.metrics.ticks)
         if skipped:
+            # One missed 30 Hz deadline can be absorbed without changing the
+            # command sequence. Larger stalls still use the explicit skip
+            # rules below, which reject required samples and unsafe jumps.
+            if skipped == 1:
+                self.actions.defer_pending(self.metrics.ticks)
             self.actions.expire_before(current)
             self.metrics.ticks = current
             self.metrics.skipped_ticks += skipped

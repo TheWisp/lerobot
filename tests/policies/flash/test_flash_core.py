@@ -316,6 +316,45 @@ def test_motor_overrun_skips_only_explicit_free_space_samples():
     assert ticks[-1].skipped_before == 2
 
 
+def test_one_missed_motor_deadline_defers_required_samples_without_a_joint_jump():
+    class FakeRobot:
+        def get_state_observation(self):
+            return {"joint.pos": 0.0}
+
+        def send_action(self, action):
+            return action
+
+    now = [0.0]
+    queue = ActionQueue()
+    queue.publish(
+        0,
+        [
+            TimedAction(0, {"joint.pos": 0.0}, "contact"),
+            TimedAction(1, {"joint.pos": 0.5}, "contact", event_id="grasp"),
+            TimedAction(2, {"joint.pos": 1.0}, "contact", interval_complete=True),
+        ],
+    )
+    loop = MotorLoop(FakeRobot(), queue, lambda receipt: None, clock=lambda: now[0], sleep=lambda dt: None)
+    loop.start()
+    assert loop.tick().tick == 0
+    now[0] = 0.07  # Tick 1 is missed, but only by one motor period.
+    second = loop.tick()
+    assert (second.tick, second.requested.event_id, second.requested.action["joint.pos"]) == (
+        2,
+        "grasp",
+        0.5,
+    )
+    assert queue.snapshot().issued_events == frozenset({"grasp"})
+    now[0] = 0.101
+    final = loop.tick()
+    assert (final.tick, final.requested.interval_complete, final.requested.action["joint.pos"]) == (
+        3,
+        True,
+        1.0,
+    )
+    assert loop.metrics.skipped_ticks == 1
+
+
 def test_motor_overrun_rejects_an_unsafe_free_space_jump():
     queue = ActionQueue(max_splice_delta={"joint.pos": 0.1})
     queue.publish(
