@@ -153,6 +153,13 @@ def test_flash_recordings_lists_source_datasets_with_outcomes(tmp_path: Path) ->
         "episode": 0,
         "modified_at_s": (bundle / "bundle.json").stat().st_mtime,
         "skills": ["one-demo"],
+        "prepared_versions": [
+            {
+                "name": "one-demo",
+                "bundle_path": str((bundle / "bundle.json").resolve()),
+                "candidate": False,
+            }
+        ],
         "bundle_path": str((bundle / "bundle.json").resolve()),
         "prepared_skill": "one-demo",
     }

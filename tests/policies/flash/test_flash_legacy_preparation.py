@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from benchmarks.flash_prepare_legacy import (
+    _apply_reference_polygons,
     _endpoint_requirement,
     _interval_layout,
     _interval_reference,
@@ -72,3 +73,15 @@ def test_legacy_annotation_preserves_end_for_end_symmetry():
     without_swap = _symmetry_from_annotation("held", {"axis_kind": "long_axis"}, points, np.eye(4))
     with pytest.raises(ValueError, match="not annotated as interchangeable"):
         without_swap.equivalent_transform(exchange_ends=True)
+
+
+def test_reference_polygon_replaces_only_its_role_and_checks_image_bounds():
+    original = {"held": np.zeros((12, 12), dtype=bool), "target": np.ones((12, 12), dtype=bool)}
+    replaced = _apply_reference_polygons(
+        original, {"held": [[2, 2], [9, 2], [9, 9], [2, 9]]}, set(original), (12, 12)
+    )
+    assert replaced["held"][5, 5] and not replaced["held"][0, 0]
+    assert np.array_equal(replaced["target"], original["target"])
+    assert not original["held"].any()
+    with pytest.raises(ValueError, match="in-frame"):
+        _apply_reference_polygons(original, {"held": [[2, 2], [20, 2], [9, 9]]}, set(original), (12, 12))

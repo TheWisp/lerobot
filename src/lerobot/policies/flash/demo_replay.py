@@ -179,6 +179,11 @@ def build_demo_replay(
     }
 
 
+def _demo_annotation_path(root: Path, bundle: Path) -> Path:
+    versioned = bundle.parent / "annotation.json"
+    return versioned if versioned.is_file() else root / "flash" / "v1" / "import-annotations.json"
+
+
 def load_legacy_demo_replay(dataset_root: Path, episode: int, bundle_path: Path) -> dict:
     """Load a prepared skill and its original aligned camera/arm clocks."""
     root = dataset_root.expanduser().resolve()
@@ -189,7 +194,7 @@ def load_legacy_demo_replay(dataset_root: Path, episode: int, bundle_path: Path)
     prepared = PreparedFlashSkill.load(bundle)
     if prepared.skill.source_episode != episode:
         raise ValueError("prepared skill belongs to a different demo episode")
-    annotation_path = root / "flash" / "v1" / "import-annotations.json"
+    annotation_path = _demo_annotation_path(root, bundle)
     if not annotation_path.is_file():
         raise ValueError("this demo has no saved capture calibration for aligned pose replay")
     annotation = json.loads(annotation_path.read_text(encoding="utf-8"))

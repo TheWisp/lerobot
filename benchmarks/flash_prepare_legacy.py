@@ -167,7 +167,35 @@ def _symmetry_from_annotation(
     )
 
 
-def prepare(root: Path, annotation_path: Path, *, output_name: str) -> tuple[Path, dict]:
+def _apply_reference_polygons(
+    masks: dict[str, np.ndarray], polygons: dict, roles: set[str], image_size: tuple[int, int]
+) -> dict[str, np.ndarray]:
+    """Replace selected SAM3 reference masks with explicitly annotated pixels."""
+    height, width = image_size
+    result = dict(masks)
+    for role, vertices in polygons.items():
+        if role not in roles:
+            raise ValueError(f"reference mask polygon names unknown role {role!r}")
+        points = np.asarray(vertices, dtype=float)
+        if (
+            points.ndim != 2
+            or points.shape[1:] != (2,)
+            or len(points) < 3
+            or not np.isfinite(points).all()
+            or np.any(points < 0)
+            or np.any(points[:, 0] >= width)
+            or np.any(points[:, 1] >= height)
+        ):
+            raise ValueError(f"{role}: reference polygon needs three or more in-frame pixel vertices")
+        mask = np.zeros(image_size, dtype=np.uint8)
+        cv2.fillPoly(mask, [np.rint(points).astype(np.int32)], 1)
+        result[role] = mask.astype(bool)
+    return result
+
+
+def prepare(
+    root: Path, annotation_path: Path, *, output_name: str, keypoints_path: Path | None = None
+) -> tuple[Path, dict]:
     destination = root / "flash" / "v1" / "prepared" / output_name
     if destination.exists():
         raise FileExistsError(f"prepared bundle already exists: {destination}")
@@ -222,7 +250,8 @@ def prepare(root: Path, annotation_path: Path, *, output_name: str) -> tuple[Pat
             raise ValueError(f"calibrated fingertip differs from recorded demo at sample {index}")
     camera_times = np.atleast_1d(np.loadtxt(root / "recording" / "times.txt")) - origin_s
     intrinsics = np.loadtxt(root / "recording" / "cam_K.txt").reshape(3, 3)
-    keypoints = json.loads((root / "keypoints.json").read_text())["keypoints"]
+    keypoints_document = json.loads((keypoints_path or root / "keypoints.json").read_text())
+    keypoints = keypoints_document["keypoints"]
     if not keypoints or any(b["t"] <= a["t"] for a, b in zip(keypoints, keypoints[1:], strict=False)):
         raise ValueError("keypoints must increase in demo time")
     grasp = _nearest_index(times, annotation["grasp_time_s"])
@@ -241,7 +270,12 @@ def prepare(root: Path, annotation_path: Path, *, output_name: str) -> tuple[Pat
     mask_source = Sam3MaskSource(
         prompts, camera_id="flash-demo-preparation", resolution=annotation["sam_resolution"]
     )
-    reference_masks = mask_source.masks(reference_frame)
+    reference_masks = _apply_reference_polygons(
+        mask_source.masks(reference_frame),
+        annotation.get("reference_polygons_by_role", {}),
+        set(prompts),
+        reference_frame.depth.shape,
+    )
     if set(reference_masks) != set(prompts):
         raise ValueError(f"reference frame is missing masks for {set(prompts) - set(reference_masks)}")
     extractor = DinoPatchExtractor(model_id=annotation["descriptor_model_id"])
@@ -290,6 +324,7 @@ def prepare(root: Path, annotation_path: Path, *, output_name: str) -> tuple[Pat
             "axial_symmetry_roles",
         )
     }
+    cache_identity["reference_polygons_by_role"] = annotation.get("reference_polygons_by_role", {})
     cache_key = hashlib.sha256(
         json.dumps(cache_identity, sort_keys=True).encode()
         + intrinsics.tobytes()
@@ -456,11 +491,19 @@ def prepare(root: Path, annotation_path: Path, *, output_name: str) -> tuple[Pat
             raise OSError(f"cannot write reference mask {path}")
     manifest = prepared.save(destination)
     (destination / "annotation.json").write_text(json.dumps(annotation, indent=2) + "\n")
-    (destination / "keypoints.json").write_text(json.dumps({"keypoints": keypoints}, indent=2) + "\n")
+    (destination / "keypoints.json").write_text(json.dumps(keypoints_document, indent=2) + "\n")
     report = {
+        "review_status": "candidate",
         "source_episode": annotation["episode"],
         "demo_frames_evaluated": len(estimates),
         "observed_pose_frames": observed_counts,
+        "pose_evidence_frames": {
+            role: {
+                evidence.value: sum(row[role].evidence == evidence for row in estimates)
+                for evidence in Evidence
+            }
+            for role in prompts
+        },
         "grasp_sample": grasp,
         "grasp_pose_evidence": grasp_evidence,
         "release_sample": release,
@@ -483,9 +526,15 @@ def main() -> None:
     parser.add_argument("dataset_root", type=Path)
     parser.add_argument("annotation", type=Path)
     parser.add_argument("--output-name", required=True)
+    parser.add_argument(
+        "--keypoints", type=Path, help="versioned keypoint annotation (defaults to dataset keypoints)"
+    )
     args = parser.parse_args()
     manifest, report = prepare(
-        args.dataset_root.expanduser(), args.annotation.expanduser(), output_name=args.output_name
+        args.dataset_root.expanduser(),
+        args.annotation.expanduser(),
+        output_name=args.output_name,
+        keypoints_path=args.keypoints.expanduser() if args.keypoints is not None else None,
     )
     print(json.dumps({"bundle": str(manifest), **report}, indent=2))
 

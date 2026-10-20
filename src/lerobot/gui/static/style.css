@@ -610,9 +610,16 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .flash-recordings { max-height: 225px; overflow-y: auto; border: 1px solid #31516c; border-radius: 4px; margin-bottom: 16px; color: #a7b5c8; font-size: 12px; }
 .flash-recording { display: flex; flex-direction: column; gap: 2px; width: 100%; padding: 8px 10px; border: 0; border-bottom: 1px solid #263c55; background: transparent; color: #e6edf3; text-align: left; cursor: pointer; }
 .flash-recording:last-child { border-bottom: 0; }
+.flash-recording-card { border-bottom: 1px solid #263c55; }
+.flash-recording-card:last-child { border-bottom: 0; }
+.flash-recording-card .flash-recording { border-bottom: 0; }
+.flash-recording-version { display: block; width: calc(100% - 20px); margin: 0 10px 8px; color: #a7b5c8; background: #101b2a; border: 1px solid #31516c; border-radius: 3px; font-size: 11px; }
 .flash-recording:hover, .flash-recording:focus { background: #0f3460; }
 .flash-recording strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .flash-recording span { color: #a7b5c8; font-size: 11px; }
+.flash-manual-setup { margin: 12px 0; border-top: 1px solid #31516c; padding-top: 8px; }
+.flash-manual-setup summary { color: #8bd5ff; cursor: pointer; font-size: 12px; }
+.flash-manual-setup[open] summary { margin-bottom: 12px; }
 .flash-skill-detail { margin: 8px 0 16px; padding: 8px; border: 1px solid #0f3460; border-radius: 4px; color: #aaa; font-size: 11px; overflow-wrap: anywhere; }
 .flash-skill-detail:empty { display: none; }
 .flash-skill-detail details { margin-top: 6px; }
@@ -647,6 +654,23 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .flash-pose-canvas { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
 .flash-replay-grid { position: absolute; inset: 0; display: grid; place-items: center; background: #111; }
 .flash-replay-grid img { width: 100%; height: 100%; object-fit: contain; }
+.flash-demo-editor { position: absolute; z-index: 15; top: 0; right: 0; bottom: 0; width: min(360px, 42%); box-sizing: border-box; overflow: auto; padding: 14px; background: #101b2a; border-left: 1px solid #31516c; color: #e6edf3; font-size: 12px; }
+.flash-demo-editor[hidden], #flash-demo-edit-toggle[hidden] { display: none; }
+.flash-demo-editing .flash-replay-grid { right: min(360px, 42%); }
+.flash-demo-editor .flash-tracker-panel { position: static; width: 100%; max-height: 210px; margin: 8px 0; padding: 7px; }
+.flash-demo-editor h3 { margin: 0 0 6px; font-size: 15px; }
+.flash-demo-editor p { margin: 4px 0 10px; color: #a7b5c8; line-height: 1.4; }
+.flash-demo-editor section { border-top: 1px solid #31516c; padding: 10px 0; }
+.flash-demo-editor label { display: block; margin: 7px 0; color: #bdd0e0; }
+.flash-demo-editor input:not([type="checkbox"]), .flash-demo-editor select { display: block; width: 100%; box-sizing: border-box; margin-top: 3px; padding: 5px; background: #0b1522; border: 1px solid #31516c; border-radius: 3px; color: #fff; }
+.flash-demo-editor button { margin: 4px 5px 4px 0; padding: 5px 8px; background: #224868; color: #fff; border: 1px solid #4d7798; border-radius: 3px; cursor: pointer; }
+.flash-demo-editor button:disabled { opacity: .5; cursor: default; }
+.flash-demo-editor .flash-editor-keypoint { margin: 7px 0; padding: 7px; border: 1px solid #31516c; border-radius: 4px; }
+.flash-demo-editor .flash-editor-keypoint summary { cursor: pointer; }
+.flash-demo-editor .flash-editor-status { min-height: 18px; color: #8bd5ff; }
+.flash-demo-mask { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; opacity: .5; mix-blend-mode: screen; pointer-events: none; image-rendering: pixelated; }
+.flash-demo-polygon { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.flash-demo-polygon.is-drawing { pointer-events: auto; cursor: crosshair; }
 /* Marker shown after the label of every required field. Bumping the CSS
  * version (style.css?v=N in index.html) is required when shipping new
  * styles like this so old browser caches don't render the form

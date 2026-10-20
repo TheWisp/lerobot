@@ -46,6 +46,20 @@ its checked IK prefix and records the achieved fraction. This is not collision
 avoidance: the current skill still lacks general per-axis required/preferred/free
 constraints and a scene-aware path planner.
 
+On 2026-10-21, the Run → FLASH inline editor regenerated this demo through its
+own asynchronous preparation action into a review candidate. The new reference
+masks and appearance model points/descriptors are byte-for-byte identical to
+the selected v10 bundle's v7 reference. The fresh pose trace has 172 observed
+dowel frames, 567 predicted ring frames and 16/8 additional lost frames for
+dowel/ring compared with the older retained trace. Ring poses agree exactly
+where both traces are valid. The new grasp reference is displaced about 3.45 mm
+from v10, while the reference-frame dowel surface residual is essentially
+unchanged (2.116 vs 2.125 mm, 90th percentile). The dowel uses a new axial
+canonicalization in this regeneration, so a raw pose-origin delta alone does
+not establish physical error. This candidate is available for visual review
+but is not the default live skill. No physical trial or independent contact
+accuracy test has validated it.
+
 ## Offline perception replay
 
 The [initial RGB-D replay](rgbd_replay.md) used a SAM3 mask, DINOv2 matches and

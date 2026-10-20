@@ -258,6 +258,13 @@ class FlashConfigInspectRequest(BaseModel):
     config_path: str
 
 
+class FlashDemoPrepareRequest(FlashDatasetInspectRequest):
+    bundle_path: str
+    annotation: dict[str, Any]
+    keypoints_document: dict[str, Any]
+    output_name: str | None = None
+
+
 class HVLARunRequest(BaseModel):
     robot: dict[str, Any]
     s1_checkpoint: str
@@ -1137,6 +1144,153 @@ def flash_demo_frame(dataset_root: str, frame_index: int) -> FileResponse:
     return FileResponse(path, media_type="image/jpeg")
 
 
+def _flash_demo_paths(dataset_root: str, bundle_path: str) -> tuple[Path, Path]:
+    root = Path(dataset_root).expanduser().resolve()
+    bundle = Path(bundle_path).expanduser().resolve()
+    prepared_root = root / "flash" / "v1" / "prepared"
+    try:
+        relative = bundle.relative_to(prepared_root)
+    except ValueError as exc:
+        raise ValueError("selected skill must be stored with this demo dataset") from exc
+    if (
+        relative.parts != (bundle.parent.name, "bundle.json")
+        or not bundle.is_file()
+        or not (root / "meta" / "info.json").is_file()
+    ):
+        raise ValueError("select a prepared FLASH skill beside a local demo")
+    return root, bundle
+
+
+def _flash_demo_preparation(dataset_root: str, bundle_path: str, episode: int) -> dict:
+    root, bundle = _flash_demo_paths(dataset_root, bundle_path)
+    manifest = json.loads(bundle.read_text(encoding="utf-8"))
+    skill = json.loads((bundle.parent / manifest["skill"]).read_text(encoding="utf-8"))
+    if skill["source_episode"] != episode:
+        raise ValueError("prepared skill belongs to a different demo episode")
+    annotation_path = bundle.parent / "annotation.json"
+    if not annotation_path.is_file():
+        annotation_path = root / "flash" / "v1" / "import-annotations.json"
+    keypoints_path = bundle.parent / "keypoints.json"
+    if not keypoints_path.is_file():
+        keypoints_path = root / "keypoints.json"
+    annotation = json.loads(annotation_path.read_text(encoding="utf-8"))
+    keypoints = json.loads(keypoints_path.read_text(encoding="utf-8"))
+    if annotation["episode"] != episode or not isinstance(keypoints["keypoints"], list):
+        raise ValueError("preparation inputs do not match the selected demo episode")
+    report_path = bundle.parent / "preparation-report.json"
+    report = json.loads(report_path.read_text(encoding="utf-8")) if report_path.is_file() else None
+    return {
+        "annotation": annotation,
+        "keypoints_document": keypoints,
+        "preparation_report": report,
+        "annotation_source": str(annotation_path),
+        "keypoints_source": str(keypoints_path),
+        "reference_masks": {
+            reference["role"]: {
+                "frame_index": reference["snippets"][0]["frame_index"],
+                "available": (root / reference["snippets"][0]["mask_artifact"]).is_file(),
+            }
+            for reference in manifest["references"]
+            if reference.get("snippets")
+        },
+    }
+
+
+@router.get("/flash/demo/preparation")
+async def flash_demo_preparation(dataset_root: str, bundle_path: str, episode: int = 0) -> dict:
+    """Read the selected demo's editable recipe without loading GPU models."""
+    try:
+        return await asyncio.get_running_loop().run_in_executor(
+            _flash_config_pool, _flash_demo_preparation, dataset_root, bundle_path, episode
+        )
+    except (OSError, KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(400, f"Cannot load FLASH demo preparation: {exc}") from exc
+
+
+@router.get("/flash/demo/reference-mask")
+def flash_demo_reference_mask(dataset_root: str, bundle_path: str, role: str) -> FileResponse:
+    """Serve a prepared reference mask from its dataset, not an arbitrary path."""
+    try:
+        root, bundle = _flash_demo_paths(dataset_root, bundle_path)
+        manifest = json.loads(bundle.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise HTTPException(400, f"Cannot read prepared reference mask: {exc}") from exc
+    reference = next((item for item in manifest["references"] if item["role"] == role), None)
+    if reference is None or not reference["snippets"]:
+        raise HTTPException(404, "Selected role has no prepared reference mask")
+    mask = (root / reference["snippets"][0]["mask_artifact"]).resolve()
+    try:
+        mask.relative_to((root / "flash" / "v1" / "masks").resolve())
+    except ValueError as exc:
+        raise HTTPException(400, "Reference mask is outside this dataset") from exc
+    if not mask.is_file():
+        raise HTTPException(404, "Prepared reference mask is missing")
+    return FileResponse(mask, media_type="image/png")
+
+
+@router.post("/flash/demo/prepare")
+async def prepare_flash_demo(req: FlashDemoPrepareRequest) -> dict:
+    """Version the edited inputs and launch offline preparation asynchronously."""
+    async with _launch_lock:
+        _ensure_no_active_process()
+
+        def save_inputs() -> tuple[Path, Path, Path, Path, str]:
+            root, bundle = _flash_demo_paths(req.dataset_root, req.bundle_path)
+            current = _flash_demo_preparation(req.dataset_root, req.bundle_path, req.episode)
+            if set(req.annotation.get("prompts_by_role", {})) != set(
+                current["annotation"]["prompts_by_role"]
+            ):
+                raise ValueError("this importer cannot change the prepared object roles")
+            if req.annotation.get("episode") != req.episode:
+                raise ValueError("annotation episode differs from the selected demo")
+            keypoints = req.keypoints_document.get("keypoints")
+            if not isinstance(keypoints, list) or not keypoints:
+                raise ValueError("the edited demo needs at least one keypoint")
+            name = (
+                req.output_name or f"flash-prepared-{time.strftime('%Y%m%d-%H%M%S')}-{secrets.token_hex(3)}"
+            )
+            if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", name) is None:
+                raise ValueError(
+                    "prepared version name must use letters, digits, dots, dashes or underscores"
+                )
+            if (root / "flash" / "v1" / "prepared" / name).exists():
+                raise ValueError("that prepared version already exists")
+            input_dir = root / "flash" / "v1" / "preparation-inputs" / name
+            input_dir.mkdir(parents=True, exist_ok=False)
+            annotation_path = input_dir / "annotation.json"
+            keypoints_path = input_dir / "keypoints.json"
+            annotation_path.write_text(json.dumps(req.annotation, indent=2) + "\n", encoding="utf-8")
+            keypoints_path.write_text(json.dumps(req.keypoints_document, indent=2) + "\n", encoding="utf-8")
+            return root, bundle, annotation_path, keypoints_path, name
+
+        try:
+            root, _, annotation_path, keypoints_path, name = await asyncio.get_running_loop().run_in_executor(
+                _flash_config_pool, save_inputs
+            )
+        except (OSError, KeyError, TypeError, ValueError) as exc:
+            raise HTTPException(400, f"Cannot prepare FLASH demo: {exc}") from exc
+        importer = Path(__file__).resolve().parents[4] / "benchmarks" / "flash_prepare_legacy.py"
+        args = [
+            sys.executable,
+            "-u",
+            str(importer),
+            str(root),
+            str(annotation_path),
+            "--keypoints",
+            str(keypoints_path),
+            "--output-name",
+            name,
+        ]
+        await _launch_subprocess(args, command="flash_prepare", config=req.model_dump())
+        return {
+            "status": "started",
+            "command": "flash_prepare",
+            "pid": _active_process.pid,
+            "bundle_path": str(root / "flash" / "v1" / "prepared" / name / "bundle.json"),
+            "output_name": name,
+        }
+
+
 def _flash_recordings(source_paths: tuple[Path, ...]) -> list[dict]:
     """Find demo episodes and rollouts under the same bounded source folders as Data."""
     extensions: set[Path] = set()
@@ -1185,6 +1339,7 @@ def _flash_recordings(source_paths: tuple[Path, ...]) -> list[dict]:
                     "episode": episode,
                     "modified_at_s": 0,
                     "skills": [],
+                    "prepared_versions": [],
                     "bundle_path": None,
                     "prepared_skill": None,
                 },
@@ -1192,8 +1347,24 @@ def _flash_recordings(source_paths: tuple[Path, ...]) -> list[dict]:
             demo["modified_at_s"] = max(demo["modified_at_s"], modified_at_s)
             demo["skills"].append(path.parent.name if path.name == "bundle.json" else path.stem)
             if path.name == "bundle.json":
-                demo["bundle_path"] = str(path.resolve())
-                demo["prepared_skill"] = path.parent.name
+                report = path.parent / "preparation-report.json"
+                try:
+                    candidate = (
+                        json.loads(report.read_text(encoding="utf-8")).get("review_status") == "candidate"
+                    )
+                except (OSError, ValueError, TypeError):
+                    candidate = False
+                demo["prepared_versions"].append(
+                    {"name": path.parent.name, "bundle_path": str(path.resolve()), "candidate": candidate}
+                )
+                if not candidate:
+                    demo["bundle_path"] = str(path.resolve())
+                    demo["prepared_skill"] = path.parent.name
+        for demo in demos.values():
+            if demo["bundle_path"] is None and demo["prepared_versions"]:
+                chosen = demo["prepared_versions"][-1]
+                demo["bundle_path"] = chosen["bundle_path"]
+                demo["prepared_skill"] = chosen["name"]
         found.extend(demos.values())
         manifest_path = extension / "manifest.json"
         try:

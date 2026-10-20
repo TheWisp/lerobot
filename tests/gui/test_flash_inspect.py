@@ -3,8 +3,11 @@
 import asyncio
 import importlib.util
 import json
+import os
 import signal
+from pathlib import Path
 from types import SimpleNamespace
+from urllib.parse import parse_qs, urlsplit
 
 import numpy as np
 import pytest
@@ -12,11 +15,15 @@ import pytest
 from lerobot.gui.api.run import (
     FlashConfigInspectRequest,
     FlashDatasetInspectRequest,
+    FlashDemoPrepareRequest,
     FlashInspectRequest,
     FlashRunRequest,
+    _flash_demo_preparation,
+    _flash_recordings,
     inspect_flash_config,
     inspect_flash_dataset,
     inspect_flash_skill,
+    prepare_flash_demo,
     start_flash,
     stop_process,
 )
@@ -86,6 +93,77 @@ def test_flash_trial_config_inspection_shows_effective_thresholds(tmp_path):
     assert result["settings"]["attachment"]["max_observation_shift_m"] == 0.014
     assert result["settings"]["first_pose_timeout_s"] == 24
     assert CausalTrackingConfig.from_config(result["settings"]["causal_tracking"])
+
+
+def test_demo_preparation_versions_edited_inputs_and_launches_existing_importer(tmp_path, monkeypatch):
+    from lerobot.gui.api import run as run_api
+
+    (tmp_path / "meta").mkdir()
+    (tmp_path / "meta/info.json").write_text("{}")
+    bundle = tmp_path / "flash/v1/prepared/original/bundle.json"
+    bundle.parent.mkdir(parents=True)
+    bundle.write_text(json.dumps({"skill": "skill.json", "references": []}))
+    (bundle.parent / "skill.json").write_text(json.dumps({"source_episode": 0}))
+    annotation = {"episode": 0, "prompts_by_role": {"held": "dowel", "target": "ring"}}
+    (bundle.parent / "annotation.json").write_text(json.dumps(annotation))
+    keypoints = {"keypoints": [{"t": 1.0, "move": "line"}]}
+    (bundle.parent / "keypoints.json").write_text(json.dumps(keypoints))
+    assert _flash_demo_preparation(str(tmp_path), str(bundle), 0)["annotation"] == annotation
+
+    launched = []
+
+    async def launch(args, *, command, config):
+        launched.append((args, command))
+        run_api._active_process = SimpleNamespace(pid=321)
+
+    monkeypatch.setattr(run_api, "_ensure_no_active_process", lambda: None)
+    monkeypatch.setattr(run_api, "_launch_subprocess", launch)
+    edited = {**annotation, "grasp_reference_frame": 17}
+    request = FlashDemoPrepareRequest(
+        dataset_root=str(tmp_path),
+        episode=0,
+        bundle_path=str(bundle),
+        annotation=edited,
+        keypoints_document=keypoints,
+        output_name="revised",
+    )
+    result = asyncio.run(prepare_flash_demo(request))
+    assert result["status"] == "started"
+    assert (
+        json.loads((tmp_path / "flash/v1/preparation-inputs/revised/annotation.json").read_text()) == edited
+    )
+    assert (
+        json.loads((tmp_path / "flash/v1/preparation-inputs/revised/keypoints.json").read_text()) == keypoints
+    )
+    args, command = launched[0]
+    assert command == "flash_prepare"
+    assert args[2].endswith("/benchmarks/flash_prepare_legacy.py")
+    assert args[-4:] == [
+        "--keypoints",
+        str(tmp_path / "flash/v1/preparation-inputs/revised/keypoints.json"),
+        "--output-name",
+        "revised",
+    ]
+
+
+def test_new_preparation_candidate_does_not_replace_default_demo(tmp_path):
+    dataset = tmp_path / "demo"
+    (dataset / "meta").mkdir(parents=True)
+    (dataset / "meta/info.json").write_text(json.dumps({"total_episodes": 1}))
+    prepared = dataset / "flash/v1/prepared"
+    for name, stamp in [("accepted", 100), ("new", 200)]:
+        path = prepared / name
+        path.mkdir(parents=True)
+        (path / "skill.json").write_text(json.dumps({"source_episode": 0}))
+        bundle = path / "bundle.json"
+        bundle.write_text(json.dumps({"skill": "skill.json"}))
+        os.utime(bundle, (stamp, stamp))
+    (prepared / "new/preparation-report.json").write_text(json.dumps({"review_status": "candidate"}))
+    recordings = _flash_recordings((tmp_path,))
+    demo = next(recording for recording in recordings if recording["kind"] == "demo")
+    assert Path(demo["bundle_path"]).parent.name == "accepted"
+    assert [version["name"] for version in demo["prepared_versions"]] == ["accepted", "new"]
+    assert demo["prepared_versions"][-1]["candidate"]
 
 
 def test_inspection_flags_held_interval_without_an_attachment_event(tmp_path):
@@ -283,6 +361,7 @@ def test_run_flash_subtab_inspects_without_launching_robot(tmp_path, gui_page):
     assert page.locator("#run-episode-control").is_hidden()
     assert page.locator("#run-launch-btn").inner_text() == "Run FLASH"
     assert page.locator("#run-launch-btn").is_disabled()
+    page.locator("#run-flash-manual-setup summary").click()
     page.locator("#run-flash-root").fill(str(tmp_path))
     page.locator("#run-flash-inspect-btn").click()
     page.wait_for_function(
@@ -319,6 +398,7 @@ def test_run_flash_view_demo_uses_data_view_without_inspection_or_robot_launch(g
             };
         }"""
     )
+    page.locator("#run-flash-manual-setup summary").click()
     page.locator("#run-flash-root").fill("/tmp/demo")
     page.locator("#run-flash-episode").fill("2")
     page.locator("#run-flash-view-btn").click()
@@ -341,9 +421,21 @@ def test_run_flash_lists_demos_and_shows_extracted_pose_overlay(gui_page):
                     "kind": "demo",
                     "dataset_root": "/tmp/one-demo",
                     "episode": 2,
-                    "skills": ["spatial-skill"],
+                    "skills": ["spatial-skill", "new-skill"],
                     "bundle_path": "/tmp/one-demo/flash/v1/prepared/spatial-skill/bundle.json",
                     "prepared_skill": "spatial-skill",
+                    "prepared_versions": [
+                        {
+                            "name": "spatial-skill",
+                            "bundle_path": "/tmp/one-demo/flash/v1/prepared/spatial-skill/bundle.json",
+                            "candidate": False,
+                        },
+                        {
+                            "name": "new-skill",
+                            "bundle_path": "/tmp/one-demo/flash/v1/prepared/new-skill/bundle.json",
+                            "candidate": True,
+                        },
+                    ],
                     "modified_at_s": 12.0,
                 }
             ]
@@ -355,6 +447,7 @@ def test_run_flash_lists_demos_and_shows_extracted_pose_overlay(gui_page):
             json={
                 "available": True,
                 "kind": "demo",
+                "bundle_path": parse_qs(urlsplit(route.request.url).query)["bundle_path"][0],
                 "fps": 30,
                 "geometry": {
                     "points_object_m": {"object": [[0, 0, 1], [0.1, 0, 1], [0, 0.1, 1]]},
@@ -410,6 +503,7 @@ def test_run_flash_lists_demos_and_shows_extracted_pose_overlay(gui_page):
         "() => document.querySelectorAll('#run-flash-demos .flash-recording').length === 1"
     )
     assert "spatial-skill" in page.locator("#run-flash-demos").inner_text()
+    assert "review candidate" in page.locator("#run-flash-demos .flash-recording-version").inner_text()
     page.locator("#run-flash-demos .flash-recording").click()
     page.wait_for_function("() => document.querySelector('#flash-tracker-mode').textContent === 'Demo'")
     assert "active" in page.locator('.tab[data-tab="run"]').get_attribute("class").split()
@@ -428,6 +522,47 @@ def test_run_flash_lists_demos_and_shows_extracted_pose_overlay(gui_page):
     assert control_y >= viewer["y"] + viewer["height"] - 1
     page.locator("#flash-tracker-content").evaluate("el => el.append(' extra detail '.repeat(100))")
     assert controls.bounding_box()["y"] == control_y
+    page.locator("#run-flash-demos .flash-recording-version").select_option(
+        "/tmp/one-demo/flash/v1/prepared/new-skill/bundle.json"
+    )
+    page.wait_for_function("() => flashReplay?.bundle_path?.includes('/new-skill/')")
+    assert "Viewing: new-skill" in page.locator("#run-flash-demos .flash-recording-meta").inner_text()
+    page.route(
+        "**/api/run/flash/demo/preparation?*",
+        lambda route: route.fulfill(
+            json={
+                "annotation": {
+                    "episode": 2,
+                    "reference_frame": 4,
+                    "grasp_reference_frame": 4,
+                    "grasp_time_s": 1.0,
+                    "release_time_s": 2.0,
+                    "start_anchored_until_s": 1.5,
+                    "held_role": "object",
+                    "prompts_by_role": {"object": "dowel"},
+                    "axial_symmetry_roles": {},
+                },
+                "keypoints_document": {"keypoints": [{"t": 1.0, "move": "line", "frame": "object"}]},
+                "reference_masks": {"object": {"frame_index": 4, "available": True}},
+            }
+        ),
+    )
+    page.locator("#flash-demo-edit-toggle").click()
+    page.wait_for_function("() => !!document.querySelector('#flash-demo-editor')")
+    assert "Edit this demo" in page.locator("#flash-demo-editor").inner_text()
+    assert page.locator("#flash-demo-editor-frame").inner_text().startswith("Frame 4")
+    page.get_by_role("button", name="Draw replacement mask").click()
+    page.evaluate("""() => {
+        const image = document.querySelector('#rerun-viewer .flash-replay-grid img');
+        const box = image.getBoundingClientRect();
+        for (const [x, y] of [[0.4, 0.4], [0.6, 0.4], [0.5, 0.6]])
+            _flashEditorPolygonClick({clientX: box.left + box.width * x, clientY: box.top + box.height * y});
+    }""")
+    page.get_by_role("button", name="Finish polygon").click()
+    assert "Manual object mask: 3 vertices" in page.locator("#flash-demo-editor-polygon-status").inner_text()
+    assert len(page.evaluate("flashDemoEditor.annotation.reference_polygons_by_role.object")) == 3
+    page.locator("#flash-demo-edit-toggle").click()
+    assert page.locator("#flash-demo-editor").count() == 0
 
 
 @pytest.mark.requires_playwright
@@ -498,6 +633,7 @@ def test_run_flash_subtab_launches_selected_prepared_skill(gui_page):
     )
     page.evaluate("switchTab('run')")
     page.evaluate("() => selectWorkflow('flash')")
+    page.locator("#run-flash-manual-setup summary").click()
     page.locator("#run-flash-root").fill("/tmp/example")
     page.locator("#run-flash-inspect-btn").click()
     page.wait_for_function(

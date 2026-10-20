@@ -374,6 +374,26 @@ let flashReplay = null;
 let flashReplayTimer = null;
 let flashOverlayRows = [];
 let flashHighlightedOverlay = null;
+let flashDemoEditor = null;
+
+function closeFlashDemoEditor() {
+    flashDemoEditor = null;
+    const trackerPanel = document.getElementById('flash-tracker-panel');
+    const viewer = document.getElementById('rerun-viewer');
+    if (trackerPanel && viewer && trackerPanel.parentElement !== viewer) {
+        trackerPanel.style.removeProperty('top');
+        trackerPanel.style.removeProperty('left');
+        trackerPanel.style.removeProperty('right');
+        trackerPanel.style.removeProperty('max-height');
+        viewer.append(trackerPanel);
+    }
+    document.getElementById('flash-demo-editor')?.remove();
+    document.querySelector('#rerun-viewer .flash-demo-mask')?.remove();
+    document.querySelector('#rerun-viewer .flash-demo-polygon')?.remove();
+    document.getElementById('rerun-viewer')?.classList.remove('flash-demo-editing');
+    const toggle = document.getElementById('flash-demo-edit-toggle');
+    if (toggle) toggle.textContent = 'Edit demo';
+}
 
 function toggleFlashTrackerPanel() {
     const panel = document.getElementById('flash-tracker-panel');
@@ -391,7 +411,7 @@ function initFlashTrackerPanelDrag() {
     const heading = document.getElementById('flash-tracker-heading');
     let drag = null;
     heading.addEventListener('pointerdown', event => {
-        if (event.button !== 0 || event.target.closest('button')) return;
+        if (event.button !== 0 || event.target.closest('button') || flashDemoEditor) return;
         const panelRect = panel.getBoundingClientRect();
         const viewerRect = viewer.getBoundingClientRect();
         drag = {
@@ -725,6 +745,7 @@ function _flashDrawOverlay() {
 
 function startFlashTelemetry() {
     if (flashTelemetryTimer) return;
+    closeFlashDemoEditor();
     flashReplay = null;
     clearInterval(flashReplayTimer); flashReplayTimer = null;
     const replayGrid = document.querySelector('#rerun-viewer .flash-replay-grid');
@@ -772,6 +793,7 @@ async function loadFlashTrackerReplay(datasetRoot, episodeIndex) {
 }
 
 function _flashInstallReplay(replay, imageAlt) {
+    closeFlashDemoEditor();
     stopFlashTelemetry();
     stopObsStreamViewer();
     clearInterval(flashReplayTimer);
@@ -792,6 +814,7 @@ function _flashInstallReplay(replay, imageAlt) {
     document.getElementById('flash-tracker-replay-controls').hidden = false;
     document.getElementById('flash-tracker-scrub').max = Math.max(0, replay.frames.length - 1);
     document.getElementById('flash-tracker-play').textContent = 'Play';
+    document.getElementById('flash-demo-edit-toggle').hidden = replay.kind !== 'demo';
 }
 
 async function loadFlashDemoReplay(datasetRoot, episodeIndex, bundlePath) {
@@ -810,6 +833,13 @@ async function loadFlashDemoReplay(datasetRoot, episodeIndex, bundlePath) {
         document.getElementById('run-flash-episode').value = String(episodeIndex);
         _clearFlashPreparedSkills();
         _flashInstallReplay({ ...result, datasetRoot, episode: episodeIndex }, 'Original aligned demo RGB frame');
+        for (const card of document.querySelectorAll('#run-flash-demos .flash-recording-card')) {
+            if (card.dataset.datasetRoot !== datasetRoot || Number(card.dataset.episode) !== episodeIndex) continue;
+            const select = card.querySelector('.flash-recording-version');
+            if (select && [...select.options].some(option => option.value === bundlePath)) select.value = bundlePath;
+            const meta = card.querySelector('.flash-recording-meta');
+            if (meta) meta.textContent = `Viewing: ${bundlePath.split('/').slice(-2, -1)[0]} · Play with extracted poses`;
+        }
         seekFlashReplay(0);
         toggleFlashReplay();
         if (status) status.textContent = `${result.skill_sample_count} spatial samples from ${bundlePath.split('/').slice(-2, -1)[0]} are shown on the original camera frames.`;
@@ -838,6 +868,10 @@ async function _loadFlashRecordings() {
         if (!demos.length) demosList.textContent = 'No FLASH demos in your dataset sources.';
         if (!rollouts.length) list.textContent = 'No FLASH rollouts in your dataset sources.';
         for (const recording of demos) {
+            const card = document.createElement('div');
+            card.className = 'flash-recording-card';
+            card.dataset.datasetRoot = recording.dataset_root;
+            card.dataset.episode = String(recording.episode);
             const button = document.createElement('button');
             button.type = 'button';
             button.className = 'flash-recording';
@@ -846,13 +880,36 @@ async function _loadFlashRecordings() {
             const label = document.createElement('strong');
             label.textContent = `${recording.dataset_root.split('/').pop()} · episode ${recording.episode}`;
             const meta = document.createElement('span');
+            meta.className = 'flash-recording-meta';
             const skills = recording.skills || [];
             meta.textContent = recording.bundle_path
                 ? `${skills.length} FLASH skill(s) · viewing: ${recording.prepared_skill} · Play with extracted poses`
                 : `${skills.length} FLASH annotation(s) · no prepared skill; preparation is not available in this UI yet`;
             button.append(label, meta);
-            button.onclick = () => loadFlashDemoReplay(recording.dataset_root, recording.episode, recording.bundle_path);
-            demosList.append(button);
+            button.onclick = () => loadFlashDemoReplay(
+                recording.dataset_root, recording.episode,
+                card.querySelector('.flash-recording-version')?.value || recording.bundle_path,
+            );
+            card.append(button);
+            const versions = recording.prepared_versions || [];
+            if (versions.length > 1) {
+                const select = document.createElement('select');
+                select.className = 'flash-recording-version';
+                select.setAttribute('aria-label', `Prepared version for ${label.textContent}`);
+                for (const version of [...versions].reverse()) {
+                    const option = document.createElement('option');
+                    option.value = version.bundle_path;
+                    option.textContent = `${version.name}${version.candidate ? ' · review candidate' : ''}`;
+                    select.append(option);
+                }
+                select.value = flashReplay?.kind === 'demo' && flashReplay.datasetRoot === recording.dataset_root &&
+                    flashReplay.episode === recording.episode
+                    ? flashReplay.bundle_path : recording.bundle_path;
+                if (!select.value) select.value = recording.bundle_path;
+                select.onchange = () => loadFlashDemoReplay(recording.dataset_root, recording.episode, select.value);
+                card.append(select);
+            }
+            demosList.append(card);
         }
         for (const recording of rollouts) {
             const button = document.createElement('button');
@@ -894,6 +951,7 @@ function seekFlashReplay(index) {
     image.src = url;
     if (demo) renderFlashDemoSnapshot({ ...selected.snapshot, ...flashReplay.geometry });
     else renderFlashSnapshot(selected.snapshot, 'Recording');
+    if (flashDemoEditor) _flashEditorUpdateFrame();
 }
 
 function toggleFlashReplay() {
@@ -909,6 +967,8 @@ function toggleFlashReplay() {
         seekFlashReplay(next);
     }, flashReplay.kind === 'demo' ? 1000 / flashReplay.fps : 100);
 }
+
+// The demo editor is loaded from flash_demo_editor.js.
 
 function _flashSkillDetail() {
     const container = document.getElementById('run-flash-skill-detail');
@@ -2072,7 +2132,8 @@ function renderRunForm() {
     html += '<div id="run-flash-demos" class="flash-recordings">Loading demos…</div>';
     html += '<div class="flash-recordings-heading"><span class="form-section-title">Rollouts</span></div>';
     html += '<div id="run-flash-recordings" class="flash-recordings">Loading rollouts…</div>';
-    html += '<div class="form-hint">Select a demo to inspect its saved spatial samples; preparation masks and rejected fits were not recorded for this imported demo. Demo editing and regeneration are not available in this UI yet. Open a rollout to compare live tracker estimates. Playback does not move the robot.</div>';
+    html += '<div class="form-hint">Select a demo, then use Edit demo beneath playback to revise its reference mask and key frames. Playback and preparation do not move the robot.</div>';
+    html += '<details class="flash-manual-setup" id="run-flash-manual-setup"><summary>Open another dataset or run a live trial</summary>';
     html += '<div class="form-grid">';
     html += '<label>Dataset</label>';
     html += '<select id="run-flash-dataset" onchange="_onFlashDatasetChange()"><option value="">Choose an opened dataset...</option></select>';
@@ -2101,7 +2162,8 @@ function renderRunForm() {
     html += '</div>';
     html += '<button type="button" class="btn-small secondary" onclick="inspectFlashTrialConfig()">Inspect trial parameters</button>';
     html += '<div id="run-flash-config-detail" class="flash-skill-detail"></div>';
-    html += '<div id="run-flash-status" class="form-hint">View the episode in Data, or inspect its FLASH skills here.</div>';
+    html += '</details>';
+    html += '<div id="run-flash-status" class="form-hint">Choose a demo above to review its extracted poses.</div>';
     html += '</div>';
 
     // ---- Episode control (active while a record subprocess runs) ----
@@ -2983,7 +3045,7 @@ async function pollRunStatus() {
         // If running but no SSE, reconnect
         if (status.running && !runEventSource) {
             connectOutputSSE();
-            startObsStreamViewer();
+            if (status.command !== 'flash_prepare') startObsStreamViewer();
         }
     } catch (e) {
         console.error('Status poll failed:', e);

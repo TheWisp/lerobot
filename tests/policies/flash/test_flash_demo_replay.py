@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 
 from lerobot.policies.flash.appearance import AppearanceModel
-from lerobot.policies.flash.demo_replay import build_demo_replay
+from lerobot.policies.flash.demo_replay import _demo_annotation_path, build_demo_replay
 from lerobot.policies.flash.matched_rgbd import ObjectPointModel
 from lerobot.policies.flash.perception import ObjectReference, ReferenceSnippet
 from lerobot.policies.flash.prepared import PreparedFlashSkill
@@ -16,6 +16,17 @@ def _pose(x: float) -> np.ndarray:
     pose = np.eye(4)
     pose[0, 3] = x
     return pose
+
+
+def test_demo_replay_uses_the_selected_preparation_recipe(tmp_path) -> None:
+    bundle = tmp_path / "flash/v1/prepared/new/bundle.json"
+    bundle.parent.mkdir(parents=True)
+    old = tmp_path / "flash/v1/import-annotations.json"
+    old.write_text('{"grasp_reference_frame": 100}')
+    assert _demo_annotation_path(tmp_path, bundle) == old
+    updated = bundle.parent / "annotation.json"
+    updated.write_text('{"grasp_reference_frame": 130}')
+    assert _demo_annotation_path(tmp_path, bundle) == updated
 
 
 def test_demo_replay_keeps_dense_samples_and_labels_sparse_endpoints() -> None:
