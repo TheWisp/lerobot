@@ -5,6 +5,8 @@ from dataclasses import replace
 import numpy as np
 import pytest
 
+from lerobot.policies.flash.causal_service import CausalTrackingConfig
+from lerobot.policies.flash.execution import MissedEventError, TimedAction
 from lerobot.policies.flash.perception import ObjectReference, ReferenceSnippet
 from lerobot.policies.flash.planner import PlannerLimits
 from lerobot.policies.flash.planning_coordinator import PlanBufferConfig
@@ -83,7 +85,7 @@ class FakeRecorder:
         self.finished = (outcome, reason)
 
 
-def runtime(test_skill, references, recorder):
+def runtime(test_skill, references, recorder, *, causal_tracking=None):
     return FlashRuntime(
         skill=test_skill,
         robot=FakeRobot(),
@@ -100,7 +102,19 @@ def runtime(test_skill, references, recorder):
         rgb_feature="camera",
         depth_feature=None,
         max_camera_age_s=0.2,
+        causal_tracking=causal_tracking,
     )
+
+
+def test_runtime_gives_causal_scene_estimator_exclusive_pose_publication():
+    attempt = runtime(
+        skill(),
+        (reference("target", "target-v1"),),
+        FakeRecorder(),
+        causal_tracking=CausalTrackingConfig(60, 64, 12, 0.1, 0.005),
+    )
+    assert attempt.causal is not None
+    assert attempt.perception.worker.publish_results is False
 
 
 def test_runtime_rejects_held_motion_without_demonstrated_attach_event():
@@ -146,6 +160,36 @@ def test_motor_epoch_starts_after_pose_readiness(monkeypatch):
     assert recorder.started
     attempt.close("unknown", "test completed")
     assert recorder.finished == ("unknown", "test completed")
+
+
+def test_runtime_wires_joint_continuity_for_late_free_space_deadlines():
+    attempt = runtime(skill(), (reference("target", "target-v1"),), FakeRecorder())
+    queue = attempt.session.actions
+    queue.publish(
+        0,
+        [
+            TimedAction(i, {"arm.pos": 0.5 * i, "gripper.pos": 1.0}, "move", may_skip_if_late=True)
+            for i in range(4)
+        ],
+    )
+    assert queue.take(0)[0] is not None
+    queue.note_issued({"arm.pos": 0.0, "gripper.pos": 1.0})
+    # This is the real queue constructed by FlashRuntime. Previously it had
+    # no continuity limit and aborted after a perfectly bounded motor slip.
+    assert queue.expire_before(3) == 2
+
+    unsafe = runtime(skill(), (reference("target", "target-v1"),), FakeRecorder()).session.actions
+    unsafe.publish(
+        0,
+        [
+            TimedAction(i, {"arm.pos": 0.5 * i, "gripper.pos": float(i)}, "move", may_skip_if_late=True)
+            for i in range(4)
+        ],
+    )
+    unsafe.take(0)
+    unsafe.note_issued({"arm.pos": 0.0, "gripper.pos": 0.0})
+    with pytest.raises(MissedEventError, match="jump at gripper"):
+        unsafe.expire_before(3)
 
 
 def test_startup_pose_updates_do_not_overflow_unconsumed_evidence():

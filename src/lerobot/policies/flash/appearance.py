@@ -276,6 +276,7 @@ class AppearanceBackendFactory:
             threshold_m=self.threshold_m,
             min_inliers=self.min_inliers,
             trials=self.trials,
+            visible_shape_fallback=True,
         )
         if self.axial_symmetries:
             from .symmetry import SymmetryCanonicalizingBackend

@@ -79,7 +79,7 @@ Its memory and compute ideas are worth adapting. For manipulation, preserve reve
 
 ## A tracker we could build
 
-The proposed tracker specializes in causal rigid-object estimation under contact and partial visibility. The full tracker is **not implemented**. A separate, optional frame-to-frame RGB-D point-motion path now exists for objects that already have an absolute pose and a mask; it does not yet track environmental groups, establish an initial pose, or recover identity after all point tracks disappear. It uses pretrained components and geometry before considering new network training.
+The proposed tracker specializes in causal rigid-object estimation under contact and partial visibility. The full tracker is **not implemented**. An experimental shared RGB-D point frontend now tracks scene points and can carry an object with nearby group motion **after observed co-motion establishes and verifies the relationship**. A separate object-point path needs an absolute pose and aligned mask to start. Neither path establishes cross-recording identity or recovers it after all supporting points disappear. The current code still lacks the single scene-estimator arbitration boundary described in the [system design](architecture.md#one-scene-estimator-several-evidence-sources). These paths use pretrained components and geometry before considering new network training.
 
 ```mermaid
 flowchart TD

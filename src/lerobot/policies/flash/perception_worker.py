@@ -123,6 +123,7 @@ class PoseProcess:
         *,
         on_result: Callable[[_Result], None] | None = None,
         require_masks: bool = False,
+        publish_results: bool = True,
     ) -> None:
         if not references:
             raise ValueError("pose worker needs object references")
@@ -131,6 +132,7 @@ class PoseProcess:
         self.store = store
         self.on_result = on_result
         self.require_masks = require_masks
+        self.publish_results = publish_results
         self.metrics = PoseProcessMetrics()
         self._context = mp.get_context("spawn")
         self._frames = self._context.Queue(maxsize=1)
@@ -209,7 +211,10 @@ class PoseProcess:
                 self._failure = message.detail
                 break
             if isinstance(message, _Result):
-                self.store.publish(message.estimates)
+                # With a scene estimator, this process is an evidence producer.
+                # It must not race that estimator to write the accepted pose.
+                if self.publish_results:
+                    self.store.publish(message.estimates)
                 if self.on_result is not None:
                     self.on_result(message)
                 self.metrics.delivered += 1

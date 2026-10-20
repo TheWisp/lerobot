@@ -158,6 +158,9 @@ class FlashEpisodeWriter:
                     "reference_version": estimate.reference_version,
                     "translation_supported": estimate.translation_supported,
                     "rotation_supported": estimate.rotation_supported,
+                    "direct_translation_observed": estimate.direct_translation_observed,
+                    "estimator": estimate.estimator,
+                    "last_direct_observation_s": estimate.last_direct_observation_s,
                 }
                 for role, estimate in record.pose_estimates.items()
             },
@@ -256,6 +259,9 @@ def load_pose_estimates(
                 reference_version=pose["reference_version"],
                 translation_supported=tuple(pose["translation_supported"]),
                 rotation_supported=tuple(pose["rotation_supported"]),
+                direct_translation_observed=bool(pose.get("direct_translation_observed", False)),
+                estimator=str(pose.get("estimator", "unspecified")),
+                last_direct_observation_s=pose.get("last_direct_observation_s"),
             )
         result[frame_index] = estimates
     return result

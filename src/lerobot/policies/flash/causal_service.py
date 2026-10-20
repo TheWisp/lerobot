@@ -13,6 +13,12 @@ import numpy as np
 
 from .causal_points import CausalRigidPointTracker
 from .perception import LatestPoseStore, RGBDFrame
+from .scene_groups import (
+    EnvironmentRelationship,
+    ScenePointTracker,
+    SceneTracks,
+    establish_environment_relationship,
+)
 from .trajectory import Evidence, PoseEstimate
 
 
@@ -31,6 +37,12 @@ class CausalTrackingConfig:
     max_frame_gap_s: float
     fit_threshold_m: float
     image_scale: float = 1.0
+    scene_max_points: int = 800
+    environment_context_radius_m: float = 0.25
+    environment_min_motion_m: float = 0.008
+    environment_prediction_max_s: float = 1.0
+    environment_min_inliers: int = 12
+    static_prediction_max_s: float | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -43,6 +55,18 @@ class CausalTrackingConfig:
             or self.fit_threshold_m <= 0
             or not isfinite(self.image_scale)
             or not 0 < self.image_scale <= 1
+            or self.scene_max_points < 16
+            or not isfinite(self.environment_context_radius_m)
+            or self.environment_context_radius_m <= 0
+            or not isfinite(self.environment_min_motion_m)
+            or self.environment_min_motion_m <= 0
+            or not isfinite(self.environment_prediction_max_s)
+            or self.environment_prediction_max_s <= 0
+            or self.environment_min_inliers < 3
+            or (
+                self.static_prediction_max_s is not None
+                and (not isfinite(self.static_prediction_max_s) or self.static_prediction_max_s <= 0)
+            )
         ):
             raise ValueError("invalid causal tracking configuration")
 
@@ -65,11 +89,18 @@ class CausalPoseService:
         max_frame_gap_s: float = 0.1,
         fit_threshold_m: float = 0.005,
         image_scale: float = 1.0,
+        scene_max_points: int = 800,
+        environment_context_radius_m: float = 0.25,
+        environment_min_motion_m: float = 0.008,
+        environment_prediction_max_s: float = 1.0,
+        environment_min_inliers: int = 12,
+        static_prediction_max_s: float | None = None,
     ) -> None:
         if history_frames < 2 or queue_frames < 2:
             raise ValueError("causal pose history and queue need at least two frames")
         self.store = store
         self.history: deque[RGBDFrame] = deque(maxlen=history_frames)
+        self.scene_history: deque[SceneTracks] = deque(maxlen=history_frames)
         self.queue: Queue[RGBDFrame | _Anchor | None] = Queue(maxsize=queue_frames)
         self.tracker_kwargs = {
             "min_inliers": min_inliers,
@@ -78,6 +109,20 @@ class CausalPoseService:
             "image_scale": image_scale,
         }
         self.active: dict[str, tuple[CausalRigidPointTracker, PoseEstimate]] = {}
+        self.scene = ScenePointTracker(
+            max_points=scene_max_points,
+            max_frame_gap_s=max_frame_gap_s,
+            image_scale=image_scale,
+        )
+        self.environment_context_radius_m = environment_context_radius_m
+        self.environment_min_motion_m = environment_min_motion_m
+        self.environment_prediction_max_s = environment_prediction_max_s
+        self.environment_min_inliers = environment_min_inliers
+        self.static_prediction_max_s = static_prediction_max_s
+        self.fit_threshold_m = fit_threshold_m
+        self.observed: dict[str, tuple[PoseEstimate, SceneTracks, tuple[np.ndarray, ...]]] = {}
+        self.candidate_relationships: dict[str, EnvironmentRelationship] = {}
+        self.relationships: dict[str, EnvironmentRelationship] = {}
         self._thread = Thread(target=self._run, name="flash-causal-points", daemon=True)
         self._lock = Lock()
         self._error: Exception | None = None
@@ -86,6 +131,13 @@ class CausalPoseService:
         self.anchors = 0
         self.missed_anchors = 0
         self.published = 0
+        self.published_by_role: dict[str, int] = {}
+        self.direct_published = 0
+        self.static_published = 0
+        self.max_processing_lag_s = 0.0
+        self.latest_processed_source_time_s: float | None = None
+        self.environment_relationships = 0
+        self.environment_published = 0
 
     @property
     def error(self) -> Exception | None:
@@ -132,18 +184,94 @@ class CausalPoseService:
         if self.history and frame.frame_id <= self.history[-1].frame_id:
             raise ValueError("causal camera frames must increase")
         self.history.append(frame)
+        scene = self.scene.update(frame)
+        self.scene_history.append(scene)
         self.frames += 1
+        self.max_processing_lag_s = max(self.max_processing_lag_s, time.perf_counter() - frame.source_time_s)
+        self.latest_processed_source_time_s = frame.source_time_s
+        object_motion_roles: set[str] = set()
         for role, (tracker, anchor) in list(self.active.items()):
             try:
                 motion = tracker.update(frame)
             except ValueError:
                 del self.active[role]
                 continue
-            self._publish(role, anchor, motion)
+            if motion.base_motion_from_seed is not None:
+                object_motion_roles.add(role)
+                self._publish(role, anchor, motion)
+        for role, relationship in list(self.relationships.items()):
+            if frame.source_time_s - relationship.anchor_time_s > self.environment_prediction_max_s:
+                del self.relationships[role]
+                continue
+            if role in object_motion_roles:
+                continue
+            pose = relationship.predict(
+                scene, fit_threshold_m=self.fit_threshold_m, min_inliers=self.environment_min_inliers
+            )
+            if pose is None:
+                continue
+            observed = self.observed.get(role)
+            if observed is None or observed[0].reference_version != relationship.reference_version:
+                continue
+            anchor = observed[0]
+            estimate = PoseEstimate(
+                role,
+                pose,
+                frame.source_time_s,
+                max(frame.available_time_s, time.perf_counter()),
+                Evidence.PREDICTED,
+                relationship.reference_version,
+                anchor.translation_supported,
+                anchor.rotation_supported,
+                estimator="environment_group_motion",
+                last_direct_observation_s=relationship.anchor_time_s,
+            )
+            previous_version, _ = self.store.snapshot()
+            if self.store.publish((estimate,)) != previous_version:
+                self.environment_published += 1
+        # A missing visual fit is not evidence that a stationary object moved.
+        # Carry the last direct pose for a bounded interval, with explicit
+        # prediction provenance. Once co-motion has been verified, only that
+        # relationship may carry the pose: a static prior must not hide a
+        # moved support surface or a failed group fit.
+        for role, (anchor, _, _) in self.observed.items():
+            if role not in object_motion_roles and role not in self.relationships:
+                self._publish_static(role, anchor, frame)
+
+    def _publish_static(self, role: str, anchor: PoseEstimate, frame: RGBDFrame) -> None:
+        if self.static_prediction_max_s is None:
+            return
+        age = frame.source_time_s - anchor.source_time_s
+        if not 0 < age <= self.static_prediction_max_s:
+            return
+        current = self.store.snapshot()[1].get(role)
+        if current is not None and current.source_time_s >= frame.source_time_s:
+            return
+        assert anchor.pose is not None
+        before, _ = self.store.snapshot()
+        after = self.store.publish(
+            (
+                PoseEstimate(
+                    role,
+                    anchor.pose,
+                    frame.source_time_s,
+                    max(frame.available_time_s, time.perf_counter()),
+                    Evidence.PREDICTED,
+                    anchor.reference_version,
+                    anchor.translation_supported,
+                    anchor.rotation_supported,
+                    estimator="stationary_prior",
+                    last_direct_observation_s=anchor.source_time_s,
+                ),
+            )
+        )
+        if after != before:
+            self.static_published += 1
 
     def _anchor(self, result: _Anchor) -> None:
         source = next((frame for frame in self.history if frame.frame_id == result.frame_id), None)
-        if source is None:
+        scene = next((item for item in self.scene_history if item.frame_id == result.frame_id), None)
+        if source is None or scene is None:
             self.missed_anchors += 1
             return
         for estimate in result.estimates:
@@ -155,8 +283,17 @@ class CausalPoseService:
                 or estimate.source_time_s != source.source_time_s
             ):
                 continue
+            if estimate.has_direct_translation:
+                self._observe_environment(estimate, scene, result.masks)
+            # The pose process only submits source-frame proposals. This is
+            # the sole owner that can publish an accepted absolute pose.
+            before, _ = self.store.snapshot()
+            if self.store.publish((estimate,)) != before:
+                self.direct_published += 1
             tracker = CausalRigidPointTracker(**self.tracker_kwargs)
             if tracker.seed(source, mask) < tracker.min_inliers:
+                if self.history[-1].frame_id > source.frame_id and estimate.role not in self.relationships:
+                    self._publish_static(estimate.role, estimate, self.history[-1])
                 continue
             self.active[estimate.role] = (tracker, estimate)
             self.anchors += 1
@@ -169,6 +306,68 @@ class CausalPoseService:
                     del self.active[estimate.role]
                     break
                 self._publish(estimate.role, estimate, motion)
+            # A point track may fail before catching up to the newest camera
+            # frame. Keep the last directly measured pose explicitly predicted
+            # until another source supports a newer state.
+            if self.history[-1].frame_id > source.frame_id and estimate.role not in self.relationships:
+                self._publish_static(estimate.role, estimate, self.history[-1])
+
+    def _observe_environment(
+        self, estimate: PoseEstimate, scene: SceneTracks, masks: dict[str, np.ndarray]
+    ) -> None:
+        """Verify co-motion before a group can predict a hidden object."""
+        role = estimate.role
+        existing = self.relationships.get(role) or self.candidate_relationships.get(role)
+        if existing is not None:
+            predicted = existing.predict(
+                scene, fit_threshold_m=self.fit_threshold_m, min_inliers=self.environment_min_inliers
+            )
+            if predicted is None or estimate.pose is None or self._pose_disagrees(predicted, estimate.pose):
+                self.relationships.pop(role, None)
+                self.candidate_relationships.pop(role, None)
+            elif scene.source_time_s > existing.anchor_time_s:
+                current_ids = {int(point_id): index for index, point_id in enumerate(scene.ids)}
+                keep = [int(point_id) for point_id in existing.ids if int(point_id) in current_ids]
+                if len(keep) >= self.environment_min_inliers:
+                    relationship = EnvironmentRelationship(
+                        np.asarray(keep, dtype=np.int64),
+                        scene.base_xyz[[current_ids[point_id] for point_id in keep]].copy(),
+                        estimate.pose,
+                        scene.source_time_s,
+                        estimate.reference_version,
+                    )
+                    if role in self.candidate_relationships:
+                        self.relationships[role] = relationship
+                        self.candidate_relationships.pop(role, None)
+                        self.environment_relationships += 1
+                    else:
+                        self.relationships[role] = relationship
+        if role not in self.relationships and role not in self.candidate_relationships:
+            previous = self.observed.get(role)
+            if previous is not None:
+                old_estimate, old_scene, old_masks = previous
+                if old_estimate.pose is not None and estimate.pose is not None:
+                    candidate = establish_environment_relationship(
+                        old_scene,
+                        scene,
+                        old_estimate.pose,
+                        estimate.pose,
+                        old_masks,
+                        context_radius_m=self.environment_context_radius_m,
+                        fit_threshold_m=self.fit_threshold_m,
+                        min_motion_m=self.environment_min_motion_m,
+                        min_inliers=self.environment_min_inliers,
+                        reference_version=estimate.reference_version,
+                    )
+                    if candidate is not None:
+                        self.candidate_relationships[role] = candidate
+        self.observed[role] = (estimate, scene, tuple(mask.copy() for mask in masks.values()))
+
+    def _pose_disagrees(self, predicted: np.ndarray, observed: np.ndarray) -> bool:
+        if np.linalg.norm(predicted[:3, 3] - observed[:3, 3]) > 2 * self.fit_threshold_m:
+            return True
+        turn = predicted[:3, :3].T @ observed[:3, :3]
+        return float(np.arccos(np.clip((np.trace(turn) - 1) / 2, -1, 1))) > 0.15
 
     def _publish(self, role: str, anchor: PoseEstimate, motion) -> None:
         if motion.base_motion_from_seed is None:
@@ -188,11 +387,14 @@ class CausalPoseService:
             anchor.reference_version,
             anchor.translation_supported,
             anchor.rotation_supported,
+            estimator="object_point_motion",
+            last_direct_observation_s=anchor.source_time_s,
         )
         before, _ = self.store.snapshot()
         after = self.store.publish((current,))
         if after != before:
             self.published += 1
+            self.published_by_role[role] = self.published_by_role.get(role, 0) + 1
 
     def close(self, timeout_s: float = 5.0) -> None:
         if not self._started:

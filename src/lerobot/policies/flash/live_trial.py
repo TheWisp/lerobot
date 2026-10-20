@@ -260,6 +260,14 @@ def trial(
                         "anchors": runtime.causal.anchors,
                         "missed_anchors": runtime.causal.missed_anchors,
                         "published": runtime.causal.published,
+                        "published_by_role": runtime.causal.published_by_role.copy(),
+                        "direct_published": runtime.causal.direct_published,
+                        "static_published": runtime.causal.static_published,
+                        "latest_processed_source_time_s": runtime.causal.latest_processed_source_time_s,
+                        "max_processing_lag_s": runtime.causal.max_processing_lag_s,
+                        "environment_relationships": runtime.causal.environment_relationships,
+                        "environment_published": runtime.causal.environment_published,
+                        "scene_gaps": runtime.causal.scene.gaps,
                     }
                     if runtime.causal is not None
                     else None

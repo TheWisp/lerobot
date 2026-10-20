@@ -1,11 +1,10 @@
 # FLASH: spatial action model
 
-Status: proposed architecture; the first executable slice is documented in
-[implementation status](../README.md). The Run → FLASH sub-tab currently
-inspects spatial data attached to a local LeRobot dataset episode and does not
-launch hardware motion.
-The first recorded RGB-D matcher result and its limits are in
-[the replay note](rgbd_replay.md).
+Status: proposed
+
+The [implementation reference](../README.md) describes what currently runs;
+this document defines the intended contracts. The first recorded RGB-D matcher
+result and its limits are in [the replay note](rgbd_replay.md).
 
 FLASH is imitation learning with an explicit 3D representation of objects, relationships and actions. Its initial form performs direct imitation: retain how a demonstration accomplishes an interaction, and adapt the motion to the live scene. Teaching, testing and collecting robot data should be one workflow: record an interaction, try it in a changed scene, intervene when needed, and retain the whole experience. The sealed prototype demonstrated useful spatial adaptation, but its uncertain object estimates, execution rules and recording paths became entangled. More demonstrations need to improve what the robot can do, while producing ordinary LeRobot data augmented with 3D information for future learned models.
 
@@ -34,7 +33,7 @@ The **rig workload** initially means the available SO-107, one overhead RGB-D ca
 | <a id="r3"></a>R3 | P0       | Keep physical motion independent of compute completion                    | Schedule 30 Hz on the rig workload, with no deliberate per-sample waits; no computation-caused command gap exceeding two periods (66.7 ms) in the agreed stress run                                      | Hardware timestamps, deadline misses, queue starvation and cause-tagged stationary intervals; the gap limit detects a lost control tick                |
 | <a id="r4"></a>R4 | P0       | Express keyframe and interval constraints independently of pose certainty | Required, preferred and free dimensions declare their reference entities and task tolerance; unobserved dimensions never become certain by fallback                                                      | Adapt keyframes under symmetry and occlusion; verify strict interaction relations and flexible transport                                               |
 | <a id="r5"></a>R5 | P0       | Track progress, verify milestones and handle exceptions                   | Explicit interval progress and milestone state; completion, failure, unknown and interruption differ; invalid prerequisites trigger recovery or a reasoned termination; takeover invalidates queued work | Missed grasp, target movement before release, obstructed insertion, delayed evidence, retry exhaustion and takeover                                    |
-| <a id="r6"></a>R6 | P0       | Use one pose interface across objects, backends and recordings            | RGB-D history produces metric pose estimates in declared frames, with evidence status; reference snippets share object identity and coordinates; no object-name branches or scene-specific offsets       | Swap backends through the same consumer; test partial/full occlusion and reference snippets from different episodes                                    |
+| <a id="r6"></a>R6 | P0       | Use one pose interface across objects, backends and recordings            | One scene-estimator owner fuses source-frame proposals into metric pose beliefs in declared frames; reference snippets share identity and coordinates; no object-name branches or scene-specific offsets | Swap backends through the same consumer; delay/reorder proposals; test partial/full occlusion and references from different episodes                   |
 | <a id="r7"></a>R7 | P0       | Preserve interaction timing and adapt transport duration                  | Grasp/placement default to 1x local demo timing; generated transport follows adapted distance at a comparable speed; pose updates affect future commands without restarting progress                     | Increase separation at fixed speed: transport takes longer while grasp/placement durations and event order remain the same; perturb each interval      |
 | <a id="r8"></a>R8 | P1       | Make more data useful and measurable                                      | Use multiple reference snippets and temporal live evidence; report held-out benefit from reference retrieval, optional tracker training, execution selection and constraint fitting separately           | Learning curves over nested reference/training sets, compared with a single-reference frozen-model baseline on held-out episodes                       |
 | <a id="r9"></a>R9 | P1       | Explain decisions in the dataset viewer                                   | Show raw evidence, pose proposals, accepted state, active keyframe/interval, progress, milestone verdicts, recovery transitions and commanded/measured motion                                            | Diagnose a known pose or progress failure from the dataset without consulting worker stdout                                                            |
@@ -57,6 +56,8 @@ The initial physical integration can use the available SO-107 with a new regular
 
 <a id="o7"></a>**O7. Tracking is not the only way more demonstrations can help.** [DINOBot](https://arxiv.org/abs/2402.13181) provides a precedent for demonstration retrieval and visual alignment. [Task-parameterized movement models](https://calinon.ch/paper3036.htm) provide a precedent for estimating which reference frames matter from multiple demonstrations. These motivate experiments here; they do not establish the performance of this proposal.
 
+<a id="o8"></a>**O8. The first live redesign trials exposed a pose-fusion boundary failure.** On 2026-10-20, two aligned RGB-D images of a stationary, fully visible dowel produced nearest-surface fits below the configured 5 mm residual but object-frame origins more than 20 mm apart. The image masks covered nearly the same span. The later fit slid on a shape whose surface did not sufficiently constrain its object-frame orientation. A subsequent partial view produced a roughly 90 mm pose jump. The [recorded two-frame fixture](../../../../../tests/policies/flash/fixtures/README.md) preserves the former case. The direct pose worker and causal point worker also published to the same latest-value store independently. A lost visual fit could therefore replace a still-useful prediction, while a delayed direct fit could conflict with motion evidence without a common arbitration decision. One scene estimator must own the accepted state and evaluate what each source actually constrains. ([R2](#r2), [R4](#r4), [R6](#r6).)
+
 ## Constraints and freedoms
 
 <a id="c1"></a>**C1. Evidence and task tolerance are different quantities.** Sensor uncertainty describes what can be measured. Task tolerance describes what still works. A noisy sensor cannot justify a wider insertion tolerance. Numerical solver tolerances, hardware limits, statistical decision policies and operator requirements must also remain distinct. Every tunable value has a source and units; not every constant is a defect. ([R4](#r4), [R6](#r6), [O2](#o2).)
@@ -74,9 +75,11 @@ The initial physical integration can use the available SO-107 with a new regular
 ```mermaid
 flowchart TD
     EP[LeRobot episodes and annotations] --> SK[Skill compilation and demonstration library]
-    CAM[Camera capture and robot observations] --> PE[Asynchronous perception service]
+    CAM[Camera capture and robot observations] --> PE[Asynchronous evidence producers]
     SK --> PE
-    PE --> BE[Timestamped object and relationship estimates]
+    PE --> FU[One event-time scene estimator]
+    CAM --> FU
+    FU --> BE[Timestamped object and relationship estimates]
     SK --> FP[FLASH policy: keyframes, progress, milestones, recovery]
     BE --> FP
     FP --> PL[Short trajectory adaptation and IK]
@@ -132,6 +135,26 @@ Human annotation uses frame/interval selection and structured options for object
 The perception service has three replaceable functions: associate objects across observations/episodes, estimate motion within a recording, and check/refine geometry against RGB-D. Point2Pose, segmentation and motion groups are candidate implementations rather than authorities baked into the controller. Cached demo results include pipeline, calibration and reference versions. ([O1](#o1), [O2](#o2), [R6](#r6).)
 
 The [tracker research and selection proposal](tracker_research.md) compares complete pose trackers with SAM, causal point tracking and VGGT-family components. Model choices remain replaceable behind these functions; their evaluation includes contact accuracy and result age, not segmentation quality alone.
+
+#### One scene estimator, several evidence sources
+
+The expensive recognizer and the causal point tracker are **evidence producers**, not independent writers of a final pose. One scene estimator owns object identity hypotheses, metric poses, object/group point membership, relationship hypotheses and the published state. The planner reads only a versioned snapshot from that owner. This prevents the arrival order of asynchronous workers from acting as a hidden ranking of their outputs. ([O1](#o1), [O8](#o8), [R2](#r2), [R6](#r6).)
+
+| Input to the scene estimator                     | Meaning                                                                                        | What it cannot establish alone                                                                            |
+| ------------------------------------------------ | ---------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| Cross-recording recognition                      | A proposed link between a live instance and an object frame built from annotated demo snippets | A continuously correct pose after the source image, or identity from a category name alone                |
+| Aligned RGB-D surface, mask and matched features | Visible points, free space, occluders and candidate metric constraints at one camera time      | Hidden geometry or rotation about an unobservable symmetry axis                                           |
+| Causal point motion                              | Correspondence and relative motion within one recording, over explicit frame IDs               | Cross-recording identity, or continued motion after all supporting points vanish                          |
+| Scene group motion                               | Motion shared by tracked surfaces, with reversible point membership                            | That a nearby object is attached to the group without observed co-motion or another declared relationship |
+| Gripper state and contact event                  | A kinematic prediction under an explicitly recorded grasp assumption                           | That the object did not slip, or that the grasp succeeded                                                 |
+
+Each proposal names its source frame ID and capture time, availability time, object-frame version, coordinate frame, supporting pixels/points, fitting residuals, observable dimensions, symmetry alternatives and producer version. It records which underlying RGB-D observations it uses, so two fits on the same pixels are not counted as independent confirmation. A producer can report no measurement; that report does not overwrite the scene estimate with a new pose. The scene estimator emits an accepted pose or an explicit unknown/lost state, the evidence that supports it, its last direct observation time and any unresolved alternatives. ([R2](#r2), [R4](#r4), [R6](#r6), [C1](#c1).)
+
+The camera stream is the event-time spine. A bounded history retains each aligned RGB-D frame and the fast point-motion increments derived from consecutive frames. A slow producer may receive only the newest frame, but its result remains tied to the **exact** older frame it analyzed. On arrival, the scene estimator checks that the frame and calibration version are retained, compares the proposal with the state predicted to that frame, applies only supported constraints, then replays subsequent motion increments to the latest processed frame before publishing one new state version. If the source frame has expired, the result is rejected with that reason; it is never transplanted onto the current image. A temporal gap invalidates the affected point tracks and calls for reassociation. Neither a slow recognizer nor this replay holds the 30 Hz motor owner. ([R2](#r2), [R3](#r3), [O8](#o8).)
+
+Prediction is a state transition with a named motion model and a widening uncertainty bound, not a refreshed observation. A world-stationary prior may bridge a short occlusion before contact; verified environment motion may carry an object with its support; a declared grasp may predict motion from the gripper. Each carries the time of its last direct support and a condition that ends or contradicts it. The allowed uncertainty is assessed at the **task point** against the active keyframe's requirements. A fixed timeout alone is insufficient: a long occlusion with stable surrounding geometry can be safer than a short one during contact, and unseen slip can remain unobservable at any duration. If neither measurement nor defensible prediction supports a required dimension, the estimator returns unknown and the policy chooses the declared recovery or stop. ([O2](#o2), [C1](#c1), [C3](#c3), [R4](#r4).)
+
+Geometry checks test a proposed pose against visible depth and free space, accounting for which model surfaces were actually visible. Nearest-surface residual alone is not a full-pose certificate: a uniform dowel can slide or rotate in object-frame coordinates while retaining a good residual ([O8](#o8)). The estimator compares plausible alternatives and motion evidence at the same timestamp. It retains a supported position/axis with unresolved rotation when that is all the image constrains; it does not force a six-degree-of-freedom answer because the output type contains a transform. Independent later views may resolve an alternative. A geometry-only relocalization after total track loss must re-establish identity and object-frame alignment rather than inherit confidence from the last accepted result. ([R4](#r4), [R6](#r6).)
 
 Each object has one state estimate, with source time, prediction time, provenance, visible support and uncertainty in the dimensions that can be measured. Competing symmetry or identity hypotheses remain alternatives instead of being averaged into an impossible pose. A covariance is useful only where its assumptions have been evaluated; otherwise report an unresolved dimension or an empirical bound, not a fabricated confidence percentage.
 
@@ -231,6 +254,29 @@ The existing policy base includes training methods as well as action methods. A 
 
 Use separate processes for heavy perception and, if needed, trajectory production. Camera filtering/capture must not contend with the motor process through a GIL-holding call. Keep existing camera/robot APIs as the public abstractions and pass timestamped snapshots through bounded buffers. GPU job scheduling favors recent useful evidence; dropping superseded work must be compatible with the tracker's temporal state, rather than silently skipping required frames.
 
+```mermaid
+flowchart LR
+    C[RGB-D capture with frame IDs] --> F[Fast causal point and scene tracks]
+    C --> S[Latest-frame segmentation and recognition process]
+    C --> H[Bounded RGB-D history]
+    F --> E[Single event-time scene estimator]
+    S --> E
+    H --> E
+    J[Timestamped robot state and grasp events] --> E
+    E --> B[Versioned pose and relationship belief]
+    B --> P[FLASH progress and spatial objectives]
+    P --> I[Asynchronous short-horizon IK]
+    I --> Q[Atomic timed action queue]
+    Q --> M[30 Hz motor owner through LeRobot Robot]
+    J --> M
+    B --> R[LeRobot episode plus FLASH evidence trace]
+    M --> R
+    S --> R
+    F --> R
+```
+
+The fast point frontend must either consume every camera frame needed for identity continuity or report a gap and reset that track. Its own throughput, queue age and published belief age are separate metrics. The slower recognizer can skip superseded frames, because it returns source-frame proposals to the scene estimator rather than pretending to have tracked the intervening motion. The action loop takes the most recent **accepted** belief and never waits for either worker. ([R2](#r2), [R3](#r3), [O8](#o8).)
+
 The motor owner runs an absolute-deadline tick: obtain bounded-cost hardware state and the latest available camera reference without waiting for a new image, consume the action due at that time, apply the lightweight action processor, call `Robot.send_action`, and publish an action receipt. Recording, encoding and visualization consume those records asynchronously. Heavy processors never execute inside this tick. Slow reads, lock contention and disk backpressure remain explicit measured failure modes, even with separate workers.
 
 The estimator publishes timestamped snapshots through a bounded nonblocking handoff. Between publications, control consumes the latest state, any supported prediction and the valid queued motion; it never waits for a fresh perception result or treats the repeated snapshot as a new measurement. Trajectory production likewise runs ahead of motor dispatch. Excessive source age or invalidated motion triggers an explicit control policy while the motor scheduler remains active. Measure perception throughput, source-to-output age, source-to-command age and motor cadence separately. Stress evaluation injects delayed perception/IK and concurrent recording to verify this separation. ([R2](#r2), [R3](#r3), [C5](#c5).)
@@ -272,6 +318,7 @@ Validation separates questions that the prototype conflated:
 
 | Question                                                   | Experiment and measurements                                                                                                                                                                                                                                          |
 | ---------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Does the estimator preserve evidence under disagreement?   | Replay stationary-object shape drift, delayed loss, verified group co-motion, independent object motion and held slip; compare each raw proposal, accepted belief, last direct-support time and rejection reason                                                     |
 | Is perception accurate enough?                             | Fully visible, carried, contact and released phases; independently measured pose/relative alignment where possible, symmetry-aware error, task-point error, false acceptance, rejection and unknown rates                                                            |
 | Does more evidence help?                                   | Fixed replays with controlled reference sets, then physical grasp/perturbation trials; report accuracy and end-to-end result age together                                                                                                                            |
 | Does the controller do the right thing with correct state? | Simulated producer and known object trajectories: missed grasp, late target jumps, changing attachment, IK alternatives, delayed evidence, recovery/retry exhaustion, takeover and stale release prerequisites                                                       |

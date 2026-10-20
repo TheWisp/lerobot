@@ -1,6 +1,7 @@
 """Heavy pose estimation must not run in or block the motor owner."""
 
 import time
+from dataclasses import replace
 
 import numpy as np
 import pytest
@@ -36,6 +37,24 @@ class FailingBackend(EchoBackend):
         raise RuntimeError("injected perception failure")
 
 
+class OccludedBackend(EchoBackend):
+    def update(self, frame):
+        if frame.frame_id == 1:
+            return super().update(frame)
+        return (
+            PoseEstimate(
+                self.reference.role,
+                None,
+                frame.source_time_s,
+                time.monotonic(),
+                Evidence.LOST,
+                self.reference.version,
+                (False,) * 3,
+                (False,) * 3,
+            ),
+        )
+
+
 class EchoMaskBackend(EchoBackend):
     def __init__(self):
         self.last_masks = {}
@@ -55,6 +74,10 @@ def echo_mask_factory():
 
 def failing_factory():
     return FailingBackend()
+
+
+def occluded_factory():
+    return OccludedBackend()
 
 
 def setup():
@@ -109,6 +132,28 @@ def test_spawned_pose_worker_reports_backend_failure():
         assert worker.submit(frame)
         with pytest.raises(PoseProcessError, match="injected perception failure"):
             poll_until(worker, lambda: False)
+    finally:
+        worker.close()
+
+
+def test_pose_worker_only_emits_proposals_when_scene_estimator_owns_state():
+    reference, first = setup()
+    store = LatestPoseStore()
+    proposals = []
+    worker = PoseProcess(
+        occluded_factory, (reference,), store, publish_results=False, on_result=proposals.append
+    )
+    try:
+        worker.start(timeout_s=10)
+        assert worker.submit(first)
+        poll_until(worker, lambda: worker.metrics.delivered == 1)
+        hidden = replace(first, frame_id=2, source_time_s=1.1, available_time_s=1.1)
+        assert worker.submit(hidden)
+        poll_until(worker, lambda: worker.metrics.delivered == 2)
+        assert store.snapshot() == (0, {})
+        assert [result.estimates[0].evidence for result in proposals] == [Evidence.OBSERVED, Evidence.LOST]
+        assert [result.frame_id for result in proposals] == [1, 2]
+        assert worker.metrics.last_source_time_s == hidden.source_time_s
     finally:
         worker.close()
 

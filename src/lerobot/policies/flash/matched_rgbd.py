@@ -17,6 +17,7 @@ from .registration import (
     unproject_pixels,
     valid_depth_pixels,
 )
+from .shape_registration import register_visible_shape
 from .trajectory import Evidence, PoseEstimate
 
 
@@ -101,6 +102,7 @@ class MatchedRGBDPoseBackend:
         threshold_m: float,
         min_inliers: int,
         trials: int,
+        visible_shape_fallback: bool = False,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.models = {model.role: model for model in models}
@@ -112,8 +114,10 @@ class MatchedRGBDPoseBackend:
         self.threshold_m = threshold_m
         self.min_inliers = min_inliers
         self.trials = trials
+        self.visible_shape_fallback = visible_shape_fallback
         self.clock = clock
         self.last_failure: dict[str, str] = {}
+        self._last_accepted_pose: dict[str, np.ndarray] = {}
         self._initialized = False
 
     def initialize(self, references: tuple[ObjectReference, ...]) -> None:
@@ -123,6 +127,7 @@ class MatchedRGBDPoseBackend:
         for role, model in self.models.items():
             if versions[role] != model.reference_version:
                 raise ValueError(f"{role}: point model and reference versions differ")
+        self._last_accepted_pose.clear()
         self._initialized = True
 
     @property
@@ -141,12 +146,55 @@ class MatchedRGBDPoseBackend:
         self.last_failure.clear()
         for role, model in self.models.items():
             match = by_role.get(role)
+            estimator = "appearance_rgbd"
             try:
                 if match is None:
                     raise DegenerateRegistrationError("no matched pixels")
                 pose = self._fit(frame, model, match)
-            except (DegenerateRegistrationError, ValueError, IndexError) as exc:
-                self.last_failure[role] = str(exc)
+            except DegenerateRegistrationError as match_error:
+                if not self.visible_shape_fallback:
+                    pose = None
+                    failure = str(match_error)
+                else:
+                    mask = getattr(self.provider, "last_masks", {}).get(role)
+                    try:
+                        if mask is None:
+                            raise DegenerateRegistrationError("no aligned instance mask")
+                        shape = register_visible_shape(
+                            model.points_object_m,
+                            frame.depth,
+                            mask,
+                            frame.intrinsics,
+                            frame.depth_m_per_unit,
+                            tolerance_m=self.threshold_m,
+                            min_points=self.min_inliers,
+                        )
+                        pose = frame.base_from_camera @ shape.camera_from_object
+                        previous = self._last_accepted_pose.get(role)
+                        if previous is not None:
+                            # Nearest-surface ICP can slide along a uniform or
+                            # partly hidden object while retaining a low depth
+                            # residual. Without matched points, such a fit is
+                            # only a local continuation of an established
+                            # object frame, not independent evidence of a
+                            # large object-frame motion.
+                            origin_shift = np.linalg.norm(pose[:3, 3] - previous[:3, 3])
+                            old_surface = model.points_object_m @ previous[:3, :3].T + previous[:3, 3]
+                            new_surface = model.points_object_m @ pose[:3, :3].T + pose[:3, 3]
+                            surface_shift = np.max(np.linalg.norm(new_surface - old_surface, axis=1))
+                            if max(origin_shift, surface_shift) > 2 * self.threshold_m:
+                                raise DegenerateRegistrationError(
+                                    "shape fit changes the object frame without matched-point support"
+                                )
+                        estimator = "visible_shape_rgbd"
+                    except (DegenerateRegistrationError, ValueError) as shape_error:
+                        pose = None
+                        failure = f"appearance: {match_error}; visible shape: {shape_error}"
+            except (ValueError, IndexError) as exc:
+                pose = None
+                failure = str(exc)
+            if pose is None:
+                self.last_failure[role] = failure
                 estimates.append(
                     PoseEstimate(
                         role,
@@ -160,6 +208,7 @@ class MatchedRGBDPoseBackend:
                     )
                 )
             else:
+                self._last_accepted_pose[role] = pose.copy()
                 estimates.append(
                     PoseEstimate(
                         role,
@@ -170,6 +219,9 @@ class MatchedRGBDPoseBackend:
                         model.reference_version,
                         (True, True, True),
                         (True, True, True),
+                        direct_translation_observed=True,
+                        estimator=estimator,
+                        last_direct_observation_s=frame.source_time_s,
                     )
                 )
         return tuple(estimates)

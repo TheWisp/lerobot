@@ -45,9 +45,11 @@ The executable core already separates:
   the regular dataset. Run → FLASH discovers either a raw skill annotation
   under `flash/v1/skills/*.json` or a prepared reference under
   `flash/v1/prepared/*/bundle.json`, and reports what an episode still lacks;
-- a spawn-isolated perception process that loads GPU models in the child,
-  accepts the latest aligned camera snapshot and publishes timestamped poses
-  to a short-lock store outside the motor loop;
+- a spawn-isolated perception process that loads GPU models in the child and
+  accepts the latest aligned camera snapshot. With causal tracking enabled it
+  submits timestamped source-frame proposals to the scene estimator; otherwise
+  the legacy path publishes its pose results to a short-lock store outside the
+  motor loop;
 - a live perception service that owns camera capture and result collection,
   waits for actual seeded object observations before motion, and exposes
   camera/estimator failures instead of reusing stale poses; its latest aligned
@@ -116,16 +118,18 @@ first action's observed object and a usable pose for every later referenced
 object before the motor epoch begins; a poor instance seed must fail before
 the arm moves.
 
-The active absolute-pose estimator is SAM3 instance masks, DINO appearance
-matches and a robust aligned RGB-D fit. An optional causal point tracker has
-its own bounded handoff for **every** captured camera frame; the heavy pose
-process may still skip superseded frames. After a depth-backed absolute pose
-and aligned instance mask seed it, the causal tracker can propagate that
-object's motion through a temporary appearance-matching dropout. It reports
-the resulting pose as **predicted**, with the new RGB-D frame's timestamp. It
-cannot initialize an object whose absolute pose was never established, and
-it is not an environment group tracker or a recovery mechanism after its
-point tracks are lost. The pose-gap wrapper that simply reused an unmoving
-last pose has been removed. Causal tracking remains an explicitly configured
-experimental live option pending a physical rollout; no successful insertion
-has been established with it.
+The active absolute-pose estimator uses SAM3 masks, DINO appearance matches
+and aligned RGB-D. A geometry-only shape fit can propose a pose when appearance
+matches are sparse. The 2026-10-20 live trial showed that a low surface residual
+can still place the dowel's object frame centimetres away from its previous
+pose; the recorded fixture and consistency rejection cover that failure, but
+do not establish accurate pose under occlusion. The optional causal service
+receives every captured camera frame, tracks object and shared scene points,
+and can predict group motion after observed co-motion verifies a relationship.
+When causal tracking is enabled, the heavy pose process submits
+source-frame proposals to the causal service, which alone publishes accepted
+poses and catches delayed proposals up to its retained frame history. That is
+the first part of the [single scene-estimator contract](docs/architecture.md#one-scene-estimator-several-evidence-sources), not the complete arbitration:
+partial observability, alternative poses, and calibrated uncertainty are still
+missing. Consequently the group path is experimental, and no successful physical
+insertion has been established for this redesign.

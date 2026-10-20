@@ -34,6 +34,9 @@ class PoseEstimate:
     reference_version: str
     translation_supported: tuple[bool, bool, bool]
     rotation_supported: tuple[bool, bool, bool]
+    direct_translation_observed: bool = False
+    estimator: str = "unspecified"
+    last_direct_observation_s: float | None = None
 
     def __post_init__(self) -> None:
         if self.pose is not None:
@@ -44,6 +47,15 @@ class PoseEstimate:
             raise ValueError("availability cannot precede source time")
         if len(self.translation_supported) != 3 or len(self.rotation_supported) != 3:
             raise ValueError("pose support must specify three translation and three rotation axes")
+        if not self.estimator:
+            raise ValueError("pose estimator provenance must be nonempty")
+        if self.last_direct_observation_s is not None and self.last_direct_observation_s > self.source_time_s:
+            raise ValueError("direct observation cannot postdate pose source")
+
+    @property
+    def has_direct_translation(self) -> bool:
+        """A current image measured the centre, even if orientation was constrained."""
+        return self.evidence == Evidence.OBSERVED or self.direct_translation_observed
 
     def supports(
         self,

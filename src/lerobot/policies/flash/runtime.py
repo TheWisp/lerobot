@@ -97,6 +97,12 @@ class FlashRuntime:
                 max_frame_gap_s=causal_tracking.max_frame_gap_s,
                 fit_threshold_m=causal_tracking.fit_threshold_m,
                 image_scale=causal_tracking.image_scale,
+                scene_max_points=causal_tracking.scene_max_points,
+                environment_context_radius_m=causal_tracking.environment_context_radius_m,
+                environment_min_motion_m=causal_tracking.environment_min_motion_m,
+                environment_prediction_max_s=causal_tracking.environment_prediction_max_s,
+                environment_min_inliers=causal_tracking.environment_min_inliers,
+                static_prediction_max_s=causal_tracking.static_prediction_max_s,
             )
             if causal_tracking is not None
             else None
@@ -123,7 +129,16 @@ class FlashRuntime:
             self.attachment.on_motor_tick(tick)
             self.recorder.submit(self.assembler.assemble(tick))
 
-        self.session = FlashSession(skill, robot, on_tick=on_tick, fps=fps)
+        self.session = FlashSession(
+            skill,
+            robot,
+            on_tick=on_tick,
+            fps=fps,
+            max_splice_delta={
+                f"{name}.pos": speed / fps
+                for name, speed in zip(arm_joint_names, planner_limits.joint_speed_deg_s, strict=True)
+            },
+        )
         self.milestones = PoseMilestonePublisher(
             skill.milestones, self.session.post_evidence, clock=self.session.motor.clock
         )
@@ -164,6 +179,7 @@ class FlashRuntime:
                 else None
             ),
             require_masks=causal is not None,
+            publish_results=causal is None,
         )
         self.perception = PerceptionService(
             source,

@@ -247,11 +247,11 @@ class ActionQueue:
             if self._last_issued is None or self._max_splice_delta is None:
                 raise MissedEventError("cannot skip motor deadlines without an issued continuity boundary")
             for joint, value in survivor.action.items():
-                if (
-                    joint not in self._last_issued
-                    or joint not in self._max_splice_delta
-                    or abs(value - self._last_issued[joint]) > self._max_splice_delta[joint]
-                ):
+                # A joint with no configured speed bound (for example a
+                # gripper) may be held across a missed free-space tick, but
+                # must never make an unchecked jump.
+                limit = self._max_splice_delta.get(joint, 0.0)
+                if joint not in self._last_issued or abs(value - self._last_issued[joint]) > limit:
                     raise MissedEventError(f"skipping deadlines would jump at {joint}")
         for _ in expired:
             self._actions.popleft()
