@@ -195,6 +195,21 @@ def test_generated_connection_retargets_and_extends_duration_for_live_distance()
     assert len(robot.sent) > 30  # generated travel is longer than the 0.2 s contact demo
 
 
+def test_fresh_stationary_group_poses_do_not_restart_connection_clock():
+    now, robot, session, poses, worker, coordinator = make_runtime(mode=MotionMode.CONNECTION)
+    for tick in range(75):
+        # A verified group pose has a new camera timestamp on every update.
+        # Sub-millimetre fit noise is below the existing IK pose tolerance.
+        poses.publish((target(0.2 + (tick % 2) * 0.0002, now[0]),))
+        coordinator.step()
+        if session.progress.phase == Phase.MOTION_COMPLETE:
+            break
+    assert session.progress.phase == Phase.MOTION_COMPLETE
+    assert tick < 55  # 0.3 m at 0.2 m/s plus the initial lead window
+    assert robot.sent[-1]["arm.pos"] == pytest.approx(30, abs=0.1)
+    assert len({request.connection.start_time_s for request in worker.requests}) == 1
+
+
 def test_coordinator_keeps_worker_joint_retiming_for_later_connection_chunks():
     class AmplifiedKinematics:
         def inverse_kinematics(self, _seed, target_pose):

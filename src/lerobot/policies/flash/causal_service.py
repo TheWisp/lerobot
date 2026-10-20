@@ -275,8 +275,19 @@ class CausalPoseService:
                 # by the next queued frame, so replay cannot starve the
                 # current scene state for the duration of its whole history.
                 while self.pending and self.queue.empty():
+                    attached_role = self._sync_attachment()
+                    replay_role = next(
+                        (
+                            role
+                            for role in self.pending
+                            if role == attached_role or role not in self.relationships
+                        ),
+                        None,
+                    )
+                    if replay_role is None:
+                        break
                     replay_started_s = time.perf_counter()
-                    if not self._replay_one():
+                    if not self._replay_one(replay_role):
                         break
                     elapsed_s = time.perf_counter() - replay_started_s
                     self.replay_compute_total_s += elapsed_s
@@ -300,6 +311,8 @@ class CausalPoseService:
         object_motion_roles: set[str] = set()
         object_started_s = time.perf_counter()
         for role, (tracker, anchor) in list(self.active.items()):
+            if role in self.relationships and role != attached_role:
+                continue
             try:
                 motion = tracker.update(frame)
             except ValueError:
@@ -478,6 +491,22 @@ class CausalPoseService:
                     self._count_anchor_outcome(estimate.role, "direct_published")
                 else:
                     self._count_anchor_outcome(estimate.role, "direct_not_published")
+            if estimate.role in self.relationships and estimate.role != attached_role:
+                # The verified scene group already updates this stationary
+                # object's pose every frame. Keep a recent direct-image seed
+                # ready for independent motion or a later grasp, but do not
+                # spend the live camera budget replaying the same interval in
+                # a second tracker.
+                standby = CausalRigidPointTracker(**self.tracker_kwargs)
+                seeded = standby.seed(source, mask)
+                if seeded >= standby.min_inliers:
+                    self.active.pop(estimate.role, None)
+                    self.pending[estimate.role] = _PendingTrack(standby, estimate, source.frame_id, {})
+                    self.motion_history[estimate.role] = deque(maxlen=self.history.maxlen)
+                    self._count_anchor_outcome(estimate.role, "standby_point_seeded")
+                else:
+                    self._count_anchor_outcome(estimate.role, "standby_point_seed_failed")
+                continue
             active = self.active.get(estimate.role)
             if active is not None and active[1].reference_version == estimate.reference_version:
                 history = {
@@ -545,8 +574,8 @@ class CausalPoseService:
             if self.history[-1].frame_id > source.frame_id and estimate.role not in self.relationships:
                 self._publish_static(estimate.role, estimate, self.history[-1])
 
-    def _replay_one(self) -> bool:
-        role, pending = next(iter(self.pending.items()))
+    def _replay_one(self, role: str) -> bool:
+        pending = self.pending[role]
         next_frame = next((frame for frame in self.history if frame.frame_id > pending.last_frame_id), None)
         if next_frame is None:
             if pending.last_frame_id == self.history[-1].frame_id:

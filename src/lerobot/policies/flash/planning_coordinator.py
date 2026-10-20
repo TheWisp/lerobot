@@ -179,6 +179,28 @@ class PlanningCoordinator:
             )
             or self._planned_attachment_time_s != (attachment.source_time_s if attachment else None)
         )
+        if interval.mode == MotionMode.CONNECTION and self._connection is not None:
+            # A generated path has its own clock. Scene-group poses can get a
+            # fresh timestamp on every camera frame even when the endpoint
+            # has not moved. Restarting that clock on each such frame makes
+            # the robot asymptotically approach a stationary goal.
+            endpoint = spatial_goal(
+                interval,
+                interval.samples[-1],
+                reference.pose,
+                attachment.gripper_from_object if attachment is not None else None,
+            )
+            shift = np.linalg.norm(endpoint[:3, 3] - self._connection.goal_pose[:3, 3])
+            turn = np.arccos(
+                np.clip(
+                    (np.trace(endpoint[:3, :3].T @ self._connection.goal_pose[:3, :3]) - 1) / 2,
+                    -1,
+                    1,
+                )
+            )
+            new_image = (
+                changed_interval or shift > limits.position_error_m or turn > limits.rotation_error_rad
+            )
         snapshot = self.session.actions.snapshot()
         next_tick = self.session.motor.metrics.ticks
         pending = [

@@ -213,6 +213,65 @@ def test_causal_service_uses_verified_scene_motion_when_object_points_disappear(
         service.close()
 
 
+def test_verified_group_defers_duplicate_point_replay_until_grasp():
+    rgb = np.random.default_rng(48).integers(0, 255, (96, 96, 3), dtype=np.uint8)
+    mask = np.zeros((96, 96), dtype=bool)
+    mask[30:65, 30:65] = True
+    service = CausalPoseService(LatestPoseStore(), image_scale=1.0)
+    service.start()
+    try:
+        for index in range(3):
+            frame = _camera_frame(rgb, index)
+            service.submit_frame(frame)
+            service.submit_anchor(
+                index,
+                (
+                    PoseEstimate(
+                        "object",
+                        _pose(0),
+                        frame.source_time_s,
+                        frame.available_time_s,
+                        Evidence.OBSERVED,
+                        "v1",
+                        (True,) * 3,
+                        (True,) * 3,
+                    ),
+                ),
+                {"object": mask},
+            )
+        deadline = time.monotonic() + 3
+        while (
+            service.anchor_outcomes_by_role.get("object", {}).get("standby_point_seeded", 0) == 0
+            and service.error is None
+            and time.monotonic() < deadline
+        ):
+            time.sleep(0.01)
+        assert service.error is None
+        assert "object" in service.relationships
+        assert "object" in service.pending
+        replay_before = service.replay_compute_total_s
+        for index in range(3, 8):
+            service.submit_frame(_camera_frame(rgb, index))
+        while service.frames < 8 and service.error is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert service.error is None
+        assert service.replay_compute_total_s == replay_before
+        assert "object" in service.pending
+
+        service.set_attached_role("object")
+        service.submit_frame(_camera_frame(rgb, 8))
+        while (
+            service.replay_compute_total_s == replay_before
+            and service.error is None
+            and time.monotonic() < deadline
+        ):
+            time.sleep(0.01)
+        assert service.error is None
+        assert service.replay_compute_total_s > replay_before
+    finally:
+        service.close()
+
+
 def test_stationary_support_stays_measured_until_grasp_then_is_withdrawn():
     rgb = np.random.default_rng(32).integers(0, 255, (96, 96, 3), dtype=np.uint8)
     mask = np.zeros((96, 96), dtype=bool)
