@@ -362,6 +362,26 @@ let flashTelemetryBusy = false;
 let flashSnapshot = null;
 let flashReplay = null;
 let flashReplayTimer = null;
+let flashOverlayRows = [];
+let flashHighlightedOverlay = null;
+
+function _flashSelectOverlay(next) {
+    const changed = flashHighlightedOverlay?.kind !== next?.kind ||
+        flashHighlightedOverlay?.role !== next?.role ||
+        flashHighlightedOverlay?.estimator !== next?.estimator;
+    flashHighlightedOverlay = next;
+    document.querySelectorAll('#flash-tracker-content [data-flash-index]').forEach(row => {
+        const selected = flashOverlayRows[Number(row.dataset.flashIndex)];
+        row.classList.toggle('flash-tracker-hover', !!next && selected?.kind === next.kind &&
+            selected?.role === next.role && selected?.estimator === next.estimator);
+    });
+    if (changed) _flashDrawOverlay();
+}
+
+function _flashOverlayRow(kind, role, estimator, className, body) {
+    const index = flashOverlayRows.push({ kind, role, estimator }) - 1;
+    return `<div class="${className}" data-flash-index="${index}" tabindex="0">${body}</div>`;
+}
 
 function _flashLayerName(estimator) {
     return ({
@@ -404,25 +424,40 @@ function renderFlashSnapshot(snapshot, mode = 'Live') {
         ...Object.keys(snapshot.proposals || {}),
         ...Object.keys(snapshot.layers || {}),
         ...Object.keys(snapshot.accepted || {}),
+        ...Object.keys(snapshot.observed_masks || {}),
     ])].sort();
     if (!roles.length) {
         content.textContent = 'Waiting for a pose proposal. The camera and motor loops can already be running.';
         _flashDrawOverlay();
         return;
     }
-    let html = '<div class="flash-tracker-legend">Solid outline: pose used for planning when available · thin outlines: independent tracker estimates · purple: measured mask (matching camera frame)</div>';
+    flashOverlayRows = [];
+    let html = '<div class="flash-tracker-legend">Hover a row to highlight it in the camera view. Solid outline: control pose · thin outlines: other estimates · purple: visible mask when its camera frame matches.</div>';
     for (const role of roles) {
         html += `<div class="flash-tracker-role"><strong>${_esc(role)}</strong>`;
+        const mask = snapshot.observed_masks?.[role];
+        if (mask && snapshot.camera && mask.frame_id === snapshot.camera.frame_id) {
+            html += _flashOverlayRow('mask', role, '', 'flash-tracker-layer',
+                '<span class="flash-tracker-dot" style="background:#d48bff"></span>Visible mask <small>Measured pixels in this camera frame</small>');
+        } else {
+            html += '<div class="flash-tracker-layer flash-tracker-unavailable">Visible mask <small>No mask for this camera frame</small></div>';
+        }
         const proposal = snapshot.proposals?.[role];
-        if (proposal) html += `<div class="flash-tracker-layer"><span class="flash-tracker-dot" style="background:#58a6ff"></span>Direct proposal <small>${_esc(_flashPoseText(proposal, snapshot))}</small></div>`;
+        if (proposal) html += _flashOverlayRow('proposal', role, '', 'flash-tracker-layer',
+            `<span class="flash-tracker-dot" style="background:#58a6ff"></span>Direct proposal <small>${_esc(_flashPoseText(proposal, snapshot))}</small>`);
         for (const [name, pose] of Object.entries(snapshot.layers?.[role] || {})) {
-            html += `<div class="flash-tracker-layer"><span class="flash-tracker-dot" style="background:${_flashLayerColor(name)}"></span>${_esc(_flashLayerName(name))}<small>${_esc(_flashPoseText(pose, snapshot))}</small></div>`;
+            html += _flashOverlayRow('layer', role, name, 'flash-tracker-layer',
+                `<span class="flash-tracker-dot" style="background:${_flashLayerColor(name)}"></span>${_esc(_flashLayerName(name))}<small>${_esc(_flashPoseText(pose, snapshot))}</small>`);
         }
         const accepted = snapshot.accepted?.[role];
         const held = snapshot.held_prediction?.role === role ? snapshot.held_prediction : null;
-        if (held && accepted) html += `<div class="flash-tracker-layer">Independent estimate <small>${_esc(_flashLayerName(accepted.estimator || 'unspecified'))}: ${_esc(_flashPoseText(accepted, snapshot))}</small></div>`;
+        if (held && accepted) html += _flashOverlayRow('accepted', role, '', 'flash-tracker-layer',
+            `Independent estimate <small>${_esc(_flashLayerName(accepted.estimator || 'unspecified'))}: ${_esc(_flashPoseText(accepted, snapshot))}</small>`);
         const planningPose = held || accepted;
-        html += `<div class="flash-tracker-selected">${held ? 'Planner prediction (rigid grasp)' : 'Accepted estimator pose'}: ${planningPose ? _esc(_flashLayerName(planningPose.estimator || 'unspecified')) + '<small>' + _esc(_flashPoseText(planningPose, snapshot)) + (held && !held.last_direct_observation_s ? ' · unverified after grasp' : '') + '</small>' : 'none'}</div>`;
+        const selectedText = `${held ? 'Planner prediction (rigid grasp)' : 'Accepted estimator pose'}: ${planningPose ? _esc(_flashLayerName(planningPose.estimator || 'unspecified')) + '<small>' + _esc(_flashPoseText(planningPose, snapshot)) + (held && !held.last_direct_observation_s ? ' · unverified after grasp' : '') + '</small>' : 'none'}`;
+        html += planningPose
+            ? _flashOverlayRow(held ? 'held' : 'accepted', role, '', 'flash-tracker-selected', selectedText)
+            : `<div class="flash-tracker-selected">${selectedText}</div>`;
         const comparison = snapshot.direct_group_comparisons?.[role];
         if (comparison) {
             const age = Math.max(0, Number(snapshot.recorded_at_s) - Number(comparison.available_at_s));
@@ -433,6 +468,22 @@ function renderFlashSnapshot(snapshot, mode = 'Live') {
         html += '</div>';
     }
     content.innerHTML = html;
+    if (flashHighlightedOverlay && !flashOverlayRows.some(row => row.kind === flashHighlightedOverlay.kind &&
+        row.role === flashHighlightedOverlay.role && row.estimator === flashHighlightedOverlay.estimator)) {
+        flashHighlightedOverlay = null;
+    }
+    _flashSelectOverlay(flashHighlightedOverlay);
+    const hoveredRow = event => {
+        const element = event.target.closest('[data-flash-index]');
+        _flashSelectOverlay(element && content.contains(element)
+            ? flashOverlayRows[Number(element.dataset.flashIndex)] : null);
+    };
+    content.onpointermove = hoveredRow;
+    content.onpointerleave = () => _flashSelectOverlay(null);
+    content.onfocusin = hoveredRow;
+    content.onfocusout = event => {
+        if (!content.contains(event.relatedTarget)) _flashSelectOverlay(null);
+    };
     _flashDrawOverlay();
 }
 
@@ -493,16 +544,17 @@ function _flashDrawOverlay() {
             context.stroke();
             context.setLineDash([]);
         };
-        for (const mask of Object.values(snapshot.observed_masks || {})) {
-            if (mask.frame_id === camera.frame_id) {
-                outline(mask.boundary_xy || [], '#d48bff', 2);
-            }
-        }
-        const draw = (role, name, pose, accepted) => {
+        const emphasized = (kind, role, estimator = '') => !flashHighlightedOverlay ||
+            (flashHighlightedOverlay.kind === kind && flashHighlightedOverlay.role === role &&
+                flashHighlightedOverlay.estimator === estimator);
+        const draw = (role, name, pose, accepted, kind, estimator = '') => {
+            const active = emphasized(kind, role, estimator);
+            context.globalAlpha = active ? 1 : 0.12;
             const points = snapshot.points_object_m?.[role] || [];
             const projectedPoints = points.map(point => _flashProject(point, pose, camera)).filter(Boolean);
             if (projectedPoints.length >= 3) {
-                outline(_flashHull(projectedPoints), _flashLayerColor(name), accepted ? 2.5 : 1.5, !accepted);
+                outline(_flashHull(projectedPoints), _flashLayerColor(name),
+                    flashHighlightedOverlay && active ? 5 : accepted ? 2.5 : 1.5, !accepted);
                 if (accepted) {
                     context.fillStyle = '#d8f8ff';
                     for (const point of projectedPoints) {
@@ -513,7 +565,7 @@ function _flashDrawOverlay() {
             }
             const center = snapshot.centers_object_m?.[role] || [0, 0, 0];
             const projected = _flashProject(center, pose, camera);
-            if (!projected) return;
+            if (!projected) { context.globalAlpha = 1; return; }
             const [x, y] = pixel(projected);
             if (!projectedPoints.length) {
                 context.strokeStyle = _flashLayerColor(name);
@@ -525,17 +577,28 @@ function _flashDrawOverlay() {
                 context.fillStyle = '#fff';
                 context.fillText(role, x + 8, y - 8);
             }
+            context.globalAlpha = 1;
         };
         for (const [role, layers] of Object.entries(snapshot.layers || {})) {
-            Object.entries(layers).forEach(([name, pose]) => draw(role, name, pose, false));
+            Object.entries(layers).forEach(([name, pose]) => draw(role, name, pose, false, 'layer', name));
         }
         for (const [role, pose] of Object.entries(snapshot.accepted || {})) {
-            if (snapshot.held_prediction?.role === role) draw(role, pose.estimator || 'accepted', pose, false);
-            else draw(role, pose.estimator || 'accepted', pose, true);
+            if (snapshot.held_prediction?.role === role) draw(role, pose.estimator || 'accepted', pose, false, 'accepted');
+            else draw(role, pose.estimator || 'accepted', pose, true, 'accepted');
         }
         if (snapshot.held_prediction) {
             const held = snapshot.held_prediction;
-            draw(held.role, held.estimator, held, true);
+            draw(held.role, held.estimator, held, true, 'held');
+        }
+        for (const [role, pose] of Object.entries(snapshot.proposals || {})) {
+            draw(role, 'appearance_rgbd', pose, false, 'proposal');
+        }
+        for (const [role, mask] of Object.entries(snapshot.observed_masks || {})) {
+            if (mask.frame_id !== camera.frame_id) continue;
+            const active = emphasized('mask', role);
+            context.globalAlpha = active ? 1 : 0.12;
+            outline(mask.boundary_xy || [], '#d48bff', flashHighlightedOverlay && active ? 5 : 2);
+            context.globalAlpha = 1;
         }
     });
 }

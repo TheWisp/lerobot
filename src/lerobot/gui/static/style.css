@@ -625,6 +625,9 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .flash-tracker-role { border-top: 1px solid #31516c; padding: 6px 0; }
 .flash-tracker-legend { color: #a7b5c8; font-size: 11px; line-height: 1.3; padding-bottom: 6px; }
 .flash-tracker-layer, .flash-tracker-selected { margin-top: 5px; }
+.flash-tracker-layer[data-flash-index], .flash-tracker-selected[data-flash-index] { border-radius: 4px; padding: 3px 4px; cursor: crosshair; }
+.flash-tracker-hover, .flash-tracker-layer[data-flash-index]:focus-visible, .flash-tracker-selected[data-flash-index]:focus-visible { background: #224868; outline: 1px solid #8bd5ff; }
+.flash-tracker-unavailable { color: #8292a6; }
 .flash-tracker-layer small, .flash-tracker-selected small { display: block; margin-left: 12px; color: #a7b5c8; }
 .flash-tracker-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; }
 .flash-tracker-selected { font-weight: 600; color: #fff; }
