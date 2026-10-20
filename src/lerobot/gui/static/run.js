@@ -849,7 +849,7 @@ async function _loadFlashRecordings() {
             const skills = recording.skills || [];
             meta.textContent = recording.bundle_path
                 ? `${skills.length} FLASH skill(s) · viewing: ${recording.prepared_skill} · Play with extracted poses`
-                : `${skills.length} FLASH annotation(s) · prepare a skill to inspect its poses`;
+                : `${skills.length} FLASH annotation(s) · no prepared skill; preparation is not available in this UI yet`;
             button.append(label, meta);
             button.onclick = () => loadFlashDemoReplay(recording.dataset_root, recording.episode, recording.bundle_path);
             demosList.append(button);
@@ -2072,7 +2072,7 @@ function renderRunForm() {
     html += '<div id="run-flash-demos" class="flash-recordings">Loading demos…</div>';
     html += '<div class="flash-recordings-heading"><span class="form-section-title">Rollouts</span></div>';
     html += '<div id="run-flash-recordings" class="flash-recordings">Loading rollouts…</div>';
-    html += '<div class="form-hint">Select a demo to inspect the spatial samples FLASH extracted. Open a rollout to compare live tracker estimates. Playback does not move the robot.</div>';
+    html += '<div class="form-hint">Select a demo to inspect its saved spatial samples; preparation masks and rejected fits were not recorded for this imported demo. Demo editing and regeneration are not available in this UI yet. Open a rollout to compare live tracker estimates. Playback does not move the robot.</div>';
     html += '<div class="form-grid">';
     html += '<label>Dataset</label>';
     html += '<select id="run-flash-dataset" onchange="_onFlashDatasetChange()"><option value="">Choose an opened dataset...</option></select>';

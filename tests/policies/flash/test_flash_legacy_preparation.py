@@ -1,12 +1,14 @@
 """The sealed-demo adapter must preserve event meaning when clocks are sampled."""
 
 import numpy as np
+import pytest
 
 from benchmarks.flash_prepare_legacy import (
     _endpoint_requirement,
     _interval_layout,
     _interval_reference,
     _nearest_index,
+    _symmetry_from_annotation,
 )
 from lerobot.policies.flash.skill import EndpointRequirement, Relation
 
@@ -56,3 +58,17 @@ def test_world_relative_retreat_does_not_follow_target_after_release():
 def test_best_effort_hover_is_a_preferred_endpoint():
     assert _endpoint_requirement({"constraint": "best_effort"}) == EndpointRequirement.PREFERRED
     assert _endpoint_requirement({"constraint": "pose"}) == EndpointRequirement.REQUIRED
+
+
+def test_legacy_annotation_preserves_end_for_end_symmetry():
+    points = np.array([[-0.04, 0.0, 0.0], [0.0, 0.001, 0.0], [0.04, 0.0, 0.0]])
+    symmetry = _symmetry_from_annotation(
+        "held", {"axis_kind": "long_axis", "ends_interchangeable": True}, points, np.eye(4)
+    )
+    assert symmetry.ends_interchangeable
+    assert abs(symmetry.axis_object[0]) == pytest.approx(1, abs=0.001)
+    assert np.isfinite(symmetry.equivalent_transform(exchange_ends=True)).all()
+
+    without_swap = _symmetry_from_annotation("held", {"axis_kind": "long_axis"}, points, np.eye(4))
+    with pytest.raises(ValueError, match="not annotated as interchangeable"):
+        without_swap.equivalent_transform(exchange_ends=True)

@@ -130,6 +130,12 @@ For example, transporting an object may require an upright orientation while per
 
 Human annotation uses frame/interval selection and structured options for object identity, reference masks, roles, symmetry, keyframe constraints, interval modes, milestones and recovery choices. A future language or vision-language annotator produces the same schema. Record the annotator, evidence frames and review status; changing the author does not change the skill format. Human input supplies intent that a single trajectory cannot uniquely establish. ([C2](#c2), [R6](#r6).)
 
+#### Demo preparation and review in Run → FLASH
+
+Selecting a demo should open one preparation workspace beside the same camera timeline used for rollout review. The operator can select or add reference views, inspect and correct each role's mask on an aligned RGB-D frame, declare object symmetry and interaction roles, place grasp/release and keyframe boundaries, and edit which dimensions and milestones matter. The preparation panel must show both the saved spatial relation and the measurement that produced it: mask, matched pixels, depth support, fitted pose, rejected candidates and predicted gripper/object relation, all aligned to the camera capture time. A predicted held outline must never look like a newly measured pose. This review remains possible before any live robot launch.
+
+**Regenerate** runs asynchronous offline preparation from a versioned annotation and immutable source episode. It always creates a new prepared bundle, records the exact annotation, reference masks, model and calibration versions, cache hit/miss, per-frame pose and rejection evidence, and displays a comparison with the previous bundle. A mask-only refresh and a full pose/skill rebuild must be distinguishable; changing a mask or reference view invalidates dependent features, geometry and pose traces. After review, the operator selects the prepared version for a live trial. No preparation job may occupy the fixed-rate motor loop, and a trial must identify the exact prepared version it used.
+
 ### Common object estimation and relationships
 
 The perception service has three replaceable functions: associate objects across observations/episodes, estimate motion within a recording, and check/refine geometry against RGB-D. Point2Pose, segmentation and motion groups are candidate implementations rather than authorities baked into the controller. Cached demo results include pipeline, calibration and reference versions. ([O1](#o1), [O2](#o2), [R6](#r6).)

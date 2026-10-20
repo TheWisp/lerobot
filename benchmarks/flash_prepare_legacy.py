@@ -141,7 +141,36 @@ def _metric_pose_at(
     raise ValueError(f"{role} has no recent metric demo pose at camera frame {camera_index}")
 
 
+def _symmetry_from_annotation(
+    role: str, spec: dict, points: np.ndarray, base_from_camera: np.ndarray
+) -> AxialSymmetry:
+    axis_kind = spec["axis_kind"]
+    if axis_kind not in ("surface_normal", "long_axis"):
+        raise ValueError("axial symmetry needs a supported PCA axis")
+    center = points.mean(axis=0)
+    eigenvalues, eigenvectors = np.linalg.eigh((points - center).T @ (points - center))
+    axis = eigenvectors[
+        :, int(np.argmin(eigenvalues) if axis_kind == "surface_normal" else np.argmax(eigenvalues))
+    ]
+    if axis[2] < 0:
+        axis = -axis
+    return AxialSymmetry(
+        role,
+        axis,
+        center,
+        base_from_camera,
+        lock_to_baseline=bool(spec.get("lock_to_baseline", False)),
+        max_observed_tilt_rad=(
+            np.deg2rad(float(spec["max_observed_tilt_deg"])) if "max_observed_tilt_deg" in spec else None
+        ),
+        ends_interchangeable=bool(spec.get("ends_interchangeable", False)),
+    )
+
+
 def prepare(root: Path, annotation_path: Path, *, output_name: str) -> tuple[Path, dict]:
+    destination = root / "flash" / "v1" / "prepared" / output_name
+    if destination.exists():
+        raise FileExistsError(f"prepared bundle already exists: {destination}")
     annotation = json.loads(annotation_path.read_text())
     required = (
         "repo_id",
@@ -239,31 +268,10 @@ def prepare(root: Path, annotation_path: Path, *, output_name: str) -> tuple[Pat
 
     axial_symmetries = []
     for role, spec in annotation["axial_symmetry_roles"].items():
-        axis_kind = spec["axis_kind"]
-        if role not in prompts or axis_kind not in ("surface_normal", "long_axis"):
-            raise ValueError("axial symmetry needs a prepared role and a supported PCA axis")
+        if role not in prompts:
+            raise ValueError("axial symmetry needs a prepared role")
         points = next(model.points.points_object_m for model in models if model.points.role == role)
-        center = points.mean(axis=0)
-        eigenvalues, eigenvectors = np.linalg.eigh((points - center).T @ (points - center))
-        axis = eigenvectors[
-            :, int(np.argmin(eigenvalues) if axis_kind == "surface_normal" else np.argmax(eigenvalues))
-        ]
-        if axis[2] < 0:
-            axis = -axis
-        axial_symmetries.append(
-            AxialSymmetry(
-                role,
-                axis,
-                center,
-                base_from_camera,
-                lock_to_baseline=bool(spec.get("lock_to_baseline", False)),
-                max_observed_tilt_rad=(
-                    np.deg2rad(float(spec["max_observed_tilt_deg"]))
-                    if "max_observed_tilt_deg" in spec
-                    else None
-                ),
-            )
-        )
+        axial_symmetries.append(_symmetry_from_annotation(role, spec, points, base_from_camera))
 
     through_frame = _nearest_index(camera_times, times[_nearest_index(times, keypoints[-1]["t"])])
     estimates: list[dict] = []
@@ -288,7 +296,8 @@ def prepare(root: Path, annotation_path: Path, *, output_name: str) -> tuple[Pat
         + base_from_camera.tobytes()
     ).hexdigest()[:12]
     cache_path = root / "flash" / "v1" / "preparation-cache" / f"{output_name}-{cache_key}.npz"
-    if cache_path.exists():
+    cache_hit = cache_path.exists()
+    if cache_hit:
         with np.load(cache_path, allow_pickle=False) as cache:
             if int(cache["frames"]) != through_frame + 1:
                 raise ValueError("cached pose trace has a different demo length")
@@ -440,15 +449,14 @@ def prepare(root: Path, annotation_path: Path, *, output_name: str) -> tuple[Pat
         annotation["descriptor_model_id"],
         tuple(axial_symmetries),
     )
-    destination = root / "flash" / "v1" / "prepared" / output_name
-    if destination.exists():
-        raise FileExistsError(f"prepared bundle already exists: {destination}")
     for role, rel in mask_paths.items():
         path = root / rel
         path.parent.mkdir(parents=True, exist_ok=True)
         if not cv2.imwrite(str(path), reference_masks[role].astype(np.uint8) * 255):
             raise OSError(f"cannot write reference mask {path}")
     manifest = prepared.save(destination)
+    (destination / "annotation.json").write_text(json.dumps(annotation, indent=2) + "\n")
+    (destination / "keypoints.json").write_text(json.dumps({"keypoints": keypoints}, indent=2) + "\n")
     report = {
         "source_episode": annotation["episode"],
         "demo_frames_evaluated": len(estimates),
@@ -460,6 +468,11 @@ def prepare(root: Path, annotation_path: Path, *, output_name: str) -> tuple[Pat
         "held_contact_pose": "predicted from recorded calibrated fingertip and grasp pose",
         "intervals": len(intervals),
         "calibration_version": version,
+        "reference_masks": mask_paths,
+        "pose_trace_cache": str(cache_path.relative_to(root)),
+        "pose_trace_cache_hit": cache_hit,
+        "annotation_artifact": "annotation.json",
+        "keypoints_artifact": "keypoints.json",
     }
     (destination / "preparation-report.json").write_text(json.dumps(report, indent=2) + "\n")
     return manifest, report
