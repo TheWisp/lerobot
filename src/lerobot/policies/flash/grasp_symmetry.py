@@ -7,16 +7,17 @@ gripper-to-object relation handles whichever branch was actually grasped.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, replace
 from math import ceil, pi
 
 import numpy as np
 
-from .geometry import interpolate, transform
-from .planner import CartesianKinematics, InfeasibleTrajectoryError, PlannerLimits
-from .skill import AttachmentAction, FlashSkill, MotionMode, Relation
+from .geometry import inverse, transform
+from .planner import InfeasibleTrajectoryError, JointPlanner
+from .skill import AttachmentAction, EndpointRequirement, FlashSkill, MotionMode, Relation
 from .symmetry import AxialSymmetry
-from .trajectory import spatial_goal
+from .trajectory import AttachmentState, ConnectionTrajectory, Evidence, MissingEvidenceError, PoseEstimate
 
 
 @dataclass(frozen=True)
@@ -54,80 +55,158 @@ def _candidate_angles(rotation_tolerance_rad: float):
             yield angle
 
 
-def _feasible_prefix(
-    prefix,
-    live_pose: np.ndarray,
+def _preview_intervals(skill: FlashSkill, role: str):
+    """Check the grasp and its first required carry, not only the approach."""
+    prefix = _pregrasp_prefix(skill, role)
+    if not prefix:
+        return ()
+    attach_ids = {
+        item.event_id
+        for item in skill.attachment_transitions
+        if item.action == AttachmentAction.ATTACH and item.role == role
+    }
+    if not any(sample.event_id in attach_ids for interval in prefix for sample in interval.samples):
+        return prefix
+    preview = list(prefix)
+    for interval in skill.intervals[len(prefix) :]:
+        preview.append(interval)
+        if (
+            interval.relation == Relation.HELD_TO_TARGET
+            and interval.held_role == role
+            and interval.endpoint_requirement == EndpointRequirement.REQUIRED
+        ):
+            break
+    return tuple(preview)
+
+
+def _preview_candidate(
+    intervals,
+    skill: FlashSkill,
     symmetry: AxialSymmetry,
-    kinematics: CartesianKinematics,
+    live_poses: Mapping[str, PoseEstimate],
+    equivalent: np.ndarray,
+    planner: JointPlanner,
     seed_deg: np.ndarray,
-    limits: PlannerLimits,
+    period_s: float,
 ) -> bool:
-    joints = seed_deg.copy()
-    current_ee = transform(kinematics.forward_kinematics(joints))
-    live_center_z = float((live_pose @ np.r_[symmetry.center_object_m, 1])[2])
-    for interval in prefix:
-        goals = [spatial_goal(interval, sample, live_pose, None) for sample in interval.samples]
-        for sample, goal in zip(interval.samples, goals, strict=True):
-            demo_center_z = float((sample.demo_reference @ np.r_[symmetry.center_object_m, 1])[2])
-            demonstrated_clearance = sample.demo_ee[2, 3] - demo_center_z
-            if goal[2, 3] - live_center_z < demonstrated_clearance - limits.position_error_m:
-                return False
-        if interval.mode == MotionMode.CONNECTION:
-            end = goals[-1]
-            distance = np.linalg.norm(end[:3, 3] - current_ee[:3, 3])
-            angle = np.arccos(np.clip((np.trace(current_ee[:3, :3].T @ end[:3, :3]) - 1) / 2, -1, 1))
-            count = max(2, ceil(distance / limits.position_error_m), ceil(angle / limits.rotation_error_rad))
-            targets = [interpolate(current_ee, end, fraction) for fraction in np.linspace(0, 1, count + 1)]
+    """Exercise the runtime planner with the candidate and predicted attachment.
+
+    This establishes bounded IK continuity only. No geometric collision model
+    is available, so it cannot certify that the free-space path misses props.
+    """
+    canonical = live_poses[symmetry.role].pose
+    if canonical is None:
+        return False
+    joints = np.asarray(seed_deg, dtype=float).copy()
+    attachment = None
+    # A static startup snapshot is valid throughout this *simulated* path.
+    preview = JointPlanner(
+        planner.kinematics,
+        planner.arm_joint_names,
+        planner.gripper_joint_name,
+        replace(planner.limits, max_pose_age_s=1e6, max_attachment_age_s=None),
+    )
+    transitions = {item.event_id: item for item in skill.attachment_transitions}
+    for interval in intervals:
+        if interval.relation == Relation.EE_TO_OBJECT and interval.reference_role == symmetry.role:
+            reference_pose = canonical @ equivalent
+        elif interval.relation == Relation.EE_TO_START:
+            reference_pose = transform(planner.kinematics.forward_kinematics(joints))
         else:
-            targets = goals
-        prior_sample_joints = None
-        for index, target in enumerate(targets):
-            refinement_seed = joints
-            for _ in range(limits.ik_refinement_attempts):
-                solved = np.asarray(kinematics.inverse_kinematics(refinement_seed, target), dtype=float)
-                if solved.shape != joints.shape or not np.isfinite(solved).all():
-                    return False
-                reached = transform(kinematics.forward_kinematics(solved))
-                position_error = np.linalg.norm(reached[:3, 3] - target[:3, 3])
-                rotation_error = np.arccos(
-                    np.clip((np.trace(reached[:3, :3].T @ target[:3, :3]) - 1) / 2, -1, 1)
-                )
-                if position_error <= limits.position_error_m and rotation_error <= limits.rotation_error_rad:
-                    break
-                refinement_seed = solved
-            if position_error > limits.position_error_m or rotation_error > limits.rotation_error_rad:
+            observed = live_poses.get(interval.reference_role)
+            if observed is None or observed.pose is None:
                 return False
-            if interval.mode == MotionMode.DEMONSTRATED and prior_sample_joints is not None:
-                dt = interval.samples[index].time_s - interval.samples[index - 1].time_s
-                if np.any(np.abs(solved - prior_sample_joints) / dt > limits.joint_speed_deg_s):
+            reference_pose = observed.pose
+        reference = PoseEstimate(
+            interval.reference_role,
+            reference_pose,
+            0.0,
+            0.0,
+            Evidence.OBSERVED,
+            interval.reference_version,
+            (True,) * 3,
+            (True,) * 3,
+        )
+        connection = (
+            ConnectionTrajectory.begin(
+                interval,
+                planner.kinematics.forward_kinematics(joints),
+                reference_pose,
+                attachment.gripper_from_object
+                if attachment is not None and interval.relation == Relation.HELD_TO_TARGET
+                else None,
+                0.0,
+            )
+            if interval.mode == MotionMode.CONNECTION
+            else None
+        )
+        duration = connection.duration_s if connection is not None else interval.demo_duration_s
+        try:
+            # Retiming can lengthen a generated path after the initial count.
+            # Re-run from the same start until the complete endpoint is included.
+            for _ in range(planner.limits.max_connection_retimings + 1):
+                count = max(2, ceil(duration / period_s) + 1)
+                actions = preview.plan(
+                    interval,
+                    start_tick=0,
+                    count=count,
+                    epoch_s=0.0,
+                    period_s=period_s,
+                    interval_start_s=0.0,
+                    seed_deg=joints,
+                    reference=reference,
+                    attachment=attachment,
+                    connection=connection,
+                )
+                if actions and actions[-1].interval_complete:
+                    break
+                if connection is None or connection.duration_s <= duration:
                     return False
-            joints = solved
-            if interval.mode == MotionMode.DEMONSTRATED:
-                prior_sample_joints = solved
-        current_ee = goals[-1]
+                duration = connection.duration_s
+            else:
+                return False
+        except (InfeasibleTrajectoryError, MissingEvidenceError, ValueError):
+            return False
+        joints = np.array([actions[-1].action[f"{name}.pos"] for name in planner.arm_joint_names])
+        for action in actions:
+            transition = transitions.get(action.event_id)
+            if (
+                transition is not None
+                and transition.action == AttachmentAction.ATTACH
+                and transition.role == symmetry.role
+            ):
+                event_joints = np.array([action.action[f"{name}.pos"] for name in planner.arm_joint_names])
+                attachment = AttachmentState(
+                    inverse(planner.kinematics.forward_kinematics(event_joints)) @ canonical,
+                    0.0,
+                    0.0,
+                    transition.reference_version,
+                )
     return True
 
 
 def select_grasp_symmetry(
     skill: FlashSkill,
     symmetry: AxialSymmetry,
-    live_pose: np.ndarray,
-    kinematics: CartesianKinematics,
+    live_poses: Mapping[str, PoseEstimate],
+    planner: JointPlanner,
     seed_deg: np.ndarray,
-    limits: PlannerLimits,
+    period_s: float,
 ) -> GraspSymmetryChoice:
-    """Find a continuous-IK alternative without lowering demo-relative clearance."""
-    prefix = _pregrasp_prefix(skill, symmetry.role)
-    if not prefix:
+    """Pick a physical equivalent that reaches the grasp and first required carry."""
+    intervals = _preview_intervals(skill, symmetry.role)
+    if not intervals:
         raise ValueError(f"{symmetry.role}: skill has no leading object-relative grasp prefix")
-    for angle in _candidate_angles(limits.rotation_error_rad):
+    if symmetry.role not in live_poses or live_poses[symmetry.role].pose is None:
+        raise ValueError(f"{symmetry.role}: no pose for grasp symmetry selection")
+    for angle in _candidate_angles(planner.limits.rotation_error_rad):
         for exchange in (False, True) if symmetry.ends_interchangeable else (False,):
             equivalent = symmetry.equivalent_transform(angle, exchange_ends=exchange)
-            if _feasible_prefix(
-                prefix, transform(live_pose) @ equivalent, symmetry, kinematics, seed_deg, limits
+            if _preview_candidate(
+                intervals, skill, symmetry, live_poses, equivalent, planner, seed_deg, period_s
             ):
                 return GraspSymmetryChoice(symmetry.role, equivalent, angle, exchange)
     raise InfeasibleTrajectoryError(
-        f"{symmetry.role}: no declared axial/end-exchange grasp alternative has a continuous IK path "
-        "with demonstrated object-relative clearance"
+        f"{symmetry.role}: no declared axial/end-exchange grasp alternative reaches the grasp "
+        "and first required held-to-target goal with bounded continuous IK"
     )

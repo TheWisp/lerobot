@@ -187,6 +187,39 @@ def test_coordinator_waits_for_new_pose_when_only_future_refill_exceeds_age_limi
     assert session.progress.phase == Phase.MOVING
 
 
+def test_stale_pose_suspends_generated_connection_and_resumes_from_measured_joints():
+    now, robot, session, poses, worker, coordinator = make_runtime(
+        mode=MotionMode.CONNECTION, max_pose_age_s=0.14
+    )
+    for _ in range(20):
+        coordinator.step()
+        if session.progress.suspended:
+            break
+    assert session.progress.phase == Phase.WAITING
+    assert session.actions.snapshot().pending == ()
+    assert any(event["type"] == "interval_suspended" for event in session.progress.events)
+    joint_at_pause = robot.joint
+    for _ in range(100):
+        poses.publish((target(0.2, now[0]),))
+        coordinator.step()
+        if session.progress.phase == Phase.MOTION_COMPLETE:
+            break
+    assert session.progress.phase == Phase.MOTION_COMPLETE
+    assert robot.joint > joint_at_pause
+    assert robot.joint == pytest.approx(30)
+    assert sum(event["type"] == "interval_start" for event in session.progress.events) == 2
+
+
+def test_stale_pose_still_stops_demonstrated_contact():
+    _, _, session, _, _, coordinator = make_runtime(max_pose_age_s=0.14)
+    for _ in range(20):
+        coordinator.step()
+        if session.progress.phase == Phase.INTERRUPTED:
+            break
+    assert session.progress.phase == Phase.INTERRUPTED
+    assert not session.progress.suspended
+
+
 def test_generated_connection_retargets_and_extends_duration_for_live_distance():
     now, robot, session, poses, worker, coordinator = make_runtime(mode=MotionMode.CONNECTION)
     for _ in range(12):

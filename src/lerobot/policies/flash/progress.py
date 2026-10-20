@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 
-from .skill import FlashSkill
+from .skill import FlashSkill, MotionMode
 
 
 class Verdict(str, Enum):
@@ -39,6 +39,7 @@ class Progress:
     interval_index: int = 0
     phase: Phase = Phase.WAITING
     interval_start_s: float | None = None
+    suspended: bool = False
     last_receipt_s: float | None = None
     attempt: int = 0
     milestones: dict[str, MilestoneUpdate] = field(default_factory=dict)
@@ -95,11 +96,23 @@ class Progress:
         if not self.can_begin():
             return False
         self.interval_start_s = now_s
+        self.suspended = False
         self.phase = Phase.MOVING
         self.events.append(
             {"type": "interval_start", "interval": self.interval.name, "at": now_s, "attempt": self.attempt}
         )
         return True
+
+    def suspend_connection(self, now_s: float, reason: str) -> None:
+        """Resume a free-space interval from measured joints after evidence returns."""
+        if self.phase != Phase.MOVING or self.interval.mode != MotionMode.CONNECTION:
+            raise ValueError("only an active generated connection can wait for new evidence")
+        self.phase = Phase.WAITING
+        self.interval_start_s = None
+        self.suspended = True
+        self.events.append(
+            {"type": "interval_suspended", "interval": self.interval.name, "at": now_s, "reason": reason}
+        )
 
     def can_begin(self) -> bool:
         return self.phase == Phase.WAITING and self._satisfied(self.interval.entry_milestone)
@@ -127,6 +140,7 @@ class Progress:
             return True
         self.interval_index += 1
         self.interval_start_s = None
+        self.suspended = False
         self.phase = Phase.WAITING
         return True
 
@@ -143,6 +157,7 @@ class Progress:
         self.interval_index = names.index(interval_name)
         self.attempt += 1
         self.interval_start_s = None
+        self.suspended = False
         self.phase = Phase.WAITING
         self.events.append({"type": "recovery", "interval": interval_name, "at": now_s, "reason": reason})
 

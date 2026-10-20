@@ -157,6 +157,45 @@ def _camera_frame(rgb: np.ndarray, frame_id: int) -> RGBDFrame:
     )
 
 
+def test_unverified_group_loss_uses_only_configured_bounded_stationary_prior():
+    rgb = np.random.default_rng(22).integers(0, 255, (96, 96, 3), dtype=np.uint8)
+    store = LatestPoseStore()
+    service = CausalPoseService(store, image_scale=1.0, static_prediction_max_s=0.05)
+    first = _camera_frame(rgb, 0)
+    service._frame(first)
+    observed = PoseEstimate("object", _pose(0.03), 0, 0, Evidence.OBSERVED, "v1", (True,) * 3, (True,) * 3)
+    service.observed["object"] = (observed, service.scene_history[-1], ())
+    store.publish((observed,))
+    # The provisional group's IDs have disappeared. It must not suppress the
+    # independently bounded prior; a confirmed group still has no such fallback.
+    lost_group = EnvironmentRelationship(
+        np.arange(10000, 10012), np.zeros((12, 3)), observed.pose, 0, "v1", 0
+    )
+    service.candidate_relationships["object"] = lost_group
+    service._frame(_camera_frame(rgb, 1))
+    estimate = store.snapshot()[1]["object"]
+    assert estimate.estimator == "stationary_prior"
+    assert estimate.source_time_s == pytest.approx(1 / 30)
+    assert estimate.last_direct_observation_s == 0
+    service._frame(_camera_frame(rgb, 2))  # beyond the configured blind interval
+    assert store.snapshot()[1]["object"].source_time_s == pytest.approx(1 / 30)
+
+    confirmed_store = LatestPoseStore()
+    confirmed = CausalPoseService(
+        confirmed_store,
+        image_scale=1.0,
+        static_prediction_max_s=1.0,
+        environment_prediction_max_s=0.05,
+    )
+    confirmed._frame(first)
+    confirmed.observed["object"] = (observed, confirmed.scene_history[-1], ())
+    confirmed_store.publish((observed,))
+    confirmed.relationships["object"] = lost_group
+    confirmed._frame(_camera_frame(rgb, 1))
+    confirmed._frame(_camera_frame(rgb, 2))  # verified group expires
+    assert confirmed_store.snapshot()[1]["object"].source_time_s == 0
+
+
 def test_causal_service_uses_verified_scene_motion_when_object_points_disappear():
     rng = np.random.default_rng(12)
     patch = rng.integers(0, 255, (56, 56, 3), dtype=np.uint8)

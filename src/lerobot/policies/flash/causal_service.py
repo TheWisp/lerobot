@@ -186,6 +186,7 @@ class CausalPoseService:
         self.observed: dict[str, tuple[PoseEstimate, SceneTracks, tuple[np.ndarray, ...]]] = {}
         self.candidate_relationships: dict[str, EnvironmentRelationship] = {}
         self.relationships: dict[str, EnvironmentRelationship] = {}
+        self._expired_verified_roles: set[str] = set()
         self._attachment_lock = Lock()
         self._attached_role: str | None = None
         self._attachment_changed_roles: set[str] = set()
@@ -267,6 +268,7 @@ class CausalPoseService:
             self.relationships.pop(item, None)
             self.candidate_relationships.pop(item, None)
             self.observed.pop(item, None)
+            self._expired_verified_roles.discard(item)
         return role
 
     def _submit(self, item: RGBDFrame | _Anchor) -> None:
@@ -357,6 +359,8 @@ class CausalPoseService:
             last_group_s = relationship.last_group_measurement_s or relationship.anchor_time_s
             if frame.source_time_s - last_group_s > self.environment_prediction_max_s:
                 del source[role]
+                if confirmed:
+                    self._expired_verified_roles.add(role)
                 self.environment_expired_by_role[role] = self.environment_expired_by_role.get(role, 0) + 1
                 continue
             if role in object_motion_roles or role == attached_role:
@@ -368,6 +372,12 @@ class CausalPoseService:
                 self.environment_fit_failures_by_role[role] = (
                     self.environment_fit_failures_by_role.get(role, 0) + 1
                 )
+                # An unverified support hypothesis has no stronger claim than
+                # the last direct object view. If its points disappear, the
+                # configured bounded stationary prior may bridge the gap.
+                # A verified moving group must never be replaced this way.
+                if not confirmed and (observed := self.observed.get(role)) is not None:
+                    self._publish_static(role, observed[0], frame)
                 continue
             pose, advanced = tracked
             source[role] = advanced
@@ -413,7 +423,7 @@ class CausalPoseService:
                 self._publish_static(role, anchor, frame)
 
     def _publish_static(self, role: str, anchor: PoseEstimate, frame: RGBDFrame) -> None:
-        if self.static_prediction_max_s is None:
+        if self.static_prediction_max_s is None or role in self._expired_verified_roles:
             return
         age = frame.source_time_s - anchor.source_time_s
         if not 0 < age <= self.static_prediction_max_s:
@@ -690,6 +700,9 @@ class CausalPoseService:
     ) -> None:
         """Verify co-motion before a group can predict a hidden object."""
         role = estimate.role
+        # An independent direct view can re-establish the stationary prior
+        # after a formerly verified support group lost all measurable points.
+        self._expired_verified_roles.discard(role)
         existing = self.relationships.get(role) or self.candidate_relationships.get(role)
         if existing is not None:
             predicted = existing.predict(

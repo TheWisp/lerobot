@@ -85,6 +85,16 @@ class FlashSession:
                 raise PlanRejectedError("planner result belongs to an interval that is no longer active")
             self.actions.publish(revision, commands)
 
+    def suspend_connection(self, reason: str) -> None:
+        """Atomically drop unissued free-space actions and wait for fresh pose evidence."""
+        with self._plan_gate_lock:
+            events = {sample.event_id for sample in self.progress.interval.samples if sample.event_id}
+            if events & self.actions.snapshot().issued_events:
+                raise ValueError("cannot suspend after a connection's semantic event was issued")
+            self.actions.cancel_unissued(reason)
+            self.progress.suspend_connection(self.motor.clock(), reason)
+            self._starved_in_a_row = 0
+
     def _allow_action(self, action: TimedAction) -> bool:
         return action.interval == self.progress.interval.name and self.progress.allows_milestone(
             action.requires_milestone

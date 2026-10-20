@@ -1,6 +1,7 @@
 """End-to-end state transitions through the fixed motor dispatcher."""
 
 import threading
+from dataclasses import replace
 
 import numpy as np
 import pytest
@@ -91,6 +92,28 @@ def test_future_contact_chunk_waits_to_start_its_own_demo_clock():
     assert session.step().tick == 2
     assert session.progress.interval_start_s == 2 / 30
     assert robot.calls.count("send") == 1
+
+
+def test_suspending_connection_invalidates_in_flight_plan_revision():
+    now = [0.0]
+    interval = replace(skill().intervals[0], mode=MotionMode.CONNECTION, speed_m_s=0.2)
+    session = FlashSession(
+        FlashSkill("demo/source", 0, (interval,)),
+        FakeRobot(),
+        clock=lambda: now[0],
+        sleep=lambda dt: now.__setitem__(0, now[0] + dt),
+    )
+    session.publish_plan(
+        0, [TimedAction(i, {"arm.pos": float(i)}, "contact", may_skip_if_late=True) for i in range(4)]
+    )
+    session.step()
+    assert session.progress.phase == Phase.MOVING
+    session.suspend_connection("reference became stale")
+    assert session.progress.phase == Phase.WAITING
+    assert session.actions.snapshot().pending == ()
+    with pytest.raises(PlanRejectedError, match="stale plan revision"):
+        session.publish_plan(1, [TimedAction(2, {"arm.pos": 2.0}, "contact")])
+    assert session.step() is None
 
 
 def test_waiting_tick_cannot_idle_across_a_concurrent_planner_publication():

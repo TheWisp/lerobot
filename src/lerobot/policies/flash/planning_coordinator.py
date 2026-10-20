@@ -99,13 +99,21 @@ class PlanningCoordinator:
             choice = select_grasp_symmetry(
                 self.session.progress.skill,
                 symmetry,
-                observed.pose,
-                self.kinematics,
+                poses,
+                self.worker.planner,
                 seed_deg,
-                self.worker.planner.limits,
+                self.session.motor.period_s,
             )
             self.grasp_choices[symmetry.role] = choice
             self._grasp_prefix_names[symmetry.role] = frozenset(item.name for item in prefix)
+            self.session.progress.events.append(
+                {
+                    "type": "grasp_symmetry_selected",
+                    "role": symmetry.role,
+                    "angle_rad": choice.angle_rad,
+                    "exchange_ends": choice.exchange_ends,
+                }
+            )
 
     def step(self):
         """Check live evidence, execute one motor tick, then refill the future queue."""
@@ -193,7 +201,16 @@ class PlanningCoordinator:
                 self.session.actions.cancel_unissued("reference lost before interval entry")
                 self._planned_reference = None
             if phase == Phase.MOVING:
-                self._fail(f"{interval.reference_role} lost its usable pose during motion")
+                if interval.mode == MotionMode.CONNECTION:
+                    # A generated free-space path can be restarted from the
+                    # measured joints without replaying any contact sample.
+                    # Stop issuing the old queue while perception catches up.
+                    self.session.suspend_connection(f"{interval.reference_role} pose became stale")
+                    self._pending_revision = None
+                    self._connection = None
+                    self._wait_for_evidence(f"{interval.reference_role} usable pose", now_s)
+                else:
+                    self._fail(f"{interval.reference_role} lost its usable pose during motion")
             else:
                 self._wait_for_evidence(f"{interval.reference_role} usable pose", now_s)
             return
@@ -214,6 +231,13 @@ class PlanningCoordinator:
         self._clear_missing_evidence("held-object attachment")
         if attachment is not None and attachment.reference_version != interval.held_reference_version:
             self._fail("held-object attachment uses the wrong object frame")
+            return
+        if (
+            self.session.progress.suspended
+            and self._planned_reference is not None
+            and self._reference_changed_too_far(self._planned_reference, reference, interval, attachment)
+        ):
+            self._fail(f"{interval.reference_role} changed the demonstrated goal while evidence was missing")
             return
         changed_interval = self._planned_interval_index != self.session.progress.interval_index
         new_image = (
@@ -409,4 +433,5 @@ class PlanningCoordinator:
             self._missing_evidence_since_s is not None
             and now_s - self._missing_evidence_since_s >= self.config.max_wait_for_evidence_s
         ):
-            self._fail(f"{kind} unavailable at interval entry")
+            context = "after a connection pause" if self.session.progress.suspended else "at interval entry"
+            self._fail(f"{kind} unavailable {context}")
