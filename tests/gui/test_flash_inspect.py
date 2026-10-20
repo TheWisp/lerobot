@@ -9,6 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlsplit
 
+import cv2
 import numpy as np
 import pytest
 
@@ -27,6 +28,7 @@ from lerobot.gui.api.run import (
     start_flash,
     stop_process,
 )
+from lerobot.policies.flash.demo_replay import load_raw_legacy_demo_replay
 from lerobot.policies.flash.inspect import inspect_dataset, inspect_skill
 from lerobot.policies.flash.skill import FlashSkill, Interval, MotionMode, Relation, SpatialSample
 
@@ -144,6 +146,65 @@ def test_demo_preparation_versions_edited_inputs_and_launches_existing_importer(
         "--output-name",
         "revised",
     ]
+
+
+def test_raw_demo_can_be_reviewed_without_preexisting_flash_labels(tmp_path):
+    dataset = tmp_path / "unprepared_recording"
+    (dataset / "meta").mkdir(parents=True)
+    (dataset / "meta/info.json").write_text(json.dumps({"total_episodes": 1, "fps": 30}))
+    (dataset / "recording/rgb").mkdir(parents=True)
+    (dataset / "recording/depth").mkdir(parents=True)
+    np.savez(dataset / "showservo_demo.npz", t=np.array([0.0, 0.03]), t0=np.array(0.0))
+    np.savetxt(dataset / "recording/times.txt", [0.0, 0.03])
+    for index in (0, 1):
+        cv2.imwrite(str(dataset / "recording/rgb" / f"{index:06d}.jpg"), np.zeros((4, 6, 3), np.uint8))
+        cv2.imwrite(str(dataset / "recording/depth" / f"{index:06d}.png"), np.zeros((4, 6), np.uint16))
+
+    listing = _flash_recordings((tmp_path,))
+    assert len(listing) == 1
+    assert listing[0]["bundle_path"] is None
+    replay = load_raw_legacy_demo_replay(dataset, 0)
+    assert replay["kind"] == "raw_demo"
+    assert replay["frames"][1]["snapshot"]["camera"]["frame_id"] == 1
+    assert replay["frames"][1]["snapshot"]["accepted"] == {}
+    assert "prompts_by_role" not in replay
+
+
+def test_raw_demo_preparation_accepts_object_roles_entered_in_editor(tmp_path, monkeypatch):
+    from lerobot.gui.api import run as run_api
+
+    dataset = tmp_path / "raw"
+    (dataset / "meta").mkdir(parents=True)
+    (dataset / "meta/info.json").write_text("{}")
+    (dataset / "showservo_demo.npz").touch()
+    launches = []
+
+    async def launch(args, *, command, config):
+        launches.append((args, command, config))
+        run_api._active_process = SimpleNamespace(pid=123)
+
+    monkeypatch.setattr(run_api, "_ensure_no_active_process", lambda: None)
+    monkeypatch.setattr(run_api, "_launch_subprocess", launch)
+    annotation = {
+        "episode": 0,
+        "prompts_by_role": {"workpiece": "wooden cylinder", "receiver": "green ring"},
+        "held_role": "workpiece",
+        "target_role": "receiver",
+    }
+    request = FlashDemoPrepareRequest(
+        dataset_root=str(dataset),
+        episode=0,
+        annotation=annotation,
+        keypoints_document={"keypoints": [{"t": 1.0, "frame": "receiver", "move": "follow"}]},
+        output_name="from-ui",
+    )
+    result = asyncio.run(prepare_flash_demo(request))
+    assert result["status"] == "started"
+    assert (
+        json.loads((dataset / "flash/v1/preparation-inputs/from-ui/annotation.json").read_text())
+        == annotation
+    )
+    assert launches[0][1] == "flash_prepare"
 
 
 def test_new_preparation_candidate_does_not_replace_default_demo(tmp_path):
@@ -768,3 +829,127 @@ def test_run_flash_tracker_panel_reuses_view_for_recorded_layers(gui_page):
     assert panel.bounding_box()["y"] == before["y"]
     page.locator("#flash-tracker-collapse").click()
     assert page.locator("#flash-tracker-content").is_visible()
+
+
+@pytest.mark.requires_playwright
+@pytest.mark.skipif(importlib.util.find_spec("playwright") is None, reason="Playwright is not installed")
+def test_raw_demo_editor_collects_object_names_and_action_from_visible_controls(gui_page):
+    page = gui_page
+    submitted = []
+    raw_frames = [
+        {
+            "frame_index": index,
+            "snapshot": {
+                "camera": {"frame_id": index, "width": 640, "height": 480},
+                "accepted": {},
+                "demo": {"phase": "raw", "time_s": float(index)},
+            },
+        }
+        for index in range(3)
+    ]
+    page.route(
+        "**/api/run/flash/recordings",
+        lambda route: route.fulfill(
+            json=[
+                {
+                    "kind": "demo",
+                    "dataset_root": "/tmp/unprepared",
+                    "episode": 0,
+                    "modified_at_s": 1.0,
+                    "skills": [],
+                    "prepared_versions": [],
+                    "bundle_path": None,
+                }
+            ]
+        ),
+    )
+    page.route(
+        "**/api/run/flash/demo/raw-replay?*",
+        lambda route: route.fulfill(
+            json={
+                "available": True,
+                "kind": "raw_demo",
+                "fps": 0.1,
+                "frames": raw_frames,
+                "starter_parameters": {
+                    "max_demo_pose_gap_frames": 90,
+                    "connection_speed_m_s": 0.04,
+                    "min_similarity": 0.75,
+                    "registration_threshold_m": 0.005,
+                    "registration_min_inliers": 12,
+                    "registration_trials": 100,
+                    "sam_resolution": 448,
+                    "descriptor_model_id": "facebook/dinov2-small",
+                },
+            }
+        ),
+    )
+
+    def capture_submission(route):
+        submitted.append(route.request.post_data_json)
+        route.fulfill(status=400, json={"detail": "captured test request"})
+
+    page.route("**/api/run/flash/demo/prepare", capture_submission)
+    page.evaluate("switchTab('run')")
+    page.evaluate("() => selectWorkflow('flash')")
+    page.locator("#run-flash-demos .flash-recording").click()
+    page.wait_for_function("() => flashReplay?.kind === 'raw_demo'")
+    page.locator("#flash-demo-edit-toggle").click()
+    assert page.locator("#flash-demo-editor-change-status").inner_text() == "Raw demo · no preparation saved"
+
+    def section(name):
+        page.locator("#flash-demo-editor .flash-editor-tabs button", has_text=name).click()
+
+    def set_field(label, value):
+        control = (
+            page.locator("#flash-demo-editor .flash-editor-pane:not([hidden]) label")
+            .filter(has_text=label)
+            .locator("input, select")
+            .first
+        )
+        if control.evaluate("element => element.tagName") == "SELECT":
+            control.select_option(str(value))
+        else:
+            control.fill(str(value))
+            control.dispatch_event("change")
+
+    def seek(index):
+        page.locator("#flash-tracker-scrub").evaluate(
+            "(element, value) => { element.value = String(value); "
+            'element.dispatchEvent(new Event("input", {bubbles: true})); }',
+            index,
+        )
+
+    set_field("Arm side", "left")
+    set_field("Robot/camera calibration file", "/tmp/calibration.json")
+    section("Objects")
+    for role, prompt in (("workpiece", "wooden cylinder"), ("receiver", "green ring")):
+        set_field("New object name", role)
+        set_field("What it looks like", prompt)
+        page.get_by_role("button", name="Add object").click()
+    set_field("Rotational symmetry", "long_axis")
+    assert "dowel" not in page.locator("#flash-demo-editor").inner_text().lower()
+    section("Events")
+    page.get_by_role("button", name="Use current for grasp view").click()
+    seek(1)
+    page.get_by_role("button", name="Use current for grasp time").click()
+    page.get_by_role("button", name="Use current for start-anchored until").click()
+    seek(2)
+    page.get_by_role("button", name="Use current for release time").click()
+    section("Advanced")
+    page.get_by_role("button", name="Apply SO-107 starter parameters").click()
+    section("Key frames")
+    seek(1)
+    page.get_by_role("button", name="Add key frame at current time").click()
+    set_field("Reference", "receiver")
+    page.get_by_role("button", name="Prepare spatial demo").click()
+    page.wait_for_function(
+        "() => document.querySelector('#flash-demo-editor-status').textContent.includes('captured test request')"
+    )
+    assert submitted[0].get("bundle_path") is None
+    assert submitted[0]["annotation"]["prompts_by_role"] == {
+        "workpiece": "wooden cylinder",
+        "receiver": "green ring",
+    }
+    assert submitted[0]["annotation"]["axial_symmetry_roles"]["receiver"] == {"axis_kind": "long_axis"}
+    assert submitted[0]["keypoints_document"]["keypoints"][0]["frame"] == "receiver"

@@ -430,7 +430,7 @@ function closeFlashDemoEditor() {
     document.querySelector('#rerun-viewer .flash-demo-polygon')?.remove();
     document.getElementById('rerun-viewer')?.classList.remove('flash-demo-editing');
     const toggle = document.getElementById('flash-demo-edit-toggle');
-    if (toggle) toggle.textContent = 'Edit demo';
+    if (toggle) toggle.textContent = flashReplay?.kind === 'raw_demo' ? 'Prepare demo' : 'Edit demo';
 }
 
 function toggleFlashTrackerPanel() {
@@ -662,6 +662,19 @@ function renderFlashDemoSnapshot(snapshot) {
     _flashDrawOverlay();
 }
 
+function renderFlashRawSnapshot(snapshot) {
+    flashSnapshot = snapshot;
+    flashOverlayRows = [];
+    flashHighlightedOverlay = null;
+    const panel = document.getElementById('flash-tracker-panel');
+    panel.hidden = selectedWorkflow !== 'flash';
+    panel.querySelector('.flash-tracker-heading strong').textContent = 'Raw demo';
+    document.getElementById('flash-tracker-mode').textContent = 'Unprepared';
+    document.getElementById('flash-tracker-content').textContent =
+        'No object poses have been extracted. Use Prepare demo to name the objects, mark the action and create a reviewable version.';
+    _flashDrawOverlay();
+}
+
 function _flashProject(point, pose, camera) {
     if (!pose?.pose || !camera?.base_from_camera || !camera?.intrinsics) return null;
     const t = pose.pose;
@@ -854,7 +867,9 @@ function _flashInstallReplay(replay, imageAlt) {
     document.getElementById('flash-tracker-replay-controls').hidden = false;
     document.getElementById('flash-tracker-scrub').max = Math.max(0, replay.frames.length - 1);
     document.getElementById('flash-tracker-play').textContent = 'Play';
-    document.getElementById('flash-demo-edit-toggle').hidden = replay.kind !== 'demo';
+    const editToggle = document.getElementById('flash-demo-edit-toggle');
+    editToggle.hidden = replay.kind !== 'demo' && replay.kind !== 'raw_demo';
+    editToggle.textContent = replay.kind === 'raw_demo' ? 'Prepare demo' : 'Edit demo';
     _flashRenderTimeline();
 }
 
@@ -868,8 +883,8 @@ function _flashRenderTimeline() {
     const markers = document.getElementById('flash-timeline-markers');
     markers.replaceChildren();
     const replay = flashReplay;
-    document.querySelector('.flash-timeline-legend').hidden = replay?.kind !== 'demo';
-    if (replay?.kind !== 'demo' || !replay.frames?.length) return;
+    document.querySelector('.flash-timeline-legend').hidden = !['demo', 'raw_demo'].includes(replay?.kind);
+    if (!['demo', 'raw_demo'].includes(replay?.kind) || !replay.frames?.length) return;
     const annotation = flashDemoEditor?.annotation || replay.preparation?.annotation;
     const keypoints = flashDemoEditor?.keypointsDocument?.keypoints || replay.preparation?.keypoints_document?.keypoints || [];
     const duration = replay.frames.at(-1).snapshot.demo.time_s;
@@ -882,7 +897,7 @@ function _flashRenderTimeline() {
         events.push({time: annotation.release_time_s, label: 'Release', kind: 'release'});
     }
     for (const event of events) {
-        if (!Number.isFinite(Number(event.time)) || event.time < 0 || event.time > duration) continue;
+        if (event.time == null || !Number.isFinite(Number(event.time)) || event.time < 0 || event.time > duration) continue;
         const button = document.createElement('button');
         button.type = 'button';
         button.className = `flash-timeline-marker flash-timeline-${event.kind}`;
@@ -950,6 +965,26 @@ async function loadFlashDemoReplay(datasetRoot, episodeIndex, bundlePath) {
     }
 }
 
+async function loadFlashRawDemoReplay(datasetRoot, episodeIndex) {
+    const status = document.getElementById('run-flash-status');
+    if (status) status.textContent = 'Loading raw RGB-D demo…';
+    try {
+        const query = new URLSearchParams({dataset_root: datasetRoot, episode: String(episodeIndex)});
+        const response = await fetch(`/api/run/flash/demo/raw-replay?${query}`);
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.detail || 'Cannot read raw demo');
+        document.getElementById('run-flash-root').value = datasetRoot;
+        document.getElementById('run-flash-episode').value = String(episodeIndex);
+        _flashInstallReplay({...result, datasetRoot, episode: episodeIndex}, 'Original raw aligned demo RGB frame');
+        seekFlashReplay(0);
+        toggleFlashReplay();
+        if (status) status.textContent = 'Raw demo: no objects or spatial skill prepared yet.';
+    } catch (error) {
+        if (status) status.textContent = `Cannot inspect raw demo: ${error.message}`;
+        showToast('Cannot inspect raw demo', error.message, 'error');
+    }
+}
+
 async function _loadFlashRecordings() {
     const list = document.getElementById('run-flash-recordings');
     const demosList = document.getElementById('run-flash-demos');
@@ -977,7 +1012,6 @@ async function _loadFlashRecordings() {
             button.type = 'button';
             button.className = 'flash-recording';
             button.title = recording.dataset_root;
-            button.disabled = !recording.bundle_path;
             const label = document.createElement('strong');
             label.textContent = `${recording.dataset_root.split('/').pop()} · episode ${recording.episode}`;
             const meta = document.createElement('span');
@@ -985,12 +1019,12 @@ async function _loadFlashRecordings() {
             const skills = recording.skills || [];
             meta.textContent = recording.bundle_path
                 ? `${skills.length} FLASH skill(s) · viewing: ${recording.prepared_skill} · Play with extracted poses`
-                : `${skills.length} FLASH annotation(s) · no prepared skill; preparation is not available in this UI yet`;
+                : 'Raw SO-107 RGB-D demo · prepare objects and action in playback';
             button.append(label, meta);
-            button.onclick = () => loadFlashDemoReplay(
-                recording.dataset_root, recording.episode,
-                card.querySelector('.flash-recording-version')?.value || recording.bundle_path,
-            );
+            button.onclick = () => recording.bundle_path
+                ? loadFlashDemoReplay(recording.dataset_root, recording.episode,
+                    card.querySelector('.flash-recording-version')?.value || recording.bundle_path)
+                : loadFlashRawDemoReplay(recording.dataset_root, recording.episode);
             card.append(button);
             const versions = recording.prepared_versions || [];
             if (versions.length > 1) {
@@ -1040,7 +1074,7 @@ function seekFlashReplay(index) {
     const selected = flashReplay.frames[Math.max(0, Math.min(index, flashReplay.frames.length - 1))];
     const scrub = document.getElementById('flash-tracker-scrub');
     scrub.value = String(index);
-    const demo = flashReplay.kind === 'demo';
+    const demo = flashReplay.kind === 'demo' || flashReplay.kind === 'raw_demo';
     document.getElementById('flash-tracker-frame').textContent = demo
         ? `${selected.snapshot.demo.time_s.toFixed(1)} s · ${index + 1}/${flashReplay.frames.length}`
         : `${index + 1} / ${flashReplay.frames.length}`;
@@ -1050,7 +1084,8 @@ function seekFlashReplay(index) {
         : `/api/datasets/${encodeURIComponent(flashReplay.datasetId)}/episodes/${flashReplay.episode}/frame/${selected.frame_index}?camera=observation.images.overhead`;
     image.onload = _flashDrawOverlay;
     image.src = url;
-    if (demo) renderFlashDemoSnapshot({ ...selected.snapshot, ...flashReplay.geometry });
+    if (flashReplay.kind === 'demo') renderFlashDemoSnapshot({ ...selected.snapshot, ...flashReplay.geometry });
+    else if (flashReplay.kind === 'raw_demo') renderFlashRawSnapshot(selected.snapshot);
     else renderFlashSnapshot(selected.snapshot, 'Recording');
     if (flashDemoEditor) _flashEditorUpdateFrame();
 }
@@ -1066,7 +1101,7 @@ function toggleFlashReplay() {
         const next = Number(document.getElementById('flash-tracker-scrub').value) + 1;
         if (next >= flashReplay.frames.length) { toggleFlashReplay(); return; }
         seekFlashReplay(next);
-    }, flashReplay.kind === 'demo' ? 1000 / flashReplay.fps : 100);
+    }, ['demo', 'raw_demo'].includes(flashReplay.kind) ? 1000 / flashReplay.fps : 100);
 }
 
 // The demo editor is loaded from flash_demo_editor.js.

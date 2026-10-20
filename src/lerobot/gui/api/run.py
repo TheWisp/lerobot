@@ -259,7 +259,7 @@ class FlashConfigInspectRequest(BaseModel):
 
 
 class FlashDemoPrepareRequest(FlashDatasetInspectRequest):
-    bundle_path: str
+    bundle_path: str | None = None
     annotation: dict[str, Any]
     keypoints_document: dict[str, Any]
     output_name: str | None = None
@@ -1132,6 +1132,19 @@ async def flash_demo_replay(dataset_root: str, bundle_path: str, episode: int = 
         raise HTTPException(400, f"Cannot replay FLASH demo: {exc}") from exc
 
 
+@router.get("/flash/demo/raw-replay")
+async def flash_raw_demo_replay(dataset_root: str, episode: int = 0) -> dict:
+    """Review a raw RGB-D demo before any object roles or skill are prepared."""
+    from lerobot.policies.flash.demo_replay import load_raw_legacy_demo_replay
+
+    try:
+        return await asyncio.get_running_loop().run_in_executor(
+            _flash_telemetry_pool, load_raw_legacy_demo_replay, Path(dataset_root), episode
+        )
+    except (OSError, KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(400, f"Cannot replay raw FLASH demo: {exc}") from exc
+
+
 @router.get("/flash/demo/frame")
 def flash_demo_frame(dataset_root: str, frame_index: int) -> FileResponse:
     """Serve the same numbered JPEG frame the preparation adapter consumed."""
@@ -1234,13 +1247,37 @@ async def prepare_flash_demo(req: FlashDemoPrepareRequest) -> dict:
     async with _launch_lock:
         _ensure_no_active_process()
 
-        def save_inputs() -> tuple[Path, Path, Path, Path, str]:
-            root, bundle = _flash_demo_paths(req.dataset_root, req.bundle_path)
-            current = _flash_demo_preparation(req.dataset_root, req.bundle_path, req.episode)
-            if set(req.annotation.get("prompts_by_role", {})) != set(
-                current["annotation"]["prompts_by_role"]
-            ):
-                raise ValueError("this importer cannot change the prepared object roles")
+        def save_inputs() -> tuple[Path, Path, Path, str]:
+            if req.bundle_path is not None:
+                root, _ = _flash_demo_paths(req.dataset_root, req.bundle_path)
+                current = _flash_demo_preparation(req.dataset_root, req.bundle_path, req.episode)
+                if set(req.annotation.get("prompts_by_role", {})) != set(
+                    current["annotation"]["prompts_by_role"]
+                ):
+                    raise ValueError("this importer cannot change the prepared object roles")
+            else:
+                root = Path(req.dataset_root).expanduser().resolve()
+                if (
+                    req.episode != 0
+                    or not (root / "showservo_demo.npz").is_file()
+                    or not (root / "meta" / "info.json").is_file()
+                ):
+                    raise ValueError("select episode 0 of a local raw RGB-D demo")
+                roles = req.annotation.get("prompts_by_role", {})
+                held, target = req.annotation.get("held_role"), req.annotation.get("target_role")
+                if (
+                    not isinstance(roles, dict)
+                    or set(roles) != {held, target}
+                    or held == target
+                    or any(
+                        not isinstance(role, str)
+                        or re.fullmatch(r"[A-Za-z][A-Za-z0-9 _-]{0,39}", role) is None
+                        or not isinstance(prompt, str)
+                        or not prompt.strip()
+                        for role, prompt in roles.items()
+                    )
+                ):
+                    raise ValueError("name two distinct objects and give each a segmentation prompt")
             if req.annotation.get("episode") != req.episode:
                 raise ValueError("annotation episode differs from the selected demo")
             keypoints = req.keypoints_document.get("keypoints")
@@ -1261,10 +1298,10 @@ async def prepare_flash_demo(req: FlashDemoPrepareRequest) -> dict:
             keypoints_path = input_dir / "keypoints.json"
             annotation_path.write_text(json.dumps(req.annotation, indent=2) + "\n", encoding="utf-8")
             keypoints_path.write_text(json.dumps(req.keypoints_document, indent=2) + "\n", encoding="utf-8")
-            return root, bundle, annotation_path, keypoints_path, name
+            return root, annotation_path, keypoints_path, name
 
         try:
-            root, _, annotation_path, keypoints_path, name = await asyncio.get_running_loop().run_in_executor(
+            root, annotation_path, keypoints_path, name = await asyncio.get_running_loop().run_in_executor(
                 _flash_config_pool, save_inputs
             )
         except (OSError, KeyError, TypeError, ValueError) as exc:
@@ -1299,6 +1336,13 @@ def _flash_recordings(source_paths: tuple[Path, ...]) -> list[dict]:
         for depth in range(4):
             pattern = "/".join(["*"] * depth + ["flash", "v1"])
             extensions.update(path for path in root.glob(pattern) if path.is_dir())
+            raw_pattern = "/".join(["*"] * depth + ["meta", "info.json"])
+            for info_path in root.glob(raw_pattern):
+                dataset_root = info_path.parent.parent
+                if (dataset_root / "showservo_demo.npz").is_file() and (
+                    dataset_root / "recording" / "times.txt"
+                ).is_file():
+                    extensions.add(dataset_root / "flash" / "v1")
     found = []
     for extension in extensions:
         dataset_root = extension.parent.parent
@@ -1312,6 +1356,18 @@ def _flash_recordings(source_paths: tuple[Path, ...]) -> list[dict]:
         if not isinstance(episode_count, int) or episode_count < 0:
             continue
         demos: dict[int, dict] = {}
+        raw_arm = dataset_root / "showservo_demo.npz"
+        if episode_count > 0 and raw_arm.is_file() and (dataset_root / "recording" / "times.txt").is_file():
+            demos[0] = {
+                "kind": "demo",
+                "dataset_root": str(dataset_root.resolve()),
+                "episode": 0,
+                "modified_at_s": raw_arm.stat().st_mtime,
+                "skills": [],
+                "prepared_versions": [],
+                "bundle_path": None,
+                "prepared_skill": None,
+            }
         skill_paths = list((extension / "prepared").glob("*/bundle.json"))
         skill_paths += list((extension / "skills").glob("*.json"))
         skill_paths.sort(key=lambda path: path.stat().st_mtime)

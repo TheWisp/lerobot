@@ -20,7 +20,7 @@ function _flashEditorField(parent, labelText, value, onChange, options = null, t
     }
     control.value = String(value ?? '');
     control.addEventListener('change', () => {
-        onChange(type === 'number' ? Number(control.value) : control.value);
+        onChange(type === 'number' ? (control.value === '' ? null : Number(control.value)) : control.value);
         _flashEditorUpdateStatus();
         _flashRenderTimeline();
     });
@@ -82,7 +82,9 @@ function _flashEditorUpdateStatus() {
     if (!flashDemoEditor) return;
     const changed = JSON.stringify([flashDemoEditor.annotation, flashDemoEditor.keypointsDocument]) !== flashDemoEditor.original;
     const status = document.getElementById('flash-demo-editor-change-status');
-    if (status) status.textContent = changed ? 'Unsaved edits · regenerate to review a new version' : 'Viewing saved preparation';
+    if (status) status.textContent = flashDemoEditor.raw
+        ? changed ? 'Unsaved setup · prepare to review a new version' : 'Raw demo · no preparation saved'
+        : changed ? 'Unsaved edits · regenerate to review a new version' : 'Viewing saved preparation';
 }
 
 function _flashEditorUpdateFrame() {
@@ -116,14 +118,15 @@ function _flashEditorUpdateFrame() {
     }
     svg.classList.toggle('is-drawing', !!flashDemoEditor.drawing && isReference);
     mask.hidden = !isReference || !!saved?.length || !flashDemoEditor.referenceMasks[role]?.available ||
-        Number(flashDemoEditor.referenceMasks[role].frame_index) !== Number(annotation.reference_frame);
+        Number(flashDemoEditor.referenceMasks[role]?.frame_index) !== Number(annotation.reference_frame);
     const frameText = document.getElementById('flash-demo-editor-frame');
     if (frameText) frameText.textContent = `Frame ${current.frame_index} · ${current.snapshot.demo.time_s.toFixed(2)} s`;
     const polygonText = document.getElementById('flash-demo-editor-polygon-status');
     if (polygonText) polygonText.textContent = flashDemoEditor.drawing
         ? `${flashDemoEditor.vertices.length} vertices; finish after at least 3`
         : saved?.length ? `Manual ${role} mask: ${saved.length} vertices` :
-            `Prepared ${role} mask shown on its reference frame`;
+            flashDemoEditor.raw ? 'No prepared mask yet; the text prompt will create one when prepared.' :
+                `Prepared ${role} mask shown on its reference frame`;
 }
 
 function _flashEditorMaskRole(role) {
@@ -131,9 +134,13 @@ function _flashEditorMaskRole(role) {
     flashDemoEditor.drawing = false;
     flashDemoEditor.vertices = [];
     const mask = document.querySelector('#rerun-viewer .flash-demo-mask');
-    mask.src = `/api/run/flash/demo/reference-mask?${new URLSearchParams({
-        dataset_root: flashReplay.datasetRoot, bundle_path: flashReplay.bundle_path, role,
-    })}`;
+    if (flashReplay.bundle_path) {
+        mask.src = `/api/run/flash/demo/reference-mask?${new URLSearchParams({
+            dataset_root: flashReplay.datasetRoot, bundle_path: flashReplay.bundle_path, role,
+        })}`;
+    } else {
+        mask.removeAttribute('src');
+    }
     _flashEditorUpdateFrame();
 }
 
@@ -166,7 +173,9 @@ function _flashEditorRender() {
     heading.textContent = 'Demo preparation';
     editor.append(heading);
     const summary = document.createElement('p');
-    summary.textContent = 'Choose an object, event or key frame to inspect. Regeneration creates a new version of this demo.';
+    summary.textContent = state.raw
+        ? 'This recording has no FLASH objects yet. Name the objects, mark the action, then prepare a reviewable candidate.'
+        : 'Object names come from this demo’s saved preparation. Choose an object, event or key frame to inspect; regeneration creates a new version.';
     editor.append(summary);
     const changed = document.createElement('p');
     changed.id = 'flash-demo-editor-change-status';
@@ -175,7 +184,7 @@ function _flashEditorRender() {
     if (report) {
         if (report.review_status === 'candidate') {
             const candidate = document.createElement('p');
-            candidate.textContent = 'Review candidate · the prior prepared version remains the default.';
+            candidate.textContent = 'Review candidate · inspect its masks and poses before using it for a live trial.';
             editor.append(candidate);
         }
         const evidence = report.pose_evidence_frames;
@@ -196,7 +205,7 @@ function _flashEditorRender() {
     tabs.setAttribute('aria-label', 'Demo editor sections');
     const panes = {};
     for (const [key, label] of [
-        ['objects', 'Objects'], ['events', 'Events'], ['keyframes', 'Key frames'],
+        ['setup', 'Setup'], ['objects', 'Objects'], ['events', 'Events'], ['keyframes', 'Key frames'],
         ['pose', 'Pose evidence'], ['advanced', 'Advanced'],
     ]) {
         const button = _flashEditorButton(tabs, label, () => {
@@ -212,7 +221,16 @@ function _flashEditorRender() {
     editor.append(tabs);
     for (const pane of Object.values(panes)) editor.append(pane);
 
-    const pose = _flashEditorSection(panes.pose, 'Pose evidence', 'Hover an item to highlight its projection in the image. This is the pose saved in the selected prepared version.');
+    const setup = _flashEditorSection(panes.setup, 'Recording and calibration', state.raw
+        ? 'The raw frames contain no FLASH object names or camera-to-arm calibration. Supply the calibration used when this demo was recorded.'
+        : 'These capture settings were saved with the selected preparation.');
+    _flashEditorField(setup, 'Dataset identity', a.repo_id, value => { a.repo_id = value; });
+    _flashEditorField(setup, 'Arm side', a.robot_arm, value => { a.robot_arm = value; }, ['', 'left', 'right']);
+    _flashEditorField(setup, 'Robot/camera calibration file', a.calibration_path, value => { a.calibration_path = value; });
+
+    const pose = _flashEditorSection(panes.pose, 'Pose evidence', state.raw
+        ? 'No object pose exists yet. Preparation will extract a first pose trace from the RGB-D recording.'
+        : 'Hover an item to highlight its projection in the image. This is the pose saved in the selected prepared version.');
     if (trackerPanel) pose.append(trackerPanel);
 
     const events = _flashEditorSection(panes.events, 'Reference and events', 'Move the playhead to the desired frame, then choose “Use current”.');
@@ -239,22 +257,58 @@ function _flashEditorRender() {
         });
     }
 
-    const objects = _flashEditorSection(panes.objects, 'Objects and masks', 'Select one object. Its prepared reference mask is shown on the reference frame; draw a correction there if needed.');
-    _flashEditorField(objects, 'Object', state.role, role => { _flashEditorMaskRole(role); _flashEditorRender(); }, roles);
-    _flashEditorField(objects, 'Segmentation prompt', a.prompts_by_role[state.role], value => {
-        a.prompts_by_role[state.role] = value;
-    });
-    _flashEditorField(objects, 'Held role', a.held_role, value => { a.held_role = value; }, roles);
-    _flashEditorField(objects, 'Target role', a.target_role, value => { a.target_role = value; }, roles);
+    const objects = _flashEditorSection(panes.objects, 'Objects and masks', state.raw
+        ? 'This SO-107 importer handles one held object and one target. Choose their names; prompts describe what SAM should segment in the reference frame.'
+        : 'These names were entered during preparation. Select an object to inspect its reference mask or draw a correction.');
+    if (state.raw && roles.length < 2) {
+        _flashEditorField(objects, 'New object name', state.newRole || '', value => { state.newRole = value; });
+        _flashEditorField(objects, 'What it looks like', state.newPrompt || '', value => { state.newPrompt = value; });
+        _flashEditorButton(objects, 'Add object', () => {
+            const name = (state.newRole || '').trim();
+            const prompt = (state.newPrompt || '').trim();
+            if (!/^[A-Za-z][A-Za-z0-9 _-]{0,39}$/.test(name) || !prompt || a.prompts_by_role[name]) {
+                showToast('Name this object', 'Use a distinct name and a visual segmentation prompt.', 'warning');
+                return;
+            }
+            a.prompts_by_role[name] = prompt;
+            state.role = name;
+            if (!a.held_role) a.held_role = name;
+            else if (!a.target_role) a.target_role = name;
+            state.newRole = ''; state.newPrompt = '';
+            _flashEditorRender();
+        });
+    }
+    if (roles.length) {
+        _flashEditorField(objects, 'Object', state.role, role => { _flashEditorMaskRole(role); _flashEditorRender(); }, roles);
+        _flashEditorField(objects, 'Segmentation prompt', a.prompts_by_role[state.role], value => {
+            a.prompts_by_role[state.role] = value;
+        });
+        _flashEditorField(objects, 'Held object', a.held_role, value => { a.held_role = value; }, roles);
+        _flashEditorField(objects, 'Target object', a.target_role, value => { a.target_role = value; }, roles);
+        if (state.raw) _flashEditorButton(objects, 'Remove selected object', () => {
+            delete a.prompts_by_role[state.role];
+            delete a.axial_symmetry_roles?.[state.role];
+            delete a.reference_polygons_by_role?.[state.role];
+            state.role = Object.keys(a.prompts_by_role)[0] || '';
+            if (!a.prompts_by_role[a.held_role]) a.held_role = state.role;
+            if (!a.prompts_by_role[a.target_role]) a.target_role = '';
+            _flashEditorRender();
+        });
+    }
     const symmetry = a.axial_symmetry_roles || {};
     const selectedSymmetry = symmetry[state.role] || {};
-    _flashEditorField(objects, `${state.role} axial symmetry`, selectedSymmetry.axis_kind || 'none', value => {
+    if (state.role) {
+        const symmetryNote = document.createElement('p');
+        symmetryNote.textContent = 'The selected axis is estimated from this object’s reference RGB-D points; the object name does not choose the axis.';
+        objects.append(symmetryNote);
+    }
+    if (state.role) _flashEditorField(objects, 'Rotational symmetry', selectedSymmetry.axis_kind || 'none', value => {
         const rules = a.axial_symmetry_roles ||= {};
         if (value === 'none') delete rules[state.role];
         else rules[state.role] = { ...rules[state.role], axis_kind: value };
         _flashEditorRender();
     }, ['none', 'long_axis', 'surface_normal']);
-    if (selectedSymmetry.axis_kind) {
+    if (state.role && selectedSymmetry.axis_kind) {
         for (const [property, label] of [
             ['ends_interchangeable', 'Ends interchangeable'],
             ['lock_to_baseline', 'Lock axis to baseline'],
@@ -275,22 +329,24 @@ function _flashEditorRender() {
     const polygonStatus = document.createElement('p');
     polygonStatus.id = 'flash-demo-editor-polygon-status';
     objects.append(polygonStatus);
-    _flashEditorButton(objects, 'Draw replacement mask', () => {
-        _flashEditorJump(Number(a.reference_frame));
-        state.drawing = true; state.vertices = [];
-        _flashEditorUpdateFrame();
-    });
-    _flashEditorButton(objects, 'Finish polygon', () => {
-        if (state.vertices.length < 3) { showToast('Mask needs three points', 'Click at least three vertices.', 'warning'); return; }
-        (a.reference_polygons_by_role ||= {})[state.role] = [...state.vertices];
-        state.drawing = false; state.vertices = [];
-        _flashEditorUpdateFrame();
-    });
-    _flashEditorButton(objects, 'Use automatic mask', () => {
-        delete a.reference_polygons_by_role?.[state.role];
-        state.drawing = false; state.vertices = [];
-        _flashEditorUpdateFrame();
-    });
+    if (state.role) {
+        _flashEditorButton(objects, 'Draw replacement mask', () => {
+            _flashEditorJump(Number(a.reference_frame));
+            state.drawing = true; state.vertices = [];
+            _flashEditorUpdateFrame();
+        });
+        _flashEditorButton(objects, 'Finish polygon', () => {
+            if (state.vertices.length < 3) { showToast('Mask needs three points', 'Click at least three vertices.', 'warning'); return; }
+            (a.reference_polygons_by_role ||= {})[state.role] = [...state.vertices];
+            state.drawing = false; state.vertices = [];
+            _flashEditorUpdateFrame();
+        });
+        _flashEditorButton(objects, 'Use automatic mask', () => {
+            delete a.reference_polygons_by_role?.[state.role];
+            state.drawing = false; state.vertices = [];
+            _flashEditorUpdateFrame();
+        });
+    }
 
     const keypoints = _flashEditorSection(panes.keyframes, 'Key frames', 'Click a marker on the timeline or choose a key frame here to inspect its motion constraint.');
     _flashEditorButton(keypoints, 'Add key frame at current time', () => {
@@ -300,7 +356,8 @@ function _flashEditorRender() {
             showToast('Key frame already exists', 'Choose another frame or edit the existing event.', 'warning');
             return;
         }
-        const prior = [...points].reverse().find(point => point.t < time) || points[0];
+        const prior = [...points].reverse().find(point => point.t < time) || points[0] ||
+            {kind: 'key', frame: 'world', move: 'line', grip: 'first', constraint: 'pose'};
         points.push({ ...prior, t: time, kind: 'key' });
         points.sort((left, right) => left.t - right.t);
         state.keypointIndex = points.findIndex(point => point.t === time);
@@ -351,9 +408,19 @@ function _flashEditorRender() {
 
     const advanced = document.createElement('details');
     advanced.className = 'flash-editor-keypoint';
+    advanced.open = state.raw;
     const advancedTitle = document.createElement('summary');
     advancedTitle.textContent = 'Preparation and matching parameters';
     advanced.append(advancedTitle);
+    if (state.raw) {
+        const note = document.createElement('p');
+        note.textContent = 'These are not inferred from the recording. Review them before preparation, or explicitly apply the starter values from prior SO-107 trials.';
+        advanced.append(note);
+        _flashEditorButton(advanced, 'Apply SO-107 starter parameters', () => {
+            Object.assign(a, flashReplay.starter_parameters);
+            _flashEditorRender();
+        });
+    }
     for (const [key, label] of [
         ['max_demo_pose_gap_frames', 'Maximum demo pose gap (frames)'],
         ['connection_speed_m_s', 'Connection speed (m/s)'],
@@ -368,9 +435,11 @@ function _flashEditorRender() {
     });
     panes.advanced.append(advanced);
 
-    const output = _flashEditorSection(editor, 'Regenerate', 'Creates a review candidate. The original demo is unchanged.');
+    const output = _flashEditorSection(editor, state.raw ? 'Prepare' : 'Regenerate',
+        'Creates a review candidate. The original demo is unchanged.');
     output.classList.add('flash-editor-footer');
-    const generate = _flashEditorButton(output, 'Regenerate prepared demo', () => void _flashEditorRegenerate());
+    const generate = _flashEditorButton(output, state.raw ? 'Prepare spatial demo' : 'Regenerate prepared demo',
+        () => void _flashEditorRegenerate());
     generate.disabled = state.running;
     const message = document.createElement('p');
     message.id = 'flash-demo-editor-status';
@@ -390,17 +459,32 @@ function _flashEditorJumpTime(time) {
 
 async function toggleFlashDemoEditor() {
     if (flashDemoEditor) { closeFlashDemoEditor(); return; }
-    if (flashReplay?.kind !== 'demo') return;
+    if (!['demo', 'raw_demo'].includes(flashReplay?.kind)) return;
     if (flashReplayTimer) toggleFlashReplay();
     const replay = flashReplay;
     const toggle = document.getElementById('flash-demo-edit-toggle');
     toggle.disabled = true;
     try {
-        const response = await fetch(`/api/run/flash/demo/preparation?${new URLSearchParams({
-            dataset_root: replay.datasetRoot, bundle_path: replay.bundle_path, episode: String(replay.episode),
-        })}`);
-        const result = await response.json();
-        if (!response.ok) throw new Error(result.detail || 'Cannot read preparation inputs');
+        let result;
+        const raw = replay.kind === 'raw_demo';
+        if (raw) {
+            const annotation = {
+                repo_id: `local/${replay.datasetRoot.split('/').pop()}`,
+                episode: replay.episode, robot_arm: '', calibration_path: '',
+                reference_frame: _flashEditorCurrentFrame().frame_index,
+                grasp_reference_frame: null, prompts_by_role: {}, held_role: '', target_role: '',
+                grasp_time_s: null, release_time_s: null, start_anchored_until_s: null,
+                axial_symmetry_roles: {},
+            };
+            for (const key of Object.keys(replay.starter_parameters)) annotation[key] = null;
+            result = {annotation, keypoints_document: {keypoints: []}, reference_masks: {}, preparation_report: null};
+        } else {
+            const response = await fetch(`/api/run/flash/demo/preparation?${new URLSearchParams({
+                dataset_root: replay.datasetRoot, bundle_path: replay.bundle_path, episode: String(replay.episode),
+            })}`);
+            result = await response.json();
+            if (!response.ok) throw new Error(result.detail || 'Cannot read preparation inputs');
+        }
         if (flashReplay !== replay) return;
         flashDemoEditor = {
             annotation: structuredClone(result.annotation),
@@ -408,7 +492,8 @@ async function toggleFlashDemoEditor() {
             referenceMasks: result.reference_masks,
             preparationReport: result.preparation_report,
             role: result.annotation.held_role,
-            section: 'objects', keypointIndex: 0,
+            section: raw ? 'setup' : 'objects', keypointIndex: 0,
+            raw, newRole: '', newPrompt: '',
             original: JSON.stringify([result.annotation, result.keypoints_document]),
             drawing: false, vertices: [], running: false, message: '',
         };
@@ -438,7 +523,36 @@ async function toggleFlashDemoEditor() {
 async function _flashEditorRegenerate() {
     if (!flashDemoEditor || flashDemoEditor.running) return;
     const state = flashDemoEditor;
+    const a = state.annotation;
     const points = state.keypointsDocument.keypoints;
+    const roles = Object.keys(a.prompts_by_role);
+    if (state.raw) {
+        const requiredNumbers = [
+            'grasp_time_s', 'release_time_s', 'start_anchored_until_s',
+            'max_demo_pose_gap_frames', 'connection_speed_m_s', 'min_similarity',
+            'registration_threshold_m', 'registration_min_inliers', 'registration_trials', 'sam_resolution',
+        ];
+        if (roles.length !== 2 || a.held_role === a.target_role ||
+            !roles.includes(a.held_role) || !roles.includes(a.target_role)) {
+            state.section = 'objects'; state.message = 'Name two distinct objects and select held and target.';
+            _flashEditorRender(); return;
+        }
+        if (!a.repo_id?.trim() || !a.robot_arm || !a.calibration_path?.trim()) {
+            state.section = 'setup'; state.message = 'Dataset identity, arm side and calibration file are required.';
+            _flashEditorRender(); return;
+        }
+        if (!a.descriptor_model_id?.trim() || requiredNumbers.some(key => !Number.isFinite(a[key])) ||
+            !(a.grasp_time_s > 0 && a.grasp_time_s < a.release_time_s) ||
+            !(a.start_anchored_until_s >= a.grasp_time_s && a.start_anchored_until_s <= a.release_time_s) ||
+            !Number.isInteger(a.reference_frame) || !Number.isInteger(a.grasp_reference_frame)) {
+            state.section = 'events'; state.message = 'Choose reference frames, grasp, release and lift completion; review matching parameters.';
+            _flashEditorRender(); return;
+        }
+        if (!points.length) {
+            state.section = 'keyframes'; state.message = 'Add at least one key frame from the playback timeline.';
+            _flashEditorRender(); return;
+        }
+    }
     if (points.some((point, index) => !Number.isFinite(point.t) || (index && point.t <= points[index - 1].t))) {
         state.message = 'Key frame times must increase.'; _flashEditorRender(); return;
     }

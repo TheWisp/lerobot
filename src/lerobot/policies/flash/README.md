@@ -8,9 +8,17 @@ panel can launch a bounded live trial and record another ordinary LeRobot
 dataset. Startup requires each needed object to register into the _same stable
 object frame_ used by the demonstration before robot motion begins.
 
-Demo preparation is currently **offline and read-only in the GUI**. For a sealed-format
-demo with `showservo_demo.npz`, edit an annotation JSON and the dataset's
-`keypoints.json`, then run:
+Run → FLASH lists a sealed-format SO-107 recording with `showservo_demo.npz`
+even before it has a `flash/v1` extension. Open the raw demo, choose **Prepare
+demo**, and use the playback editor to name the held object and target, enter
+segmentation prompts and calibration, mark grasp/release and key frames, and
+review symmetry and matching settings. The editor writes versioned preparation
+inputs and runs the existing offline importer; object names come from these
+inputs, not from object-specific code. This adapter currently supports one held
+object and one target in episode 0 of the sealed format. It does not yet prepare
+arbitrary LeRobot recordings or infer camera-to-arm calibration from RGB-D.
+
+The equivalent command-line path remains available:
 
 ```bash
 python benchmarks/flash_prepare_legacy.py <dataset_root> <annotation.json> --output-name <new-name>
@@ -20,11 +28,11 @@ An unused output name creates a new bundle and forces the importer to run SAM3,
 DINO and RGB-D pose extraction again; the pose cache includes the output name.
 It does not overwrite a previous bundle. New bundles retain `annotation.json`,
 `keypoints.json` and `preparation-report.json` with cache provenance. This
-importer saves reference-frame masks only, so the current demo playback cannot
-display historical per-frame masks or rejected fits. The preparation UI and
-evidence recording specified in the [architecture](docs/architecture.md)
-are not implemented yet. A legacy bundle modified after import cannot be
-assumed reproducible from the dataset's top-level annotation file alone.
+importer saves reference-frame masks only, so demo playback cannot display
+historical per-frame masks or rejected fits. The per-frame evidence recording
+specified in the [architecture](docs/architecture.md) is not implemented yet.
+A legacy bundle modified after import cannot be assumed reproducible from the
+dataset's top-level annotation file alone.
 
 The rig JSON is the single place to tune live execution and tracking limits;
 [the example configuration](docs/trial_config.example.json) lists every active

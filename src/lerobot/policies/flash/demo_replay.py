@@ -1,4 +1,4 @@
-"""Review the exact spatial samples retained from a migrated RGB-D demonstration.
+"""Review raw RGB-D demonstrations and exact prepared spatial samples.
 
 This is a read-only adapter for the sealed recording layout. It does not rerun
 perception or invent per-frame tracker observations absent from the prepared
@@ -16,6 +16,20 @@ import numpy as np
 
 from .prepared import PreparedFlashSkill
 from .skill import MotionMode, Relation
+
+# Explicit opt-in profile for the sealed SO-107 RGB-D adapter. These are
+# starting values from the prior insertion trials, not inferred from a new
+# recording; the raw-demo editor exposes every value before preparation.
+LEGACY_SO107_STARTER = {
+    "max_demo_pose_gap_frames": 90,
+    "connection_speed_m_s": 0.04,
+    "min_similarity": 0.75,
+    "registration_threshold_m": 0.005,
+    "registration_min_inliers": 12,
+    "registration_trials": 100,
+    "sam_resolution": 448,
+    "descriptor_model_id": "facebook/dinov2-small",
+}
 
 
 def _nearest_index(values: np.ndarray, target: float) -> int:
@@ -182,6 +196,60 @@ def build_demo_replay(
 def _demo_annotation_path(root: Path, bundle: Path) -> Path:
     versioned = bundle.parent / "annotation.json"
     return versioned if versioned.is_file() else root / "flash" / "v1" / "import-annotations.json"
+
+
+def load_raw_legacy_demo_replay(dataset_root: Path, episode: int) -> dict:
+    """Expose an unprepared sealed-format recording without inventing object poses."""
+    root = dataset_root.expanduser().resolve()
+    info_path = root / "meta" / "info.json"
+    if episode != 0 or not info_path.is_file() or not (root / "showservo_demo.npz").is_file():
+        raise ValueError("select episode 0 of a local RGB-D demo with recorded arm samples")
+    info = json.loads(info_path.read_text(encoding="utf-8"))
+    with np.load(root / "showservo_demo.npz", allow_pickle=False) as arm:
+        arm_times_s = np.asarray(arm["t"], dtype=float)
+        origin_s = float(arm["t0"])
+    camera_times_s = np.atleast_1d(np.loadtxt(root / "recording" / "times.txt")) - origin_s
+    if len(camera_times_s) < 2 or len(arm_times_s) < 2 or not np.all(np.diff(camera_times_s) > 0):
+        raise ValueError("raw demo needs monotonic camera and arm timestamps")
+    image_dir = root / "recording" / "rgb"
+    depth_dir = root / "recording" / "depth"
+    if any(
+        not (image_dir / f"{index:06d}.jpg").is_file() or not (depth_dir / f"{index:06d}.png").is_file()
+        for index in range(len(camera_times_s))
+    ):
+        raise ValueError("raw demo RGB-D frames do not match camera timestamps")
+    first = cv2.imread(str(image_dir / "000000.jpg"), cv2.IMREAD_COLOR)
+    if first is None:
+        raise ValueError("first raw demo RGB frame cannot be decoded")
+    frames = []
+    for index, camera_time_s in enumerate(camera_times_s):
+        arm_index = _nearest_index(arm_times_s, float(camera_time_s))
+        frames.append(
+            {
+                "frame_index": index,
+                "snapshot": {
+                    "recorded_at_s": float(camera_time_s),
+                    "camera": {"frame_id": index, "width": first.shape[1], "height": first.shape[0]},
+                    "accepted": {},
+                    "demo": {
+                        "phase": "raw",
+                        "time_s": float(camera_time_s),
+                        "nearest_recorded_arm_frame_index": arm_index,
+                        "camera_arm_delta_s": float(camera_time_s - arm_times_s[arm_index]),
+                    },
+                },
+            }
+        )
+    return {
+        "available": True,
+        "kind": "raw_demo",
+        "fps": float(info["fps"]),
+        "frames": frames,
+        "source_episode": episode,
+        "bundle_path": None,
+        "raw_tracker_history": False,
+        "starter_parameters": LEGACY_SO107_STARTER,
+    }
 
 
 def load_legacy_demo_replay(dataset_root: Path, episode: int, bundle_path: Path) -> dict:
