@@ -144,7 +144,7 @@ class JointPlanner:
                 if attempt + 1 == self.limits.max_connection_retimings:
                     raise InfeasibleTrajectoryError(
                         "generated connection could not be timed within joint speed limits "
-                        f"at tick {exc.tick} (ratio {exc.ratio:.3f}, duration {connection.duration_s:.3f} s)"
+                        f"at tick {exc.tick} (ratio {exc.ratio:.6f}, duration {connection.duration_s:.3f} s)"
                     ) from exc
                 first_due_s = epoch_s + start_tick * period_s
                 if first_due_s > connection.start_time_s + 1e-9:
@@ -157,7 +157,11 @@ class JointPlanner:
                     distance_m = np.linalg.norm(connection.goal_pose[:3, 3] - connection.start_pose[:3, 3])
                     connection.duration_s = max(remaining_s, distance_m / interval.speed_m_s)
                     connection.joint_retimed = False
-                connection.duration_s *= exc.ratio
+                # The sampled joint-speed bound is only an estimate of the
+                # discrete IK trajectory. Give a failed tick at least one
+                # additional motor period; multiplying by a near-1 ratio
+                # alone can repeat the same failure on every retry.
+                connection.duration_s = connection.duration_s * exc.ratio + period_s
         raise AssertionError("connection retiming loop did not return")
 
     def _plan_once(

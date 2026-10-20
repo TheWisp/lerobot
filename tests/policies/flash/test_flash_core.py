@@ -24,7 +24,12 @@ from lerobot.policies.flash.perception import (
     RGBDFrame,
     TimedEndEffectorHistory,
 )
-from lerobot.policies.flash.planner import InfeasibleTrajectoryError, JointPlanner, PlannerLimits
+from lerobot.policies.flash.planner import (
+    InfeasibleTrajectoryError,
+    JointPlanner,
+    PlannerLimits,
+    _ConnectionSpeedExceededError,
+)
 from lerobot.policies.flash.pose_disagreement import PoseComparison, PoseComparisonVerdict, SurfaceSupport
 from lerobot.policies.flash.progress import MilestoneUpdate, Phase, Progress, Verdict
 from lerobot.policies.flash.recording import (
@@ -150,6 +155,55 @@ def test_generated_connection_retimes_short_cartesian_move_with_large_joint_trav
     assert connection.joint_retimed
     assert connection.duration_s > 100 / 180
     assert max(np.diff([0.0, *(action.action["arm.pos"] for action in actions)])) <= 180 / 30
+
+
+def test_connection_retime_makes_progress_when_discrete_tick_is_just_over_speed_limit():
+    class IdentityKinematics:
+        def inverse_kinematics(self, _seed, target):
+            return np.array([target[0, 3]])
+
+        def forward_kinematics(self, joints):
+            return pose(joints[0])
+
+    class DiscreteLimitPlanner(JointPlanner):
+        def _plan_once(self, interval, **kwargs):
+            if kwargs["connection"].duration_s < 0.25 + kwargs["period_s"]:
+                raise _ConnectionSpeedExceededError(kwargs["start_tick"] + 2, 1.0001)
+            return [TimedAction(kwargs["start_tick"], {"arm.pos": 0.0}, interval.name)]
+
+    interval = Interval(
+        "approach",
+        MotionMode.CONNECTION,
+        Relation.EE_TO_OBJECT,
+        "object",
+        (sample(0, (0, 0, 0), (0, 0, 0)), sample(1, (0, 0, 0), (0, 0, 0))),
+        speed_m_s=0.04,
+        reference_version="object-v1",
+    )
+    reference = PoseEstimate(
+        "object", pose(0.01), 0, 0, Evidence.OBSERVED, "object-v1", (True,) * 3, (True,) * 3
+    )
+    connection = ConnectionTrajectory.begin(interval, pose(), reference.pose, None, 0)
+    planner = DiscreteLimitPlanner(
+        IdentityKinematics(),
+        ("arm",),
+        "gripper",
+        PlannerLimits((180.0,), 0.001, 0.01, 10.0, max_connection_retimings=3),
+    )
+    actions = planner.plan(
+        interval,
+        start_tick=0,
+        count=3,
+        epoch_s=0,
+        period_s=1 / 30,
+        interval_start_s=0,
+        seed_deg=np.array([0.0]),
+        reference=reference,
+        attachment=None,
+        connection=connection,
+    )
+    assert len(actions) == 1
+    assert connection.duration_s >= 0.25 + 1 / 30
 
 
 def test_milestone_requires_fresh_evidence_and_motion_is_not_success():
