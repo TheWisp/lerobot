@@ -1,8 +1,10 @@
-"""Review raw RGB-D demonstrations and exact prepared spatial samples.
+"""Review raw RGB-D demonstrations and prepared spatial samples on camera frames.
 
 This is a read-only adapter for the sealed recording layout. It does not rerun
 perception or invent per-frame tracker observations absent from the prepared
 skill. The camera images are the same numbered RGB frames used by preparation.
+For generated connections, a held-object preview follows the recorded gripper
+with the skill's unverified attachment instead of displaying a future endpoint.
 """
 
 from __future__ import annotations
@@ -14,6 +16,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from .geometry import inverse
 from .prepared import PreparedFlashSkill
 from .skill import MotionMode, Relation
 
@@ -133,13 +136,25 @@ def build_demo_replay(
                     source_time_s=sample.time_s,
                 )
             if interval.held_role is not None and sample.demo_held is not None:
+                held_pose = sample.demo_held
+                held_source_time_s = sample.time_s
+                held_estimator = "demo_held"
+                if interval.mode == MotionMode.CONNECTION:
+                    # A generated connection retains only its endpoint. Painting
+                    # that future held pose on each earlier RGB frame makes the
+                    # replay look like a tracking error. The demo arm recording
+                    # gives the frame-time gripper pose; the stored grasp
+                    # attachment remains a prediction throughout the interval.
+                    held_pose = arm_tips[arm_index] @ inverse(sample.demo_ee) @ sample.demo_held
+                    held_source_time_s = float(arm_times_s[arm_index])
+                    held_estimator = "demo_held_recorded_gripper"
                 held_prediction = {
                     "role": interval.held_role,
                     **_pose(
-                        sample.demo_held,
+                        held_pose,
                         evidence=sample.held_evidence or "unverified",
-                        estimator="demo_held",
-                        source_time_s=sample.time_s,
+                        estimator=held_estimator,
+                        source_time_s=held_source_time_s,
                     ),
                 }
             detail = {

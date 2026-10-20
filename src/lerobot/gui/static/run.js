@@ -508,7 +508,7 @@ function _flashLayerName(estimator) {
 
 function _flashLayerColor(estimator) {
     if (estimator === 'demo_reference') return '#34d399';
-    if (estimator === 'demo_held') return '#fb923c';
+    if (estimator === 'demo_held' || estimator === 'demo_held_recorded_gripper') return '#fb923c';
     if (estimator === 'demo_ee') return '#58a6ff';
     if (estimator === 'object_point_motion') return '#fbbf24';
     if (estimator === 'environment_group_motion') return '#34d399';
@@ -620,7 +620,7 @@ function renderFlashDemoSnapshot(snapshot) {
         html += '<div class="flash-tracker-role">No spatial skill sample applies to this part of the recording.</div>';
     } else {
         const mode = demo.phase === 'connection_endpoint'
-            ? 'Generated connection: only its endpoint goal is retained. The blue gripper point shows recorded motion for context.'
+            ? 'Generated connection: its target pose is the saved endpoint goal, not a measurement at this frame. The held outline follows the recorded gripper with the predicted grasp attachment.'
             : 'Demonstrated motion: this sample and its object relation were retained.';
         html += `<div class="flash-tracker-role"><strong>${_esc(demo.interval_name)}</strong><small>${_esc(mode)}</small>`;
         html += `<div>${_esc(demo.relation.replaceAll('_', ' '))} · arm sample ${demo.source_arm_frame_index} at ${demo.sample_time_s.toFixed(2)} s</div>`;
@@ -644,9 +644,12 @@ function renderFlashDemoSnapshot(snapshot) {
         }
         if (snapshot.held_prediction) {
             const held = snapshot.held_prediction;
+            const heldNote = held.estimator === 'demo_held_recorded_gripper'
+                ? 'predicted grasp attachment projected from this frame’s recorded gripper; not independently measured'
+                : `${held.evidence} from grasp attachment; not independently measured here`;
             html += `<div class="flash-tracker-role"><strong>${_esc(held.role)}</strong>`;
             html += _flashOverlayRow('held', held.role, '', 'flash-tracker-selected',
-                `<span class="flash-tracker-dot" style="background:#fb923c"></span>Held pose used by skill <small>${_esc(held.evidence)} from grasp attachment; not independently measured here</small>`);
+                `<span class="flash-tracker-dot" style="background:#fb923c"></span>Held pose shown in demo <small>${_esc(heldNote)}</small>`);
             html += '</div>';
         }
     }

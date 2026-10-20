@@ -86,3 +86,58 @@ def test_demo_replay_keeps_dense_samples_and_labels_sparse_endpoints() -> None:
     assert "object" not in frames[3]["accepted"]
     assert frames[3]["demo"]["phase"] == "outside_skill"
     assert replay["raw_tracker_history"] is False
+
+
+def test_connection_replay_projects_held_object_from_recorded_gripper_at_camera_time() -> None:
+    attachment_x = 0.5
+    connection = Interval(
+        "carry",
+        MotionMode.CONNECTION,
+        Relation.HELD_TO_TARGET,
+        "receiver",
+        (
+            SpatialSample(1.0, _pose(0.1), _pose(1.0), _pose(0.1 + attachment_x)),
+            SpatialSample(2.0, _pose(0.3), _pose(1.0), _pose(0.3 + attachment_x)),
+        ),
+        speed_m_s=0.1,
+        reference_version="receiver-v1",
+        held_reference_version="workpiece-v1",
+        held_role="workpiece",
+    )
+    reference = ObjectReference(
+        "workpiece",
+        "workpiece-v1",
+        (ReferenceSnippet("demo", 0, 0, "workpiece", np.eye(4), "mask.png", "cal-v1"),),
+    )
+    target_reference = ObjectReference(
+        "receiver",
+        "receiver-v1",
+        (ReferenceSnippet("demo", 0, 0, "receiver", np.eye(4), "target-mask.png", "cal-v1"),),
+    )
+    points = ObjectPointModel("workpiece", "workpiece-v1", np.array([[0, 0, 1], [0.1, 0, 1], [0, 0.1, 1]]))
+    target_points = ObjectPointModel(
+        "receiver", "receiver-v1", np.array([[0, 0, 1], [0.1, 0, 1], [0, 0.1, 1]])
+    )
+    prepared = PreparedFlashSkill(
+        FlashSkill("demo", 0, (connection,)),
+        (reference, target_reference),
+        (AppearanceModel(points, np.ones((3, 2))), AppearanceModel(target_points, np.ones((3, 2)))),
+        {"workpiece": "workpiece", "receiver": "receiver"},
+        "descriptor-v1",
+    )
+    replay = build_demo_replay(
+        prepared,
+        arm_times_s=np.array([1.0, 1.5, 2.0]),
+        arm_tips=np.stack([_pose(x) for x in (0.1, 0.2, 0.3)]),
+        camera_times_s=np.array([1.0, 1.5, 2.0]),
+        intrinsics=np.eye(3),
+        base_from_camera=np.eye(4),
+        image_size=(640, 480),
+        fps=30,
+    )
+    middle = replay["frames"][1]["snapshot"]
+    assert middle["demo"]["phase"] == "connection_endpoint"
+    assert np.isclose(middle["held_prediction"]["pose"][0][3], 0.7)
+    assert middle["held_prediction"]["source_time_s"] == 1.5
+    assert middle["held_prediction"]["estimator"] == "demo_held_recorded_gripper"
+    assert middle["accepted"]["receiver"]["source_time_s"] == 2.0

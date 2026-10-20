@@ -55,6 +55,16 @@ reference surface is incomplete. At frame 130, by comparison, 94% of its
 projected points agree with measured depth within 10 mm. The initial pose
 therefore looks plausible, but its rigid carry assumption is not verified.
 
+The demo replay also had a separate display-time error on generated connections:
+it drew the saved **end** held pose on every earlier camera frame, even though
+the recorded gripper was still moving toward that endpoint. At frame 300 this
+put the projected sampled-surface centre about 30 pixels from the frame-time
+gripper-projected location. Replay now projects the same unverified grasp
+attachment from the recorded gripper at that camera frame. This only removes
+the future-endpoint display artifact; the frame-400 contact interval uses a
+dense sample within about 12 ms of the camera frame, and its measured
+27-pixel/13° discrepancy remains an estimation problem.
+
 The demo viewer cannot draw preparation-time masks because that history was
 not stored in the skill. A missing mask overlay is not evidence that SAM3 lost
 the object. This audit establishes that the _demo relation_ used for insertion
