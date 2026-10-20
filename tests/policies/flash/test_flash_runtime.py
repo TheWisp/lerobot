@@ -16,6 +16,25 @@ from lerobot.policies.flash.skill import FlashSkill, Interval, MotionMode, Relat
 from lerobot.policies.flash.trajectory import Evidence, PoseEstimate
 
 
+def test_attachment_policy_has_one_validated_configuration_boundary():
+    config = {
+        "motor_history_capacity": 120,
+        "max_motor_sample_gap_s": 0.12,
+        "max_unverified_age_s": None,
+        "max_observation_shift_m": 0.015,
+        "max_observation_turn_deg": 15,
+        "max_pregrasp_pose_age_s": 3.1,
+    }
+    policy = AttachmentRuntimeLimits.from_config(config)
+    assert policy.max_attachment_age_s is None
+    assert policy.max_update_shift_m == 0.015
+    assert policy.max_update_turn_rad == pytest.approx(np.deg2rad(15))
+    with pytest.raises(ValueError, match="keys differ"):
+        AttachmentRuntimeLimits.from_config({**config, "unknown_limit": 1})
+    with pytest.raises(ValueError, match="positive or null"):
+        AttachmentRuntimeLimits.from_config({**config, "max_unverified_age_s": 0})
+
+
 def identity():
     return np.eye(4)
 

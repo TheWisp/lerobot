@@ -231,6 +231,7 @@ def trial(
                 {"gripper": state["gripper.pos"]},
             ),
         )
+        attachment_policy = AttachmentRuntimeLimits.from_config(settings["attachment"])
         runtime = FlashRuntime(
             skill=bundle.skill,
             robot=strict_robot,
@@ -240,6 +241,7 @@ def trial(
             object_centers_by_role=centers_by_role,
             object_points_by_role=points_by_role,
             live_telemetry=telemetry,
+            grasp_symmetries=bundle.axial_symmetries,
             kinematics=kin,
             arm_joint_names=arm_names,
             gripper_joint_name="gripper",
@@ -250,7 +252,7 @@ def trial(
                 settings["max_pose_age_s"],
                 allow_predicted_reference=True,
                 ik_refinement_attempts=settings["ik_refinement_attempts"],
-                max_attachment_age_s=settings["max_attachment_age_s"],
+                max_attachment_age_s=attachment_policy.max_attachment_age_s,
             ),
             buffer_config=PlanBufferConfig(
                 settings["lead_ticks"],
@@ -260,14 +262,7 @@ def trial(
                 np.deg2rad(settings["max_reference_turn_deg"]),
                 max_wait_for_evidence_s=settings.get("max_wait_for_evidence_s", 2.0),
             ),
-            attachment_limits=AttachmentRuntimeLimits(
-                settings["history_capacity"],
-                settings["max_motor_sample_gap_s"],
-                settings["max_attachment_age_s"],
-                settings["max_update_shift_m"],
-                np.deg2rad(settings["max_update_turn_deg"]),
-                settings["max_pregrasp_age_s"],
-            ),
+            attachment_limits=attachment_policy,
             recorder=recorder,
             rgb_feature="overhead",
             depth_feature="overhead_depth",

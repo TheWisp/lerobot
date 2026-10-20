@@ -8,12 +8,14 @@ from math import floor
 
 import numpy as np
 
+from .grasp_symmetry import GraspSymmetryChoice, _pregrasp_prefix, select_grasp_symmetry
 from .perception import LatestPoseStore
 from .planner import CartesianKinematics
 from .planner_worker import PlanFailureKind, PlannerWorker, PlanRequest
 from .progress import Phase
 from .session import FlashSession
 from .skill import MotionMode, Relation
+from .symmetry import AxialSymmetry
 from .trajectory import AttachmentState, ConnectionTrajectory, Evidence, PoseEstimate, spatial_goal
 
 
@@ -61,6 +63,7 @@ class PlanningCoordinator:
         arm_joint_names: tuple[str, ...],
         config: PlanBufferConfig,
         attachment_at: Callable[[float], AttachmentState | None],
+        grasp_symmetries: tuple[AxialSymmetry, ...] = (),
     ) -> None:
         self.session = session
         self.worker = worker
@@ -69,6 +72,9 @@ class PlanningCoordinator:
         self.arm_joint_names = arm_joint_names
         self.config = config
         self.attachment_at = attachment_at
+        self.grasp_symmetries = grasp_symmetries
+        self.grasp_choices: dict[str, GraspSymmetryChoice] = {}
+        self._grasp_prefix_names: dict[str, frozenset[str]] = {}
         self._next_revision = 0
         self._pending_revision: int | None = None
         self._planned_reference: PoseEstimate | None = None
@@ -79,6 +85,26 @@ class PlanningCoordinator:
         self._start_anchor_pose: np.ndarray | None = None
         self._missing_evidence_key: tuple[int, str] | None = None
         self._missing_evidence_since_s: float | None = None
+
+    def prepare_grasp_choices(self, poses: dict[str, PoseEstimate], seed_deg: np.ndarray) -> None:
+        """Resolve declared grasp equivalences before starting the motor clock."""
+        for symmetry in self.grasp_symmetries:
+            prefix = _pregrasp_prefix(self.session.progress.skill, symmetry.role)
+            if not prefix:
+                continue
+            observed = poses.get(symmetry.role)
+            if observed is None or observed.pose is None:
+                raise ValueError(f"{symmetry.role}: no pose for grasp symmetry selection")
+            choice = select_grasp_symmetry(
+                self.session.progress.skill,
+                symmetry,
+                observed.pose,
+                self.kinematics,
+                seed_deg,
+                self.worker.planner.limits,
+            )
+            self.grasp_choices[symmetry.role] = choice
+            self._grasp_prefix_names[symmetry.role] = frozenset(item.name for item in prefix)
 
     def step(self):
         """Check live evidence, execute one motor tick, then refill the future queue."""
@@ -158,6 +184,9 @@ class PlanningCoordinator:
         if interval.reference_version != reference.reference_version:
             self._fail(f"{interval.reference_role} pose uses the wrong object frame")
             return
+        if interval.name in self._grasp_prefix_names.get(interval.reference_role, ()):
+            choice = self.grasp_choices[interval.reference_role]
+            reference = replace(reference, pose=reference.pose @ choice.equivalent_transform)
         attachment = self.attachment_at(now_s) if interval.relation == Relation.HELD_TO_TARGET else None
         if interval.relation == Relation.HELD_TO_TARGET and attachment is None:
             if phase == Phase.MOVING:

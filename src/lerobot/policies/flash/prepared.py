@@ -117,6 +117,7 @@ class PreparedFlashSkill:
                     "baseline_base_from_object": item.baseline_base_from_object.tolist(),
                     "lock_to_baseline": item.lock_to_baseline,
                     "max_observed_tilt_rad": item.max_observed_tilt_rad,
+                    "ends_interchangeable": item.ends_interchangeable,
                 }
                 for item in self.axial_symmetries
             ],

@@ -27,6 +27,7 @@ class AxialSymmetry:
     baseline_base_from_object: np.ndarray
     lock_to_baseline: bool = False
     max_observed_tilt_rad: float | None = None
+    ends_interchangeable: bool = False
 
     def __post_init__(self) -> None:
         axis = np.asarray(self.axis_object, dtype=float)
@@ -45,24 +46,49 @@ class AxialSymmetry:
         ):
             raise ValueError("locked support orientation needs an observed-tilt limit")
 
+    def equivalent_transform(self, angle_rad: float = 0.0, *, exchange_ends: bool = False) -> np.ndarray:
+        """Object-local rotation about its axis, optionally exchanging equal ends.
+
+        The transform rotates about the annotated physical centre. It is a
+        planning alternative, not a new pose measurement: the scene estimator
+        retains its canonical object frame and the grasp attachment uses it.
+        """
+        if not np.isfinite(angle_rad):
+            raise ValueError("symmetry angle must be finite")
+        if exchange_ends and not self.ends_interchangeable:
+            raise ValueError("object ends were not annotated as interchangeable")
+        rotation = Rotation.from_rotvec(angle_rad * self.axis_object).as_matrix()
+        if exchange_ends:
+            basis = np.eye(3)[int(np.argmin(np.abs(self.axis_object)))]
+            transverse = basis - self.axis_object * np.dot(basis, self.axis_object)
+            transverse /= np.linalg.norm(transverse)
+            rotation = rotation @ Rotation.from_rotvec(np.pi * transverse).as_matrix()
+        result = np.eye(4)
+        result[:3, :3] = rotation
+        result[:3, 3] = self.center_object_m - rotation @ self.center_object_m
+        return transform(result)
+
     def canonicalize(self, base_from_object: np.ndarray) -> np.ndarray:
         observed = transform(base_from_object)
         baseline = self.baseline_base_from_object
         start_axis = baseline[:3, :3] @ self.axis_object
         observed_axis = observed[:3, :3] @ self.axis_object
+        if self.ends_interchangeable and np.dot(start_axis, observed_axis) < 0:
+            observed_axis = -observed_axis
         cross = np.cross(start_axis, observed_axis)
         dot = float(np.clip(np.dot(start_axis, observed_axis), -1.0, 1.0))
         if self.lock_to_baseline and np.arccos(dot) > self.max_observed_tilt_rad:
             raise ValueError("observed support axis contradicts its declared support plane")
         if dot <= -1 + 1e-8:
-            raise ValueError("symmetry axis reversed; the equivalent normal is ambiguous")
-        rotation = (
-            Rotation.from_rotvec(
+            raise ValueError("symmetry axis reversed; object ends were not declared interchangeable")
+        if self.lock_to_baseline:
+            rotation = np.eye(3)
+        elif np.linalg.norm(cross) > 1e-12:
+            rotation = Rotation.from_rotvec(
                 cross / np.linalg.norm(cross) * np.arctan2(np.linalg.norm(cross), dot)
             ).as_matrix()
-            if not self.lock_to_baseline and np.linalg.norm(cross) > 1e-12
-            else np.eye(3)
-        )
+        else:
+            rotation = np.eye(3)
         canonical = np.eye(4)
         canonical[:3, :3] = rotation @ baseline[:3, :3]
         center_base = observed[:3, :3] @ self.center_object_m + observed[:3, 3]

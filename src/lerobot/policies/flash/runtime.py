@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from math import ceil, isfinite
 from typing import Protocol
@@ -25,6 +25,7 @@ from .progress import Phase, Verdict
 from .recording import RecordedTick, TickRecordAssembler
 from .session import FlashSession, PoseChange
 from .skill import AttachmentAction, FlashSkill, Relation
+from .symmetry import AxialSymmetry
 from .trajectory import PoseEstimate
 
 
@@ -41,12 +42,58 @@ class AttemptRecorder(Protocol):
 
 @dataclass(frozen=True)
 class AttachmentRuntimeLimits:
+    """One policy for grasp seeding, measured corrections, and optional expiry."""
+
     history_capacity: int
     max_motor_sample_gap_s: float
     max_attachment_age_s: float | None
     max_update_shift_m: float
     max_update_turn_rad: float
     max_pregrasp_age_s: float
+
+    @classmethod
+    def from_config(cls, config: Mapping[str, object]) -> AttachmentRuntimeLimits:
+        """Read the attachment section of a rig's FLASH trial configuration."""
+        required = {
+            "motor_history_capacity",
+            "max_motor_sample_gap_s",
+            "max_unverified_age_s",
+            "max_observation_shift_m",
+            "max_observation_turn_deg",
+            "max_pregrasp_pose_age_s",
+        }
+        if set(config) != required:
+            raise ValueError(f"attachment policy keys differ: {sorted(set(config) ^ required)}")
+        age = config["max_unverified_age_s"]
+        values = {key: config[key] for key in required if key != "max_unverified_age_s"}
+        if age is not None and (
+            isinstance(age, bool) or not isinstance(age, (int, float)) or not isfinite(age) or age <= 0
+        ):
+            raise ValueError("attachment max_unverified_age_s must be positive or null")
+        if (
+            isinstance(values["motor_history_capacity"], bool)
+            or not isinstance(values["motor_history_capacity"], int)
+            or values["motor_history_capacity"] < 2
+        ):
+            raise ValueError("attachment motor_history_capacity must be at least two")
+        for key, value in values.items():
+            if key == "motor_history_capacity":
+                continue
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not isfinite(value)
+                or value <= 0
+            ):
+                raise ValueError(f"attachment {key} must be finite and positive")
+        return cls(
+            int(values["motor_history_capacity"]),
+            float(values["max_motor_sample_gap_s"]),
+            None if age is None else float(age),
+            float(values["max_observation_shift_m"]),
+            np.deg2rad(float(values["max_observation_turn_deg"])),
+            float(values["max_pregrasp_pose_age_s"]),
+        )
 
 
 @dataclass(frozen=True)
@@ -90,6 +137,7 @@ class FlashRuntime:
         object_centers_by_role: dict[str, np.ndarray] | None = None,
         object_points_by_role: dict[str, np.ndarray] | None = None,
         live_telemetry: FlashLiveTelemetry | None = None,
+        grasp_symmetries: tuple[AxialSymmetry, ...] = (),
     ) -> None:
         self._validate_bindings(skill, references)
         self.skill = skill
@@ -255,6 +303,7 @@ class FlashRuntime:
             arm_joint_names,
             buffer_config,
             self.attachment.state,
+            grasp_symmetries,
         )
         self._perception_started = False
         self._causal_started = False
@@ -352,6 +401,12 @@ class FlashRuntime:
             _, first_poses = self.poses.snapshot()
             if first_poses[first_role].reference_version != self.skill.intervals[0].reference_version:
                 raise ValueError(f"{first_role}: live pose does not use the demonstrated object frame")
+            if self.coordinator.grasp_symmetries:
+                initial = self.session.motor.robot.get_state_observation()
+                self.coordinator.prepare_grasp_choices(
+                    first_poses,
+                    np.array([float(initial[f"{name}.pos"]) for name in self.arm_joint_names]),
+                )
             self.planner.start()
             self._planner_started = True
             self.recorder.start()

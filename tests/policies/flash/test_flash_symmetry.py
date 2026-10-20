@@ -29,3 +29,24 @@ def test_annotated_dowel_axis_removes_real_static_fit_jitter():
     assert max(corrected_turns) < 7
     for raw, fixed in zip(direct, canonical, strict=True):
         np.testing.assert_allclose(raw[:3, :3] @ center + raw[:3, 3], fixed[:3, :3] @ center + fixed[:3, 3])
+
+
+def test_interchangeable_ends_preserve_center_and_canonicalize_reversed_axis():
+    fixture = Path(__file__).parent / "fixtures" / "dowel_axial_jitter_20261020.npz"
+    with np.load(fixture) as recorded:
+        points = recorded["points"]
+        baseline = recorded["demo_reference"]
+    center = points.mean(axis=0)
+    _, vectors = np.linalg.eigh(np.cov(points.T))
+    symmetry = AxialSymmetry("dowel", vectors[:, -1], center, baseline, ends_interchangeable=True)
+    exchanged = baseline @ symmetry.equivalent_transform(exchange_ends=True)
+    np.testing.assert_allclose(
+        exchanged[:3, :3] @ center + exchanged[:3, 3],
+        baseline[:3, :3] @ center + baseline[:3, 3],
+    )
+    corrected = symmetry.canonicalize(exchanged)
+    np.testing.assert_allclose(
+        corrected[:3, :3] @ symmetry.axis_object,
+        baseline[:3, :3] @ symmetry.axis_object,
+        atol=1e-8,
+    )
