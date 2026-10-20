@@ -78,7 +78,8 @@ in the ring. This supports a visually successful physical result for the
 finished; the recording has no independent insertion verifier or calibrated
 contact-pose ground truth.
 
-The **new FLASH redesign** has no recorded successful physical insertion.
+At the time of the earlier trials below, the **new FLASH redesign** had no
+recorded visually successful physical insertion.
 Its LeRobot episode manifests under
 `~/.cache/huggingface/lerobot/demos/flash_insertion_trial_20261020*` all report
 `failure` or `interrupted`, including the latest four trials:
@@ -152,7 +153,7 @@ displays live RGB-D and motor state from FLASH through LeRobot's optional
 observation stream, and local episode links open its ordinary dataset replay.
 The Run → FLASH tracker panel now shows recorded accepted poses and the
 separate gripper-predicted held outline for recordings that include it. No
-successful redesign insertion has been recorded.
+visually successful redesign insertion had been recorded at that point.
 
 In the 19:11 live trial, the arm grasped and lifted the dowel before the next
 generated carry connection failed its IK check. The retiming code tried the
@@ -171,3 +172,20 @@ for the first carry, 15 for the next approach and 138 for the 4.6 s insertion
 interval. This checks calibrated IK geometry and event timing only. The trial's
 grasp-time pose supplies an approximate attachment; the preview has no live
 perception, collision or motor feedback and cannot establish task success.
+
+## Later same-day attempts and held-pose audit
+
+The 20:18:38 physical attempt visually placed the dowel upright in the ring,
+but its manifest says `interrupted`: the next demonstrated retreat failed a
+joint-speed check after release. The 20:33:10 attempt completed the command
+sequence without a planner error, but the dowel entered tilted and fell out
+after release; its manifest says `unknown` because the skill has no independent
+success milestone. Neither manifest alone expresses the physical outcome.
+
+Among the 19 attempts from 17:22:16 through 20:33:10, six issued an
+`attach-held` event. Four later recordings contain held-pose telemetry and
+instance masks; none contains an accepted post-grasp held observation. The
+gripper attachment remained an unverified prediction. The
+[held-pose evidence plan](held_pose_plan.md) records the source audit, the
+grasp-closure timing finding and the partial-observation experiments to run
+before enabling live attachment corrections.

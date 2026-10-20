@@ -136,6 +136,8 @@ The perception service has three replaceable functions: associate objects across
 
 The [tracker research and selection proposal](tracker_research.md) compares complete pose trackers with SAM, causal point tracking and VGGT-family components. Model choices remain replaceable behind these functions; their evaluation includes contact accuracy and result age, not segmentation quality alone.
 
+The [held-pose evidence plan](held_pose_plan.md) audits the recent physical attempts and specifies the next partial-observation benchmark, fusion rules and trade-offs. It is an implementation and evaluation sequence for the shared estimator below, not an additional held-object tracker.
+
 #### One scene estimator, several evidence sources
 
 The expensive recognizer and the causal point tracker are **evidence producers**, not independent writers of a final pose. One scene estimator owns object identity hypotheses, metric poses, object/group point membership, relationship hypotheses and the published state. The planner reads only a versioned snapshot from that owner. This prevents the arrival order of asynchronous workers from acting as a hidden ranking of their outputs. ([O1](#o1), [O8](#o8), [R2](#r2), [R6](#r6).)
