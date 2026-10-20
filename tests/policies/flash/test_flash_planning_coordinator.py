@@ -162,6 +162,24 @@ def test_coordinator_interrupts_when_target_exits_explicit_replanning_envelope()
     assert "demonstrated goal beyond the replanning envelope" in session.progress.events[-1]["reason"]
 
 
+def test_coordinator_waits_for_new_pose_when_only_future_refill_exceeds_age_limit():
+    now, robot, session, poses, worker, coordinator = make_runtime(
+        mode=MotionMode.CONNECTION, max_pose_age_s=0.14
+    )
+    for _ in range(4):
+        coordinator.step()
+    assert session.progress.phase == Phase.MOVING
+    assert robot.sent
+    assert session.actions.snapshot().pending
+    # The queued command is still supported, but a newly planned command
+    # after the lead window would use stale evidence.
+    coordinator.schedule()
+    assert session.progress.phase == Phase.MOVING
+    poses.publish((target(0.2, now[0]),))
+    coordinator.schedule()
+    assert session.progress.phase == Phase.MOVING
+
+
 def test_generated_connection_retargets_and_extends_duration_for_live_distance():
     now, robot, session, poses, worker, coordinator = make_runtime(mode=MotionMode.CONNECTION)
     for _ in range(12):

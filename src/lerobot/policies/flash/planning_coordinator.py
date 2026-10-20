@@ -257,8 +257,10 @@ class PlanningCoordinator:
             )
         evidence_ticks = floor((evidence_deadline_s - due_s) / self.session.motor.period_s) + 1
         if evidence_ticks <= 0:
-            if phase == Phase.MOVING:
-                self._fail("no fresh pose can support the next future action")
+            # A future refill can fall past the pose's age limit while the
+            # current committed queue remains supported. Keep dispatching
+            # that queue and retry on the next perception result. The
+            # current-pose check above still stops motion when it ages out.
             return
         count = min(self.config.horizon_ticks, evidence_ticks)
         connection = None
