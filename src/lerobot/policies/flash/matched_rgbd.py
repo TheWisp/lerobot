@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Protocol, cast
 
 import numpy as np
 
@@ -49,6 +49,11 @@ class PixelMatches:
 
 class PixelMatchProvider(Protocol):
     def matches(self, frame: RGBDFrame) -> tuple[PixelMatches, ...]: ...
+
+
+class MaskProvidingPixelMatchProvider(PixelMatchProvider, Protocol):
+    @property
+    def last_masks(self) -> dict[str, np.ndarray]: ...
 
 
 @dataclass(frozen=True)
@@ -119,6 +124,10 @@ class MatchedRGBDPoseBackend:
             if versions[role] != model.reference_version:
                 raise ValueError(f"{role}: point model and reference versions differ")
         self._initialized = True
+
+    @property
+    def last_masks(self) -> dict[str, np.ndarray]:
+        return cast(MaskProvidingPixelMatchProvider, self.provider).last_masks
 
     def update(self, frame: RGBDFrame) -> tuple[PoseEstimate, ...]:
         if not self._initialized:

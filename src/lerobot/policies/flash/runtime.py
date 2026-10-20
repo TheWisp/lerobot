@@ -8,6 +8,7 @@ from math import isfinite
 from typing import Protocol
 
 from .attachment_lifecycle import AttachmentLifecycle
+from .causal_service import CausalPoseService, CausalTrackingConfig
 from .execution import MotorTick, RobotIO
 from .milestones import PoseMilestonePublisher
 from .perception import HeldAttachmentUpdater, LatestPoseStore, ObjectReference, PoseBackend
@@ -81,11 +82,25 @@ class FlashRuntime:
         depth_feature: str | None,
         max_camera_age_s: float,
         fps: float = 30.0,
+        causal_tracking: CausalTrackingConfig | None = None,
     ) -> None:
         self._validate_bindings(skill, references)
         self.skill = skill
         self.recorder = recorder
         self.poses = LatestPoseStore()
+        self.causal = (
+            CausalPoseService(
+                self.poses,
+                history_frames=causal_tracking.history_frames,
+                queue_frames=causal_tracking.queue_frames,
+                min_inliers=causal_tracking.min_inliers,
+                max_frame_gap_s=causal_tracking.max_frame_gap_s,
+                fit_threshold_m=causal_tracking.fit_threshold_m,
+                image_scale=causal_tracking.image_scale,
+            )
+            if causal_tracking is not None
+            else None
+        )
         updaters = {
             transition.role: HeldAttachmentUpdater(
                 transition.role,
@@ -138,13 +153,26 @@ class FlashRuntime:
             # Revisit the same source frame to withdraw a true gate when it expires.
             self.milestones(version, poses)
 
-        pose_process = PoseProcess(pose_backend_factory, references, self.poses)
+        causal = self.causal
+        pose_process = PoseProcess(
+            pose_backend_factory,
+            references,
+            self.poses,
+            on_result=(
+                (lambda result: causal.submit_anchor(result.frame_id, result.estimates, result.masks))
+                if causal is not None
+                else None
+            ),
+            require_masks=causal is not None,
+        )
         self.perception = PerceptionService(
             source,
             pose_process,
             self.poses,
             clock=self.session.motor.clock,
             on_pose_update=on_pose_update,
+            causal_frames=causal.submit_frame if causal is not None else None,
+            causal_error=(lambda: causal.error) if causal is not None else None,
         )
         self.assembler = TickRecordAssembler(
             self.perception.frames,
@@ -167,6 +195,7 @@ class FlashRuntime:
             self.attachment.state,
         )
         self._perception_started = False
+        self._causal_started = False
         self._planner_started = False
         self._recorder_started = False
         self._ready = False
@@ -201,6 +230,9 @@ class FlashRuntime:
             raise RuntimeError("FLASH attempt cannot be started twice")
         self._started_once = True
         try:
+            if self.causal is not None:
+                self.causal.start()
+                self._causal_started = True
             self.perception.start(timeout_s=pose_start_timeout_s)
             self._perception_started = True
             first_role = self.skill.intervals[0].reference_role
@@ -335,10 +367,16 @@ class FlashRuntime:
                     self.perception.close()
             finally:
                 try:
-                    if self._planner_started:
-                        self.planner.close()
+                    if self._causal_started and self.causal is not None:
+                        self.causal.close()
                 finally:
-                    if self._recorder_started:
-                        self.recorder.finish(outcome, reason)
+                    try:
+                        if self._planner_started:
+                            self.planner.close()
+                    finally:
+                        if self._recorder_started:
+                            self.recorder.finish(outcome, reason)
         finally:
-            self._perception_started = self._planner_started = self._recorder_started = False
+            self._perception_started = self._causal_started = self._planner_started = (
+                self._recorder_started
+            ) = False

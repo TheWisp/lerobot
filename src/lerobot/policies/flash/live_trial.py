@@ -24,6 +24,7 @@ import numpy as np
 from lerobot.cameras.realsense import RealSenseCamera, RealSenseCameraConfig
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.policies.flash.appearance import AppearanceBackendFactory
+from lerobot.policies.flash.causal_service import CausalTrackingConfig
 from lerobot.policies.flash.kinematics import SelectedJointKinematics
 from lerobot.policies.flash.planner import PlannerLimits
 from lerobot.policies.flash.planning_coordinator import PlanBufferConfig
@@ -172,7 +173,6 @@ def trial(
             sam_resolution=settings["sam_resolution"],
             dino_model_id=bundle.descriptor_model_id,
             axial_symmetries=bundle.axial_symmetries,
-            max_pose_gap_s=settings.get("max_pose_gap_s"),
             seed_points_by_role=settings.get("seed_points_by_role"),
         )
         output_root = Path(settings["output_root"]).expanduser()
@@ -229,6 +229,11 @@ def trial(
             depth_feature="overhead_depth",
             max_camera_age_s=settings["max_camera_age_s"],
             fps=settings["fps"],
+            causal_tracking=(
+                CausalTrackingConfig(**settings["causal_tracking"])
+                if settings.get("causal_tracking") is not None
+                else None
+            ),
         )
         result = runtime.run(
             max_duration_s=settings["max_duration_s"],
@@ -249,6 +254,16 @@ def trial(
                     if not isinstance(value, list)
                 },
                 "pose_metrics": vars(runtime.perception.worker.metrics).copy(),
+                "causal_metrics": (
+                    {
+                        "frames": runtime.causal.frames,
+                        "anchors": runtime.causal.anchors,
+                        "missed_anchors": runtime.causal.missed_anchors,
+                        "published": runtime.causal.published,
+                    }
+                    if runtime.causal is not None
+                    else None
+                ),
                 "planner_last_result": (
                     {
                         "revision": runtime.planner.last_result.revision,

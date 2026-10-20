@@ -36,8 +36,21 @@ class FailingBackend(EchoBackend):
         raise RuntimeError("injected perception failure")
 
 
+class EchoMaskBackend(EchoBackend):
+    def __init__(self):
+        self.last_masks = {}
+
+    def update(self, frame):
+        self.last_masks = {self.reference.role: np.ones(frame.depth.shape, dtype=bool)}
+        return super().update(frame)
+
+
 def echo_factory():
     return EchoBackend()
+
+
+def echo_mask_factory():
+    return EchoMaskBackend()
 
 
 def failing_factory():
@@ -98,3 +111,32 @@ def test_spawned_pose_worker_reports_backend_failure():
             poll_until(worker, lambda: False)
     finally:
         worker.close()
+
+
+def test_causal_handoff_requires_aligned_masks_from_the_same_pose_frame():
+    reference, frame = setup()
+    received = []
+    worker = PoseProcess(
+        echo_mask_factory,
+        (reference,),
+        LatestPoseStore(),
+        require_masks=True,
+        on_result=received.append,
+    )
+    try:
+        worker.start(timeout_s=10)
+        assert worker.submit(frame)
+        poll_until(worker, lambda: bool(received))
+        assert received[0].frame_id == frame.frame_id
+        assert received[0].masks["item"].shape == frame.depth.shape
+    finally:
+        worker.close()
+
+    missing_masks = PoseProcess(echo_factory, (reference,), LatestPoseStore(), require_masks=True)
+    try:
+        with pytest.raises(
+            PoseProcessError, match="requires a pose backend that exposes aligned instance masks"
+        ):
+            missing_masks.start(timeout_s=10)
+    finally:
+        missing_masks.close()

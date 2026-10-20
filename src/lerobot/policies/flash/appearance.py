@@ -10,7 +10,6 @@ import numpy as np
 
 from .matched_rgbd import MatchedRGBDPoseBackend, ObjectPointModel, PixelMatches
 from .perception import ObjectReference, PoseBackend, ReferenceSnippet, RGBDFrame
-from .pose_gap import PoseGapBackend
 from .registration import transform_points, unproject_pixels, valid_depth_pixels
 from .symmetry import AxialSymmetry
 
@@ -187,9 +186,11 @@ class AppearancePixelMatcher:
         self.extractor = extractor
         self.mask_source = mask_source
         self.min_similarity = min_similarity
+        self.last_masks: dict[str, np.ndarray] = {}
 
     def matches(self, frame: RGBDFrame) -> tuple[PixelMatches, ...]:
         masks = self.mask_source.masks(frame)
+        self.last_masks = masks
         out = []
         for role, model in self.models.items():
             mask = masks.get(role)
@@ -247,16 +248,11 @@ class AppearanceBackendFactory:
     sam_resolution: int | None = None
     dino_model_id: str = "facebook/dinov2-small"
     axial_symmetries: tuple[AxialSymmetry, ...] = ()
-    max_pose_gap_s: float | None = None
     seed_points_by_role: dict[str, tuple[float, float]] | None = None
 
     def __post_init__(self) -> None:
         if set(self.prompts_by_role) != {model.points.role for model in self.models}:
             raise ValueError("one text prompt is needed for each appearance model role")
-        if self.max_pose_gap_s is not None and (
-            not np.isfinite(self.max_pose_gap_s) or self.max_pose_gap_s <= 0
-        ):
-            raise ValueError("pose gap must be a positive finite duration")
 
     def __call__(self) -> PoseBackend:
         from .dino_features import DinoPatchExtractor
@@ -285,6 +281,4 @@ class AppearanceBackendFactory:
             from .symmetry import SymmetryCanonicalizingBackend
 
             backend = SymmetryCanonicalizingBackend(backend, self.axial_symmetries)
-        if self.max_pose_gap_s is not None:
-            backend = PoseGapBackend(backend, self.max_pose_gap_s)
         return backend

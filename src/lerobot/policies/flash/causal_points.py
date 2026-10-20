@@ -43,6 +43,7 @@ class CausalRigidPointTracker:
         max_frame_gap_s: float = 0.1,
         fb_threshold_px: float = 1.0,
         fit_threshold_m: float = 0.005,
+        image_scale: float = 1.0,
     ) -> None:
         if (
             max_points < min_inliers
@@ -53,6 +54,8 @@ class CausalRigidPointTracker:
             or fb_threshold_px <= 0
             or not np.isfinite(fit_threshold_m)
             or fit_threshold_m <= 0
+            or not np.isfinite(image_scale)
+            or not 0 < image_scale <= 1
         ):
             raise ValueError("invalid causal point-tracker limits")
         self.max_points = max_points
@@ -60,6 +63,7 @@ class CausalRigidPointTracker:
         self.max_frame_gap_s = max_frame_gap_s
         self.fb_threshold_px = fb_threshold_px
         self.fit_threshold_m = fit_threshold_m
+        self.image_scale = image_scale
         self._gray: np.ndarray | None = None
         self._uv = np.empty((0, 2), dtype=np.float32)
         self._base_seed = np.empty((0, 3), dtype=float)
@@ -69,24 +73,31 @@ class CausalRigidPointTracker:
     def seed(self, frame: RGBDFrame, mask: np.ndarray) -> int:
         if mask.shape != frame.depth.shape or mask.dtype != bool:
             raise ValueError("seed mask must align with RGB-D pixels")
-        gray = cv2.cvtColor(frame.rgb, cv2.COLOR_RGB2GRAY)
+        gray = self._gray_image(frame.rgb)
+        seed_mask = (
+            cv2.resize(mask.astype(np.uint8), (gray.shape[1], gray.shape[0]), interpolation=cv2.INTER_NEAREST)
+            if self.image_scale != 1
+            else mask.astype(np.uint8)
+        )
         corners = cv2.goodFeaturesToTrack(
             gray,
             maxCorners=self.max_points,
             qualityLevel=0.005,
             minDistance=5,
-            mask=mask.astype(np.uint8),
+            mask=seed_mask,
         )
         uv = corners.reshape(-1, 2) if corners is not None else np.empty((0, 2), dtype=np.float32)
         if len(uv):
-            px = np.rint(uv).astype(int)
+            px = self._full_pixels(uv, frame.depth.shape)
             valid = frame.depth[px[:, 1], px[:, 0]] > 0
             uv = uv[valid]
         self._uv = uv.astype(np.float32)
         self._base_seed = (
             transform_points(
                 frame.base_from_camera,
-                unproject_pixels(frame.depth, frame.intrinsics, uv, frame.depth_m_per_unit),
+                unproject_pixels(
+                    frame.depth, frame.intrinsics, uv / self.image_scale, frame.depth_m_per_unit
+                ),
             )
             if len(uv)
             else np.empty((0, 3), dtype=float)
@@ -103,7 +114,7 @@ class CausalRigidPointTracker:
         if not 0 < dt <= self.max_frame_gap_s:
             self._valid[:] = False
             raise ValueError("causal point tracks lost a camera-frame interval")
-        gray = cv2.cvtColor(frame.rgb, cv2.COLOR_RGB2GRAY)
+        gray = self._gray_image(frame.rgb)
         live = np.flatnonzero(self._valid)
         if len(live):
             before = self._uv[live].reshape(-1, 1, 2)
@@ -114,7 +125,7 @@ class CausalRigidPointTracker:
                 gray, self._gray, after, None, winSize=(21, 21), maxLevel=3
             )
             xy = after.reshape(-1, 2)
-            height, width = frame.depth.shape
+            height, width = gray.shape
             good = (
                 (forward_ok.ravel() == 1)
                 & (backward_ok.ravel() == 1)
@@ -130,9 +141,7 @@ class CausalRigidPointTracker:
         self._last_source_time_s = frame.source_time_s
         live = np.flatnonzero(self._valid)
         if len(live):
-            px = np.rint(self._uv[live]).astype(int)
-            px[:, 0] = np.clip(px[:, 0], 0, frame.depth.shape[1] - 1)
-            px[:, 1] = np.clip(px[:, 1], 0, frame.depth.shape[0] - 1)
+            px = self._full_pixels(self._uv[live], frame.depth.shape)
             depth_ok = frame.depth[px[:, 1], px[:, 0]] > 0
             live = live[depth_ok]
         if len(live) < self.min_inliers:
@@ -141,7 +150,9 @@ class CausalRigidPointTracker:
             )
         current = transform_points(
             frame.base_from_camera,
-            unproject_pixels(frame.depth, frame.intrinsics, self._uv[live], frame.depth_m_per_unit),
+            unproject_pixels(
+                frame.depth, frame.intrinsics, self._uv[live] / self.image_scale, frame.depth_m_per_unit
+            ),
         )
         try:
             fit = register_object(
@@ -164,3 +175,17 @@ class CausalRigidPointTracker:
             len(fit.inlier_indices),
             fit.median_error_m,
         )
+
+    def _gray_image(self, rgb: np.ndarray) -> np.ndarray:
+        gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+        if self.image_scale != 1:
+            gray = cv2.resize(
+                gray, None, fx=self.image_scale, fy=self.image_scale, interpolation=cv2.INTER_AREA
+            )
+        return gray
+
+    def _full_pixels(self, uv: np.ndarray, shape: tuple[int, int]) -> np.ndarray:
+        px = np.rint(uv / self.image_scale).astype(int)
+        px[:, 0] = np.clip(px[:, 0], 0, shape[1] - 1)
+        px[:, 1] = np.clip(px[:, 1], 0, shape[0] - 1)
+        return px

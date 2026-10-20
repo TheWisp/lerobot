@@ -24,12 +24,13 @@ def frame(rgb, source_time_s, depth=None):
     )
 
 
-def test_causal_points_recover_metric_motion_and_abstain_without_depth():
+@pytest.mark.parametrize("image_scale", [1.0, 0.5])
+def test_causal_points_recover_metric_motion_and_abstain_without_depth(image_scale):
     gray = np.random.default_rng(1).integers(0, 255, (96, 96), dtype=np.uint8)
     rgb = np.repeat(gray[:, :, None], 3, axis=2)
     mask = np.zeros(gray.shape, dtype=bool)
     mask[20:76, 20:76] = True
-    tracker = CausalRigidPointTracker(min_inliers=12)
+    tracker = CausalRigidPointTracker(min_inliers=12, image_scale=image_scale)
     assert tracker.seed(frame(rgb, 0), mask) >= 12
 
     shifted = cv2.warpAffine(rgb, np.float32([[1, 0, 2], [0, 1, 0]]), (96, 96))

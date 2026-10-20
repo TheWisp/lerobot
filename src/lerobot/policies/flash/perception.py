@@ -134,6 +134,13 @@ class PoseBackend(Protocol):
     def update(self, frame: RGBDFrame) -> tuple[PoseEstimate, ...]: ...
 
 
+class InstanceMaskPoseBackend(PoseBackend, Protocol):
+    """A pose backend that also exposes masks from its most recent frame."""
+
+    @property
+    def last_masks(self) -> dict[str, np.ndarray]: ...
+
+
 class LatestPoseStore:
     """Short-lock handoff from an asynchronous estimator to the planner."""
 

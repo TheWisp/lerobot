@@ -15,8 +15,11 @@ from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass, field, replace
 from queue import Empty, Full
+from typing import cast
 
-from .perception import LatestPoseStore, ObjectReference, PoseBackend, RGBDFrame
+import numpy as np
+
+from .perception import InstanceMaskPoseBackend, LatestPoseStore, ObjectReference, PoseBackend, RGBDFrame
 from .trajectory import PoseEstimate
 
 
@@ -29,6 +32,8 @@ class _Ready:
 class _Result:
     estimates: tuple[PoseEstimate, ...]
     failures: dict[str, str]
+    frame_id: int
+    masks: dict[str, np.ndarray]
 
 
 @dataclass(frozen=True)
@@ -49,15 +54,38 @@ def _publish_latest(queue, message: _Result | _Failure) -> None:
 
 
 def _run_backend(
-    factory: Callable[[], PoseBackend], references: tuple[ObjectReference, ...], frames, results
+    factory: Callable[[], PoseBackend],
+    references: tuple[ObjectReference, ...],
+    frames,
+    results,
+    require_masks: bool,
 ):
     try:
         backend = factory()
+        if require_masks and not hasattr(backend, "last_masks"):
+            raise TypeError("causal tracking requires a pose backend that exposes aligned instance masks")
         backend.initialize(references)
+        known_roles = {reference.role for reference in references}
         results.put(_Ready())
         while (frame := frames.get()) is not None:
             estimates = backend.update(frame)
-            _publish_latest(results, _Result(estimates, dict(getattr(backend, "last_failure", {}))))
+            masks = cast(InstanceMaskPoseBackend, backend).last_masks if require_masks else {}
+            for role, mask in masks.items():
+                if (
+                    role not in known_roles
+                    or np.asarray(mask).shape != frame.depth.shape
+                    or np.asarray(mask).dtype != bool
+                ):
+                    raise ValueError(f"{role}: causal mask does not align with RGB-D")
+            _publish_latest(
+                results,
+                _Result(
+                    estimates,
+                    dict(getattr(backend, "last_failure", {})),
+                    frame.frame_id,
+                    {role: np.asarray(mask, dtype=bool).copy() for role, mask in masks.items()},
+                ),
+            )
     except Exception:
         _publish_latest(results, _Failure(traceback.format_exc()))
 
@@ -92,19 +120,24 @@ class PoseProcess:
         factory: Callable[[], PoseBackend],
         references: tuple[ObjectReference, ...],
         store: LatestPoseStore,
+        *,
+        on_result: Callable[[_Result], None] | None = None,
+        require_masks: bool = False,
     ) -> None:
         if not references:
             raise ValueError("pose worker needs object references")
         self.factory = factory
         self.references = references
         self.store = store
+        self.on_result = on_result
+        self.require_masks = require_masks
         self.metrics = PoseProcessMetrics()
         self._context = mp.get_context("spawn")
         self._frames = self._context.Queue(maxsize=1)
         self._results = self._context.Queue(maxsize=2)
         self._process = self._context.Process(
             target=_run_backend,
-            args=(factory, references, self._frames, self._results),
+            args=(factory, references, self._frames, self._results, require_masks),
             name="flash-pose",
             daemon=True,
         )
@@ -177,6 +210,8 @@ class PoseProcess:
                 break
             if isinstance(message, _Result):
                 self.store.publish(message.estimates)
+                if self.on_result is not None:
+                    self.on_result(message)
                 self.metrics.delivered += 1
                 self.metrics.last_failures = message.failures
                 for role, reason in message.failures.items():

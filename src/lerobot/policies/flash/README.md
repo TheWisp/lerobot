@@ -115,12 +115,16 @@ first action's observed object and a usable pose for every later referenced
 object before the motor epoch begins; a poor instance seed must fail before
 the arm moves.
 
-The active estimator is SAM3 instance masks, DINO appearance matches and a
-robust aligned RGB-D fit. A short, globally configured pose gap may retain a
-previous measurement, marked predicted and with its original capture time.
-It is not a group tracker. The camera capture thread runs independently of the
-30 Hz motor loop, but the heavy pose process keeps only the newest pending
-frame. A frame-to-frame point/group tracker therefore needs its own causal
-camera-frame path before its motion can become a second pose source. The
-current controller cannot follow an object that moves while direct RGB-D
-matching is unavailable.
+The active absolute-pose estimator is SAM3 instance masks, DINO appearance
+matches and a robust aligned RGB-D fit. An optional causal point tracker has
+its own bounded handoff for **every** captured camera frame; the heavy pose
+process may still skip superseded frames. After a depth-backed absolute pose
+and aligned instance mask seed it, the causal tracker can propagate that
+object's motion through a temporary appearance-matching dropout. It reports
+the resulting pose as **predicted**, with the new RGB-D frame's timestamp. It
+cannot initialize an object whose absolute pose was never established, and
+it is not an environment group tracker or a recovery mechanism after its
+point tracks are lost. The pose-gap wrapper that simply reused an unmoving
+last pose has been removed. Causal tracking remains an explicitly configured
+experimental live option pending a physical rollout; no successful insertion
+has been established with it.

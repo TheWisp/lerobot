@@ -9,12 +9,13 @@ grant task-side freedom: an interaction may impose stricter constraints.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from typing import cast
 
 import numpy as np
 from scipy.spatial.transform import Rotation
 
 from .geometry import transform
-from .perception import ObjectReference, PoseBackend, RGBDFrame
+from .perception import InstanceMaskPoseBackend, ObjectReference, PoseBackend, RGBDFrame
 from .trajectory import Evidence, PoseEstimate
 
 
@@ -82,6 +83,10 @@ class SymmetryCanonicalizingBackend:
     @property
     def last_failure(self):
         return {**getattr(self.inner, "last_failure", {}), **self._last_failure}
+
+    @property
+    def last_masks(self) -> dict[str, np.ndarray]:
+        return cast(InstanceMaskPoseBackend, self.inner).last_masks
 
     def initialize(self, references: tuple[ObjectReference, ...]) -> None:
         if not set(self.symmetries) <= {item.role for item in references}:

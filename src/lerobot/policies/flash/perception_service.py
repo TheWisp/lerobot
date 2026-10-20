@@ -38,6 +38,8 @@ class PerceptionService:
         clock=time.perf_counter,
         collector_period_s: float = 0.01,
         on_pose_update: Callable[[int, dict[str, PoseEstimate]], None] | None = None,
+        causal_frames: Callable[[RGBDFrame], None] | None = None,
+        causal_error: Callable[[], Exception | None] | None = None,
     ) -> None:
         if collector_period_s <= 0:
             raise ValueError("collector period must be positive")
@@ -50,6 +52,8 @@ class PerceptionService:
         self.clock = clock
         self.collector_period_s = collector_period_s
         self.on_pose_update = on_pose_update
+        self.causal_frames = causal_frames
+        self.causal_error = causal_error
         self.captured = 0
         self._stop = Event()
         self._lock = Lock()
@@ -83,6 +87,10 @@ class PerceptionService:
                 frame = self.source.read()
                 self.frames.publish(frame)
                 self.captured += 1
+                if self.causal_frames is not None:
+                    frozen = self.frames.snapshot()
+                    assert frozen is not None
+                    self.causal_frames(frozen)
                 if not self.worker.submit(frame) and not self.worker.alive:
                     raise PerceptionServiceError("pose process stopped during camera capture")
         except Exception as exc:
@@ -92,6 +100,8 @@ class PerceptionService:
         try:
             while not self._stop.is_set():
                 self.worker.poll()
+                if self.causal_error is not None and (error := self.causal_error()) is not None:
+                    raise PerceptionServiceError("causal point tracking failed") from error
                 if self.on_pose_update is not None:
                     self.on_pose_update(*self.store.snapshot())
                 self._stop.wait(self.collector_period_s)
