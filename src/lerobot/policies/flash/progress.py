@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 
-from .skill import FlashSkill, MotionMode
+from .skill import FlashSkill, Interval, MotionMode
 
 
 class Verdict(str, Enum):
@@ -40,6 +40,8 @@ class Progress:
     phase: Phase = Phase.WAITING
     interval_start_s: float | None = None
     suspended: bool = False
+    entry_alignment: Interval | None = None
+    aligned_entries: set[int] = field(default_factory=set)
     last_receipt_s: float | None = None
     attempt: int = 0
     milestones: dict[str, MilestoneUpdate] = field(default_factory=dict)
@@ -48,7 +50,28 @@ class Progress:
 
     @property
     def interval(self):
-        return self.skill.intervals[self.interval_index]
+        return self.entry_alignment or self.skill.intervals[self.interval_index]
+
+    def align_demonstrated_entry(self, interval: Interval, now_s: float) -> None:
+        """Insert a generated approach before starting a demonstrated local clock."""
+        if (
+            self.phase != Phase.WAITING
+            or self.entry_alignment is not None
+            or self.interval_index in self.aligned_entries
+            or self.interval.mode != MotionMode.DEMONSTRATED
+            or interval.mode != MotionMode.CONNECTION
+        ):
+            raise ValueError("demonstrated entry cannot be aligned in the current state")
+        self.entry_alignment = interval
+        self.aligned_entries.add(self.interval_index)
+        self.events.append(
+            {
+                "type": "entry_alignment_planned",
+                "interval": self.skill.intervals[self.interval_index].name,
+                "alignment": interval.name,
+                "at": now_s,
+            }
+        )
 
     def update_milestone(self, update: MilestoneUpdate) -> bool:
         """Update from a new observation; repeated frames cannot add evidence."""
@@ -135,6 +158,12 @@ class Progress:
         if self.phase != Phase.VERIFYING or not self._satisfied(self.interval.completion_milestone):
             return False
         self.events.append({"type": "interval_complete", "interval": self.interval.name, "at": now_s})
+        if self.entry_alignment is not None:
+            self.entry_alignment = None
+            self.interval_start_s = None
+            self.suspended = False
+            self.phase = Phase.WAITING
+            return True
         if self.interval_index + 1 == len(self.skill.intervals):
             self.phase = Phase.MOTION_COMPLETE
             return True
@@ -155,6 +184,8 @@ class Progress:
         if interval_name not in self.interval.recovery_intervals:
             raise ValueError(f"recovery to {interval_name} is not permitted from {self.interval.name}")
         self.interval_index = names.index(interval_name)
+        self.entry_alignment = None
+        self.aligned_entries.clear()
         self.attempt += 1
         self.interval_start_s = None
         self.suspended = False

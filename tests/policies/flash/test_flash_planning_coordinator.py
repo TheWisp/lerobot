@@ -5,8 +5,12 @@ import pytest
 
 from lerobot.policies.flash.execution import PlanRejectedError, TimedAction
 from lerobot.policies.flash.perception import LatestPoseStore
-from lerobot.policies.flash.planner import JointPlanner, PlannerLimits
-from lerobot.policies.flash.planner_worker import PlanResult
+from lerobot.policies.flash.planner import (
+    DemonstratedEntryDiscontinuityError,
+    JointPlanner,
+    PlannerLimits,
+)
+from lerobot.policies.flash.planner_worker import PlanFailureKind, PlanResult
 from lerobot.policies.flash.planning_coordinator import PlanBufferConfig, PlanningCoordinator
 from lerobot.policies.flash.progress import Phase
 from lerobot.policies.flash.session import FlashSession
@@ -74,6 +78,14 @@ class InlineWorker:
         )
         self.publish(request.revision, actions)
         self.last_result = PlanResult(request.revision, len(actions), None, connection=request.connection)
+
+
+class EntryFailureWorker(InlineWorker):
+    def submit(self, request):
+        try:
+            super().submit(request)
+        except DemonstratedEntryDiscontinuityError as exc:
+            self.last_result = PlanResult(request.revision, 0, str(exc), PlanFailureKind.ENTRY_DISCONTINUITY)
 
 
 def make_runtime(*, mode=MotionMode.DEMONSTRATED, max_pose_age_s=10.0, event_at_end=False):
@@ -155,6 +167,43 @@ def test_coordinator_starts_in_future_and_replans_from_committed_prefix():
         coordinator.step()
     assert session.progress.phase == Phase.MOTION_COMPLETE
     assert robot.sent[-1]["arm.pos"] == 30.5
+
+
+def test_moved_demonstrated_entry_aligns_before_its_local_clock_starts():
+    now, robot, session, poses, _, coordinator = make_runtime()
+    original = session.progress.skill.intervals[0]
+    previous = Interval(
+        "previous-transport",
+        MotionMode.CONNECTION,
+        Relation.EE_TO_OBJECT,
+        "target",
+        (SpatialSample(0.0, pose(), pose()), SpatialSample(0.1, pose(), pose())),
+        speed_m_s=0.2,
+        reference_version="target-v1",
+    )
+    session.progress.skill = FlashSkill("demo/source", 0, (previous, original))
+    session.progress.interval_index = 1
+    coordinator.worker = EntryFailureWorker(
+        JointPlanner(LinearKinematics(), ("arm",), "gripper", PlannerLimits((100.0,), 0.001, 0.01, 10.0)),
+        session.publish_plan,
+    )
+    for _ in range(100):
+        coordinator.step()
+        if session.progress.phase == Phase.MOTION_COMPLETE:
+            break
+    assert session.progress.phase == Phase.MOTION_COMPLETE
+    events = session.progress.events
+    assert any(event["type"] == "entry_alignment_planned" for event in events)
+    starts = [event["interval"] for event in events if event["type"] == "interval_start"]
+    assert starts == ["__align__contact", "contact"]
+    assert robot.joint == pytest.approx(30.0)
+    assert (
+        max(
+            abs(right["arm.pos"] - left["arm.pos"])
+            for left, right in zip(robot.sent, robot.sent[1:], strict=False)
+        )
+        <= 100 / 30 + 1e-6
+    )
 
 
 def test_coordinator_interrupts_when_target_exits_explicit_replanning_envelope():

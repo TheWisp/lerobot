@@ -13,7 +13,7 @@ from threading import Lock, Thread
 import numpy as np
 
 from .execution import PlanRejectedError, TimedAction
-from .planner import InfeasibleTrajectoryError, JointPlanner
+from .planner import DemonstratedEntryDiscontinuityError, InfeasibleTrajectoryError, JointPlanner
 from .skill import Interval
 from .trajectory import AttachmentState, ConnectionTrajectory, MissingEvidenceError, PoseEstimate
 
@@ -70,6 +70,7 @@ class PlanResult:
 class PlanFailureKind(str, Enum):
     SUPERSEDED = "superseded"
     MISSING_EVIDENCE = "missing_evidence"
+    ENTRY_DISCONTINUITY = "entry_discontinuity"
     INFEASIBLE = "infeasible"
     REJECTED = "rejected"
     INVALID = "invalid"
@@ -171,6 +172,10 @@ class PlannerWorker:
             except MissingEvidenceError as exc:
                 result = PlanResult(
                     request.revision, 0, str(exc), PlanFailureKind.MISSING_EVIDENCE, request.connection
+                )
+            except DemonstratedEntryDiscontinuityError as exc:
+                result = PlanResult(
+                    request.revision, 0, str(exc), PlanFailureKind.ENTRY_DISCONTINUITY, request.connection
                 )
             except InfeasibleTrajectoryError as exc:
                 result = PlanResult(

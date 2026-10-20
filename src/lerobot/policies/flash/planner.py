@@ -30,6 +30,10 @@ class InfeasibleTrajectoryError(RuntimeError):
     pass
 
 
+class DemonstratedEntryDiscontinuityError(InfeasibleTrajectoryError):
+    """The first demonstrated sample cannot follow the issued joint boundary in one tick."""
+
+
 class _ConnectionSpeedExceededError(InfeasibleTrajectoryError):
     def __init__(self, tick: int, ratio: float) -> None:
         super().__init__(f"joint speed exceeds configured limit at tick {tick}")
@@ -304,6 +308,10 @@ class JointPlanner:
                 if interval.mode == MotionMode.CONNECTION:
                     raise _ConnectionSpeedExceededError(
                         tick, float(np.max(speed / self.limits.joint_speed_deg_s))
+                    )
+                if tick == start_tick:
+                    raise DemonstratedEntryDiscontinuityError(
+                        f"demonstrated entry exceeds joint speed limit at tick {tick}"
                     )
                 raise InfeasibleTrajectoryError(f"joint speed exceeds configured limit at tick {tick}")
             reached = transform(self.kinematics.forward_kinematics(solved))

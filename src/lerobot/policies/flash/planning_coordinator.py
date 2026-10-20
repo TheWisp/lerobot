@@ -14,7 +14,7 @@ from .planner import CartesianKinematics
 from .planner_worker import PlanFailureKind, PlannerWorker, PlanRequest
 from .progress import Phase
 from .session import FlashSession
-from .skill import MotionMode, Relation
+from .skill import Interval, MotionMode, Relation
 from .symmetry import AxialSymmetry
 from .trajectory import AttachmentState, ConnectionTrajectory, Evidence, PoseEstimate, spatial_goal
 
@@ -80,6 +80,7 @@ class PlanningCoordinator:
         self._planned_reference: PoseEstimate | None = None
         self._planned_attachment_time_s: float | None = None
         self._planned_interval_index: int | None = None
+        self._planned_interval_name: str | None = None
         self._connection: ConnectionTrajectory | None = None
         self._start_anchor_interval_index: int | None = None
         self._start_anchor_pose: np.ndarray | None = None
@@ -139,6 +140,19 @@ class PlanningCoordinator:
         ):
             self._pending_revision = None
             if result.error:
+                if (
+                    result.failure == PlanFailureKind.ENTRY_DISCONTINUITY
+                    and phase == Phase.WAITING
+                    and self.session.progress.interval.mode == MotionMode.DEMONSTRATED
+                ):
+                    try:
+                        alignment = self._entry_alignment(self.session.progress.interval)
+                        self.session.progress.align_demonstrated_entry(alignment, self.session.motor.clock())
+                    except ValueError as exc:
+                        self._fail(str(exc))
+                    self._planned_reference = None
+                    self._planned_interval_name = None
+                    return
                 if result.failure in (
                     PlanFailureKind.MISSING_EVIDENCE,
                     PlanFailureKind.INFEASIBLE,
@@ -240,6 +254,7 @@ class PlanningCoordinator:
             self._fail(f"{interval.reference_role} changed the demonstrated goal while evidence was missing")
             return
         changed_interval = self._planned_interval_index != self.session.progress.interval_index
+        changed_interval |= self._planned_interval_name != interval.name
         new_image = (
             changed_interval
             or self._planned_reference is None
@@ -398,7 +413,36 @@ class PlanningCoordinator:
         self._planned_reference = reference
         self._planned_attachment_time_s = attachment.source_time_s if attachment else None
         self._planned_interval_index = self.session.progress.interval_index
+        self._planned_interval_name = interval.name
         self._connection = connection
+
+    def _entry_alignment(self, interval: Interval) -> Interval:
+        """Bridge a moved first sample using the skill's annotated free-space speed."""
+        intervals = self.session.progress.skill.intervals
+        index = self.session.progress.interval_index
+        candidates = (*reversed(intervals[:index]), *intervals[index + 1 :])
+        speed = next(
+            (candidate.speed_m_s for candidate in candidates if candidate.mode == MotionMode.CONNECTION),
+            None,
+        )
+        if speed is None:
+            raise ValueError(f"{interval.name}: entry moved, but the skill has no free-space speed")
+        first = interval.samples[0]
+        action = self.session.actions.snapshot().last_issued or self.session.motor.last_observed or {}
+        gripper = action.get(f"{self.worker.planner.gripper_joint_name}.pos", first.gripper)
+        sample = replace(first, gripper=gripper, event_id=None, requires_milestone=None)
+        return Interval(
+            name=f"__align__{interval.name}",
+            mode=MotionMode.CONNECTION,
+            relation=interval.relation,
+            reference_role=interval.reference_role,
+            samples=(sample, replace(sample, time_s=sample.time_s + self.session.motor.period_s)),
+            speed_m_s=speed,
+            entry_milestone=interval.entry_milestone,
+            reference_version=interval.reference_version,
+            held_reference_version=interval.held_reference_version,
+            held_role=interval.held_role,
+        )
 
     def _reference_changed_too_far(
         self, prior: PoseEstimate, current: PoseEstimate, interval, attachment: AttachmentState | None
