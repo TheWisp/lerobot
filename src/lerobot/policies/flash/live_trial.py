@@ -32,6 +32,7 @@ from lerobot.policies.flash.prepared import PreparedFlashSkill
 from lerobot.policies.flash.recording import FlashEpisodeWriter, RecorderWorker
 from lerobot.policies.flash.rgbd_source import LeRobotRGBDSource
 from lerobot.policies.flash.runtime import AttachmentRuntimeLimits, FlashRuntime
+from lerobot.robots.obs_stream import publish_external_observation
 from lerobot.robots.so107_description.calibrated_kinematics import make_calibrated_so107_kinematics
 from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
 from lerobot.robots.so107_follower_gravity import SO107FollowerGravity, SO107FollowerGravityRobotConfig
@@ -42,6 +43,7 @@ class StrictMotorState:
 
     def __init__(self, robot: SO107FollowerGravity) -> None:
         self.robot = robot
+        self.latest_state: dict[str, float] = {}
 
     def get_state_observation(self) -> dict[str, float]:
         positions = self.robot.bus.sync_read("Present_Position", num_retry=1)
@@ -49,7 +51,8 @@ class StrictMotorState:
             np.isfinite(value) for value in positions.values()
         ):
             raise RuntimeError("incomplete or non-finite SO-107 motor state")
-        return {f"{name}.pos": float(value) for name, value in positions.items()}
+        self.latest_state = {f"{name}.pos": float(value) for name, value in positions.items()}
+        return self.latest_state
 
     def send_action(self, action: dict[str, float]) -> dict[str, float]:
         return self.robot.send_action(action)
@@ -113,26 +116,26 @@ def trial(
     profile = json.loads(Path(settings["robot_profile"]).expanduser().read_text())
     if profile["type"] != "so107_follower_gravity":
         raise ValueError("FLASH SO-107 launcher requires the gravity robot profile")
-    robot = SO107FollowerGravity(SO107FollowerGravityRobotConfig(**profile["fields"]))
-    camera = RealSenseCamera(
-        RealSenseCameraConfig(
-            serial_number_or_name=settings["camera_serial"],
-            width=settings["camera_width"],
-            height=settings["camera_height"],
-            fps=settings["fps"],
-            use_depth=True,
-            enable_decimation=False,
-            enable_spatial=False,
-            enable_temporal=False,
-            enable_hole_filling=False,
-        )
+    camera_config = RealSenseCameraConfig(
+        serial_number_or_name=settings["camera_serial"],
+        width=settings["camera_width"],
+        height=settings["camera_height"],
+        fps=settings["fps"],
+        use_depth=True,
+        enable_decimation=False,
+        enable_spatial=False,
+        enable_temporal=False,
+        enable_hole_filling=False,
     )
+    robot = SO107FollowerGravity(
+        SO107FollowerGravityRobotConfig(**{**profile["fields"], "cameras": {"overhead": camera_config}})
+    )
+    camera: RealSenseCamera = robot.cameras["overhead"]
     calibration = json.loads(Path(settings["calibration_path"]).expanduser().read_text())
     arm = profile["fields"]["arm"]
     if arm != settings["robot_arm"]:
         raise ValueError("robot arm and calibrated arm differ")
     try:
-        camera.connect()
         robot.connect(calibrate=False)
         strict_robot = StrictMotorState(robot)
         state = strict_robot.get_state_observation()
@@ -161,6 +164,20 @@ def trial(
             calibration_version=bundle.references[0].snippets[0].calibration_version,
             color_order="rgb",
             max_capture_age_s=settings["max_capture_age_s"],
+            on_frame=lambda frame: publish_external_observation(
+                robot,
+                {
+                    **strict_robot.latest_state,
+                    "overhead": frame.rgb,
+                    "overhead_depth": (
+                        np.clip(
+                            frame.depth.astype(np.float32) * (255.0 / max(1, int(frame.depth.max()))),
+                            0,
+                            255,
+                        ).astype(np.uint8)[:, :, None]
+                    ),
+                },
+            ),
         )
         backend = AppearanceBackendFactory(
             bundle.appearance_models,
@@ -271,6 +288,9 @@ def trial(
                                 "anchor_compute_total_s": runtime.causal.anchor_compute_total_s,
                                 "anchor_compute_max_s": runtime.causal.anchor_compute_max_s,
                                 "max_queue_age_s": runtime.causal.max_queue_age_s,
+                                "replay_compute_total_s": runtime.causal.replay_compute_total_s,
+                                "replay_compute_max_s": runtime.causal.replay_compute_max_s,
+                                "pending_point_tracks": tuple(runtime.causal.pending),
                             }
                             if runtime.causal is not None
                             else None
@@ -324,6 +344,9 @@ def trial(
                         "anchor_compute_total_s": runtime.causal.anchor_compute_total_s,
                         "anchor_compute_max_s": runtime.causal.anchor_compute_max_s,
                         "max_queue_age_s": runtime.causal.max_queue_age_s,
+                        "replay_compute_total_s": runtime.causal.replay_compute_total_s,
+                        "replay_compute_max_s": runtime.causal.replay_compute_max_s,
+                        "pending_point_tracks": tuple(runtime.causal.pending),
                     }
                     if runtime.causal is not None
                     else None
@@ -378,8 +401,11 @@ def trial(
     finally:
         if robot.is_connected:
             robot.disconnect()
-        if camera.is_connected:
-            camera.disconnect()
+        else:
+            if camera.is_connected:
+                camera.disconnect()
+            if robot.bus.is_connected:
+                robot.bus.disconnect()
 
 
 def main() -> None:

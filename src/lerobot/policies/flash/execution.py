@@ -213,18 +213,20 @@ class ActionQueue:
         with self._lock:
             return self._expire_locked(tick)
 
-    def defer_pending(self, missed_tick: int) -> bool:
-        """Preserve a missed sample and its successors one motor period later.
+    def defer_pending_until(self, resume_tick: int) -> bool:
+        """Keep the unissued sequence continuous after a motor deadline slip.
 
-        A one-tick scheduling slip must not skip a contact event or jump over
-        multiple joint samples. The motor clock still advances; only the
-        unissued suffix moves. A planner replacement uses the same queue lock.
+        The motor clock advances without trying to burst old commands. Shift
+        only the pending suffix that has become due, preserving every event and
+        the original intervals between its samples. A planner replacement uses
+        this same queue lock and must revalidate its splice against the result.
         """
         with self._lock:
-            if not self._actions or self._actions[0][1].tick != missed_tick:
+            if not self._actions or self._actions[0][1].tick >= resume_tick:
                 return False
+            shift = resume_tick - self._actions[0][1].tick
             self._actions = deque(
-                (revision, replace(action, tick=action.tick + 1)) for revision, action in self._actions
+                (revision, replace(action, tick=action.tick + shift)) for revision, action in self._actions
             )
             return True
 
@@ -374,18 +376,16 @@ class MotorLoop:
         self.epoch_s = self.clock()
 
     def align_to_clock(self) -> int:
-        """Skip stale deadlines rather than bursting their commands later."""
+        """Advance missed wall-clock slots while preserving the command sequence."""
         if self.epoch_s is None:
             self.start()
         current = max(0, floor((self.clock() - self.epoch_s) / self.period_s))
         skipped = max(0, current - self.metrics.ticks)
         if skipped:
-            # One missed 30 Hz deadline can be absorbed without changing the
-            # command sequence. Larger stalls still use the explicit skip
-            # rules below, which reject required samples and unsafe jumps.
-            if skipped == 1:
-                self.actions.defer_pending(self.metrics.ticks)
-            self.actions.expire_before(current)
+            # Skipping a queued sample can turn a variable state-read delay
+            # into a joint jump or erase a contact event. Keep the unissued
+            # sequence and resume it at the next available motor deadline.
+            self.actions.defer_pending_until(current)
             self.metrics.ticks = current
             self.metrics.skipped_ticks += skipped
             self._skipped_since_record += skipped

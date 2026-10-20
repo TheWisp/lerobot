@@ -32,6 +32,14 @@ class _Anchor:
     calibration_version: str | None = None
 
 
+@dataclass
+class _PendingTrack:
+    tracker: CausalRigidPointTracker
+    anchor: PoseEstimate
+    last_frame_id: int
+    proposals: dict[int, PoseEstimate]
+
+
 @dataclass(frozen=True)
 class CausalTrackingConfig:
     history_frames: int
@@ -112,6 +120,7 @@ class CausalPoseService:
             "image_scale": image_scale,
         }
         self.active: dict[str, tuple[CausalRigidPointTracker, PoseEstimate]] = {}
+        self.pending: dict[str, _PendingTrack] = {}
         self.motion_history: dict[str, deque[tuple[int, RigidPointMotion, np.ndarray]]] = {}
         self.scene = ScenePointTracker(
             max_points=scene_max_points,
@@ -149,6 +158,8 @@ class CausalPoseService:
         self.anchor_compute_total_s = 0.0
         self.anchor_compute_max_s = 0.0
         self.max_queue_age_s = 0.0
+        self.replay_compute_total_s = 0.0
+        self.replay_compute_max_s = 0.0
 
     @property
     def error(self) -> Exception | None:
@@ -198,6 +209,17 @@ class CausalPoseService:
                     elapsed_s = time.perf_counter() - started_s
                     self.anchor_compute_total_s += elapsed_s
                     self.anchor_compute_max_s = max(self.anchor_compute_max_s, elapsed_s)
+                # Catch a delayed object-point seed up only in the gaps
+                # between incoming camera events. Each step is interruptible
+                # by the next queued frame, so replay cannot starve the
+                # current scene state for the duration of its whole history.
+                while self.pending and self.queue.empty():
+                    replay_started_s = time.perf_counter()
+                    if not self._replay_one():
+                        break
+                    elapsed_s = time.perf_counter() - replay_started_s
+                    self.replay_compute_total_s += elapsed_s
+                    self.replay_compute_max_s = max(self.replay_compute_max_s, elapsed_s)
         except Exception as exc:
             with self._lock:
                 self._error = exc
@@ -379,6 +401,25 @@ class CausalPoseService:
                         self._publish(estimate.role, corrected, from_latest[0])
                         self._count_anchor_outcome(estimate.role, "reused_point_track")
                         continue
+            pending = self.pending.get(estimate.role)
+            if pending is not None and pending.anchor.reference_version == estimate.reference_version:
+                motion_at_source = next(
+                    (
+                        motion
+                        for frame_id, motion, _ in self.motion_history[estimate.role]
+                        if frame_id == source.frame_id
+                    ),
+                    None,
+                )
+                if motion_at_source is not None and motion_at_source.base_motion_from_seed is not None:
+                    seed_pose = inverse(motion_at_source.base_motion_from_seed) @ estimate.pose
+                    pending.anchor = replace(estimate, pose=seed_pose)
+                elif source.frame_id > pending.last_frame_id:
+                    pending.proposals[source.frame_id] = estimate
+                self._count_anchor_outcome(estimate.role, "pending_point_track")
+                if self.history[-1].frame_id > source.frame_id and estimate.role not in self.relationships:
+                    self._publish_static(estimate.role, estimate, self.history[-1])
+                continue
             tracker = CausalRigidPointTracker(**self.tracker_kwargs)
             seeded = tracker.seed(source, mask)
             if seeded < tracker.min_inliers:
@@ -387,7 +428,6 @@ class CausalPoseService:
                     self._publish_static(estimate.role, estimate, self.history[-1])
                 continue
             self._count_anchor_outcome(estimate.role, "point_seeded")
-            self.active[estimate.role] = (tracker, estimate)
             self.motion_history[estimate.role] = deque(maxlen=self.history.maxlen)
             self.motion_history[estimate.role].append(
                 (
@@ -399,26 +439,50 @@ class CausalPoseService:
                 )
             )
             self.anchors += 1
-            for frame in self.history:
-                if frame.frame_id <= source.frame_id:
-                    continue
-                try:
-                    motion = tracker.update(frame)
-                except ValueError:
-                    del self.active[estimate.role]
-                    self.motion_history.pop(estimate.role, None)
-                    self._count_anchor_outcome(estimate.role, "point_replay_lost")
-                    break
-                if motion.base_motion_from_seed is not None:
-                    self.motion_history[estimate.role].append(
-                        (frame.frame_id, motion, tracker.current_pixels(frame.depth.shape))
-                    )
-                self._publish(estimate.role, estimate, motion)
+            self.pending[estimate.role] = _PendingTrack(tracker, estimate, source.frame_id, {})
             # A point track may fail before catching up to the newest camera
             # frame. Keep the last directly measured pose explicitly predicted
             # until another source supports a newer state.
             if self.history[-1].frame_id > source.frame_id and estimate.role not in self.relationships:
                 self._publish_static(estimate.role, estimate, self.history[-1])
+
+    def _replay_one(self) -> bool:
+        role, pending = next(iter(self.pending.items()))
+        next_frame = next((frame for frame in self.history if frame.frame_id > pending.last_frame_id), None)
+        if next_frame is None:
+            if pending.last_frame_id == self.history[-1].frame_id:
+                self.active[role] = (pending.tracker, pending.anchor)
+                del self.pending[role]
+            else:
+                # Its history was evicted before a causal replay could catch
+                # up. A future direct view must seed a new track.
+                del self.pending[role]
+                self.motion_history.pop(role, None)
+                self._count_anchor_outcome(role, "point_history_expired")
+            return False
+        try:
+            motion = pending.tracker.update(next_frame)
+        except ValueError:
+            del self.pending[role]
+            self.motion_history.pop(role, None)
+            self._count_anchor_outcome(role, "point_replay_lost")
+            return False
+        pending.last_frame_id = next_frame.frame_id
+        if motion.base_motion_from_seed is not None:
+            self.motion_history[role].append(
+                (next_frame.frame_id, motion, pending.tracker.current_pixels(next_frame.depth.shape))
+            )
+            if (proposal := pending.proposals.pop(next_frame.frame_id, None)) is not None:
+                pending.anchor = replace(
+                    proposal,
+                    pose=inverse(motion.base_motion_from_seed) @ proposal.pose,
+                )
+            self._publish(role, pending.anchor, motion)
+        if next_frame.frame_id == self.history[-1].frame_id:
+            self.active[role] = (pending.tracker, pending.anchor)
+            del self.pending[role]
+            self._count_anchor_outcome(role, "point_replay_caught_up")
+        return True
 
     def _count_anchor_outcome(self, role: str, outcome: str) -> None:
         counts = self.anchor_outcomes_by_role.setdefault(role, {})

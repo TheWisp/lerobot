@@ -1,13 +1,16 @@
 """A delayed pose anchor must replay against its own RGB-D frame."""
 
 import time
+from threading import Event
 
 import cv2
 import numpy as np
 import pytest
 
+from lerobot.policies.flash.causal_points import CausalRigidPointTracker
 from lerobot.policies.flash.causal_service import CausalPoseService, CausalTrackingConfig
 from lerobot.policies.flash.perception import LatestPoseStore, RGBDFrame
+from lerobot.policies.flash.scene_groups import ScenePointTracker
 from lerobot.policies.flash.trajectory import Evidence, PoseEstimate
 
 
@@ -70,7 +73,7 @@ def test_delayed_anchor_uses_retained_frame_and_all_intervening_motion():
         service.close()
 
 
-def test_later_observation_rebases_continuous_track_without_replaying_frames():
+def test_later_observation_rebases_pending_track_without_restarting_replay():
     image = np.random.default_rng(14).integers(0, 255, (96, 96), dtype=np.uint8)
     frames = [
         frame(cv2.warpAffine(image, np.float32([[1, 0, 2 * i], [0, 1, 0]]), (96, 96)), i) for i in range(5)
@@ -97,20 +100,69 @@ def test_later_observation_rebases_continuous_track_without_replaying_frames():
         service.submit_anchor(2, (second,), {"object": shifted_mask})
         deadline = time.monotonic() + 2
         while (
-            service.anchor_outcomes_by_role.get("object", {}).get("reused_point_track", 0) < 1
+            service.anchor_outcomes_by_role.get("object", {}).get("point_replay_caught_up", 0) < 1
             and service.error is None
             and time.monotonic() < deadline
         ):
             time.sleep(0.01)
         assert service.error is None
         assert service.anchors == 1
-        assert service.anchor_outcomes_by_role["object"]["reused_point_track"] == 1
+        assert service.anchor_outcomes_by_role["object"]["pending_point_track"] == 1
+        assert service.anchor_outcomes_by_role["object"]["point_replay_caught_up"] == 1
         result = store.snapshot()[1]["object"]
         assert result.source_time_s == frames[-1].source_time_s
         assert result.last_direct_observation_s == frames[2].source_time_s
         np.testing.assert_allclose(result.pose[0, 3], 0.09, atol=0.005)
     finally:
         service.close()
+
+
+def test_old_point_replay_yields_to_a_new_camera_frame(monkeypatch):
+    image = np.random.default_rng(24).integers(0, 255, (96, 96), dtype=np.uint8)
+    frames = [frame(image, index) for index in range(22)]
+    mask = np.ones(image.shape, dtype=bool)
+    first_replay = Event()
+    allow_replay = Event()
+    new_scene_frame = Event()
+    allow_scene = Event()
+    replay_calls = []
+    point_update = CausalRigidPointTracker.update
+    scene_update = ScenePointTracker.update
+
+    def tracked_update(self, item):
+        replay_calls.append(item.frame_id)
+        if len(replay_calls) == 1:
+            first_replay.set()
+            assert allow_replay.wait(2)
+        return point_update(self, item)
+
+    def scene_frame(self, item):
+        if item.frame_id == 21:
+            new_scene_frame.set()
+            assert allow_scene.wait(2)
+        return scene_update(self, item)
+
+    monkeypatch.setattr(CausalRigidPointTracker, "update", tracked_update)
+    monkeypatch.setattr(ScenePointTracker, "update", scene_frame)
+    service = CausalPoseService(LatestPoseStore(), history_frames=60)
+    service.start()
+    try:
+        for item in frames[:21]:
+            service.submit_frame(item)
+        anchor = PoseEstimate(
+            "object", np.eye(4), 0.0, 0.0, Evidence.OBSERVED, "object-v1", (True,) * 3, (True,) * 3
+        )
+        service.submit_anchor(0, (anchor,), {"object": mask})
+        assert first_replay.wait(2)
+        service.submit_frame(frames[21])
+        allow_replay.set()
+        assert new_scene_frame.wait(2)
+        assert replay_calls == [1]
+    finally:
+        allow_replay.set()
+        allow_scene.set()
+        service.close()
+    assert service.error is None
 
 
 def test_anchor_requires_the_recorded_capture_time_and_calibration():

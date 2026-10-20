@@ -117,10 +117,22 @@ prevented later-arriving direct measurements from refreshing the belief. The
 scene estimator now rebases a prediction at the measurement's source frame,
 and startup readiness checks the latest direct-support time rather than the
 published prediction's evidence label. This made the approach start, but its
-first ring point-track anchor still replayed historical frames serially on
-the scene worker (about 0.8 s), making the dowel prediction exceed the
-planner's 0.8 s source-age bound mid-motion. Waiting for the worker to catch
-up before motor start did not prevent a later replay stall. No successful
-redesign rollout has been recorded; the point-anchor replay must be made
-nonblocking or removed from the per-frame scene worker before another
-success claim.
+first ring point-track anchor replayed historical frames serially on the
+scene worker (about 0.8 s), making the dowel prediction exceed the planner's
+0.8 s source-age bound mid-motion. Replaying one historical frame at a time
+between new camera events reduced the next trial's maximum scene-processing
+lag to 0.25 s; it still ended on a RealSense cache/notification race that
+returned one capture twice. The camera now publishes its frame and
+notification under the same lock, with a forced-interleaving regression test.
+
+The following GUI-launched attempt on 2026-10-20 recorded 246 frames and
+reached the approach to grasp, but stopped before contact: the dowel had no
+usable pose at the next interval entry. Its last direct view was about six
+seconds old, all fourteen object-point seeds lacked enough tracks, and no
+environment group had been established. The bounded stationary prediction
+expired as designed. This is a missing occlusion-support mechanism, not
+evidence that the dowel moved. The arm was parked afterward. The GUI now
+displays live RGB-D and motor state from FLASH through LeRobot's optional
+observation stream, and local episode links open its ordinary dataset replay.
+The replay has no FLASH-specific pose outline yet. No successful redesign
+insertion has been recorded.

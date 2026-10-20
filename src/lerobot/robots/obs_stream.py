@@ -726,6 +726,20 @@ def _maybe_write_action(robot, action: dict) -> None:
             logger.debug("ObservationStream.write_action failed", exc_info=True)
 
 
+def publish_external_observation(robot, observation: dict) -> None:
+    """Publish an observation captured outside ``robot.get_observation`` for display.
+
+    The stream is optional, best effort telemetry. The caller remains responsible
+    for keeping this out of the control path and for supplying actual captured
+    values; no robot or camera read is performed here.
+    """
+    if _active_stream is not None and _active_robot_id == id(robot):
+        try:
+            _active_stream.write_obs(observation)
+        except Exception:
+            logger.debug("ObservationStream.write_obs failed", exc_info=True)
+
+
 def _maybe_mark_observation(robot) -> None:
     # Only the robot that owns the stream marks, so a composite's inner reads
     # do not move the mark past the moment the outer read began.

@@ -8,6 +8,7 @@
 //   #/home
 //   #/dataset/<encoded repo_id>
 //   #/episode/<encoded repo_id>/<episode_id>
+//   #/local-episode/<encoded absolute path>/<episode_id>
 //   #/run/<run_id>
 //
 // hashchange fires both for backend-driven commands (we set
@@ -36,6 +37,7 @@
     home: "data",
     dataset: "data",
     episode: "data",
+    "local-episode": "data",
     run: "run",
     model: "model",
     robot: "robot",
@@ -65,6 +67,9 @@
     params = params || {};
     if (view === "episode" && params.repo_id != null && params.episode_id != null) {
       return `#/episode/${encodeRepoId(params.repo_id)}/${Number(params.episode_id)}`;
+    }
+    if (view === "local-episode" && params.path != null && params.episode_id != null) {
+      return `#/local-episode/${encodeURIComponent(params.path)}/${Number(params.episode_id)}`;
     }
     if (view === "dataset" && params.repo_id != null) {
       return `#/dataset/${encodeRepoId(params.repo_id)}`;
@@ -97,6 +102,12 @@
           repo_id: `${decodeURIComponent(parts[1])}/${decodeURIComponent(parts[2])}`,
           episode_id: Number(parts[3]),
         },
+      };
+    }
+    if (head === "local-episode" && parts.length === 3) {
+      return {
+        view: "local-episode",
+        params: { path: decodeURIComponent(parts[1]), episode_id: Number(parts[2]) },
       };
     }
     if (head === "run" && parts.length >= 2) {

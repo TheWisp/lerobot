@@ -720,7 +720,10 @@ class RealSenseCamera(Camera):
                     if self.use_depth and processed_depth_frame is not None:
                         self.latest_depth_frame = processed_depth_frame
                     self.latest_timestamp = capture_time
-                self.new_frame_event.set()
+                    # Publishing the notification with the snapshot prevents a
+                    # reader from clearing an older event between this cache
+                    # update and set(), then consuming this frame twice.
+                    self.new_frame_event.set()
                 failure_count = 0
 
             except DeviceNotConnectedError:

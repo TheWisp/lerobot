@@ -37,6 +37,7 @@ class LeRobotRGBDSource:
         color_order: Literal["rgb", "bgr"],
         max_capture_age_s: float,
         clock: Callable[[], float] = time.perf_counter,
+        on_frame: Callable[[RGBDFrame], None] | None = None,
     ) -> None:
         if not calibration_version or color_order not in ("rgb", "bgr"):
             raise ValueError("RGB-D source needs calibration identity and color order")
@@ -50,6 +51,7 @@ class LeRobotRGBDSource:
         self.color_order = color_order
         self.max_capture_age_s = max_capture_age_s
         self.clock = clock
+        self.on_frame = on_frame
         self._next_frame_id = 0
 
     def read(self, timeout_ms: int = 200) -> RGBDFrame:
@@ -74,4 +76,6 @@ class LeRobotRGBDSource:
             self.calibration_version,
         )
         self._next_frame_id += 1
+        if self.on_frame is not None:
+            self.on_frame(frame)
         return frame

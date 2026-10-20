@@ -337,7 +337,7 @@ def test_queue_snapshot_exposes_future_splice_seed_without_mutating_live_queue()
     assert queue.take(1)[0].action["joint.pos"] == 0.2
 
 
-def test_motor_overrun_skips_only_explicit_free_space_samples():
+def test_motor_overrun_delays_free_space_sequence_without_a_joint_jump():
     class FakeRobot:
         def get_state_observation(self):
             return {"joint.pos": 0.0}
@@ -365,9 +365,12 @@ def test_motor_overrun_skips_only_explicit_free_space_samples():
     now[0] = 0.12
     receipt = loop.tick()
     assert receipt.tick == 3
+    assert receipt.requested.action["joint.pos"] == pytest.approx(0.1)
     assert loop.metrics.skipped_ticks == 2
     assert loop.metrics.commanded == 2
     assert ticks[-1].skipped_before == 2
+    now[0] = 0.134
+    assert loop.tick().requested.action["joint.pos"] == pytest.approx(0.2)
 
 
 def test_one_missed_motor_deadline_defers_required_samples_without_a_joint_jump():
@@ -409,6 +412,40 @@ def test_one_missed_motor_deadline_defers_required_samples_without_a_joint_jump(
     assert loop.metrics.skipped_ticks == 1
 
 
+def test_multiple_missed_deadlines_preserve_required_contact_event_order():
+    class FakeRobot:
+        def get_state_observation(self):
+            return {"joint.pos": 0.0}
+
+        def send_action(self, action):
+            return action
+
+    now = [0.0]
+    queue = ActionQueue(max_splice_delta={"joint.pos": 0.1})
+    queue.publish(
+        0,
+        [
+            TimedAction(0, {"joint.pos": 0.0}, "contact"),
+            TimedAction(1, {"joint.pos": 0.1}, "contact", event_id="grasp"),
+            TimedAction(2, {"joint.pos": 0.2}, "contact", interval_complete=True),
+        ],
+    )
+    loop = MotorLoop(FakeRobot(), queue, lambda receipt: None, clock=lambda: now[0], sleep=lambda dt: None)
+    loop.start()
+    assert loop.tick().tick == 0
+    now[0] = 0.14
+    grasp = loop.tick()
+    assert (grasp.tick, grasp.requested.event_id, grasp.requested.action["joint.pos"]) == (
+        4,
+        "grasp",
+        0.1,
+    )
+    now[0] = 0.168
+    completion = loop.tick()
+    assert (completion.tick, completion.requested.interval_complete) == (5, True)
+    assert loop.metrics.skipped_ticks == 3
+
+
 def test_motor_overrun_rejects_an_unsafe_free_space_jump():
     queue = ActionQueue(max_splice_delta={"joint.pos": 0.1})
     queue.publish(
@@ -424,7 +461,7 @@ def test_motor_overrun_rejects_an_unsafe_free_space_jump():
         queue.expire_before(2)
 
 
-def test_motor_does_not_send_contact_after_a_state_read_crosses_its_deadline():
+def test_slow_state_read_delays_contact_sequence_without_dropping_its_first_sample():
     now = [0.0]
 
     class SlowReadRobot:
@@ -444,9 +481,11 @@ def test_motor_does_not_send_contact_after_a_state_read_crosses_its_deadline():
     queue.publish(0, [TimedAction(i, {"joint.pos": float(i)}, "contact") for i in range(4)])
     loop = MotorLoop(robot, queue, lambda receipt: None, clock=lambda: now[0], sleep=lambda dt: None)
     loop.start()
-    with pytest.raises(MissedEventError, match="missed required contact sample"):
-        loop.tick()
-    assert robot.sent == []
+    receipt = loop.tick()
+    assert receipt.tick == 2
+    assert receipt.requested.action["joint.pos"] == 0.0
+    assert robot.sent == [{"joint.pos": 0.0}]
+    assert loop.metrics.skipped_ticks == 2
 
 
 def test_direct_queue_take_cannot_drop_a_required_contact_sample():

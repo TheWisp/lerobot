@@ -141,7 +141,7 @@ def test_release_gate_rejection_keeps_tick_but_never_sends_release():
         session.publish_plan(1, [TimedAction(2, {"arm.pos": 0.2}, "contact", event_id="release")])
 
 
-def test_late_contact_tick_fails_instead_of_bursting_old_commands():
+def test_late_contact_start_shifts_the_unissued_sequence_without_dropping_it():
     now = [0.0]
     robot = FakeRobot()
     session = FlashSession(
@@ -149,11 +149,12 @@ def test_late_contact_tick_fails_instead_of_bursting_old_commands():
     )
     session.publish_plan(0, [TimedAction(i, {"arm.pos": float(i)}, "contact") for i in range(4)])
     now[0] = 0.085  # two 30 Hz deadlines have already passed
-    assert session.step() is None
-    assert session.progress.phase == Phase.FAILED
-    assert session.motor.metrics.commanded == 0
-    assert "send" not in robot.calls
-    assert "missed required" in session.progress.events[-1]["reason"]
+    first = session.step()
+    assert (first.tick, first.requested.action["arm.pos"]) == (2, 0.0)
+    assert session.progress.phase == Phase.MOVING
+    assert session.motor.metrics.skipped_ticks == 2
+    assert session.motor.metrics.commanded == 1
+    assert robot.calls.count("send") == 1
 
 
 def test_compiled_release_gate_blocks_first_gripper_opening_tick():
