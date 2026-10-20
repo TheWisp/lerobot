@@ -133,6 +133,9 @@ the first part of the [single scene-estimator contract](docs/architecture.md#one
 partial observability, alternative poses, and calibrated uncertainty are still
 missing. Consequently the group path is experimental, and no successful physical
 insertion has been established for this redesign.
+The [recorded-evidence audit](docs/evidence_status.md) separates demo extraction,
+offline pose checks, visually successful sealed-prototype runs and the
+interrupted physical trials of this redesign.
 
 The next architecture milestone is the [scene-estimator contract](docs/architecture.md#one-scene-estimator-several-evidence-sources), independent of which tracker is best on a particular view. The current code has one publisher when causal tracking is enabled, but it still treats a backend's candidate `PoseEstimate` as an accepted six-axis observation. In particular, the RGB-D backend keeps its own previous candidate for shape-continuity checks, and the scene service has no general rule for comparing a new candidate with visible depth, point motion, a group prediction and unresolved symmetry at the same source time. The accepted pose trace does not yet retain each raw candidate and its rejection reason.
 

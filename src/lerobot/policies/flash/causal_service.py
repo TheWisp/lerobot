@@ -27,6 +27,8 @@ class _Anchor:
     frame_id: int
     estimates: tuple[PoseEstimate, ...]
     masks: dict[str, np.ndarray]
+    source_time_s: float | None = None
+    calibration_version: str | None = None
 
 
 @dataclass(frozen=True)
@@ -159,8 +161,11 @@ class CausalPoseService:
         frame_id: int,
         estimates: tuple[PoseEstimate, ...],
         masks: dict[str, np.ndarray],
+        *,
+        source_time_s: float | None = None,
+        calibration_version: str | None = None,
     ) -> None:
-        self._submit(_Anchor(frame_id, estimates, masks))
+        self._submit(_Anchor(frame_id, estimates, masks, source_time_s, calibration_version))
 
     def _submit(self, item: RGBDFrame | _Anchor) -> None:
         if self.error is not None:
@@ -272,7 +277,15 @@ class CausalPoseService:
     def _anchor(self, result: _Anchor) -> None:
         source = next((frame for frame in self.history if frame.frame_id == result.frame_id), None)
         scene = next((item for item in self.scene_history if item.frame_id == result.frame_id), None)
-        if source is None or scene is None:
+        if (
+            source is None
+            or scene is None
+            or (result.source_time_s is not None and result.source_time_s != source.source_time_s)
+            or (
+                result.calibration_version is not None
+                and result.calibration_version != source.calibration_version
+            )
+        ):
             self.missed_anchors += 1
             return
         for estimate in result.estimates:

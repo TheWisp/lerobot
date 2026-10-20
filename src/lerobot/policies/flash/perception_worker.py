@@ -1,7 +1,8 @@
-"""Process-isolated pose estimation with a latest-frame handoff.
+"""Process-isolated pose proposals with a latest-frame handoff.
 
 The motor owner never calls this worker. A camera/host producer submits aligned
-frames, and a separate host collector polls results into ``LatestPoseStore``.
+frames, and a separate host collector routes each result to exactly one sink:
+the scene estimator or a legacy ``LatestPoseStore``.
 Slow perception may drop superseded camera frames; it cannot delay a motor
 read or command. The backend is constructed *inside* a spawned process so
 CUDA state is never inherited through ``fork``.
@@ -33,6 +34,8 @@ class _Result:
     estimates: tuple[PoseEstimate, ...]
     failures: dict[str, str]
     frame_id: int
+    source_time_s: float
+    calibration_version: str
     masks: dict[str, np.ndarray]
 
 
@@ -83,6 +86,8 @@ def _run_backend(
                     estimates,
                     dict(getattr(backend, "last_failure", {})),
                     frame.frame_id,
+                    frame.source_time_s,
+                    frame.calibration_version,
                     {role: np.asarray(mask, dtype=bool).copy() for role, mask in masks.items()},
                 ),
             )
@@ -106,7 +111,7 @@ class PoseProcessError(RuntimeError):
 
 
 class PoseProcess:
-    """Own one isolated pose backend and publish newest observations to a store.
+    """Own one isolated backend and deliver newest results to one sink.
 
     The supplied factory must be spawn-picklable and load GPU models only when
     called by the child. ``submit`` is for a camera/host thread, and ``poll``
@@ -119,20 +124,20 @@ class PoseProcess:
         self,
         factory: Callable[[], PoseBackend],
         references: tuple[ObjectReference, ...],
-        store: LatestPoseStore,
+        store: LatestPoseStore | None,
         *,
         on_result: Callable[[_Result], None] | None = None,
         require_masks: bool = False,
-        publish_results: bool = True,
     ) -> None:
         if not references:
             raise ValueError("pose worker needs object references")
+        if (store is None) == (on_result is None):
+            raise ValueError("pose worker needs exactly one result sink")
         self.factory = factory
         self.references = references
         self.store = store
         self.on_result = on_result
         self.require_masks = require_masks
-        self.publish_results = publish_results
         self.metrics = PoseProcessMetrics()
         self._context = mp.get_context("spawn")
         self._frames = self._context.Queue(maxsize=1)
@@ -211,9 +216,8 @@ class PoseProcess:
                 self._failure = message.detail
                 break
             if isinstance(message, _Result):
-                # With a scene estimator, this process is an evidence producer.
-                # It must not race that estimator to write the accepted pose.
-                if self.publish_results:
+                # A scene-estimator route never has access to the pose store.
+                if self.store is not None:
                     self.store.publish(message.estimates)
                 if self.on_result is not None:
                     self.on_result(message)

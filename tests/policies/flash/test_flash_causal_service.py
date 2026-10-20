@@ -68,3 +68,46 @@ def test_delayed_anchor_uses_retained_frame_and_all_intervening_motion():
         np.testing.assert_allclose(center[:3], [0.04, 0.0, 1.0], atol=0.005)
     finally:
         service.close()
+
+
+def test_anchor_requires_the_recorded_capture_time_and_calibration():
+    image = np.random.default_rng(9).integers(0, 255, (96, 96), dtype=np.uint8)
+    captured = frame(image, 1)
+    mask = np.ones(image.shape, dtype=bool)
+    estimate = PoseEstimate(
+        "object",
+        np.eye(4),
+        captured.source_time_s,
+        captured.available_time_s,
+        Evidence.OBSERVED,
+        "object-v1",
+        (True,) * 3,
+        (True,) * 3,
+    )
+    store = LatestPoseStore()
+    service = CausalPoseService(store)
+    service.start()
+    try:
+        service.submit_frame(captured)
+        service.submit_anchor(
+            1,
+            (estimate,),
+            {"object": mask},
+            source_time_s=captured.source_time_s,
+            calibration_version="different-calibration",
+        )
+        service.submit_anchor(
+            1,
+            (estimate,),
+            {"object": mask},
+            source_time_s=captured.source_time_s + 0.01,
+            calibration_version=captured.calibration_version,
+        )
+        deadline = time.monotonic() + 2
+        while service.missed_anchors < 2 and service.error is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert service.error is None
+        assert service.missed_anchors == 2
+        assert store.snapshot() == (0, {})
+    finally:
+        service.close()

@@ -114,7 +114,8 @@ def test_runtime_gives_causal_scene_estimator_exclusive_pose_publication():
         causal_tracking=CausalTrackingConfig(60, 64, 12, 0.1, 0.005),
     )
     assert attempt.causal is not None
-    assert attempt.perception.worker.publish_results is False
+    assert attempt.perception.worker.store is None
+    assert attempt.perception.worker.on_result is not None
 
 
 def test_runtime_rejects_held_motion_without_demonstrated_attach_event():

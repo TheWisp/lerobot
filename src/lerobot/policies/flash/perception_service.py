@@ -43,8 +43,10 @@ class PerceptionService:
     ) -> None:
         if collector_period_s <= 0:
             raise ValueError("collector period must be positive")
-        if worker.store is not store:
-            raise ValueError("service and pose worker must share one pose store")
+        if causal_frames is None and worker.store is not store:
+            raise ValueError("legacy service and pose worker must share one pose store")
+        if causal_frames is not None and worker.store is not None:
+            raise ValueError("causal service pose worker must not publish directly to a store")
         self.source = source
         self.worker = worker
         self.store = store

@@ -172,14 +172,21 @@ class FlashRuntime:
         pose_process = PoseProcess(
             pose_backend_factory,
             references,
-            self.poses,
+            self.poses if causal is None else None,
             on_result=(
-                (lambda result: causal.submit_anchor(result.frame_id, result.estimates, result.masks))
+                (
+                    lambda result: causal.submit_anchor(
+                        result.frame_id,
+                        result.estimates,
+                        result.masks,
+                        source_time_s=result.source_time_s,
+                        calibration_version=result.calibration_version,
+                    )
+                )
                 if causal is not None
                 else None
             ),
             require_masks=causal is not None,
-            publish_results=causal is None,
         )
         self.perception = PerceptionService(
             source,

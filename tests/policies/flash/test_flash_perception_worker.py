@@ -138,11 +138,8 @@ def test_spawned_pose_worker_reports_backend_failure():
 
 def test_pose_worker_only_emits_proposals_when_scene_estimator_owns_state():
     reference, first = setup()
-    store = LatestPoseStore()
     proposals = []
-    worker = PoseProcess(
-        occluded_factory, (reference,), store, publish_results=False, on_result=proposals.append
-    )
+    worker = PoseProcess(occluded_factory, (reference,), None, on_result=proposals.append)
     try:
         worker.start(timeout_s=10)
         assert worker.submit(first)
@@ -150,7 +147,6 @@ def test_pose_worker_only_emits_proposals_when_scene_estimator_owns_state():
         hidden = replace(first, frame_id=2, source_time_s=1.1, available_time_s=1.1)
         assert worker.submit(hidden)
         poll_until(worker, lambda: worker.metrics.delivered == 2)
-        assert store.snapshot() == (0, {})
         assert [result.estimates[0].evidence for result in proposals] == [Evidence.OBSERVED, Evidence.LOST]
         assert [result.frame_id for result in proposals] == [1, 2]
         assert worker.metrics.last_source_time_s == hidden.source_time_s
@@ -164,7 +160,7 @@ def test_causal_handoff_requires_aligned_masks_from_the_same_pose_frame():
     worker = PoseProcess(
         echo_mask_factory,
         (reference,),
-        LatestPoseStore(),
+        None,
         require_masks=True,
         on_result=received.append,
     )
@@ -173,6 +169,8 @@ def test_causal_handoff_requires_aligned_masks_from_the_same_pose_frame():
         assert worker.submit(frame)
         poll_until(worker, lambda: bool(received))
         assert received[0].frame_id == frame.frame_id
+        assert received[0].source_time_s == frame.source_time_s
+        assert received[0].calibration_version == frame.calibration_version
         assert received[0].masks["item"].shape == frame.depth.shape
     finally:
         worker.close()
@@ -185,3 +183,11 @@ def test_causal_handoff_requires_aligned_masks_from_the_same_pose_frame():
             missing_masks.start(timeout_s=10)
     finally:
         missing_masks.close()
+
+
+def test_pose_worker_rejects_dual_or_missing_result_sinks():
+    reference, _ = setup()
+    with pytest.raises(ValueError, match="exactly one result sink"):
+        PoseProcess(echo_factory, (reference,), LatestPoseStore(), on_result=lambda result: None)
+    with pytest.raises(ValueError, match="exactly one result sink"):
+        PoseProcess(echo_factory, (reference,), None)
