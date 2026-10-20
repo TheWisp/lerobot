@@ -348,7 +348,7 @@ def test_missing_held_attachment_interrupts_instead_of_waiting_indefinitely():
         poses,
         kinematics,
         ("arm",),
-        PlanBufferConfig(2, 8, 3, 0.02, 0.1, max_wait_for_attachment_s=2),
+        PlanBufferConfig(2, 8, 3, 0.02, 0.1, max_wait_for_evidence_s=2),
         lambda _at_s: None,
     )
     coordinator.step()
@@ -358,6 +358,18 @@ def test_missing_held_attachment_interrupts_instead_of_waiting_indefinitely():
     coordinator.schedule()
     assert session.progress.phase == Phase.INTERRUPTED
     assert "attachment unavailable" in session.progress.events[-1]["reason"]
+
+
+def test_missing_reference_at_interval_entry_reports_failure_instead_of_waiting_for_attempt_timeout():
+    now, robot, session, poses, worker, coordinator = make_runtime(max_pose_age_s=0.1)
+    now[0] = 1.0
+    coordinator.schedule()
+    assert session.progress.phase == Phase.WAITING
+    now[0] = 3.1
+    coordinator.schedule()
+    assert session.progress.phase == Phase.INTERRUPTED
+    assert "target usable pose unavailable" in session.progress.events[-1]["reason"]
+    assert robot.sent == []
 
 
 def test_fresh_equivalent_pose_does_not_cancel_first_future_chunk():

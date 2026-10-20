@@ -214,6 +214,7 @@ def trial(
                 settings["refill_at_ticks"],
                 settings["max_reference_shift_m"],
                 np.deg2rad(settings["max_reference_turn_deg"]),
+                max_wait_for_evidence_s=settings.get("max_wait_for_evidence_s", 2.0),
             ),
             attachment_limits=AttachmentRuntimeLimits(
                 settings["history_capacity"],

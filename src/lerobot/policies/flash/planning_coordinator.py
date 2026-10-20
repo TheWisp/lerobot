@@ -24,7 +24,7 @@ class PlanBufferConfig:
     refill_at_ticks: int
     max_reference_shift_m: float
     max_reference_turn_rad: float
-    max_wait_for_attachment_s: float = 2.0
+    max_wait_for_evidence_s: float = 2.0
 
     def __post_init__(self) -> None:
         if (
@@ -35,8 +35,8 @@ class PlanBufferConfig:
             or self.max_reference_shift_m <= 0
             or not np.isfinite(self.max_reference_turn_rad)
             or self.max_reference_turn_rad <= 0
-            or not np.isfinite(self.max_wait_for_attachment_s)
-            or self.max_wait_for_attachment_s <= 0
+            or not np.isfinite(self.max_wait_for_evidence_s)
+            or self.max_wait_for_evidence_s <= 0
         ):
             raise ValueError("invalid FLASH planning buffer or reference-change limits")
 
@@ -77,8 +77,8 @@ class PlanningCoordinator:
         self._connection: ConnectionTrajectory | None = None
         self._start_anchor_interval_index: int | None = None
         self._start_anchor_pose: np.ndarray | None = None
-        self._missing_attachment_interval_index: int | None = None
-        self._missing_attachment_since_s: float | None = None
+        self._missing_evidence_key: tuple[int, str] | None = None
+        self._missing_evidence_since_s: float | None = None
 
     def step(self):
         """Check live evidence, execute one motor tick, then refill the future queue."""
@@ -151,7 +151,10 @@ class PlanningCoordinator:
                 self._planned_reference = None
             if phase == Phase.MOVING:
                 self._fail(f"{interval.reference_role} lost its usable pose during motion")
+            else:
+                self._wait_for_evidence(f"{interval.reference_role} usable pose", now_s)
             return
+        self._clear_missing_evidence(f"{interval.reference_role} usable pose")
         if interval.reference_version != reference.reference_version:
             self._fail(f"{interval.reference_role} pose uses the wrong object frame")
             return
@@ -159,17 +162,10 @@ class PlanningCoordinator:
         if interval.relation == Relation.HELD_TO_TARGET and attachment is None:
             if phase == Phase.MOVING:
                 self._fail("held-object attachment expired during motion")
-            elif self._missing_attachment_interval_index != self.session.progress.interval_index:
-                self._missing_attachment_interval_index = self.session.progress.interval_index
-                self._missing_attachment_since_s = now_s
-            elif (
-                self._missing_attachment_since_s is not None
-                and now_s - self._missing_attachment_since_s >= self.config.max_wait_for_attachment_s
-            ):
-                self._fail("held-object attachment unavailable at interval entry")
+            else:
+                self._wait_for_evidence("held-object attachment", now_s)
             return
-        self._missing_attachment_interval_index = None
-        self._missing_attachment_since_s = None
+        self._clear_missing_evidence("held-object attachment")
         if attachment is not None and attachment.reference_version != interval.held_reference_version:
             self._fail("held-object attachment uses the wrong object frame")
             return
@@ -321,3 +317,19 @@ class PlanningCoordinator:
     def _fail(self, reason: str) -> None:
         self.session.actions.cancel_unissued(reason)
         self.session.progress.interrupt(self.session.motor.clock(), reason)
+
+    def _clear_missing_evidence(self, kind: str) -> None:
+        if self._missing_evidence_key is not None and self._missing_evidence_key[1] == kind:
+            self._missing_evidence_key = None
+            self._missing_evidence_since_s = None
+
+    def _wait_for_evidence(self, kind: str, now_s: float) -> None:
+        key = (self.session.progress.interval_index, kind)
+        if self._missing_evidence_key != key:
+            self._missing_evidence_key = key
+            self._missing_evidence_since_s = now_s
+        elif (
+            self._missing_evidence_since_s is not None
+            and now_s - self._missing_evidence_since_s >= self.config.max_wait_for_evidence_s
+        ):
+            self._fail(f"{kind} unavailable at interval entry")
