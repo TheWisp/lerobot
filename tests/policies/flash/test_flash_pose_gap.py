@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from lerobot.policies.flash.perception import LatestPoseStore, RGBDFrame
-from lerobot.policies.flash.pose_gap import PoseGapBackend, PoseGapLimit
+from lerobot.policies.flash.pose_gap import PoseGapBackend
 from lerobot.policies.flash.trajectory import Evidence, PoseEstimate
 
 
@@ -31,7 +31,7 @@ def test_pose_gap_preserves_measurement_time_and_accepts_later_target_motion():
         def update(self, _frame):
             return (next(self.results),)
 
-    backend = PoseGapBackend(Backend(), (PoseGapLimit("target", 0.4),))
+    backend = PoseGapBackend(Backend(), 0.4)
     store = LatestPoseStore()
     results = []
     for time_s in (0.0, 0.2, 0.5, 0.6):

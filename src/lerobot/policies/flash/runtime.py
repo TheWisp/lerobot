@@ -209,6 +209,23 @@ class FlashRuntime:
                 max_pose_age_s=self.planner.planner.limits.max_pose_age_s,
                 timeout_s=first_pose_timeout_s,
             )
+            # A demonstration may use more objects after the grasp. Establish
+            # every referenced object frame before starting irreversible motion;
+            # a support-constrained pose can be predicted in unconstrained axes.
+            required_roles = tuple(
+                dict.fromkeys(
+                    interval.reference_role
+                    for interval in self.skill.intervals
+                    if interval.relation != Relation.EE_TO_START
+                )
+            )
+            if len(required_roles) > 1:
+                self.perception.wait_ready(
+                    required_roles,
+                    max_pose_age_s=self.planner.planner.limits.max_pose_age_s,
+                    timeout_s=first_pose_timeout_s,
+                    allow_predicted=True,
+                )
             _, first_poses = self.poses.snapshot()
             if first_poses[first_role].reference_version != self.skill.intervals[0].reference_version:
                 raise ValueError(f"{first_role}: live pose does not use the demonstrated object frame")

@@ -108,12 +108,19 @@ measurement nor a fit to matched points establishes independent pose accuracy
 under occlusion. Multi-view reference preparation, evidence/observability
 gates and asynchronous publication to the controller remain necessary.
 Other milestone types, such as grasp verification, still need independent
-evidence. The attempt host wires the planner worker, milestone publisher and
-recorder, but Run → FLASH still lacks the hardware/configuration launch path
-and the present insertion recording lacks a compiled skill/reference bundle.
-A real process smoke test loaded the cached models and published the ring pose.
-The first SAM3 seed still cost about 1.5 seconds after worker readiness, so
-hardware launch must wait for a valid first observation rather than treating
-process startup as pose readiness.
-A physical rollout cannot be claimed from the core unit tests or
-skill-inspection UI alone.
+evidence. The SO-107 trial launcher accepts a prepared skill, calibrated rig
+configuration and ordinary LeRobot source dataset. It records each rollout as
+an ordinary LeRobot episode with a FLASH decision trace. Startup waits for the
+first action's observed object and a usable pose for every later referenced
+object before the motor epoch begins; a poor instance seed must fail before
+the arm moves.
+
+The active estimator is SAM3 instance masks, DINO appearance matches and a
+robust aligned RGB-D fit. A short, globally configured pose gap may retain a
+previous measurement, marked predicted and with its original capture time.
+It is not a group tracker. The camera capture thread runs independently of the
+30 Hz motor loop, but the heavy pose process keeps only the newest pending
+frame. A frame-to-frame point/group tracker therefore needs its own causal
+camera-frame path before its motion can become a second pose source. The
+current controller cannot follow an object that moves while direct RGB-D
+matching is unavailable.

@@ -24,11 +24,9 @@ import numpy as np
 from lerobot.cameras.realsense import RealSenseCamera, RealSenseCameraConfig
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.policies.flash.appearance import AppearanceBackendFactory
-from lerobot.policies.flash.continuity import PoseCoastLimit
 from lerobot.policies.flash.kinematics import SelectedJointKinematics
 from lerobot.policies.flash.planner import PlannerLimits
 from lerobot.policies.flash.planning_coordinator import PlanBufferConfig
-from lerobot.policies.flash.pose_gap import PoseGapLimit
 from lerobot.policies.flash.prepared import PreparedFlashSkill
 from lerobot.policies.flash.recording import FlashEpisodeWriter, RecorderWorker
 from lerobot.policies.flash.rgbd_source import LeRobotRGBDSource
@@ -174,8 +172,7 @@ def trial(
             sam_resolution=settings["sam_resolution"],
             dino_model_id=bundle.descriptor_model_id,
             axial_symmetries=bundle.axial_symmetries,
-            pose_coast_limits=tuple(PoseCoastLimit(**item) for item in settings["pose_coast_limits"]),
-            pose_gap_limits=tuple(PoseGapLimit(**item) for item in settings.get("pose_gap_limits", ())),
+            max_pose_gap_s=settings.get("max_pose_gap_s"),
             seed_points_by_role=settings.get("seed_points_by_role"),
         )
         output_root = Path(settings["output_root"]).expanduser()

@@ -1,5 +1,7 @@
 """Attempt wiring must establish fresh object frames before motor deadlines begin."""
 
+from dataclasses import replace
+
 import numpy as np
 import pytest
 
@@ -167,6 +169,54 @@ def test_startup_pose_updates_do_not_overflow_unconsumed_evidence():
     attempt._ready = True
     callback(200, {"target": pose})
     assert attempt.session._evidence.qsize() == 1
+
+
+def test_startup_acquires_later_reference_before_any_motion(monkeypatch):
+    first = skill().intervals[0]
+    second = replace(first, name="place", reference_role="ring", reference_version="ring-v1")
+    attempt = runtime(
+        FlashSkill("demo", 0, (first, second)),
+        (reference("target", "target-v1"), reference("ring", "ring-v1")),
+        FakeRecorder(),
+    )
+    waits = []
+
+    def wait_ready(roles, *, max_pose_age_s, timeout_s, allow_predicted=False):
+        waits.append((roles, allow_predicted))
+        if len(waits) == 1:
+            attempt.poses.publish(
+                (
+                    PoseEstimate(
+                        "target",
+                        identity(),
+                        1.0,
+                        1.0,
+                        Evidence.OBSERVED,
+                        "target-v1",
+                        (True,) * 3,
+                        (True,) * 3,
+                    ),
+                    PoseEstimate(
+                        "ring",
+                        identity(),
+                        1.0,
+                        1.0,
+                        Evidence.PREDICTED,
+                        "ring-v1",
+                        (True,) * 3,
+                        (True,) * 3,
+                    ),
+                )
+            )
+
+    monkeypatch.setattr(attempt.perception, "start", lambda timeout_s: None)
+    monkeypatch.setattr(attempt.perception, "wait_ready", wait_ready)
+    monkeypatch.setattr(attempt.perception, "close", lambda: None)
+    monkeypatch.setattr(attempt.planner, "start", lambda: waits.append("planner started"))
+    monkeypatch.setattr(attempt.planner, "close", lambda: None)
+    attempt.start(pose_start_timeout_s=2, first_pose_timeout_s=2)
+    assert waits == [(("target",), False), (("target", "ring"), True), "planner started"]
+    attempt.close("unknown", "test completed")
 
 
 def test_motion_completion_without_outcome_verifier_remains_unknown(monkeypatch):

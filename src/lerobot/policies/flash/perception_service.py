@@ -98,8 +98,15 @@ class PerceptionService:
         except Exception as exc:
             self._fail(exc)
 
-    def wait_ready(self, roles: tuple[str, ...], *, max_pose_age_s: float, timeout_s: float) -> None:
-        """Block the host before motion until each required role is freshly seen."""
+    def wait_ready(
+        self,
+        roles: tuple[str, ...],
+        *,
+        max_pose_age_s: float,
+        timeout_s: float,
+        allow_predicted: bool = False,
+    ) -> None:
+        """Block the host before motion until each required role has usable evidence."""
         if not self._started or not roles or max_pose_age_s <= 0 or timeout_s <= 0:
             raise ValueError("wait_ready needs a started service, roles and positive bounds")
         deadline = time.monotonic() + timeout_s
@@ -113,13 +120,18 @@ class PerceptionService:
                 role
                 for role in roles
                 if role not in poses
-                or poses[role].evidence != Evidence.OBSERVED
+                or (not allow_predicted and poses[role].evidence != Evidence.OBSERVED)
+                or poses[role].evidence == Evidence.LOST
                 or not 0 <= now_s - poses[role].source_time_s <= max_pose_age_s
             ]
             if not missing:
                 return
             self._stop.wait(min(0.01, max(0, deadline - time.monotonic())))
-        raise PerceptionServiceError(f"no fresh observed pose for: {', '.join(missing)}")
+        kind = "usable" if allow_predicted else "observed"
+        failures = self.worker.metrics.last_failures
+        detail = "; ".join(f"{role}: {failures[role]}" for role in missing if role in failures)
+        reason = f"no fresh {kind} pose for: {', '.join(missing)}"
+        raise PerceptionServiceError(f"{reason} (last estimator failure: {detail})" if detail else reason)
 
     def close(self, timeout_s: float = 5.0) -> None:
         if not self._started:
