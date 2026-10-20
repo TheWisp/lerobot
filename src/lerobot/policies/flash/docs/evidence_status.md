@@ -159,3 +159,12 @@ with the existing 3 mm and 3° limits. A physical rerun remains outstanding:
 after that stop, the robot bus found arm motors 1–6 but not gripper motor 7 on
 two connection attempts, so the return path did not move and the dowel remains
 in the gripper.
+
+The [offline IK preview](../../../../../benchmarks/flash_preview_ik.py) of the
+revised bundle completes all eleven intervals from the demonstration's initial
+joint state. Beginning at the last trial's measured lift pose, it also
+completes the remaining carry, dense insertion, release and retreat: 75 ticks
+for the first carry, 15 for the next approach and 138 for the 4.6 s insertion
+interval. This checks calibrated IK geometry and event timing only. The trial's
+grasp-time pose supplies an approximate attachment; the preview has no live
+perception, collision or motor feedback and cannot establish task success.
