@@ -49,8 +49,10 @@ def move_to_rest_position(
     """Smoothly interpolate the robot from its current position to *rest_position*.
 
     Sends intermediate waypoints via ``robot.send_action()`` at the
-    requested rate.  All existing safety limits (``max_relative_target``,
-    joint limits) inside ``send_action()`` are honoured.
+    requested rate. All existing safety limits (``max_relative_target``,
+    joint limits) inside ``send_action()`` are honoured. Rest keys must
+    match this robot's action and observation keys; a stale profile is an
+    error rather than a successful no-op.
 
     The robot **must** be connected.
 
@@ -65,14 +67,14 @@ def move_to_rest_position(
 
     # Read current positions
     obs = robot.get_observation()
-    current_pos: dict[str, float] = {}
-    for key in rest_position:
-        if key in obs:
-            current_pos[key] = float(obs[key])
-        else:
-            # Can't read this key — assume already at target (safe no-op for that joint)
-            logger.warning("Cannot read current position for %r, assuming at rest", key)
-            current_pos[key] = rest_position[key]
+    action_keys = set(robot.action_features)
+    unknown = set(rest_position) - action_keys
+    if unknown:
+        raise ValueError(f"Rest position keys are not robot action keys: {sorted(unknown)}")
+    missing = set(rest_position) - set(obs)
+    if missing:
+        raise RuntimeError(f"Cannot read current position for rest joints: {sorted(missing)}")
+    current_pos = {key: float(obs[key]) for key in rest_position}
 
     num_steps = max(1, int(duration_s * steps_per_second))
     dt = duration_s / num_steps
@@ -85,15 +87,11 @@ def move_to_rest_position(
         start_t = time.perf_counter()
         alpha = step / num_steps  # ramps 1/N … 1.0
 
-        action = {
-            key: current_pos[key] * (1.0 - alpha) + rest_position[key] * alpha
-            for key in rest_position
-            if key in current_pos
-        }
+        action = {key: current_pos[key] * (1.0 - alpha) + rest_position[key] * alpha for key in rest_position}
 
         robot.send_action(action)
 
         elapsed = time.perf_counter() - start_t
         precise_sleep(max(dt - elapsed, 0.0))
 
-    logger.info("Reached rest position")
+    logger.info("Rest-position command sequence complete")

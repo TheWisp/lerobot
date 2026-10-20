@@ -178,21 +178,19 @@ class TestMoveToRestPosition:
         with pytest.raises(ValueError, match="empty"):
             move_to_rest_position(robot, {})
 
-    def test_missing_current_position_uses_target(self):
-        """If a key in rest_position can't be read from observation, assume at target."""
+    def test_unknown_rest_key_rejected_before_motion(self):
+        """An old profile with mismatched joint names must not report a successful park."""
         robot = _make_mock_robot({"a.pos": 0.0}, action_keys=["a.pos"])
-        # rest_position has a key not in observation
         target = {"a.pos": 10.0, "unknown.pos": 5.0}
-        robot.get_observation.return_value = {"a.pos": 0.0}
-
-        with patch("lerobot.robots.rest_position.precise_sleep"):
+        with pytest.raises(ValueError, match="unknown.pos"):
             move_to_rest_position(robot, target, duration_s=0.1, steps_per_second=10)
+        assert not robot.sent_actions
 
-        # All actions should include both keys
-        for action in robot.sent_actions:
-            assert "a.pos" in action
-            # unknown.pos should be at target (interpolating from target to target = target)
-            assert abs(action["unknown.pos"] - 5.0) < 1e-6
+    def test_missing_current_position_rejected_before_motion(self):
+        robot = _make_mock_robot({"a.pos": 0.0}, action_keys=["a.pos", "missing.pos"])
+        with pytest.raises(RuntimeError, match="missing.pos"):
+            move_to_rest_position(robot, {"a.pos": 10.0, "missing.pos": 5.0})
+        assert not robot.sent_actions
 
     def test_calls_precise_sleep(self):
         """Verify that precise_sleep is called for timing control."""
