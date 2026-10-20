@@ -26,6 +26,7 @@ from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.policies.flash.appearance import AppearanceBackendFactory
 from lerobot.policies.flash.causal_service import CausalTrackingConfig
 from lerobot.policies.flash.kinematics import SelectedJointKinematics
+from lerobot.policies.flash.live_telemetry import FlashLiveTelemetry
 from lerobot.policies.flash.planner import PlannerLimits
 from lerobot.policies.flash.planning_coordinator import PlanBufferConfig
 from lerobot.policies.flash.prepared import PreparedFlashSkill
@@ -101,6 +102,7 @@ def trial(
     preflight: bool,
     auto_output: bool = False,
     source_dataset_root: Path | None = None,
+    telemetry_path: Path | None = None,
     stop_requested: Callable[[], bool] | None = None,
 ) -> dict:
     bundle = PreparedFlashSkill.load(bundle_path)
@@ -135,6 +137,7 @@ def trial(
     arm = profile["fields"]["arm"]
     if arm != settings["robot_arm"]:
         raise ValueError("robot arm and calibrated arm differ")
+    telemetry: FlashLiveTelemetry | None = None
     try:
         robot.connect(calibrate=False)
         strict_robot = StrictMotorState(robot)
@@ -207,12 +210,25 @@ def trial(
             image_writer_threads=4,
         )
         recorder = RecorderWorker(FlashEpisodeWriter(dataset, 0, settings["task"]))
+        centers_by_role = {
+            model.points.role: model.points.points_object_m.mean(axis=0) for model in bundle.appearance_models
+        }
+        telemetry = FlashLiveTelemetry(
+            telemetry_path or output_root / "flash" / "v1" / "live_tracker.json",
+            output_root / "flash" / "v1" / "tracker_episode_000000.jsonl",
+            centers_by_role,
+            points_by_role={
+                model.points.role: model.points.points_object_m for model in bundle.appearance_models
+            },
+        )
         runtime = FlashRuntime(
             skill=bundle.skill,
             robot=strict_robot,
             source=source,
             pose_backend_factory=backend,
             references=bundle.references,
+            object_centers_by_role=centers_by_role,
+            live_telemetry=telemetry,
             kinematics=kin,
             arm_joint_names=arm_names,
             gripper_joint_name="gripper",
@@ -337,8 +353,14 @@ def trial(
                         "latest_processed_source_time_s": runtime.causal.latest_processed_source_time_s,
                         "max_processing_lag_s": runtime.causal.max_processing_lag_s,
                         "environment_relationships": runtime.causal.environment_relationships,
+                        "environment_relationships_by_role": runtime.causal.environment_relationships_by_role.copy(),
                         "environment_published": runtime.causal.environment_published,
+                        "environment_published_by_role": runtime.causal.environment_published_by_role.copy(),
+                        "environment_candidate_published_by_role": runtime.causal.environment_candidate_published_by_role.copy(),
+                        "environment_fit_failures_by_role": runtime.causal.environment_fit_failures_by_role.copy(),
+                        "environment_expired_by_role": runtime.causal.environment_expired_by_role.copy(),
                         "scene_gaps": runtime.causal.scene.gaps,
+                        "scene_recent_gap_durations_s": tuple(runtime.causal.scene.recent_gap_durations_s),
                         "frame_compute_total_s": runtime.causal.frame_compute_total_s,
                         "frame_compute_max_s": runtime.causal.frame_compute_max_s,
                         "anchor_compute_total_s": runtime.causal.anchor_compute_total_s,
@@ -357,6 +379,7 @@ def trial(
                         "issued_actions": runtime.planner.last_result.issued_actions,
                         "error": runtime.planner.last_result.error,
                         "failure": runtime.planner.last_result.failure,
+                        "compute_s": runtime.planner.last_result.compute_s,
                         "connection_duration_s": (
                             runtime.planner.last_result.connection.duration_s
                             if runtime.planner.last_result.connection is not None
@@ -382,6 +405,9 @@ def trial(
                     else None
                 ),
                 "planner_superseded": runtime.planner.superseded,
+                "planner_completed": runtime.planner.completed,
+                "planner_compute_total_s": runtime.planner.compute_total_s,
+                "planner_compute_max_s": runtime.planner.compute_max_s,
                 "planner_pending_revision": runtime.coordinator._pending_revision,
                 "attachment": {
                     "active_role": runtime.attachment.active_role,
@@ -399,6 +425,8 @@ def trial(
         )
         return report
     finally:
+        if telemetry is not None:
+            telemetry.close()
         if robot.is_connected:
             robot.disconnect()
         else:
@@ -414,6 +442,7 @@ def main() -> None:
     parser.add_argument("config", type=Path)
     parser.add_argument("--preflight", action="store_true")
     parser.add_argument("--auto-output", action="store_true", help="write a new dataset for this attempt")
+    parser.add_argument("--telemetry-path", type=Path, help="GUI-owned live tracker snapshot")
     parser.add_argument(
         "--source-dataset-root", type=Path, help="require this demo dataset in the trial config"
     )
@@ -427,6 +456,7 @@ def main() -> None:
         preflight=args.preflight,
         auto_output=args.auto_output,
         source_dataset_root=args.source_dataset_root,
+        telemetry_path=args.telemetry_path,
         stop_requested=stop.is_set,
     )
     print(json.dumps(report, indent=2))

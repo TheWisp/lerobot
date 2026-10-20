@@ -10,6 +10,7 @@ import pytest
 from lerobot.policies.flash.causal_service import CausalPoseService
 from lerobot.policies.flash.perception import LatestPoseStore, RGBDFrame
 from lerobot.policies.flash.scene_groups import (
+    EnvironmentRelationship,
     ScenePointTracker,
     SceneTracks,
     establish_environment_relationship,
@@ -82,6 +83,66 @@ def test_environment_relation_needs_non_object_co_motion_and_tracks_occlusion():
         )
 
 
+def test_unresolved_support_rotation_does_not_rotate_object_frame():
+    """Small stationary support patches cannot justify a rigid-body tilt."""
+    rng = np.random.default_rng(44)
+    points = rng.uniform((-0.01, -0.01, 1.0), (0.01, 0.01, 1.0), (40, 3))
+    pixels = np.column_stack((rng.integers(20, 76, 40), rng.integers(20, 76, 40)))
+    angle = np.deg2rad(15)
+    rotation = np.array([[np.cos(angle), -np.sin(angle), 0], [np.sin(angle), np.cos(angle), 0], [0, 0, 1]])
+    center = points.mean(axis=0)
+    changed = (points - center) @ rotation.T + center
+    relation = EnvironmentRelationship(np.arange(len(points)), points, _pose(0), 0.0, "v1", 0.0)
+    predicted = relation.predict(_tracks(1, changed, pixels), fit_threshold_m=0.005, min_inliers=12)
+    assert predicted is not None
+    np.testing.assert_allclose(predicted[:3, :3], np.eye(3), atol=1e-8)
+    np.testing.assert_allclose(predicted[:3, 3], _pose(0)[:3, 3], atol=0.001)
+
+
+def test_stationary_support_requires_direct_agreement_and_surviving_context_points():
+    rng = np.random.default_rng(31)
+    points = rng.uniform((-0.1, -0.1, 0.98), (0.1, 0.1, 1.02), (40, 3))
+    pixels = np.column_stack((rng.integers(20, 76, 40), rng.integers(20, 76, 40)))
+    before = _tracks(0, points, pixels)
+    after = _tracks(1, points.copy(), pixels)
+    mask = np.zeros((96, 96), dtype=bool)
+    mask[pixels[:4, 1], pixels[:4, 0]] = True
+    options = {
+        "context_radius_m": 0.25,
+        "fit_threshold_m": 0.005,
+        "min_motion_m": 0.008,
+        "min_inliers": 12,
+        "reference_version": "v1",
+        "allow_stationary": True,
+    }
+    relation = establish_environment_relationship(before, after, _pose(0), _pose(0), (mask,), **options)
+    assert relation is not None
+    assert len(relation.ids) >= 12
+    assert relation.predict(after, fit_threshold_m=0.005, min_inliers=12) is not None
+    assert (
+        establish_environment_relationship(before, after, _pose(0), _pose(0.02), (mask,), **options) is None
+    )
+
+    # The object frame can be far from its visible surface. A small rotation
+    # around that surface moves the frame origin without moving the support.
+    remote_center = np.array([0.0, 0.0, 0.4])
+    baseline = _pose(0)
+    baseline[:3, 3] -= remote_center
+    theta = np.deg2rad(4)
+    turned = baseline.copy()
+    turned[:3, :3] = np.array(
+        [[np.cos(theta), 0, np.sin(theta)], [0, 1, 0], [-np.sin(theta), 0, np.cos(theta)]]
+    )
+    turned[:3, 3] = _pose(0)[:3, 3] - turned[:3, :3] @ remote_center
+    assert np.linalg.norm(turned[:3, 3] - baseline[:3, 3]) > 0.02
+    assert (
+        establish_environment_relationship(
+            before, after, baseline, turned, (mask,), **options, object_center_object_m=remote_center
+        )
+        is not None
+    )
+
+
 def _camera_frame(rgb: np.ndarray, frame_id: int) -> RGBDFrame:
     return RGBDFrame(
         frame_id,
@@ -130,7 +191,15 @@ def test_causal_service_uses_verified_scene_motion_when_object_points_disappear(
                 )
                 service.submit_anchor(index, (observed,), {"object": mask})
         deadline = time.monotonic() + 3
-        while service.environment_published < 1 and service.error is None and time.monotonic() < deadline:
+        while (
+            (
+                service.environment_relationships < 1
+                or store.snapshot()[1].get("object") is None
+                or store.snapshot()[1]["object"].source_time_s < frames[3].source_time_s
+            )
+            and service.error is None
+            and time.monotonic() < deadline
+        ):
             time.sleep(0.01)
         assert service.error is None
         assert service.environment_relationships == 1
@@ -140,6 +209,98 @@ def test_causal_service_uses_verified_scene_motion_when_object_points_disappear(
         assert predicted.estimator == "environment_group_motion"
         assert predicted.last_direct_observation_s == frames[2].source_time_s
         assert predicted.pose[0, 3] == pytest.approx(0.06, abs=0.005)
+    finally:
+        service.close()
+
+
+def test_stationary_support_stays_measured_until_grasp_then_is_withdrawn():
+    rgb = np.random.default_rng(32).integers(0, 255, (96, 96, 3), dtype=np.uint8)
+    mask = np.zeros((96, 96), dtype=bool)
+    mask[46:50, 46:50] = True
+    store = LatestPoseStore()
+    service = CausalPoseService(store, image_scale=1.0, environment_prediction_max_s=1.0)
+    service.start()
+    try:
+        for index in range(3):
+            frame = _camera_frame(rgb, index)
+            service.submit_frame(frame)
+            observed = PoseEstimate(
+                "object",
+                _pose(0),
+                frame.source_time_s,
+                frame.available_time_s,
+                Evidence.OBSERVED,
+                "v1",
+                (True,) * 3,
+                (True,) * 3,
+            )
+            service.submit_anchor(index, (observed,), {"object": mask})
+        deadline = time.monotonic() + 5
+        while service.environment_relationships < 1 and service.error is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert service.error is None
+        assert service.environment_relationships == 1
+
+        for index in range(3, 46):
+            service.submit_frame(_camera_frame(rgb, index))
+            while (
+                store.snapshot()[1]["object"].source_time_s < index / 30
+                and service.error is None
+                and time.monotonic() < deadline
+            ):
+                time.sleep(0.002)
+        assert service.error is None
+        assert service.frames == 46
+        predicted = store.snapshot()[1]["object"]
+        assert predicted.estimator == "environment_group_motion"
+        assert predicted.source_time_s == pytest.approx(45 / 30)
+        assert predicted.last_direct_observation_s == pytest.approx(2 / 30)
+
+        published = service.environment_published
+        service.set_attached_role("object")
+        service.submit_frame(_camera_frame(rgb, 46))
+        while service.frames < 47 and service.error is None and time.monotonic() < deadline:
+            time.sleep(0.002)
+        assert service.error is None
+        assert "object" not in service.relationships
+        assert service.environment_published == published
+    finally:
+        service.close()
+
+
+def test_single_visible_pose_can_seed_a_labeled_support_hypothesis():
+    rgb = np.random.default_rng(33).integers(0, 255, (96, 96, 3), dtype=np.uint8)
+    mask = np.zeros((96, 96), dtype=bool)
+    mask[46:50, 46:50] = True
+    store = LatestPoseStore()
+    service = CausalPoseService(store, image_scale=1.0)
+    service.start()
+    try:
+        first = _camera_frame(rgb, 0)
+        service.submit_frame(first)
+        service.submit_anchor(
+            0,
+            (PoseEstimate("object", _pose(0), 0, 0, Evidence.OBSERVED, "v1", (True,) * 3, (True,) * 3),),
+            {"object": mask},
+        )
+        service.submit_frame(_camera_frame(rgb, 1))
+        deadline = time.monotonic() + 3
+        while (
+            service.environment_candidate_published_by_role.get("object", 0) < 1
+            and service.error is None
+            and time.monotonic() < deadline
+        ):
+            time.sleep(0.01)
+        assert service.error is None
+        estimate = store.snapshot()[1]["object"]
+        assert estimate.evidence == Evidence.PREDICTED
+        assert estimate.estimator == "environment_support_hypothesis"
+        assert estimate.last_direct_observation_s == first.source_time_s
+        service.set_attached_role("object")
+        service.submit_frame(_camera_frame(rgb, 2))
+        while service.frames < 3 and service.error is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert "object" not in service.candidate_relationships
     finally:
         service.close()
 
@@ -160,7 +321,9 @@ def test_causal_service_marks_bounded_static_occlusion_as_prediction():
         (True,) * 3,
     )
     store = LatestPoseStore()
-    service = CausalPoseService(store, image_scale=1.0, static_prediction_max_s=0.05)
+    service = CausalPoseService(
+        store, image_scale=1.0, static_prediction_max_s=0.05, environment_min_inliers=1000
+    )
     service.start()
     try:
         service.submit_frame(frames[0])
@@ -206,7 +369,9 @@ def test_delayed_absolute_proposal_is_replayed_by_the_only_pose_owner():
         (False,) * 3,
     )
     store = LatestPoseStore()
-    service = CausalPoseService(store, image_scale=1.0, static_prediction_max_s=1.0)
+    service = CausalPoseService(
+        store, image_scale=1.0, static_prediction_max_s=1.0, environment_min_inliers=1000
+    )
     service.start()
     try:
         for frame in frames:
@@ -237,7 +402,9 @@ def test_delayed_direct_measurement_refreshes_a_newer_stationary_prediction():
     mask = np.zeros((96, 96), dtype=bool)
     mask[46:48, 46:48] = True  # No object-point seed; only a scene-time prediction.
     store = LatestPoseStore()
-    service = CausalPoseService(store, image_scale=1.0, static_prediction_max_s=1.0)
+    service = CausalPoseService(
+        store, image_scale=1.0, static_prediction_max_s=1.0, environment_min_inliers=1000
+    )
     service.start()
     try:
         service.submit_frame(frames[0])
@@ -361,7 +528,7 @@ def test_scene_tracks_keep_identities_on_every_frame():
         interrupted.calibration_version,
     )
     after_gap = tracker.update(interrupted)
-    assert not np.intersect1d(second.ids, after_gap.ids).size
+    assert len(np.intersect1d(second.ids, after_gap.ids)) >= 12
     assert tracker.gaps == 1
 
 

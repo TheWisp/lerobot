@@ -100,6 +100,9 @@ async function selectWorkflow(workflow) {
         await _ensureModelDataLoaded();
     }
     if (workflow === 'flash') await _loadFlashDatasets();
+    const trackerPanel = document.getElementById('flash-tracker-panel');
+    if (trackerPanel) trackerPanel.hidden = workflow !== 'flash';
+    if (workflow === 'flash' && _isRunning && _runCommand === 'flash') startFlashTelemetry();
     _updateLaunchButton();
 }
 
@@ -351,6 +354,255 @@ async function viewFlashDemo() {
     }
     switchTab('data');
     selectEpisode(dataset.id, episodeIndex, episode.video_length || episode.length);
+}
+
+let flashTelemetryTimer = null;
+let flashTelemetryBusy = false;
+let flashSnapshot = null;
+let flashReplay = null;
+let flashReplayTimer = null;
+
+function _flashLayerName(estimator) {
+    return ({
+        appearance_rgbd: 'Direct RGB-D',
+        visible_shape_rgbd: 'Visible shape RGB-D',
+        object_point_motion: 'Object points',
+        environment_group_motion: 'Verified group',
+        environment_support_hypothesis: 'Group hypothesis',
+        stationary_prior: 'Stationary prior',
+    })[estimator] || estimator.replaceAll('_', ' ');
+}
+
+function _flashLayerColor(estimator) {
+    if (estimator === 'object_point_motion') return '#fbbf24';
+    if (estimator === 'environment_group_motion') return '#34d399';
+    if (estimator === 'environment_support_hypothesis') return '#a3e635';
+    if (estimator === 'stationary_prior') return '#94a3b8';
+    return '#58a6ff';
+}
+
+function _flashPoseText(pose, snapshot) {
+    if (!pose) return 'No estimate';
+    const age = Number(snapshot.recorded_at_s) - Number(pose.source_time_s);
+    const freshness = Number.isFinite(age) ? ` · ${Math.max(0, age).toFixed(2)} s old` : '';
+    const xyz = pose.pose ? ` · ${pose.pose.slice(0, 3).map((row, i) => (row[3] * 1000).toFixed(0)).join(', ')} mm` : '';
+    return `${pose.evidence || 'unknown'}${freshness}${xyz}`;
+}
+
+function renderFlashSnapshot(snapshot, mode = 'Live') {
+    flashSnapshot = snapshot;
+    const panel = document.getElementById('flash-tracker-panel');
+    const content = document.getElementById('flash-tracker-content');
+    const modeEl = document.getElementById('flash-tracker-mode');
+    if (!panel || !content || !snapshot) return;
+    panel.hidden = selectedWorkflow !== 'flash';
+    modeEl.textContent = mode;
+    const roles = [...new Set([
+        ...Object.keys(snapshot.proposals || {}),
+        ...Object.keys(snapshot.layers || {}),
+        ...Object.keys(snapshot.accepted || {}),
+    ])].sort();
+    if (!roles.length) {
+        content.textContent = 'Waiting for a pose proposal. The camera and motor loops can already be running.';
+        _flashDrawOverlay();
+        return;
+    }
+    let html = '<div class="flash-tracker-legend">Dots + solid outline: planner model pose · thin outlines: tracker hypotheses · purple: measured mask (matching camera frame)</div>';
+    for (const role of roles) {
+        html += `<div class="flash-tracker-role"><strong>${_esc(role)}</strong>`;
+        const proposal = snapshot.proposals?.[role];
+        if (proposal) html += `<div class="flash-tracker-layer"><span class="flash-tracker-dot" style="background:#58a6ff"></span>Direct proposal <small>${_esc(_flashPoseText(proposal, snapshot))}</small></div>`;
+        for (const [name, pose] of Object.entries(snapshot.layers?.[role] || {})) {
+            html += `<div class="flash-tracker-layer"><span class="flash-tracker-dot" style="background:${_flashLayerColor(name)}"></span>${_esc(_flashLayerName(name))}<small>${_esc(_flashPoseText(pose, snapshot))}</small></div>`;
+        }
+        const accepted = snapshot.accepted?.[role];
+        html += `<div class="flash-tracker-selected">Planner pose: ${accepted ? _esc(_flashLayerName(accepted.estimator || 'unspecified')) + '<small>' + _esc(_flashPoseText(accepted, snapshot)) + '</small>' : 'none'}</div>`;
+        html += '</div>';
+    }
+    content.innerHTML = html;
+    _flashDrawOverlay();
+}
+
+function _flashProject(point, pose, camera) {
+    if (!pose?.pose || !camera?.base_from_camera || !camera?.intrinsics) return null;
+    const t = pose.pose;
+    const world = [0, 1, 2].map(i => t[i][3] + t[i][0] * point[0] + t[i][1] * point[1] + t[i][2] * point[2]);
+    const base = camera.base_from_camera;
+    const delta = world.map((v, i) => v - base[i][3]);
+    const cam = [0, 1, 2].map(i => base[0][i] * delta[0] + base[1][i] * delta[1] + base[2][i] * delta[2]);
+    if (cam[2] <= 0) return null;
+    const k = camera.intrinsics;
+    return [k[0][0] * cam[0] / cam[2] + k[0][2], k[1][1] * cam[1] / cam[2] + k[1][2]];
+}
+
+function _flashHull(points) {
+    const sorted = points.filter(point => point && point.every(Number.isFinite))
+        .sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+    if (sorted.length < 3) return sorted;
+    const cross = (a, b, c) => (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+    const lower = [], upper = [];
+    for (const point of sorted) {
+        while (lower.length >= 2 && cross(lower.at(-2), lower.at(-1), point) <= 0) lower.pop();
+        lower.push(point);
+    }
+    for (const point of [...sorted].reverse()) {
+        while (upper.length >= 2 && cross(upper.at(-2), upper.at(-1), point) <= 0) upper.pop();
+        upper.push(point);
+    }
+    lower.pop(); upper.pop();
+    return lower.concat(upper);
+}
+
+function _flashDrawOverlay() {
+    const snapshot = flashSnapshot;
+    const camera = snapshot?.camera;
+    document.querySelectorAll('.flash-pose-canvas').forEach(canvas => {
+        const context = canvas.getContext('2d');
+        const width = canvas.clientWidth, height = canvas.clientHeight;
+        const dpr = window.devicePixelRatio || 1;
+        canvas.width = Math.round(width * dpr); canvas.height = Math.round(height * dpr);
+        context.setTransform(dpr, 0, 0, dpr, 0, 0);
+        context.clearRect(0, 0, width, height);
+        if (!camera?.width || !camera?.height) return;
+        const scale = Math.min(width / camera.width, height / camera.height);
+        const left = (width - camera.width * scale) / 2;
+        const top = (height - camera.height * scale) / 2;
+        const pixel = point => [left + point[0] * scale, top + point[1] * scale];
+        const outline = (points, color, width, dashed = false) => {
+            if (points.length < 3) return;
+            context.beginPath();
+            context.moveTo(...pixel(points[0]));
+            for (const point of points.slice(1)) context.lineTo(...pixel(point));
+            context.closePath();
+            context.strokeStyle = color;
+            context.lineWidth = width;
+            context.setLineDash(dashed ? [5, 4] : []);
+            context.stroke();
+            context.setLineDash([]);
+        };
+        for (const mask of Object.values(snapshot.observed_masks || {})) {
+            if (mask.frame_id === camera.frame_id) {
+                outline(mask.boundary_xy || [], '#d48bff', 2);
+            }
+        }
+        const draw = (role, name, pose, accepted) => {
+            const points = snapshot.points_object_m?.[role] || [];
+            const projectedPoints = points.map(point => _flashProject(point, pose, camera)).filter(Boolean);
+            if (projectedPoints.length >= 3) {
+                outline(_flashHull(projectedPoints), _flashLayerColor(name), accepted ? 2.5 : 1.5, !accepted);
+                if (accepted) {
+                    context.fillStyle = '#d8f8ff';
+                    for (const point of projectedPoints) {
+                        const [x, y] = pixel(point);
+                        context.fillRect(x - 1, y - 1, 2, 2);
+                    }
+                }
+            }
+            const center = snapshot.centers_object_m?.[role] || [0, 0, 0];
+            const projected = _flashProject(center, pose, camera);
+            if (!projected) return;
+            const [x, y] = pixel(projected);
+            if (!projectedPoints.length) {
+                context.strokeStyle = _flashLayerColor(name);
+                context.lineWidth = accepted ? 2.5 : 1.5;
+                context.beginPath(); context.arc(x, y, accepted ? 9 : 5, 0, 2 * Math.PI); context.stroke();
+            }
+            if (accepted) {
+                context.font = 'bold 13px sans-serif';
+                context.fillStyle = '#fff';
+                context.fillText(role, x + 8, y - 8);
+            }
+        };
+        for (const [role, layers] of Object.entries(snapshot.layers || {})) {
+            Object.entries(layers).forEach(([name, pose]) => draw(role, name, pose, false));
+        }
+        for (const [role, pose] of Object.entries(snapshot.accepted || {})) draw(role, pose.estimator || 'accepted', pose, true);
+    });
+}
+
+function startFlashTelemetry() {
+    if (flashTelemetryTimer) return;
+    flashReplay = null;
+    clearInterval(flashReplayTimer); flashReplayTimer = null;
+    const replayGrid = document.querySelector('#rerun-viewer .flash-replay-grid');
+    if (replayGrid) replayGrid.remove();
+    document.getElementById('flash-tracker-replay-controls').hidden = true;
+    flashTelemetryTimer = setInterval(async () => {
+        if (flashTelemetryBusy) return;
+        flashTelemetryBusy = true;
+        try {
+            const response = await fetch('/api/run/flash/telemetry/live');
+            const data = await response.json();
+            if (data.available) renderFlashSnapshot(data.snapshot, 'Live');
+        } catch (error) { console.warn('FLASH tracker stream:', error); }
+        finally { flashTelemetryBusy = false; }
+    }, 200);
+}
+
+function stopFlashTelemetry() {
+    if (flashTelemetryTimer) clearInterval(flashTelemetryTimer);
+    flashTelemetryTimer = null;
+}
+
+async function loadFlashTrackerReplay() {
+    const root = _val('run-flash-root');
+    const episode = Number(_val('run-flash-episode'));
+    if (!root || !Number.isInteger(episode) || episode < 0) {
+        showToast('Cannot inspect FLASH recording', 'Select a local dataset and episode.', 'warning'); return;
+    }
+    try {
+        const response = await fetch(`/api/run/flash/telemetry/replay?dataset_root=${encodeURIComponent(root)}&episode=${episode}`);
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.detail || 'Cannot read tracker trace');
+        let dataset = Object.values(datasets).find(item => item.root === root);
+        if (!dataset) {
+            await openDataset(root);
+            dataset = Object.values(datasets).find(item => item.root === root);
+        }
+        if (!dataset) return;
+        stopFlashTelemetry();
+        stopObsStreamViewer();
+        flashReplay = { ...result, datasetId: dataset.id, episode };
+        const viewer = document.getElementById('rerun-viewer');
+        viewer.querySelector('.flash-replay-grid')?.remove();
+        const grid = document.createElement('div');
+        grid.className = 'flash-replay-grid';
+        grid.innerHTML = '<img alt="Recorded overhead camera"><canvas class="flash-pose-canvas"></canvas>';
+        viewer.prepend(grid);
+        document.getElementById('rerun-placeholder').style.display = 'none';
+        const controls = document.getElementById('flash-tracker-replay-controls');
+        controls.hidden = false;
+        document.getElementById('flash-tracker-scrub').max = Math.max(0, result.frames.length - 1);
+        seekFlashReplay(0);
+        if (!result.layer_history) showToast('Older FLASH recording', 'This trace contains planner poses, but predates per-tracker layer recording.', 'warning');
+    } catch (error) { showToast('Cannot inspect FLASH recording', error.message, 'error'); }
+}
+
+function seekFlashReplay(index) {
+    if (!flashReplay?.frames?.length) return;
+    const selected = flashReplay.frames[Math.max(0, Math.min(index, flashReplay.frames.length - 1))];
+    const scrub = document.getElementById('flash-tracker-scrub');
+    scrub.value = String(index);
+    document.getElementById('flash-tracker-frame').textContent = `${index + 1} / ${flashReplay.frames.length}`;
+    const image = document.querySelector('#rerun-viewer .flash-replay-grid img');
+    const url = `/api/datasets/${encodeURIComponent(flashReplay.datasetId)}/episodes/${flashReplay.episode}/frame/${selected.frame_index}?camera=observation.images.overhead`;
+    image.onload = _flashDrawOverlay;
+    image.src = url;
+    renderFlashSnapshot(selected.snapshot, 'Recording');
+}
+
+function toggleFlashReplay() {
+    if (!flashReplay) return;
+    const button = document.getElementById('flash-tracker-play');
+    if (flashReplayTimer) {
+        clearInterval(flashReplayTimer); flashReplayTimer = null; button.textContent = 'Play'; return;
+    }
+    button.textContent = 'Pause';
+    flashReplayTimer = setInterval(() => {
+        const next = Number(document.getElementById('flash-tracker-scrub').value) + 1;
+        if (next >= flashReplay.frames.length) { toggleFlashReplay(); return; }
+        seekFlashReplay(next);
+    }, 100);
 }
 
 function _flashSkillDetail() {
@@ -1482,6 +1734,7 @@ function renderRunForm() {
     html += '<div class="flash-demo-actions">';
     html += '<button type="button" class="btn-small secondary" id="run-flash-view-btn" onclick="viewFlashDemo()">View demo in Data</button>';
     html += '<button type="button" class="btn-small secondary" id="run-flash-inspect-btn" onclick="inspectFlashDataset()">Inspect FLASH skills</button>';
+    html += '<button type="button" class="btn-small secondary" id="run-flash-tracker-replay-btn" onclick="loadFlashTrackerReplay()">Inspect tracker recording here</button>';
     html += '</div>';
     html += '<div class="form-section-title">Live robot trial</div>';
     html += '<div class="form-grid">';
@@ -1592,6 +1845,7 @@ async function launchRun() {
             showToast('Started', `FLASH trial started (PID ${data.pid})`, 'success');
             updateRunUI(true, data.command);
             connectOutputSSE();
+            startFlashTelemetry();
             startObsStreamViewer();
         } catch (e) { showToast('FLASH launch failed', e.message, 'error'); }
         return;
@@ -2341,6 +2595,8 @@ async function pollRunStatus() {
         const status = await res.json();
         _reportRunFailure(status.last_error);
         updateRunUI(status.running, status.command);
+        if (status.running && status.command === 'flash' && selectedWorkflow === 'flash') startFlashTelemetry();
+        else if (!status.running) stopFlashTelemetry();
 
         // Live record-phase readout next to the episode-control buttons
         // ("recording episode 3" / "resetting" / ...). Empty when idle or
@@ -2734,6 +2990,13 @@ async function startObsStreamViewer() {
         if (lowBandwidth) ov.style.display = 'none';
         else overlayElements[key] = ov;
 
+        if (selectedWorkflow === 'flash' && key.includes('overhead') && !key.includes('depth')) {
+            const poseCanvas = document.createElement('canvas');
+            poseCanvas.className = 'flash-pose-canvas';
+            cell.appendChild(poseCanvas);
+            if (img) img.addEventListener('load', _flashDrawOverlay);
+        }
+
         // Same chip family as the enlarge button beside it, and as the data tab's
         // tiles -- one class rather than two hand-written inline plates that had
         // already drifted apart in inset, padding and background.
@@ -2797,6 +3060,7 @@ async function startObsStreamViewer() {
     }
 
     container.appendChild(grid);
+    _flashDrawOverlay();
     if (lowBandwidth) _attachLiveVideo(videoElements, urdfFrame);
     // Click / drag-a-box on a tile to segment what is under it — one delegated handler for
     // the whole grid (see Overlays.installTileGestures). Run tab only — see clickCapable().
@@ -2816,6 +3080,10 @@ async function startObsStreamViewer() {
         others.forEach((el) => { el.style.display = focusedTile ? 'none' : ''; });
         grid.style.gridTemplateColumns = focusedTile ? '1fr' : gridCols;
         grid.style.gridTemplateRows = focusedTile ? '1fr' : gridRows;
+    }
+    if (selectedWorkflow === 'flash') {
+        const overhead = camKeys.find(key => key.includes('overhead') && !key.includes('depth'));
+        if (overhead) focusTile(overhead);
     }
     // Deliberately NO Esc hotkey: six other components already bind Escape (log modal,
     // process modal, bug-report and add-host dialogs, data-tab handlers), so a global

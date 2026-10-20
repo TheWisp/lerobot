@@ -170,13 +170,15 @@ def test_flash_launch_uses_shared_process_owner_and_prepared_episode(tmp_path, m
     )
     assert asyncio.run(start_flash(request))["pid"] == 123
     assert launched[0][1] == "flash"
-    assert launched[0][0][-5:] == [
+    assert launched[0][0][-7:-2] == [
         str(bundle),
         str(config),
         "--auto-output",
         "--source-dataset-root",
         str(tmp_path),
     ]
+    assert launched[0][0][-2] == "--telemetry-path"
+    assert launched[0][0][-1] == str(run_api._flash_live_path)
 
 
 def test_flash_stop_waits_for_trial_dataset_save(monkeypatch):
@@ -375,3 +377,63 @@ def test_run_flash_subtab_launches_selected_prepared_skill(gui_page):
             "config_path": "/tmp/trial.json",
         }
     ]
+
+
+def test_run_flash_tracker_panel_reuses_view_for_recorded_layers(gui_page):
+    page = gui_page
+    page.evaluate("switchTab('run')")
+    page.evaluate("() => selectWorkflow('flash')")
+    page.route(
+        "**/api/run/flash/telemetry/replay?*",
+        lambda route: route.fulfill(
+            json={
+                "available": True,
+                "layer_history": True,
+                "frames": [
+                    {
+                        "frame_index": 3,
+                        "snapshot": {
+                            "recorded_at_s": 12.0,
+                            "camera": None,
+                            "centers_object_m": {},
+                            "proposals": {
+                                "object": {
+                                    "evidence": "observed",
+                                    "source_time_s": 11.9,
+                                    "estimator": "appearance_rgbd",
+                                    "pose": None,
+                                }
+                            },
+                            "layers": {
+                                "object": {
+                                    "environment_group_motion": {
+                                        "evidence": "predicted",
+                                        "source_time_s": 12.0,
+                                        "pose": None,
+                                    }
+                                }
+                            },
+                            "accepted": {
+                                "object": {
+                                    "evidence": "predicted",
+                                    "source_time_s": 12.0,
+                                    "estimator": "environment_group_motion",
+                                    "pose": None,
+                                }
+                            },
+                        },
+                    }
+                ],
+            }
+        ),
+    )
+    page.evaluate("datasets['/tmp/tracker-run'] = {id: '/tmp/tracker-run', root: '/tmp/tracker-run'}")
+    page.locator("#run-flash-root").fill("/tmp/tracker-run")
+    page.locator("#run-flash-tracker-replay-btn").click()
+    page.wait_for_function("() => document.querySelector('#flash-tracker-mode').textContent === 'Recording'")
+    panel = page.locator("#flash-tracker-panel")
+    assert panel.is_visible()
+    assert "Direct proposal" in panel.inner_text()
+    assert "Verified group" in panel.inner_text()
+    assert "Planner pose: Verified group" in panel.inner_text()
+    assert page.locator("#flash-tracker-replay-controls").is_visible()

@@ -8,6 +8,7 @@ group points may carry the object's last observed pose through occlusion.
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass
 
 import cv2
@@ -15,7 +16,13 @@ import numpy as np
 
 from .geometry import inverse, transform
 from .perception import RGBDFrame
-from .registration import DegenerateRegistrationError, register_object, transform_points, unproject_pixels
+from .registration import (
+    DegenerateRegistrationError,
+    register_object,
+    rigid_fit,
+    transform_points,
+    unproject_pixels,
+)
 
 
 @dataclass(frozen=True)
@@ -71,6 +78,7 @@ class ScenePointTracker:
         self._next_id = 0
         self._last_time_s: float | None = None
         self.gaps = 0
+        self.recent_gap_durations_s: deque[float] = deque(maxlen=16)
 
     def update(self, frame: RGBDFrame) -> SceneTracks:
         gray = cv2.cvtColor(frame.rgb, cv2.COLOR_RGB2GRAY)
@@ -81,14 +89,20 @@ class ScenePointTracker:
         if self._gray is not None:
             assert self._last_time_s is not None
             dt = frame.source_time_s - self._last_time_s
-            if not 0 < dt <= self.max_frame_gap_s:
-                # A capture gap ends this track generation. Keep monotonically
-                # increasing IDs so an old relationship cannot attach to new
-                # pixels when tracking resumes.
+            if dt <= 0:
+                # Non-monotone camera time has no causal optical-flow meaning.
                 self._uv = np.empty((0, 2), dtype=np.float32)
                 self._ids = np.empty(0, dtype=np.int64)
                 self._gray = None
                 self.gaps += 1
+                self.recent_gap_durations_s.append(float(dt))
+            elif dt > self.max_frame_gap_s:
+                # Time alone cannot prove that a point moved: a stationary
+                # scene remains trackable after a dropped camera frame. Keep
+                # only identities that pass the same forward/backward image
+                # check and later 3D group fit as on every other frame.
+                self.gaps += 1
+                self.recent_gap_durations_s.append(float(dt))
             if self._gray is not None and len(self._uv):
                 before = self._uv.reshape(-1, 1, 2)
                 after, forward_ok, _ = cv2.calcOpticalFlowPyrLK(
@@ -167,6 +181,25 @@ def _paired(before: SceneTracks, after: SceneTracks) -> tuple[np.ndarray, np.nda
     )
 
 
+def _outside_masks(xy: np.ndarray, masks: tuple[np.ndarray, ...]) -> np.ndarray:
+    keep = np.ones(len(xy), dtype=bool)
+    for mask in masks:
+        if mask.dtype != bool or mask.ndim != 2:
+            raise ValueError("object exclusion mask must be boolean HxW")
+        inside = (xy[:, 0] >= 0) & (xy[:, 0] < mask.shape[1]) & (xy[:, 1] >= 0) & (xy[:, 1] < mask.shape[0])
+        keep[inside] &= ~mask[xy[inside, 1], xy[inside, 0]]
+    return keep
+
+
+def _support_center(pose: np.ndarray, object_center_object_m: np.ndarray | None) -> np.ndarray:
+    local_center = (
+        np.zeros(3) if object_center_object_m is None else np.asarray(object_center_object_m, dtype=float)
+    )
+    if local_center.shape != (3,) or not np.isfinite(local_center).all():
+        raise ValueError("object support center must be a finite 3D point")
+    return transform_points(transform(pose), local_center[None])[0]
+
+
 @dataclass(frozen=True)
 class EnvironmentRelationship:
     """Measured environmental point group carrying one last observed pose."""
@@ -176,6 +209,7 @@ class EnvironmentRelationship:
     anchor_pose: np.ndarray
     anchor_time_s: float
     reference_version: str
+    last_group_measurement_s: float | None = None
 
     def predict(
         self,
@@ -184,6 +218,16 @@ class EnvironmentRelationship:
         fit_threshold_m: float,
         min_inliers: int,
     ) -> np.ndarray | None:
+        tracked = self.track(tracks, fit_threshold_m=fit_threshold_m, min_inliers=min_inliers)
+        return tracked[0] if tracked is not None else None
+
+    def track(
+        self,
+        tracks: SceneTracks,
+        *,
+        fit_threshold_m: float,
+        min_inliers: int,
+    ) -> tuple[np.ndarray, EnvironmentRelationship] | None:
         lookup = {int(point_id): index for index, point_id in enumerate(tracks.ids)}
         left, right = [], []
         for index, point_id in enumerate(self.ids):
@@ -192,17 +236,104 @@ class EnvironmentRelationship:
                 right.append(current)
         if len(left) < min_inliers:
             return None
+        source = self.anchor_xyz[left]
+        target = tracks.base_xyz[right]
+        # When the measured support points have not moved beyond the 3-D fit
+        # resolution, their orientation is unobservable. A least-squares rigid
+        # fit can still invent a large rotation on a nearly planar support,
+        # which rotates a distant object-frame origin and the planner goal.
+        # Preserve the anchor orientation and carry only measured translation.
+        translation = np.median(target - source, axis=0)
+        translation_inliers = np.flatnonzero(
+            np.linalg.norm(source + translation - target, axis=1) <= fit_threshold_m
+        )
+        if np.linalg.norm(translation) <= fit_threshold_m and len(translation_inliers) >= max(
+            min_inliers, len(source) // 2 + 1
+        ):
+            motion = np.eye(4)
+            motion[:3, 3] = translation
+            inliers = translation_inliers
+        else:
+            fitted = self._fit_motion(source, target, fit_threshold_m, min_inliers)
+            if fitted is None:
+                return None
+            motion, inliers = fitted
+        source_indices = np.asarray(left, dtype=int)[inliers]
+        relationship = EnvironmentRelationship(
+            self.ids[source_indices],
+            self.anchor_xyz[source_indices],
+            self.anchor_pose,
+            self.anchor_time_s,
+            self.reference_version,
+            tracks.source_time_s,
+        )
+        return motion @ self.anchor_pose, relationship
+
+    @staticmethod
+    def _fit_motion(
+        source: np.ndarray, target: np.ndarray, fit_threshold_m: float, min_inliers: int
+    ) -> tuple[np.ndarray, np.ndarray] | None:
         try:
-            fit = register_object(
-                self.anchor_xyz[left],
-                tracks.base_xyz[right],
-                threshold_m=fit_threshold_m,
-                min_inliers=min_inliers,
-                trials=100,
-            )
+            # Once point identities are associated, a consensus fit should
+            # be cheap. Trim depth/flow outliers directly when a majority
+            # agrees; use robust search only when the scene split is real.
+            direct = rigid_fit(source, target)
+            residual = np.linalg.norm(transform_points(direct, source) - target, axis=1)
+            inliers = np.flatnonzero(residual <= fit_threshold_m)
+            if len(inliers) >= max(min_inliers, len(source) // 2 + 1):
+                refined = rigid_fit(source[inliers], target[inliers])
+                residual = np.linalg.norm(transform_points(refined, source) - target, axis=1)
+                inliers = np.flatnonzero(residual <= fit_threshold_m)
+                if len(inliers) >= max(min_inliers, len(source) // 2 + 1):
+                    motion = refined
+                else:
+                    raise DegenerateRegistrationError("direct group refit lost its majority")
+            else:
+                raise DegenerateRegistrationError("direct group fit lacked a majority")
         except DegenerateRegistrationError:
-            return None
-        return fit.base_from_demo_object @ self.anchor_pose
+            try:
+                fit = register_object(
+                    source,
+                    target,
+                    threshold_m=fit_threshold_m,
+                    min_inliers=min_inliers,
+                    trials=100,
+                )
+            except DegenerateRegistrationError:
+                return None
+            motion = fit.base_from_demo_object
+            inliers = np.asarray(fit.inlier_indices, dtype=int)
+        return motion, inliers
+
+
+def seed_environment_relationship(
+    scene: SceneTracks,
+    pose: np.ndarray,
+    object_masks: tuple[np.ndarray, ...],
+    *,
+    context_radius_m: float,
+    min_inliers: int,
+    reference_version: str,
+    object_center_object_m: np.ndarray | None = None,
+) -> EnvironmentRelationship | None:
+    """Propose nearby support points from one direct object observation.
+
+    This is a hypothesis until a second direct view agrees. It may still
+    carry an explicitly predicted pose while the object is briefly hidden.
+    """
+    center = _support_center(pose, object_center_object_m)
+    nearby = np.linalg.norm(scene.base_xyz - center, axis=1) <= context_radius_m
+    keep = nearby & _outside_masks(scene.xy, object_masks)
+    if int(keep.sum()) < min_inliers:
+        return None
+    return EnvironmentRelationship(
+        scene.ids[keep].copy(),
+        scene.base_xyz[keep].copy(),
+        transform(pose),
+        scene.source_time_s,
+        reference_version,
+        scene.source_time_s,
+    )
 
 
 def establish_environment_relationship(
@@ -217,30 +348,32 @@ def establish_environment_relationship(
     min_motion_m: float,
     min_inliers: int,
     reference_version: str,
+    allow_stationary: bool = False,
+    object_center_object_m: np.ndarray | None = None,
 ) -> EnvironmentRelationship | None:
-    """Link only if non-object scene points share a *measured* object motion."""
+    """Link an object to nearby non-object points after independent pose agreement.
+
+    A stationary support can be verified from distinct direct object views:
+    both the object and its surrounding points must stay within the measured
+    registration error. Moving associations still require measurable co-motion.
+    """
     if after.source_time_s <= before.source_time_s:
         return None
     ids, xy, old_xyz, new_xyz = _paired(before, after)
     if len(ids) < min_inliers:
         return None
-    for mask in before_object_masks:
-        if mask.dtype != bool or mask.ndim != 2:
-            raise ValueError("object exclusion mask must be boolean HxW")
-        inside = (xy[:, 0] >= 0) & (xy[:, 0] < mask.shape[1]) & (xy[:, 1] >= 0) & (xy[:, 1] < mask.shape[0])
-        excluded = np.zeros(len(ids), dtype=bool)
-        excluded[inside] = mask[xy[inside, 1], xy[inside, 0]]
-        keep = ~excluded
-        ids, xy, old_xyz, new_xyz = ids[keep], xy[keep], old_xyz[keep], new_xyz[keep]
+    keep = _outside_masks(xy, before_object_masks)
+    ids, old_xyz, new_xyz = ids[keep], old_xyz[keep], new_xyz[keep]
     old_pose, new_pose = transform(before_pose), transform(after_pose)
-    old_center = old_pose[:3, 3]
+    old_center = _support_center(old_pose, object_center_object_m)
     nearby = np.linalg.norm(old_xyz - old_center, axis=1) <= context_radius_m
     ids, old_xyz, new_xyz = ids[nearby], old_xyz[nearby], new_xyz[nearby]
     if len(ids) < min_inliers:
         return None
     expected_motion = new_pose @ inverse(old_pose)
-    displaced_center = expected_motion[:3, :3] @ old_center + expected_motion[:3, 3]
-    if np.linalg.norm(displaced_center - old_center) < min_motion_m:
+    displaced_center = transform_points(expected_motion, old_center[None])[0]
+    displacement = np.linalg.norm(displaced_center - old_center)
+    if displacement < min_motion_m and (not allow_stationary or displacement > fit_threshold_m):
         return None
     residual = np.linalg.norm(transform_points(expected_motion, old_xyz) - new_xyz, axis=1)
     agree = residual <= fit_threshold_m
@@ -258,9 +391,15 @@ def establish_environment_relationship(
     except DegenerateRegistrationError:
         return None
     predicted_center = transform_points(fit.base_from_demo_object, old_center[None])[0]
-    if np.linalg.norm(predicted_center - new_pose[:3, 3]) > fit_threshold_m:
+    new_center = _support_center(new_pose, object_center_object_m)
+    if np.linalg.norm(predicted_center - new_center) > fit_threshold_m:
         return None
     indices = np.asarray(fit.inlier_indices, dtype=int)
     return EnvironmentRelationship(
-        ids[indices], new_xyz[indices], new_pose, after.source_time_s, reference_version
+        ids[indices],
+        new_xyz[indices],
+        new_pose,
+        after.source_time_s,
+        reference_version,
+        after.source_time_s,
     )

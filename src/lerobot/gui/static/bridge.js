@@ -133,12 +133,11 @@
     if (route) applyRoute(route.view, route.params);
   }
 
-  // Apply the URL hash on first load so deep-links work directly. bridge.js
-  // is loaded near the end of <body> (so it might run before or after
-  // DOMContentLoaded depending on script ordering / `defer`); fire the handler
-  // immediately if the document is already parsed, otherwise wait for it.
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", onHashChange);
+  // Apply the initial route after all page scripts have installed their
+  // consumers. Running it immediately from this script can switch the Run tab
+  // before bridge_consumers.js has registered the FLASH workflow handler.
+  if (document.readyState !== "complete") {
+    document.addEventListener("DOMContentLoaded", onHashChange, { once: true });
   } else {
     onHashChange();
   }

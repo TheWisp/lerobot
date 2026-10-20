@@ -38,6 +38,7 @@ class PerceptionService:
         clock=time.perf_counter,
         collector_period_s: float = 0.01,
         on_pose_update: Callable[[int, dict[str, PoseEstimate]], None] | None = None,
+        on_frame: Callable[[RGBDFrame], None] | None = None,
         causal_frames: Callable[[RGBDFrame], None] | None = None,
         causal_error: Callable[[], Exception | None] | None = None,
     ) -> None:
@@ -54,6 +55,7 @@ class PerceptionService:
         self.clock = clock
         self.collector_period_s = collector_period_s
         self.on_pose_update = on_pose_update
+        self.on_frame = on_frame
         self.causal_frames = causal_frames
         self.causal_error = causal_error
         self.captured = 0
@@ -89,6 +91,8 @@ class PerceptionService:
                 frame = self.source.read()
                 self.frames.publish(frame)
                 self.captured += 1
+                if self.on_frame is not None:
+                    self.on_frame(frame)
                 if self.causal_frames is not None:
                     frozen = self.frames.snapshot()
                     assert frozen is not None

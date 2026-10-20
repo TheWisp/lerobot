@@ -29,6 +29,15 @@ points moved by at most 1.5 mm, however: the arbitrary reference origin is far
 from the visible surface and is not a valid continuity metric. This is a real
 false-rejection regression case, without RGB or motor actions.
 
+`dowel_axial_jitter_20261020.npz` stores the prepared dowel points, the first
+demonstrated dowel reference pose, and 14 distinct direct RGB-D pose proposals
+from the 2026-10-20 17:36:41 physical trial. The dowel remained on the tray;
+successive proposals rotated up to 19.4 degrees, mostly about its long axis,
+while their modeled surface centers stayed within a few millimetres. These
+poses are tracker outputs rather than independent ground truth. The fixture
+tests the explicitly annotated cylindrical symmetry without storing images or
+motor actions.
+
 `ring_tray_motion_20261016.npz` contains sparse, persistent RGB-D point tracks
 from camera frames 331, 360, 390 and 422 of the 2026-10-16 11:21:49 insertion
 attempt. The tray and ring visibly moved together between the first two frames.

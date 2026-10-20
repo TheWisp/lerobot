@@ -8,9 +8,12 @@ from dataclasses import dataclass
 from math import isfinite
 from typing import Protocol
 
+import numpy as np
+
 from .attachment_lifecycle import AttachmentLifecycle
 from .causal_service import CausalPoseService, CausalTrackingConfig
 from .execution import MotorTick, RobotIO
+from .live_telemetry import FlashLiveTelemetry
 from .milestones import PoseMilestonePublisher
 from .perception import HeldAttachmentUpdater, LatestPoseStore, ObjectReference, PoseBackend
 from .perception_service import PerceptionService, RGBDSource
@@ -84,11 +87,14 @@ class FlashRuntime:
         max_camera_age_s: float,
         fps: float = 30.0,
         causal_tracking: CausalTrackingConfig | None = None,
+        object_centers_by_role: dict[str, np.ndarray] | None = None,
+        live_telemetry: FlashLiveTelemetry | None = None,
     ) -> None:
         self._validate_bindings(skill, references)
         self.skill = skill
         self.recorder = recorder
         self.max_camera_age_s = max_camera_age_s
+        self.live_telemetry = live_telemetry
         self.poses = LatestPoseStore()
         self.causal = (
             CausalPoseService(
@@ -105,6 +111,8 @@ class FlashRuntime:
                 environment_prediction_max_s=causal_tracking.environment_prediction_max_s,
                 environment_min_inliers=causal_tracking.environment_min_inliers,
                 static_prediction_max_s=causal_tracking.static_prediction_max_s,
+                object_centers_by_role=object_centers_by_role,
+                on_layer=live_telemetry.layer if live_telemetry is not None else None,
             )
             if causal_tracking is not None
             else None
@@ -128,7 +136,10 @@ class FlashRuntime:
         )
 
         def on_tick(tick: MotorTick) -> None:
+            prior_attachment = self.attachment.active_role
             self.attachment.on_motor_tick(tick)
+            if self.causal is not None and self.attachment.active_role != prior_attachment:
+                self.causal.set_attached_role(self.attachment.active_role)
             self.recorder.submit(self.assembler.assemble(tick))
 
         self.session = FlashSession(
@@ -148,6 +159,8 @@ class FlashRuntime:
         self._last_pose_times: dict[str, float] = {}
 
         def on_pose_update(version: int, poses: dict[str, PoseEstimate]) -> None:
+            if self.live_telemetry is not None:
+                self.live_telemetry.accepted(poses)
             # Perception may publish for many seconds while the first observed
             # pose is being seeded. No motor session consumes evidence until
             # startup completes; the next collector pass publishes the latest
@@ -171,23 +184,24 @@ class FlashRuntime:
             self.milestones(version, poses)
 
         causal = self.causal
+
+        def on_pose_result(result) -> None:
+            if self.live_telemetry is not None:
+                self.live_telemetry.proposals(result.estimates, result.masks, result.frame_id)
+            assert causal is not None
+            causal.submit_anchor(
+                result.frame_id,
+                result.estimates,
+                result.masks,
+                source_time_s=result.source_time_s,
+                calibration_version=result.calibration_version,
+            )
+
         pose_process = PoseProcess(
             pose_backend_factory,
             references,
             self.poses if causal is None else None,
-            on_result=(
-                (
-                    lambda result: causal.submit_anchor(
-                        result.frame_id,
-                        result.estimates,
-                        result.masks,
-                        source_time_s=result.source_time_s,
-                        calibration_version=result.calibration_version,
-                    )
-                )
-                if causal is not None
-                else None
-            ),
+            on_result=on_pose_result if causal is not None else None,
             require_masks=causal is not None,
         )
         self.perception = PerceptionService(
@@ -196,6 +210,7 @@ class FlashRuntime:
             self.poses,
             clock=self.session.motor.clock,
             on_pose_update=on_pose_update,
+            on_frame=live_telemetry.frame if live_telemetry is not None else None,
             causal_frames=causal.submit_frame if causal is not None else None,
             causal_error=(lambda: causal.error) if causal is not None else None,
         )

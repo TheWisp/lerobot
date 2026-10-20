@@ -9,9 +9,13 @@ import json
 import logging
 import os
 import re
+import secrets
 import signal
 import sys
+import tempfile
 import time
+from bisect import bisect_left
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -298,6 +302,8 @@ _active_process: asyncio.subprocess.Process | None = None
 # when it did.
 _active_loop: asyncio.AbstractEventLoop | None = None
 _active_command: str | None = None
+_flash_live_path: Path | None = None
+_flash_telemetry_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gui-flash-telemetry")
 _active_config: dict | None = None
 _debug_process: asyncio.subprocess.Process | None = None  # optional model debug alongside teleop
 _debug_output_path: Path | None = None  # log file for debug model output
@@ -976,6 +982,8 @@ async def start_flash(req: FlashRunRequest) -> dict:
         if not config.is_file():
             raise HTTPException(400, "Select an existing local robot/camera trial config")
         await _release_preview_cameras()
+        global _flash_live_path
+        _flash_live_path = Path(tempfile.gettempdir()) / f"lerobot-flash-{secrets.token_hex(16)}.json"
         args = [
             sys.executable,
             "-u",
@@ -986,9 +994,89 @@ async def start_flash(req: FlashRunRequest) -> dict:
             "--auto-output",
             "--source-dataset-root",
             str(Path(req.dataset_root).expanduser().resolve()),
+            "--telemetry-path",
+            str(_flash_live_path),
         ]
         await _launch_subprocess(args, command="flash", config=req.model_dump())
         return {"status": "started", "command": "flash", "pid": _active_process.pid}
+
+
+@router.get("/flash/telemetry/live")
+async def flash_live_telemetry() -> dict:
+    """Return the current trial's latest tracker layers without touching its loops."""
+    path = _flash_live_path if _active_command == "flash" and is_run_active() else None
+    if path is None:
+        return {"available": False}
+
+    def read() -> dict:
+        try:
+            return {"available": True, "snapshot": json.loads(path.read_text(encoding="utf-8"))}
+        except FileNotFoundError:
+            return {"available": False}
+
+    return await asyncio.get_running_loop().run_in_executor(_flash_telemetry_pool, read)
+
+
+def _flash_tracker_replay(root: Path, episode: int) -> dict:
+    extension = root.expanduser().resolve() / "flash" / "v1"
+    trace_path = extension / f"episode_{episode:06d}.jsonl"
+    if not trace_path.is_file():
+        raise HTTPException(404, "No FLASH trace is stored for this episode")
+    ticks = [json.loads(line) for line in trace_path.open(encoding="utf-8") if line.strip()]
+    if not ticks:
+        raise HTTPException(404, "FLASH trace has no frames")
+    camera_ticks = [tick for tick in ticks if tick.get("camera_source_time_s") is not None]
+    times = [tick["camera_source_time_s"] for tick in camera_ticks]
+    layers_path = extension / f"tracker_episode_{episode:06d}.jsonl"
+    snapshots = (
+        [json.loads(line) for line in layers_path.open(encoding="utf-8") if line.strip()]
+        if layers_path.is_file()
+        else []
+    )
+    if snapshots:
+        frames = []
+        for snapshot in snapshots:
+            camera = snapshot.get("camera")
+            source_s = camera.get("source_time_s") if camera else None
+            if source_s is not None and camera_ticks:
+                pos = bisect_left(times, source_s)
+                pos = min(pos, len(camera_ticks) - 1)
+                if pos and abs(times[pos - 1] - source_s) < abs(times[pos] - source_s):
+                    pos -= 1
+                frame_index = camera_ticks[pos]["frame_index"]
+            else:
+                frame_index = 0
+            frames.append({"frame_index": frame_index, "snapshot": snapshot})
+        return {"available": True, "layer_history": True, "frames": frames}
+    # Older trials recorded the accepted planner pose at motor ticks, but not
+    # every rejected/direct/group layer. Show only what those traces establish.
+    return {
+        "available": True,
+        "layer_history": False,
+        "frames": [
+            {
+                "frame_index": tick["frame_index"],
+                "snapshot": {
+                    "recorded_at_s": tick.get("observed_at_s") or tick.get("scheduled_s"),
+                    "camera": None,
+                    "centers_object_m": {},
+                    "proposals": {},
+                    "layers": {},
+                    "accepted": tick.get("poses", {}),
+                },
+            }
+            for tick in ticks
+        ],
+    }
+
+
+@router.get("/flash/telemetry/replay")
+async def flash_tracker_replay(dataset_root: str, episode: int = 0) -> dict:
+    if episode < 0:
+        raise HTTPException(400, "Episode must be nonnegative")
+    return await asyncio.get_running_loop().run_in_executor(
+        _flash_telemetry_pool, _flash_tracker_replay, Path(dataset_root), episode
+    )
 
 
 async def _inspect_flash_subprocess(*args: str) -> dict:

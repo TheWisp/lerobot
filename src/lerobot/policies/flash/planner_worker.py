@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 from queue import Empty, Full, Queue
 from threading import Lock, Thread
@@ -61,6 +62,7 @@ class PlanResult:
     error: str | None
     failure: PlanFailureKind | None = None
     connection: ConnectionTrajectory | None = None
+    compute_s: float = 0.0
 
 
 class PlanFailureKind(str, Enum):
@@ -95,6 +97,9 @@ class PlannerWorker:
         self._fatal: Exception | None = None
         self._newest_requested = -1
         self.superseded = 0
+        self.completed = 0
+        self.compute_total_s = 0.0
+        self.compute_max_s = 0.0
         self._started = False
 
     @property
@@ -133,6 +138,7 @@ class PlannerWorker:
 
     def _run(self) -> None:
         while (request := self._requests.get()) is not None:
+            started_s = time.perf_counter()
             try:
                 actions = self.planner.plan(
                     request.interval,
@@ -181,7 +187,11 @@ class PlannerWorker:
                     self._fatal = exc
                 return
             with self._lock:
-                self._last_result = result
+                compute_s = time.perf_counter() - started_s
+                self.completed += 1
+                self.compute_total_s += compute_s
+                self.compute_max_s = max(self.compute_max_s, compute_s)
+                self._last_result = replace(result, compute_s=compute_s)
 
     def close(self, timeout_s: float = 5.0) -> None:
         if not self._started:
