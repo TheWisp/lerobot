@@ -371,6 +371,7 @@ function _flashLayerName(estimator) {
         environment_group_motion: 'Verified group',
         environment_support_hypothesis: 'Group hypothesis',
         stationary_prior: 'Stationary prior',
+        grasp_attachment_prediction: 'Gripper attachment prediction',
     })[estimator] || estimator.replaceAll('_', ' ');
 }
 
@@ -379,6 +380,7 @@ function _flashLayerColor(estimator) {
     if (estimator === 'environment_group_motion') return '#34d399';
     if (estimator === 'environment_support_hypothesis') return '#a3e635';
     if (estimator === 'stationary_prior') return '#94a3b8';
+    if (estimator === 'grasp_attachment_prediction') return '#fb923c';
     return '#58a6ff';
 }
 
@@ -408,7 +410,7 @@ function renderFlashSnapshot(snapshot, mode = 'Live') {
         _flashDrawOverlay();
         return;
     }
-    let html = '<div class="flash-tracker-legend">Dots + solid outline: planner model pose · thin outlines: tracker hypotheses · purple: measured mask (matching camera frame)</div>';
+    let html = '<div class="flash-tracker-legend">Solid outline: pose used for planning when available · thin outlines: independent tracker estimates · purple: measured mask (matching camera frame)</div>';
     for (const role of roles) {
         html += `<div class="flash-tracker-role"><strong>${_esc(role)}</strong>`;
         const proposal = snapshot.proposals?.[role];
@@ -417,7 +419,10 @@ function renderFlashSnapshot(snapshot, mode = 'Live') {
             html += `<div class="flash-tracker-layer"><span class="flash-tracker-dot" style="background:${_flashLayerColor(name)}"></span>${_esc(_flashLayerName(name))}<small>${_esc(_flashPoseText(pose, snapshot))}</small></div>`;
         }
         const accepted = snapshot.accepted?.[role];
-        html += `<div class="flash-tracker-selected">Planner pose: ${accepted ? _esc(_flashLayerName(accepted.estimator || 'unspecified')) + '<small>' + _esc(_flashPoseText(accepted, snapshot)) + '</small>' : 'none'}</div>`;
+        const held = snapshot.held_prediction?.role === role ? snapshot.held_prediction : null;
+        if (held && accepted) html += `<div class="flash-tracker-layer">Independent estimate <small>${_esc(_flashLayerName(accepted.estimator || 'unspecified'))}: ${_esc(_flashPoseText(accepted, snapshot))}</small></div>`;
+        const planningPose = held || accepted;
+        html += `<div class="flash-tracker-selected">${held ? 'Planner prediction (rigid grasp)' : 'Accepted estimator pose'}: ${planningPose ? _esc(_flashLayerName(planningPose.estimator || 'unspecified')) + '<small>' + _esc(_flashPoseText(planningPose, snapshot)) + (held && !held.last_direct_observation_s ? ' · unverified after grasp' : '') + '</small>' : 'none'}</div>`;
         const comparison = snapshot.direct_group_comparisons?.[role];
         if (comparison) {
             const age = Math.max(0, Number(snapshot.recorded_at_s) - Number(comparison.available_at_s));
@@ -524,7 +529,14 @@ function _flashDrawOverlay() {
         for (const [role, layers] of Object.entries(snapshot.layers || {})) {
             Object.entries(layers).forEach(([name, pose]) => draw(role, name, pose, false));
         }
-        for (const [role, pose] of Object.entries(snapshot.accepted || {})) draw(role, pose.estimator || 'accepted', pose, true);
+        for (const [role, pose] of Object.entries(snapshot.accepted || {})) {
+            if (snapshot.held_prediction?.role === role) draw(role, pose.estimator || 'accepted', pose, false);
+            else draw(role, pose.estimator || 'accepted', pose, true);
+        }
+        if (snapshot.held_prediction) {
+            const held = snapshot.held_prediction;
+            draw(held.role, held.estimator, held, true);
+        }
     });
 }
 

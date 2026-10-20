@@ -10,7 +10,7 @@ import numpy as np
 from lerobot.gui.api.run import _flash_recordings, _flash_tracker_replay
 from lerobot.policies.flash.live_telemetry import FlashLiveTelemetry
 from lerobot.policies.flash.perception import RGBDFrame
-from lerobot.policies.flash.trajectory import Evidence, PoseEstimate
+from lerobot.policies.flash.trajectory import AttachmentState, Evidence, PoseEstimate
 
 
 def _estimate(source_s: float, estimator: str, evidence: Evidence) -> PoseEstimate:
@@ -93,6 +93,36 @@ def test_older_trace_does_not_claim_unrecorded_tracker_layers(tmp_path: Path) ->
     assert not replay["layer_history"]
     assert replay["frames"][0]["snapshot"]["layers"] == {}
     assert replay["frames"][0]["snapshot"]["accepted"]["object"]["estimator"] == "object_point_motion"
+
+
+def test_held_prediction_is_recorded_separately_from_stale_independent_pose(tmp_path: Path) -> None:
+    class Kinematics:
+        def forward_kinematics(self, joints):
+            result = np.eye(4)
+            result[0, 3] = joints[0]
+            return result
+
+    live = tmp_path / "live.json"
+    telemetry = FlashLiveTelemetry(
+        live, tmp_path / "tracker.jsonl", {"object": np.zeros(3)}, kinematics=Kinematics()
+    )
+    telemetry.accepted({"object": _estimate(1.0, "stationary_prior", Evidence.PREDICTED)})
+    gripper_from_object = np.eye(4)
+    gripper_from_object[0, 3] = 0.2
+    telemetry.held_attachment(
+        "object",
+        AttachmentState(gripper_from_object, 2.0, 2.0, "reference-v1"),
+        np.array([0.3]),
+        3.0,
+        independently_observed=False,
+    )
+    telemetry.close()
+    snapshot = json.loads(live.read_text())
+    assert snapshot["accepted"]["object"]["estimator"] == "stationary_prior"
+    held = snapshot["held_prediction"]
+    assert held["estimator"] == "grasp_attachment_prediction"
+    assert held["pose"][0][3] == 0.5
+    assert held["last_direct_observation_s"] is None
 
 
 def test_flash_recordings_lists_source_datasets_with_outcomes(tmp_path: Path) -> None:

@@ -12,9 +12,9 @@ from threading import Condition, Thread
 import cv2
 import numpy as np
 
-from .perception import RGBDFrame
+from .perception import EndEffectorKinematics, RGBDFrame
 from .pose_disagreement import PoseComparison
-from .trajectory import PoseEstimate
+from .trajectory import AttachmentState, Evidence, PoseEstimate
 
 
 def _mask_boundary(mask: np.ndarray) -> list[list[int]]:
@@ -55,6 +55,7 @@ class FlashLiveTelemetry:
         centers_by_role: dict[str, np.ndarray],
         *,
         points_by_role: dict[str, np.ndarray] | None = None,
+        kinematics: EndEffectorKinematics | None = None,
         period_s: float = 0.1,
     ) -> None:
         self.live_path = live_path
@@ -64,6 +65,7 @@ class FlashLiveTelemetry:
             role: np.asarray(points, dtype=float).tolist() for role, points in (points_by_role or {}).items()
         }
         self.period_s = period_s
+        self.kinematics = kinematics
         self._condition = Condition()
         self._revision = 0
         self._closed = False
@@ -74,6 +76,7 @@ class FlashLiveTelemetry:
         self._layers: dict[str, dict[str, PoseEstimate]] = {}
         self._comparisons: dict[str, dict] = {}
         self._accepted: dict[str, PoseEstimate] = {}
+        self._held_attachment: tuple[str, AttachmentState, np.ndarray, float, bool] | None = None
         self._thread = Thread(target=self._write_loop, name="flash-live-telemetry", daemon=True)
         self._thread.start()
 
@@ -119,6 +122,30 @@ class FlashLiveTelemetry:
             self._accepted = dict(poses)
             self._changed()
 
+    def held_attachment(
+        self,
+        role: str | None,
+        attachment: AttachmentState | None,
+        joints_deg: np.ndarray | None,
+        observed_at_s: float,
+        *,
+        independently_observed: bool,
+    ) -> None:
+        """Record the controller's rigid-grasp prediction without doing FK on the motor loop."""
+        with self._condition:
+            self._held_attachment = (
+                (
+                    role,
+                    attachment,
+                    np.asarray(joints_deg, dtype=float).copy(),
+                    observed_at_s,
+                    independently_observed,
+                )
+                if role is not None and attachment is not None and joints_deg is not None
+                else None
+            )
+            self._changed()
+
     def _snapshot(self) -> dict:
         with self._condition:
             frame = self._frame
@@ -128,6 +155,25 @@ class FlashLiveTelemetry:
             layers = {role: values.copy() for role, values in self._layers.items()}
             comparisons = self._comparisons.copy()
             accepted = self._accepted.copy()
+            held = self._held_attachment
+        held_prediction = None
+        if held is not None and self.kinematics is not None:
+            role, attachment, joints, observed_at_s, independently_observed = held
+            pose = self.kinematics.forward_kinematics(joints) @ attachment.gripper_from_object
+            held_prediction = _estimate_json(
+                PoseEstimate(
+                    role,
+                    pose,
+                    observed_at_s,
+                    observed_at_s,
+                    Evidence.PREDICTED,
+                    attachment.reference_version,
+                    (True,) * 3,
+                    (True,) * 3,
+                    estimator="grasp_attachment_prediction",
+                    last_direct_observation_s=attachment.source_time_s if independently_observed else None,
+                )
+            )
         return {
             "schema_version": 1,
             "recorded_at_s": time.perf_counter(),
@@ -156,6 +202,7 @@ class FlashLiveTelemetry:
             },
             "direct_group_comparisons": comparisons,
             "accepted": {role: _estimate_json(value) for role, value in accepted.items()},
+            "held_prediction": held_prediction,
         }
 
     def _write_loop(self) -> None:

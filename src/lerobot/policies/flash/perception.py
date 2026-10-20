@@ -283,11 +283,12 @@ class AttachmentEstimate:
     def gripper_from_object(self) -> np.ndarray | None:
         return None if self._attachment is None else self._attachment.copy()
 
-    def state(self, now_s: float, max_age_s: float) -> AttachmentState | None:
+    def state(self, now_s: float, max_age_s: float | None) -> AttachmentState | None:
         if (
             self._attachment is None
             or self._source_time_s is None
-            or not 0 <= now_s - self._source_time_s <= max_age_s
+            or now_s < self._source_time_s
+            or (max_age_s is not None and now_s - self._source_time_s > max_age_s)
         ):
             return None
         return AttachmentState(self._attachment, self._source_time_s, now_s, self._reference_version or "")
@@ -354,15 +355,19 @@ class HeldAttachmentUpdater:
         *,
         history_capacity: int,
         max_motor_sample_gap_s: float,
-        max_attachment_age_s: float,
+        max_attachment_age_s: float | None,
         max_update_shift_m: float,
         max_update_turn_rad: float,
     ) -> None:
         if not role or not reference_version or not arm_joint_names:
             raise ValueError("held attachment needs a role, object frame and arm joints")
-        values = (max_attachment_age_s, max_update_shift_m, max_update_turn_rad)
+        values = (max_update_shift_m, max_update_turn_rad)
         if any(not np.isfinite(value) or value <= 0 for value in values):
             raise ValueError("held attachment limits must be finite and positive")
+        if max_attachment_age_s is not None and (
+            not np.isfinite(max_attachment_age_s) or max_attachment_age_s <= 0
+        ):
+            raise ValueError("maximum attachment age must be finite and positive when set")
         self.role = role
         self.reference_version = reference_version
         self.kinematics = kinematics

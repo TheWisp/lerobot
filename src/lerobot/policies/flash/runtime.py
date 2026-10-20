@@ -43,7 +43,7 @@ class AttemptRecorder(Protocol):
 class AttachmentRuntimeLimits:
     history_capacity: int
     max_motor_sample_gap_s: float
-    max_attachment_age_s: float
+    max_attachment_age_s: float | None
     max_update_shift_m: float
     max_update_turn_rad: float
     max_pregrasp_age_s: float
@@ -143,6 +143,20 @@ class FlashRuntime:
             self.attachment.on_motor_tick(tick)
             if self.causal is not None and self.attachment.active_role != prior_attachment:
                 self.causal.set_attached_role(self.attachment.active_role)
+            if self.live_telemetry is not None:
+                role = self.attachment.active_role
+                updater = self.attachment.updaters[role] if role is not None else None
+                self.live_telemetry.held_attachment(
+                    role,
+                    updater.state(tick.observed_at_s) if updater is not None else None,
+                    np.array([tick.observed[f"{name}.pos"] for name in self.arm_joint_names])
+                    if updater is not None
+                    else None,
+                    tick.observed_at_s,
+                    independently_observed=updater.has_postgrasp_observation
+                    if updater is not None
+                    else False,
+                )
             self.recorder.submit(self.assembler.assemble(tick))
 
         self.session = FlashSession(

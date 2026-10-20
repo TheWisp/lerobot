@@ -458,5 +458,5 @@ def test_run_flash_tracker_panel_reuses_view_for_recorded_layers(gui_page):
     assert panel.is_visible()
     assert "Direct proposal" in panel.inner_text()
     assert "Verified group" in panel.inner_text()
-    assert "Planner pose: Verified group" in panel.inner_text()
+    assert "Accepted estimator pose: Verified group" in panel.inner_text()
     assert page.locator("#flash-tracker-replay-controls").is_visible()

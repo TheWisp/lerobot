@@ -750,7 +750,10 @@ def test_joint_planner_keeps_grasp_attachment_after_observed_pose_age_expires():
         "attachment": attachment,
     }
     default = JointPlanner(
-        LinearKinematics(), ("arm",), "gripper", PlannerLimits((2000.0,), 0.001, 0.01, 0.8)
+        LinearKinematics(),
+        ("arm",),
+        "gripper",
+        PlannerLimits((2000.0,), 0.001, 0.01, 0.8, max_attachment_age_s=0.8),
     )
     with pytest.raises(MissingEvidenceError, match="attachment is stale"):
         default.plan(interval, **kwargs)
@@ -762,6 +765,13 @@ def test_joint_planner_keeps_grasp_attachment_after_observed_pose_age_expires():
         PlannerLimits((2000.0,), 0.001, 0.01, 0.8, max_attachment_age_s=20),
     )
     assert separate.plan(interval, **kwargs)[0].action["arm.pos"] == pytest.approx(48.0)
+
+    # A rigid grasp is an assumption until release or contradictory evidence;
+    # an elapsed clock alone does not prove that the object slipped.
+    persistent = JointPlanner(
+        LinearKinematics(), ("arm",), "gripper", PlannerLimits((2000.0,), 0.001, 0.01, 0.8)
+    )
+    assert persistent.plan(interval, **kwargs)[0].action["arm.pos"] == pytest.approx(48.0)
 
 
 def test_attachment_updates_from_observation_but_not_its_own_prediction():
@@ -782,6 +792,7 @@ def test_attachment_updates_from_observation_but_not_its_own_prediction():
     np.testing.assert_allclose(prediction.pose[:3, 3], [0.4, 0, 0])
     assert not relation.update(pose(0.3, 0, 0), prediction)
     assert relation.predict(pose(0.3, 0, 0), 2.2, 1.0, "held") is None
+    assert relation.state(100.0, None) is not None
 
 
 def test_delayed_held_observation_uses_gripper_pose_at_camera_capture():

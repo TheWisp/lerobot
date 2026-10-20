@@ -83,7 +83,10 @@ class PlannerLimits:
 
     @property
     def effective_attachment_age_s(self) -> float:
-        return self.max_pose_age_s if self.max_attachment_age_s is None else self.max_attachment_age_s
+        # A rigid grasp assumption remains in force until release or a
+        # contradictory independent observation. Pose freshness belongs to
+        # the target; elapsed wall time alone is not evidence of object slip.
+        return float("inf") if self.max_attachment_age_s is None else self.max_attachment_age_s
 
 
 class JointPlanner:

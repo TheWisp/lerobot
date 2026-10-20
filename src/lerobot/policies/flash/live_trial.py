@@ -222,6 +222,14 @@ def trial(
             output_root / "flash" / "v1" / "tracker_episode_000000.jsonl",
             centers_by_role,
             points_by_role=points_by_role,
+            # Pinocchio FK mutates its Data workspace. The telemetry writer
+            # therefore has its own model instead of racing the planner.
+            kinematics=SelectedJointKinematics(
+                make_calibrated_so107_kinematics(calibration, arm=arm),
+                tuple(MOTOR_NAMES),
+                arm_names,
+                {"gripper": state["gripper.pos"]},
+            ),
         )
         runtime = FlashRuntime(
             skill=bundle.skill,
