@@ -33,6 +33,7 @@ class InfeasibleTrajectoryError(RuntimeError):
 class _ConnectionSpeedExceededError(InfeasibleTrajectoryError):
     def __init__(self, tick: int, ratio: float) -> None:
         super().__init__(f"joint speed exceeds configured limit at tick {tick}")
+        self.tick = tick
         self.ratio = ratio
 
 
@@ -142,7 +143,8 @@ class JointPlanner:
             except _ConnectionSpeedExceededError as exc:
                 if attempt + 1 == self.limits.max_connection_retimings:
                     raise InfeasibleTrajectoryError(
-                        "generated connection could not be timed within joint speed limits"
+                        "generated connection could not be timed within joint speed limits "
+                        f"at tick {exc.tick} (ratio {exc.ratio:.3f}, duration {connection.duration_s:.3f} s)"
                     ) from exc
                 first_due_s = epoch_s + start_tick * period_s
                 if first_due_s > connection.start_time_s + 1e-9:

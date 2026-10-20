@@ -8,7 +8,7 @@ import numpy as np
 from lerobot.policies.flash.execution import TimedAction
 from lerobot.policies.flash.planner_worker import PlannerWorker, PlanRequest
 from lerobot.policies.flash.skill import Interval, MotionMode, Relation, SpatialSample
-from lerobot.policies.flash.trajectory import Evidence, PoseEstimate
+from lerobot.policies.flash.trajectory import ConnectionTrajectory, Evidence, PoseEstimate
 
 
 def request(revision):
@@ -23,6 +23,29 @@ def request(revision):
     )
     reference = PoseEstimate("object", identity, 0, 0, Evidence.OBSERVED, "v1", (True,) * 3, (True,) * 3)
     return PlanRequest(revision, interval, 0, 1, 0, 1 / 30, 0, np.array([revision]), reference, None)
+
+
+def test_plan_request_preserves_retimed_connection_in_worker_snapshot():
+    base = request(1)
+    connection = ConnectionTrajectory.begin(base.interval, np.eye(4), base.reference.pose, None, 0)
+    connection.duration_s = 1.5
+    connection.joint_retimed = True
+    copied = PlanRequest(
+        base.revision,
+        base.interval,
+        base.start_tick,
+        base.count,
+        base.epoch_s,
+        base.period_s,
+        base.interval_start_s,
+        base.seed_deg,
+        base.reference,
+        base.attachment,
+        connection,
+    )
+    assert copied.connection is not connection
+    assert copied.connection.duration_s == 1.5
+    assert copied.connection.joint_retimed
 
 
 def test_planner_worker_supersedes_pending_request_without_blocking_motor_owner():

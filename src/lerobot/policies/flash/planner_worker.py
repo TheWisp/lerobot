@@ -49,6 +49,7 @@ class PlanRequest:
                     connection.goal_pose.copy(),
                     connection.start_time_s,
                     connection.duration_s,
+                    connection.joint_retimed,
                 ),
             )
 
@@ -59,6 +60,7 @@ class PlanResult:
     issued_actions: int
     error: str | None
     failure: PlanFailureKind | None = None
+    connection: ConnectionTrajectory | None = None
 
 
 class PlanFailureKind(str, Enum):
@@ -155,15 +157,25 @@ class PlannerWorker:
                         )
                     else:
                         self.publish(request.revision, actions)
-                        result = PlanResult(request.revision, len(actions), None)
+                        result = PlanResult(
+                            request.revision, len(actions), None, connection=request.connection
+                        )
             except MissingEvidenceError as exc:
-                result = PlanResult(request.revision, 0, str(exc), PlanFailureKind.MISSING_EVIDENCE)
+                result = PlanResult(
+                    request.revision, 0, str(exc), PlanFailureKind.MISSING_EVIDENCE, request.connection
+                )
             except InfeasibleTrajectoryError as exc:
-                result = PlanResult(request.revision, 0, str(exc), PlanFailureKind.INFEASIBLE)
+                result = PlanResult(
+                    request.revision, 0, str(exc), PlanFailureKind.INFEASIBLE, request.connection
+                )
             except PlanRejectedError as exc:
-                result = PlanResult(request.revision, 0, str(exc), PlanFailureKind.REJECTED)
+                result = PlanResult(
+                    request.revision, 0, str(exc), PlanFailureKind.REJECTED, request.connection
+                )
             except ValueError as exc:
-                result = PlanResult(request.revision, 0, str(exc), PlanFailureKind.INVALID)
+                result = PlanResult(
+                    request.revision, 0, str(exc), PlanFailureKind.INVALID, request.connection
+                )
             except Exception as exc:
                 with self._lock:
                     self._fatal = exc

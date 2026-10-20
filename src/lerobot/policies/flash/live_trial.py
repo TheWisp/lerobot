@@ -249,7 +249,34 @@ def trial(
                     if not isinstance(value, list)
                 },
                 "planner_last_result": (
-                    vars(runtime.planner.last_result) if runtime.planner.last_result is not None else None
+                    {
+                        "revision": runtime.planner.last_result.revision,
+                        "issued_actions": runtime.planner.last_result.issued_actions,
+                        "error": runtime.planner.last_result.error,
+                        "failure": runtime.planner.last_result.failure,
+                        "connection_duration_s": (
+                            runtime.planner.last_result.connection.duration_s
+                            if runtime.planner.last_result.connection is not None
+                            else None
+                        ),
+                        "connection_start_time_s": (
+                            runtime.planner.last_result.connection.start_time_s
+                            if runtime.planner.last_result.connection is not None
+                            else None
+                        ),
+                        "connection_start_xyz_m": (
+                            runtime.planner.last_result.connection.start_pose[:3, 3].tolist()
+                            if runtime.planner.last_result.connection is not None
+                            else None
+                        ),
+                        "connection_goal_xyz_m": (
+                            runtime.planner.last_result.connection.goal_pose[:3, 3].tolist()
+                            if runtime.planner.last_result.connection is not None
+                            else None
+                        ),
+                    }
+                    if runtime.planner.last_result is not None
+                    else None
                 ),
                 "planner_superseded": runtime.planner.superseded,
                 "planner_pending_revision": runtime.coordinator._pending_revision,

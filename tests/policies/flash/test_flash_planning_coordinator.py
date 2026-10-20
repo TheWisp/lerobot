@@ -66,7 +66,7 @@ class InlineWorker:
             issued_events=request.issued_events,
         )
         self.publish(request.revision, actions)
-        self.last_result = PlanResult(request.revision, len(actions), None)
+        self.last_result = PlanResult(request.revision, len(actions), None, connection=request.connection)
 
 
 def make_runtime(*, mode=MotionMode.DEMONSTRATED, max_pose_age_s=10.0, event_at_end=False):
@@ -175,6 +175,57 @@ def test_generated_connection_retargets_and_extends_duration_for_live_distance()
     assert session.progress.phase == Phase.MOTION_COMPLETE
     assert robot.sent[-1]["arm.pos"] == 30.5
     assert len(robot.sent) > 30  # generated travel is longer than the 0.2 s contact demo
+
+
+def test_coordinator_keeps_worker_joint_retiming_for_later_connection_chunks():
+    class AmplifiedKinematics:
+        def inverse_kinematics(self, _seed, target_pose):
+            return np.array([target_pose[0, 3] * 10_000])
+
+        def forward_kinematics(self, joints):
+            return pose(joints[0] / 10_000)
+
+    now = [0.0]
+    interval = Interval(
+        "approach",
+        MotionMode.CONNECTION,
+        Relation.EE_TO_OBJECT,
+        "target",
+        (SpatialSample(0, pose(), pose()), SpatialSample(1, pose(), pose())),
+        speed_m_s=0.04,
+        reference_version="target-v1",
+    )
+    session = FlashSession(
+        FlashSkill("demo/source", 0, (interval,)),
+        FakeRobot(),
+        clock=lambda: now[0],
+        sleep=lambda dt: now.__setitem__(0, now[0] + dt),
+    )
+    poses = LatestPoseStore()
+    poses.publish((target(0.01, 0),))
+    kinematics = AmplifiedKinematics()
+    worker = InlineWorker(
+        JointPlanner(kinematics, ("arm",), "gripper", PlannerLimits((180.0,), 0.001, 0.01, 10)),
+        session.publish_plan,
+    )
+    coordinator = PlanningCoordinator(
+        session,
+        worker,
+        poses,
+        kinematics,
+        ("arm",),
+        PlanBufferConfig(2, 8, 3, 0.02, 0.1),
+        lambda _at_s: None,
+    )
+    coordinator.step()
+    coordinator.schedule()
+    assert coordinator._connection.duration_s > 100 / 180
+    assert coordinator._connection.joint_retimed
+    for _ in range(12):
+        if len(worker.requests) > 1:
+            break
+        coordinator.step()
+    assert worker.requests[1].connection.joint_retimed
 
 
 def test_lost_target_cancels_old_queue_before_next_motor_send():

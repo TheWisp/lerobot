@@ -112,6 +112,10 @@ class PlanningCoordinator:
                     self._fail(f"IK plan failed: {result.error}")
                     return
                 self._planned_reference = None
+            elif result.connection is not None:
+                # The worker may have lengthened this generated path to meet
+                # joint-speed limits. Subsequent chunks must share that clock.
+                self._connection = result.connection
         interval = self.session.progress.interval
         _, live_poses = self.poses.snapshot()
         now_s = self.session.motor.clock()
