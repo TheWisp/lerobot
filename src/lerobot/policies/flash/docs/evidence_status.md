@@ -33,15 +33,18 @@ accurate enough for a live insertion.
 The repeatable [prepared-skill audit](../../../../../benchmarks/flash_audit_legacy_skill.py)
 now checks every retained arm sample against the sealed demo's time, calibrated
 fingertip pose and gripper command. The local
-`insertion-migrated-v9-world-retreat` bundle has eleven contiguous intervals,
+`insertion-migrated-v10-preferred-hover` bundle has eleven contiguous intervals,
 grasp/release events at arm samples 228/513, and a constant demonstrated held
 attachment; all recorded sample values match exactly. A visual contact sheet
 confirms the grasp, lift, insertion and release boundaries. The audit caught
 one wrong relation in v7: the final world-relative retreat was made
-ring-relative; v9 retains it as a motion relative to the interval entry.
-The demo's first hover at sample 179 is annotated `best_effort`, but the
-current skill schema does not represent that preference, so extraction is
-not yet fully faithful to the annotated keyframes.
+ring-relative; v10 retains it as a motion relative to the interval entry.
+The demo's first hover at sample 179 is annotated `best_effort` and is now a
+preferred connection endpoint; the grasp at sample 228 remains required.
+When a preferred endpoint cannot be reached, the planner advances only along
+its checked IK prefix and records the achieved fraction. This is not collision
+avoidance: the current skill still lacks general per-axis required/preferred/free
+constraints and a scene-aware path planner.
 
 ## Offline perception replay
 

@@ -13,7 +13,7 @@ from pathlib import Path
 
 import numpy as np
 
-from benchmarks.flash_prepare_legacy import _nearest_index
+from benchmarks.flash_prepare_legacy import _endpoint_requirement, _nearest_index
 from lerobot.policies.flash.geometry import inverse
 from lerobot.policies.flash.prepared import PreparedFlashSkill
 from lerobot.policies.flash.skill import MotionMode, Relation
@@ -90,6 +90,7 @@ def audit(source_root: Path, bundle_path: Path, annotation_path: Path) -> dict:
                 "name": interval.name,
                 "frames": [indices[0], indices[-1]],
                 "mode": interval.mode.value,
+                "endpoint_requirement": interval.endpoint_requirement.value,
                 "relation": interval.relation.value,
                 "reference_role": interval.reference_role,
                 "samples": len(indices),
@@ -105,15 +106,21 @@ def audit(source_root: Path, bundle_path: Path, annotation_path: Path) -> dict:
     }
     if events != expected_events:
         raise ValueError(f"skill event frames differ from annotated demo: {events!r}")
+    keypoint_constraints = []
     for item in keypoints:
-        if item.get("frame") != "world":
-            continue
         endpoint = _nearest_index(times, float(item["t"]))
         interval = next(
             (row for row in skill.intervals if row.samples[-1].source_frame_index == endpoint), None
         )
-        if interval is None or interval.relation != Relation.EE_TO_START:
+        if item.get("frame") == "world" and (interval is None or interval.relation != Relation.EE_TO_START):
             raise ValueError(f"world-relative keypoint at arm sample {endpoint} follows another object")
+        if "constraint" in item:
+            expected = _endpoint_requirement(item)
+            if interval is None or interval.endpoint_requirement != expected:
+                raise ValueError(f"keypoint constraint at arm sample {endpoint} was not preserved")
+            keypoint_constraints.append(
+                {"frame": endpoint, "constraint": interval.endpoint_requirement.value}
+            )
     if (
         max_time_error_s > 1e-9
         or max_tip_error_m > 1e-5
@@ -133,11 +140,7 @@ def audit(source_root: Path, bundle_path: Path, annotation_path: Path) -> dict:
         "max_gripper_error_deg": max_gripper_error_deg,
         "max_held_attachment_translation_m": max_attachment_translation_m,
         "max_held_attachment_rotation_rad": max_attachment_rotation_rad,
-        "unrepresented_keypoint_constraints": [
-            {"frame": _nearest_index(times, float(item["t"])), "constraint": item["constraint"]}
-            for item in keypoints
-            if item.get("constraint") == "best_effort"
-        ],
+        "keypoint_constraints": keypoint_constraints,
     }
 
 

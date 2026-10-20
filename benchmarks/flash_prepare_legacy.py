@@ -31,6 +31,7 @@ from lerobot.policies.flash.prepared import PreparedFlashSkill
 from lerobot.policies.flash.skill import (
     AttachmentAction,
     AttachmentTransition,
+    EndpointRequirement,
     FlashSkill,
     Interval,
     MotionMode,
@@ -114,6 +115,15 @@ def _interval_reference(
     if carrying:
         return target, Relation.HELD_TO_TARGET, False
     return (target if first >= grasp else held), Relation.EE_TO_OBJECT, False
+
+
+def _endpoint_requirement(end_key: dict) -> EndpointRequirement:
+    constraint = end_key.get("constraint", "pose")
+    if constraint == "best_effort":
+        return EndpointRequirement.PREFERRED
+    if constraint == "pose":
+        return EndpointRequirement.REQUIRED
+    raise ValueError(f"unsupported keypoint constraint: {constraint!r}")
 
 
 def _metric_pose_at(
@@ -352,6 +362,7 @@ def prepare(root: Path, annotation_path: Path, *, output_name: str) -> tuple[Pat
         _interval_layout(times, keypoints, grasp, release, start_anchor_end)
     ):
         mode = MotionMode.DEMONSTRATED if demonstrated else MotionMode.CONNECTION
+        endpoint_requirement = _endpoint_requirement(end_key)
         reference_role, relation, relative_to_entry = _interval_reference(
             first=first,
             grasp=grasp,
@@ -409,6 +420,7 @@ def prepare(root: Path, annotation_path: Path, *, output_name: str) -> tuple[Pat
                 ),
                 held_reference_version=roles_version[held] if carrying else None,
                 held_role=held if carrying else None,
+                endpoint_requirement=endpoint_requirement,
             )
         )
     skill = FlashSkill(

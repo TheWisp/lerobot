@@ -95,6 +95,7 @@ def inspect_skill(path: str) -> dict:
             {
                 "name": interval.name,
                 "mode": interval.mode.value,
+                "endpoint_requirement": interval.endpoint_requirement.value,
                 "relation": interval.relation.value,
                 "reference_role": interval.reference_role,
                 "held_role": interval.held_role,

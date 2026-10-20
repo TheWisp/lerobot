@@ -20,6 +20,10 @@ The executable core already separates:
 - sample-bound semantic events that survive replanning, with an optional
   milestone gate before the associated gripper change;
 - generated connections, timed from live path length and configured speed;
+- required and preferred connection endpoints: a preferred waypoint may end at
+  the checked continuous-IK prefix when its exact goal is unreachable, with
+  that shortfall recorded in the attempt trace; this does not claim collision
+  avoidance or relax a demonstrated contact event;
 - explicit pose-relation milestone tolerances, observed true/false/unknown
   verdicts from the perception collector (including expiry when frames stop),
   and bounded recovery transitions;

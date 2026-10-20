@@ -51,6 +51,8 @@ class PlanRequest:
                     connection.start_time_s,
                     connection.duration_s,
                     connection.joint_retimed,
+                    connection.requested_goal_pose.copy(),
+                    connection.achieved_fraction,
                 ),
             )
 

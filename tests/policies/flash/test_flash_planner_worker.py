@@ -30,6 +30,9 @@ def test_plan_request_preserves_retimed_connection_in_worker_snapshot():
     connection = ConnectionTrajectory.begin(base.interval, np.eye(4), base.reference.pose, None, 0)
     connection.duration_s = 1.5
     connection.joint_retimed = True
+    connection.requested_goal_pose[0, 3] = 1.0
+    connection.goal_pose[0, 3] = 0.4
+    connection.achieved_fraction = 0.4
     copied = PlanRequest(
         base.revision,
         base.interval,
@@ -46,6 +49,9 @@ def test_plan_request_preserves_retimed_connection_in_worker_snapshot():
     assert copied.connection is not connection
     assert copied.connection.duration_s == 1.5
     assert copied.connection.joint_retimed
+    assert copied.connection.goal_pose[0, 3] == 0.4
+    assert copied.connection.requested_goal_pose[0, 3] == 1.0
+    assert copied.connection.achieved_fraction == 0.4
 
 
 def test_planner_worker_supersedes_pending_request_without_blocking_motor_owner():

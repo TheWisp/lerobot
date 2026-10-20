@@ -43,6 +43,7 @@ from lerobot.policies.flash.recording import (
 from lerobot.policies.flash.skill import (
     AttachmentAction,
     AttachmentTransition,
+    EndpointRequirement,
     FlashSkill,
     Interval,
     MilestoneSpec,
@@ -183,6 +184,74 @@ def test_generated_connection_subdivides_when_local_ik_cannot_jump_to_endpoint()
     planner = JointPlanner(LocalKinematics(), ("arm",), "gripper", PlannerLimits((1000,), 0.001, 0.01, 10))
     planner._retime_connection(connection, np.array([0.0]), 1 / 30)
     assert connection.joint_retimed
+
+
+def test_preferred_connection_advances_to_checked_ik_prefix_without_claiming_endpoint(tmp_path):
+    class BoundedKinematics:
+        def inverse_kinematics(self, seed, target):
+            return seed if target[0, 3] > 0.4 else np.array([target[0, 3] * 10])
+
+        def forward_kinematics(self, joints):
+            return pose(joints[0] / 10)
+
+    samples = (sample(0, (0, 0, 0), (0, 0, 0)), sample(1, (0, 0, 0), (0, 0, 0)))
+    interval = Interval(
+        "hover",
+        MotionMode.CONNECTION,
+        Relation.EE_TO_OBJECT,
+        "object",
+        samples,
+        speed_m_s=0.5,
+        reference_version="object-v1",
+        endpoint_requirement=EndpointRequirement.PREFERRED,
+    )
+    skill_path = tmp_path / "preferred.json"
+    FlashSkill("demo/source", 0, (interval,)).save(skill_path)
+    assert FlashSkill.load(skill_path).intervals[0].endpoint_requirement == EndpointRequirement.PREFERRED
+    reference = PoseEstimate(
+        "object", pose(1), 0, 0, Evidence.OBSERVED, "object-v1", (True,) * 3, (True,) * 3
+    )
+    planner = JointPlanner(BoundedKinematics(), ("arm",), "gripper", PlannerLimits((1000,), 0.001, 0.01, 10))
+    connection = ConnectionTrajectory.begin(interval, pose(), reference.pose, None, 0)
+    actions = planner.plan(
+        interval,
+        start_tick=0,
+        count=100,
+        epoch_s=0,
+        period_s=1 / 30,
+        interval_start_s=0,
+        seed_deg=np.array([0.0]),
+        reference=reference,
+        attachment=None,
+        connection=connection,
+    )
+    assert actions[-1].interval_complete
+    assert 0.3 < connection.achieved_fraction <= 0.401
+    assert connection.goal_pose[0, 3] <= 0.401
+    assert connection.requested_goal_pose[0, 3] == 1.0
+
+    strict = Interval(
+        "hover",
+        MotionMode.CONNECTION,
+        Relation.EE_TO_OBJECT,
+        "object",
+        samples,
+        speed_m_s=0.5,
+        reference_version="object-v1",
+    )
+    with pytest.raises(InfeasibleTrajectoryError, match="no bounded continuous IK path"):
+        planner.plan(
+            strict,
+            start_tick=0,
+            count=100,
+            epoch_s=0,
+            period_s=1 / 30,
+            interval_start_s=0,
+            seed_deg=np.array([0.0]),
+            reference=reference,
+            attachment=None,
+            connection=ConnectionTrajectory.begin(strict, pose(), reference.pose, None, 0),
+        )
 
 
 def test_connection_retime_makes_progress_when_discrete_tick_is_just_over_speed_limit():

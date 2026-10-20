@@ -2,8 +2,13 @@
 
 import numpy as np
 
-from benchmarks.flash_prepare_legacy import _interval_layout, _interval_reference, _nearest_index
-from lerobot.policies.flash.skill import Relation
+from benchmarks.flash_prepare_legacy import (
+    _endpoint_requirement,
+    _interval_layout,
+    _interval_reference,
+    _nearest_index,
+)
+from lerobot.policies.flash.skill import EndpointRequirement, Relation
 
 
 def test_lift_uses_grasp_anchor_until_nearest_recorded_boundary():
@@ -46,3 +51,8 @@ def test_world_relative_retreat_does_not_follow_target_after_release():
         target="target",
     )
     assert (role, relation, anchored) == ("__start__", Relation.EE_TO_START, True)
+
+
+def test_best_effort_hover_is_a_preferred_endpoint():
+    assert _endpoint_requirement({"constraint": "best_effort"}) == EndpointRequirement.PREFERRED
+    assert _endpoint_requirement({"constraint": "pose"}) == EndpointRequirement.REQUIRED

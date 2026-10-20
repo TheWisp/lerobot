@@ -10,7 +10,14 @@ from lerobot.policies.flash.planner_worker import PlanResult
 from lerobot.policies.flash.planning_coordinator import PlanBufferConfig, PlanningCoordinator
 from lerobot.policies.flash.progress import Phase
 from lerobot.policies.flash.session import FlashSession
-from lerobot.policies.flash.skill import FlashSkill, Interval, MotionMode, Relation, SpatialSample
+from lerobot.policies.flash.skill import (
+    EndpointRequirement,
+    FlashSkill,
+    Interval,
+    MotionMode,
+    Relation,
+    SpatialSample,
+)
 from lerobot.policies.flash.trajectory import AttachmentState, Evidence, PoseEstimate
 
 
@@ -208,6 +215,61 @@ def test_fresh_stationary_group_poses_do_not_restart_connection_clock():
     assert tick < 55  # 0.3 m at 0.2 m/s plus the initial lead window
     assert robot.sent[-1]["arm.pos"] == pytest.approx(30, abs=0.1)
     assert len({request.connection.start_time_s for request in worker.requests}) == 1
+
+
+def test_preferred_waypoint_records_partial_progress_without_retargeting_stationary_pose():
+    class BoundedKinematics:
+        def inverse_kinematics(self, seed, goal):
+            return seed if goal[0, 3] > 0.4 else np.array([goal[0, 3] * 10])
+
+        def forward_kinematics(self, joints):
+            return pose(joints[0] / 10)
+
+    now = [0.0]
+    robot = FakeRobot()
+    interval = Interval(
+        "hover",
+        MotionMode.CONNECTION,
+        Relation.EE_TO_OBJECT,
+        "target",
+        (SpatialSample(0, pose(), pose()), SpatialSample(1, pose(), pose())),
+        speed_m_s=0.5,
+        reference_version="target-v1",
+        endpoint_requirement=EndpointRequirement.PREFERRED,
+    )
+    session = FlashSession(
+        FlashSkill("demo/source", 0, (interval,)),
+        robot,
+        clock=lambda: now[0],
+        sleep=lambda dt: now.__setitem__(0, now[0] + dt),
+    )
+    poses = LatestPoseStore()
+    poses.publish((target(1.0, 0),))
+    kinematics = BoundedKinematics()
+    worker = InlineWorker(
+        JointPlanner(kinematics, ("arm",), "gripper", PlannerLimits((1000,), 0.001, 0.01, 10)),
+        session.publish_plan,
+    )
+    coordinator = PlanningCoordinator(
+        session,
+        worker,
+        poses,
+        kinematics,
+        ("arm",),
+        PlanBufferConfig(2, 8, 3, 0.02, 0.1),
+        lambda _now_s: None,
+    )
+    for _ in range(100):
+        poses.publish((target(1.0, now[0]),))
+        coordinator.step()
+        if session.progress.phase == Phase.MOTION_COMPLETE:
+            break
+    assert session.progress.phase == Phase.MOTION_COMPLETE
+    assert 0.3 < robot.joint / 10 <= 0.401
+    assert len({request.connection.start_time_s for request in worker.requests}) == 1
+    limited = [event for event in session.progress.events if event["type"] == "preferred_endpoint_limited"]
+    assert len(limited) == 1
+    assert limited[0]["achieved_fraction"] < 1
 
 
 def test_coordinator_keeps_worker_joint_retiming_for_later_connection_chunks():

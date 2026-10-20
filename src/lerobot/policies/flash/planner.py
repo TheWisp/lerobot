@@ -9,7 +9,7 @@ import numpy as np
 
 from .execution import TimedAction
 from .geometry import interpolate, transform
-from .skill import Interval, MotionMode, Relation
+from .skill import EndpointRequirement, Interval, MotionMode, Relation
 from .trajectory import (
     AttachmentState,
     ConnectionTrajectory,
@@ -257,11 +257,15 @@ class JointPlanner:
                     interval, interval.samples[-1], reference.pose, live_attachment
                 )
                 if (
-                    np.linalg.norm(current_endpoint[:3, 3] - connection.goal_pose[:3, 3])
+                    np.linalg.norm(current_endpoint[:3, 3] - connection.requested_goal_pose[:3, 3])
                     > self.limits.position_error_m
                     or np.arccos(
                         np.clip(
-                            (np.trace(current_endpoint[:3, :3].T @ connection.goal_pose[:3, :3]) - 1) / 2,
+                            (
+                                np.trace(current_endpoint[:3, :3].T @ connection.requested_goal_pose[:3, :3])
+                                - 1
+                            )
+                            / 2,
                             -1,
                             1,
                         )
@@ -352,6 +356,8 @@ class JointPlanner:
         required_duration_s = 0.0
         for _ in range(self.limits.max_connection_ik_samples):
             next_fraction = min(1.0, fraction + step)
+            if next_fraction <= fraction:
+                break
             target = interpolate(connection.start_pose, connection.goal_pose, next_fraction)
             refinement_seed = previous
             for _ in range(self.limits.ik_refinement_attempts):
@@ -395,6 +401,22 @@ class JointPlanner:
                 connection.joint_retimed = True
                 return
             step = min(1.0 - fraction, step * 2)
+        if connection.interval.endpoint_requirement == EndpointRequirement.PREFERRED:
+            # An annotated preferred waypoint has no semantic event. If the
+            # bounded local search cannot finish, retain only the continuous
+            # IK prefix that was actually checked. The next interval starts
+            # from that measured endpoint and must satisfy its own limits.
+            connection.goal_pose = interpolate(
+                connection.start_pose, connection.requested_goal_pose, fraction
+            )
+            connection.achieved_fraction = fraction
+            connection.duration_s = max(
+                period_s,
+                connection.duration_s * fraction,
+                required_duration_s * fraction + period_s,
+            )
+            connection.joint_retimed = True
+            return
         raise InfeasibleTrajectoryError("generated connection has no bounded continuous IK path")
 
     def _attachment_pose(

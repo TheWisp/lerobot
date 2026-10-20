@@ -10,6 +10,7 @@ import numpy as np
 from .geometry import inverse, transform
 from .skill import (
     AttachmentTransition,
+    EndpointRequirement,
     FlashSkill,
     Interval,
     MilestoneSpec,
@@ -59,6 +60,7 @@ class IntervalAnnotation:
     recovery_intervals: tuple[str, ...] = ()
     allow_predicted_demo_pose: bool = False
     events: tuple[ActionEventAnnotation, ...] = ()
+    endpoint_requirement: EndpointRequirement = EndpointRequirement.REQUIRED
 
     def __post_init__(self) -> None:
         if self.first_frame < 0 or self.last_frame <= self.first_frame:
@@ -212,6 +214,7 @@ def compile_skill(
                 reference_version=versions[annotation.reference_role],
                 held_reference_version=versions.get(annotation.held_role) if annotation.held_role else None,
                 held_role=annotation.held_role,
+                endpoint_requirement=annotation.endpoint_requirement,
             )
         )
     compiled_milestones = list(milestones)

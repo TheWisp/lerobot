@@ -680,7 +680,10 @@ function _flashSkillDetail() {
     const intervalList = document.createElement('ul');
     for (const interval of skill.intervals) {
         const row = document.createElement('li');
-        row.textContent = `${interval.name}: ${interval.mode}, ${interval.relation} to ${interval.reference_role}, ${interval.samples} samples`;
+        const endpoint = interval.mode === 'connection'
+            ? `, ${interval.endpoint_requirement || 'required'} endpoint`
+            : '';
+        row.textContent = `${interval.name}: ${interval.mode}${endpoint}, ${interval.relation} to ${interval.reference_role}, ${interval.samples} samples`;
         intervalList.append(row);
     }
     intervals.append(intervalList);

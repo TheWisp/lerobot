@@ -178,6 +178,17 @@ class ConnectionTrajectory:
     start_time_s: float
     duration_s: float
     joint_retimed: bool = False
+    requested_goal_pose: np.ndarray | None = None
+    achieved_fraction: float = 1.0
+
+    def __post_init__(self) -> None:
+        self.start_pose = transform(self.start_pose)
+        self.goal_pose = transform(self.goal_pose)
+        self.requested_goal_pose = transform(
+            self.goal_pose if self.requested_goal_pose is None else self.requested_goal_pose
+        )
+        if not 0 <= self.achieved_fraction <= 1:
+            raise ValueError("connection achieved fraction must lie between zero and one")
 
     @classmethod
     def begin(
@@ -192,7 +203,14 @@ class ConnectionTrajectory:
             raise ValueError("expected generated connection")
         endpoint = spatial_goal(interval, interval.samples[-1], live_reference, live_attachment)
         distance = float(np.linalg.norm(transform(endpoint)[:3, 3] - transform(current_ee)[:3, 3]))
-        return cls(interval, transform(current_ee), transform(endpoint), now_s, distance / interval.speed_m_s)
+        return cls(
+            interval,
+            transform(current_ee),
+            transform(endpoint),
+            now_s,
+            distance / interval.speed_m_s,
+            requested_goal_pose=transform(endpoint),
+        )
 
     def retarget(
         self,
@@ -203,6 +221,8 @@ class ConnectionTrajectory:
     ) -> None:
         replacement = self.begin(self.interval, current_ee, live_reference, live_attachment, now_s)
         self.start_pose, self.goal_pose = replacement.start_pose, replacement.goal_pose
+        self.requested_goal_pose = replacement.requested_goal_pose
+        self.achieved_fraction = replacement.achieved_fraction
         self.start_time_s, self.duration_s = replacement.start_time_s, replacement.duration_s
         self.joint_retimed = False
 

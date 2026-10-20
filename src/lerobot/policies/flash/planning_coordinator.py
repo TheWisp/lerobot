@@ -85,6 +85,7 @@ class PlanningCoordinator:
         self._start_anchor_pose: np.ndarray | None = None
         self._missing_evidence_key: tuple[int, str] | None = None
         self._missing_evidence_since_s: float | None = None
+        self._reported_preferred_limit: set[tuple[str, int]] = set()
 
     def prepare_grasp_choices(self, poses: dict[str, PoseEstimate], seed_deg: np.ndarray) -> None:
         """Resolve declared grasp equivalences before starting the motor clock."""
@@ -142,6 +143,22 @@ class PlanningCoordinator:
                 # The worker may have lengthened this generated path to meet
                 # joint-speed limits. Subsequent chunks must share that clock.
                 self._connection = result.connection
+                if (
+                    result.connection.interval.name == self.session.progress.interval.name
+                    and result.connection.achieved_fraction < 1.0
+                ):
+                    key = (result.connection.interval.name, self.session.progress.attempt)
+                    if key not in self._reported_preferred_limit:
+                        self.session.progress.events.append(
+                            {
+                                "type": "preferred_endpoint_limited",
+                                "interval": key[0],
+                                "achieved_fraction": result.connection.achieved_fraction,
+                                "requested_xyz_m": result.connection.requested_goal_pose[:3, 3].tolist(),
+                                "planned_xyz_m": result.connection.goal_pose[:3, 3].tolist(),
+                            }
+                        )
+                        self._reported_preferred_limit.add(key)
         interval = self.session.progress.interval
         _, live_poses = self.poses.snapshot()
         now_s = self.session.motor.clock()
@@ -219,10 +236,10 @@ class PlanningCoordinator:
                 reference.pose,
                 attachment.gripper_from_object if attachment is not None else None,
             )
-            shift = np.linalg.norm(endpoint[:3, 3] - self._connection.goal_pose[:3, 3])
+            shift = np.linalg.norm(endpoint[:3, 3] - self._connection.requested_goal_pose[:3, 3])
             turn = np.arccos(
                 np.clip(
-                    (np.trace(endpoint[:3, :3].T @ self._connection.goal_pose[:3, :3]) - 1) / 2,
+                    (np.trace(endpoint[:3, :3].T @ self._connection.requested_goal_pose[:3, :3]) - 1) / 2,
                     -1,
                     1,
                 )

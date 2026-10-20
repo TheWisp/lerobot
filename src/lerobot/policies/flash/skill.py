@@ -17,6 +17,13 @@ class MotionMode(str, Enum):
     CONNECTION = "connection"
 
 
+class EndpointRequirement(str, Enum):
+    """Whether a generated waypoint must be reached before advancing."""
+
+    REQUIRED = "required"
+    PREFERRED = "preferred"
+
+
 class Relation(str, Enum):
     EE_TO_OBJECT = "ee_to_object"
     EE_TO_START = "ee_to_start"
@@ -81,8 +88,10 @@ class Interval:
     reference_version: str | None = None
     held_reference_version: str | None = None
     held_role: str | None = None
+    endpoint_requirement: EndpointRequirement = EndpointRequirement.REQUIRED
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "endpoint_requirement", EndpointRequirement(self.endpoint_requirement))
         if not self.name or not self.reference_role or len(self.samples) < 2:
             raise ValueError("interval needs a name, reference role and at least two samples")
         if any(b.time_s <= a.time_s for a, b in zip(self.samples, self.samples[1:], strict=False)):
@@ -98,6 +107,10 @@ class Interval:
             raise ValueError("semantic event IDs must be unique within an interval")
         if self.mode == MotionMode.CONNECTION and any(sample.event_id for sample in self.samples[:-1]):
             raise ValueError("generated connection events may occur only at its endpoint")
+        if self.endpoint_requirement == EndpointRequirement.PREFERRED and (
+            self.mode != MotionMode.CONNECTION or any(sample.event_id for sample in self.samples)
+        ):
+            raise ValueError("a preferred endpoint must be a generated connection without semantic events")
 
     @property
     def demo_duration_s(self) -> float:
@@ -228,6 +241,9 @@ class FlashSkill:
                     reference_version=item.get("reference_version"),
                     held_reference_version=item.get("held_reference_version"),
                     held_role=item.get("held_role"),
+                    endpoint_requirement=EndpointRequirement(
+                        item.get("endpoint_requirement", EndpointRequirement.REQUIRED)
+                    ),
                 )
             )
         milestones = tuple(
@@ -300,6 +316,7 @@ class FlashSkill:
                     "reference_version": interval.reference_version,
                     "held_reference_version": interval.held_reference_version,
                     "held_role": interval.held_role,
+                    "endpoint_requirement": interval.endpoint_requirement.value,
                     "speed_m_s": interval.speed_m_s,
                     "entry_milestone": interval.entry_milestone,
                     "completion_milestone": interval.completion_milestone,
