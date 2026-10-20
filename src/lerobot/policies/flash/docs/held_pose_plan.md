@@ -19,6 +19,52 @@ they are not committed to git. The audit uses the latest 19 local attempts,
 | Prepared `insertion-migrated-v10-preferred-hover` bundle | Each object has one reference snippet at demo frame 100; the dowel surface used by the replay contains 318 sampled points.                                                                                                                                    | A single tray-side surface does not cover all held viewpoints. Adding views requires **registered** object frames, not copying predicted gripper poses as truth.                              |
 | Stored masks and RGB-D at held frames                    | Masks often cover one exposed end during grasp/lift and more of the shaft near insertion. The current shape-only fallback rejects three replayed held frames from the two latest runs.                                                                        | The replay reconstructed masks from stored contours, so this is a diagnostic, not an exact reproduction of every worker input. The live backend also recorded `lost` proposals on held views. |
 
+## The source demonstration has the same held-pose problem
+
+The prepared `insertion-migrated-v10-preferred-hover` skill does not contain an
+independently observed held pose. Its orange replay outline is the frame-130
+pre-occlusion pose propagated by the recorded gripper after the annotated
+`attach-held` event at arm sample 228 (7.638 s). At that event, the measured
+gripper was 88.34° while the command was 97.42°; it did not settle near
+97.81° until sample 235 (7.872 s). Closure and possible object motion thus
+continued after the attachment assumption was made. The camera occludes the
+contact, so the exact source of the resulting slip or offset is not directly
+identified.
+
+An offline sequential replay of the current SAM3 → DINO → RGB-D path through
+demo frame 450 separates segmentation from pose registration. Its per-frame
+results are saved locally at
+`~/.cache/huggingface/lerobot/demos/insertion/flash/v1/analysis/demo_mask_pose_audit_current_backend.csv`.
+On every frame
+251–450 SAM3 returned a dowel mask (median 3,051 pixels), but the matcher
+found a median of only five distinct reference correspondences and returned
+no accepted pose. At frame 400 the mask had 3,423 pixels, but only seven
+correspondences passed the configured similarity floor, below the 12 needed
+for a rigid fit. A fresh mask at that frame also failed the current whole-shape
+fallback. Reducing the appearance floor in a diagnostic produced up to 114
+matches, but the candidate still disagreed with the segmented depth surface;
+loosening the floor alone did not recover a supported pose. The prepared
+reference has only one tray-side view at frame 100, while the object is later
+seen upright and from another side.
+
+The saved prediction is visibly wrong in clear held views. A color-assisted
+RGB-D check at frame 400 estimates roughly 27 image pixels of centre offset
+and 13° of axis disagreement between the projected prediction and the visible
+dowel. Those are diagnostic estimates, not six-axis ground truth; the sampled
+reference surface is incomplete. At frame 130, by comparison, 94% of its
+projected points agree with measured depth within 10 mm. The initial pose
+therefore looks plausible, but its rigid carry assumption is not verified.
+
+The demo viewer cannot draw preparation-time masks because that history was
+not stored in the skill. A missing mask overlay is not evidence that SAM3 lost
+the object. This audit establishes that the _demo relation_ used for insertion
+is itself uncertain, so correcting only the live attachment cannot make the
+transferred relation accurate. Future preparation needs to retain mask and
+fit-failure evidence, update the object-to-gripper relation after closure from
+independent partial observations, and reject a precise contact relation when
+its task-relevant pose remains unverified. These requirements apply to any
+held rigid object, not just this dowel.
+
 The attachment lifecycle currently seeds `T_E_H` from a pregrasp object pose
 and the **observed arm joints at the tick that dispatches** `attach-held`.
 Dispatch does not mean the gripper has reached its commanded closure. In the

@@ -415,6 +415,10 @@ def test_run_flash_lists_demos_and_shows_extracted_pose_overlay(gui_page):
     assert "active" in page.locator('.tab[data-tab="run"]').get_attribute("class").split()
     assert "Reference pose used by skill" in page.locator("#flash-tracker-content").inner_text()
     assert "predicted" in page.locator("#flash-tracker-content").inner_text()
+    assert (
+        "no mask here does not mean segmentation was lost"
+        in page.locator("#flash-tracker-content").inner_text()
+    )
     assert "/api/run/flash/demo/frame?" in page.locator("#rerun-viewer .flash-replay-grid img").get_attribute(
         "src"
     )

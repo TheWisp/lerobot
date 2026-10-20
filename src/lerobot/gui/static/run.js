@@ -557,7 +557,7 @@ function renderFlashDemoSnapshot(snapshot) {
     panel.querySelector('.flash-tracker-heading strong').textContent = 'FLASH demo extraction';
     document.getElementById('flash-tracker-mode').textContent = 'Demo';
     const demo = snapshot.demo;
-    let html = `<div class="flash-tracker-legend">Demo time ${demo.time_s.toFixed(2)} s · nearest arm reading ${(demo.camera_arm_delta_s * 1000).toFixed(0)} ms from this RGB frame. Outlines project the sampled reference surface, not a complete object mesh. These are the poses stored in the selected prepared skill; raw tracker proposals were not saved.</div>`;
+    let html = `<div class="flash-tracker-legend">Demo time ${demo.time_s.toFixed(2)} s · nearest arm reading ${(demo.camera_arm_delta_s * 1000).toFixed(0)} ms from this RGB frame. Outlines project the sampled reference surface, not a complete object mesh. These are the poses stored in the selected prepared skill. Preparation did not save the segmentation or raw tracker history, so no mask here does not mean segmentation was lost.</div>`;
     if (demo.phase === 'outside_skill') {
         html += '<div class="flash-tracker-role">No spatial skill sample applies to this part of the recording.</div>';
     } else {
