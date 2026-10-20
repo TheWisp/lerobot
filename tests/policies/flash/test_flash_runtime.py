@@ -146,6 +146,29 @@ def test_motor_epoch_starts_after_pose_readiness(monkeypatch):
     assert recorder.finished == ("unknown", "test completed")
 
 
+def test_startup_pose_updates_do_not_overflow_unconsumed_evidence():
+    attempt = runtime(skill(), (reference("target", "target-v1"),), FakeRecorder())
+    callback = attempt.perception.on_pose_update
+    assert callback is not None
+    for version in range(1, 201):
+        pose = PoseEstimate(
+            "target",
+            identity(),
+            float(version),
+            float(version),
+            Evidence.OBSERVED,
+            "target-v1",
+            (True,) * 3,
+            (True,) * 3,
+        )
+        callback(version, {"target": pose})
+    assert attempt.session._evidence.empty()
+
+    attempt._ready = True
+    callback(200, {"target": pose})
+    assert attempt.session._evidence.qsize() == 1
+
+
 def test_motion_completion_without_outcome_verifier_remains_unknown(monkeypatch):
     recorder = FakeRecorder()
     attempt = runtime(skill(), (reference("target", "target-v1"),), recorder)

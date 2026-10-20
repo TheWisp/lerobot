@@ -116,6 +116,12 @@ class FlashRuntime:
         self._last_pose_times: dict[str, float] = {}
 
         def on_pose_update(version: int, poses: dict[str, PoseEstimate]) -> None:
+            # Perception may publish for many seconds while the first observed
+            # pose is being seeded. No motor session consumes evidence until
+            # startup completes; the next collector pass publishes the latest
+            # snapshot once the session is ready.
+            if not self._ready:
+                return
             self.attachment.on_pose_update(version, poses)
             if version != self._last_pose_version:
                 changed = frozenset(
