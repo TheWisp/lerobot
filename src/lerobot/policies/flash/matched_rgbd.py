@@ -17,7 +17,7 @@ from .registration import (
     unproject_pixels,
     valid_depth_pixels,
 )
-from .shape_registration import register_visible_shape
+from .shape_registration import register_visible_shape, visible_surface_p90
 from .trajectory import Evidence, PoseEstimate
 
 
@@ -151,6 +151,21 @@ class MatchedRGBDPoseBackend:
                 if match is None:
                     raise DegenerateRegistrationError("no matched pixels")
                 pose = self._fit(frame, model, match)
+                mask = getattr(self.provider, "last_masks", {}).get(role)
+                if mask is not None:
+                    surface_p90 = visible_surface_p90(
+                        model.points_object_m,
+                        np.linalg.inv(frame.base_from_camera) @ pose,
+                        frame.depth,
+                        mask,
+                        frame.intrinsics,
+                        frame.depth_m_per_unit,
+                        min_points=self.min_inliers,
+                    )
+                    if surface_p90 > self.threshold_m:
+                        raise DegenerateRegistrationError(
+                            f"matched pose disagrees with segmented depth surface ({surface_p90:.4f} m)"
+                        )
             except DegenerateRegistrationError as match_error:
                 if not self.visible_shape_fallback:
                     pose = None

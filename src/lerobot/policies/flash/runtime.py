@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from math import isfinite
@@ -87,6 +88,7 @@ class FlashRuntime:
         self._validate_bindings(skill, references)
         self.skill = skill
         self.recorder = recorder
+        self.max_camera_age_s = max_camera_age_s
         self.poses = LatestPoseStore()
         self.causal = (
             CausalPoseService(
@@ -281,6 +283,35 @@ class FlashRuntime:
                     timeout_s=first_pose_timeout_s,
                     allow_predicted=True,
                 )
+            if self.causal is not None:
+                # A first point-track seed may replay retained frames. Let
+                # that work catch the live camera before starting the motor
+                # clock; otherwise an old prediction can expire mid-approach
+                # even though the camera itself is fresh.
+                deadline_s = self.session.motor.clock() + first_pose_timeout_s
+                while self.session.motor.clock() < deadline_s:
+                    if self.perception.error is not None:
+                        raise RuntimeError(
+                            "perception failed while catching up to the live camera"
+                        ) from self.perception.error
+                    source_s = self.causal.latest_processed_source_time_s
+                    _, current_poses = self.poses.snapshot()
+                    now_s = self.session.motor.clock()
+                    if (
+                        source_s is not None
+                        and 0 <= now_s - source_s <= self.max_camera_age_s
+                        and all(
+                            role in current_poses
+                            and current_poses[role].usable(
+                                now_s, self.planner.planner.limits.max_pose_age_s, True
+                            )
+                            for role in required_roles
+                        )
+                    ):
+                        break
+                    time.sleep(0.01)
+                else:
+                    raise RuntimeError("causal scene tracking did not catch up to the live camera")
             _, first_poses = self.poses.snapshot()
             if first_poses[first_role].reference_version != self.skill.intervals[0].reference_version:
                 raise ValueError(f"{first_role}: live pose does not use the demonstrated object frame")

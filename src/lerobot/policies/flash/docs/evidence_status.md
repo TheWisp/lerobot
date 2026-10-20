@@ -96,3 +96,31 @@ RGB-D frames through the same backend recovered a dowel pose on every frame;
 replaying every fourth or eighth frame also succeeded. That evidence narrows
 this failure to the live producer-to-scene-estimator path or earlier streaming
 state. It does not prove the final insertion pose would be accurate.
+
+The later v7 approach trials issued real commands but did not reach the
+grasp. In the 16:28 trial, a dowel appearance fit at camera frame 206 passed
+the matched-point RANSAC despite disagreeing with the remaining segmented
+depth: its visible-surface 90th percentile was 6.6 mm, versus 3.7 mm for the
+preceding pose and a configured 5 mm tolerance. The bad fit changed the
+planned grasp goal and the planner stopped. Reprocessing that exact recorded
+frame reproduced the fit. The backend now checks every matched pose against
+the visible RGB-D surface and falls back to the independent shape fit when
+that check fails. A fixture from the real frame locks in this regression.
+The sealed runner's corresponding rule checked a candidate against camera
+depth; its other tracking limitations remain relevant.
+
+Subsequent physical trials did not reach the grasp. The plain dowel cannot
+seed enough object-specific optical-flow points, so the slower direct RGB-D
+updates need a causal prediction between fits. Enabling the existing bounded
+stationary prior exposed an event-time bug: its newer predicted timestamp
+prevented later-arriving direct measurements from refreshing the belief. The
+scene estimator now rebases a prediction at the measurement's source frame,
+and startup readiness checks the latest direct-support time rather than the
+published prediction's evidence label. This made the approach start, but its
+first ring point-track anchor still replayed historical frames serially on
+the scene worker (about 0.8 s), making the dowel prediction exceed the
+planner's 0.8 s source-age bound mid-motion. Waiting for the worker to catch
+up before motor start did not prevent a later replay stall. No successful
+redesign rollout has been recorded; the point-anchor replay must be made
+nonblocking or removed from the per-frame scene worker before another
+success claim.

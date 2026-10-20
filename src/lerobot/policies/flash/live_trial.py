@@ -235,12 +235,61 @@ def trial(
                 else None
             ),
         )
-        result = runtime.run(
-            max_duration_s=settings["max_duration_s"],
-            pose_start_timeout_s=settings["pose_start_timeout_s"],
-            first_pose_timeout_s=settings["first_pose_timeout_s"],
-            stop_requested=stop_requested,
-        )
+        try:
+            result = runtime.run(
+                max_duration_s=settings["max_duration_s"],
+                pose_start_timeout_s=settings["pose_start_timeout_s"],
+                first_pose_timeout_s=settings["first_pose_timeout_s"],
+                stop_requested=stop_requested,
+            )
+        except Exception:
+            # Startup can fail before an episode exists. Preserve the same
+            # evidence-boundary counters that a completed trial reports.
+            _, poses = runtime.poses.snapshot()
+            now_s = time.perf_counter()
+            print(
+                json.dumps(
+                    {
+                        "now_s": now_s,
+                        "startup_pose_metrics": vars(runtime.perception.worker.metrics),
+                        "startup_anchor_outcomes_by_role": (
+                            runtime.causal.anchor_outcomes_by_role if runtime.causal is not None else None
+                        ),
+                        "startup_missed_anchors": (
+                            runtime.causal.missed_anchors if runtime.causal is not None else None
+                        ),
+                        "startup_causal_frames": runtime.causal.frames
+                        if runtime.causal is not None
+                        else None,
+                        "startup_causal_processing_lag_s": (
+                            runtime.causal.max_processing_lag_s if runtime.causal is not None else None
+                        ),
+                        "startup_causal_timing": (
+                            {
+                                "frame_compute_total_s": runtime.causal.frame_compute_total_s,
+                                "frame_compute_max_s": runtime.causal.frame_compute_max_s,
+                                "anchor_compute_total_s": runtime.causal.anchor_compute_total_s,
+                                "anchor_compute_max_s": runtime.causal.anchor_compute_max_s,
+                                "max_queue_age_s": runtime.causal.max_queue_age_s,
+                            }
+                            if runtime.causal is not None
+                            else None
+                        ),
+                        "startup_poses": {
+                            role: {
+                                "evidence": estimate.evidence.value,
+                                "source_time_s": estimate.source_time_s,
+                                "source_age_s": now_s - estimate.source_time_s,
+                                "estimator": estimate.estimator,
+                            }
+                            for role, estimate in poses.items()
+                        },
+                    },
+                    indent=2,
+                ),
+                file=sys.stderr,
+            )
+            raise
         report.update(
             {
                 "outcome": result.outcome,
@@ -263,12 +312,18 @@ def trial(
                         "published": runtime.causal.published,
                         "published_by_role": runtime.causal.published_by_role.copy(),
                         "direct_published": runtime.causal.direct_published,
+                        "anchor_outcomes_by_role": runtime.causal.anchor_outcomes_by_role.copy(),
                         "static_published": runtime.causal.static_published,
                         "latest_processed_source_time_s": runtime.causal.latest_processed_source_time_s,
                         "max_processing_lag_s": runtime.causal.max_processing_lag_s,
                         "environment_relationships": runtime.causal.environment_relationships,
                         "environment_published": runtime.causal.environment_published,
                         "scene_gaps": runtime.causal.scene.gaps,
+                        "frame_compute_total_s": runtime.causal.frame_compute_total_s,
+                        "frame_compute_max_s": runtime.causal.frame_compute_max_s,
+                        "anchor_compute_total_s": runtime.causal.anchor_compute_total_s,
+                        "anchor_compute_max_s": runtime.causal.anchor_compute_max_s,
+                        "max_queue_age_s": runtime.causal.max_queue_age_s,
                     }
                     if runtime.causal is not None
                     else None

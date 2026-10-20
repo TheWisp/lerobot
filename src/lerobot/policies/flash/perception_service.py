@@ -123,6 +123,13 @@ class PerceptionService:
             raise ValueError("wait_ready needs a started service, roles and positive bounds")
         deadline = time.monotonic() + timeout_s
         missing = list(roles)
+
+        def fresh_direct(pose: PoseEstimate, now_s: float) -> bool:
+            direct_s = (
+                pose.source_time_s if pose.evidence == Evidence.OBSERVED else pose.last_direct_observation_s
+            )
+            return direct_s is not None and 0 <= now_s - direct_s <= max_pose_age_s
+
         while time.monotonic() < deadline:
             if self.error is not None:
                 raise PerceptionServiceError("live perception failed") from self.error
@@ -132,7 +139,7 @@ class PerceptionService:
                 role
                 for role in roles
                 if role not in poses
-                or (not allow_predicted and poses[role].evidence != Evidence.OBSERVED)
+                or (not allow_predicted and not fresh_direct(poses[role], now_s))
                 or poses[role].evidence == Evidence.LOST
                 or not 0 <= now_s - poses[role].source_time_s <= max_pose_age_s
             ]

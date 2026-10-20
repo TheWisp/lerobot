@@ -5,14 +5,15 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from lerobot.policies.flash.matched_rgbd import MatchedRGBDPoseBackend, ObjectPointModel
+from lerobot.policies.flash.matched_rgbd import MatchedRGBDPoseBackend, ObjectPointModel, PixelMatches
 from lerobot.policies.flash.perception import ObjectReference, ReferenceSnippet, RGBDFrame
 from lerobot.policies.flash.registration import DegenerateRegistrationError
-from lerobot.policies.flash.shape_registration import register_visible_shape
+from lerobot.policies.flash.shape_registration import register_visible_shape, visible_surface_p90
 from lerobot.policies.flash.trajectory import Evidence
 
 FIXTURE = Path(__file__).parent / "fixtures/dowel_live_visible_shape_20261020.npz"
 DRIFT_FIXTURE = Path(__file__).parent / "fixtures/dowel_static_fit_drift_20261020.npz"
+BAD_MATCH_FIXTURE = Path(__file__).parent / "fixtures/dowel_bad_match_20261020.npz"
 
 
 class EmptyMatches:
@@ -157,3 +158,65 @@ def test_real_static_dowel_preserves_stable_surface_despite_remote_frame_origin(
     assert backend.update(first)[0].evidence == Evidence.OBSERVED
     provider.last_masks["object"] = data["mask_13"]
     assert backend.update(second)[0].evidence == Evidence.OBSERVED
+
+
+def test_recorded_bad_correspondence_fit_is_refused_by_its_visible_depth_surface():
+    with np.load(BAD_MATCH_FIXTURE) as saved:
+        data = {key: saved[key] for key in saved.files}
+    frame = RGBDFrame(
+        105,
+        np.zeros((*data["depth"].shape, 3), dtype=np.uint8),
+        data["depth"],
+        data["intrinsics"],
+        0.001,
+        np.eye(4),
+        1.0,
+        1.0,
+        "cal",
+    )
+    bad = data["bad_camera_from_object"]
+    prior = data["prior_camera_from_object"]
+    observed_bad = visible_surface_p90(
+        data["model"], bad, data["depth"], data["mask"], data["intrinsics"], 0.001, min_points=12
+    )
+    observed_prior = visible_surface_p90(
+        data["model"], prior, data["depth"], data["mask"], data["intrinsics"], 0.001, min_points=12
+    )
+    assert observed_bad > 0.005
+    assert observed_prior < 0.005
+
+    class RecordedProposal:
+        last_masks = {"object": data["mask"]}
+
+        def matches(self, _frame):
+            return (PixelMatches("object", "v1", np.arange(12), np.zeros((12, 2))),)
+
+    backend = MatchedRGBDPoseBackend(
+        (ObjectPointModel("object", "v1", data["model"]),),
+        RecordedProposal(),
+        threshold_m=0.005,
+        min_inliers=12,
+        trials=20,
+        visible_shape_fallback=True,
+        clock=lambda: 1.1,
+    )
+    reference = ObjectReference(
+        "object", "v1", (ReferenceSnippet("demo", 0, 0, "object", np.eye(4), "mask", "cal"),)
+    )
+    backend.initialize((reference,))
+    backend._fit = lambda _frame, _model, _match: bad
+    (estimate,) = backend.update(frame)
+    assert estimate.evidence == Evidence.OBSERVED
+    assert estimate.estimator == "visible_shape_rgbd"
+    assert (
+        visible_surface_p90(
+            data["model"],
+            estimate.pose,
+            data["depth"],
+            data["mask"],
+            data["intrinsics"],
+            0.001,
+            min_points=12,
+        )
+        < 0.005
+    )

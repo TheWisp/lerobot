@@ -234,6 +234,15 @@ class PlanningCoordinator:
                 return
             boundary = snapshot.boundary_before(start_tick)
             interval_start_s = self.session.progress.interval_start_s
+            if boundary is None and not pending:
+                # A camera-age boundary can shorten the previous chunk to a
+                # single issued action. There is then no queued command at the
+                # usual lead tick, but the immediately following tick still
+                # has a real issued joint boundary. Replan from that boundary
+                # when fresh evidence arrives instead of declaring a broken
+                # trajectory before checking evidence freshness.
+                start_tick = next_tick
+                boundary = snapshot.boundary_before(start_tick)
             if boundary is None or interval_start_s is None:
                 self._fail("no continuous joint boundary for an active interval replan")
                 return

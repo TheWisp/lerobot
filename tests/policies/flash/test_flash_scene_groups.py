@@ -231,6 +231,61 @@ def test_delayed_absolute_proposal_is_replayed_by_the_only_pose_owner():
         service.close()
 
 
+def test_delayed_direct_measurement_refreshes_a_newer_stationary_prediction():
+    rgb = np.random.default_rng(16).integers(0, 255, (96, 96, 3), dtype=np.uint8)
+    frames = [_camera_frame(rgb, index) for index in range(4)]
+    mask = np.zeros((96, 96), dtype=bool)
+    mask[46:48, 46:48] = True  # No object-point seed; only a scene-time prediction.
+    store = LatestPoseStore()
+    service = CausalPoseService(store, image_scale=1.0, static_prediction_max_s=1.0)
+    service.start()
+    try:
+        service.submit_frame(frames[0])
+        first = PoseEstimate(
+            "object",
+            _pose(0.03),
+            frames[0].source_time_s,
+            frames[0].available_time_s,
+            Evidence.OBSERVED,
+            "v1",
+            (True,) * 3,
+            (True,) * 3,
+        )
+        service.submit_anchor(0, (first,), {"object": mask})
+        for frame in frames[1:]:
+            service.submit_frame(frame)
+        deadline = time.monotonic() + 3
+        while service.frames < len(frames) and service.error is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert service.error is None
+        assert store.snapshot()[1]["object"].estimator == "stationary_prior"
+        second = PoseEstimate(
+            "object",
+            _pose(0.04),
+            frames[1].source_time_s,
+            frames[1].available_time_s,
+            Evidence.OBSERVED,
+            "v1",
+            (True,) * 3,
+            (True,) * 3,
+        )
+        service.submit_anchor(1, (second,), {"object": mask})
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            current = store.snapshot()[1]["object"]
+            if current.last_direct_observation_s == frames[1].source_time_s or service.error is not None:
+                break
+            time.sleep(0.01)
+        assert service.error is None
+        current = store.snapshot()[1]["object"]
+        assert current.source_time_s == frames[-1].source_time_s
+        assert current.last_direct_observation_s == frames[1].source_time_s
+        assert current.pose[0, 3] == pytest.approx(0.04)
+        assert service.anchor_outcomes_by_role["object"]["direct_rebased"] == 1
+    finally:
+        service.close()
+
+
 def test_older_delayed_proposal_cannot_erase_newer_direct_observation():
     rgb = np.random.default_rng(18).integers(0, 255, (96, 96, 3), dtype=np.uint8)
     frames = [_camera_frame(rgb, index) for index in range(3)]

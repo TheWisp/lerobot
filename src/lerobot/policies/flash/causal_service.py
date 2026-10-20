@@ -4,14 +4,15 @@ from __future__ import annotations
 
 import time
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from math import isfinite
 from queue import Full, Queue
 from threading import Lock, Thread
 
 import numpy as np
 
-from .causal_points import CausalRigidPointTracker
+from .causal_points import CausalRigidPointTracker, RigidPointMotion
+from .geometry import inverse
 from .perception import LatestPoseStore, RGBDFrame
 from .scene_groups import (
     EnvironmentRelationship,
@@ -111,6 +112,7 @@ class CausalPoseService:
             "image_scale": image_scale,
         }
         self.active: dict[str, tuple[CausalRigidPointTracker, PoseEstimate]] = {}
+        self.motion_history: dict[str, deque[tuple[int, RigidPointMotion, np.ndarray]]] = {}
         self.scene = ScenePointTracker(
             max_points=scene_max_points,
             max_frame_gap_s=max_frame_gap_s,
@@ -136,11 +138,17 @@ class CausalPoseService:
         self.published = 0
         self.published_by_role: dict[str, int] = {}
         self.direct_published = 0
+        self.anchor_outcomes_by_role: dict[str, dict[str, int]] = {}
         self.static_published = 0
         self.max_processing_lag_s = 0.0
         self.latest_processed_source_time_s: float | None = None
         self.environment_relationships = 0
         self.environment_published = 0
+        self.frame_compute_total_s = 0.0
+        self.frame_compute_max_s = 0.0
+        self.anchor_compute_total_s = 0.0
+        self.anchor_compute_max_s = 0.0
+        self.max_queue_age_s = 0.0
 
     @property
     def error(self) -> Exception | None:
@@ -178,10 +186,18 @@ class CausalPoseService:
     def _run(self) -> None:
         try:
             while (item := self.queue.get()) is not None:
+                started_s = time.perf_counter()
                 if isinstance(item, RGBDFrame):
+                    self.max_queue_age_s = max(self.max_queue_age_s, started_s - item.source_time_s)
                     self._frame(item)
+                    elapsed_s = time.perf_counter() - started_s
+                    self.frame_compute_total_s += elapsed_s
+                    self.frame_compute_max_s = max(self.frame_compute_max_s, elapsed_s)
                 else:
                     self._anchor(item)
+                    elapsed_s = time.perf_counter() - started_s
+                    self.anchor_compute_total_s += elapsed_s
+                    self.anchor_compute_max_s = max(self.anchor_compute_max_s, elapsed_s)
         except Exception as exc:
             with self._lock:
                 self._error = exc
@@ -201,8 +217,12 @@ class CausalPoseService:
                 motion = tracker.update(frame)
             except ValueError:
                 del self.active[role]
+                self.motion_history.pop(role, None)
                 continue
             if motion.base_motion_from_seed is not None:
+                self.motion_history[role].append(
+                    (frame.frame_id, motion, tracker.current_pixels(frame.depth.shape))
+                )
                 object_motion_roles.add(role)
                 self._publish(role, anchor, motion)
         for role, relationship in list(self.relationships.items()):
@@ -251,8 +271,17 @@ class CausalPoseService:
         if not 0 < age <= self.static_prediction_max_s:
             return
         current = self.store.snapshot()[1].get(role)
-        if current is not None and current.source_time_s >= frame.source_time_s:
-            return
+        if current is not None:
+            if current.source_time_s > frame.source_time_s:
+                return
+            if current.source_time_s == frame.source_time_s and (
+                current.evidence != Evidence.PREDICTED
+                or (
+                    current.last_direct_observation_s is not None
+                    and current.last_direct_observation_s >= anchor.source_time_s
+                )
+            ):
+                return
         assert anchor.pose is not None
         before, _ = self.store.snapshot()
         after = self.store.publish(
@@ -289,13 +318,16 @@ class CausalPoseService:
             self.missed_anchors += 1
             return
         for estimate in result.estimates:
+            self._count_anchor_outcome(estimate.role, "received")
             mask = result.masks.get(estimate.role)
-            if (
-                mask is None
-                or estimate.pose is None
-                or estimate.evidence == Evidence.LOST
-                or estimate.source_time_s != source.source_time_s
-            ):
+            if mask is None:
+                self._count_anchor_outcome(estimate.role, "missing_mask")
+                continue
+            if estimate.pose is None or estimate.evidence == Evidence.LOST:
+                self._count_anchor_outcome(estimate.role, "lost_pose")
+                continue
+            if estimate.source_time_s != source.source_time_s:
+                self._count_anchor_outcome(estimate.role, "time_mismatch")
                 continue
             current = self.store.snapshot()[1].get(estimate.role)
             if current is not None:
@@ -307,20 +339,65 @@ class CausalPoseService:
                     # Until then, replaying only point motion from this older
                     # proposal would erase the later direct observation.
                     self.superseded_proposals += 1
+                    self._count_anchor_outcome(estimate.role, "superseded_by_direct")
                     continue
             if estimate.has_direct_translation:
                 self._observe_environment(estimate, scene, result.masks)
             # The pose process only submits source-frame proposals. This is
             # the sole owner that can publish an accepted absolute pose.
-            before, _ = self.store.snapshot()
-            if self.store.publish((estimate,)) != before:
-                self.direct_published += 1
+            if current is not None and current.source_time_s > estimate.source_time_s:
+                # A prediction for a later camera frame cannot become an
+                # observation at this older frame. Rebase that prediction on
+                # the new direct evidence below, at its real source time.
+                self._count_anchor_outcome(estimate.role, "direct_rebased")
+            else:
+                before, _ = self.store.snapshot()
+                if self.store.publish((estimate,)) != before:
+                    self.direct_published += 1
+                    self._count_anchor_outcome(estimate.role, "direct_published")
+                else:
+                    self._count_anchor_outcome(estimate.role, "direct_not_published")
+            active = self.active.get(estimate.role)
+            if active is not None and active[1].reference_version == estimate.reference_version:
+                history = {
+                    frame_id: (motion, pixels)
+                    for frame_id, motion, pixels in self.motion_history[estimate.role]
+                }
+                from_source = history.get(source.frame_id)
+                from_latest = history.get(self.history[-1].frame_id)
+                if from_source is not None and from_latest is not None:
+                    source_motion, source_pixels = from_source
+                    inside = mask[source_pixels[:, 1], source_pixels[:, 0]]
+                    if int(inside.sum()) >= active[0].min_inliers:
+                        # Both transforms are measured from the same surviving
+                        # point identities. Rebase the old seed on this new
+                        # source-frame observation, then carry it to the latest
+                        # frame without rerunning optical flow over history.
+                        seed_pose = inverse(source_motion.base_motion_from_seed) @ estimate.pose
+                        corrected = replace(estimate, pose=seed_pose)
+                        self.active[estimate.role] = (active[0], corrected)
+                        self._publish(estimate.role, corrected, from_latest[0])
+                        self._count_anchor_outcome(estimate.role, "reused_point_track")
+                        continue
             tracker = CausalRigidPointTracker(**self.tracker_kwargs)
-            if tracker.seed(source, mask) < tracker.min_inliers:
+            seeded = tracker.seed(source, mask)
+            if seeded < tracker.min_inliers:
+                self._count_anchor_outcome(estimate.role, "point_seed_failed")
                 if self.history[-1].frame_id > source.frame_id and estimate.role not in self.relationships:
                     self._publish_static(estimate.role, estimate, self.history[-1])
                 continue
+            self._count_anchor_outcome(estimate.role, "point_seeded")
             self.active[estimate.role] = (tracker, estimate)
+            self.motion_history[estimate.role] = deque(maxlen=self.history.maxlen)
+            self.motion_history[estimate.role].append(
+                (
+                    source.frame_id,
+                    RigidPointMotion(
+                        np.eye(4), source.source_time_s, source.available_time_s, seeded, seeded, seeded, 0.0
+                    ),
+                    tracker.current_pixels(source.depth.shape),
+                )
+            )
             self.anchors += 1
             for frame in self.history:
                 if frame.frame_id <= source.frame_id:
@@ -329,13 +406,23 @@ class CausalPoseService:
                     motion = tracker.update(frame)
                 except ValueError:
                     del self.active[estimate.role]
+                    self.motion_history.pop(estimate.role, None)
+                    self._count_anchor_outcome(estimate.role, "point_replay_lost")
                     break
+                if motion.base_motion_from_seed is not None:
+                    self.motion_history[estimate.role].append(
+                        (frame.frame_id, motion, tracker.current_pixels(frame.depth.shape))
+                    )
                 self._publish(estimate.role, estimate, motion)
             # A point track may fail before catching up to the newest camera
             # frame. Keep the last directly measured pose explicitly predicted
             # until another source supports a newer state.
             if self.history[-1].frame_id > source.frame_id and estimate.role not in self.relationships:
                 self._publish_static(estimate.role, estimate, self.history[-1])
+
+    def _count_anchor_outcome(self, role: str, outcome: str) -> None:
+        counts = self.anchor_outcomes_by_role.setdefault(role, {})
+        counts[outcome] = counts.get(outcome, 0) + 1
 
     def _observe_environment(
         self, estimate: PoseEstimate, scene: SceneTracks, masks: dict[str, np.ndarray]

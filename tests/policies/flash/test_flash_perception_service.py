@@ -2,6 +2,7 @@
 
 import time
 from threading import Event
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -125,3 +126,46 @@ def test_camera_failure_prevents_pose_readiness():
         assert isinstance(service.error, TimeoutError)
     finally:
         service.close()
+
+
+def test_readiness_uses_capture_time_of_direct_support_after_prediction():
+    store = LatestPoseStore()
+    worker = SimpleNamespace(store=store, metrics=SimpleNamespace(last_failures={}))
+    service = PerceptionService(FakeCameraSource(), worker, store, clock=lambda: 1.1)
+    service._started = True
+    store.publish(
+        (
+            PoseEstimate(
+                "item",
+                np.eye(4),
+                1.1,
+                1.1,
+                Evidence.PREDICTED,
+                "v1",
+                (True,) * 3,
+                (True,) * 3,
+                estimator="stationary_prior",
+                last_direct_observation_s=1.0,
+            ),
+        )
+    )
+    service.wait_ready(("item",), max_pose_age_s=0.2, timeout_s=0.01)
+
+    store.publish(
+        (
+            PoseEstimate(
+                "item",
+                np.eye(4),
+                1.2,
+                1.2,
+                Evidence.PREDICTED,
+                "v1",
+                (True,) * 3,
+                (True,) * 3,
+                estimator="stationary_prior",
+                last_direct_observation_s=0.5,
+            ),
+        )
+    )
+    with pytest.raises(PerceptionServiceError, match="no fresh observed pose"):
+        service.wait_ready(("item",), max_pose_age_s=0.2, timeout_s=0.01)

@@ -34,6 +34,50 @@ def _principal_frame(points: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return centre, axes
 
 
+def visible_surface_p90(
+    model_points_object_m: np.ndarray,
+    camera_from_object: np.ndarray,
+    live_depth: np.ndarray,
+    live_mask: np.ndarray,
+    intrinsics: np.ndarray,
+    depth_m_per_unit: float,
+    *,
+    min_points: int,
+    max_live_points: int = 1000,
+) -> float:
+    """Distance of segmented depth to a proposed surface, including unmatched pixels.
+
+    A correspondence fit can agree with a small, incorrectly matched subset of
+    a mask. This one-way check uses the same visible depth that supplied those
+    correspondences, while allowing reference surfaces hidden from the camera.
+    """
+    model = np.asarray(model_points_object_m, dtype=float)
+    pose = np.asarray(camera_from_object, dtype=float)
+    mask = np.asarray(live_mask)
+    if (
+        model.ndim != 2
+        or model.shape[1] != 3
+        or not np.isfinite(model).all()
+        or pose.shape != (4, 4)
+        or not np.isfinite(pose).all()
+        or mask.shape != live_depth.shape
+        or mask.dtype != bool
+        or min_points < 3
+        or max_live_points < min_points
+    ):
+        raise ValueError("invalid visible-surface inputs")
+    valid = mask & np.isfinite(live_depth) & (live_depth > 0)
+    y, x = np.nonzero(valid)
+    if len(model) < min_points or len(x) < min_points:
+        raise DegenerateRegistrationError("too few depth-backed surface points")
+    if len(x) > max_live_points:
+        keep = np.linspace(0, len(x) - 1, max_live_points, dtype=int)
+        x, y = x[keep], y[keep]
+    live = unproject_pixels(live_depth, intrinsics, np.column_stack((x, y)), depth_m_per_unit)
+    surface = model @ pose[:3, :3].T + pose[:3, 3]
+    return float(np.quantile(cKDTree(surface).query(live)[0], 0.9))
+
+
 def register_visible_shape(
     model_points_object_m: np.ndarray,
     live_depth: np.ndarray,

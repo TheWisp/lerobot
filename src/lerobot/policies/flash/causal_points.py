@@ -176,6 +176,10 @@ class CausalRigidPointTracker:
             fit.median_error_m,
         )
 
+    def current_pixels(self, depth_shape: tuple[int, int]) -> np.ndarray:
+        """Depth-image coordinates for surviving tracked point identities."""
+        return self._full_pixels(self._uv[self._valid], depth_shape)
+
     def _gray_image(self, rgb: np.ndarray) -> np.ndarray:
         gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
         if self.image_scale != 1:

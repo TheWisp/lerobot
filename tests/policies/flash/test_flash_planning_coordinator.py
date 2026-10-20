@@ -270,6 +270,20 @@ def test_future_chunk_stops_at_camera_evidence_age_boundary():
     assert [action.tick for action in session.actions.snapshot().pending] == [3]
 
 
+def test_single_issued_action_replans_from_that_joint_boundary_when_evidence_refreshes():
+    now, robot, session, poses, worker, coordinator = make_runtime(max_pose_age_s=0.11)
+    for _ in range(4):
+        coordinator.step()
+    assert len(robot.sent) == 1
+    assert session.progress.phase == Phase.MOVING
+    assert session.actions.snapshot().pending == ()
+    poses.publish((target(0.2, now[0]),))
+    coordinator.schedule()
+    assert session.progress.phase == Phase.MOVING
+    assert worker.requests[-1].start_tick == session.motor.metrics.ticks
+    assert session.actions.snapshot().pending
+
+
 def test_coordinator_uses_attachment_age_separately_from_camera_pose_age():
     now = [2.0]
     robot = FakeRobot()

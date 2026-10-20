@@ -70,6 +70,49 @@ def test_delayed_anchor_uses_retained_frame_and_all_intervening_motion():
         service.close()
 
 
+def test_later_observation_rebases_continuous_track_without_replaying_frames():
+    image = np.random.default_rng(14).integers(0, 255, (96, 96), dtype=np.uint8)
+    frames = [
+        frame(cv2.warpAffine(image, np.float32([[1, 0, 2 * i], [0, 1, 0]]), (96, 96)), i) for i in range(5)
+    ]
+    mask = np.zeros(image.shape, dtype=bool)
+    mask[20:76, 20:76] = True
+    shifted_mask = np.zeros_like(mask)
+    shifted_mask[20:76, 24:80] = True
+    store = LatestPoseStore()
+    service = CausalPoseService(store)
+    service.start()
+    try:
+        for item in frames:
+            service.submit_frame(item)
+        first = PoseEstimate(
+            "object", np.eye(4), 0.0, 0.0, Evidence.OBSERVED, "object-v1", (True,) * 3, (True,) * 3
+        )
+        service.submit_anchor(0, (first,), {"object": mask})
+        second_pose = np.eye(4)
+        second_pose[0, 3] = 0.05  # frame 2 plus a 1 cm absolute correction
+        second = PoseEstimate(
+            "object", second_pose, 2 / 30, 2 / 30, Evidence.OBSERVED, "object-v1", (True,) * 3, (True,) * 3
+        )
+        service.submit_anchor(2, (second,), {"object": shifted_mask})
+        deadline = time.monotonic() + 2
+        while (
+            service.anchor_outcomes_by_role.get("object", {}).get("reused_point_track", 0) < 1
+            and service.error is None
+            and time.monotonic() < deadline
+        ):
+            time.sleep(0.01)
+        assert service.error is None
+        assert service.anchors == 1
+        assert service.anchor_outcomes_by_role["object"]["reused_point_track"] == 1
+        result = store.snapshot()[1]["object"]
+        assert result.source_time_s == frames[-1].source_time_s
+        assert result.last_direct_observation_s == frames[2].source_time_s
+        np.testing.assert_allclose(result.pose[0, 3], 0.09, atol=0.005)
+    finally:
+        service.close()
+
+
 def test_anchor_requires_the_recorded_capture_time_and_calibration():
     image = np.random.default_rng(9).integers(0, 255, (96, 96), dtype=np.uint8)
     captured = frame(image, 1)
