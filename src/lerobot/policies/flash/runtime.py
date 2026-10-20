@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from math import isfinite
+from math import ceil, isfinite
 from typing import Protocol
 
 import numpy as np
@@ -88,6 +88,7 @@ class FlashRuntime:
         fps: float = 30.0,
         causal_tracking: CausalTrackingConfig | None = None,
         object_centers_by_role: dict[str, np.ndarray] | None = None,
+        object_points_by_role: dict[str, np.ndarray] | None = None,
         live_telemetry: FlashLiveTelemetry | None = None,
     ) -> None:
         self._validate_bindings(skill, references)
@@ -112,7 +113,9 @@ class FlashRuntime:
                 environment_min_inliers=causal_tracking.environment_min_inliers,
                 static_prediction_max_s=causal_tracking.static_prediction_max_s,
                 object_centers_by_role=object_centers_by_role,
+                object_points_by_role=object_points_by_role,
                 on_layer=live_telemetry.layer if live_telemetry is not None else None,
+                on_comparison=live_telemetry.comparison if live_telemetry is not None else None,
             )
             if causal_tracking is not None
             else None
@@ -147,6 +150,11 @@ class FlashRuntime:
             robot,
             on_tick=on_tick,
             fps=fps,
+            # An empty queue holds the last command while fresh perception or
+            # IK catches up. The coordinator separately stops motion once its
+            # pose expires; a fixed two-tick timeout would fail before that
+            # evidence boundary during a normal asynchronous update.
+            max_starved_ticks=max(1, ceil(planner_limits.max_pose_age_s * fps)),
             max_splice_delta={
                 f"{name}.pos": speed / fps
                 for name, speed in zip(arm_joint_names, planner_limits.joint_speed_deg_s, strict=True)

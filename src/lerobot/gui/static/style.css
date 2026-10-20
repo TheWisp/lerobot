@@ -620,6 +620,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .flash-tracker-layer small, .flash-tracker-selected small { display: block; margin-left: 12px; color: #a7b5c8; }
 .flash-tracker-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; }
 .flash-tracker-selected { font-weight: 600; color: #fff; }
+.flash-tracker-comparison { margin-top: 5px; color: #fbbf24; }
+.flash-tracker-comparison small { display: block; margin-left: 12px; color: #a7b5c8; }
 .flash-tracker-replay-controls { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
 .flash-tracker-replay-controls input { flex: 1; min-width: 0; }
 .flash-pose-canvas { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }

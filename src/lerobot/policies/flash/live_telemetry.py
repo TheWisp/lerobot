@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import time
+from dataclasses import asdict
 from pathlib import Path
 from threading import Condition, Thread
 
@@ -12,6 +13,7 @@ import cv2
 import numpy as np
 
 from .perception import RGBDFrame
+from .pose_disagreement import PoseComparison
 from .trajectory import PoseEstimate
 
 
@@ -70,6 +72,7 @@ class FlashLiveTelemetry:
         self._masks: dict[str, np.ndarray] = {}
         self._mask_frame_id: int | None = None
         self._layers: dict[str, dict[str, PoseEstimate]] = {}
+        self._comparisons: dict[str, dict] = {}
         self._accepted: dict[str, PoseEstimate] = {}
         self._thread = Thread(target=self._write_loop, name="flash-live-telemetry", daemon=True)
         self._thread.start()
@@ -102,6 +105,15 @@ class FlashLiveTelemetry:
             self._layers.setdefault(estimate.role, {})[estimate.estimator] = estimate
             self._changed()
 
+    def comparison(self, role: str, result: PoseComparison) -> None:
+        with self._condition:
+            self._comparisons[role] = {
+                **asdict(result),
+                "verdict": result.verdict.value,
+                "available_at_s": time.perf_counter(),
+            }
+            self._changed()
+
     def accepted(self, poses: dict[str, PoseEstimate]) -> None:
         with self._condition:
             self._accepted = dict(poses)
@@ -114,6 +126,7 @@ class FlashLiveTelemetry:
             masks = self._masks.copy()
             mask_frame_id = self._mask_frame_id
             layers = {role: values.copy() for role, values in self._layers.items()}
+            comparisons = self._comparisons.copy()
             accepted = self._accepted.copy()
         return {
             "schema_version": 1,
@@ -141,6 +154,7 @@ class FlashLiveTelemetry:
                 role: {name: _estimate_json(value) for name, value in entries.items()}
                 for role, entries in layers.items()
             },
+            "direct_group_comparisons": comparisons,
             "accepted": {role: _estimate_json(value) for role, value in accepted.items()},
         }
 

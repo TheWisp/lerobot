@@ -1,5 +1,7 @@
 """End-to-end state transitions through the fixed motor dispatcher."""
 
+import threading
+
 import numpy as np
 import pytest
 
@@ -89,6 +91,52 @@ def test_future_contact_chunk_waits_to_start_its_own_demo_clock():
     assert session.step().tick == 2
     assert session.progress.interval_start_s == 2 / 30
     assert robot.calls.count("send") == 1
+
+
+def test_waiting_tick_cannot_idle_across_a_concurrent_planner_publication():
+    now = [0.0]
+    session = FlashSession(
+        skill(), FakeRobot(), clock=lambda: now[0], sleep=lambda dt: now.__setitem__(0, now[0] + dt)
+    )
+    inspected = threading.Event()
+    continue_idle = threading.Event()
+    original_has_due = session.actions.has_due
+
+    def paused_has_due(tick):
+        result = original_has_due(tick)
+        inspected.set()
+        assert continue_idle.wait(1)
+        return result
+
+    session.actions.has_due = paused_has_due
+    step_errors = []
+    publication_errors = []
+
+    def step():
+        try:
+            session.step()
+        except Exception as exc:
+            step_errors.append(exc)
+
+    def publish():
+        try:
+            session.publish_plan(0, [TimedAction(0, {"arm.pos": 1.0}, "contact")])
+        except PlanRejectedError as exc:
+            publication_errors.append(exc)
+
+    motor = threading.Thread(target=step)
+    motor.start()
+    assert inspected.wait(1)
+    planner = threading.Thread(target=publish)
+    planner.start()
+    assert planner.is_alive()  # publication waits for the motor's idle decision
+    continue_idle.set()
+    motor.join(1)
+    planner.join(1)
+    assert not motor.is_alive() and not planner.is_alive()
+    assert not step_errors
+    assert len(publication_errors) == 1  # tick zero has already been skipped
+    assert session.motor.metrics.idle == 1
 
 
 def test_target_change_invalidates_release_gate_before_motor_send():

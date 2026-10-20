@@ -107,7 +107,9 @@ class PerceptionService:
             while not self._stop.is_set():
                 self.worker.poll()
                 if self.causal_error is not None and (error := self.causal_error()) is not None:
-                    raise PerceptionServiceError("causal point tracking failed") from error
+                    raise PerceptionServiceError(
+                        f"causal point tracking failed: {type(error).__name__}: {error}"
+                    ) from error
                 if self.on_pose_update is not None:
                     self.on_pose_update(*self.store.snapshot())
                 self._stop.wait(self.collector_period_s)

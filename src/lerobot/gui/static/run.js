@@ -417,6 +417,13 @@ function renderFlashSnapshot(snapshot, mode = 'Live') {
         }
         const accepted = snapshot.accepted?.[role];
         html += `<div class="flash-tracker-selected">Planner pose: ${accepted ? _esc(_flashLayerName(accepted.estimator || 'unspecified')) + '<small>' + _esc(_flashPoseText(accepted, snapshot)) + '</small>' : 'none'}</div>`;
+        const comparison = snapshot.direct_group_comparisons?.[role];
+        if (comparison) {
+            const age = Math.max(0, Number(snapshot.recorded_at_s) - Number(comparison.available_at_s));
+            const separation = Number(comparison.object_center_difference_m) * 1000;
+            html += `<div class="flash-tracker-comparison">Latest direct/group check: ${_esc(comparison.verdict.replaceAll('_', ' '))}`
+                + `<small>${separation.toFixed(1)} mm between centres · ${age.toFixed(1)} s ago</small></div>`;
+        }
         html += '</div>';
     }
     content.innerHTML = html;

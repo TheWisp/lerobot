@@ -38,6 +38,15 @@ poses are tracker outputs rather than independent ground truth. The fixture
 tests the explicitly annotated cylindrical symmetry without storing images or
 motor actions.
 
+`dowel_group_direct_ambiguous_20261020.npz` stores one aligned depth frame,
+the corresponding segmented dowel mask boundary raster, camera calibration,
+prepared model points, and the competing direct and verified-group poses from
+the 2026-10-20 17:51:21 trial. The dowel was partly hidden during approach.
+The two poses differ by about 13 mm at the modeled centre; the visible depth
+patch does not clearly favor either pose. The fixture checks that the late
+direct proposal is recorded as a disagreement rather than replacing the group
+anchor. It contains no RGB or motor actions.
+
 `ring_tray_motion_20261016.npz` contains sparse, persistent RGB-D point tracks
 from camera frames 331, 360, 390 and 422 of the 2026-10-16 11:21:49 insertion
 attempt. The tray and ring visibly moved together between the first two frames.

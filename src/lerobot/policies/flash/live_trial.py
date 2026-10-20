@@ -14,6 +14,7 @@ import json
 import signal
 import sys
 import time
+import traceback
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -213,13 +214,14 @@ def trial(
         centers_by_role = {
             model.points.role: model.points.points_object_m.mean(axis=0) for model in bundle.appearance_models
         }
+        points_by_role = {
+            model.points.role: model.points.points_object_m for model in bundle.appearance_models
+        }
         telemetry = FlashLiveTelemetry(
             telemetry_path or output_root / "flash" / "v1" / "live_tracker.json",
             output_root / "flash" / "v1" / "tracker_episode_000000.jsonl",
             centers_by_role,
-            points_by_role={
-                model.points.role: model.points.points_object_m for model in bundle.appearance_models
-            },
+            points_by_role=points_by_role,
         )
         runtime = FlashRuntime(
             skill=bundle.skill,
@@ -228,6 +230,7 @@ def trial(
             pose_backend_factory=backend,
             references=bundle.references,
             object_centers_by_role=centers_by_role,
+            object_points_by_role=points_by_role,
             live_telemetry=telemetry,
             kinematics=kin,
             arm_joint_names=arm_names,
@@ -358,11 +361,17 @@ def trial(
                         "environment_published_by_role": runtime.causal.environment_published_by_role.copy(),
                         "environment_candidate_published_by_role": runtime.causal.environment_candidate_published_by_role.copy(),
                         "environment_fit_failures_by_role": runtime.causal.environment_fit_failures_by_role.copy(),
+                        "direct_group_disagreements_by_role": (
+                            runtime.causal.direct_group_disagreements_by_role.copy()
+                        ),
                         "environment_expired_by_role": runtime.causal.environment_expired_by_role.copy(),
                         "scene_gaps": runtime.causal.scene.gaps,
                         "scene_recent_gap_durations_s": tuple(runtime.causal.scene.recent_gap_durations_s),
                         "frame_compute_total_s": runtime.causal.frame_compute_total_s,
                         "frame_compute_max_s": runtime.causal.frame_compute_max_s,
+                        "scene_update_total_s": runtime.causal.scene_update_total_s,
+                        "environment_track_total_s": runtime.causal.environment_track_total_s,
+                        "object_track_total_s": runtime.causal.object_track_total_s,
                         "anchor_compute_total_s": runtime.causal.anchor_compute_total_s,
                         "anchor_compute_max_s": runtime.causal.anchor_compute_max_s,
                         "max_queue_age_s": runtime.causal.max_queue_age_s,
@@ -409,6 +418,11 @@ def trial(
                 "planner_compute_total_s": runtime.planner.compute_total_s,
                 "planner_compute_max_s": runtime.planner.compute_max_s,
                 "planner_pending_revision": runtime.coordinator._pending_revision,
+                "causal_error": (
+                    "".join(traceback.format_exception(runtime.causal.error))
+                    if runtime.causal is not None and runtime.causal.error is not None
+                    else None
+                ),
                 "attachment": {
                     "active_role": runtime.attachment.active_role,
                     "last_event": runtime.attachment.last_event,

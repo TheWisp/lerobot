@@ -135,16 +135,20 @@ class FlashSession:
             return self._idle_tick("missed required action")
         tick = self.motor.metrics.ticks
         if self.progress.phase == Phase.WAITING:
-            if self.progress.can_begin() and self.actions.has_tick(tick):
-                self.progress.begin(self.motor.epoch_s + tick * self.motor.period_s)
-            else:
-                if self.actions.has_due(tick):
-                    reason = "entry milestone not satisfied or first command expired"
-                    events = self.actions.cancel_unissued(reason)
-                    self.progress.events.append(
-                        {"type": "plan_cancelled", "reason": reason, "events": events}
-                    )
-                return self._idle_tick("awaiting interval entry")
+            # Publication and the idle decision must be one transaction. A
+            # planner can otherwise publish tick N after has_due(N) returns
+            # false but before skip(N), making an ordinary startup race fatal.
+            with self._plan_gate_lock:
+                if self.progress.can_begin() and self.actions.has_tick(tick):
+                    self.progress.begin(self.motor.epoch_s + tick * self.motor.period_s)
+                else:
+                    if self.actions.has_due(tick):
+                        reason = "entry milestone not satisfied or first command expired"
+                        events = self.actions.cancel_unissued(reason)
+                        self.progress.events.append(
+                            {"type": "plan_cancelled", "reason": reason, "events": events}
+                        )
+                    return self._idle_tick("awaiting interval entry")
         if self.progress.phase != Phase.MOVING:
             if self.actions.has_due(tick):
                 reason = f"no motion permitted in {self.progress.phase.value}"

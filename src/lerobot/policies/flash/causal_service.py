@@ -15,6 +15,7 @@ import numpy as np
 from .causal_points import CausalRigidPointTracker, RigidPointMotion
 from .geometry import inverse
 from .perception import LatestPoseStore, RGBDFrame
+from .pose_disagreement import PoseComparison, PoseComparisonVerdict, compare_pose_proposals
 from .registration import transform_points
 from .scene_groups import (
     EnvironmentRelationship,
@@ -110,7 +111,9 @@ class CausalPoseService:
         environment_min_inliers: int = 12,
         static_prediction_max_s: float | None = None,
         object_centers_by_role: dict[str, np.ndarray] | None = None,
+        object_points_by_role: dict[str, np.ndarray] | None = None,
         on_layer: Callable[[PoseEstimate], None] | None = None,
+        on_comparison: Callable[[str, PoseComparison], None] | None = None,
     ) -> None:
         if history_frames < 2 or queue_frames < 2:
             raise ValueError("causal pose history and queue need at least two frames")
@@ -142,12 +145,22 @@ class CausalPoseService:
             role: np.asarray(center, dtype=float).copy()
             for role, center in (object_centers_by_role or {}).items()
         }
+        self.object_points_by_role = {
+            role: np.asarray(points, dtype=float).copy()
+            for role, points in (object_points_by_role or {}).items()
+        }
         self.on_layer = on_layer
+        self.on_comparison = on_comparison
         if any(
             center.shape != (3,) or not np.isfinite(center).all()
             for center in self.object_centers_by_role.values()
         ):
             raise ValueError("object support centers must be finite 3D points")
+        if any(
+            points.ndim != 2 or points.shape[1] != 3 or not len(points) or not np.isfinite(points).all()
+            for points in self.object_points_by_role.values()
+        ):
+            raise ValueError("object support models must contain finite 3D points")
         self.observed: dict[str, tuple[PoseEstimate, SceneTracks, tuple[np.ndarray, ...]]] = {}
         self.candidate_relationships: dict[str, EnvironmentRelationship] = {}
         self.relationships: dict[str, EnvironmentRelationship] = {}
@@ -176,8 +189,13 @@ class CausalPoseService:
         self.environment_candidate_published_by_role: dict[str, int] = {}
         self.environment_fit_failures_by_role: dict[str, int] = {}
         self.environment_expired_by_role: dict[str, int] = {}
+        self.direct_group_disagreements_by_role: dict[str, dict[str, int]] = {}
+        self.last_direct_group_comparison: dict[str, PoseComparison] = {}
         self.frame_compute_total_s = 0.0
         self.frame_compute_max_s = 0.0
+        self.scene_update_total_s = 0.0
+        self.environment_track_total_s = 0.0
+        self.object_track_total_s = 0.0
         self.anchor_compute_total_s = 0.0
         self.anchor_compute_max_s = 0.0
         self.max_queue_age_s = 0.0
@@ -272,12 +290,15 @@ class CausalPoseService:
         if self.history and frame.frame_id <= self.history[-1].frame_id:
             raise ValueError("causal camera frames must increase")
         self.history.append(frame)
+        scene_started_s = time.perf_counter()
         scene = self.scene.update(frame)
+        self.scene_update_total_s += time.perf_counter() - scene_started_s
         self.scene_history.append(scene)
         self.frames += 1
         self.max_processing_lag_s = max(self.max_processing_lag_s, time.perf_counter() - frame.source_time_s)
         self.latest_processed_source_time_s = frame.source_time_s
         object_motion_roles: set[str] = set()
+        object_started_s = time.perf_counter()
         for role, (tracker, anchor) in list(self.active.items()):
             try:
                 motion = tracker.update(frame)
@@ -291,6 +312,8 @@ class CausalPoseService:
                 )
                 object_motion_roles.add(role)
                 self._publish(role, anchor, motion)
+        self.object_track_total_s += time.perf_counter() - object_started_s
+        environment_started_s = time.perf_counter()
         for role, relationship in list(self.relationships.items()) + list(
             self.candidate_relationships.items()
         ):
@@ -339,6 +362,7 @@ class CausalPoseService:
                     self.environment_candidate_published_by_role[role] = (
                         self.environment_candidate_published_by_role.get(role, 0) + 1
                     )
+        self.environment_track_total_s += time.perf_counter() - environment_started_s
         # A missing visual fit is not evidence that a stationary object moved.
         # Carry the last direct pose for a bounded interval, with explicit
         # prediction provenance. Once co-motion has been verified, only that
@@ -434,6 +458,9 @@ class CausalPoseService:
                     self._count_anchor_outcome(estimate.role, "superseded_by_direct")
                     continue
             if estimate.has_direct_translation and estimate.role != attached_role:
+                if self._direct_conflicts_with_verified_group(estimate, source, scene, mask):
+                    self._count_anchor_outcome(estimate.role, "direct_group_unresolved")
+                    continue
                 self._observe_environment(estimate, scene, result.masks)
             # The pose process only submits source-frame proposals. This is
             # the sole owner that can publish an accepted absolute pose.
@@ -559,6 +586,53 @@ class CausalPoseService:
     def _count_anchor_outcome(self, role: str, outcome: str) -> None:
         counts = self.anchor_outcomes_by_role.setdefault(role, {})
         counts[outcome] = counts.get(outcome, 0) + 1
+
+    def _direct_conflicts_with_verified_group(
+        self, estimate: PoseEstimate, frame: RGBDFrame, scene: SceneTracks, mask: np.ndarray
+    ) -> bool:
+        """Keep an unresolved partial view from replacing a verified group anchor.
+
+        A direct fit can supersede the group when the aligned RGB-D surface
+        favors it. If neither fit dominates, retain the group's causal track
+        and wait for more evidence instead of promoting the disputed fit to a
+        stationary prior when the support group later expires.
+        """
+        relationship = self.relationships.get(estimate.role)
+        points = self.object_points_by_role.get(estimate.role)
+        if (
+            relationship is None
+            or points is None
+            or estimate.pose is None
+            or frame.source_time_s < relationship.anchor_time_s
+        ):
+            return False
+        group_pose = relationship.predict(
+            scene, fit_threshold_m=self.fit_threshold_m, min_inliers=self.environment_min_inliers
+        )
+        if group_pose is None or not self._pose_disagrees(estimate.role, group_pose, estimate.pose):
+            return False
+        center = points.mean(axis=0)
+        radius = float(np.sqrt(np.mean(np.sum((points - center) ** 2, axis=1))))
+        comparison = compare_pose_proposals(
+            frame,
+            mask,
+            points,
+            estimate.pose,
+            group_pose,
+            max_agreement_offset_m=self.fit_threshold_m,
+            max_agreement_angle_rad=float(np.arctan2(self.fit_threshold_m, max(radius, np.finfo(float).eps))),
+            min_masked_depth_points=self.environment_min_inliers,
+        )
+        self.last_direct_group_comparison[estimate.role] = comparison
+        verdict = comparison.verdict.value
+        counts = self.direct_group_disagreements_by_role.setdefault(estimate.role, {})
+        counts[verdict] = counts.get(verdict, 0) + 1
+        if self.on_comparison is not None:
+            self.on_comparison(estimate.role, comparison)
+        return comparison.verdict not in (
+            PoseComparisonVerdict.AGREE,
+            PoseComparisonVerdict.CANDIDATE_FAVORED,
+        )
 
     def _observe_environment(
         self, estimate: PoseEstimate, scene: SceneTracks, masks: dict[str, np.ndarray]
