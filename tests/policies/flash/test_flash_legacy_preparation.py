@@ -2,7 +2,8 @@
 
 import numpy as np
 
-from benchmarks.flash_prepare_legacy import _interval_layout, _nearest_index
+from benchmarks.flash_prepare_legacy import _interval_layout, _interval_reference, _nearest_index
+from lerobot.policies.flash.skill import Relation
 
 
 def test_lift_uses_grasp_anchor_until_nearest_recorded_boundary():
@@ -32,3 +33,16 @@ def test_lift_uses_grasp_anchor_until_nearest_recorded_boundary():
         (5, 6, False, True),
         (6, 7, False, False),
     ]
+
+
+def test_world_relative_retreat_does_not_follow_target_after_release():
+    role, relation, anchored = _interval_reference(
+        first=552,
+        grasp=228,
+        end_key={"t": 19.66, "frame": "world", "move": "line"},
+        start_anchored=False,
+        carrying=False,
+        held="held",
+        target="target",
+    )
+    assert (role, relation, anchored) == ("__start__", Relation.EE_TO_START, True)

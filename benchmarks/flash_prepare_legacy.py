@@ -97,6 +97,25 @@ def _interval_layout(
     return layout
 
 
+def _interval_reference(
+    *,
+    first: int,
+    grasp: int,
+    end_key: dict,
+    start_anchored: bool,
+    carrying: bool,
+    held: str,
+    target: str,
+) -> tuple[str, Relation, bool]:
+    """Preserve each keypoint's declared reference rather than inferring it from time alone."""
+    relative_to_entry = start_anchored or end_key.get("frame") == "world"
+    if relative_to_entry:
+        return "__start__", Relation.EE_TO_START, True
+    if carrying:
+        return target, Relation.HELD_TO_TARGET, False
+    return (target if first >= grasp else held), Relation.EE_TO_OBJECT, False
+
+
 def _metric_pose_at(
     estimates: list[dict], role: str, camera_index: int, *, max_previous: int
 ) -> tuple[np.ndarray, str]:
@@ -333,19 +352,21 @@ def prepare(root: Path, annotation_path: Path, *, output_name: str) -> tuple[Pat
         _interval_layout(times, keypoints, grasp, release, start_anchor_end)
     ):
         mode = MotionMode.DEMONSTRATED if demonstrated else MotionMode.CONNECTION
-        reference_role = "__start__" if start_anchored else (target if first >= grasp else held)
-        relation = (
-            Relation.EE_TO_START
-            if start_anchored
-            else Relation.HELD_TO_TARGET
-            if carrying
-            else Relation.EE_TO_OBJECT
+        reference_role, relation, relative_to_entry = _interval_reference(
+            first=first,
+            grasp=grasp,
+            end_key=end_key,
+            start_anchored=start_anchored,
+            carrying=carrying,
+            held=held,
+            target=target,
         )
+        carrying = relation == Relation.HELD_TO_TARGET
         indices = range(first, last + 1) if demonstrated else (first, last)
         samples = []
         for index in indices:
             camera_index = int(camera_for_arm[index])
-            if start_anchored:
+            if relative_to_entry:
                 reference_pose, reference_evidence = recorded_tips[first], "recorded_start"
             elif reference_role == held and index <= grasp:
                 reference_pose = grasp_held
@@ -384,7 +405,7 @@ def prepare(root: Path, annotation_path: Path, *, output_name: str) -> tuple[Pat
                 if mode == MotionMode.CONNECTION
                 else None,
                 reference_version=(
-                    f"{output_name}:start-anchor" if start_anchored else roles_version[reference_role]
+                    f"{output_name}:start-anchor" if relative_to_entry else roles_version[reference_role]
                 ),
                 held_reference_version=roles_version[held] if carrying else None,
                 held_role=held if carrying else None,

@@ -30,6 +30,19 @@ pose during insertion in this prepared skill. Extraction has produced a
 replayable spatial skill, but has not established that its contact geometry is
 accurate enough for a live insertion.
 
+The repeatable [prepared-skill audit](../../../../../benchmarks/flash_audit_legacy_skill.py)
+now checks every retained arm sample against the sealed demo's time, calibrated
+fingertip pose and gripper command. The local
+`insertion-migrated-v9-world-retreat` bundle has eleven contiguous intervals,
+grasp/release events at arm samples 228/513, and a constant demonstrated held
+attachment; all recorded sample values match exactly. A visual contact sheet
+confirms the grasp, lift, insertion and release boundaries. The audit caught
+one wrong relation in v7: the final world-relative retreat was made
+ring-relative; v9 retains it as a motion relative to the interval entry.
+The demo's first hover at sample 179 is annotated `best_effort`, but the
+current skill schema does not represent that preference, so extraction is
+not yet fully faithful to the annotated keyframes.
+
 ## Offline perception replay
 
 The [initial RGB-D replay](rgbd_replay.md) used a SAM3 mask, DINOv2 matches and
@@ -134,5 +147,15 @@ expired as designed. This is a missing occlusion-support mechanism, not
 evidence that the dowel moved. The arm was parked afterward. The GUI now
 displays live RGB-D and motor state from FLASH through LeRobot's optional
 observation stream, and local episode links open its ordinary dataset replay.
-The replay has no FLASH-specific pose outline yet. No successful redesign
-insertion has been recorded.
+The Run → FLASH tracker panel now shows recorded accepted poses and the
+separate gripper-predicted held outline for recordings that include it. No
+successful redesign insertion has been recorded.
+
+In the 19:11 live trial, the arm grasped and lifted the dowel before the next
+generated carry connection failed its IK check. The retiming code tried the
+far endpoint first and rejected the path when that single local solve failed;
+it now subdivides failed IK steps. The recorded start and goal pass offline
+with the existing 3 mm and 3° limits. A physical rerun remains outstanding:
+after that stop, the robot bus found arm motors 1–6 but not gripper motor 7 on
+two connection attempts, so the return path did not move and the dowel remains
+in the gripper.
