@@ -1,11 +1,12 @@
 # FLASH implementation status
 
-FLASH lives at **Run → FLASH**. The current Run panel inspects a regular local
-LeRobot dataset episode and discovers spatial skill annotations and prepared
-references under that dataset's `flash/v1` extension. A source episode can
-have multiple skills. The panel deliberately does not command a robot yet: the
-live tracker must register each object into the _same stable object frame_ used
-by the demonstration before the spatial equation can produce safe goals.
+FLASH lives at **Run → FLASH**. The Run panel inspects a regular local LeRobot
+dataset episode and discovers spatial skill annotations and prepared references
+under that dataset's `flash/v1` extension. A source episode can have multiple
+skills. With a prepared skill and calibrated local trial configuration, the
+panel can launch a bounded live trial and record another ordinary LeRobot
+dataset. Startup requires each needed object to register into the _same stable
+object frame_ used by the demonstration before robot motion begins.
 
 The executable core already separates:
 
