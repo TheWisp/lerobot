@@ -141,6 +141,7 @@ class FlashRuntime:
     ) -> None:
         self._validate_bindings(skill, references)
         self.skill = skill
+        self.arm_joint_names = arm_joint_names
         self.recorder = recorder
         self.max_camera_age_s = max_camera_age_s
         self.live_telemetry = live_telemetry

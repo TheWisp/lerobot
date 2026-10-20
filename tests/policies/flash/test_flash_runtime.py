@@ -13,6 +13,7 @@ from lerobot.policies.flash.planning_coordinator import PlanBufferConfig
 from lerobot.policies.flash.progress import Phase
 from lerobot.policies.flash.runtime import AttachmentRuntimeLimits, FlashRuntime
 from lerobot.policies.flash.skill import FlashSkill, Interval, MotionMode, Relation, SpatialSample
+from lerobot.policies.flash.symmetry import AxialSymmetry
 from lerobot.policies.flash.trajectory import Evidence, PoseEstimate
 
 
@@ -104,7 +105,7 @@ class FakeRecorder:
         self.finished = (outcome, reason)
 
 
-def runtime(test_skill, references, recorder, *, causal_tracking=None):
+def runtime(test_skill, references, recorder, *, causal_tracking=None, grasp_symmetries=()):
     return FlashRuntime(
         skill=test_skill,
         robot=FakeRobot(),
@@ -122,6 +123,7 @@ def runtime(test_skill, references, recorder, *, causal_tracking=None):
         depth_feature=None,
         max_camera_age_s=0.2,
         causal_tracking=causal_tracking,
+        grasp_symmetries=grasp_symmetries,
     )
 
 
@@ -180,6 +182,42 @@ def test_motor_epoch_starts_after_pose_readiness(monkeypatch):
     assert recorder.started
     attempt.close("unknown", "test completed")
     assert recorder.finished == ("unknown", "test completed")
+
+
+def test_startup_selects_declared_grasp_symmetry_before_motor_epoch(monkeypatch):
+    symmetry = AxialSymmetry("target", np.array([0.0, 0.0, 1.0]), np.zeros(3), identity())
+    attempt = runtime(
+        skill(),
+        (reference("target", "target-v1"),),
+        FakeRecorder(),
+        grasp_symmetries=(symmetry,),
+    )
+
+    def wait_ready(roles, *, max_pose_age_s, timeout_s):
+        attempt.poses.publish(
+            (
+                PoseEstimate(
+                    "target",
+                    identity(),
+                    1.0,
+                    1.0,
+                    Evidence.OBSERVED,
+                    "target-v1",
+                    (True,) * 3,
+                    (True,) * 3,
+                ),
+            )
+        )
+
+    monkeypatch.setattr(attempt.perception, "start", lambda timeout_s: None)
+    monkeypatch.setattr(attempt.perception, "wait_ready", wait_ready)
+    monkeypatch.setattr(attempt.perception, "close", lambda: None)
+    monkeypatch.setattr(attempt.planner, "start", lambda: None)
+    monkeypatch.setattr(attempt.planner, "close", lambda: None)
+    attempt.start(pose_start_timeout_s=2, first_pose_timeout_s=2)
+    assert attempt.coordinator.grasp_choices["target"].angle_rad == 0
+    assert attempt.session.motor.epoch_s is not None
+    attempt.close("unknown", "test completed")
 
 
 def test_runtime_wires_joint_continuity_for_late_free_space_deadlines():
