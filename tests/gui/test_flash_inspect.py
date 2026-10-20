@@ -330,6 +330,48 @@ def test_run_flash_view_demo_uses_data_view_without_inspection_or_robot_launch(g
 
 @pytest.mark.requires_playwright
 @pytest.mark.skipif(importlib.util.find_spec("playwright") is None, reason="Playwright is not installed")
+def test_run_flash_lists_demos_and_opens_recorded_episode(gui_page):
+    page = gui_page
+    page.route(
+        "**/api/run/flash/recordings",
+        lambda route: route.fulfill(
+            json=[
+                {
+                    "kind": "demo",
+                    "dataset_root": "/tmp/one-demo",
+                    "episode": 2,
+                    "skills": ["spatial-skill"],
+                    "modified_at_s": 12.0,
+                }
+            ]
+        ),
+    )
+    page.evaluate("switchTab('run')")
+    page.evaluate("() => selectWorkflow('flash')")
+    page.evaluate(
+        """() => {
+            window.openDataset = async root => {
+                datasets.demo = { id: 'demo', root, repo_id: 'demo', fps: 30 };
+                episodes.demo = [{ episode_index: 2, length: 42 }];
+            };
+            window.selectEpisode = (id, episode, length) => {
+                window.flashViewedEpisode = { id, episode, length };
+            };
+            window.togglePlay = () => { window.flashDemoPlayed = true; };
+        }"""
+    )
+    page.wait_for_function(
+        "() => document.querySelectorAll('#run-flash-demos .flash-recording').length === 1"
+    )
+    assert "spatial-skill" in page.locator("#run-flash-demos").inner_text()
+    page.locator("#run-flash-demos .flash-recording").click()
+    page.wait_for_function("() => window.flashDemoPlayed === true")
+    assert page.evaluate("window.flashViewedEpisode") == {"id": "demo", "episode": 2, "length": 42}
+    assert "active" in page.locator('.tab[data-tab="data"]').get_attribute("class").split()
+
+
+@pytest.mark.requires_playwright
+@pytest.mark.skipif(importlib.util.find_spec("playwright") is None, reason="Playwright is not installed")
 def test_run_flash_subtab_launches_selected_prepared_skill(gui_page):
     page = gui_page
     bundle = "/tmp/example/flash/v1/prepared/ready/bundle.json"

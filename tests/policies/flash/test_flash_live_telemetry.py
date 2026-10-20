@@ -132,18 +132,33 @@ def test_flash_recordings_lists_source_datasets_with_outcomes(tmp_path: Path) ->
     for extension in (older, latest, incomplete):
         extension.mkdir(parents=True)
         (extension.parent.parent / "meta").mkdir()
-        (extension.parent.parent / "meta" / "info.json").write_text("{}")
+        (extension.parent.parent / "meta" / "info.json").write_text('{"total_episodes": 1}')
     for extension in (older, latest):
         (extension / "episode_000000.jsonl").write_text("{}\n")
     (latest / "manifest.json").write_text(
         json.dumps({"episodes": {"0": {"frames": 42, "outcome": "interrupted", "reason": "IK failed"}}})
     )
+    bundle = older / "prepared" / "one-demo"
+    bundle.mkdir(parents=True)
+    (bundle / "bundle.json").write_text('{"skill": "skill.json"}')
+    (bundle / "skill.json").write_text('{"source_episode": 0}')
     recordings = _flash_recordings((tmp_path,))
     assert {item["dataset_root"] for item in recordings} == {
         str(older.parent.parent),
         str(latest.parent.parent),
     }
+    assert next(item for item in recordings if item["kind"] == "demo") == {
+        "kind": "demo",
+        "dataset_root": str(older.parent.parent),
+        "episode": 0,
+        "modified_at_s": (bundle / "bundle.json").stat().st_mtime,
+        "skills": ["one-demo"],
+    }
     assert (
-        next(item for item in recordings if item["dataset_root"] == str(latest.parent.parent))["reason"]
+        next(
+            item
+            for item in recordings
+            if item["kind"] == "rollout" and item["dataset_root"] == str(latest.parent.parent)
+        )["reason"]
         == "IK failed"
     )

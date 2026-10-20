@@ -337,7 +337,14 @@ function _flashDatasetInputError() {
     return null;
 }
 
-async function viewFlashDemo() {
+async function viewFlashDemo(datasetRoot = null, episodeNumber = null, play = false) {
+    if (datasetRoot !== null) {
+        document.getElementById('run-flash-root').value = datasetRoot;
+        document.getElementById('run-flash-episode').value = String(episodeNumber);
+        const select = document.getElementById('run-flash-dataset');
+        if (select && [...select.options].some(option => option.value === datasetRoot)) select.value = datasetRoot;
+        _clearFlashPreparedSkills();
+    }
     const error = _flashDatasetInputError();
     if (error) { showToast('Cannot view demo', error, 'warning'); return; }
     const root = _val('run-flash-root');
@@ -355,6 +362,7 @@ async function viewFlashDemo() {
     }
     switchTab('data');
     selectEpisode(dataset.id, episodeIndex, episode.video_length || episode.length);
+    if (play && !isPlaying) togglePlay();
 }
 
 let flashTelemetryTimer = null;
@@ -665,17 +673,37 @@ async function loadFlashTrackerReplay(datasetRoot, episodeIndex) {
 
 async function _loadFlashRecordings() {
     const list = document.getElementById('run-flash-recordings');
-    if (!list) return;
+    const demosList = document.getElementById('run-flash-demos');
+    if (!list || !demosList) return;
     const generation = ++flashRecordingsGeneration;
-    list.textContent = 'Loading recordings…';
+    list.textContent = 'Loading rollouts…';
+    demosList.textContent = 'Loading demos…';
     try {
         const response = await fetch('/api/run/flash/recordings');
         if (!response.ok) throw new Error(`Recordings returned ${response.status}`);
         const recordings = await response.json();
         if (generation !== flashRecordingsGeneration) return;
         list.replaceChildren();
-        if (!recordings.length) { list.textContent = 'No FLASH recordings in your dataset sources.'; return; }
-        for (const recording of recordings) {
+        demosList.replaceChildren();
+        const demos = recordings.filter(recording => recording.kind === 'demo');
+        const rollouts = recordings.filter(recording => recording.kind !== 'demo');
+        if (!demos.length) demosList.textContent = 'No FLASH demos in your dataset sources.';
+        if (!rollouts.length) list.textContent = 'No FLASH rollouts in your dataset sources.';
+        for (const recording of demos) {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'flash-recording';
+            button.title = recording.dataset_root;
+            const label = document.createElement('strong');
+            label.textContent = `${recording.dataset_root.split('/').pop()} · episode ${recording.episode}`;
+            const meta = document.createElement('span');
+            const skills = recording.skills || [];
+            meta.textContent = `${skills.length} FLASH skill(s) · latest: ${skills.at(-1) || 'none'} · Play demo in Data`;
+            button.append(label, meta);
+            button.onclick = () => viewFlashDemo(recording.dataset_root, recording.episode, true);
+            demosList.append(button);
+        }
+        for (const recording of rollouts) {
             const button = document.createElement('button');
             button.type = 'button';
             button.className = 'flash-recording';
@@ -691,7 +719,10 @@ async function _loadFlashRecordings() {
             list.append(button);
         }
     } catch (error) {
-        if (generation === flashRecordingsGeneration) list.textContent = `Cannot list recordings: ${error.message}`;
+        if (generation === flashRecordingsGeneration) {
+            list.textContent = `Cannot list rollouts: ${error.message}`;
+            demosList.textContent = `Cannot list demos: ${error.message}`;
+        }
     }
 }
 
@@ -1880,8 +1911,10 @@ function renderRunForm() {
     // Demo viewing and skill inspection are read-only. The shared Run button
     // only starts a robot trial after a prepared bundle and rig are selected.
     html += `<div id="run-section-flash" style="${selectedWorkflow === 'flash' ? '' : 'display:none'}">`;
-    html += '<div class="flash-recordings-heading"><span class="form-section-title">FLASH recordings</span><button type="button" class="btn-small secondary" onclick="_loadFlashRecordings()">Refresh</button></div>';
-    html += '<div id="run-flash-recordings" class="flash-recordings">Loading recordings…</div>';
+    html += '<div class="flash-recordings-heading"><span class="form-section-title">DEMOs</span><button type="button" class="btn-small secondary" onclick="_loadFlashRecordings()">Refresh</button></div>';
+    html += '<div id="run-flash-demos" class="flash-recordings">Loading demos…</div>';
+    html += '<div class="flash-recordings-heading"><span class="form-section-title">Rollouts</span></div>';
+    html += '<div id="run-flash-recordings" class="flash-recordings">Loading rollouts…</div>';
     html += '<div class="form-hint">Choose a normal LeRobot dataset episode. View its video in Data or inspect the FLASH skill stored beside it; neither moves the robot.</div>';
     html += '<div class="form-grid">';
     html += '<label>Dataset</label>';

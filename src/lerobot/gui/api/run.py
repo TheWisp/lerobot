@@ -1107,7 +1107,7 @@ async def flash_tracker_replay(dataset_root: str, episode: int = 0) -> dict:
 
 
 def _flash_recordings(source_paths: tuple[Path, ...]) -> list[dict]:
-    """Find FLASH episodes under the same bounded source folders as Data."""
+    """Find demo episodes and rollouts under the same bounded source folders as Data."""
     extensions: set[Path] = set()
     for source in source_paths:
         root = source.expanduser()
@@ -1117,8 +1117,48 @@ def _flash_recordings(source_paths: tuple[Path, ...]) -> list[dict]:
     found = []
     for extension in extensions:
         dataset_root = extension.parent.parent
-        if not (dataset_root / "meta" / "info.json").is_file():
+        info_path = dataset_root / "meta" / "info.json"
+        if not info_path.is_file():
             continue
+        try:
+            episode_count = json.loads(info_path.read_text(encoding="utf-8"))["total_episodes"]
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+        if not isinstance(episode_count, int) or episode_count < 0:
+            continue
+        demos: dict[int, dict] = {}
+        skill_paths = list((extension / "prepared").glob("*/bundle.json"))
+        skill_paths += list((extension / "skills").glob("*.json"))
+        skill_paths.sort(key=lambda path: path.stat().st_mtime)
+        for path in skill_paths:
+            try:
+                if path.stat().st_size > 16 * 1024 * 1024:
+                    continue
+                metadata = json.loads(path.read_text(encoding="utf-8"))
+                if path.name == "bundle.json":
+                    path_to_skill = path.parent / metadata["skill"]
+                    if path_to_skill.stat().st_size > 16 * 1024 * 1024:
+                        continue
+                    metadata = json.loads(path_to_skill.read_text(encoding="utf-8"))
+                episode = metadata["source_episode"]
+                if not isinstance(episode, int) or not 0 <= episode < episode_count:
+                    continue
+                modified_at_s = path.stat().st_mtime
+            except (OSError, ValueError, KeyError, TypeError):
+                continue
+            demo = demos.setdefault(
+                episode,
+                {
+                    "kind": "demo",
+                    "dataset_root": str(dataset_root.resolve()),
+                    "episode": episode,
+                    "modified_at_s": 0,
+                    "skills": [],
+                },
+            )
+            demo["modified_at_s"] = max(demo["modified_at_s"], modified_at_s)
+            demo["skills"].append(path.parent.name if path.name == "bundle.json" else path.stem)
+        found.extend(demos.values())
         manifest_path = extension / "manifest.json"
         try:
             episodes = json.loads(manifest_path.read_text(encoding="utf-8")).get("episodes", {})
@@ -1132,6 +1172,7 @@ def _flash_recordings(source_paths: tuple[Path, ...]) -> list[dict]:
             detail = episodes.get(str(episode), {})
             found.append(
                 {
+                    "kind": "rollout",
                     "dataset_root": str(dataset_root.resolve()),
                     "episode": episode,
                     "modified_at_s": trace.stat().st_mtime,
