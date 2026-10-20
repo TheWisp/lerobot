@@ -211,6 +211,9 @@ def trial(
             image_writer_threads=4,
         )
         recorder = RecorderWorker(FlashEpisodeWriter(dataset, 0, settings["task"]))
+        config_snapshot = output_root / "flash" / "v1" / "trial_config.json"
+        config_snapshot.parent.mkdir(parents=True, exist_ok=True)
+        config_snapshot.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
         centers_by_role = {
             model.points.role: model.points.points_object_m.mean(axis=0) for model in bundle.appearance_models
         }

@@ -27,6 +27,9 @@ from .scene_groups import (
 )
 from .trajectory import Evidence, PoseEstimate
 
+DEFAULT_MAX_POSE_DISAGREEMENT_TRANSLATION_M = 0.01
+DEFAULT_MAX_POSE_DISAGREEMENT_ROTATION_RAD = 0.15
+
 
 @dataclass(frozen=True)
 class _Anchor:
@@ -59,6 +62,8 @@ class CausalTrackingConfig:
     environment_prediction_max_s: float = 1.0
     environment_min_inliers: int = 12
     static_prediction_max_s: float | None = None
+    max_pose_disagreement_translation_m: float = DEFAULT_MAX_POSE_DISAGREEMENT_TRANSLATION_M
+    max_pose_disagreement_rotation_rad: float = DEFAULT_MAX_POSE_DISAGREEMENT_ROTATION_RAD
 
     @classmethod
     def from_config(cls, config: dict[str, Any]) -> CausalTrackingConfig:
@@ -87,6 +92,10 @@ class CausalTrackingConfig:
             or not isfinite(self.environment_prediction_max_s)
             or self.environment_prediction_max_s <= 0
             or self.environment_min_inliers < 3
+            or not isfinite(self.max_pose_disagreement_translation_m)
+            or self.max_pose_disagreement_translation_m <= 0
+            or not isfinite(self.max_pose_disagreement_rotation_rad)
+            or self.max_pose_disagreement_rotation_rad <= 0
             or (
                 self.static_prediction_max_s is not None
                 and (not isfinite(self.static_prediction_max_s) or self.static_prediction_max_s <= 0)
@@ -119,6 +128,8 @@ class CausalPoseService:
         environment_prediction_max_s: float = 1.0,
         environment_min_inliers: int = 12,
         static_prediction_max_s: float | None = None,
+        max_pose_disagreement_translation_m: float = DEFAULT_MAX_POSE_DISAGREEMENT_TRANSLATION_M,
+        max_pose_disagreement_rotation_rad: float = DEFAULT_MAX_POSE_DISAGREEMENT_ROTATION_RAD,
         object_centers_by_role: dict[str, np.ndarray] | None = None,
         object_points_by_role: dict[str, np.ndarray] | None = None,
         on_layer: Callable[[PoseEstimate], None] | None = None,
@@ -150,6 +161,8 @@ class CausalPoseService:
         self.environment_min_inliers = environment_min_inliers
         self.static_prediction_max_s = static_prediction_max_s
         self.fit_threshold_m = fit_threshold_m
+        self.max_pose_disagreement_translation_m = max_pose_disagreement_translation_m
+        self.max_pose_disagreement_rotation_rad = max_pose_disagreement_rotation_rad
         self.object_centers_by_role = {
             role: np.asarray(center, dtype=float).copy()
             for role, center in (object_centers_by_role or {}).items()
@@ -751,10 +764,13 @@ class CausalPoseService:
             local_center = np.zeros(3)
         before = transform_points(predicted, local_center[None])[0]
         after = transform_points(observed, local_center[None])[0]
-        if np.linalg.norm(before - after) > 2 * self.fit_threshold_m:
+        if np.linalg.norm(before - after) > self.max_pose_disagreement_translation_m:
             return True
         turn = predicted[:3, :3].T @ observed[:3, :3]
-        return float(np.arccos(np.clip((np.trace(turn) - 1) / 2, -1, 1))) > 0.15
+        return (
+            float(np.arccos(np.clip((np.trace(turn) - 1) / 2, -1, 1)))
+            > self.max_pose_disagreement_rotation_rad
+        )
 
     def _publish(self, role: str, anchor: PoseEstimate, motion) -> None:
         if motion.base_motion_from_seed is None:

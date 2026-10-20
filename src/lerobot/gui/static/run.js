@@ -752,6 +752,48 @@ async function inspectFlashDataset() {
     }
 }
 
+async function inspectFlashTrialConfig() {
+    const target = document.getElementById('run-flash-config-detail');
+    if (!target) return;
+    target.textContent = 'Reading trial parameters…';
+    try {
+        const res = await fetch('/api/run/flash/config-inspect', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ config_path: _val('run-flash-config') }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || 'Cannot read trial config');
+        target.replaceChildren();
+        const note = document.createElement('div');
+        note.className = 'form-hint';
+        note.textContent = `Parameters from ${data.path}. Edit that JSON file to change them, then inspect again. Each run records its effective config beside the episode.`;
+        target.append(note);
+        const highlights = [
+            ['attachment.max_observation_shift_m', 'Held-pose correction gate', value => `${value * 1000} mm`],
+            ['attachment.max_unverified_age_s', 'Held prediction expiry', value => value == null ? 'disabled' : `${value} s`],
+            ['first_pose_timeout_s', 'Initial pose wait', value => `${value} s`],
+            ['causal_tracking.max_pose_disagreement_translation_m', 'Group/direct translation disagreement', value => `${value * 1000} mm`],
+            ['causal_tracking.max_pose_disagreement_rotation_rad', 'Group/direct rotation disagreement', value => `${(value * 180 / Math.PI).toFixed(1)}°`],
+        ];
+        for (const [path, label, format] of highlights) {
+            const value = path.split('.').reduce((part, key) => part?.[key], data.settings);
+            if (value === undefined) continue;
+            const row = document.createElement('div');
+            row.textContent = `${label}: ${format(value)} (${path})`;
+            target.append(row);
+        }
+        const all = document.createElement('details');
+        const summary = document.createElement('summary');
+        summary.textContent = 'All trial parameters';
+        const contents = document.createElement('pre');
+        contents.textContent = JSON.stringify(data.settings, null, 2);
+        all.append(summary, contents);
+        target.append(all);
+    } catch (error) {
+        target.textContent = `Cannot inspect trial parameters: ${error.message}`;
+    }
+}
+
 function _recordDatasetOptions() {
     // None (pure teleop) + opened datasets (resume) + New dataset
     const ds = window.datasets || {};
@@ -1802,8 +1844,10 @@ function renderRunForm() {
     html += '<div id="run-flash-skill-detail" class="flash-skill-detail"></div>';
     html += '<div class="form-grid">';
     html += '<label>Robot/camera trial config</label>';
-    html += '<input id="run-flash-config" type="text" placeholder="/absolute/path/to/flash-trial.json" oninput="_updateLaunchButton()">';
+    html += '<input id="run-flash-config" type="text" placeholder="/absolute/path/to/flash-trial.json" oninput="document.getElementById(\'run-flash-config-detail\').replaceChildren(); _updateLaunchButton()">';
     html += '</div>';
+    html += '<button type="button" class="btn-small secondary" onclick="inspectFlashTrialConfig()">Inspect trial parameters</button>';
+    html += '<div id="run-flash-config-detail" class="flash-skill-detail"></div>';
     html += '<div id="run-flash-status" class="form-hint">View the episode in Data, or inspect its FLASH skills here.</div>';
     html += '</div>';
 

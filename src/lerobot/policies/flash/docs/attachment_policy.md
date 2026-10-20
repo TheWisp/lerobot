@@ -15,4 +15,8 @@ The current SO-107 trial sets `max_unverified_age_s` to `null`. The old 20 s set
 
 The [example trial JSON](trial_config.example.json) also exposes the planner's IK sample and retiming budgets, evidence wait, and every causal group-tracking limit. The live launcher requires these values in its rig JSON so a trial cannot silently inherit a different internal default.
 
+In Run → FLASH, **Inspect trial parameters** reads the selected rig JSON without moving the robot. The panel highlights the held-pose correction gate, held-prediction expiry, first-pose wait, and direct/group disagreement limits, then shows the full configuration. Each live attempt saves the effective values in its regular dataset at `flash/v1/trial_config.json`. The highlighted 20 s `first_pose_timeout_s` is only a startup wait; it is unrelated to the disabled `max_unverified_age_s` held-prediction expiry.
+
+`causal_tracking.max_pose_disagreement_translation_m` and `max_pose_disagreement_rotation_rad` gate whether two tracker poses disagree at the modeled object center. They are independent of the RGB-D fit tolerance. Their current 10 mm and 0.15 rad values preserve the previous behavior, but are provisional and should be calibrated against recorded discrepancies rather than treated as object properties.
+
 The GUI recording now stores `held_prediction` separately from the independent tracker `accepted` pose. Older recordings lack that field; their stationary tray outline is an old tracker state, not the pose the held-to-target planner used.

@@ -254,6 +254,10 @@ class FlashRunRequest(FlashDatasetInspectRequest):
     config_path: str
 
 
+class FlashConfigInspectRequest(BaseModel):
+    config_path: str
+
+
 class HVLARunRequest(BaseModel):
     robot: dict[str, Any]
     s1_checkpoint: str
@@ -304,6 +308,7 @@ _active_loop: asyncio.AbstractEventLoop | None = None
 _active_command: str | None = None
 _flash_live_path: Path | None = None
 _flash_telemetry_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gui-flash-telemetry")
+_flash_config_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gui-flash-config")
 _active_config: dict | None = None
 _debug_process: asyncio.subprocess.Process | None = None  # optional model debug alongside teleop
 _debug_output_path: Path | None = None  # log file for debug model output
@@ -960,6 +965,28 @@ async def inspect_flash_skill(req: FlashInspectRequest) -> dict:
 async def inspect_flash_dataset(req: FlashDatasetInspectRequest) -> dict:
     """Discover FLASH data beside an ordinary local LeRobot episode."""
     return await _inspect_flash_subprocess("--dataset-root", req.dataset_root, "--episode", str(req.episode))
+
+
+@router.post("/flash/config-inspect")
+async def inspect_flash_config(req: FlashConfigInspectRequest) -> dict:
+    """Show the exact trial parameters without connecting to a robot."""
+    from lerobot.policies.flash.causal_service import CausalTrackingConfig
+    from lerobot.policies.flash.runtime import AttachmentRuntimeLimits
+
+    def read() -> dict:
+        path = Path(req.config_path).expanduser().resolve()
+        if not path.is_file():
+            raise ValueError("Select an existing local robot/camera trial config")
+        settings = json.loads(path.read_text(encoding="utf-8"))
+        AttachmentRuntimeLimits.from_config(settings["attachment"])
+        if settings.get("causal_tracking") is not None:
+            CausalTrackingConfig.from_config(settings["causal_tracking"])
+        return {"path": str(path), "settings": settings}
+
+    try:
+        return await asyncio.get_running_loop().run_in_executor(_flash_config_pool, read)
+    except (KeyError, TypeError, ValueError, OSError) as exc:
+        raise HTTPException(400, f"Invalid FLASH trial config: {exc}") from exc
 
 
 @router.post("/flash/run")

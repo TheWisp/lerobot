@@ -161,6 +161,8 @@ class FlashRuntime:
                 environment_prediction_max_s=causal_tracking.environment_prediction_max_s,
                 environment_min_inliers=causal_tracking.environment_min_inliers,
                 static_prediction_max_s=causal_tracking.static_prediction_max_s,
+                max_pose_disagreement_translation_m=causal_tracking.max_pose_disagreement_translation_m,
+                max_pose_disagreement_rotation_rad=causal_tracking.max_pose_disagreement_rotation_rad,
                 object_centers_by_role=object_centers_by_role,
                 object_points_by_role=object_points_by_role,
                 on_layer=live_telemetry.layer if live_telemetry is not None else None,

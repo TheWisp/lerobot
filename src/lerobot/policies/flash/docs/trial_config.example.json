@@ -49,7 +49,9 @@
     "environment_min_motion_m": 0.008,
     "environment_prediction_max_s": 1.0,
     "environment_min_inliers": 12,
-    "static_prediction_max_s": null
+    "static_prediction_max_s": null,
+    "max_pose_disagreement_translation_m": 0.01,
+    "max_pose_disagreement_rotation_rad": 0.15
   },
   "attachment": {
     "motor_history_capacity": 120,

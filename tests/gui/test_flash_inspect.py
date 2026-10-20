@@ -10,9 +10,11 @@ import numpy as np
 import pytest
 
 from lerobot.gui.api.run import (
+    FlashConfigInspectRequest,
     FlashDatasetInspectRequest,
     FlashInspectRequest,
     FlashRunRequest,
+    inspect_flash_config,
     inspect_flash_dataset,
     inspect_flash_skill,
     start_flash,
@@ -65,6 +67,25 @@ def test_flash_inspect_subprocess_returns_spatial_intervals(tmp_path):
     assert inspected["source_repo_id"] == "example/dataset"
     assert inspected["intervals"][0]["demo_duration_s"] == 1.0
     assert inspected["milestones"][0]["pose_relation"]["translation_tolerance_m"] == 0.01
+
+
+def test_flash_trial_config_inspection_shows_effective_thresholds(tmp_path):
+    from pathlib import Path
+
+    from lerobot.policies.flash.causal_service import CausalTrackingConfig
+
+    example = (
+        Path(__file__).resolve().parents[2] / "src/lerobot/policies/flash/docs/trial_config.example.json"
+    )
+    config = json.loads(example.read_text())
+    config["attachment"]["max_observation_shift_m"] = 0.014
+    config["first_pose_timeout_s"] = 24
+    path = tmp_path / "trial.json"
+    path.write_text(json.dumps(config))
+    result = asyncio.run(inspect_flash_config(FlashConfigInspectRequest(config_path=str(path))))
+    assert result["settings"]["attachment"]["max_observation_shift_m"] == 0.014
+    assert result["settings"]["first_pose_timeout_s"] == 24
+    assert CausalTrackingConfig.from_config(result["settings"]["causal_tracking"])
 
 
 def test_inspection_flags_held_interval_without_an_attachment_event(tmp_path):
@@ -357,6 +378,22 @@ def test_run_flash_subtab_launches_selected_prepared_skill(gui_page):
 
     page.route("**/api/run/flash/dataset-inspect", inspect_response)
     page.route("**/api/run/flash/run", launch_response)
+    page.route(
+        "**/api/run/flash/config-inspect",
+        lambda route: route.fulfill(
+            json={
+                "path": "/tmp/trial.json",
+                "settings": {
+                    "attachment": {"max_observation_shift_m": 0.015, "max_unverified_age_s": None},
+                    "first_pose_timeout_s": 20,
+                    "causal_tracking": {
+                        "max_pose_disagreement_translation_m": 0.01,
+                        "max_pose_disagreement_rotation_rad": 0.15,
+                    },
+                },
+            }
+        ),
+    )
     page.evaluate("switchTab('run')")
     page.evaluate("() => selectWorkflow('flash')")
     page.locator("#run-flash-root").fill("/tmp/example")
@@ -374,6 +411,14 @@ def test_run_flash_subtab_launches_selected_prepared_skill(gui_page):
     assert inspections == [{"dataset_root": "/tmp/example", "episode": 0}]
     assert page.locator("#run-launch-btn").is_disabled()
     page.locator("#run-flash-config").fill("/tmp/trial.json")
+    page.get_by_role("button", name="Inspect trial parameters").click()
+    detail = page.locator("#run-flash-config-detail")
+    page.wait_for_function(
+        "() => document.getElementById('run-flash-config-detail').textContent.includes('Held-pose correction gate')"
+    )
+    assert "Held-pose correction gate: 15 mm" in detail.inner_text()
+    assert "Held prediction expiry: disabled" in detail.inner_text()
+    assert "Initial pose wait: 20 s" in detail.inner_text()
     assert page.locator("#run-launch-btn").inner_text() == "Run FLASH"
     page.locator("#run-launch-btn").click()
     assert requests, page.locator("#run-terminal").inner_text()
