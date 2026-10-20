@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
 if TYPE_CHECKING:
@@ -1106,6 +1106,37 @@ async def flash_tracker_replay(dataset_root: str, episode: int = 0) -> dict:
     )
 
 
+@router.get("/flash/demo/replay")
+async def flash_demo_replay(dataset_root: str, bundle_path: str, episode: int = 0) -> dict:
+    """Play the original camera frames with the exact prepared spatial samples."""
+    from lerobot.policies.flash.demo_replay import load_legacy_demo_replay
+
+    if episode < 0:
+        raise HTTPException(400, "Episode must be nonnegative")
+    try:
+        return await asyncio.get_running_loop().run_in_executor(
+            _flash_telemetry_pool,
+            load_legacy_demo_replay,
+            Path(dataset_root),
+            episode,
+            Path(bundle_path),
+        )
+    except (OSError, KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(400, f"Cannot replay FLASH demo: {exc}") from exc
+
+
+@router.get("/flash/demo/frame")
+def flash_demo_frame(dataset_root: str, frame_index: int) -> FileResponse:
+    """Serve the same numbered JPEG frame the preparation adapter consumed."""
+    root = Path(dataset_root).expanduser().resolve()
+    if frame_index < 0 or not (root / "meta" / "info.json").is_file():
+        raise HTTPException(400, "Select a valid local demo dataset and frame")
+    path = root / "recording" / "rgb" / f"{frame_index:06d}.jpg"
+    if not path.is_file():
+        raise HTTPException(404, "Demo camera frame is missing")
+    return FileResponse(path, media_type="image/jpeg")
+
+
 def _flash_recordings(source_paths: tuple[Path, ...]) -> list[dict]:
     """Find demo episodes and rollouts under the same bounded source folders as Data."""
     extensions: set[Path] = set()
@@ -1154,10 +1185,15 @@ def _flash_recordings(source_paths: tuple[Path, ...]) -> list[dict]:
                     "episode": episode,
                     "modified_at_s": 0,
                     "skills": [],
+                    "bundle_path": None,
+                    "prepared_skill": None,
                 },
             )
             demo["modified_at_s"] = max(demo["modified_at_s"], modified_at_s)
             demo["skills"].append(path.parent.name if path.name == "bundle.json" else path.stem)
+            if path.name == "bundle.json":
+                demo["bundle_path"] = str(path.resolve())
+                demo["prepared_skill"] = path.parent.name
         found.extend(demos.values())
         manifest_path = extension / "manifest.json"
         try:

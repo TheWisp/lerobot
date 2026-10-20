@@ -404,6 +404,9 @@ function _flashLayerName(estimator) {
 }
 
 function _flashLayerColor(estimator) {
+    if (estimator === 'demo_reference') return '#34d399';
+    if (estimator === 'demo_held') return '#fb923c';
+    if (estimator === 'demo_ee') return '#58a6ff';
     if (estimator === 'object_point_motion') return '#fbbf24';
     if (estimator === 'environment_group_motion') return '#34d399';
     if (estimator === 'environment_support_hypothesis') return '#a3e635';
@@ -427,6 +430,7 @@ function renderFlashSnapshot(snapshot, mode = 'Live') {
     const modeEl = document.getElementById('flash-tracker-mode');
     if (!panel || !content || !snapshot) return;
     panel.hidden = selectedWorkflow !== 'flash';
+    panel.querySelector('.flash-tracker-heading strong').textContent = 'FLASH tracker inspection';
     modeEl.textContent = mode;
     const roles = [...new Set([
         ...Object.keys(snapshot.proposals || {}),
@@ -481,6 +485,11 @@ function renderFlashSnapshot(snapshot, mode = 'Live') {
         flashHighlightedOverlay = null;
     }
     _flashSelectOverlay(flashHighlightedOverlay);
+    _flashBindOverlayRows(content);
+    _flashDrawOverlay();
+}
+
+function _flashBindOverlayRows(content) {
     const hoveredRow = event => {
         const element = event.target.closest('[data-flash-index]');
         _flashSelectOverlay(element && content.contains(element)
@@ -492,6 +501,61 @@ function renderFlashSnapshot(snapshot, mode = 'Live') {
     content.onfocusout = event => {
         if (!content.contains(event.relatedTarget)) _flashSelectOverlay(null);
     };
+}
+
+function renderFlashDemoSnapshot(snapshot) {
+    flashSnapshot = snapshot;
+    flashOverlayRows = [];
+    const panel = document.getElementById('flash-tracker-panel');
+    const content = document.getElementById('flash-tracker-content');
+    panel.hidden = selectedWorkflow !== 'flash';
+    panel.querySelector('.flash-tracker-heading strong').textContent = 'FLASH demo extraction';
+    document.getElementById('flash-tracker-mode').textContent = 'Demo';
+    const demo = snapshot.demo;
+    let html = `<div class="flash-tracker-legend">Demo time ${demo.time_s.toFixed(2)} s · nearest arm reading ${(demo.camera_arm_delta_s * 1000).toFixed(0)} ms from this RGB frame. Outlines project the sampled reference surface, not a complete object mesh. These are the poses stored in the selected prepared skill; raw tracker proposals were not saved.</div>`;
+    if (demo.phase === 'outside_skill') {
+        html += '<div class="flash-tracker-role">No spatial skill sample applies to this part of the recording.</div>';
+    } else {
+        const mode = demo.phase === 'connection_endpoint'
+            ? 'Generated connection: only its endpoint goal is retained. The blue gripper point shows recorded motion for context.'
+            : 'Demonstrated motion: this sample and its object relation were retained.';
+        html += `<div class="flash-tracker-role"><strong>${_esc(demo.interval_name)}</strong><small>${_esc(mode)}</small>`;
+        html += `<div>${_esc(demo.relation.replaceAll('_', ' '))} · arm sample ${demo.source_arm_frame_index} at ${demo.sample_time_s.toFixed(2)} s</div>`;
+        if (demo.event_id) html += `<div>Event: ${_esc(demo.event_id)}</div>`;
+        html += '</div>';
+        if (demo.reference_role === '__start__') {
+            html += '<div class="flash-tracker-role">Motion is anchored to the achieved grasp or interval entry; this interval uses no object reference pose.</div>';
+        } else {
+            const role = demo.reference_role;
+            const pose = snapshot.accepted[role];
+            const constraint = flashReplay.pose_constraints?.[role];
+            const graspReference = flashReplay.grasp_reference;
+            const evidenceNote = constraint?.orientation_locked_to_baseline
+                ? `${pose.evidence}; orientation locked to a baseline. Fresh versus carried translation is not saved here.`
+                : `${pose.evidence}; ${graspReference?.role === role && demo.time_s <= graspReference.grasp_time_s
+                    ? `pre-grasp seed from camera frame ${graspReference.camera_frame_index}` : 'source proposal history not saved'}`;
+            html += `<div class="flash-tracker-role"><strong>${_esc(role)}</strong>`;
+            html += _flashOverlayRow('accepted', role, '', 'flash-tracker-selected',
+                `<span class="flash-tracker-dot" style="background:#34d399"></span>Reference pose used by skill <small>${_esc(evidenceNote)} · sampled at ${pose.source_time_s.toFixed(2)} s</small>`);
+            html += '</div>';
+        }
+        if (snapshot.held_prediction) {
+            const held = snapshot.held_prediction;
+            html += `<div class="flash-tracker-role"><strong>${_esc(held.role)}</strong>`;
+            html += _flashOverlayRow('held', held.role, '', 'flash-tracker-selected',
+                `<span class="flash-tracker-dot" style="background:#fb923c"></span>Held pose used by skill <small>${_esc(held.evidence)} from grasp attachment; not independently measured here</small>`);
+            html += '</div>';
+        }
+    }
+    html += _flashOverlayRow('accepted', '__gripper__', '', 'flash-tracker-role',
+        '<span class="flash-tracker-dot" style="background:#58a6ff"></span>Recorded gripper position');
+    content.innerHTML = html;
+    if (flashHighlightedOverlay && !flashOverlayRows.some(row => row.kind === flashHighlightedOverlay.kind &&
+        row.role === flashHighlightedOverlay.role && row.estimator === flashHighlightedOverlay.estimator)) {
+        flashHighlightedOverlay = null;
+    }
+    _flashSelectOverlay(flashHighlightedOverlay);
+    _flashBindOverlayRows(content);
     _flashDrawOverlay();
 }
 
@@ -564,11 +628,14 @@ function _flashDrawOverlay() {
                 outline(_flashHull(projectedPoints), _flashLayerColor(name),
                     flashHighlightedOverlay && active ? 5 : accepted ? 2.5 : 1.5, !accepted);
                 if (accepted) {
-                    context.fillStyle = '#d8f8ff';
+                    const previousAlpha = context.globalAlpha;
+                    context.globalAlpha = flashReplay?.kind === 'demo' ? previousAlpha * 0.45 : previousAlpha;
+                    context.fillStyle = flashReplay?.kind === 'demo' ? _flashLayerColor(name) : '#d8f8ff';
                     for (const point of projectedPoints) {
                         const [x, y] = pixel(point);
                         context.fillRect(x - 1, y - 1, 2, 2);
                     }
+                    context.globalAlpha = previousAlpha;
                 }
             }
             const center = snapshot.centers_object_m?.[role] || [0, 0, 0];
@@ -583,7 +650,7 @@ function _flashDrawOverlay() {
             if (accepted) {
                 context.font = 'bold 13px sans-serif';
                 context.fillStyle = '#fff';
-                context.fillText(role, x + 8, y - 8);
+                context.fillText(role === '__gripper__' ? 'gripper' : role, x + 8, y - 8);
             }
             context.globalAlpha = 1;
         };
@@ -651,24 +718,60 @@ async function loadFlashTrackerReplay(datasetRoot, episodeIndex) {
             dataset = Object.values(datasets).find(item => item.root === root);
         }
         if (!dataset) return;
-        stopFlashTelemetry();
-        stopObsStreamViewer();
-        flashReplay = { ...result, datasetId: dataset.id, episode };
-        const viewer = document.getElementById('rerun-viewer');
-        viewer.querySelector('.flash-replay-grid')?.remove();
-        const grid = document.createElement('div');
-        grid.className = 'flash-replay-grid';
-        grid.innerHTML = '<img alt="Recorded overhead camera"><canvas class="flash-pose-canvas"></canvas>';
-        viewer.prepend(grid);
-        document.getElementById('rerun-placeholder').style.display = 'none';
-        const controls = document.getElementById('flash-tracker-replay-controls');
-        controls.hidden = false;
-        document.getElementById('flash-tracker-scrub').max = Math.max(0, result.frames.length - 1);
+        _flashInstallReplay({ ...result, datasetId: dataset.id, episode }, 'Recorded overhead camera');
         const firstTrackedFrame = result.frames.findIndex(frame =>
             frame.snapshot?.camera && Object.keys(frame.snapshot?.accepted || {}).length);
         seekFlashReplay(Math.max(0, firstTrackedFrame));
         if (!result.layer_history) showToast('Older FLASH recording', 'This trace contains planner poses, but predates per-tracker layer recording.', 'warning');
     } catch (error) { showToast('Cannot inspect FLASH recording', error.message, 'error'); }
+}
+
+function _flashInstallReplay(replay, imageAlt) {
+    stopFlashTelemetry();
+    stopObsStreamViewer();
+    clearInterval(flashReplayTimer);
+    flashReplayTimer = null;
+    flashReplay = replay;
+    flashHighlightedOverlay = null;
+    const viewer = document.getElementById('rerun-viewer');
+    viewer.querySelector('.flash-replay-grid')?.remove();
+    const grid = document.createElement('div');
+    grid.className = 'flash-replay-grid';
+    const image = document.createElement('img');
+    image.alt = imageAlt;
+    const canvas = document.createElement('canvas');
+    canvas.className = 'flash-pose-canvas';
+    grid.append(image, canvas);
+    viewer.prepend(grid);
+    document.getElementById('rerun-placeholder').style.display = 'none';
+    document.getElementById('flash-tracker-replay-controls').hidden = false;
+    document.getElementById('flash-tracker-scrub').max = Math.max(0, replay.frames.length - 1);
+    document.getElementById('flash-tracker-play').textContent = 'Play';
+}
+
+async function loadFlashDemoReplay(datasetRoot, episodeIndex, bundlePath) {
+    if (!bundlePath) {
+        showToast('Cannot inspect demo', 'This demo has no prepared FLASH skill.', 'warning');
+        return;
+    }
+    const status = document.getElementById('run-flash-status');
+    if (status) status.textContent = 'Loading aligned demo frames and prepared spatial poses…';
+    try {
+        const query = new URLSearchParams({ dataset_root: datasetRoot, episode: String(episodeIndex), bundle_path: bundlePath });
+        const response = await fetch(`/api/run/flash/demo/replay?${query}`);
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.detail || 'Cannot read prepared demo');
+        document.getElementById('run-flash-root').value = datasetRoot;
+        document.getElementById('run-flash-episode').value = String(episodeIndex);
+        _clearFlashPreparedSkills();
+        _flashInstallReplay({ ...result, datasetRoot, episode: episodeIndex }, 'Original aligned demo RGB frame');
+        seekFlashReplay(0);
+        toggleFlashReplay();
+        if (status) status.textContent = `${result.skill_sample_count} spatial samples from ${bundlePath.split('/').slice(-2, -1)[0]} are shown on the original camera frames.`;
+    } catch (error) {
+        if (status) status.textContent = `Cannot inspect demo: ${error.message}`;
+        showToast('Cannot inspect demo', error.message, 'error');
+    }
 }
 
 async function _loadFlashRecordings() {
@@ -694,13 +797,16 @@ async function _loadFlashRecordings() {
             button.type = 'button';
             button.className = 'flash-recording';
             button.title = recording.dataset_root;
+            button.disabled = !recording.bundle_path;
             const label = document.createElement('strong');
             label.textContent = `${recording.dataset_root.split('/').pop()} · episode ${recording.episode}`;
             const meta = document.createElement('span');
             const skills = recording.skills || [];
-            meta.textContent = `${skills.length} FLASH skill(s) · latest: ${skills.at(-1) || 'none'} · Play demo in Data`;
+            meta.textContent = recording.bundle_path
+                ? `${skills.length} FLASH skill(s) · viewing: ${recording.prepared_skill} · Play with extracted poses`
+                : `${skills.length} FLASH annotation(s) · prepare a skill to inspect its poses`;
             button.append(label, meta);
-            button.onclick = () => viewFlashDemo(recording.dataset_root, recording.episode, true);
+            button.onclick = () => loadFlashDemoReplay(recording.dataset_root, recording.episode, recording.bundle_path);
             demosList.append(button);
         }
         for (const recording of rollouts) {
@@ -731,12 +837,18 @@ function seekFlashReplay(index) {
     const selected = flashReplay.frames[Math.max(0, Math.min(index, flashReplay.frames.length - 1))];
     const scrub = document.getElementById('flash-tracker-scrub');
     scrub.value = String(index);
-    document.getElementById('flash-tracker-frame').textContent = `${index + 1} / ${flashReplay.frames.length}`;
+    const demo = flashReplay.kind === 'demo';
+    document.getElementById('flash-tracker-frame').textContent = demo
+        ? `${selected.snapshot.demo.time_s.toFixed(1)} s · ${index + 1}/${flashReplay.frames.length}`
+        : `${index + 1} / ${flashReplay.frames.length}`;
     const image = document.querySelector('#rerun-viewer .flash-replay-grid img');
-    const url = `/api/datasets/${encodeURIComponent(flashReplay.datasetId)}/episodes/${flashReplay.episode}/frame/${selected.frame_index}?camera=observation.images.overhead`;
+    const url = demo
+        ? `/api/run/flash/demo/frame?${new URLSearchParams({ dataset_root: flashReplay.datasetRoot, frame_index: String(selected.frame_index) })}`
+        : `/api/datasets/${encodeURIComponent(flashReplay.datasetId)}/episodes/${flashReplay.episode}/frame/${selected.frame_index}?camera=observation.images.overhead`;
     image.onload = _flashDrawOverlay;
     image.src = url;
-    renderFlashSnapshot(selected.snapshot, 'Recording');
+    if (demo) renderFlashDemoSnapshot({ ...selected.snapshot, ...flashReplay.geometry });
+    else renderFlashSnapshot(selected.snapshot, 'Recording');
 }
 
 function toggleFlashReplay() {
@@ -750,7 +862,7 @@ function toggleFlashReplay() {
         const next = Number(document.getElementById('flash-tracker-scrub').value) + 1;
         if (next >= flashReplay.frames.length) { toggleFlashReplay(); return; }
         seekFlashReplay(next);
-    }, 100);
+    }, flashReplay.kind === 'demo' ? 1000 / flashReplay.fps : 100);
 }
 
 function _flashSkillDetail() {
@@ -1915,7 +2027,7 @@ function renderRunForm() {
     html += '<div id="run-flash-demos" class="flash-recordings">Loading demos…</div>';
     html += '<div class="flash-recordings-heading"><span class="form-section-title">Rollouts</span></div>';
     html += '<div id="run-flash-recordings" class="flash-recordings">Loading rollouts…</div>';
-    html += '<div class="form-hint">Choose a normal LeRobot dataset episode. View its video in Data or inspect the FLASH skill stored beside it; neither moves the robot.</div>';
+    html += '<div class="form-hint">Select a demo to inspect the spatial samples FLASH extracted. Open a rollout to compare live tracker estimates. Playback does not move the robot.</div>';
     html += '<div class="form-grid">';
     html += '<label>Dataset</label>';
     html += '<select id="run-flash-dataset" onchange="_onFlashDatasetChange()"><option value="">Choose an opened dataset...</option></select>';
@@ -1929,7 +2041,7 @@ function renderRunForm() {
     html += '<input id="run-flash-episode" type="number" min="0" step="1" value="0" oninput="_clearFlashPreparedSkills()">';
     html += '</div>';
     html += '<div class="flash-demo-actions">';
-    html += '<button type="button" class="btn-small secondary" id="run-flash-view-btn" onclick="viewFlashDemo()">View demo in Data</button>';
+    html += '<button type="button" class="btn-small secondary" id="run-flash-view-btn" onclick="viewFlashDemo()">View raw episode in Data</button>';
     html += '<button type="button" class="btn-small secondary" id="run-flash-inspect-btn" onclick="inspectFlashDataset()">Inspect FLASH skills</button>';
     html += '</div>';
     html += '<div class="form-section-title">Live robot trial</div>';

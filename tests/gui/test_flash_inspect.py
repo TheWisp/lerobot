@@ -330,8 +330,9 @@ def test_run_flash_view_demo_uses_data_view_without_inspection_or_robot_launch(g
 
 @pytest.mark.requires_playwright
 @pytest.mark.skipif(importlib.util.find_spec("playwright") is None, reason="Playwright is not installed")
-def test_run_flash_lists_demos_and_opens_recorded_episode(gui_page):
+def test_run_flash_lists_demos_and_shows_extracted_pose_overlay(gui_page):
     page = gui_page
+    identity = np.eye(4).tolist()
     page.route(
         "**/api/run/flash/recordings",
         lambda route: route.fulfill(
@@ -341,33 +342,82 @@ def test_run_flash_lists_demos_and_opens_recorded_episode(gui_page):
                     "dataset_root": "/tmp/one-demo",
                     "episode": 2,
                     "skills": ["spatial-skill"],
+                    "bundle_path": "/tmp/one-demo/flash/v1/prepared/spatial-skill/bundle.json",
+                    "prepared_skill": "spatial-skill",
                     "modified_at_s": 12.0,
                 }
             ]
         ),
     )
+    page.route(
+        "**/api/run/flash/demo/replay?*",
+        lambda route: route.fulfill(
+            json={
+                "available": True,
+                "kind": "demo",
+                "fps": 30,
+                "geometry": {
+                    "points_object_m": {"object": [[0, 0, 1], [0.1, 0, 1], [0, 0.1, 1]]},
+                    "centers_object_m": {"object": [0.03, 0.03, 1]},
+                },
+                "frames": [
+                    {
+                        "frame_index": 4,
+                        "snapshot": {
+                            "recorded_at_s": 1.0,
+                            "camera": {
+                                "frame_id": 4,
+                                "width": 640,
+                                "height": 480,
+                                "intrinsics": identity,
+                                "base_from_camera": identity,
+                            },
+                            "accepted": {
+                                "object": {
+                                    "pose": identity,
+                                    "evidence": "predicted",
+                                    "source_time_s": 1.0,
+                                    "estimator": "demo_reference",
+                                },
+                                "__gripper__": {
+                                    "pose": identity,
+                                    "evidence": "recorded",
+                                    "source_time_s": 1.0,
+                                    "estimator": "demo_ee",
+                                },
+                            },
+                            "held_prediction": None,
+                            "demo": {
+                                "phase": "demonstrated_sample",
+                                "time_s": 1.0,
+                                "camera_arm_delta_s": 0.01,
+                                "interval_name": "contact",
+                                "relation": "ee_to_object",
+                                "reference_role": "object",
+                                "source_arm_frame_index": 5,
+                                "sample_time_s": 1.0,
+                                "event_id": None,
+                            },
+                        },
+                    }
+                ],
+            }
+        ),
+    )
     page.evaluate("switchTab('run')")
     page.evaluate("() => selectWorkflow('flash')")
-    page.evaluate(
-        """() => {
-            window.openDataset = async root => {
-                datasets.demo = { id: 'demo', root, repo_id: 'demo', fps: 30 };
-                episodes.demo = [{ episode_index: 2, length: 42 }];
-            };
-            window.selectEpisode = (id, episode, length) => {
-                window.flashViewedEpisode = { id, episode, length };
-            };
-            window.togglePlay = () => { window.flashDemoPlayed = true; };
-        }"""
-    )
     page.wait_for_function(
         "() => document.querySelectorAll('#run-flash-demos .flash-recording').length === 1"
     )
     assert "spatial-skill" in page.locator("#run-flash-demos").inner_text()
     page.locator("#run-flash-demos .flash-recording").click()
-    page.wait_for_function("() => window.flashDemoPlayed === true")
-    assert page.evaluate("window.flashViewedEpisode") == {"id": "demo", "episode": 2, "length": 42}
-    assert "active" in page.locator('.tab[data-tab="data"]').get_attribute("class").split()
+    page.wait_for_function("() => document.querySelector('#flash-tracker-mode').textContent === 'Demo'")
+    assert "active" in page.locator('.tab[data-tab="run"]').get_attribute("class").split()
+    assert "Reference pose used by skill" in page.locator("#flash-tracker-content").inner_text()
+    assert "predicted" in page.locator("#flash-tracker-content").inner_text()
+    assert "/api/run/flash/demo/frame?" in page.locator("#rerun-viewer .flash-replay-grid img").get_attribute(
+        "src"
+    )
 
 
 @pytest.mark.requires_playwright
