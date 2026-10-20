@@ -10,6 +10,7 @@ let obsStreamGen = 0; // bumped on stop/restart to cancel an in-flight "wait for
 let _runFormRendered = false; // true once all workflow sections are in the DOM
 let flashDatasets = []; // opened ordinary LeRobot datasets, refreshed on FLASH selection
 let flashPreparedSkills = [];
+let flashInspectGeneration = 0;
 
 // ============================================================================
 // Initialization
@@ -178,9 +179,8 @@ const _WORKFLOW_VALIDATORS = {
         if (!_val('run-flash-root')) return 'Select an opened dataset or enter a local dataset directory.';
         const episode = _val('run-flash-episode');
         if (!/^\d+$/.test(episode)) return 'Enter a nonnegative demo episode number.';
-        if (_val('run-flash-skill') && !_val('run-flash-config')) {
-            return 'Enter the local robot/camera trial config for this prepared skill.';
-        }
+        if (!_val('run-flash-skill')) return 'Inspect the dataset and select a prepared skill before running.';
+        if (!_val('run-flash-config')) return 'Enter the local robot/camera trial config before running.';
         return null;
     },
 };
@@ -212,9 +212,7 @@ function _updateLaunchButton() {
     if (!btn) return;
     const { ready, reason } = _validateLaunch();
     btn.disabled = !ready;
-    btn.textContent = selectedWorkflow === 'flash'
-        ? (_val('run-flash-skill') ? 'Run FLASH' : 'Inspect FLASH data')
-        : 'Launch';
+    btn.textContent = selectedWorkflow === 'flash' ? 'Run FLASH' : 'Launch';
     // Native `title` shows on hover; gives the missing-field hint without
     // needing extra inline text below the button.
     btn.title = reason;
@@ -318,10 +316,131 @@ function _onFlashDatasetChange() {
 }
 
 function _clearFlashPreparedSkills() {
+    flashInspectGeneration += 1;
     flashPreparedSkills = [];
     const select = document.getElementById('run-flash-skill');
-    if (select) select.innerHTML = '<option value="">Inspect the dataset to choose a prepared skill</option>';
+    if (select) select.replaceChildren(new Option('Inspect skills to choose one', ''));
+    const detail = document.getElementById('run-flash-skill-detail');
+    if (detail) detail.replaceChildren();
+    const status = document.getElementById('run-flash-status');
+    if (status) status.textContent = 'View the episode in Data, or inspect its FLASH skills here.';
     _updateLaunchButton();
+}
+
+function _flashDatasetInputError() {
+    if (!_val('run-flash-root')) return 'Select a dataset or enter its local directory.';
+    if (!/^\d+$/.test(_val('run-flash-episode'))) return 'Enter a nonnegative demo episode number.';
+    return null;
+}
+
+async function viewFlashDemo() {
+    const error = _flashDatasetInputError();
+    if (error) { showToast('Cannot view demo', error, 'warning'); return; }
+    const root = _val('run-flash-root');
+    const episodeIndex = Number(_val('run-flash-episode'));
+    let dataset = Object.values(datasets).find(item => item.root === root);
+    if (!dataset) {
+        await openDataset(root);
+        dataset = Object.values(datasets).find(item => item.root === root);
+    }
+    if (!dataset) return; // openDataset already showed the API error.
+    const episode = (episodes[dataset.id] || []).find(item => item.episode_index === episodeIndex);
+    if (!episode) {
+        showToast('Cannot view demo', `Episode ${episodeIndex} is not in this dataset.`, 'error');
+        return;
+    }
+    switchTab('data');
+    selectEpisode(dataset.id, episodeIndex, episode.video_length || episode.length);
+}
+
+function _flashSkillDetail() {
+    const container = document.getElementById('run-flash-skill-detail');
+    if (!container) return;
+    container.replaceChildren();
+    const selected = flashPreparedSkills.find(item => item.path === _val('run-flash-skill'));
+    if (!selected) { _updateLaunchButton(); return; }
+    const skill = selected.inspection;
+    const heading = document.createElement('div');
+    heading.className = 'form-section-title';
+    heading.textContent = `Selected: ${selected.path.split('/').slice(-2, -1)[0]}`;
+    container.append(heading);
+    const summary = document.createElement('div');
+    summary.textContent = `${skill.intervals.length} motion intervals · ${skill.prepared_references.length} object references · ${skill.milestones.length} milestones`;
+    container.append(summary);
+    const intervals = document.createElement('details');
+    const intervalHeading = document.createElement('summary');
+    intervalHeading.textContent = 'Motion intervals';
+    intervals.append(intervalHeading);
+    const intervalList = document.createElement('ul');
+    for (const interval of skill.intervals) {
+        const row = document.createElement('li');
+        row.textContent = `${interval.name}: ${interval.mode}, ${interval.relation} to ${interval.reference_role}, ${interval.samples} samples`;
+        intervalList.append(row);
+    }
+    intervals.append(intervalList);
+    container.append(intervals);
+    for (const milestone of skill.milestones) {
+        const row = document.createElement('div');
+        const rule = milestone.pose_relation;
+        row.textContent = rule
+            ? `Milestone ${milestone.name}: verify ${rule.moving_role} relative to ${rule.reference_role} within ${rule.translation_tolerance_m} m`
+            : `Milestone ${milestone.name}: external verifier needed`;
+        container.append(row);
+    }
+    if (skill.warnings.length) {
+        const warnings = document.createElement('div');
+        warnings.className = 'form-hint';
+        warnings.textContent = `${skill.warnings.length} evidence warning(s): ${skill.warnings.join('; ')}`;
+        container.append(warnings);
+    }
+    _updateLaunchButton();
+}
+
+async function inspectFlashDataset() {
+    const error = _flashDatasetInputError();
+    if (error) { showToast('Cannot inspect skills', error, 'warning'); return; }
+    const button = document.getElementById('run-flash-inspect-btn');
+    const status = document.getElementById('run-flash-status');
+    const root = _val('run-flash-root');
+    const episode = Number(_val('run-flash-episode'));
+    _clearFlashPreparedSkills();
+    const generation = flashInspectGeneration;
+    if (button) button.disabled = true;
+    if (status) status.textContent = 'Inspecting skills stored with this episode…';
+    try {
+        const res = await fetch('/api/run/flash/dataset-inspect', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ dataset_root: root, episode }),
+        });
+        const data = await res.json();
+        if (generation !== flashInspectGeneration) return;
+        if (!res.ok) throw new Error(data.detail || 'Inspection failed');
+        flashPreparedSkills = data.skills.filter(item =>
+            item.kind === 'prepared' && item.inspection.runtime_bindings_complete);
+        const select = document.getElementById('run-flash-skill');
+        if (select) {
+            select.replaceChildren(new Option('Select a prepared skill', ''));
+            for (const item of flashPreparedSkills) {
+                const skill = item.inspection;
+                const name = item.path.split('/').slice(-2, -1)[0];
+                select.add(new Option(`${name} (${skill.intervals.length} intervals, ${skill.prepared_references.length} references)`, item.path));
+            }
+            if (flashPreparedSkills.length === 1) select.value = flashPreparedSkills[0].path;
+        }
+        if (status) {
+            status.textContent = flashPreparedSkills.length
+                ? `${flashPreparedSkills.length} prepared skill(s) found. Select one to inspect its summary. A calibrated robot/camera config is needed only for a live run.`
+                : `No runnable prepared skill found. ${data.missing.join(' ')}`;
+        }
+        _flashSkillDetail();
+    } catch (e) {
+        if (generation !== flashInspectGeneration) return;
+        _clearFlashPreparedSkills();
+        if (status) status.textContent = `Inspection failed: ${e.message}`;
+        showToast('FLASH inspection failed', e.message, 'error');
+    } finally {
+        if (button) button.disabled = false;
+    }
 }
 
 function _recordDatasetOptions() {
@@ -1344,10 +1463,10 @@ function renderRunForm() {
     html += '</div>'; // end standard fields
     html += '</div>'; // end policy section
 
-    // FLASH data lives beside ordinary LeRobot episodes. Inspect to select a
-    // prepared bundle, then launch it with explicit calibrated rig settings.
+    // Demo viewing and skill inspection are read-only. The shared Run button
+    // only starts a robot trial after a prepared bundle and rig are selected.
     html += `<div id="run-section-flash" style="${selectedWorkflow === 'flash' ? '' : 'display:none'}">`;
-    html += '<div class="form-hint">Inspect a demo dataset, select a prepared skill, then run a bounded live trial. Each trial records a new LeRobot dataset with FLASH trace data.</div>';
+    html += '<div class="form-hint">Choose a normal LeRobot dataset episode. View its video in Data or inspect the FLASH skill stored beside it; neither moves the robot.</div>';
     html += '<div class="form-grid">';
     html += '<label>Dataset</label>';
     html += '<select id="run-flash-dataset" onchange="_onFlashDatasetChange()"><option value="">Choose an opened dataset...</option></select>';
@@ -1360,15 +1479,21 @@ function renderRunForm() {
     html += `<label>Demo episode${_REQ}</label>`;
     html += '<input id="run-flash-episode" type="number" min="0" step="1" value="0" oninput="_clearFlashPreparedSkills()">';
     html += '</div>';
+    html += '<div class="flash-demo-actions">';
+    html += '<button type="button" class="btn-small secondary" id="run-flash-view-btn" onclick="viewFlashDemo()">View demo in Data</button>';
+    html += '<button type="button" class="btn-small secondary" id="run-flash-inspect-btn" onclick="inspectFlashDataset()">Inspect FLASH skills</button>';
+    html += '</div>';
+    html += '<div class="form-section-title">Live robot trial</div>';
     html += '<div class="form-grid">';
     html += '<label>Prepared skill</label>';
-    html += '<select id="run-flash-skill" onchange="_updateLaunchButton()"><option value="">Inspect the dataset to choose a prepared skill</option></select>';
+    html += '<select id="run-flash-skill" onchange="_flashSkillDetail()"><option value="">Inspect skills to choose one</option></select>';
     html += '</div>';
+    html += '<div id="run-flash-skill-detail" class="flash-skill-detail"></div>';
     html += '<div class="form-grid">';
     html += '<label>Robot/camera trial config</label>';
     html += '<input id="run-flash-config" type="text" placeholder="/absolute/path/to/flash-trial.json" oninput="_updateLaunchButton()">';
     html += '</div>';
-    html += '<div id="run-flash-status" class="form-hint">Spatial skills and prepared references are stored under this dataset\'s flash/v1 directory.</div>';
+    html += '<div id="run-flash-status" class="form-hint">View the episode in Data, or inspect its FLASH skills here.</div>';
     html += '</div>';
 
     // ---- Episode control (active while a record subprocess runs) ----
@@ -1444,82 +1569,31 @@ function _getActiveFpsInputId() {
 
 async function launchRun() {
     if (selectedWorkflow === 'flash') {
+        const { ready, reason } = _validateLaunch();
+        if (!ready) { showToast('Cannot run FLASH', reason, 'warning'); return; }
         try {
             const bundlePath = _val('run-flash-skill');
-            if (bundlePath) {
-                const res = await fetch('/api/run/flash/run', {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        dataset_root: _val('run-flash-root'),
-                        episode: Number(_val('run-flash-episode')),
-                        bundle_path: bundlePath,
-                        config_path: _val('run-flash-config'),
-                    }),
-                });
-                const data = await res.json();
-                if (!res.ok) {
-                    showToast('FLASH launch failed', data.detail || 'Unknown error', 'error');
-                    return;
-                }
-                clearTerminal('run-terminal');
-                appendTerminalLine(`FLASH trial started from ${bundlePath}`);
-                showToast('Started', `FLASH trial started (PID ${data.pid})`, 'success');
-                updateRunUI(true, data.command);
-                connectOutputSSE();
-                startObsStreamViewer();
-                return;
-            }
-            const res = await fetch('/api/run/flash/dataset-inspect', {
+            const res = await fetch('/api/run/flash/run', {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     dataset_root: _val('run-flash-root'),
                     episode: Number(_val('run-flash-episode')),
+                    bundle_path: bundlePath,
+                    config_path: _val('run-flash-config'),
                 }),
             });
             const data = await res.json();
             if (!res.ok) {
-                showToast('FLASH dataset invalid', data.detail || 'Unknown error', 'error');
+                showToast('FLASH launch failed', data.detail || 'Unknown error', 'error');
                 return;
             }
             clearTerminal('run-terminal');
-            appendTerminalLine(`Dataset: ${data.dataset_root}, demo episode ${data.episode}`);
-            for (const item of data.skills) {
-                const skill = item.inspection;
-                appendTerminalLine(`${item.kind === 'prepared' ? 'Prepared skill' : 'Spatial annotation'}: ${item.path}`);
-                for (const interval of skill.intervals) {
-                    appendTerminalLine(`  ${interval.name}: ${interval.mode}, ${interval.relation} to ${interval.reference_role}${interval.held_role ? ` with ${interval.held_role} held` : ''}, ${interval.samples} samples, demo ${interval.demo_duration_s.toFixed(2)}s`);
-                }
-                for (const transition of skill.attachment_transitions) {
-                    appendTerminalLine(`  ${transition.event_id}: ${transition.action} ${transition.role} (${transition.reference_version})`);
-                }
-                for (const reference of skill.prepared_references) {
-                    appendTerminalLine(`  Reference ${reference.role}: ${reference.views} views, ${reference.model_points} surface points (${reference.version})`);
-                }
-                for (const milestone of skill.milestones) {
-                    const rule = milestone.pose_relation;
-                    appendTerminalLine(rule
-                        ? `  Milestone ${milestone.name}: verify ${rule.moving_role} relative to ${rule.reference_role} within ${rule.translation_tolerance_m} m${rule.rotation_tolerance_rad == null ? '' : ` and ${rule.rotation_tolerance_rad} rad`}`
-                        : `  Milestone ${milestone.name}: external verifier needed (${milestone.depends_on_roles.join(', ')})`);
-                }
-                for (const missing of skill.missing) appendTerminalLine(`  Needs: ${missing}`);
-                for (const warning of skill.warnings) appendTerminalLine(`  Evidence warning: ${warning}`);
-            }
-            for (const missing of data.missing) appendTerminalLine(`Needs: ${missing}`);
-            for (const warning of data.warnings) appendTerminalLine(`Warning: ${warning}`);
-            flashPreparedSkills = data.skills.filter(item =>
-                item.kind === 'prepared' && item.inspection.runtime_bindings_complete);
-            const skillSelect = document.getElementById('run-flash-skill');
-            if (skillSelect) {
-                skillSelect.innerHTML = '<option value="">Select a prepared skill</option>' +
-                    flashPreparedSkills.map(item => `<option value="${_esc(item.path)}">${_esc(item.path.split('/').slice(-2).join('/'))}</option>`).join('');
-            }
-            const status = document.getElementById('run-flash-status');
-            if (status) status.textContent = data.skills.length
-                ? `${flashPreparedSkills.length} prepared skill(s) ready for a calibrated live trial. ${data.missing.join('. ')}.`
-                : `${data.missing.join('. ')}.`;
-            showToast('FLASH dataset', `${data.skills.length} spatial skill(s) found`, data.skills.length ? 'success' : 'warning');
-            _updateLaunchButton();
-        } catch (e) { showToast('FLASH inspect failed', e.message, 'error'); }
+            appendTerminalLine(`FLASH trial started from ${bundlePath}`);
+            showToast('Started', `FLASH trial started (PID ${data.pid})`, 'success');
+            updateRunUI(true, data.command);
+            connectOutputSSE();
+            startObsStreamViewer();
+        } catch (e) { showToast('FLASH launch failed', e.message, 'error'); }
         return;
     }
 

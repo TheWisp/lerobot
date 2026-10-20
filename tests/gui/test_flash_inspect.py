@@ -211,7 +211,7 @@ def test_flash_stop_waits_for_trial_dataset_save(monkeypatch):
 
 @pytest.mark.requires_playwright
 @pytest.mark.skipif(importlib.util.find_spec("playwright") is None, reason="Playwright is not installed")
-def test_run_flash_subtab_displays_spatial_milestone_from_skill(tmp_path, gui_page):
+def test_run_flash_subtab_inspects_without_launching_robot(tmp_path, gui_page):
     identity = np.eye(4).tolist()
     meta = tmp_path / "meta"
     meta.mkdir()
@@ -258,13 +258,43 @@ def test_run_flash_subtab_displays_spatial_milestone_from_skill(tmp_path, gui_pa
     page.evaluate("switchTab('run')")
     page.evaluate("() => selectWorkflow('flash')")
     assert page.locator("#run-episode-control").is_hidden()
-    assert page.locator("#run-launch-btn").inner_text() == "Inspect FLASH data"
+    assert page.locator("#run-launch-btn").inner_text() == "Run FLASH"
+    assert page.locator("#run-launch-btn").is_disabled()
     page.locator("#run-flash-root").fill(str(tmp_path))
-    page.evaluate("() => launchRun()")
+    page.locator("#run-flash-inspect-btn").click()
     page.wait_for_function(
-        "() => document.getElementById('run-terminal').textContent.includes('Milestone placed: verify held relative to target within 0.01 m')"
+        "() => document.getElementById('run-flash-status').textContent.includes('No runnable prepared skill')"
     )
-    assert "No prepared RGB-D object references" in page.locator("#run-terminal").inner_text()
+    assert page.locator("#run-launch-btn").is_disabled()
+    assert "Prepared skill:" not in page.locator("#run-terminal").inner_text()
+
+
+@pytest.mark.requires_playwright
+@pytest.mark.skipif(importlib.util.find_spec("playwright") is None, reason="Playwright is not installed")
+def test_run_flash_view_demo_uses_data_view_without_inspection_or_robot_launch(gui_page):
+    page = gui_page
+    requests = []
+    page.route("**/api/run/flash/**", lambda route: requests.append(route.request.url))
+    page.evaluate("switchTab('run')")
+    page.evaluate("() => selectWorkflow('flash')")
+    page.evaluate(
+        """() => {
+            window.openDataset = async root => {
+                datasets.demo = { id: 'demo', root, repo_id: 'demo', fps: 30 };
+                episodes.demo = [{ episode_index: 2, length: 42 }];
+            };
+            window.selectEpisode = (id, episode, length) => {
+                window.flashViewedEpisode = { id, episode, length };
+            };
+        }"""
+    )
+    page.locator("#run-flash-root").fill("/tmp/demo")
+    page.locator("#run-flash-episode").fill("2")
+    page.locator("#run-flash-view-btn").click()
+    page.wait_for_function("() => window.flashViewedEpisode !== undefined")
+    assert page.evaluate("window.flashViewedEpisode") == {"id": "demo", "episode": 2, "length": 42}
+    assert "active" in page.locator('.tab[data-tab="data"]').get_attribute("class").split()
+    assert requests == []
 
 
 @pytest.mark.requires_playwright
@@ -273,8 +303,10 @@ def test_run_flash_subtab_launches_selected_prepared_skill(gui_page):
     page = gui_page
     bundle = "/tmp/example/flash/v1/prepared/ready/bundle.json"
     requests = []
+    inspections = []
 
     def inspect_response(route):
+        inspections.append(route.request.post_data_json)
         route.fulfill(
             json={
                 "dataset_root": "/tmp/example",
@@ -288,7 +320,16 @@ def test_run_flash_subtab_launches_selected_prepared_skill(gui_page):
                             "intervals": [],
                             "attachment_transitions": [],
                             "prepared_references": [],
-                            "milestones": [],
+                            "milestones": [
+                                {
+                                    "name": "placed",
+                                    "pose_relation": {
+                                        "moving_role": "held",
+                                        "reference_role": "target",
+                                        "translation_tolerance_m": 0.01,
+                                    },
+                                }
+                            ],
                             "missing": [],
                             "warnings": [],
                         },
@@ -309,14 +350,22 @@ def test_run_flash_subtab_launches_selected_prepared_skill(gui_page):
     page.evaluate("switchTab('run')")
     page.evaluate("() => selectWorkflow('flash')")
     page.locator("#run-flash-root").fill("/tmp/example")
-    page.evaluate("() => launchRun()")
+    page.locator("#run-flash-inspect-btn").click()
     page.wait_for_function(
         "() => [...document.querySelectorAll('#run-flash-skill option')].some(option => option.value.endsWith('/ready/bundle.json'))"
     )
     page.locator("#run-flash-skill").select_option(bundle)
+    assert "0 motion intervals" in page.locator("#run-flash-skill-detail").inner_text()
+    assert (
+        "Milestone placed: verify held relative to target within 0.01 m"
+        in page.locator("#run-flash-skill-detail").inner_text()
+    )
+    assert not requests
+    assert inspections == [{"dataset_root": "/tmp/example", "episode": 0}]
+    assert page.locator("#run-launch-btn").is_disabled()
     page.locator("#run-flash-config").fill("/tmp/trial.json")
     assert page.locator("#run-launch-btn").inner_text() == "Run FLASH"
-    page.evaluate("() => launchRun()")
+    page.locator("#run-launch-btn").click()
     assert requests, page.locator("#run-terminal").inner_text()
     assert requests == [
         {

@@ -604,6 +604,12 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .run-form .form-section-title { font-size: 12px; color: #666; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
 .dataset-conflict-warning { font-size: 11px; color: #f39c12; margin-top: 4px; }
 .form-hint { font-size: 11px; color: #666; margin-top: 2px; }
+.flash-demo-actions { display: flex; gap: 8px; margin: 12px 0 18px; flex-wrap: wrap; }
+.flash-skill-detail { margin: 8px 0 16px; padding: 8px; border: 1px solid #0f3460; border-radius: 4px; color: #aaa; font-size: 11px; overflow-wrap: anywhere; }
+.flash-skill-detail:empty { display: none; }
+.flash-skill-detail details { margin-top: 6px; }
+.flash-skill-detail summary { cursor: pointer; color: #4fc3f7; }
+.flash-skill-detail ul { margin: 6px 0; padding-left: 18px; }
 /* Marker shown after the label of every required field. Bumping the CSS
  * version (style.css?v=N in index.html) is required when shipping new
  * styles like this so old browser caches don't render the form
