@@ -19,7 +19,11 @@ function _flashEditorField(parent, labelText, value, onChange, options = null, t
         if (type === 'number') control.step = 'any';
     }
     control.value = String(value ?? '');
-    control.addEventListener('change', () => onChange(type === 'number' ? Number(control.value) : control.value));
+    control.addEventListener('change', () => {
+        onChange(type === 'number' ? Number(control.value) : control.value);
+        _flashEditorUpdateStatus();
+        _flashRenderTimeline();
+    });
     label.append(control);
     parent.append(label);
     return control;
@@ -43,7 +47,11 @@ function _flashEditorButton(parent, label, action) {
     const button = document.createElement('button');
     button.type = 'button';
     button.textContent = label;
-    button.onclick = action;
+    button.onclick = () => {
+        action();
+        _flashEditorUpdateStatus();
+        _flashRenderTimeline();
+    };
     parent.append(button);
     return button;
 }
@@ -67,6 +75,14 @@ function _flashEditorSetReferenceFrame(frameIndex) {
         flashDemoEditor.message = 'Reference frame changed; draw new polygons if the automatic mask needs correction.';
     }
     _flashEditorRender();
+    _flashRenderTimeline();
+}
+
+function _flashEditorUpdateStatus() {
+    if (!flashDemoEditor) return;
+    const changed = JSON.stringify([flashDemoEditor.annotation, flashDemoEditor.keypointsDocument]) !== flashDemoEditor.original;
+    const status = document.getElementById('flash-demo-editor-change-status');
+    if (status) status.textContent = changed ? 'Unsaved edits · regenerate to review a new version' : 'Viewing saved preparation';
 }
 
 function _flashEditorUpdateFrame() {
@@ -141,16 +157,20 @@ function _flashEditorPolygonClick(event) {
 
 function _flashEditorRender() {
     const editor = document.getElementById('flash-demo-editor');
+    const trackerPanel = document.getElementById('flash-tracker-panel');
     editor.replaceChildren();
     const state = flashDemoEditor;
     const a = state.annotation;
     const roles = Object.keys(a.prompts_by_role);
     const heading = document.createElement('h3');
-    heading.textContent = 'Edit this demo';
+    heading.textContent = 'Demo preparation';
     editor.append(heading);
     const summary = document.createElement('p');
-    summary.textContent = 'Review the actual camera frames and extracted poses. Changes create a new prepared version; this recording stays intact.';
+    summary.textContent = 'Choose an object, event or key frame to inspect. Regeneration creates a new version of this demo.';
     editor.append(summary);
+    const changed = document.createElement('p');
+    changed.id = 'flash-demo-editor-change-status';
+    editor.append(changed);
     const report = state.preparationReport;
     if (report) {
         if (report.review_status === 'candidate') {
@@ -167,13 +187,35 @@ function _flashEditorRender() {
             : 'This version has no per-source evidence count; inspect its pose labels on the timeline.';
         editor.append(note);
     }
-    const trackerPanel = document.getElementById('flash-tracker-panel');
-    if (trackerPanel) editor.append(trackerPanel);
     const frameText = document.createElement('p');
     frameText.id = 'flash-demo-editor-frame';
     editor.append(frameText);
 
-    const events = _flashEditorSection(editor, 'Reference and events', 'Use the playback scrubber to select an exact frame.');
+    const tabs = document.createElement('nav');
+    tabs.className = 'flash-editor-tabs';
+    tabs.setAttribute('aria-label', 'Demo editor sections');
+    const panes = {};
+    for (const [key, label] of [
+        ['objects', 'Objects'], ['events', 'Events'], ['keyframes', 'Key frames'],
+        ['pose', 'Pose evidence'], ['advanced', 'Advanced'],
+    ]) {
+        const button = _flashEditorButton(tabs, label, () => {
+            state.section = key; _flashEditorRender();
+        });
+        button.classList.toggle('active', state.section === key);
+        button.setAttribute('aria-current', state.section === key ? 'page' : 'false');
+        const pane = document.createElement('div');
+        pane.className = 'flash-editor-pane';
+        pane.hidden = state.section !== key;
+        panes[key] = pane;
+    }
+    editor.append(tabs);
+    for (const pane of Object.values(panes)) editor.append(pane);
+
+    const pose = _flashEditorSection(panes.pose, 'Pose evidence', 'Hover an item to highlight its projection in the image. This is the pose saved in the selected prepared version.');
+    if (trackerPanel) pose.append(trackerPanel);
+
+    const events = _flashEditorSection(panes.events, 'Reference and events', 'Move the playhead to the desired frame, then choose “Use current”.');
     _flashEditorField(events, 'Appearance reference frame', a.reference_frame,
         value => _flashEditorSetReferenceFrame(value), null, 'number');
     _flashEditorButton(events, 'Use current for appearance', () => {
@@ -197,20 +239,19 @@ function _flashEditorRender() {
         });
     }
 
-    const objects = _flashEditorSection(editor, 'Objects and masks', 'Select a role, inspect its saved mask, or draw a replacement on the appearance reference frame.');
-    _flashEditorField(objects, 'Mask role', state.role, role => _flashEditorMaskRole(role), roles);
-    for (const role of roles) {
-        _flashEditorField(objects, `${role} prompt`, a.prompts_by_role[role], value => {
-            a.prompts_by_role[role] = value;
-        });
-    }
+    const objects = _flashEditorSection(panes.objects, 'Objects and masks', 'Select one object. Its prepared reference mask is shown on the reference frame; draw a correction there if needed.');
+    _flashEditorField(objects, 'Object', state.role, role => { _flashEditorMaskRole(role); _flashEditorRender(); }, roles);
+    _flashEditorField(objects, 'Segmentation prompt', a.prompts_by_role[state.role], value => {
+        a.prompts_by_role[state.role] = value;
+    });
     _flashEditorField(objects, 'Held role', a.held_role, value => { a.held_role = value; }, roles);
     _flashEditorField(objects, 'Target role', a.target_role, value => { a.target_role = value; }, roles);
-    const symmetry = a.axial_symmetry_roles || (a.axial_symmetry_roles = {});
+    const symmetry = a.axial_symmetry_roles || {};
     const selectedSymmetry = symmetry[state.role] || {};
     _flashEditorField(objects, `${state.role} axial symmetry`, selectedSymmetry.axis_kind || 'none', value => {
-        if (value === 'none') delete symmetry[state.role];
-        else symmetry[state.role] = { ...symmetry[state.role], axis_kind: value };
+        const rules = a.axial_symmetry_roles ||= {};
+        if (value === 'none') delete rules[state.role];
+        else rules[state.role] = { ...rules[state.role], axis_kind: value };
         _flashEditorRender();
     }, ['none', 'long_axis', 'surface_normal']);
     if (selectedSymmetry.axis_kind) {
@@ -221,7 +262,7 @@ function _flashEditorRender() {
             const check = document.createElement('label');
             const box = document.createElement('input');
             box.type = 'checkbox'; box.checked = !!selectedSymmetry[property];
-            box.onchange = () => { symmetry[state.role][property] = box.checked; };
+            box.onchange = () => { symmetry[state.role][property] = box.checked; _flashEditorUpdateStatus(); };
             check.append(box, document.createTextNode(` ${label}`));
             objects.append(check);
         }
@@ -251,7 +292,7 @@ function _flashEditorRender() {
         _flashEditorUpdateFrame();
     });
 
-    const keypoints = _flashEditorSection(editor, 'Key frames', 'These event times and constraints control which motions are preserved or replanned.');
+    const keypoints = _flashEditorSection(panes.keyframes, 'Key frames', 'Click a marker on the timeline or choose a key frame here to inspect its motion constraint.');
     _flashEditorButton(keypoints, 'Add key frame at current time', () => {
         const time = _flashEditorCurrentFrame().snapshot.demo.time_s;
         const points = state.keypointsDocument.keypoints;
@@ -262,11 +303,24 @@ function _flashEditorRender() {
         const prior = [...points].reverse().find(point => point.t < time) || points[0];
         points.push({ ...prior, t: time, kind: 'key' });
         points.sort((left, right) => left.t - right.t);
+        state.keypointIndex = points.findIndex(point => point.t === time);
         _flashEditorRender();
+        _flashRenderTimeline();
     });
+    const keypointList = document.createElement('div');
+    keypointList.className = 'flash-editor-keypoint-list';
+    keypoints.append(keypointList);
     state.keypointsDocument.keypoints.forEach((point, index) => {
+        const select = _flashEditorButton(keypointList, `${index + 1} · ${point.t.toFixed(2)} s`, () => {
+            state.keypointIndex = index;
+            _flashEditorRender();
+            _flashEditorJumpTime(point.t);
+        });
+        select.classList.toggle('active', index === state.keypointIndex);
+        if (index !== state.keypointIndex) return;
         const details = document.createElement('details');
         details.className = 'flash-editor-keypoint';
+        details.open = true;
         const title = document.createElement('summary');
         title.textContent = `${index + 1}. ${point.t.toFixed(2)} s · ${point.move} · ${point.frame || 'world'}`;
         details.append(title);
@@ -275,10 +329,7 @@ function _flashEditorRender() {
             point.t = _flashEditorCurrentFrame().snapshot.demo.time_s; _flashEditorRender();
         });
         _flashEditorButton(details, 'Jump', () => {
-            const nearest = flashReplay.frames.reduce((best, frame, frameIndex) =>
-                Math.abs(frame.snapshot.demo.time_s - point.t) < Math.abs(flashReplay.frames[best].snapshot.demo.time_s - point.t)
-                    ? frameIndex : best, 0);
-            seekFlashReplay(nearest);
+            _flashEditorJumpTime(point.t);
         });
         _flashEditorField(details, 'Reference', point.frame || 'world', value => { point.frame = value; }, ['world', ...roles]);
         _flashEditorField(details, 'Motion', point.move, value => { point.move = value; }, ['line', 'follow', 'lift']);
@@ -291,7 +342,9 @@ function _flashEditorRender() {
                 return;
             }
             state.keypointsDocument.keypoints.splice(index, 1);
+            state.keypointIndex = Math.max(0, Math.min(index, state.keypointsDocument.keypoints.length - 1));
             _flashEditorRender();
+            _flashRenderTimeline();
         });
         keypoints.append(details);
     });
@@ -313,9 +366,10 @@ function _flashEditorRender() {
     _flashEditorField(advanced, 'Descriptor model', a.descriptor_model_id, value => {
         a.descriptor_model_id = value;
     });
-    editor.append(advanced);
+    panes.advanced.append(advanced);
 
-    const output = _flashEditorSection(editor, 'Regenerate', 'Runs preparation off the robot and opens the resulting version in this same playback.');
+    const output = _flashEditorSection(editor, 'Regenerate', 'Creates a review candidate. The original demo is unchanged.');
+    output.classList.add('flash-editor-footer');
     const generate = _flashEditorButton(output, 'Regenerate prepared demo', () => void _flashEditorRegenerate());
     generate.disabled = state.running;
     const message = document.createElement('p');
@@ -324,6 +378,14 @@ function _flashEditorRender() {
     message.textContent = state.message || '';
     output.append(message);
     _flashEditorMaskRole(state.role);
+    _flashEditorUpdateStatus();
+}
+
+function _flashEditorJumpTime(time) {
+    const nearest = flashReplay.frames.reduce((best, frame, frameIndex) =>
+        Math.abs(frame.snapshot.demo.time_s - time) < Math.abs(flashReplay.frames[best].snapshot.demo.time_s - time)
+            ? frameIndex : best, 0);
+    seekFlashReplay(nearest);
 }
 
 async function toggleFlashDemoEditor() {
@@ -346,6 +408,8 @@ async function toggleFlashDemoEditor() {
             referenceMasks: result.reference_masks,
             preparationReport: result.preparation_report,
             role: result.annotation.held_role,
+            section: 'objects', keypointIndex: 0,
+            original: JSON.stringify([result.annotation, result.keypoints_document]),
             drawing: false, vertices: [], running: false, message: '',
         };
         const viewer = document.getElementById('rerun-viewer');
@@ -366,6 +430,7 @@ async function toggleFlashDemoEditor() {
         viewer.append(panel);
         toggle.textContent = 'Close editor';
         _flashEditorRender();
+        _flashRenderTimeline();
     } catch (error) { showToast('Cannot edit demo', error.message, 'error'); }
     finally { toggle.disabled = false; }
 }

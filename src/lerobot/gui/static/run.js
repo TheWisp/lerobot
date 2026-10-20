@@ -12,6 +12,42 @@ let flashDatasets = []; // opened ordinary LeRobot datasets, refreshed on FLASH 
 let flashPreparedSkills = [];
 let flashInspectGeneration = 0;
 let flashRecordingsGeneration = 0;
+let flashUiMode = 'review';
+let flashLibraryTab = 'demos';
+
+function _flashUpdateWorkspace() {
+    const reviewing = selectedWorkflow === 'flash' && flashUiMode === 'review' &&
+        !(_isRunning && _runCommand === 'flash');
+    document.getElementById('tab-run').classList.toggle('flash-reviewing', reviewing);
+    const section = document.getElementById('run-section-flash');
+    if (section) {
+        section.dataset.mode = flashUiMode;
+        section.dataset.libraryTab = flashLibraryTab;
+    }
+    const placeholder = document.getElementById('rerun-placeholder');
+    if (placeholder && reviewing && !flashReplay) placeholder.textContent = 'Choose a demo or rollout to inspect its camera frames and spatial estimates.';
+}
+
+function selectFlashLibraryTab(tab) {
+    flashLibraryTab = tab;
+    _flashUpdateWorkspace();
+    document.querySelectorAll('.flash-library-tab').forEach(button => {
+        button.classList.toggle('active', button.dataset.tab === tab);
+        button.setAttribute('aria-selected', String(button.dataset.tab === tab));
+    });
+}
+
+function showFlashLiveSetup() {
+    flashUiMode = 'live';
+    _flashUpdateWorkspace();
+    document.getElementById('run-flash-manual-setup').open = true;
+}
+
+function showFlashReview() {
+    if (_isRunning && _runCommand === 'flash') return;
+    flashUiMode = 'review';
+    _flashUpdateWorkspace();
+}
 
 // ============================================================================
 // Initialization
@@ -49,6 +85,7 @@ async function runTabInit() {
     initSplitHandle();
     initFlashTrackerPanelDrag();
     renderRunForm();
+    _flashUpdateWorkspace();
     if (selectedWorkflow === 'flash') await Promise.all([_loadFlashDatasets(), _loadFlashRecordings()]);
     _initSelectTitleSync();
     await _ensureModelDataLoaded();
@@ -88,6 +125,7 @@ function _initSelectTitleSync() {
 
 async function selectWorkflow(workflow) {
     selectedWorkflow = workflow;
+    _flashUpdateWorkspace();
     document.querySelectorAll('.workflow-btn').forEach(b => {
         b.classList.toggle('active', b.dataset.workflow === workflow);
     });
@@ -411,7 +449,7 @@ function initFlashTrackerPanelDrag() {
     const heading = document.getElementById('flash-tracker-heading');
     let drag = null;
     heading.addEventListener('pointerdown', event => {
-        if (event.button !== 0 || event.target.closest('button') || flashDemoEditor) return;
+        if (event.button !== 0 || event.target.closest('button') || flashDemoEditor || flashUiMode === 'review') return;
         const panelRect = panel.getBoundingClientRect();
         const viewerRect = viewer.getBoundingClientRect();
         drag = {
@@ -799,6 +837,8 @@ function _flashInstallReplay(replay, imageAlt) {
     clearInterval(flashReplayTimer);
     flashReplayTimer = null;
     flashReplay = replay;
+    flashUiMode = 'review';
+    _flashUpdateWorkspace();
     flashHighlightedOverlay = null;
     const viewer = document.getElementById('rerun-viewer');
     viewer.querySelector('.flash-replay-grid')?.remove();
@@ -815,6 +855,65 @@ function _flashInstallReplay(replay, imageAlt) {
     document.getElementById('flash-tracker-scrub').max = Math.max(0, replay.frames.length - 1);
     document.getElementById('flash-tracker-play').textContent = 'Play';
     document.getElementById('flash-demo-edit-toggle').hidden = replay.kind !== 'demo';
+    _flashRenderTimeline();
+}
+
+function stepFlashReplay(delta) {
+    if (!flashReplay?.frames?.length) return;
+    if (flashReplayTimer) toggleFlashReplay();
+    seekFlashReplay(Number(document.getElementById('flash-tracker-scrub').value) + delta);
+}
+
+function _flashRenderTimeline() {
+    const markers = document.getElementById('flash-timeline-markers');
+    markers.replaceChildren();
+    const replay = flashReplay;
+    document.querySelector('.flash-timeline-legend').hidden = replay?.kind !== 'demo';
+    if (replay?.kind !== 'demo' || !replay.frames?.length) return;
+    const annotation = flashDemoEditor?.annotation || replay.preparation?.annotation;
+    const keypoints = flashDemoEditor?.keypointsDocument?.keypoints || replay.preparation?.keypoints_document?.keypoints || [];
+    const duration = replay.frames.at(-1).snapshot.demo.time_s;
+    if (!(duration > 0)) return;
+    const events = [
+        ...keypoints.map((point, index) => ({time: point.t, label: `Key frame ${index + 1} · ${point.move}`, kind: 'key', index})),
+    ];
+    if (annotation) {
+        events.push({time: annotation.grasp_time_s, label: 'Grasp', kind: 'grasp'});
+        events.push({time: annotation.release_time_s, label: 'Release', kind: 'release'});
+    }
+    for (const event of events) {
+        if (!Number.isFinite(Number(event.time)) || event.time < 0 || event.time > duration) continue;
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = `flash-timeline-marker flash-timeline-${event.kind}`;
+        button.style.left = `${100 * event.time / duration}%`;
+        button.title = `${event.label} · ${Number(event.time).toFixed(2)} s`;
+        button.setAttribute('aria-label', button.title);
+        button.onclick = () => {
+            if (flashReplayTimer) toggleFlashReplay();
+            const nearest = replay.frames.reduce((best, frame, index) =>
+                Math.abs(frame.snapshot.demo.time_s - event.time) < Math.abs(replay.frames[best].snapshot.demo.time_s - event.time)
+                    ? index : best, 0);
+            seekFlashReplay(nearest);
+            if (flashDemoEditor) {
+                flashDemoEditor.section = event.kind === 'key' ? 'keyframes' : 'events';
+                if (event.kind === 'key') flashDemoEditor.keypointIndex = event.index;
+                _flashEditorRender();
+            }
+        };
+        markers.append(button);
+    }
+}
+
+async function _flashLoadPreparationForTimeline(replay, query) {
+    try {
+        const response = await fetch(`/api/run/flash/demo/preparation?${query}`);
+        if (!response.ok) return;
+        const preparation = await response.json();
+        if (flashReplay !== replay) return;
+        replay.preparation = preparation;
+        _flashRenderTimeline();
+    } catch (_) { /* Playback remains available if editable inputs cannot be read. */ }
 }
 
 async function loadFlashDemoReplay(datasetRoot, episodeIndex, bundlePath) {
@@ -833,6 +932,7 @@ async function loadFlashDemoReplay(datasetRoot, episodeIndex, bundlePath) {
         document.getElementById('run-flash-episode').value = String(episodeIndex);
         _clearFlashPreparedSkills();
         _flashInstallReplay({ ...result, datasetRoot, episode: episodeIndex }, 'Original aligned demo RGB frame');
+        const replay = flashReplay;
         for (const card of document.querySelectorAll('#run-flash-demos .flash-recording-card')) {
             if (card.dataset.datasetRoot !== datasetRoot || Number(card.dataset.episode) !== episodeIndex) continue;
             const select = card.querySelector('.flash-recording-version');
@@ -843,6 +943,7 @@ async function loadFlashDemoReplay(datasetRoot, episodeIndex, bundlePath) {
         seekFlashReplay(0);
         toggleFlashReplay();
         if (status) status.textContent = `${result.skill_sample_count} spatial samples from ${bundlePath.split('/').slice(-2, -1)[0]} are shown on the original camera frames.`;
+        void _flashLoadPreparationForTimeline(replay, query);
     } catch (error) {
         if (status) status.textContent = `Cannot inspect demo: ${error.message}`;
         showToast('Cannot inspect demo', error.message, 'error');
@@ -2128,11 +2229,14 @@ function renderRunForm() {
     // Demo viewing and skill inspection are read-only. The shared Run button
     // only starts a robot trial after a prepared bundle and rig are selected.
     html += `<div id="run-section-flash" style="${selectedWorkflow === 'flash' ? '' : 'display:none'}">`;
-    html += '<div class="flash-recordings-heading"><span class="form-section-title">DEMOs</span><button type="button" class="btn-small secondary" onclick="_loadFlashRecordings()">Refresh</button></div>';
+    html += '<div class="flash-library"><div class="flash-library-tabs" role="tablist" aria-label="FLASH recordings">';
+    html += `<button type="button" class="flash-library-tab ${flashLibraryTab === 'demos' ? 'active' : ''}" data-tab="demos" role="tab" aria-selected="${flashLibraryTab === 'demos'}" onclick="selectFlashLibraryTab('demos')">Demos</button>`;
+    html += `<button type="button" class="flash-library-tab ${flashLibraryTab === 'rollouts' ? 'active' : ''}" data-tab="rollouts" role="tab" aria-selected="${flashLibraryTab === 'rollouts'}" onclick="selectFlashLibraryTab('rollouts')">Rollouts</button>`;
+    html += '<button type="button" class="flash-library-refresh" onclick="_loadFlashRecordings()" aria-label="Refresh FLASH recordings" title="Refresh recordings">↻</button></div>';
     html += '<div id="run-flash-demos" class="flash-recordings">Loading demos…</div>';
-    html += '<div class="flash-recordings-heading"><span class="form-section-title">Rollouts</span></div>';
     html += '<div id="run-flash-recordings" class="flash-recordings">Loading rollouts…</div>';
-    html += '<div class="form-hint">Select a demo, then use Edit demo beneath playback to revise its reference mask and key frames. Playback and preparation do not move the robot.</div>';
+    html += '<button type="button" class="flash-live-entry" onclick="showFlashLiveSetup()">Set up live trial →</button></div>';
+    html += '<button type="button" class="flash-review-return" onclick="showFlashReview()">← Back to recordings</button>';
     html += '<details class="flash-manual-setup" id="run-flash-manual-setup"><summary>Open another dataset or run a live trial</summary>';
     html += '<div class="form-grid">';
     html += '<label>Dataset</label>';
@@ -3080,6 +3184,7 @@ function _reportRunFailure(failure) {
 function updateRunUI(isRunning, command = null) {
     _isRunning = isRunning;  // mirror for _validateLaunch
     _runCommand = command;  // mirror for the N/R hotkey gate
+    _flashUpdateWorkspace();
     const stopBtn = document.getElementById('run-stop-btn');
     const formInputs = document.querySelectorAll('#run-form input, #run-form select');
     const workflowBtns = document.querySelectorAll('.workflow-btn');

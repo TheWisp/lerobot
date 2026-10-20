@@ -361,7 +361,7 @@ def test_run_flash_subtab_inspects_without_launching_robot(tmp_path, gui_page):
     assert page.locator("#run-episode-control").is_hidden()
     assert page.locator("#run-launch-btn").inner_text() == "Run FLASH"
     assert page.locator("#run-launch-btn").is_disabled()
-    page.locator("#run-flash-manual-setup summary").click()
+    page.get_by_role("button", name="Set up live trial").click()
     page.locator("#run-flash-root").fill(str(tmp_path))
     page.locator("#run-flash-inspect-btn").click()
     page.wait_for_function(
@@ -398,7 +398,7 @@ def test_run_flash_view_demo_uses_data_view_without_inspection_or_robot_launch(g
             };
         }"""
     )
-    page.locator("#run-flash-manual-setup summary").click()
+    page.get_by_role("button", name="Set up live trial").click()
     page.locator("#run-flash-root").fill("/tmp/demo")
     page.locator("#run-flash-episode").fill("2")
     page.locator("#run-flash-view-btn").click()
@@ -506,6 +506,9 @@ def test_run_flash_lists_demos_and_shows_extracted_pose_overlay(gui_page):
     assert "review candidate" in page.locator("#run-flash-demos .flash-recording-version").inner_text()
     page.locator("#run-flash-demos .flash-recording").click()
     page.wait_for_function("() => document.querySelector('#flash-tracker-mode').textContent === 'Demo'")
+    assert "flash-reviewing" in page.locator("#tab-run").get_attribute("class").split()
+    assert page.locator("#run-terminal-container").is_hidden()
+    assert page.locator("#overlays-panel-run").is_hidden()
     assert "active" in page.locator('.tab[data-tab="run"]').get_attribute("class").split()
     assert "Reference pose used by skill" in page.locator("#flash-tracker-content").inner_text()
     assert "predicted" in page.locator("#flash-tracker-content").inner_text()
@@ -549,7 +552,7 @@ def test_run_flash_lists_demos_and_shows_extracted_pose_overlay(gui_page):
     )
     page.locator("#flash-demo-edit-toggle").click()
     page.wait_for_function("() => !!document.querySelector('#flash-demo-editor')")
-    assert "Edit this demo" in page.locator("#flash-demo-editor").inner_text()
+    assert "Demo preparation" in page.locator("#flash-demo-editor").inner_text()
     assert page.locator("#flash-demo-editor-frame").inner_text().startswith("Frame 4")
     page.get_by_role("button", name="Draw replacement mask").click()
     page.evaluate("""() => {
@@ -633,7 +636,7 @@ def test_run_flash_subtab_launches_selected_prepared_skill(gui_page):
     )
     page.evaluate("switchTab('run')")
     page.evaluate("() => selectWorkflow('flash')")
-    page.locator("#run-flash-manual-setup summary").click()
+    page.get_by_role("button", name="Set up live trial").click()
     page.locator("#run-flash-root").fill("/tmp/example")
     page.locator("#run-flash-inspect-btn").click()
     page.wait_for_function(
@@ -735,6 +738,7 @@ def test_run_flash_tracker_panel_reuses_view_for_recorded_layers(gui_page):
     page.evaluate("() => selectWorkflow('flash')")
     page.evaluate("datasets['/tmp/tracker-run'] = {id: '/tmp/tracker-run', root: '/tmp/tracker-run'}")
     page.wait_for_function("() => document.querySelectorAll('.flash-recording').length === 1")
+    page.get_by_role("tab", name="Rollouts").click()
     page.locator(".flash-recording").click()
     page.wait_for_function("() => document.querySelector('#flash-tracker-mode').textContent === 'Recording'")
     panel = page.locator("#flash-tracker-panel")
@@ -748,8 +752,9 @@ def test_run_flash_tracker_panel_reuses_view_for_recorded_layers(gui_page):
     assert "flash-tracker-hover" in group.get_attribute("class")
     assert page.evaluate("flashHighlightedOverlay?.kind") == "layer"
     assert page.locator("#flash-tracker-replay-controls").is_visible()
-    viewer = page.locator("#rerun-viewer").bounding_box()
-    assert panel.bounding_box()["y"] >= viewer["y"] + 32
+    image = page.locator("#rerun-viewer .flash-replay-grid").bounding_box()
+    inspector = panel.bounding_box()
+    assert inspector["x"] >= image["x"] + image["width"] or inspector["y"] >= image["y"] + image["height"]
     page.locator("#flash-tracker-collapse").click()
     assert not page.locator("#flash-tracker-content").is_visible()
     assert page.locator("#flash-tracker-replay-controls").is_visible()
@@ -759,6 +764,7 @@ def test_run_flash_tracker_panel_reuses_view_for_recorded_layers(gui_page):
     page.mouse.down()
     page.mouse.move(heading["x"] - 60, heading["y"] + heading["height"] / 2 + 30)
     page.mouse.up()
-    assert panel.bounding_box()["x"] < before["x"]
+    assert panel.bounding_box()["x"] == before["x"]
+    assert panel.bounding_box()["y"] == before["y"]
     page.locator("#flash-tracker-collapse").click()
     assert page.locator("#flash-tracker-content").is_visible()
