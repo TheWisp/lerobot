@@ -127,6 +127,24 @@ A two-criterion Pareto comparison therefore favors that pose on these frames. Ar
 
 I also passed the saved poses through FLASH's existing [`surface_support`](../../../src/lerobot/policies/flash/pose_disagreement.py) diagnostic, without changing it. It projects the frame-100 point cloud into the current camera and reports mask coverage and depth residual at supported projected points. On the 100 shared insertion frames, the SAM2-fed pose dominates on **both existing fields** every time: median projected mask fraction **0.706 versus 0.223**, median projected-point depth p90 **19.5 versus 28.7 mm**. That depth residual includes partially occluded and back-side model points, so it is a relative diagnostic, not a claim of 19.5 mm tip error. Across frames 249–280, the same check gives five SAM2-dominant, one SAM3-dominant, ten tradeoffs and sixteen missing-candidate frames. The [replay check](check_live_pose_support.py) and [frame-level results](live_pose_support.csv) preserve this result. In the current service this diagnostic is invoked only for a direct pose conflicting with an already verified group prediction; it is **not** a general scene-estimator decision over multiple tracker candidates. The work needed is candidate ownership and event-time arbitration, then validation against independent task-feature labels, rather than a dowel-specific scoring constant.
 
+## A lone reported pose can be contradicted by free space
+
+The [causal ray-consistency replay](analyze_ray_consistency.py) z-buffers the same first-view object points under each candidate pose. A valid measured depth **farther** than the predicted front surface contradicts that pose at the pixel; a closer measurement may simply be an occluder. A 3 × 3 depth-neighborhood check excludes missing or discontinuous measurements. The following diagnostics use a 5 mm depth difference and a 10 mm local depth-span setting, both stated experiment choices rather than deployed thresholds.
+
+![Visible free-space contradictions for dowel and ring](ray_consistency.png)
+
+The gray span marks grasp occlusion and early reacquisition; pale blue marks insertion.
+
+| Object and phase             | Point2Pose with SAM2 masks | Point2Pose with SAM3 masks | BundleSDF |
+| ---------------------------- | -------------------------: | -------------------------: | --------: |
+| Dowel, reacquisition 249–280 |                       2.7% |                       2.5% | **85.8%** |
+| Dowel, insertion 400–500     |                      17.3% |                      11.4% |  **100%** |
+| Ring, insertion 400–500      |                       8.2% |                      21.1% |  **1.2%** |
+
+Values are median fractions of valid projected pixels over frames where each source emitted a pose, **not** pose-error rates. The BundleSDF dowel branch exceeds 50% contradiction by frame 201 and does so in 323 scored frames with at least 100 valid projected pixels; at frame 263 it reports the only dowel pose, but **90.8% of 1,802** depth-quality-checked projected pixels contradict it. With 3, 5 or 10 mm depth differences, its median reacquisition contradiction stays between **85.0% and 86.0%**. An estimator should not promote a lone candidate merely because it is the only backend to return a transform. When both Point2Pose branches are lost, it needs a labeled prediction or unknown state, not false direct evidence from BundleSDF.
+
+The ring result goes the other way: BundleSDF's insertion pose has the lowest free-space contradiction and, as measured above, slightly better visible-surface fit. Yet free-space alone is **not** a sufficient dowel selector. During insertion the SAM3-fed Point2Pose branch has fewer contradicted projected pixels even though its shaft projection and current segmented-surface fit are much worse. The first-view cloud is incomplete, and a pose can reduce contradictions by projecting fewer points into the visible object. Its low contradiction rate therefore cannot validate the hidden tip. The [frame-level ray scores](ray_consistency.csv) retain all three tolerance settings and the valid pixel counts; none of these sources has independent full-pose or contact-tip ground truth in this recording.
+
 ## Runtime and compatibility boundaries
 
 The Point2Pose bridge reported roughly 60 ms median frame time in this recording. The compatible BundleSDF dowel pass took about 190 s for 451 frames, including online reconstruction and debug output; the ring pass took about 88 s. These are observed experiment times, **not** matched implementation speed benchmarks. To run the old BundleSDF source on this CUDA 12.8 / Python 3.11 / PCL 1.12 machine, the isolated checkout changed CUDA architecture and binding compatibility, used OpenCV's CPU brute-force L2 descriptor matcher instead of its unavailable CUDA module, removed an upstream `pdb.set_trace()`, and guarded percentile denoising on empty masks. None of those changes was made in FLASH or the GUI server.
