@@ -369,6 +369,7 @@ class HeldAttachmentUpdater:
         max_attachment_age_s: float | None,
         max_update_shift_m: float,
         max_update_turn_rad: float,
+        object_center_object_m: np.ndarray | None = None,
     ) -> None:
         if not role or not reference_version or not arm_joint_names:
             raise ValueError("held attachment needs a role, object frame and arm joints")
@@ -387,6 +388,11 @@ class HeldAttachmentUpdater:
         self.max_attachment_age_s = max_attachment_age_s
         self.max_update_shift_m = max_update_shift_m
         self.max_update_turn_rad = max_update_turn_rad
+        self.object_center_object_m = (
+            np.zeros(3) if object_center_object_m is None else np.asarray(object_center_object_m, dtype=float)
+        )
+        if self.object_center_object_m.shape != (3,) or not np.isfinite(self.object_center_object_m).all():
+            raise ValueError("held attachment needs a finite object center")
         self._lock = Lock()
         self._estimate = AttachmentEstimate()
         self._active = False
@@ -462,7 +468,10 @@ class HeldAttachmentUpdater:
             prior = self._estimate.gripper_from_object
             if prior is not None:
                 relative = inverse(prior) @ candidate
-                shift = float(np.linalg.norm(relative[:3, 3]))
+                center = self.object_center_object_m
+                prior_center = prior[:3, :3] @ center + prior[:3, 3]
+                candidate_center = candidate[:3, :3] @ center + candidate[:3, 3]
+                shift = float(np.linalg.norm(prior_center - candidate_center))
                 turn = float(np.arccos(np.clip((np.trace(relative[:3, :3]) - 1) / 2, -1, 1)))
                 if shift > self.max_update_shift_m or turn > self.max_update_turn_rad:
                     self._conflicted = True

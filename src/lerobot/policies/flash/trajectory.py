@@ -37,6 +37,7 @@ class PoseEstimate:
     direct_translation_observed: bool = False
     estimator: str = "unspecified"
     last_direct_observation_s: float | None = None
+    symmetry_canonicalized: bool = False
 
     def __post_init__(self) -> None:
         if self.pose is not None:

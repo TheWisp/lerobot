@@ -161,6 +161,7 @@ class FlashEpisodeWriter:
                     "direct_translation_observed": estimate.direct_translation_observed,
                     "estimator": estimate.estimator,
                     "last_direct_observation_s": estimate.last_direct_observation_s,
+                    "symmetry_canonicalized": estimate.symmetry_canonicalized,
                 }
                 for role, estimate in record.pose_estimates.items()
             },
@@ -262,6 +263,7 @@ def load_pose_estimates(
                 direct_translation_observed=bool(pose.get("direct_translation_observed", False)),
                 estimator=str(pose.get("estimator", "unspecified")),
                 last_direct_observation_s=pose.get("last_direct_observation_s"),
+                symmetry_canonicalized=bool(pose.get("symmetry_canonicalized", False)),
             )
         result[frame_index] = estimates
     return result

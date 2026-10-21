@@ -513,9 +513,15 @@ class CausalPoseService:
                 self._count_anchor_outcome(estimate.role, "time_mismatch")
                 continue
             symmetry = self.axial_symmetries.get(estimate.role)
-            if symmetry is not None:
+            if symmetry is not None and not estimate.symmetry_canonicalized:
                 try:
-                    estimate = replace(estimate, pose=symmetry.canonicalize(estimate.pose))
+                    active = self.active.get(estimate.role)
+                    reference = active[1].pose if active is not None else None
+                    estimate = replace(
+                        estimate,
+                        pose=symmetry.canonicalize(estimate.pose, reference_pose=reference),
+                        symmetry_canonicalized=True,
+                    )
                 except ValueError:
                     self._count_anchor_outcome(estimate.role, "direct_symmetry_invalid")
                     continue
@@ -779,7 +785,7 @@ class CausalPoseService:
         symmetry = self.axial_symmetries.get(estimate.role)
         if symmetry is not None:
             try:
-                predicted = symmetry.canonicalize(predicted)
+                predicted = symmetry.canonicalize(predicted, reference_pose=estimate.pose)
             except ValueError:
                 self._count_anchor_outcome(estimate.role, "point_symmetry_invalid")
                 return False
@@ -931,7 +937,9 @@ class CausalPoseService:
         symmetry = self.axial_symmetries.get(role)
         if symmetry is not None:
             try:
-                pose = symmetry.canonicalize(pose)
+                previous = self.store.snapshot()[1].get(role)
+                reference = previous.pose if previous is not None else anchor.pose
+                pose = symmetry.canonicalize(pose, reference_pose=reference)
             except ValueError:
                 self._count_anchor_outcome(role, "point_symmetry_invalid")
                 return
@@ -951,6 +959,7 @@ class CausalPoseService:
             anchor.rotation_supported,
             estimator="object_point_motion",
             last_direct_observation_s=anchor.source_time_s,
+            symmetry_canonicalized=symmetry is not None,
         )
         before, _ = self.store.snapshot()
         after = self.store.publish((current,))

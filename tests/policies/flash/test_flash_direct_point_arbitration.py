@@ -5,6 +5,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from scipy.spatial.transform import Rotation
 
 from lerobot.policies.flash.causal_points import CausalRigidPointTracker, RigidPointMotion
 from lerobot.policies.flash.causal_service import CausalPoseService, _Anchor
@@ -202,3 +203,46 @@ def test_duplicate_symmetry_role_is_rejected():
     symmetry = AxialSymmetry("object", np.array([0.0, 0.0, 1.0]), np.zeros(3), np.eye(4))
     with pytest.raises(ValueError, match="at most one axial symmetry"):
         CausalPoseService(LatestPoseStore(), axial_symmetries=(symmetry, symmetry))
+
+
+def test_direct_pose_already_canonicalized_is_not_rebased_to_old_axis():
+    baseline = np.eye(4)
+    symmetry = AxialSymmetry(
+        "object", np.array([1.0, 0.0, 0.0]), np.zeros(3), baseline, ends_interchangeable=True
+    )
+    frame = RGBDFrame(
+        1,
+        np.zeros((2, 2, 3), dtype=np.uint8),
+        np.ones((2, 2), dtype=np.uint16),
+        np.eye(3),
+        0.001,
+        baseline,
+        1.0,
+        1.0,
+        "camera-v1",
+    )
+    scene = SceneTracks(1, 1.0, np.array([], dtype=np.int64), np.empty((0, 2), dtype=int), np.empty((0, 3)))
+    store = LatestPoseStore()
+    service = CausalPoseService(store, axial_symmetries=(symmetry,))
+    service.history.append(frame)
+    service.scene_history.append(scene)
+    prior = PoseEstimate("object", baseline, 0.0, 0.0, Evidence.OBSERVED, "v1", (True,) * 3, (True,) * 3)
+    service.active["object"] = (CausalRigidPointTracker(min_inliers=12), prior)
+    service.motion_history["object"] = deque()
+    measured = np.eye(4)
+    measured[:3, :3] = Rotation.from_euler("y", 120, degrees=True).as_matrix()
+    direct = PoseEstimate(
+        "object",
+        measured,
+        1.0,
+        1.0,
+        Evidence.OBSERVED,
+        "v1",
+        (True,) * 3,
+        (True,) * 3,
+        symmetry_canonicalized=True,
+    )
+
+    service._anchor(_Anchor(1, (direct,), {"object": np.ones((2, 2), dtype=bool)}, 1.0, "camera-v1"))
+
+    np.testing.assert_allclose(store.snapshot()[1]["object"].pose, measured)

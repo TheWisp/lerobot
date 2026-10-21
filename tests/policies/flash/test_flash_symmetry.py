@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import numpy as np
+from scipy.spatial.transform import Rotation
 
 from lerobot.policies.flash.grasp_symmetry import select_grasp_symmetry
 from lerobot.policies.flash.planner import JointPlanner, PlannerLimits
@@ -16,7 +17,7 @@ from lerobot.policies.flash.skill import (
     Relation,
     SpatialSample,
 )
-from lerobot.policies.flash.symmetry import AxialSymmetry
+from lerobot.policies.flash.symmetry import AxialSymmetry, SymmetryCanonicalizingBackend
 from lerobot.policies.flash.trajectory import Evidence, PoseEstimate
 
 
@@ -138,3 +139,49 @@ def test_interchangeable_ends_preserve_center_and_canonicalize_reversed_axis():
         baseline[:3, :3] @ symmetry.axis_object,
         atol=1e-8,
     )
+
+
+def test_interchangeable_axis_follows_smooth_rotation_through_perpendicular():
+    center = np.array([0.2, 0.1, 0.0])
+    symmetry = AxialSymmetry("object", np.array([1, 0, 0]), center, np.eye(4), ends_interchangeable=True)
+    observations = []
+    for angle in np.deg2rad(np.arange(0, 121, 5)):
+        pose = np.eye(4)
+        pose[:3, :3] = Rotation.from_rotvec(angle * np.array([0, 1, 0])).as_matrix()
+        pose[:3, 3] = center - pose[:3, :3] @ center
+        observations.append(pose)
+
+    fixed_reference = [symmetry.canonicalize(pose) for pose in observations]
+    assert max(_turn_deg(a, b) for a, b in zip(fixed_reference, fixed_reference[1:], strict=False)) > 170
+
+    continuous = []
+    for pose in observations:
+        continuous.append(symmetry.canonicalize(pose, reference_pose=continuous[-1] if continuous else None))
+    assert max(_turn_deg(a, b) for a, b in zip(continuous, continuous[1:], strict=False)) < 6
+    for observed, canonical in zip(observations, continuous, strict=True):
+        np.testing.assert_allclose(canonical[:3, :3] @ center + canonical[:3, 3], center, atol=1e-9)
+        np.testing.assert_allclose(
+            canonical[:3, :3] @ np.array([0.3, 0.0, 0.0]) + canonical[:3, 3],
+            observed[:3, :3] @ np.array([0.3, 0.0, 0.0]) + observed[:3, 3],
+            atol=1e-9,
+        )
+
+    class SequenceBackend:
+        def __init__(self, poses):
+            self.poses = iter(poses)
+
+        def initialize(self, _references):
+            pass
+
+        def update(self, _frame):
+            return (
+                PoseEstimate(
+                    "object", next(self.poses), 0, 0, Evidence.OBSERVED, "v1", (True,) * 3, (True,) * 3
+                ),
+            )
+
+    backend = SymmetryCanonicalizingBackend(SequenceBackend(observations), (symmetry,))
+    backend.initialize((type("Reference", (), {"role": "object"})(),))
+    outputs = [backend.update(None)[0].pose for _ in observations]
+    for actual, expected in zip(outputs, continuous, strict=True):
+        np.testing.assert_allclose(actual, expected, atol=1e-9)

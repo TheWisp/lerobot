@@ -4,6 +4,7 @@ import json
 
 import numpy as np
 import pytest
+from scipy.spatial.transform import Rotation
 
 from lerobot.policies.flash.attachment_lifecycle import AttachmentLifecycle
 from lerobot.policies.flash.execution import (
@@ -955,6 +956,50 @@ def test_held_attachment_uses_postgrasp_observation_and_stops_on_conflict():
     assert not updater.on_pose_update(3, {"held": conflicting})
     assert updater.state(0.09) is None
     assert "disagrees" in updater.last_rejection
+
+
+def test_held_attachment_compares_physical_center_when_object_frame_rotates():
+    class StationaryKinematics:
+        def forward_kinematics(self, _joints):
+            return np.eye(4)
+
+    center = np.array([0.5, 0.0, 0.0])
+    updater = HeldAttachmentUpdater(
+        "held",
+        "held-v1",
+        StationaryKinematics(),
+        ("arm",),
+        history_capacity=5,
+        max_motor_sample_gap_s=0.04,
+        max_attachment_age_s=1.0,
+        max_update_shift_m=0.015,
+        max_update_turn_rad=np.deg2rad(15),
+        object_center_object_m=center,
+    )
+    for time_s in (0.0, 0.03, 0.06):
+        updater.on_motor_tick(
+            MotorTick(0, time_s, {"arm.pos": 0.0}, 0.0, {"arm.pos": 0.0}, None, observed_at_s=time_s)
+        )
+    pregrasp = PoseEstimate(
+        "held", np.eye(4), 0.015, 0.035, Evidence.OBSERVED, "held-v1", (True,) * 3, (True,) * 3
+    )
+    assert updater.activate(0.04, pregrasp, np.zeros(1))
+
+    rotated = np.eye(4)
+    rotated[:3, :3] = Rotation.from_euler("y", 10, degrees=True).as_matrix()
+    rotated[:3, 3] = center - rotated[:3, :3] @ center
+    assert np.linalg.norm(rotated[:3, 3]) > updater.max_update_shift_m
+    observation = PoseEstimate(
+        "held", rotated, 0.045, 0.07, Evidence.OBSERVED, "held-v1", (True,) * 3, (True,) * 3
+    )
+    assert updater.on_pose_update(1, {"held": observation})
+
+    displaced = rotated.copy()
+    displaced[0, 3] += 0.02
+    observation = PoseEstimate(
+        "held", displaced, 0.055, 0.08, Evidence.OBSERVED, "held-v1", (True,) * 3, (True,) * 3
+    )
+    assert not updater.on_pose_update(2, {"held": observation})
 
 
 def test_demonstrated_attachment_events_bind_and_release_live_object():

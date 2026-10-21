@@ -190,6 +190,7 @@ class FlashRuntime:
                 max_attachment_age_s=attachment_limits.max_attachment_age_s,
                 max_update_shift_m=attachment_limits.max_update_shift_m,
                 max_update_turn_rad=attachment_limits.max_update_turn_rad,
+                object_center_object_m=(object_centers_by_role or {}).get(transition.role),
             )
             for transition in skill.attachment_transitions
         }

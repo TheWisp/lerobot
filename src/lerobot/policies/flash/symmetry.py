@@ -68,10 +68,23 @@ class AxialSymmetry:
         result[:3, 3] = self.center_object_m - rotation @ self.center_object_m
         return transform(result)
 
-    def canonicalize(self, base_from_object: np.ndarray) -> np.ndarray:
+    def canonicalize(
+        self, base_from_object: np.ndarray, *, reference_pose: np.ndarray | None = None
+    ) -> np.ndarray:
+        """Remove axial gauge using the previous pose when end identity is ambiguous.
+
+        A fixed first-view reference has a branch cut at 90 degrees for an
+        end-interchangeable axis. Following a prior pose lifts that unoriented
+        axis continuously while adjacent observations support the motion.
+        """
         observed = transform(base_from_object)
         baseline = self.baseline_base_from_object
-        start_axis = baseline[:3, :3] @ self.axis_object
+        reference = (
+            transform(reference_pose)
+            if reference_pose is not None and not self.lock_to_baseline
+            else baseline
+        )
+        start_axis = reference[:3, :3] @ self.axis_object
         observed_axis = observed[:3, :3] @ self.axis_object
         if self.ends_interchangeable and np.dot(start_axis, observed_axis) < 0:
             observed_axis = -observed_axis
@@ -90,7 +103,7 @@ class AxialSymmetry:
         else:
             rotation = np.eye(3)
         canonical = np.eye(4)
-        canonical[:3, :3] = rotation @ baseline[:3, :3]
+        canonical[:3, :3] = rotation @ reference[:3, :3]
         center_base = observed[:3, :3] @ self.center_object_m + observed[:3, 3]
         canonical[:3, 3] = center_base - canonical[:3, :3] @ self.center_object_m
         return transform(canonical)
@@ -103,6 +116,7 @@ class SymmetryCanonicalizingBackend:
         self.inner = inner
         self.symmetries = {item.role: item for item in symmetries}
         self._last_failure: dict[str, str] = {}
+        self._last_pose: dict[str, np.ndarray] = {}
         if len(self.symmetries) != len(symmetries):
             raise ValueError("at most one axial symmetry per role")
 
@@ -117,6 +131,7 @@ class SymmetryCanonicalizingBackend:
     def initialize(self, references: tuple[ObjectReference, ...]) -> None:
         if not set(self.symmetries) <= {item.role for item in references}:
             raise ValueError("axial symmetry role lacks an object reference")
+        self._last_pose.clear()
         self.inner.initialize(references)
 
     def update(self, frame: RGBDFrame) -> tuple[PoseEstimate, ...]:
@@ -128,11 +143,16 @@ class SymmetryCanonicalizingBackend:
                 out.append(estimate)
             else:
                 try:
+                    pose = symmetry.canonicalize(
+                        estimate.pose, reference_pose=self._last_pose.get(estimate.role)
+                    )
+                    self._last_pose[estimate.role] = pose
                     out.append(
                         replace(
                             estimate,
-                            pose=symmetry.canonicalize(estimate.pose),
+                            pose=pose,
                             evidence=Evidence.PREDICTED if symmetry.lock_to_baseline else estimate.evidence,
+                            symmetry_canonicalized=True,
                         )
                     )
                 except ValueError as exc:
