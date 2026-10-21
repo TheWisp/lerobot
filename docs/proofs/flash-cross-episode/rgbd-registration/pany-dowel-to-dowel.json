@@ -1,0 +1,85 @@
+{
+  "method": "PANY official RGB-D single-reference pointmap, then optional trimmed ICP",
+  "demo_frame": 100,
+  "live_frame": 5,
+  "target_role": "dowel",
+  "source_points": 3739,
+  "target_points": 3650,
+  "reference_scale": 1.131213357292936,
+  "rotation": [
+    [
+      -0.0799807922820173,
+      -0.9963320581687692,
+      0.030422076377611358
+    ],
+    [
+      0.986417590840783,
+      -0.0747184176701977,
+      0.14627882464911904
+    ],
+    [
+      -0.1434691930199883,
+      0.041708367578296296,
+      0.9887755067395969
+    ]
+  ],
+  "translation_m": [
+    -0.2028628070842123,
+    0.08332709629864876,
+    -0.0015093376975664485
+  ],
+  "score": {
+    "source_to_target_median_mm": 3.499883182360233,
+    "target_to_source_median_mm": 3.5881810720737093,
+    "source_supported_fraction": 0.8863332441829366,
+    "target_supported_fraction": 0.9002739726027398,
+    "projection_mask_fraction": 0.7373629312650442,
+    "projection_surface_median_mm": 4.513197208373343
+  },
+  "refined_rotation": [
+    [
+      -0.05437859168951109,
+      -0.9584116884794648,
+      0.2801606755984975
+    ],
+    [
+      0.9555046608615807,
+      0.03151937528456627,
+      0.2932871835820077
+    ],
+    [
+      -0.2899203543003855,
+      0.28364337532826606,
+      0.9140528561274379
+    ]
+  ],
+  "refined_translation_m": [
+    -0.3004439284158638,
+    0.017520953417658254,
+    0.0007728817993436499
+  ],
+  "refined_score": {
+    "source_to_target_median_mm": 0.9280162312507675,
+    "target_to_source_median_mm": 0.875485281480846,
+    "source_supported_fraction": 0.9625568333779085,
+    "target_supported_fraction": 1.0,
+    "projection_mask_fraction": 0.8785771596683605,
+    "projection_surface_median_mm": 1.0442957431036626
+  },
+  "timings_s": {
+    "preprocess": 0.8006852599792182,
+    "model_load": 4.079502991022309,
+    "model_inference": 0.24060585797997192,
+    "reference_and_query_fit": 0.0738312280154787,
+    "score_and_refine": 0.06792395299999043,
+    "total": 5.262549540988402
+  },
+  "landmark_before_xy": [
+    121.41831772224845,
+    257.3369806120789
+  ],
+  "landmark_after_xy": [
+    127.22399336373837,
+    262.1100698506736
+  ]
+}

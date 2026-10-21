@@ -1,0 +1,85 @@
+{
+  "method": "PANY official RGB-D single-reference pointmap, then optional trimmed ICP",
+  "demo_frame": 100,
+  "live_frame": 54,
+  "target_role": "dowel",
+  "source_points": 3739,
+  "target_points": 3225,
+  "reference_scale": 1.1752823756300046,
+  "rotation": [
+    [
+      -0.03672277094808584,
+      -0.9857498626022018,
+      0.16416042907362074
+    ],
+    [
+      0.9888371577554097,
+      -0.012106281909030413,
+      0.14850762061437317
+    ],
+    [
+      -0.14440399418332556,
+      0.1677815434369343,
+      0.9751906686109247
+    ]
+  ],
+  "translation_m": [
+    -0.25040596094556256,
+    0.07906842463891223,
+    0.005066598547886991
+  ],
+  "score": {
+    "source_to_target_median_mm": 4.003395363224698,
+    "target_to_source_median_mm": 4.199423952246926,
+    "source_supported_fraction": 0.7975394490505483,
+    "target_supported_fraction": 0.888062015503876,
+    "projection_mask_fraction": 0.6515110992243915,
+    "projection_surface_median_mm": 4.317646925098451
+  },
+  "refined_rotation": [
+    [
+      -0.04773370160240439,
+      -0.9480720205085421,
+      0.3144533950527227
+    ],
+    [
+      0.9475500526774222,
+      0.05662208158536744,
+      0.3145518042357328
+    ],
+    [
+      -0.31602277038584964,
+      0.31297505300868816,
+      0.895642911428356
+    ]
+  ],
+  "refined_translation_m": [
+    -0.3120255135688182,
+    0.0031898828539641405,
+    0.004971056794871864
+  ],
+  "refined_score": {
+    "source_to_target_median_mm": 1.0996743158146793,
+    "target_to_source_median_mm": 0.9032254981595422,
+    "source_supported_fraction": 0.9162877774806097,
+    "target_supported_fraction": 1.0,
+    "projection_mask_fraction": 0.7975394490505483,
+    "projection_surface_median_mm": 1.1731159834568738
+  },
+  "timings_s": {
+    "preprocess": 0.781580420996761,
+    "model_load": 4.054765242006397,
+    "model_inference": 0.2274144960101694,
+    "reference_and_query_fit": 0.07778909199987538,
+    "score_and_refine": 0.06349830699036829,
+    "total": 5.205047777999425
+  },
+  "landmark_before_xy": [
+    128.61132941589182,
+    255.13894048154208
+  ],
+  "landmark_after_xy": [
+    130.9934991988727,
+    257.1905895561026
+  ]
+}

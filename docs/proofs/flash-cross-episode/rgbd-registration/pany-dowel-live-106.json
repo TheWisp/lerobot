@@ -1,0 +1,85 @@
+{
+  "method": "PANY official RGB-D single-reference pointmap, then optional trimmed ICP",
+  "demo_frame": 100,
+  "live_frame": 106,
+  "target_role": "dowel",
+  "source_points": 3739,
+  "target_points": 1322,
+  "reference_scale": 1.1061666031827553,
+  "rotation": [
+    [
+      0.9506733661362401,
+      -0.30557137687067853,
+      -0.053350581595215184
+    ],
+    [
+      0.258298374143812,
+      0.8750651184205116,
+      -0.40932015396063626
+    ],
+    [
+      0.17176175602809007,
+      0.3753494001074911,
+      0.9108296915478179
+    ]
+  ],
+  "translation_m": [
+    0.024029095638169157,
+    0.15553534642745853,
+    0.08206331064553135
+  ],
+  "score": {
+    "source_to_target_median_mm": 21.307628948471176,
+    "target_to_source_median_mm": 5.322191210241559,
+    "source_supported_fraction": 0.08130516180797004,
+    "target_supported_fraction": 0.5718608169440242,
+    "projection_mask_fraction": 0.19871623428724258,
+    "projection_surface_median_mm": 7.953623599983417
+  },
+  "refined_rotation": [
+    [
+      -0.0034081629321261395,
+      -0.9861034699439921,
+      0.16609735395196962
+    ],
+    [
+      0.9451299424035373,
+      0.05108436289255537,
+      0.32267596724910835
+    ],
+    [
+      -0.32667686847665534,
+      0.1580833148446712,
+      0.9318218119200721
+    ]
+  ],
+  "refined_translation_m": [
+    -0.2234681414190725,
+    -0.02983420917982727,
+    0.0019350621172461446
+  ],
+  "refined_score": {
+    "source_to_target_median_mm": 5.658946600061182,
+    "target_to_source_median_mm": 0.9699876045353416,
+    "source_supported_fraction": 0.5113666755817063,
+    "target_supported_fraction": 1.0,
+    "projection_mask_fraction": 0.38646696977801553,
+    "projection_surface_median_mm": 1.3259157534812327
+  },
+  "timings_s": {
+    "preprocess": 0.786564542009728,
+    "model_load": 4.040936880977824,
+    "model_inference": 0.22872837001341395,
+    "reference_and_query_fit": 0.09533734200522304,
+    "score_and_refine": 0.04632725098053925,
+    "total": 5.197894526005257
+  },
+  "landmark_before_xy": [
+    230.7110388489124,
+    222.21112663704284
+  ],
+  "landmark_after_xy": [
+    162.731867603882,
+    216.6906752054856
+  ]
+}

@@ -1,5 +1,11 @@
 # Cross-episode surface-alignment pilot
 
+**Later result:** [Direct RGB-D point-cloud registration](rgbd-registration/README.md)
+aligns the clear dowel and ring across demo and replay without treating a
+point tracker's hard-cut predictions as correspondences. The TrackEverything
+experiment below remains as evidence about that model's behavior, not as the
+registration method FLASH should use for the episode boundary.
+
 This pilot asks whether TrackEverything proposes geometrically coherent
 demo-to-live point matches on the **same physical dowel**. It does not assume
 that the annotated tool tip is visible or even queried. If these matches

@@ -1,0 +1,64 @@
+# Direct RGB-D registration across FLASH episodes
+
+This experiment tests a demo-to-rollout object-cloud transform directly. It does **not** treat TrackEverything predictions across the episode cut as point correspondences. The benchmark back-projects every valid pixel inside each saved object mask using the recorded RealSense depth and intrinsics, proposes global rigid alignments, refines them with trimmed point-to-point ICP, and scores both source-to-target and target-to-source surface coverage. The source and target clouds each contain thousands of measured points when the objects are clear.
+
+The source is `demos/insertion/recording`, frame 100. The target is `flash_insertion_trial_20261020_020-20261020-195134-752249`, frame 5. Source masks are from `trackeverything-growth-ui-20261021-a`; target masks are the trial's recorded observed masks. The source and target depth images have the same 848×480 shape and use the demo's saved overhead camera intrinsics. `benchmarks/flash_rgbd_registration.py` reproduces the comparisons. The test did not move the robot.
+
+![Measured demo dowel and its cloud registered to the replay](dowel-comparison.png)
+
+The green dots on the right are **measured demo depth points after rigid alignment**, not point-tracker predictions. The red line is the live mask. The white circle on the left marks a demo point at pixel (218, 300); its projection lands around (126, 265) in the replay. This is a plausible geometric transfer, not independent proof that the same physical end was identified.
+
+| Source → target                     | Best balanced surface coverage within 6 mm | Source→target / target→source median surface distance |
+| ----------------------------------- | -----------------------------------------: | ----------------------------------------------------: |
+| Dowel → dowel                       |                                      97.2% |                                        1.00 / 0.96 mm |
+| Ring → ring                         |                                      97.2% |                                        1.47 / 1.67 mm |
+| Dowel → ring (wrong-object control) |                                      57.7% |                                        4.92 / 4.99 mm |
+| Ring → dowel (wrong-object control) |                                      59.2% |                                        3.98 / 4.66 mm |
+
+The distance and coverage numbers test agreement with observed surfaces. They are **not** ground-truth transform or material-point errors. The 6 mm neighborhood is a benchmark parameter, not an acceptance threshold for the robot. A wrong-object match can still explain part of a surface, which is why balanced coverage matters more than the nearest patch's residual.
+
+The clear dowel start was also tested in four other saved trials, with the same demo source and a different live object arrangement each time:
+
+| Trial start (Oct 20, 2026) | Live frame | Best balanced coverage | Source→target / target→source median |
+| -------------------------- | ---------: | ---------------------: | -----------------------------------: |
+| 17:57:33                   |          1 |                  98.4% |                       0.84 / 0.77 mm |
+| 18:04:12                   |          1 |                  98.7% |                       0.86 / 0.80 mm |
+| 19:11:55                   |          4 |                  98.8% |                       0.89 / 0.90 mm |
+| 19:51:34                   |          5 |                  97.2% |                       1.00 / 0.96 mm |
+| 20:33:10                   |          0 |                  98.3% |                       0.85 / 0.85 mm |
+
+The `trial-*` reports and overlays in this directory contain each result. They show that the clear-view registration was not peculiar to one replay. They still do not identify an unmarked physical endpoint independently of shape.
+
+On the clear dowel pair, the candidate methods behaved differently:
+
+| Candidate initializer                | Balanced coverage after the same trimmed ICP | Observation                                                                                |
+| ------------------------------------ | -------------------------------------------: | ------------------------------------------------------------------------------------------ |
+| PCA multistart                       |                                        97.2% | Strong on this elongated object; produces several plausible alignments.                    |
+| ORB plus 3D RANSAC                   |                                        97.2% | Only three rigid feature inliers; the independent cloud fit supplies most of the evidence. |
+| FPFH plus RANSAC                     |                         94–97% across reruns | Good global initializer; stochastic and sometimes fits a smaller surface subset.           |
+| FPFH plus fast global registration   |                         93–97% across reruns | Also plausible, with variable coverage.                                                    |
+| DINOv2 patch matching plus 3D RANSAC |                                        76.2% | Six rigid inliers from 13 mutual patch matches; weaker than shape here.                    |
+| SIFT plus 3D RANSAC                  |                                 No transform | Only four and six detected object keypoints; no consistent 3D triple.                      |
+| Point-to-plane ICP after a good seed |                                           0% | Diverged on this small/noisy surface; cannot be accepted without scoring.                  |
+| Colored ICP after a good seed        |                                 No transform | Open3D reported no correspondences during optimization.                                    |
+
+The released [PANY](https://demianhj.github.io/PANY/) checkpoint provides a separate learned RGB-D reference comparison. The [adapter](../../../../benchmarks/flash_pany_registration.py) follows its published single-reference pointmap path and scores the resulting transform against the same raw clouds. It was tested from upstream commit `db2518f86c9315d4d18606cbed7771183472ba91` with the published checkpoint. This is a pretrained general model; no FLASH-specific training was performed.
+
+| PANY source → target | Raw balanced coverage | After the same trimmed ICP |
+| -------------------- | --------------------: | -------------------------: |
+| Dowel → dowel        |                 88.6% |                      96.3% |
+| Ring → ring          |                 97.1% |                      96.2% |
+| Dowel → ring         |                  2.0% |                      52.5% |
+| Ring → dowel         |                 11.0% |                      48.2% |
+
+PANY gives a useful coarse transform for the dowel and directly distinguishes the wrong-object controls. Blindly refining a bad transform can create a misleading partial fit, so refinement must be conditional on the raw evidence. With the model already loaded, PANY pointmap inference took about 0.23 s, its reference/query fit about 0.07 s, and the diagnostic ICP about 0.07 s on this machine. Loading the 4.74 GB checkpoint took about 4 s; preprocessing the pair took about 0.8 s in the adapter. This is an asynchronous relocalization candidate, not a 30 Hz robot-loop job.
+
+On the 20:33:10 start, PANY scored 77.9% before and 92.2% after ICP, versus 98.3% for the best classical registration. The learned model is viable as another proposal, but was not the best method for this plain dowel in these recordings. Its two good shape alignments can project the annotated source end to different live ends; this experiment does not resolve that identity.
+
+The cloud fit remains consistent over early replay frames. Independently registering demo frame 100 to replay frames 5, 14, 30, and 44 placed the annotated source point within roughly two image pixels of the same live location. As the gripper approaches, depth-backed live points fall from 3,650 at frame 5 to 2,179 at frame 80, 827 at frame 130, and 295 at frame 155. Balanced coverage falls from 97% to 72%, 36%, and 23% respectively. At frame 163 the saved live mask contains **no valid depth**. Direct RGB-D registration cannot make a new measurement from that frame; a live system would need to carry a prior pose and wait for later usable evidence.
+
+PANY also weakens under the same occlusion: raw balanced coverage is 79.8% at live frame 54, 63.8% at frame 80, 8.1% at frame 106, and 1.3% at frame 130. Its point projection at frame 80 moves roughly 33 image pixels from the earlier visible-end estimate while the dowel still appears to lie on the tray. A live system must not let a newly computed but poorly supported relocalization overwrite a previously supported pose.
+
+The demo has the same issue during grasp: frame 100→110 aligns at 0.24 mm median surface distance and frame 100→130 at 0.69 mm; masked depth becomes incomplete around frame 140 and registration degrades. A multiview map can help with changes of viewpoint, but it cannot infer a uniquely labeled point on an untextured object from an ambiguous geometric fit, nor recover measured depth that is absent. The next experiment should connect confident adjacent demo views into an object map, then relocalize live views against that map while retaining multiple candidate transforms and reporting when observations are insufficient.
+
+The complete per-method transforms, scores, settings, and timings are in the four `report.json` files here. The first figure and the corresponding `overlay.png` files show the actual reprojection for review.

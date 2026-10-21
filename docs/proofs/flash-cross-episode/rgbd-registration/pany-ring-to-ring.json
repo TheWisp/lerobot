@@ -1,0 +1,77 @@
+{
+  "method": "PANY official RGB-D single-reference pointmap, then optional trimmed ICP",
+  "demo_frame": 100,
+  "live_frame": 5,
+  "target_role": "ring",
+  "source_points": 3502,
+  "target_points": 3771,
+  "reference_scale": 0.6091018444850167,
+  "rotation": [
+    [
+      0.9988548376093486,
+      0.018174543995106936,
+      -0.04425719529038762
+    ],
+    [
+      -0.01557390768359364,
+      0.9981709703450437,
+      0.05841376002191368
+    ],
+    [
+      0.04523789101919419,
+      -0.05765760930705289,
+      0.9973109511607355
+    ]
+  ],
+  "translation_m": [
+    0.0855632111917492,
+    0.022117922722325822,
+    -0.013515159434092261
+  ],
+  "score": {
+    "source_to_target_median_mm": 1.0607216146719989,
+    "target_to_source_median_mm": 1.1274520028927193,
+    "source_supported_fraction": 1.0,
+    "target_supported_fraction": 0.9708300185627154,
+    "projection_mask_fraction": 0.9854368932038835,
+    "projection_surface_median_mm": 1.626975022159416
+  },
+  "refined_rotation": [
+    [
+      0.9991564108448905,
+      0.04106195719512332,
+      0.0006183355579661325
+    ],
+    [
+      -0.04104625963772649,
+      0.9980740256200451,
+      0.046512836425553664
+    ],
+    [
+      0.0012927634388064132,
+      -0.04649897906302701,
+      0.9989175009522998
+    ]
+  ],
+  "refined_translation_m": [
+    0.06601209245534781,
+    0.02444529758612968,
+    -0.020126611042254883
+  ],
+  "refined_score": {
+    "source_to_target_median_mm": 0.9609400874785368,
+    "target_to_source_median_mm": 1.0148506142889167,
+    "source_supported_fraction": 1.0,
+    "target_supported_fraction": 0.9620790241315301,
+    "projection_mask_fraction": 0.971730439748715,
+    "projection_surface_median_mm": 1.3531817505248456
+  },
+  "timings_s": {
+    "preprocess": 0.7949698739976157,
+    "model_load": 4.039069401012966,
+    "model_inference": 0.22773423400940374,
+    "reference_and_query_fit": 0.18690574399079196,
+    "score_and_refine": 0.06166178599232808,
+    "total": 5.310341319011059
+  }
+}
