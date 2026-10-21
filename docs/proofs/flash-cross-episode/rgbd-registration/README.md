@@ -29,6 +29,21 @@ The clear dowel start was also tested in four other saved trials, with the same 
 
 The `trial-*` reports and overlays in this directory contain each result. They show that the clear-view registration was not peculiar to one replay. They still do not identify an unmarked physical endpoint independently of shape.
 
+## A later demo view bridges to a held live view
+
+The first view of an object need not stay visible throughout a demonstration. I tested a two-link route from the marked dowel end in clear demo frame 100, through later demo frame 500 after the grasp, to held-object frame 496 of the 20:33 live trial. The benchmark now accepts either another RGB-D recording or a saved FLASH trial as its target. Both links use measured masked clouds, not point-tracker correspondences.
+
+![The marked demo point mapped through a later demo view to the live held dowel](view-bridge.png)
+
+| Link                | Balanced surface coverage within 6 mm | Mapped point                                 |
+| ------------------- | ------------------------------------: | -------------------------------------------- |
+| Demo 100 → demo 500 |                                 82.3% | `(210.5, 111.0)` in demo 500                 |
+| Demo 500 → live 496 |                                 87.3% | Composed result `(268.4, 215.3)` in live 496 |
+
+The figure uses the deterministic `pca_11` demo-link candidate. Its demo-frame projection is about two pixels from a separate TrackEverything prediction of the same annotated point. The composed live point lies inside the recorded dowel mask and is 4.4 mm from measured depth at that pixel. A separate TrackEverything demo-to-live transfer landed at `(270.4, 206.6)` in that live frame, about nine pixels away. This is a plausible bridge across a large pose change and grasp, **not** ground truth for the physical endpoint or insertion accuracy. The [demo-link report](demo-100-to-500/report.json) and [live-link report](demo-500-to-live-496/report.json) retain the other candidate transforms. A stochastic FPFH run ranked a different demo-link transform higher by surface coverage, so choosing by surface coverage alone is insufficient.
+
+A diagnostic adjacent-frame ICP pass over demo frames 100–700 found 22 consecutive links without usable masked depth at frames 176–197. Surface overlap was high for most other adjacent pairs, yet composing some plausible local links and one cross-gap link moved the marked point tens of pixels away from its later tracked location. Thus, adding every frame can supply alternate routes, but it also adds false or drifting edges. A production map must retain competing transforms, check independent evidence and loop consistency, and relocalize against strong clear views rather than trusting a chain solely because its pairwise surfaces overlap.
+
 On the clear dowel pair, the candidate methods behaved differently:
 
 | Candidate initializer                | Balanced coverage after the same trimmed ICP | Observation                                                                                |

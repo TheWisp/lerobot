@@ -381,17 +381,45 @@ def run(args: argparse.Namespace) -> dict:
     demo_mask = (
         _image((args.demo_masks / f"{args.demo_frame:06d}.png").read_bytes(), cv2.IMREAD_GRAYSCALE) > 0
     )
-    table = pq.read_table(
-        args.live_root / "data/chunk-000/file-000.parquet",
-        columns=["observation.images.overhead", "observation.images.overhead_depth"],
-    )
-    live_rgb = _image(
-        table["observation.images.overhead"][args.live_frame].as_py()["bytes"], cv2.IMREAD_COLOR
-    )
-    live_depth = _image(
-        table["observation.images.overhead_depth"][args.live_frame].as_py()["bytes"], cv2.IMREAD_UNCHANGED
-    )
-    live_mask = _live_masks(args.live_root, [args.live_frame], live_depth.shape, args.role)[args.live_frame]
+    if args.target_recording is not None:
+        if args.target_masks is None:
+            raise ValueError("--target-masks is required with --target-recording")
+        source_k = np.loadtxt(args.demo_recording / "cam_K.txt").reshape(3, 3)
+        target_k = np.loadtxt(args.target_recording / "cam_K.txt").reshape(3, 3)
+        if not np.allclose(source_k, target_k):
+            raise ValueError("this benchmark currently requires matching source and target intrinsics")
+        live_rgb = _image(
+            (args.target_recording / "rgb" / f"{args.live_frame:06d}.jpg").read_bytes(),
+            cv2.IMREAD_COLOR,
+        )
+        live_depth = _image(
+            (args.target_recording / "depth" / f"{args.live_frame:06d}.png").read_bytes(),
+            cv2.IMREAD_UNCHANGED,
+        )
+        live_mask = (
+            _image(
+                (args.target_masks / f"{args.live_frame:06d}.png").read_bytes(),
+                cv2.IMREAD_GRAYSCALE,
+            )
+            > 0
+        )
+    else:
+        if args.role is None:
+            raise ValueError("--role is required with --live-root")
+        table = pq.read_table(
+            args.live_root / "data/chunk-000/file-000.parquet",
+            columns=["observation.images.overhead", "observation.images.overhead_depth"],
+        )
+        live_rgb = _image(
+            table["observation.images.overhead"][args.live_frame].as_py()["bytes"], cv2.IMREAD_COLOR
+        )
+        live_depth = _image(
+            table["observation.images.overhead_depth"][args.live_frame].as_py()["bytes"],
+            cv2.IMREAD_UNCHANGED,
+        )
+        live_mask = _live_masks(args.live_root, [args.live_frame], live_depth.shape, args.role)[
+            args.live_frame
+        ]
     k = np.loadtxt(args.demo_recording / "cam_K.txt").reshape(3, 3)
     source = cloud(demo_depth, demo_mask, k, args.edge_pixels)
     target = cloud(live_depth, live_mask, k, args.edge_pixels)
@@ -543,6 +571,7 @@ def run(args: argparse.Namespace) -> dict:
     report = {
         "demo_frame": args.demo_frame,
         "live_frame": args.live_frame,
+        "target_kind": "recording" if args.target_recording is not None else "live_trial",
         "source_points": len(source),
         "target_points": len(target),
         "seconds": time.perf_counter() - start,
@@ -567,8 +596,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--demo-recording", type=Path, required=True)
     parser.add_argument("--demo-masks", type=Path, required=True)
-    parser.add_argument("--live-root", type=Path, required=True)
-    parser.add_argument("--role", required=True)
+    target = parser.add_mutually_exclusive_group(required=True)
+    target.add_argument("--live-root", type=Path)
+    target.add_argument("--target-recording", type=Path)
+    parser.add_argument("--target-masks", type=Path)
+    parser.add_argument("--role")
     parser.add_argument("--demo-frame", type=int, required=True)
     parser.add_argument("--live-frame", type=int, required=True)
     parser.add_argument("--landmark-xy", type=int, nargs=2)
