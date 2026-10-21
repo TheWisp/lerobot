@@ -39,8 +39,8 @@ class Candidate:
     lost: np.ndarray
 
     def pose_at(self, frame: int) -> np.ndarray | None:
-        index = frame - int(self.frames[0])
-        if index < 0 or index >= len(self.frames) or int(self.frames[index]) != frame or self.lost[index]:
+        index = int(np.searchsorted(self.frames, frame))
+        if index >= len(self.frames) or int(self.frames[index]) != frame or self.lost[index]:
             return None
         return self.poses[index]
 
@@ -57,7 +57,15 @@ def load_candidate(specification: str) -> Candidate:
     else:
         raise ValueError("candidate must be NAME=PATH[:POSES_KEY:LOST_KEY]")
     with np.load(path) as trace:
-        return Candidate(name, trace["frames"].copy(), trace[pose_key].copy(), trace[lost_key].copy())
+        candidate = Candidate(name, trace["frames"].copy(), trace[pose_key].copy(), trace[lost_key].copy())
+    if (
+        not len(candidate.frames)
+        or len(candidate.frames) != len(candidate.poses)
+        or len(candidate.frames) != len(candidate.lost)
+        or np.any(np.diff(candidate.frames) <= 0)
+    ):
+        raise ValueError(f"{name}: pose trace must have strictly increasing aligned frames")
+    return candidate
 
 
 def pareto(a: dict[str, float], b: dict[str, float], *, ray_evidence: bool) -> str:
