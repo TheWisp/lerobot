@@ -2,7 +2,8 @@
 
 The visible depth lies on the front surface and the contact end is occluded.
 The extrapolated contact point is therefore a diagnostic, not a ground-truth
-label. A recorded grasp orientation selects one end identity for all sources.
+label. A pregrasp Point2Pose pose transported by the recorded gripper selects
+one end identity for all sources; it does not supply the insertion pose.
 """
 
 from __future__ import annotations
