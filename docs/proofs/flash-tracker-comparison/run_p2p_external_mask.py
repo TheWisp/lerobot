@@ -1,8 +1,9 @@
 """Run the pinned Point2Pose pipeline with current-frame external masks.
 
-This is an offline, causal segmentation ablation. Keep the same initial mask
-as the sealed SAM2 run, then replace only subsequent masks with saved causal
-SAM3 results. The sealed bridge and Point2Pose checkout are not edited.
+This is an offline, causal segmentation ablation. The initial mask can come
+from the sealed recording or a supplied image; subsequent masks come from
+Point2Pose's SAM2 or saved causal SAM3 results. The sealed bridge and
+Point2Pose checkout are not edited.
 """
 
 from __future__ import annotations
@@ -48,7 +49,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset", required=True, type=Path)
     parser.add_argument("--current-masks", "--sam3-masks", dest="current_masks", type=Path)
-    parser.add_argument("--sealed-masks", required=True, type=Path)
+    initial_mask = parser.add_mutually_exclusive_group(required=True)
+    initial_mask.add_argument("--sealed-masks", type=Path)
+    initial_mask.add_argument("--initial-mask", type=Path)
     parser.add_argument("--role", required=True, choices=("dowel", "ring"))
     parser.add_argument("--mask-source", choices=("external", "internal"), default="external")
     parser.add_argument("--label", default="sam3")
@@ -100,9 +103,14 @@ def main() -> None:
             if not ready.get("ready"):
                 raise RuntimeError(f"Point2Pose bridge not ready: {ready}")
             intrinsics = np.loadtxt(args.dataset / "cam_K.txt").reshape(3, 3)
-            with np.load(args.sealed_masks, allow_pickle=False) as initial_masks:
-                mask_index = 0 if args.role == "dowel" else 1
-                initial = initial_masks[f"o{mask_index}_masks"][args.first_frame].astype(np.uint8)
+            if args.initial_mask is not None:
+                initial = cv2.imread(str(args.initial_mask), cv2.IMREAD_GRAYSCALE)
+                if initial is None:
+                    raise FileNotFoundError(f"missing initial mask: {args.initial_mask}")
+            else:
+                with np.load(args.sealed_masks, allow_pickle=False) as initial_masks:
+                    mask_index = 0 if args.role == "dowel" else 1
+                    initial = initial_masks[f"o{mask_index}_masks"][args.first_frame].astype(np.uint8)
             for frame in range(args.first_frame, args.last_frame + 1):
                 stem = f"{frame:06d}"
                 bgr = cv2.imread(str(args.dataset / "rgb" / f"{stem}.jpg"))
