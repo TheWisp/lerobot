@@ -94,6 +94,94 @@ Its memory and compute ideas are worth adapting. For manipulation, preserve reve
 
 **D4RT, Any4D and fast visual-geometry tracking** broaden the research comparison. They offer joint geometry/motion or efficient trajectory prediction, but video-wide inference speed is not evidence of causal metric pose updates. D4RT's official project did not link released model weights/code in the inspected material. Any4D and the CVPR 2026 fast spatial tracker are worth assessing for offline references or a future causal frontend. They are not reasons to replace reliable measured depth with an unverified prediction. [D4RT](https://d4rt-paper.github.io/), [Any4D](https://any-4d.github.io/), [fast spatial tracking paper](https://openaccess.thecvf.com/content/CVPR2026/html/Huang_Fast_Spatial_Tracking_with_Visual_Geometry_Transformer_CVPR_2026_paper.html).
 
+## Cross-episode object maps and task landmarks
+
+The demo-to-live problem is **object registration across episodes**, followed by
+causal tracking within the live episode. A human can annotate an interaction
+point once in a demo, even if that point will later be hidden. It need not be
+directly detected in the live image. Registering a rigid live object frame to
+the demo object frame transports the annotation and its uncertainty to the
+live frame. A bank of demo views and a growing live map provide more chances
+for a usable bridge than matching either episode to its first frame.
+The demo frames must first form a consistent object map, and the live frames
+must form one or more consistent live map segments. A lost track through grasp
+can disconnect that graph; simply pooling all pixels would create a false
+overlap claim. Cross-episode matches are edges between those segments,
+with their own residuals, uncertainty and potentially competing alignments.
+
+The intersection that matters is between _material surface regions observed
+in the two episodes after an unknown rigid alignment_. Their camera/world
+point clouds need not intersect numerically because the object moved. Even a
+nonempty common surface is not sufficient for a unique registration: one known
+3D point leaves rotation free; two leave rotation about their joining axis
+free; three non-collinear, correctly corresponding 3D points determine a
+proper rigid transform in ideal conditions. An extended patch can also supply
+the missing constraints through shape, normals, boundaries or appearance,
+without persistent named point IDs. A small smooth cylindrical patch can
+slide or rotate into several equally plausible alignments. Matching the
+_shape_ of two low-overlap clouds is therefore a hypothesis, not a proof that
+individual material points correspond. [GeoTransformer](https://openaccess.thecvf.com/content/CVPR2022/html/Qin_Geometric_Transformer_for_Fast_and_Robust_Point_Cloud_Registration_CVPR_2022_paper.html)
+and [PREDATOR](https://openaccess.thecvf.com/content/CVPR2021/html/Huang_Predator_Registration_of_3D_Point_Clouds_With_Low_Overlap_CVPR_2021_paper.html)
+address low-overlap registration; [TEASER++](https://arxiv.org/abs/2001.07715)
+addresses outlier correspondences. None can recover a physically unobservable
+symmetry from an unmarked object.
+
+The reference-map pattern is established but has distinct operating costs.
+[OnePose++](https://arxiv.org/abs/2301.07673) builds a semi-dense object map
+from a reference video and matches later images to it without a CAD model or
+repeatable keypoint detection. [BundleSDF](https://bundlesdf.github.io/) keeps
+posed RGB-D memory views, registers new views to them, jointly refines a pose
+graph and builds an object field asynchronously. [FoundationPose](https://openaccess.thecvf.com/content/CVPR2024/papers/Wen_FoundationPose_Unified_6D_Pose_Estimation_and_Tracking_of_Novel_Objects_CVPR_2024_paper.pdf)
+has a model-free mode using a small set of reference images without
+object-specific fine-tuning. These are stronger conceptual matches to
+multi-view demo-to-live alignment than expecting a point tracker to bridge an
+abrupt episode cut. TrackEverything is valuable for dense trajectories _within_
+an episode, but its published persistent scene cloud is not by itself a
+verified cross-episode object identity map.
+
+The [object-only retrieval pilot](../../../../../docs/proofs/flash-cross-episode/object-view-retrieval.md)
+tests this distinction on the saved dowel demo and rollout. A retrieved demo
+view bridged to a partly visible held dowel, and the transferred point retained
+mask/depth support in 41 of 42 later aligned observations. A different demo
+view independently proposed a nearby point at insertion. A rotated tray start
+failed the same checks, despite a high object-crop similarity score. These are
+surface and co-motion checks, not independently labeled material-point
+identity or hidden-tip accuracy. The earlier
+[startup bridge pilot](../../../../../docs/proofs/flash-cross-episode/README.md)
+shows that several coherent matches can still be geometrically wrong or be
+lost through grasp. More views improve candidate availability; they do not
+automatically certify the task point.
+
+For FLASH, store a task landmark in a demo object frame and associate each
+accepted live pose hypothesis with a cross-episode object-frame transform.
+Propagate the landmark by that transform, including while it is hidden. Keep
+multiple transforms when the observed surface supports several alignments;
+update only dimensions constrained by current RGB-D, point motion, contact or
+gripper evidence. Reject an appearance-only bridge that contradicts the live
+mask/depth. Add a newly visible surface to a persistent map only under a
+supported pose, retaining its provenance so a bad pose can be rolled back.
+The asynchronous estimator can revisit demo references and correct its map;
+the fixed-rate robot loop consumes the latest timestamped belief.
+
+For a visually symmetric dowel, axial roll may be irrelevant and its two
+identical material ends cannot be named by the image alone. The task can still
+distinguish the _grasped_ end from the _free insertion_ end through the action
+and gripper attachment. That relation breaks task ambiguity only while its
+attachment hypothesis is supported; it is not a measurement that the object
+never slipped. If the live object is merely similar to the demo object rather
+than the same rigid geometry, one rigid transform cannot guarantee that the
+annotated point has the same functional meaning. Such transfer needs a
+validated part correspondence or a new annotation.
+
+The decisive evaluation is hidden-point error on held-out episodes, not just
+surface fit. Temporarily mark or independently measure a material point for
+ground truth while withholding that signal from the estimator. Report
+registration coverage, accepted wrong bridges, symmetry-aware task-point and
+axis error, recovery after occlusion, and source-to-output delay. Compare a
+first-view anchor, a demo-view bank, and a jointly registered object map with
+the same masks, RGB-D and compute budget. This separates the benefit of
+additional views from that of a different tracking model.
+
 ## A tracker we could build
 
 The proposed tracker specializes in causal rigid-object estimation under contact and partial visibility. The full tracker is **not implemented**. An experimental shared RGB-D point frontend now tracks scene points and can carry an object with nearby group motion **after observed co-motion establishes and verifies the relationship**. A separate object-point path needs an absolute pose and aligned mask to start. Neither path establishes cross-recording identity or recovers it after all supporting points disappear. The current code still lacks the single scene-estimator arbitration boundary described in the [system design](architecture.md#one-scene-estimator-several-evidence-sources). These paths use pretrained components and geometry before considering new network training.

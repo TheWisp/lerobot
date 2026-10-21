@@ -94,3 +94,11 @@ for FLASH at runtime. A future estimator should keep spatially distributed
 rigid support, admit newly observed points, report uncertainty, and
 relocalize when support collapses. The live FLASH runtime was not changed by
 this pilot.
+
+A follow-up [object-only demo-view retrieval pilot](object-view-retrieval.md)
+tests a different bridge: it searches many masked demo views for the live
+object, then checks the proposed transfer against the exactly aligned mask
+and measured depth. It finds a supported held-object seed in one saved rollout
+and follows it through most of the remaining observations, while rejecting a
+rotated-start proposal. This is evidence for multiview relocalization, not an
+independent hidden-tip measurement or a live runtime integration.
