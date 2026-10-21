@@ -59,6 +59,8 @@ def main() -> None:
     parser.add_argument("--diagnostic-frames", type=int, nargs="*", default=())
     parser.add_argument("--python", required=True, type=Path)
     parser.add_argument("--sealed-bridge", required=True, type=Path)
+    parser.add_argument("--worker-bridge", type=Path)
+    parser.add_argument("--worker-diagnostic", type=Path)
     parser.add_argument("--p2p-repo", required=True, type=Path)
     parser.add_argument("--p2p-config", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
@@ -72,7 +74,7 @@ def main() -> None:
     args.output.mkdir(parents=True, exist_ok=True)
     log_path = args.output / f"p2p_{args.role}_{args.label}_worker.log"
     bridge_script = (
-        args.sealed_bridge
+        (args.worker_bridge or args.sealed_bridge)
         if args.mask_source == "internal"
         else Path(__file__).with_name("p2p_external_mask_bridge.py")
     )
@@ -87,8 +89,10 @@ def main() -> None:
     try:
         with log_path.open("wb") as log:
             command = [str(args.python), str(bridge_script)]
-            if args.mask_source == "external":
+            if args.mask_source == "external" or args.worker_bridge:
                 command.extend(("--sealed-bridge", str(args.sealed_bridge)))
+            if args.worker_diagnostic:
+                command.extend(("--diagnostic", str(args.worker_diagnostic)))
             command.extend(("--repo", str(args.p2p_repo), "--config", str(args.p2p_config)))
             process = subprocess.Popen(
                 command,
