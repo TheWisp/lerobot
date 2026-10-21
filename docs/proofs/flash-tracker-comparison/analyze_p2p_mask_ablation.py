@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import argparse
 import csv
+import math
+from collections import Counter
 from pathlib import Path
 
 import cv2
@@ -124,6 +126,29 @@ def cross_score_dowel_models(
                 "map points",
                 len(model),
             )
+
+
+def pareto_compare_dowel(rows: list[tuple], first_frame: int, last_frame: int) -> Counter[str]:
+    """Count unambiguous surface-and-shaft decisions; retain tradeoffs as unresolved."""
+    by_frame = {(row[1], row[2]): row for row in rows if row[0] == "dowel"}
+    counts: Counter[str] = Counter()
+    for frame in range(first_frame, last_frame + 1):
+        sam2 = by_frame[frame, "sam2"]
+        sam3 = by_frame[frame, "sam3"]
+        if sam2[3] or sam3[3]:
+            counts["missing_candidate"] += 1
+            continue
+        depth_sam2, depth_sam3 = sam2[6], sam3[6]
+        axis_sam2, axis_sam3 = sam2[7], sam3[7]
+        if not all(math.isfinite(value) for value in (depth_sam2, depth_sam3, axis_sam2, axis_sam3)):
+            counts["missing_score"] += 1
+        elif depth_sam2 <= depth_sam3 and axis_sam2 <= axis_sam3:
+            counts["sam2_dominates"] += 1
+        elif depth_sam3 <= depth_sam2 and axis_sam3 <= axis_sam2:
+            counts["sam3_dominates"] += 1
+        else:
+            counts["tradeoff"] += 1
+    return counts
 
 
 def main() -> None:
@@ -244,6 +269,13 @@ def main() -> None:
         args.edge_limit_mm / 1000,
         args.map_support_radius_mm / 1000,
     )
+    for first, last in ((249, 280), (281, 399), (400, 500)):
+        print(
+            "dowel surface-and-shaft Pareto decisions",
+            first,
+            last,
+            dict(pareto_compare_dowel(rows, first, last)),
+        )
 
 
 if __name__ == "__main__":
