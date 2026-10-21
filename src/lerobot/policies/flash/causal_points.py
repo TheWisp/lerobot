@@ -73,39 +73,34 @@ class CausalRigidPointTracker:
     def seed(self, frame: RGBDFrame, mask: np.ndarray) -> int:
         if mask.shape != frame.depth.shape or mask.dtype != bool:
             raise ValueError("seed mask must align with RGB-D pixels")
-        gray = self._gray_image(frame.rgb)
-        seed_mask = (
-            cv2.resize(mask.astype(np.uint8), (gray.shape[1], gray.shape[0]), interpolation=cv2.INTER_NEAREST)
-            if self.image_scale != 1
-            else mask.astype(np.uint8)
-        )
+        # Detect before resizing: a small visible object can lose most of its
+        # corners when the image is downsampled for faster optical flow.
+        full_gray = cv2.cvtColor(frame.rgb, cv2.COLOR_RGB2GRAY)
         corners = cv2.goodFeaturesToTrack(
-            gray,
+            full_gray,
             maxCorners=self.max_points,
             qualityLevel=0.005,
             minDistance=5,
-            mask=seed_mask,
+            mask=mask.astype(np.uint8),
         )
-        uv = corners.reshape(-1, 2) if corners is not None else np.empty((0, 2), dtype=np.float32)
-        if len(uv):
-            px = self._full_pixels(uv, frame.depth.shape)
+        full_uv = corners.reshape(-1, 2) if corners is not None else np.empty((0, 2), dtype=np.float32)
+        if len(full_uv):
+            px = np.rint(full_uv).astype(int)
             valid = frame.depth[px[:, 1], px[:, 0]] > 0
-            uv = uv[valid]
-        self._uv = uv.astype(np.float32)
+            full_uv = full_uv[valid]
+        self._uv = (full_uv * self.image_scale).astype(np.float32)
         self._base_seed = (
             transform_points(
                 frame.base_from_camera,
-                unproject_pixels(
-                    frame.depth, frame.intrinsics, uv / self.image_scale, frame.depth_m_per_unit
-                ),
+                unproject_pixels(frame.depth, frame.intrinsics, full_uv, frame.depth_m_per_unit),
             )
-            if len(uv)
+            if len(full_uv)
             else np.empty((0, 3), dtype=float)
         )
-        self._valid = np.ones(len(uv), dtype=bool)
-        self._gray = gray
+        self._valid = np.ones(len(full_uv), dtype=bool)
+        self._gray = self._gray_image(frame.rgb)
         self._last_source_time_s = frame.source_time_s
-        return len(uv)
+        return len(full_uv)
 
     def update(self, frame: RGBDFrame) -> RigidPointMotion:
         if self._gray is None or self._last_source_time_s is None:

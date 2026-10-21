@@ -43,7 +43,7 @@
     "min_inliers": 12,
     "max_frame_gap_s": 0.1,
     "fit_threshold_m": 0.005,
-    "image_scale": 0.5,
+    "image_scale": 1.0,
     "scene_max_points": 800,
     "environment_context_radius_m": 0.25,
     "environment_min_motion_m": 0.008,

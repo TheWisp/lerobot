@@ -52,3 +52,19 @@ def test_causal_points_reject_unobserved_frame_gap():
     tracker.seed(frame(rgb, 0), np.ones(gray.shape, dtype=bool))
     with pytest.raises(ValueError, match="lost a camera-frame interval"):
         tracker.update(frame(rgb, 0.2))
+
+
+def test_half_scale_tracking_keeps_features_on_small_object():
+    gray = np.zeros((128, 128), dtype=np.uint8)
+    gray[32:64, 32:64] = np.random.default_rng(4).integers(0, 255, (32, 32), dtype=np.uint8)
+    rgb = np.repeat(gray[:, :, None], 3, axis=2)
+    mask = np.zeros(gray.shape, dtype=bool)
+    mask[32:64, 32:64] = True
+    tracker = CausalRigidPointTracker(min_inliers=12, image_scale=0.5)
+
+    assert tracker.seed(frame(rgb, 0), mask) >= 12
+    shifted = cv2.warpAffine(rgb, np.float32([[1, 0, 2], [0, 1, 0]]), (128, 128))
+    motion = tracker.update(frame(shifted, 0.033))
+    assert motion.base_motion_from_seed is not None
+    assert motion.inliers >= 12
+    np.testing.assert_allclose(motion.base_motion_from_seed[:3, 3], [0.02, 0, 0], atol=0.005)
