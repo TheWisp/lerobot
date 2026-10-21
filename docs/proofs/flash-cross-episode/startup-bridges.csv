@@ -1,0 +1,7 @@
+run_time,query_count,model_surface_support_10mm,zero_motion_surface_support_10mm,rigid_inliers_10mm,supported_axis_span_fraction
+17:52,112,38,23,30,0.46
+18:04,112,30,25,26,0.42
+19:11,112,63,33,51,0.87
+19:51,112,24,15,22,0.25
+20:13,112,39,24,31,0.53
+20:33,112,61,27,39,0.72
