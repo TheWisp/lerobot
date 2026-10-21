@@ -128,7 +128,7 @@ points increased from 93 after one pass to 141 after two. At frame 500 the
 count increased from 101 to 141. At the configured query spacing, coverage of
 the visible SAM3 mask rose from 77% to 93% at frame 454 and from 77% to 91%
 at frame 500. Both views visibly populate parts of the dowel missed by the
-single initial view. The results and a six-frame contact sheet are in the local
+single initial view. The results, a six-frame contact sheet, and a 30 fps video are in the local
 demo dataset under `flash/v1/tracker-runs/trackeverything-expanded-20261021-2/`.
 
 More dots do not imply stable identities. Among points that still pass the mask
@@ -139,6 +139,16 @@ but dowel correspondence drift remains measurable even after rejecting points
 outside the observed surface. Mask and depth agreement validate where a point
 is now, not whether it retained the same physical identity. These outputs are
 an offline research result, not a revised prepared skill or live tracker.
+
+There is still a useful co-moving subset. With the prepared demo's 5 mm rigid
+registration tolerance and 100 trials, at frame 454 the frame-361 dowel cohort
+has 42 rigid-consistent tracks among its 58 mask/depth-supported tracks; the
+frame-409 cohort has 28 among 47. At frame 550 those counts are 31/56 and
+21/47. The ring cohort retains 74/74 at frame 454 and 71/75 at frame 550.
+These are within-cohort checks anchored at each cohort's birth frame; they do
+not establish alignment between cohorts or prove a stable relative dowel-ring
+cloud. A next experiment must link overlapping cohorts and reject drifting
+identities before using their relative motion for control.
 
 Other trackers register an argv template under their tracker ID:
 
