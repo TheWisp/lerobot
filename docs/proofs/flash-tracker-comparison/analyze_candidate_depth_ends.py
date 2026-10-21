@@ -22,6 +22,7 @@ def main() -> None:
     parser.add_argument("--dataset", required=True, type=Path)
     parser.add_argument("--masks", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--candidate", action="append", default=[], help="extra NAME=POSE_TRACE.npz")
     args = parser.parse_args()
 
     root = Path(__file__).parent
@@ -41,6 +42,15 @@ def main() -> None:
         ("TAPNext 512", "tapnext512_fixed_dowel_100_550_pose.npz"),
     ):
         with np.load(root / filename) as trace:
+            traces[name] = {
+                int(frame): (pose, bool(lost))
+                for frame, pose, lost in zip(trace["frames"], trace["poses"], trace["lost"], strict=True)
+            }
+    for specification in args.candidate:
+        name, separator, filename = specification.partition("=")
+        if not separator or not name or not filename or name in traces:
+            parser.error("--candidate needs a unique NAME=POSE_TRACE.npz")
+        with np.load(filename) as trace:
             traces[name] = {
                 int(frame): (pose, bool(lost))
                 for frame, pose, lost in zip(trace["frames"], trace["poses"], trace["lost"], strict=True)
