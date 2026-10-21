@@ -83,11 +83,14 @@ SAM-derived mask is not independent hand-labelled ground truth. The reported
 counts therefore show plausible partial alignment, not a verified point
 transfer or a millimetre-level endpoint error measurement.
 
-The next validation should hold out a distinctive point or temporary test
-mark visible in both episodes, fit a transform using other points, and measure
-the held-out 3D error and end assignment. Marks would be a measurement tool,
-not a requirement for FLASH at runtime. If this check succeeds, the tracker
-experiment can maintain the candidate rigid anchor, add newly observed live
-points in that frame, and enforce rigid co-motion with mask and depth
-agreement. It should report uncertainty and drop or relocalize the anchor when
-support collapses. The live FLASH runtime was not changed by this pilot.
+An [explicit dowel-endpoint transfer test](landmark-test.md) now shows why
+surface agreement is insufficient: a demo endpoint query lands near a visible
+end in two replay starts but misses the dowel entirely in a third, more
+rotated start. Tracking a successful seed through one rollout retains surface
+support on many frames but loses it through grasp. A temporary mark or another
+independent measurement is still needed to establish physical end identity
+and held-out 3D error. Marks would be a measurement tool, not a requirement
+for FLASH at runtime. A future estimator should keep spatially distributed
+rigid support, admit newly observed points, report uncertainty, and
+relocalize when support collapses. The live FLASH runtime was not changed by
+this pilot.
