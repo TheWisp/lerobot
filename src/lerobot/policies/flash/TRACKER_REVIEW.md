@@ -27,12 +27,41 @@ TrackEverything has a built-in adapter:
     "repository": "/absolute/path/to/trackeverything",
     "checkpoint": "/absolute/path/to/model.pth",
     "query_count": 128,
+    "mode": "dense",
     "timeout_s": 3600
   }
 }
 ```
 
-The query count is a configurable spatial sampling budget, not a pose acceptance rule.
+The [upstream integration guide](https://github.com/ayushjain1144/trackeverything#inference-demopy--demo_hfpy)
+uses dense mode and `output.tracks()` to expose persistent 3D scene points, their birth
+frames and the pixel-to-track map. It documents sparse mode as an optional way to track
+specified query points; query points are not merged with scene points and may retain
+higher resolution. The model outputs point trajectories, **not object identities or
+6D object poses**. FLASH must supply segmentation and fit or otherwise infer poses.
+
+This adapter presently fits a rigid pose independently per frame from points sampled
+inside one reference mask per object. Dense mode is the default because it also runs
+the model's persistent scene representation while preserving those high-resolution
+queries. It does **not** use `output.tracks()` for pose fitting or associate newly
+born scene points with an object. Thus dense mode does not by itself address a rotating
+object whose original visible surface disappears. Sparse mode remains available for
+comparison. The raw per-query tracks and visibility logits are retained for diagnosis.
+
+On the evaluated 613-frame insertion demo, switching this same query fit from sparse
+to dense context took 27.1 s versus 27.9 s and improved median held-dowel RGB-D
+surface discrepancy over frames 400–500 from about 27 mm to 18 mm. The dowel fit still
+had only 18 inliers from a median 83.5 visible queries, and the native scene output
+represented its reference mask with just 9 distinct tracks after deduplication at the
+upstream default 20 mm voxel size. The candidate is therefore still an inaccurate
+pose estimate, not a corrected skill. Use segmentation across later views to associate
+new points with an object, then check temporal rigidity and RGB-D surface agreement
+before accepting a pose. Reducing voxel size may retain more scene detail but costs
+memory/compute; it should be measured rather than assumed to fix correspondence.
+The review card reports fits whose frame-to-frame pose motion disagrees with the
+motion of tracked points that supported the previous fit. This uses the saved
+registration tolerance rather than a fixed speed limit. It is a warning, not
+proof that other frames are accurate.
 Rigid fitting uses the selected demo's registration threshold, minimum inliers and
 trial count. TrackEverything receives measured depth and camera intrinsics and runs
 with future context within temporal windows. This is an offline demo extractor; this
@@ -88,7 +117,7 @@ calibrated base frame. An object-to-camera output from another tracker must be c
 to this relative convention by its adapter before import.
 
 The candidate manifest records its source bundle and trace hashes. A candidate cannot
-be applied to a different or changed bundle. Preview coverage is not an accuracy score:
+be applied to a different or changed bundle. Preview coverage and rigid-fit support are not accuracy scores:
 even a high-coverage pose trace may contradict the image/depth evidence.
 
 ## TrackEverything access

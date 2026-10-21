@@ -266,7 +266,7 @@ def test_trackeverything_shares_inference_but_fits_each_object_at_its_reference(
 
         def infer(self, **kwargs):
             queries = kwargs["query_points_2d"]
-            calls.append(queries.copy())
+            calls.append((queries.copy(), kwargs["mode"]))
             base = np.column_stack([queries[:, 1:], np.ones(len(queries))])
             moved = base.copy()
             moved[:4] = base[:4] @ motion_a[:3, :3].T + motion_a[:3, 3]
@@ -298,10 +298,48 @@ def test_trackeverything_shares_inference_but_fits_each_object_at_its_reference(
         ],
     )
     assert len(calls) == 1
-    np.testing.assert_array_equal(calls[0][:, 0], [0, 0, 0, 0, 1, 1, 1, 1])
+    np.testing.assert_array_equal(calls[0][0][:, 0], [0, 0, 0, 0, 1, 1, 1, 1])
+    assert calls[0][1] == "dense"
     with np.load(output) as trace:
         assert trace["roles"].tolist() == ["a", "b"]
         assert not trace["lost"].any()
+        assert not trace["temporal_conflicts"].any()
+        assert trace["query_coords_m"].shape == (2, 8, 3)
         np.testing.assert_allclose(trace["poses"][0, 1], motion_a, atol=1e-6)
         np.testing.assert_allclose(trace["poses"][1, 0], np.linalg.inv(motion_b), atol=1e-6)
         np.testing.assert_allclose(trace["poses"][1, 1], np.eye(4), atol=1e-6)
+
+
+def test_temporal_conflict_flags_pose_motion_unsupported_by_point_tracks():
+    import importlib.util
+    from pathlib import Path
+
+    spec = importlib.util.spec_from_file_location(
+        "flash_te_adapter", Path(__file__).resolve().parents[3] / "benchmarks/flash_trackeverything_pose.py"
+    )
+    adapter = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(adapter)
+    reference = np.array([[0.0, 0, 1], [0.1, 0, 1], [0, 0.1, 1], [0.1, 0.1, 1]])
+    points = np.stack((reference, reference.copy()))
+    visible = np.ones((2, 4))
+    poses = np.stack((np.eye(4), _pose(0.05)))
+    conflicts = adapter._temporal_motion_conflicts(
+        points,
+        visible,
+        poses,
+        np.zeros(2, dtype=bool),
+        reference_index=0,
+        fit_threshold_m=0.005,
+        min_inliers=3,
+    )
+    assert conflicts.tolist() == [False, True]
+    poses[1] = np.eye(4)
+    assert not adapter._temporal_motion_conflicts(
+        points,
+        visible,
+        poses,
+        np.zeros(2, dtype=bool),
+        reference_index=0,
+        fit_threshold_m=0.005,
+        min_inliers=3,
+    ).any()

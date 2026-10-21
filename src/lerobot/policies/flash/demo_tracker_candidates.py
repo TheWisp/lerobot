@@ -144,6 +144,8 @@ def process_demo(
             str(output),
             "--query-count",
             str(setup.get("query_count", 128)),
+            "--mode",
+            str(setup.get("mode", "dense")),
             "--fit-threshold-m",
             str(annotation["registration_threshold_m"]),
             "--min-inliers",
@@ -160,11 +162,22 @@ def process_demo(
         with np.load(output, allow_pickle=False) as data:
             if data["roles"].tolist() != [spec["role"] for spec in specs]:
                 raise ValueError("tracker output object identities differ from the requested objects")
+            metadata = json.loads(str(data["metadata"]))
+            offset = 0
             for index, spec in enumerate(specs):
                 source = run_dir / f"object-{index}.npz"
+                count = int(metadata["query_counts"][spec["role"]])
+                visible = (data["query_visibility_logits"][:, offset : offset + count] > 0).sum(axis=1)
                 np.savez_compressed(
-                    source, frames=data["frames"], poses=data["poses"][index], lost=data["lost"][index]
+                    source,
+                    frames=data["frames"],
+                    poses=data["poses"][index],
+                    lost=data["lost"][index],
+                    inliers=data["inliers"][index],
+                    visible_queries=visible,
+                    temporal_conflicts=data["temporal_conflicts"][index],
                 )
+                offset += count
                 sources[spec["role"]] = source
     else:
         # External single-object adapters still receive every annotated object,
@@ -192,7 +205,7 @@ def process_demo(
             sources[spec["role"]] = output
     if _fingerprint(bundle) != source_hash:
         raise ValueError("prepared demo changed while the tracker was processing; rerun on the new version")
-    return import_relative_traces(
+    result = import_relative_traces(
         root,
         bundle,
         tracker=tracker,
@@ -200,6 +213,14 @@ def process_demo(
         candidate_id=candidate_id,
         expected_episode=expected_episode,
     )
+    if tracker == "trackeverything" and "command" not in setup:
+        destination = _candidate_dir(root, candidate_id) / "manifest.json"
+        manifest = json.loads(destination.read_text(encoding="utf-8"))
+        manifest["inference_mode"] = str(setup.get("mode", "dense"))
+        manifest["raw_query_trace"] = str(output)
+        destination.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+        result.update(inference_mode=manifest["inference_mode"], raw_query_trace=manifest["raw_query_trace"])
+    return result
 
 
 def _run_tracker(args: list[str], run_dir: Path, setup: dict, env: dict | None = None) -> None:
@@ -323,6 +344,15 @@ def _relative_trace(root: Path, bundle: Path, prepared: PreparedFlashSkill, role
         frames = np.asarray(data["frames"])
         poses = np.asarray(data["poses"], dtype=np.float64)
         lost = np.asarray(data["lost"])
+        support = (
+            (
+                np.asarray(data["inliers"]),
+                np.asarray(data["visible_queries"]),
+                np.asarray(data["temporal_conflicts"]) if "temporal_conflicts" in data else None,
+            )
+            if "inliers" in data and "visible_queries" in data
+            else None
+        )
     _validate_poses(frames, poses, lost, len(camera_times))
     matches = np.flatnonzero(frames == reference_frame)
     if len(matches) != 1 or lost[matches[0]]:
@@ -344,13 +374,25 @@ def _relative_trace(root: Path, bundle: Path, prepared: PreparedFlashSkill, role
         @ np.linalg.inv(object_from_reference_camera)
     )
     base_poses[lost] = np.eye(4)
-    return {"frames": frames, "poses": base_poses, "lost": lost}, {
+    if support is not None and (
+        support[0].shape != lost.shape
+        or support[1].shape != lost.shape
+        or (support[2] is not None and support[2].shape != lost.shape)
+    ):
+        raise ValueError("tracker support diagnostics do not match pose frames")
+    info = {
         "source_trace": str(source),
         "source_trace_sha256": _fingerprint(source),
         "reference_frame": reference_frame,
         "valid_frames": int((~lost).sum()),
         "total_frames": len(frames),
     }
+    if support is not None and (~lost).any():
+        info["median_inliers"] = float(np.median(support[0][~lost]))
+        info["median_visible_queries"] = float(np.median(support[1][~lost]))
+        if support[2] is not None:
+            info["temporal_conflict_frames"] = int(np.count_nonzero(support[2]))
+    return {"frames": frames, "poses": base_poses, "lost": lost}, info
 
 
 def import_relative_traces(

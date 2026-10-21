@@ -52,7 +52,10 @@ def run(
     min_inliers: int,
     fit_trials: int,
     reference_specs: list[dict] | None = None,
+    mode: str = "dense",
 ) -> dict:
+    if mode not in ("dense", "sparse"):
+        raise ValueError("TrackEverything mode must be dense or sparse")
     if not 0 <= first_frame <= last_frame or query_count < min_inliers or min_inliers < 3:
         raise ValueError("invalid demo span or fit support settings")
     if not checkpoint.is_file() or not (repository / "demo_hf.py").is_file():
@@ -95,7 +98,7 @@ def run(
             intrinsics=np.repeat(intrinsics[None], len(frames), axis=0),
             extrinsics=cameras,
             query_points_2d=queries,
-            mode="sparse",
+            mode=mode,
         )
     elapsed_s = time.perf_counter() - start
     points = tracked.query_coords[0].float().cpu().numpy() * tracked.norm_factor
@@ -105,16 +108,26 @@ def run(
     traces, offset = [], 0
     for spec, role_queries in zip(specs, queries_by_role, strict=True):
         end = offset + len(role_queries)
-        traces.append(
-            _fit_tracks(
-                points[:, offset:end],
-                visibility[:, offset:end],
-                int(spec["frame_index"]) - first_frame,
-                fit_threshold_m=fit_threshold_m,
-                min_inliers=min_inliers,
-                fit_trials=fit_trials,
-            )
+        object_points = points[:, offset:end]
+        object_visibility = visibility[:, offset:end]
+        trace = _fit_tracks(
+            object_points,
+            object_visibility,
+            int(spec["frame_index"]) - first_frame,
+            fit_threshold_m=fit_threshold_m,
+            min_inliers=min_inliers,
+            fit_trials=fit_trials,
         )
+        trace["temporal_conflicts"] = _temporal_motion_conflicts(
+            object_points,
+            object_visibility,
+            trace["poses"],
+            trace["lost"],
+            reference_index=int(spec["frame_index"]) - first_frame,
+            fit_threshold_m=fit_threshold_m,
+            min_inliers=min_inliers,
+        )
+        traces.append(trace)
         offset = end
     arrays = {key: np.stack([trace[key] for trace in traces]) for key in traces[0]}
     if reference_specs is None:
@@ -125,6 +138,9 @@ def run(
     np.savez_compressed(
         output,
         frames=frames,
+        query_points_2d=queries,
+        query_coords_m=points,
+        query_visibility_logits=visibility,
         **arrays,
         elapsed_s=np.asarray(elapsed_s),
         metadata=np.asarray(
@@ -132,6 +148,7 @@ def run(
                 {
                     "tracker": "TrackEverything",
                     "windowed_noncausal": True,
+                    "mode": mode,
                     "first_frame": first_frame,
                     "query_counts": {
                         spec["role"]: len(query) for spec, query in zip(specs, queries_by_role, strict=True)
@@ -184,6 +201,38 @@ def _fit_tracks(points, visibility, reference_index, *, fit_threshold_m, min_inl
     }
 
 
+def _temporal_motion_conflicts(
+    points: np.ndarray,
+    visibility: np.ndarray,
+    poses: np.ndarray,
+    lost: np.ndarray,
+    *,
+    reference_index: int,
+    fit_threshold_m: float,
+    min_inliers: int,
+) -> np.ndarray:
+    """Flag pose changes contradicted by the tracked motion of prior supporters.
+
+    Each independently fitted pose can be within one registration tolerance of
+    a point. Two adjacent poses therefore permit at most twice that discrepancy
+    in the point's measured displacement. No robot speed limit is assumed.
+    """
+    conflicts = np.zeros(len(points), dtype=bool)
+    reference = points[reference_index]
+    for index in range(reference_index + 1, len(points)):
+        if lost[index - 1] or lost[index]:
+            continue
+        before = reference @ poses[index - 1, :3, :3].T + poses[index - 1, :3, 3]
+        after = reference @ poses[index, :3, :3].T + poses[index, :3, 3]
+        prior_support = (visibility[index - 1] > 0) & (visibility[index] > 0)
+        prior_support &= np.linalg.norm(before - points[index - 1], axis=1) <= fit_threshold_m
+        if prior_support.sum() < min_inliers:
+            continue
+        displacement_error = np.linalg.norm((after - before) - (points[index] - points[index - 1]), axis=1)
+        conflicts[index] = np.median(displacement_error[prior_support]) > 2 * fit_threshold_m
+    return conflicts
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--recording", type=Path, required=True)
@@ -196,6 +245,7 @@ def main() -> None:
     parser.add_argument("--last-frame", type=int, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--query-count", type=int, default=128)
+    parser.add_argument("--mode", choices=("dense", "sparse"), default="dense")
     parser.add_argument("--fit-threshold-m", type=float, required=True)
     parser.add_argument("--min-inliers", type=int, required=True)
     parser.add_argument("--fit-trials", type=int, required=True)
@@ -211,6 +261,7 @@ def main() -> None:
                 last_frame=args.last_frame,
                 output=args.output,
                 query_count=args.query_count,
+                mode=args.mode,
                 fit_threshold_m=args.fit_threshold_m,
                 min_inliers=args.min_inliers,
                 fit_trials=args.fit_trials,

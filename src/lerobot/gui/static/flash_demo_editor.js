@@ -287,8 +287,24 @@ function _flashEditorRender() {
                 const item = document.createElement('div');
                 item.className = 'flash-editor-keypoint';
                 const label = document.createElement('strong');
-                label.textContent = `${candidate.tracker} · ${_flashTrackerCoverage(candidate)}`;
+                label.textContent = `${candidate.tracker}${candidate.inference_mode ? ` (${candidate.inference_mode} context, fixed-query pose fit)` : ''} · ${_flashTrackerCoverage(candidate)}`;
                 item.append(label);
+                const hasConflicts = Object.values(candidate.coverage_by_role || {}).some(info => info.temporal_conflict_frames > 0);
+                const missingEvidence = candidate.tracker === 'trackeverything' && !candidate.inference_mode;
+                if (hasConflicts || missingEvidence) {
+                    const warning = document.createElement('p');
+                    warning.className = 'flash-editor-status';
+                    warning.textContent = missingEvidence
+                        ? 'Earlier sparse-mode result: point-motion diagnostics are unavailable. Regenerate before considering this pose for a demo.'
+                        : 'Some pose changes contradict tracked point motion. Inspect affected replay frames before applying.';
+                    item.append(warning);
+                }
+                if (candidate.tracker === 'trackeverything' && !missingEvidence) {
+                    const note = document.createElement('p');
+                    note.className = 'flash-editor-status';
+                    note.textContent = 'This pose is fitted from fixed reference-point tracks. New scene points are not associated with objects; coverage and fit support do not establish pose accuracy.';
+                    item.append(note);
+                }
                 const highlight = () => {
                     if (flashReplay.tracker_candidate?.candidate_id === candidate.candidate_id)
                         _flashSelectOverlay({kind: 'layer', role: candidate.role || null, estimator: 'candidate_tracker'});
@@ -637,7 +653,9 @@ async function _flashEditorRefreshTrackers(state) {
 function _flashTrackerCoverage(candidate) {
     const coverage = candidate.coverage_by_role || {[candidate.role]: candidate};
     return Object.entries(coverage).map(([role, info]) =>
-        `${role}: ${info.valid_frames}/${info.total_frames} frames`).join(' · ');
+        `${role}: ${info.valid_frames}/${info.total_frames} pose frames` +
+        (info.median_inliers == null ? '' : ` · median fit support ${info.median_inliers}/${info.median_visible_queries} visible tracks`) +
+        (info.temporal_conflict_frames ? ` · ${info.temporal_conflict_frames} motion conflicts` : '')).join(' · ');
 }
 
 async function _flashEditorProcessTracker() {
