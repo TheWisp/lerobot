@@ -75,6 +75,7 @@ class FlashLiveTelemetry:
         self._mask_frame_id: int | None = None
         self._layers: dict[str, dict[str, PoseEstimate]] = {}
         self._comparisons: dict[str, dict] = {}
+        self._point_comparisons: dict[str, dict] = {}
         self._accepted: dict[str, PoseEstimate] = {}
         self._held_attachment: tuple[str, AttachmentState, np.ndarray, float, bool] | None = None
         self._thread = Thread(target=self._write_loop, name="flash-live-telemetry", daemon=True)
@@ -111,6 +112,15 @@ class FlashLiveTelemetry:
     def comparison(self, role: str, result: PoseComparison) -> None:
         with self._condition:
             self._comparisons[role] = {
+                **asdict(result),
+                "verdict": result.verdict.value,
+                "available_at_s": time.perf_counter(),
+            }
+            self._changed()
+
+    def point_comparison(self, role: str, result: PoseComparison) -> None:
+        with self._condition:
+            self._point_comparisons[role] = {
                 **asdict(result),
                 "verdict": result.verdict.value,
                 "available_at_s": time.perf_counter(),
@@ -154,6 +164,7 @@ class FlashLiveTelemetry:
             mask_frame_id = self._mask_frame_id
             layers = {role: values.copy() for role, values in self._layers.items()}
             comparisons = self._comparisons.copy()
+            point_comparisons = self._point_comparisons.copy()
             accepted = self._accepted.copy()
             held = self._held_attachment
         held_prediction = None
@@ -201,6 +212,7 @@ class FlashLiveTelemetry:
                 for role, entries in layers.items()
             },
             "direct_group_comparisons": comparisons,
+            "direct_point_comparisons": point_comparisons,
             "accepted": {role: _estimate_json(value) for role, value in accepted.items()},
             "held_prediction": held_prediction,
         }

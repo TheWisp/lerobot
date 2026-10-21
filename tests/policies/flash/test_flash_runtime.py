@@ -12,7 +12,15 @@ from lerobot.policies.flash.planner import PlannerLimits
 from lerobot.policies.flash.planning_coordinator import PlanBufferConfig
 from lerobot.policies.flash.progress import Phase
 from lerobot.policies.flash.runtime import AttachmentRuntimeLimits, FlashRuntime
-from lerobot.policies.flash.skill import FlashSkill, Interval, MotionMode, Relation, SpatialSample
+from lerobot.policies.flash.skill import (
+    AttachmentAction,
+    AttachmentTransition,
+    FlashSkill,
+    Interval,
+    MotionMode,
+    Relation,
+    SpatialSample,
+)
 from lerobot.policies.flash.symmetry import AxialSymmetry
 from lerobot.policies.flash.trajectory import Evidence, PoseEstimate
 
@@ -271,6 +279,54 @@ def test_startup_pose_updates_do_not_overflow_unconsumed_evidence():
     attempt._ready = True
     callback(200, {"target": pose})
     assert attempt.session._evidence.qsize() == 1
+
+
+def test_delayed_direct_pose_updates_held_attachment_after_newer_point_prediction():
+    base = skill()
+    interval = replace(
+        base.intervals[0],
+        samples=(replace(base.intervals[0].samples[0], event_id="attach"), base.intervals[0].samples[1]),
+    )
+    with_grasp = replace(
+        base,
+        intervals=(interval,),
+        attachment_transitions=(
+            AttachmentTransition("attach", AttachmentAction.ATTACH, "target", "target-v1"),
+        ),
+    )
+    attempt = runtime(
+        with_grasp,
+        (reference("target", "target-v1"),),
+        FakeRecorder(),
+        causal_tracking=CausalTrackingConfig(60, 64, 12, 0.1, 0.005),
+    )
+    assert attempt.causal is not None
+    updater = attempt.attachment.updaters["target"]
+    updater.history.append(1.0, np.array([0.0]))
+    updater.history.append(1.02, np.array([0.0]))
+    pregrasp = PoseEstimate(
+        "target", identity(), 0.99, 0.99, Evidence.OBSERVED, "target-v1", (True,) * 3, (True,) * 3
+    )
+    assert updater.activate(1.0, pregrasp, np.array([0.0]))
+    attempt.attachment.active_role = "target"
+    attempt._ready = True
+    corrected = identity()
+    corrected[0, 3] = 0.005
+    observed = PoseEstimate(
+        "target", corrected, 1.01, 1.03, Evidence.OBSERVED, "target-v1", (True,) * 3, (True,) * 3
+    )
+    newer_prediction = PoseEstimate(
+        "target", identity(), 1.02, 1.03, Evidence.PREDICTED, "target-v1", (True,) * 3, (True,) * 3
+    )
+    assert attempt.causal.on_direct_observation is not None
+    attempt.causal.on_direct_observation(observed)
+    callback = attempt.perception.on_pose_update
+    assert callback is not None
+
+    callback(1, {"target": newer_prediction})
+
+    assert updater.has_postgrasp_observation
+    assert updater.state(1.04).gripper_from_object[0, 3] == pytest.approx(0.005)
 
 
 def test_startup_acquires_later_reference_before_any_motion(monkeypatch):

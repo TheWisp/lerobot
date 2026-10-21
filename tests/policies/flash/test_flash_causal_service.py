@@ -102,7 +102,8 @@ def test_later_observation_rebases_pending_track_without_restarting_replay():
     shifted_mask = np.zeros_like(mask)
     shifted_mask[20:76, 24:80] = True
     store = LatestPoseStore()
-    service = CausalPoseService(store)
+    accepted_direct = []
+    service = CausalPoseService(store, on_direct_observation=accepted_direct.append)
     service.start()
     try:
         for item in frames:
@@ -132,6 +133,10 @@ def test_later_observation_rebases_pending_track_without_restarting_replay():
         assert result.source_time_s == frames[-1].source_time_s
         assert result.last_direct_observation_s == frames[2].source_time_s
         np.testing.assert_allclose(result.pose[0, 3], 0.09, atol=0.005)
+        assert [estimate.source_time_s for estimate in accepted_direct] == [
+            frames[0].source_time_s,
+            frames[2].source_time_s,
+        ]
     finally:
         service.close()
 

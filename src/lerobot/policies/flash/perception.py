@@ -157,13 +157,24 @@ class LatestPoseStore:
                 if previous is not None:
                     if estimate.source_time_s < previous.source_time_s:
                         continue
-                    if estimate.source_time_s == previous.source_time_s and not (
-                        estimate.reference_version == previous.reference_version
-                        and estimate.evidence == Evidence.PREDICTED
-                        and previous.evidence != Evidence.LOST
-                        and estimate.available_time_s > previous.available_time_s
-                    ):
-                        continue
+                    if estimate.source_time_s == previous.source_time_s:
+                        if estimate.reference_version != previous.reference_version:
+                            continue
+                        priority = (
+                            estimate.evidence != Evidence.LOST,
+                            estimate.has_direct_translation,
+                            estimate.evidence == Evidence.OBSERVED,
+                        )
+                        previous_priority = (
+                            previous.evidence != Evidence.LOST,
+                            previous.has_direct_translation,
+                            previous.evidence == Evidence.OBSERVED,
+                        )
+                        if priority < previous_priority or (
+                            priority == previous_priority
+                            and estimate.available_time_s <= previous.available_time_s
+                        ):
+                            continue
                 self._poses[estimate.role] = estimate
                 changed = True
             if changed:

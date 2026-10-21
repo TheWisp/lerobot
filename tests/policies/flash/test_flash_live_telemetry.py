@@ -10,6 +10,7 @@ import numpy as np
 from lerobot.gui.api.run import _flash_recordings, _flash_tracker_replay
 from lerobot.policies.flash.live_telemetry import FlashLiveTelemetry
 from lerobot.policies.flash.perception import RGBDFrame
+from lerobot.policies.flash.pose_disagreement import PoseComparison, PoseComparisonVerdict, SurfaceSupport
 from lerobot.policies.flash.trajectory import AttachmentState, Evidence, PoseEstimate
 
 
@@ -64,6 +65,10 @@ def test_live_tracker_layers_are_replayed_with_camera_frame(tmp_path: Path) -> N
     telemetry.proposals((direct,), {"object": mask}, frame_id=9)
     telemetry.layer(direct)
     telemetry.layer(group)
+    support = SurfaceSupport(20, 16, 0.8, 0.003)
+    telemetry.point_comparison(
+        "object", PoseComparison(PoseComparisonVerdict.AMBIGUOUS, 0.012, 0.1, support, support)
+    )
     telemetry.accepted({"object": group})
     telemetry.close()
 
@@ -74,10 +79,12 @@ def test_live_tracker_layers_are_replayed_with_camera_frame(tmp_path: Path) -> N
     assert len(current["observed_masks"]["object"]["boundary_xy"]) >= 4
     assert set(current["layers"]["object"]) == {"appearance_rgbd", "environment_group_motion"}
     assert current["accepted"]["object"]["estimator"] == "environment_group_motion"
+    assert current["direct_point_comparisons"]["object"]["verdict"] == "ambiguous"
     replay = _flash_tracker_replay(tmp_path, 0)
     assert replay["layer_history"]
     assert replay["frames"][-1]["frame_index"] == 8
     assert replay["frames"][-1]["snapshot"]["accepted"] == current["accepted"]
+    assert replay["frames"][-1]["snapshot"]["direct_point_comparisons"] == current["direct_point_comparisons"]
 
 
 def test_older_trace_does_not_claim_unrecorded_tracker_layers(tmp_path: Path) -> None:

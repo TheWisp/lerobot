@@ -580,6 +580,13 @@ function renderFlashSnapshot(snapshot, mode = 'Live') {
             html += `<div class="flash-tracker-comparison">Latest direct/group check: ${_esc(comparison.verdict.replaceAll('_', ' '))}`
                 + `<small>${separation.toFixed(1)} mm between centres · ${age.toFixed(1)} s ago</small></div>`;
         }
+        const pointComparison = snapshot.direct_point_comparisons?.[role];
+        if (pointComparison) {
+            const age = Math.max(0, Number(snapshot.recorded_at_s) - Number(pointComparison.available_at_s));
+            const separation = Number(pointComparison.object_center_difference_m) * 1000;
+            html += `<div class="flash-tracker-comparison">Latest direct/points check: ${_esc(pointComparison.verdict.replaceAll('_', ' '))}`
+                + `<small>${separation.toFixed(1)} mm between centres · ${age.toFixed(1)} s ago</small></div>`;
+        }
         html += '</div>';
     }
     content.innerHTML = html;

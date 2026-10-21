@@ -25,6 +25,7 @@ from .scene_groups import (
     establish_environment_relationship,
     seed_environment_relationship,
 )
+from .symmetry import AxialSymmetry
 from .trajectory import Evidence, PoseEstimate
 
 DEFAULT_MAX_POSE_DISAGREEMENT_TRANSLATION_M = 0.01
@@ -132,8 +133,11 @@ class CausalPoseService:
         max_pose_disagreement_rotation_rad: float = DEFAULT_MAX_POSE_DISAGREEMENT_ROTATION_RAD,
         object_centers_by_role: dict[str, np.ndarray] | None = None,
         object_points_by_role: dict[str, np.ndarray] | None = None,
+        axial_symmetries: tuple[AxialSymmetry, ...] = (),
         on_layer: Callable[[PoseEstimate], None] | None = None,
         on_comparison: Callable[[str, PoseComparison], None] | None = None,
+        on_point_comparison: Callable[[str, PoseComparison], None] | None = None,
+        on_direct_observation: Callable[[PoseEstimate], None] | None = None,
     ) -> None:
         if history_frames < 2 or queue_frames < 2:
             raise ValueError("causal pose history and queue need at least two frames")
@@ -171,8 +175,13 @@ class CausalPoseService:
             role: np.asarray(points, dtype=float).copy()
             for role, points in (object_points_by_role or {}).items()
         }
+        self.axial_symmetries = {item.role: item for item in axial_symmetries}
+        if len(self.axial_symmetries) != len(axial_symmetries):
+            raise ValueError("at most one axial symmetry per role")
         self.on_layer = on_layer
         self.on_comparison = on_comparison
+        self.on_point_comparison = on_point_comparison
+        self.on_direct_observation = on_direct_observation
         if any(
             center.shape != (3,) or not np.isfinite(center).all()
             for center in self.object_centers_by_role.values()
@@ -214,6 +223,8 @@ class CausalPoseService:
         self.environment_expired_by_role: dict[str, int] = {}
         self.direct_group_disagreements_by_role: dict[str, dict[str, int]] = {}
         self.last_direct_group_comparison: dict[str, PoseComparison] = {}
+        self.direct_point_disagreements_by_role: dict[str, dict[str, int]] = {}
+        self.last_direct_point_comparison: dict[str, PoseComparison] = {}
         self.frame_compute_total_s = 0.0
         self.frame_compute_max_s = 0.0
         self.scene_update_total_s = 0.0
@@ -490,6 +501,13 @@ class CausalPoseService:
             if estimate.source_time_s != source.source_time_s:
                 self._count_anchor_outcome(estimate.role, "time_mismatch")
                 continue
+            symmetry = self.axial_symmetries.get(estimate.role)
+            if symmetry is not None:
+                try:
+                    estimate = replace(estimate, pose=symmetry.canonicalize(estimate.pose))
+                except ValueError:
+                    self._count_anchor_outcome(estimate.role, "direct_symmetry_invalid")
+                    continue
             current = self.store.snapshot()[1].get(estimate.role)
             if current is not None:
                 last_direct_s = current.last_direct_observation_s
@@ -502,11 +520,26 @@ class CausalPoseService:
                     self.superseded_proposals += 1
                     self._count_anchor_outcome(estimate.role, "superseded_by_direct")
                     continue
+            if (
+                estimate.has_direct_translation
+                and estimate.role != attached_role
+                and self._direct_conflicts_with_verified_group(estimate, source, scene, mask)
+            ):
+                self._count_anchor_outcome(estimate.role, "direct_group_unresolved")
+                continue
+            if self._direct_conflicts_with_point_motion(estimate, source, mask):
+                self._count_anchor_outcome(estimate.role, "direct_point_unresolved")
+                continue
             if estimate.has_direct_translation and estimate.role != attached_role:
-                if self._direct_conflicts_with_verified_group(estimate, source, scene, mask):
-                    self._count_anchor_outcome(estimate.role, "direct_group_unresolved")
-                    continue
                 self._observe_environment(estimate, scene, result.masks)
+            self._count_anchor_outcome(estimate.role, "direct_accepted")
+            if self.on_layer is not None:
+                self.on_layer(estimate)
+            # The newest published state may already be a later point-motion
+            # prediction. Preserve the accepted source-frame observation as a
+            # separate event so a held attachment can correct at image time.
+            if estimate.evidence == Evidence.OBSERVED and self.on_direct_observation is not None:
+                self.on_direct_observation(estimate)
             # The pose process only submits source-frame proposals. This is
             # the sole owner that can publish an accepted absolute pose.
             if current is not None and current.source_time_s > estimate.source_time_s:
@@ -517,8 +550,6 @@ class CausalPoseService:
             else:
                 before, _ = self.store.snapshot()
                 if self.store.publish((estimate,)) != before:
-                    if self.on_layer is not None:
-                        self.on_layer(estimate)
                     self.direct_published += 1
                     self._count_anchor_outcome(estimate.role, "direct_published")
                 else:
@@ -695,6 +726,73 @@ class CausalPoseService:
             PoseComparisonVerdict.CANDIDATE_FAVORED,
         )
 
+    def _direct_conflicts_with_point_motion(
+        self, estimate: PoseEstimate, frame: RGBDFrame, mask: np.ndarray
+    ) -> bool:
+        """Do not reset a supported point track from a disputed direct fit.
+
+        A delayed direct result is compared at its own camera frame. Its
+        point-motion alternative is retained only while enough surviving
+        tracked pixels still lie in that frame's object mask. A missing or
+        unsupported point prior never prevents direct reacquisition.
+        """
+        active = self.active.get(estimate.role)
+        points = self.object_points_by_role.get(estimate.role)
+        if (
+            active is None
+            or points is None
+            or not estimate.has_direct_translation
+            or active[1].reference_version != estimate.reference_version
+        ):
+            return False
+        tracked = next(
+            (
+                (motion, pixels)
+                for frame_id, motion, pixels in self.motion_history.get(estimate.role, ())
+                if frame_id == frame.frame_id
+            ),
+            None,
+        )
+        if tracked is None:
+            return False
+        motion, pixels = tracked
+        if (
+            motion.base_motion_from_seed is None
+            or motion.source_time_s != frame.source_time_s
+            or int(mask[pixels[:, 1], pixels[:, 0]].sum()) < active[0].min_inliers
+        ):
+            return False
+        assert active[1].pose is not None and estimate.pose is not None
+        predicted = motion.base_motion_from_seed @ active[1].pose
+        symmetry = self.axial_symmetries.get(estimate.role)
+        if symmetry is not None:
+            try:
+                predicted = symmetry.canonicalize(predicted)
+            except ValueError:
+                self._count_anchor_outcome(estimate.role, "point_symmetry_invalid")
+                return False
+        center = points.mean(axis=0)
+        radius = float(np.sqrt(np.mean(np.sum((points - center) ** 2, axis=1))))
+        comparison = compare_pose_proposals(
+            frame,
+            mask,
+            points,
+            estimate.pose,
+            predicted,
+            max_agreement_offset_m=self.fit_threshold_m,
+            max_agreement_angle_rad=float(np.arctan2(self.fit_threshold_m, max(radius, np.finfo(float).eps))),
+            min_masked_depth_points=active[0].min_inliers,
+        )
+        self.last_direct_point_comparison[estimate.role] = comparison
+        counts = self.direct_point_disagreements_by_role.setdefault(estimate.role, {})
+        counts[comparison.verdict.value] = counts.get(comparison.verdict.value, 0) + 1
+        if self.on_point_comparison is not None:
+            self.on_point_comparison(estimate.role, comparison)
+        return comparison.verdict not in (
+            PoseComparisonVerdict.AGREE,
+            PoseComparisonVerdict.CANDIDATE_FAVORED,
+        )
+
     def _observe_environment(
         self, estimate: PoseEstimate, scene: SceneTracks, masks: dict[str, np.ndarray]
     ) -> None:
@@ -789,9 +887,17 @@ class CausalPoseService:
         if motion.base_motion_from_seed is None:
             return
         assert anchor.pose is not None
+        pose = motion.base_motion_from_seed @ anchor.pose
+        symmetry = self.axial_symmetries.get(role)
+        if symmetry is not None:
+            try:
+                pose = symmetry.canonicalize(pose)
+            except ValueError:
+                self._count_anchor_outcome(role, "point_symmetry_invalid")
+                return
         current = PoseEstimate(
             role,
-            motion.base_motion_from_seed @ anchor.pose,
+            pose,
             motion.source_time_s,
             max(motion.available_time_s, time.perf_counter()),
             # The current RGB-D frame measures point motion. It does not

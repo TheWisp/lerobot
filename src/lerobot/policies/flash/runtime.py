@@ -6,6 +6,7 @@ import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from math import ceil, isfinite
+from queue import Empty, SimpleQueue
 from typing import Protocol
 
 import numpy as np
@@ -146,6 +147,7 @@ class FlashRuntime:
         self.max_camera_age_s = max_camera_age_s
         self.live_telemetry = live_telemetry
         self.poses = LatestPoseStore()
+        accepted_direct: SimpleQueue[PoseEstimate] = SimpleQueue()
         self.causal = (
             CausalPoseService(
                 self.poses,
@@ -165,8 +167,11 @@ class FlashRuntime:
                 max_pose_disagreement_rotation_rad=causal_tracking.max_pose_disagreement_rotation_rad,
                 object_centers_by_role=object_centers_by_role,
                 object_points_by_role=object_points_by_role,
+                axial_symmetries=grasp_symmetries,
                 on_layer=live_telemetry.layer if live_telemetry is not None else None,
                 on_comparison=live_telemetry.comparison if live_telemetry is not None else None,
+                on_point_comparison=(live_telemetry.point_comparison if live_telemetry is not None else None),
+                on_direct_observation=accepted_direct.put,
             )
             if causal_tracking is not None
             else None
@@ -234,12 +239,20 @@ class FlashRuntime:
         def on_pose_update(version: int, poses: dict[str, PoseEstimate]) -> None:
             if self.live_telemetry is not None:
                 self.live_telemetry.accepted(poses)
+            direct_observations = []
+            while True:
+                try:
+                    direct_observations.append(accepted_direct.get_nowait())
+                except Empty:
+                    break
             # Perception may publish for many seconds while the first observed
             # pose is being seeded. No motor session consumes evidence until
             # startup completes; the next collector pass publishes the latest
             # snapshot once the session is ready.
             if not self._ready:
                 return
+            for observed in direct_observations:
+                self.attachment.on_pose_update(version, {observed.role: observed})
             self.attachment.on_pose_update(version, poses)
             if version != self._last_pose_version:
                 changed = frozenset(
