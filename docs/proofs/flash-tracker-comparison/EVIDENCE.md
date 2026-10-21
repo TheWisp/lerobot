@@ -316,6 +316,29 @@ The [replay projection](plot_cotracker_seed_pose_fork.py) shows how similar the 
 
 ![Two causal dowel pose lineages with different predicted hidden ends](cotracker3_seed_pose_fork.png)
 
+### Late Point2Pose restarts expose mask ownership and anchor error
+
+I restarted the **unchanged sealed Point2Pose bridge** and pinned Point2Pose checkout from SAM3 masks at frames 340 and 380. Each restart sees only that seed and later RGB-D; its relative poses are [rebased](rebase_sparse_pose.py) through the original Point2Pose pose at the seed, not through future poses. The [replay runner](run_p2p_external_mask.py) tested its usual internal SAM2 masks, external causal SAM3 masks on later frames, and a controlled [exact-initial-mask switch](p2p_external_mask_bridge.py) that prevents SAM2's first mask output from replacing the supplied seed mask. The latter two are replay-only ablations; neither edits upstream Point2Pose or FLASH's live backend. Every branch is scored against the **same** current SAM3/depth and frame-100 reference model in the [candidate bank](p2p_late_reseed_all_bank.csv).
+
+| Dowel pose branch                         | Insertion frames scored | Visible-surface p90 | Current-depth inferred-end disagreement |
+| ----------------------------------------- | ----------------------: | ------------------: | --------------------------------------: |
+| Original continuous Point2Pose            |                 100/101 |             7.50 mm |                                 3.70 mm |
+| Restart 340, internal SAM2                |                 100/101 |             6.40 mm |                                11.73 mm |
+| Restart 340, exact initial and later SAM3 |                   0/101 |                   — |                                       — |
+| Restart 380, internal SAM2                |                 101/101 |            16.63 mm |                                19.71 mm |
+| Restart 380, SAM3 on later frames only    |                 101/101 |             7.43 mm |                                 3.47 mm |
+| Restart 380, exact initial and later SAM3 |                 101/101 |             8.21 mm |                                 5.54 mm |
+
+The [frame-level end checks](candidate_depth_ends_p2p_reseed_sweep.csv) infer a hidden end by extending the observed shaft using first-view length and a gripper-based direction prior; these values are **not hidden-tip ground truth**. They show why the frame-340 restart's better visible-surface score cannot by itself replace the original pose. Restarting at 380 with exact masks preserves a pose at the original tracker's lost frame 499, but it is not more accurate on every visible or inferred-end check. Different branches can fill one another's missing frames without resolving their absolute contact-end disagreement.
+
+The mask and point ownership [measurements](p2p_reseed_mask_ownership.csv) explain the severe frame-380 internal failure. Point2Pose's `FrontEnd.initialize` feeds the supplied first mask to SAM2, then **replaces** it with SAM2's first output before seeding its point map. At frame 380, the supplied SAM3 dowel mask has 3,317 pixels and overlaps the SAM3 ring by only 16 pixels. SAM2's returned mask has 5,934 pixels, including **2,584 ring pixels**; at frame 381, **11 of 18** pose-fit pixels lie in the ring mask. Internal Point2Pose keeps emitting confident-looking poses while fitting the wrong rigid object. External SAM3 masks on later frames remove those ring pixels but leave just **seven** dowel fit points from the contaminated initial map. Keeping the seed mask exact gives **18 dowel fit points** at frame 381 and no ring fit points, yet its median insertion surface fit remains worse than the original branch. The [first 40 frame scores](p2p_reseed380_early_bank.csv) show the internal branch drifting immediately after its shared frame-380 anchor.
+
+The opposite problem appears at frame 340: SAM2 expands the mask only modestly (3,151 pixels, 0.924 IoU with SAM3) and seeds **eight** valid tracks. Forcing the exact 2,945-pixel SAM3 mask leaves only **two** valid tracks, so the pose is lost through insertion. A small mask change around a texture-poor object can radically change sparse point admission even when both outlines look plausible. The figure shows the actual recorded RGB, mask boundaries and fit pixels; red points land in the ring's SAM3 mask.
+
+![Mask and point ownership of two Point2Pose restarts](p2p_reseed_mask_ownership.png)
+
+The retained [340 internal](p2p_dowel_reseed340_internal_340_550.npz), [340 exact](p2p_dowel_reseed340_exact_340_550.npz), [380 internal](p2p_dowel_reseed380_internal_380_550.npz), [380 later-only external](p2p_dowel_reseed380_external_380_550.npz) and [380 exact](p2p_dowel_reseed380_exact_380_550.npz) traces include per-frame lost flags, fit counts and timing; their rebased pose files are saved beside them. These experiments argue for **verified ownership and spatial distribution of point support** at each seed, plus multiple pose lineages when current depth supports conflicting task ends. Mask IoU, fit count or one candidate's surface residual alone cannot certify the partly hidden tip.
+
 ### Current silhouette and self-built maps are different kinds of evidence
 
 The [shaft overlay](dowel_candidate_axes.jpg) projects the same frame-100 depth-cloud shaft proxy through the three causal dowel traces onto recorded insertion frames. Cyan is the **current** SAM3 mask boundary; orange is Point2Pose, pink is fixed-seed TAPNext++ 256 and green is fixed-seed TAPNext++ 512. The projected endpoint inside the ring is a **predicted** contact-end location, not an observed tip. The [projection script](plot_dowel_candidate_axes.py) reproduces the image.

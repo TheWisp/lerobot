@@ -54,6 +54,7 @@ def main() -> None:
     initial_mask.add_argument("--initial-mask", type=Path)
     parser.add_argument("--role", required=True, choices=("dowel", "ring"))
     parser.add_argument("--mask-source", choices=("external", "internal"), default="external")
+    parser.add_argument("--honor-initial-mask", action="store_true")
     parser.add_argument("--label", default="sam3")
     parser.add_argument("--save-masks", action="store_true")
     parser.add_argument("--diagnostic-frames", type=int, nargs="*", default=())
@@ -71,6 +72,8 @@ def main() -> None:
         parser.error("last frame precedes first frame")
     if args.mask_source == "external" and args.current_masks is None:
         parser.error("external mask source needs --current-masks")
+    if args.honor_initial_mask and args.mask_source != "external":
+        parser.error("honoring the initial mask requires the external-mask bridge")
     args.output.mkdir(parents=True, exist_ok=True)
     log_path = args.output / f"p2p_{args.role}_{args.label}_worker.log"
     bridge_script = (
@@ -91,6 +94,8 @@ def main() -> None:
             command = [str(args.python), str(bridge_script)]
             if args.mask_source == "external" or args.worker_bridge:
                 command.extend(("--sealed-bridge", str(args.sealed_bridge)))
+            if args.honor_initial_mask:
+                command.append("--honor-initial-mask")
             if args.worker_diagnostic:
                 command.extend(("--diagnostic", str(args.worker_diagnostic)))
             command.extend(("--repo", str(args.p2p_repo), "--config", str(args.p2p_config)))

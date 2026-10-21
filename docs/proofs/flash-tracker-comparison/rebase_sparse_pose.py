@@ -23,14 +23,16 @@ def main() -> None:
     args = parser.parse_args()
     with np.load(args.relative) as relative:
         data = {key: relative[key].copy() for key in relative.files}
+    seed_frame = int(data["seed_frame"]) if "seed_frame" in data else int(data["frames"][0])
     with np.load(args.anchor) as anchor:
-        indices = np.flatnonzero(anchor["frames"] == data["seed_frame"])
+        indices = np.flatnonzero(anchor["frames"] == seed_frame)
         if len(indices) != 1 or bool(anchor[args.anchor_lost_key][indices[0]]):
             raise ValueError("the seed has no valid causal anchor pose")
         seed_from_reference = anchor[args.anchor_pose_key][indices[0]].copy()
     if not np.isfinite(seed_from_reference).all() or not np.allclose(seed_from_reference[3], [0, 0, 0, 1]):
         raise ValueError("anchor must be a finite homogeneous pose")
     data["poses"] = data["poses"] @ seed_from_reference
+    data["seed_frame"] = np.asarray(seed_frame)
     data["anchor_source"] = np.asarray(str(args.anchor))
     data["anchor_pose_key"] = np.asarray(args.anchor_pose_key)
     args.output.parent.mkdir(parents=True, exist_ok=True)

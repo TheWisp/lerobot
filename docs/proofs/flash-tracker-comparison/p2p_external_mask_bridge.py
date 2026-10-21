@@ -21,6 +21,7 @@ def main() -> None:
     parser.add_argument("--sealed-bridge", required=True, type=Path)
     parser.add_argument("--repo", required=True, type=Path)
     parser.add_argument("--config", required=True, type=Path)
+    parser.add_argument("--honor-initial-mask", action="store_true")
     args = parser.parse_args()
 
     specification = importlib.util.spec_from_file_location("sealed_p2p_bridge", args.sealed_bridge)
@@ -59,6 +60,33 @@ def main() -> None:
 
     bridge._read = read_with_mask
     bridge.Session.step = step_with_mask
+    if args.honor_initial_mask:
+        # The ordinary initializer feeds a supplied mask to SAM2, then
+        # immediately replaces it with SAM2's first output before seeding the
+        # Point2Pose point map. Keep that first output equal to the supplied
+        # mask in this ablation, without editing the sealed bridge or P2P.
+        sys.path.insert(0, str(args.repo))
+        from point2pose.pipeline.components.front_end import FrontEnd
+
+        original_initialize = FrontEnd.initialize
+
+        def initialize_with_exact_mask(frontend, frame):
+            import torch
+
+            supplied = np.asarray(frame.mask, dtype=bool)
+            if supplied.ndim != 4 or supplied.shape[1] != 1:
+                raise ValueError("initial masks must have shape (N, 1, H, W)")
+            logits = torch.from_numpy(np.where(supplied, 1.0, -1.0).astype(np.float32)).to(
+                frontend.segmenter.device
+            )
+            original_segment = frontend.segmenter.segment
+            frontend.segmenter.segment = lambda _rgb: (list(range(len(supplied))), logits)
+            try:
+                return original_initialize(frontend, frame)
+            finally:
+                frontend.segmenter.segment = original_segment
+
+        FrontEnd.initialize = initialize_with_exact_mask
     sys.argv = [str(args.sealed_bridge), "--repo", str(args.repo), "--config", str(args.config)]
     bridge.main()
 
