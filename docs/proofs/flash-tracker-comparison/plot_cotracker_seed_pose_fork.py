@@ -17,6 +17,7 @@ def main() -> None:
     parser.add_argument("--masks", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--frames", type=int, nargs=4, default=(403, 451, 491, 499))
+    parser.add_argument("--candidate", action="append", default=[], help="NAME=POSE_TRACE.npz; exactly two")
     args = parser.parse_args()
     root = Path(__file__).parent
     with np.load(root / "pose_traces.npz") as reference:
@@ -24,10 +25,24 @@ def main() -> None:
         center = reference["dowel_reference_center_camera_m"].copy()
         shaft = reference["dowel_reference_shaft_camera"].copy()
         offsets = reference["dowel_reference_end_offsets_m"].copy()
+    if args.candidate:
+        if len(args.candidate) != 2:
+            parser.error("provide exactly two pose candidates")
+        specifications = []
+        for entry in args.candidate:
+            name, separator, filename = entry.partition("=")
+            if not separator or not name or not filename:
+                parser.error("each candidate must be NAME=POSE_TRACE.npz")
+            specifications.append((name, Path(filename)))
+    else:
+        specifications = [
+            (f"seed {seed}", root / f"cotracker3_shared_dowel_{seed}_550_rebased_pose.npz")
+            for seed in (340, 380)
+        ]
     traces = {}
-    for seed, color in ((340, "#f97316"), (380, "#b91cdb")):
-        with np.load(root / f"cotracker3_shared_dowel_{seed}_550_rebased_pose.npz") as source:
-            traces[seed] = (source["frames"].copy(), source["poses"].copy(), source["lost"].copy(), color)
+    for (name, path), color in zip(specifications, ("#f97316", "#b91cdb"), strict=True):
+        with np.load(path) as source:
+            traces[name] = (source["frames"].copy(), source["poses"].copy(), source["lost"].copy(), color)
     ends = [center + offset * shaft for offset in offsets]
     figure, axes = plt.subplots(2, 2, figsize=(11, 8), constrained_layout=True)
     for axis, frame in zip(axes.flat, args.frames, strict=True):
@@ -52,7 +67,7 @@ def main() -> None:
             crop[edge_rows, edge_columns] = color
         axis.imshow(crop)
         contact_ends = []
-        for seed, (frames, poses, lost, color) in traces.items():
+        for name, (frames, poses, lost, color) in traces.items():
             index = np.flatnonzero(frames == frame)
             if len(index) != 1 or lost[index[0]]:
                 continue
@@ -60,9 +75,7 @@ def main() -> None:
             contact_ends.append(pose[:3, :3] @ ends[1] + pose[:3, 3])
             projected = [project(pose[:3, :3] @ point + pose[:3, 3], intrinsics) for point in ends]
             pixels = np.stack(projected) - np.array((left, top))
-            axis.plot(
-                pixels[:, 0], pixels[:, 1], "-o", color=color, linewidth=2, markersize=4, label=f"seed {seed}"
-            )
+            axis.plot(pixels[:, 0], pixels[:, 1], "-o", color=color, linewidth=2, markersize=4, label=name)
             axis.plot(pixels[1, 0], pixels[1, 1], "o", color=color, markersize=10, fillstyle="none")
         if len(contact_ends) != 2:
             raise ValueError(f"both pose lineages must be valid at frame {frame}")
