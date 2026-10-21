@@ -1,10 +1,11 @@
-# Cross-episode point transfer pilot
+# Cross-episode surface-alignment pilot
 
-This pilot asks whether TrackEverything can transfer **some** surface-point
-identities from a recorded FLASH demo to a later run of the **same physical
-dowel**. It does not assume that the annotated tool tip is visible or even
-queried. A successful rigid set of surface correspondences could instead carry
-an annotated point expressed in the demo object's frame.
+This pilot asks whether TrackEverything proposes geometrically coherent
+demo-to-live point matches on the **same physical dowel**. It does not assume
+that the annotated tool tip is visible or even queried. If these matches
+identify the same material points, their rigid transform could carry an
+annotated point expressed in the demo object's frame. This pilot does not
+establish that premise.
 
 ## Inputs and method
 
@@ -48,9 +49,10 @@ miss the depth check.
 
 The strongest case has 63 surface-supported predictions, while 33 unchanged
 source points would happen to overlap the live surface. Its rigid consensus is
-far stronger than chance pairing: with the same 300-trial, 10 mm RANSAC check,
-52 correspondences agree; across 20 random permutations of the target-point
-identities, the maximum is 14. At a stricter 5 mm depth tolerance, the six
+far stronger than random pairing: with the same 300-trial, 10 mm RANSAC check,
+52 indexed prediction pairs agree; across 20 random permutations of the target
+assignments, the maximum is 14. This tests geometric coherence, not physical
+point identity. At a stricter 5 mm depth tolerance, the six
 surface-supported counts are 21, 17, 27, 20, 24 and 34 respectively. At a
 5 mm rigid threshold, the 19:11 and 20:33 cases retain 29 and 28 inliers.
 
@@ -61,7 +63,7 @@ live views yielded at most two surface-supported points. The model is not a
 general cross-episode re-identification mechanism out of the box.
 
 Two longer clips put demo frame 100 before the live run and continue
-TrackEverything through grasp and carry. Initially supported query identities
+TrackEverything through grasp and carry. Initially supported query IDs
 are mostly lost at grasp: in the 20:33 run, 41 initially rigid-consistent
 queries are surface-supported at the start, none at frame 85, and only 0–1
 through most of frames 160–218. The 19:11 run starts with 53 such queries,
@@ -71,15 +73,21 @@ not been established. Some predicted points visibly follow the gripper. Thus
 the startup bridge does **not** yet give a reliable object frame or hidden-tip
 trajectory through contact.
 
-These measurements use the run's own SAM-derived mask as surface evidence;
-they are not independent hand-labelled ground truth. A smooth, nearly
-symmetric dowel also makes individual material-point identity intrinsically
-hard to verify from RGB-D. Partial rigid agreement is real evidence for
-cross-episode registration, but is not yet a millimetre-level endpoint error
-measurement.
+Each query ID denotes a pixel in the demo frame. Its live prediction passes
+the surface check if it projects inside the live mask at compatible depth;
+the rigid check asks whether several indexed predictions move together.
+Neither check tells us that a prediction landed on the **same material spot**.
+A coherent shift along the nearly uniform dowel, or an end-for-end swap, could
+pass both checks while mapping the annotated tip incorrectly. The run's own
+SAM-derived mask is not independent hand-labelled ground truth. The reported
+counts therefore show plausible partial alignment, not a verified point
+transfer or a millimetre-level endpoint error measurement.
 
-The next tracker experiment should retain the verified demo-to-live rigid
-anchor, add newly observed live points in that anchored frame, and enforce
-rigid co-motion with mask and depth agreement. It should report uncertainty
-and drop or relocalize the anchor when support collapses. The live FLASH
-runtime was not changed by this pilot.
+The next validation should hold out a distinctive point or temporary test
+mark visible in both episodes, fit a transform using other points, and measure
+the held-out 3D error and end assignment. Marks would be a measurement tool,
+not a requirement for FLASH at runtime. If this check succeeds, the tracker
+experiment can maintain the candidate rigid anchor, add newly observed live
+points in that frame, and enforce rigid co-motion with mask and depth
+agreement. It should report uncertainty and drop or relocalize the anchor when
+support collapses. The live FLASH runtime was not changed by this pilot.
