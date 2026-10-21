@@ -16,7 +16,14 @@ import numpy as np
 from .causal_points import CausalRigidPointTracker, RigidPointMotion
 from .geometry import inverse
 from .perception import LatestPoseStore, RGBDFrame
-from .pose_disagreement import PoseComparison, PoseComparisonVerdict, compare_pose_proposals
+from .pose_disagreement import (
+    FreeSpaceComparison,
+    FreeSpaceVerdict,
+    PoseComparison,
+    PoseComparisonVerdict,
+    compare_pose_proposals,
+    free_space_support,
+)
 from .registration import transform_points
 from .scene_groups import (
     EnvironmentRelationship,
@@ -137,6 +144,7 @@ class CausalPoseService:
         on_layer: Callable[[PoseEstimate], None] | None = None,
         on_comparison: Callable[[str, PoseComparison], None] | None = None,
         on_point_comparison: Callable[[str, PoseComparison], None] | None = None,
+        on_free_space_comparison: Callable[[str, FreeSpaceComparison], None] | None = None,
         on_direct_observation: Callable[[PoseEstimate], None] | None = None,
     ) -> None:
         if history_frames < 2 or queue_frames < 2:
@@ -181,6 +189,7 @@ class CausalPoseService:
         self.on_layer = on_layer
         self.on_comparison = on_comparison
         self.on_point_comparison = on_point_comparison
+        self.on_free_space_comparison = on_free_space_comparison
         self.on_direct_observation = on_direct_observation
         if any(
             center.shape != (3,) or not np.isfinite(center).all()
@@ -225,6 +234,8 @@ class CausalPoseService:
         self.last_direct_group_comparison: dict[str, PoseComparison] = {}
         self.direct_point_disagreements_by_role: dict[str, dict[str, int]] = {}
         self.last_direct_point_comparison: dict[str, PoseComparison] = {}
+        self.direct_free_space_counts_by_role: dict[str, dict[str, int]] = {}
+        self.last_direct_free_space_comparison: dict[str, FreeSpaceComparison] = {}
         self.frame_compute_total_s = 0.0
         self.frame_compute_max_s = 0.0
         self.scene_update_total_s = 0.0
@@ -508,6 +519,7 @@ class CausalPoseService:
                 except ValueError:
                     self._count_anchor_outcome(estimate.role, "direct_symmetry_invalid")
                     continue
+            self._record_direct_free_space(estimate, source)
             current = self.store.snapshot()[1].get(estimate.role)
             if current is not None:
                 last_direct_s = current.last_direct_observation_s
@@ -792,6 +804,34 @@ class CausalPoseService:
             PoseComparisonVerdict.AGREE,
             PoseComparisonVerdict.CANDIDATE_FAVORED,
         )
+
+    def _record_direct_free_space(self, estimate: PoseEstimate, frame: RGBDFrame) -> None:
+        """Record an independent contradiction without yet changing pose ownership."""
+        points = self.object_points_by_role.get(estimate.role)
+        if points is None or not estimate.has_direct_translation:
+            return
+        assert estimate.pose is not None
+        support = free_space_support(
+            frame,
+            points,
+            estimate.pose,
+            depth_tolerance_m=self.fit_threshold_m,
+            max_local_depth_span_m=self.max_pose_disagreement_translation_m,
+        )
+        if support.valid_depth_pixels < self.tracker_kwargs["min_inliers"]:
+            verdict = FreeSpaceVerdict.INSUFFICIENT_DEPTH
+        elif support.median_signed_gap_m is not None and (
+            support.median_signed_gap_m > self.max_pose_disagreement_translation_m
+        ):
+            verdict = FreeSpaceVerdict.CONTRADICTED
+        else:
+            verdict = FreeSpaceVerdict.NOT_CONTRADICTED
+        comparison = FreeSpaceComparison(verdict, support, self.max_pose_disagreement_translation_m)
+        self.last_direct_free_space_comparison[estimate.role] = comparison
+        counts = self.direct_free_space_counts_by_role.setdefault(estimate.role, {})
+        counts[verdict.value] = counts.get(verdict.value, 0) + 1
+        if self.on_free_space_comparison is not None:
+            self.on_free_space_comparison(estimate.role, comparison)
 
     def _observe_environment(
         self, estimate: PoseEstimate, scene: SceneTracks, masks: dict[str, np.ndarray]

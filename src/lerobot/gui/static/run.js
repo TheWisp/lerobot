@@ -587,6 +587,14 @@ function renderFlashSnapshot(snapshot, mode = 'Live') {
             html += `<div class="flash-tracker-comparison">Latest direct/points check: ${_esc(pointComparison.verdict.replaceAll('_', ' '))}`
                 + `<small>${separation.toFixed(1)} mm between centres · ${age.toFixed(1)} s ago</small></div>`;
         }
+        const depthCheck = snapshot.direct_free_space_comparisons?.[role];
+        if (depthCheck) {
+            const age = Math.max(0, Number(snapshot.recorded_at_s) - Number(depthCheck.available_at_s));
+            const signedGap = depthCheck.support?.median_signed_gap_m;
+            const gapText = signedGap == null ? 'no valid depth' : `${(Number(signedGap) * 1000).toFixed(1)} mm median signed gap`;
+            html += `<div class="flash-tracker-comparison">Latest direct/depth diagnostic: ${_esc(depthCheck.verdict.replaceAll('_', ' '))}`
+                + `<small>${_esc(gapText)} · ${Number(depthCheck.support?.valid_depth_pixels || 0)} rays · ${age.toFixed(1)} s ago · diagnostic only</small></div>`;
+        }
         html += '</div>';
     }
     content.innerHTML = html;

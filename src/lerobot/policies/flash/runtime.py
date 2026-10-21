@@ -171,6 +171,9 @@ class FlashRuntime:
                 on_layer=live_telemetry.layer if live_telemetry is not None else None,
                 on_comparison=live_telemetry.comparison if live_telemetry is not None else None,
                 on_point_comparison=(live_telemetry.point_comparison if live_telemetry is not None else None),
+                on_free_space_comparison=(
+                    live_telemetry.free_space_comparison if live_telemetry is not None else None
+                ),
                 on_direct_observation=accepted_direct.put,
             )
             if causal_tracking is not None

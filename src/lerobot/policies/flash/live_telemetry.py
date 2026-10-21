@@ -13,7 +13,7 @@ import cv2
 import numpy as np
 
 from .perception import EndEffectorKinematics, RGBDFrame
-from .pose_disagreement import PoseComparison
+from .pose_disagreement import FreeSpaceComparison, PoseComparison
 from .trajectory import AttachmentState, Evidence, PoseEstimate
 
 
@@ -76,6 +76,7 @@ class FlashLiveTelemetry:
         self._layers: dict[str, dict[str, PoseEstimate]] = {}
         self._comparisons: dict[str, dict] = {}
         self._point_comparisons: dict[str, dict] = {}
+        self._free_space_comparisons: dict[str, dict] = {}
         self._accepted: dict[str, PoseEstimate] = {}
         self._held_attachment: tuple[str, AttachmentState, np.ndarray, float, bool] | None = None
         self._thread = Thread(target=self._write_loop, name="flash-live-telemetry", daemon=True)
@@ -127,6 +128,15 @@ class FlashLiveTelemetry:
             }
             self._changed()
 
+    def free_space_comparison(self, role: str, result: FreeSpaceComparison) -> None:
+        with self._condition:
+            self._free_space_comparisons[role] = {
+                **asdict(result),
+                "verdict": result.verdict.value,
+                "available_at_s": time.perf_counter(),
+            }
+            self._changed()
+
     def accepted(self, poses: dict[str, PoseEstimate]) -> None:
         with self._condition:
             self._accepted = dict(poses)
@@ -165,6 +175,7 @@ class FlashLiveTelemetry:
             layers = {role: values.copy() for role, values in self._layers.items()}
             comparisons = self._comparisons.copy()
             point_comparisons = self._point_comparisons.copy()
+            free_space_comparisons = self._free_space_comparisons.copy()
             accepted = self._accepted.copy()
             held = self._held_attachment
         held_prediction = None
@@ -213,6 +224,7 @@ class FlashLiveTelemetry:
             },
             "direct_group_comparisons": comparisons,
             "direct_point_comparisons": point_comparisons,
+            "direct_free_space_comparisons": free_space_comparisons,
             "accepted": {role: _estimate_json(value) for role, value in accepted.items()},
             "held_prediction": held_prediction,
         }

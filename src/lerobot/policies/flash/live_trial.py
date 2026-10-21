@@ -375,6 +375,9 @@ def trial(
                         "direct_point_disagreements_by_role": (
                             runtime.causal.direct_point_disagreements_by_role.copy()
                         ),
+                        "direct_free_space_counts_by_role": (
+                            runtime.causal.direct_free_space_counts_by_role.copy()
+                        ),
                         "environment_expired_by_role": runtime.causal.environment_expired_by_role.copy(),
                         "scene_gaps": runtime.causal.scene.gaps,
                         "scene_recent_gap_durations_s": tuple(runtime.causal.scene.recent_gap_durations_s),

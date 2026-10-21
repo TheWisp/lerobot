@@ -12,6 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
+import cv2
 import numpy as np
 
 from .geometry import inverse, transform
@@ -25,6 +26,34 @@ class SurfaceSupport:
     masked_depth_points: int
     projected_point_mask_fraction: float
     depth_residual_p90_m: float
+
+
+@dataclass(frozen=True)
+class FreeSpaceSupport:
+    """One-sided metric contradiction of a projected measured object surface.
+
+    Positive signed gap means the camera measured a farther surface where the
+    proposed object surface should have blocked the ray. Negative gaps may be
+    ordinary occluders, so this is evidence against a pose, not a pose fit.
+    """
+
+    projected_pixels: int
+    valid_depth_pixels: int
+    median_signed_gap_m: float | None
+    contradiction_fraction: float | None
+
+
+class FreeSpaceVerdict(str, Enum):
+    NOT_CONTRADICTED = "not_contradicted"
+    CONTRADICTED = "contradicted"
+    INSUFFICIENT_DEPTH = "insufficient_depth"
+
+
+@dataclass(frozen=True)
+class FreeSpaceComparison:
+    verdict: FreeSpaceVerdict
+    support: FreeSpaceSupport
+    tolerated_gap_m: float
 
 
 class PoseComparisonVerdict(str, Enum):
@@ -42,6 +71,60 @@ class PoseComparison:
     rotation_difference_rad: float
     candidate: SurfaceSupport
     prior: SurfaceSupport
+
+
+def free_space_support(
+    frame: RGBDFrame,
+    points_object_m: np.ndarray,
+    base_from_object: np.ndarray,
+    *,
+    depth_tolerance_m: float,
+    max_local_depth_span_m: float,
+) -> FreeSpaceSupport:
+    """Z-buffer a measured object cloud against same-frame aligned depth.
+
+    Each first-view model pixel votes once at its nearest projected depth.
+    Depth at discontinuities or with missing neighbors is excluded; otherwise
+    an occluder in front does not count as a free-space contradiction.
+    """
+    if (
+        not np.isfinite(depth_tolerance_m)
+        or depth_tolerance_m <= 0
+        or not np.isfinite(max_local_depth_span_m)
+        or max_local_depth_span_m <= 0
+    ):
+        raise ValueError("free-space comparison needs positive metric tolerances")
+    points = np.asarray(points_object_m, dtype=float)
+    if points.ndim != 2 or points.shape[1] != 3 or not len(points) or not np.isfinite(points).all():
+        raise ValueError("object model needs finite Nx3 points")
+    camera_from_object = inverse(frame.base_from_camera) @ transform(base_from_object)
+    camera_points = transform_points(camera_from_object, points)
+    camera_points = camera_points[camera_points[:, 2] > 0]
+    height, width = frame.depth.shape
+    if not len(camera_points):
+        return FreeSpaceSupport(0, 0, None, None)
+    x = np.rint(camera_points[:, 0] / camera_points[:, 2] * frame.intrinsics[0, 0] + frame.intrinsics[0, 2])
+    y = np.rint(camera_points[:, 1] / camera_points[:, 2] * frame.intrinsics[1, 1] + frame.intrinsics[1, 2])
+    inside = (x >= 0) & (x < width) & (y >= 0) & (y < height)
+    flat = y[inside].astype(int) * width + x[inside].astype(int)
+    front = np.full(height * width, np.inf, dtype=float)
+    np.minimum.at(front, flat, camera_points[inside, 2])
+    projected = np.isfinite(front).reshape((height, width))
+    measured = frame.metric_depth().astype(np.float32)
+    measured = np.where(np.isfinite(measured), measured, 0)
+    neighborhood = np.ones((3, 3), dtype=np.uint8)
+    lower = cv2.erode(measured, neighborhood)
+    upper = cv2.dilate(measured, neighborhood)
+    valid = projected & (measured > 0) & (lower > 0) & (upper - lower <= max_local_depth_span_m)
+    gaps = measured[valid] - front.reshape((height, width))[valid]
+    if not len(gaps):
+        return FreeSpaceSupport(int(projected.sum()), 0, None, None)
+    return FreeSpaceSupport(
+        int(projected.sum()),
+        len(gaps),
+        float(np.median(gaps)),
+        float(np.mean(gaps > depth_tolerance_m)),
+    )
 
 
 def surface_support(
