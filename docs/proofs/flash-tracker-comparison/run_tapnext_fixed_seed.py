@@ -32,6 +32,7 @@ def main() -> None:
     parser.add_argument("--seed-frame", required=True, type=int)
     parser.add_argument("--last-frame", required=True, type=int)
     parser.add_argument("--checkpoint", required=True, type=Path)
+    parser.add_argument("--input-resolution", type=int, choices=(256, 512), default=256)
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
     if args.last_frame <= args.seed_frame or not args.checkpoint.is_file():
@@ -61,7 +62,7 @@ def main() -> None:
     tracker = TapnextTracker(
         {
             "device": "cuda",
-            "input_resolution": 256,
+            "input_resolution": args.input_resolution,
             "visible_threshold": 0.5,
             "half_precision": True,
             "checkpoint_path": str(args.checkpoint),
