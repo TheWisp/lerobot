@@ -30,10 +30,13 @@ def main() -> None:
     parser.add_argument("--tracks", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--pose-trace-output", type=Path)
+    parser.add_argument("--anchor-pose-trace", type=Path)
     parser.add_argument("--gate-current-mask", action="store_true")
     parser.add_argument("--fit-threshold-m", type=float, default=0.005)
     parser.add_argument("--min-inliers", type=int, default=12)
     args = parser.parse_args()
+    if args.anchor_pose_trace is not None and args.pose_trace_output is None:
+        parser.error("--anchor-pose-trace needs --pose-trace-output")
     intrinsics = np.load(Path(__file__).with_name("pose_traces.npz"))["intrinsics"]
     with np.load(args.tracks) as track:
         role = str(track["role"])
@@ -99,7 +102,14 @@ def main() -> None:
     )
     if args.pose_trace_output is not None:
         args.pose_trace_output.parent.mkdir(parents=True, exist_ok=True)
-        poses = np.stack([np.eye(4), *(row[1] for row in records)])
+        anchor_pose = np.eye(4)
+        if args.anchor_pose_trace is not None:
+            with np.load(args.anchor_pose_trace) as anchor_trace:
+                anchor_index = np.flatnonzero(anchor_trace["frames"] == seed_frame)
+                if len(anchor_index) != 1 or anchor_trace["lost"][anchor_index[0]]:
+                    raise ValueError("source-frame anchor pose is unavailable")
+                anchor_pose = anchor_trace["poses"][anchor_index[0]]
+        poses = np.stack([anchor_pose, *(row[1] @ anchor_pose for row in records)])
         np.savez_compressed(
             args.pose_trace_output,
             frames=frames,
