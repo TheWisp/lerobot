@@ -496,6 +496,7 @@ function _flashOverlayRow(kind, role, estimator, className, body) {
 
 function _flashLayerName(estimator) {
     return ({
+        candidate_tracker: 'Tracker candidate',
         appearance_rgbd: 'Direct RGB-D',
         visible_shape_rgbd: 'Visible shape RGB-D',
         object_point_motion: 'Object points',
@@ -507,6 +508,7 @@ function _flashLayerName(estimator) {
 }
 
 function _flashLayerColor(estimator) {
+    if (estimator === 'candidate_tracker') return '#f472b6';
     if (estimator === 'demo_reference') return '#34d399';
     if (estimator === 'demo_held' || estimator === 'demo_held_recorded_gripper') return '#fb923c';
     if (estimator === 'demo_ee') return '#58a6ff';
@@ -631,6 +633,17 @@ function renderFlashDemoSnapshot(snapshot) {
     document.getElementById('flash-tracker-mode').textContent = 'Demo';
     const demo = snapshot.demo;
     let html = `<div class="flash-tracker-legend">Demo time ${demo.time_s.toFixed(2)} s · nearest arm reading ${(demo.camera_arm_delta_s * 1000).toFixed(0)} ms from this RGB frame. Outlines project the sampled reference surface, not a complete object mesh. These are the poses stored in the selected prepared skill. Preparation did not save the segmentation or raw tracker history, so no mask here does not mean segmentation was lost.</div>`;
+    if (flashReplay.tracker_candidate) {
+        for (const role of flashReplay.tracker_candidate.roles || [flashReplay.tracker_candidate.role]) {
+            const proposal = snapshot.layers?.[role]?.candidate_tracker;
+            html += `<div class="flash-tracker-role"><strong>${_esc(flashReplay.tracker_candidate.tracker)} proposal · ${_esc(role)}</strong>`;
+            html += proposal
+                ? _flashOverlayRow('layer', role, 'candidate_tracker', 'flash-tracker-layer',
+                    `<span class="flash-tracker-dot" style="background:#f472b6"></span>Candidate pose on this camera frame <small>Preview only; hover to highlight the pink outline</small>`)
+                : '<div class="flash-tracker-unavailable">No candidate pose at this camera frame</div>';
+            html += '</div>';
+        }
+    }
     if (demo.phase === 'outside_skill') {
         html += '<div class="flash-tracker-role">No spatial skill sample applies to this part of the recording.</div>';
     } else {
@@ -751,7 +764,8 @@ function _flashDrawOverlay() {
             context.setLineDash([]);
         };
         const emphasized = (kind, role, estimator = '') => !flashHighlightedOverlay ||
-            (flashHighlightedOverlay.kind === kind && flashHighlightedOverlay.role === role &&
+            (flashHighlightedOverlay.kind === kind &&
+                (flashHighlightedOverlay.role === null || flashHighlightedOverlay.role === role) &&
                 flashHighlightedOverlay.estimator === estimator);
         const draw = (role, name, pose, accepted, kind, estimator = '') => {
             const active = emphasized(kind, role, estimator);
@@ -789,7 +803,9 @@ function _flashDrawOverlay() {
             context.globalAlpha = 1;
         };
         for (const [role, layers] of Object.entries(snapshot.layers || {})) {
-            Object.entries(layers).forEach(([name, pose]) => draw(role, name, pose, false, 'layer', name));
+            Object.entries(layers).forEach(([name, pose]) => {
+                if (name !== 'candidate_tracker') draw(role, name, pose, false, 'layer', name);
+            });
         }
         for (const [role, pose] of Object.entries(snapshot.accepted || {})) {
             if (snapshot.held_prediction?.role === role) draw(role, pose.estimator || 'accepted', pose, false, 'accepted');
@@ -808,6 +824,12 @@ function _flashDrawOverlay() {
             context.globalAlpha = active ? 1 : 0.12;
             outline(mask.boundary_xy || [], '#d48bff', flashHighlightedOverlay && active ? 5 : 2);
             context.globalAlpha = 1;
+        }
+        // Review candidates stay visible when they closely overlap the saved
+        // surface. Hovering their row still isolates them from all other layers.
+        for (const [role, layers] of Object.entries(snapshot.layers || {})) {
+            if (layers.candidate_tracker) draw(role, 'candidate_tracker', layers.candidate_tracker,
+                false, 'layer', 'candidate_tracker');
         }
     });
 }
@@ -949,7 +971,7 @@ async function _flashLoadPreparationForTimeline(replay, query) {
     } catch (_) { /* Playback remains available if editable inputs cannot be read. */ }
 }
 
-async function loadFlashDemoReplay(datasetRoot, episodeIndex, bundlePath) {
+async function loadFlashDemoReplay(datasetRoot, episodeIndex, bundlePath, candidateId = null) {
     if (!bundlePath) {
         showToast('Cannot inspect demo', 'This demo has no prepared FLASH skill.', 'warning');
         return;
@@ -958,6 +980,7 @@ async function loadFlashDemoReplay(datasetRoot, episodeIndex, bundlePath) {
     if (status) status.textContent = 'Loading aligned demo frames and prepared spatial poses…';
     try {
         const query = new URLSearchParams({ dataset_root: datasetRoot, episode: String(episodeIndex), bundle_path: bundlePath });
+        if (candidateId) query.set('candidate_id', candidateId);
         const response = await fetch(`/api/run/flash/demo/replay?${query}`);
         const result = await response.json();
         if (!response.ok) throw new Error(result.detail || 'Cannot read prepared demo');
@@ -981,6 +1004,23 @@ async function loadFlashDemoReplay(datasetRoot, episodeIndex, bundlePath) {
         if (status) status.textContent = `Cannot inspect demo: ${error.message}`;
         showToast('Cannot inspect demo', error.message, 'error');
     }
+}
+
+async function previewFlashDemoTrackerCandidate(candidateId) {
+    if (flashReplay?.kind !== 'demo') return;
+    const replay = flashReplay;
+    const current = Number(document.getElementById('flash-tracker-scrub').value);
+    const query = new URLSearchParams({dataset_root: replay.datasetRoot,
+        episode: String(replay.episode), bundle_path: replay.bundle_path});
+    if (candidateId) query.set('candidate_id', candidateId);
+    const response = await fetch(`/api/run/flash/demo/replay?${query}`);
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.detail || 'Cannot preview tracker candidate');
+    if (flashReplay !== replay) return;
+    replay.frames = result.frames;
+    replay.geometry = result.geometry;
+    replay.tracker_candidate = result.tracker_candidate || null;
+    seekFlashReplay(current);
 }
 
 async function loadFlashRawDemoReplay(datasetRoot, episodeIndex) {

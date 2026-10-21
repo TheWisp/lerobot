@@ -18,6 +18,7 @@ function _flashEditorField(parent, labelText, value, onChange, options = null, t
         control.type = type;
         if (type === 'number') control.step = 'any';
     }
+    control.setAttribute('aria-label', labelText);
     control.value = String(value ?? '');
     control.addEventListener('change', () => {
         onChange(type === 'number' ? (control.value === '' ? null : Number(control.value)) : control.value);
@@ -206,7 +207,7 @@ function _flashEditorRender() {
     const panes = {};
     for (const [key, label] of [
         ['setup', 'Setup'], ['objects', 'Objects'], ['events', 'Events'], ['keyframes', 'Key frames'],
-        ['pose', 'Pose evidence'], ['advanced', 'Advanced'],
+        ['pose', 'Pose evidence'], ['trackers', 'Trackers'], ['advanced', 'Advanced'],
     ]) {
         const button = _flashEditorButton(tabs, label, () => {
             state.section = key; _flashEditorRender();
@@ -232,6 +233,92 @@ function _flashEditorRender() {
         ? 'No object pose exists yet. Preparation will extract a first pose trace from the RGB-D recording.'
         : 'Hover an item to highlight its projection in the image. This is the pose saved in the selected prepared version.');
     if (trackerPanel) pose.append(trackerPanel);
+
+    const trackers = _flashEditorSection(panes.trackers, 'Compare pose trackers', state.raw
+        ? 'Prepare object names, references and calibration before comparing tracker poses.'
+        : 'Choose a tracker to process all annotated objects. You can limit processing to one object for diagnosis. Preview the pink candidate alongside the saved pose. Apply replaces the available poses in a new demo version; missing frames keep the saved pose.');
+    if (!state.raw) {
+        const trackerChoices = (state.trackers?.trackers || []).map(item => item.id);
+        const trackerSelect = _flashEditorField(trackers, 'Tracker', state.tracker, value => {
+            state.tracker = value; _flashEditorRender();
+        }, trackerChoices);
+        for (const option of trackerSelect.options) {
+            option.textContent = state.trackers.trackers.find(item => item.id === option.value)?.name || option.value;
+        }
+        trackerSelect.disabled = state.running;
+        const selectedTracker = state.trackers?.trackers?.find(item => item.id === state.tracker);
+        const trackerName = selectedTracker?.name;
+        if (trackerName) {
+            const identity = document.createElement('p');
+            identity.textContent = `${trackerName} · ${selectedTracker.runnable ? 'local runner ready' : 'runner not installed; import output available'}`;
+            trackers.append(identity);
+        }
+        const roleSelect = _flashEditorField(trackers, 'Processing scope', state.trackerRole,
+            value => { state.trackerRole = value; }, ['', ...roles]);
+        roleSelect.options[0].textContent = 'All annotated objects';
+        roleSelect.disabled = state.running;
+        const processButton = _flashEditorButton(trackers, 'Process demo and preview',
+            () => void _flashEditorProcessTracker());
+        processButton.disabled = state.running || !selectedTracker?.runnable;
+        const importDetails = document.createElement('details');
+        const importSummary = document.createElement('summary');
+        importSummary.textContent = 'Import an existing result';
+        importDetails.append(importSummary);
+        importDetails.open = !!state.trackerSource;
+        trackers.append(importDetails);
+        const importRole = _flashEditorField(importDetails, 'Object in imported trace', state.trackerImportRole,
+            value => { state.trackerImportRole = value; }, roles);
+        importRole.disabled = state.running;
+        const sourceInput = _flashEditorField(importDetails, 'Saved tracker output (.npz)', state.trackerSource,
+            value => { state.trackerSource = value; _flashEditorRender(); });
+        sourceInput.disabled = state.running;
+        const format = document.createElement('p');
+        format.textContent = 'NPZ format: frames, poses and lost arrays. Each pose maps the reference camera frame to the current camera frame. The reference frame must be included.';
+        importDetails.append(format);
+        const importButton = _flashEditorButton(importDetails, 'Import output and preview',
+            () => void _flashEditorImportTracker());
+        importButton.disabled = state.running || !state.trackerSource?.trim();
+        const candidates = state.trackers?.candidates || [];
+        if (candidates.length) {
+            const heading = document.createElement('p');
+            heading.textContent = 'Saved candidates';
+            trackers.append(heading);
+            for (const candidate of candidates) {
+                const item = document.createElement('div');
+                item.className = 'flash-editor-keypoint';
+                const label = document.createElement('strong');
+                label.textContent = `${candidate.tracker} · ${_flashTrackerCoverage(candidate)}`;
+                item.append(label);
+                const highlight = () => {
+                    if (flashReplay.tracker_candidate?.candidate_id === candidate.candidate_id)
+                        _flashSelectOverlay({kind: 'layer', role: candidate.role || null, estimator: 'candidate_tracker'});
+                };
+                item.onpointerenter = highlight;
+                item.onpointermove = highlight;
+                item.onfocusin = highlight;
+                item.onpointerleave = () => _flashSelectOverlay(null);
+                item.onfocusout = event => {
+                    if (!item.contains(event.relatedTarget)) _flashSelectOverlay(null);
+                };
+                const preview = _flashEditorButton(item,
+                    flashReplay.tracker_candidate?.candidate_id === candidate.candidate_id ? 'Showing' : 'Preview',
+                    () => void _flashEditorPreviewTracker(candidate.candidate_id));
+                preview.disabled = state.running;
+                const apply = _flashEditorButton(item, 'Apply as new demo version',
+                    () => void _flashEditorApplyTracker(candidate.candidate_id));
+                apply.disabled = state.running;
+                trackers.append(item);
+            }
+            if (flashReplay.tracker_candidate) _flashEditorButton(trackers, 'Hide candidate overlay',
+                () => void _flashEditorPreviewTracker(null));
+        }
+        if (state.trackerMessage) {
+            const note = document.createElement('p');
+            note.className = 'flash-editor-status';
+            note.textContent = state.trackerMessage;
+            trackers.append(note);
+        }
+    }
 
     const events = _flashEditorSection(panes.events, 'Reference and events', 'Move the playhead to the desired frame, then choose “Use current”.');
     _flashEditorField(events, 'Appearance reference frame', a.reference_frame,
@@ -438,6 +525,7 @@ function _flashEditorRender() {
     const output = _flashEditorSection(editor, state.raw ? 'Prepare' : 'Regenerate',
         'Creates a review candidate. The original demo is unchanged.');
     output.classList.add('flash-editor-footer');
+    output.hidden = state.section === 'trackers';
     const generate = _flashEditorButton(output, state.raw ? 'Prepare spatial demo' : 'Regenerate prepared demo',
         () => void _flashEditorRegenerate());
     generate.disabled = state.running;
@@ -486,6 +574,20 @@ async function toggleFlashDemoEditor() {
             if (!response.ok) throw new Error(result.detail || 'Cannot read preparation inputs');
         }
         if (flashReplay !== replay) return;
+        let trackers = {trackers: [], candidates: []};
+        let trackerMessage = '';
+        if (!raw) {
+            try {
+                const query = new URLSearchParams({dataset_root: replay.datasetRoot, bundle_path: replay.bundle_path});
+                const response = await fetch(`/api/run/flash/demo/trackers?${query}`);
+                trackers = await response.json();
+                if (!response.ok) throw new Error(trackers.detail || 'Cannot load demo trackers');
+            } catch (error) {
+                trackers = {trackers: [], candidates: []};
+                trackerMessage = `Tracker candidates unavailable: ${error.message}`;
+            }
+        }
+        if (flashReplay !== replay) return;
         flashDemoEditor = {
             annotation: structuredClone(result.annotation),
             keypointsDocument: structuredClone(result.keypoints_document),
@@ -496,6 +598,10 @@ async function toggleFlashDemoEditor() {
             raw, newRole: '', newPrompt: '',
             original: JSON.stringify([result.annotation, result.keypoints_document]),
             drawing: false, vertices: [], running: false, message: '',
+            trackers, tracker: trackers.trackers.find(item => item.runnable)?.id || 'point2pose',
+            trackerRole: '',
+            trackerImportRole: result.annotation.held_role,
+            trackerSource: '', trackerMessage,
         };
         const viewer = document.getElementById('rerun-viewer');
         viewer.classList.add('flash-demo-editing');
@@ -518,6 +624,130 @@ async function toggleFlashDemoEditor() {
         _flashRenderTimeline();
     } catch (error) { showToast('Cannot edit demo', error.message, 'error'); }
     finally { toggle.disabled = false; }
+}
+
+async function _flashEditorRefreshTrackers(state) {
+    const query = new URLSearchParams({dataset_root: flashReplay.datasetRoot, bundle_path: flashReplay.bundle_path});
+    const response = await fetch(`/api/run/flash/demo/trackers?${query}`);
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.detail || 'Cannot list tracker candidates');
+    if (flashDemoEditor === state) state.trackers = result;
+}
+
+function _flashTrackerCoverage(candidate) {
+    const coverage = candidate.coverage_by_role || {[candidate.role]: candidate};
+    return Object.entries(coverage).map(([role, info]) =>
+        `${role}: ${info.valid_frames}/${info.total_frames} frames`).join(' · ');
+}
+
+async function _flashEditorProcessTracker() {
+    const state = flashDemoEditor;
+    if (!state || state.running) return;
+    const replay = flashReplay;
+    state.running = true;
+    state.trackerMessage = `Processing ${state.trackerRole || 'all annotated objects'} with ${state.tracker} on the recorded RGB-D frames…`;
+    _flashEditorRender();
+    try {
+        const response = await fetch('/api/run/flash/demo/trackers/process', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({dataset_root: flashReplay.datasetRoot, bundle_path: flashReplay.bundle_path,
+                episode: flashReplay.episode, tracker: state.tracker, role: state.trackerRole || null}),
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.detail || 'Tracker could not process the demo');
+        if (flashDemoEditor !== state || flashReplay !== replay) {
+            showToast('Tracker candidate saved', 'Open the source demo’s Trackers section to review it.', 'success');
+            return;
+        }
+        await _flashEditorRefreshTrackers(state);
+        await previewFlashDemoTrackerCandidate(result.candidate_id);
+        state.trackerMessage = `${_flashTrackerCoverage(result)}. Review the pink candidate against the saved pose before applying.`;
+    } catch (error) {
+        state.trackerMessage = error.message;
+        showToast('Cannot process demo', error.message, 'error');
+    } finally {
+        state.running = false;
+        if (flashDemoEditor === state) _flashEditorRender();
+    }
+}
+
+async function _flashEditorImportTracker() {
+    const state = flashDemoEditor;
+    if (!state || state.running || !state.trackerSource?.trim()) return;
+    const replay = flashReplay;
+    state.running = true;
+    state.trackerMessage = 'Validating and aligning saved tracker poses…';
+    _flashEditorRender();
+    try {
+        const response = await fetch('/api/run/flash/demo/trackers/import', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({dataset_root: flashReplay.datasetRoot, bundle_path: flashReplay.bundle_path,
+                episode: flashReplay.episode, tracker: state.tracker, role: state.trackerImportRole,
+                source_path: state.trackerSource}),
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.detail || 'Tracker output could not be imported');
+        if (flashDemoEditor !== state || flashReplay !== replay) return;
+        await _flashEditorRefreshTrackers(state);
+        await previewFlashDemoTrackerCandidate(result.candidate_id);
+        state.trackerMessage = `${_flashTrackerCoverage(result)}. Review the pink candidate against the saved outline before applying.`;
+    } catch (error) {
+        state.trackerMessage = error.message;
+        showToast('Cannot import tracker output', error.message, 'error');
+    } finally {
+        state.running = false;
+        if (flashDemoEditor === state) _flashEditorRender();
+    }
+}
+
+async function _flashEditorPreviewTracker(candidateId) {
+    const state = flashDemoEditor;
+    if (!state || state.running) return;
+    state.running = true;
+    try {
+        await previewFlashDemoTrackerCandidate(candidateId);
+        state.trackerMessage = candidateId ? 'Pink: candidate pose. Green/orange: pose used by saved skill.' : '';
+    } catch (error) {
+        state.trackerMessage = error.message;
+        showToast('Cannot preview tracker', error.message, 'error');
+    } finally {
+        state.running = false;
+        if (flashDemoEditor === state) _flashEditorRender();
+    }
+}
+
+async function _flashEditorApplyTracker(candidateId) {
+    const state = flashDemoEditor;
+    if (!state || state.running) return;
+    const replay = flashReplay;
+    state.running = true;
+    state.trackerMessage = 'Creating a new prepared demo version…';
+    _flashEditorRender();
+    try {
+        const response = await fetch('/api/run/flash/demo/trackers/apply', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({dataset_root: flashReplay.datasetRoot, bundle_path: flashReplay.bundle_path,
+                episode: flashReplay.episode, candidate_id: candidateId}),
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.detail || 'Tracker poses could not be applied');
+        if (flashDemoEditor !== state || flashReplay !== replay) {
+            showToast('Tracker poses applied', 'The new version is saved in the source demo.', 'success');
+            return;
+        }
+        const {datasetRoot, episode} = replay;
+        await _loadFlashRecordings();
+        if (flashReplay !== replay) return;
+        await loadFlashDemoReplay(datasetRoot, episode, result.bundle_path);
+        showToast('Tracker poses applied',
+            `New demo version: ${result.report.changed_reference_samples} reference and ${result.report.changed_held_samples} held samples changed.`, 'success');
+    } catch (error) {
+        state.trackerMessage = error.message;
+        showToast('Cannot apply tracker', error.message, 'error');
+    } finally {
+        state.running = false;
+        if (flashDemoEditor === state) _flashEditorRender();
+    }
 }
 
 async function _flashEditorRegenerate() {

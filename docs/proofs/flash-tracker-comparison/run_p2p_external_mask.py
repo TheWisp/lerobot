@@ -52,7 +52,7 @@ def main() -> None:
     initial_mask = parser.add_mutually_exclusive_group(required=True)
     initial_mask.add_argument("--sealed-masks", type=Path)
     initial_mask.add_argument("--initial-mask", type=Path)
-    parser.add_argument("--role", required=True, choices=("dowel", "ring"))
+    parser.add_argument("--role", required=True)
     parser.add_argument("--mask-source", choices=("external", "internal"), default="external")
     parser.add_argument("--honor-initial-mask", action="store_true")
     parser.add_argument("--crop-from-uneroded-mask", action="store_true")
@@ -66,6 +66,7 @@ def main() -> None:
     parser.add_argument("--p2p-repo", required=True, type=Path)
     parser.add_argument("--p2p-config", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--output-file", type=Path, help="Write the FLASH trace to this exact NPZ path")
     parser.add_argument("--first-frame", type=int, default=100)
     parser.add_argument("--last-frame", type=int, default=550)
     args = parser.parse_args()
@@ -192,7 +193,10 @@ def main() -> None:
                 )
                 if frame % 25 == 0:
                     print(frame, "lost", tracked["lost"], "inliers", tracked["fit_inliers"], flush=True)
-        output = args.output / f"p2p_{args.role}_{args.label}_{args.first_frame}_{args.last_frame}.npz"
+        output = (
+            args.output_file
+            or args.output / f"p2p_{args.role}_{args.label}_{args.first_frame}_{args.last_frame}.npz"
+        )
         np.savez_compressed(
             output,
             frames=np.asarray([item[0] for item in records]),

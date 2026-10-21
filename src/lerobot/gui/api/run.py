@@ -265,6 +265,25 @@ class FlashDemoPrepareRequest(FlashDatasetInspectRequest):
     output_name: str | None = None
 
 
+class FlashTrackerImportRequest(FlashDatasetInspectRequest):
+    bundle_path: str
+    tracker: str
+    role: str
+    source_path: str
+
+
+class FlashTrackerProcessRequest(FlashDatasetInspectRequest):
+    bundle_path: str
+    tracker: str
+    role: str | None = None
+
+
+class FlashTrackerApplyRequest(FlashDatasetInspectRequest):
+    bundle_path: str
+    candidate_id: str
+    output_name: str | None = None
+
+
 class HVLARunRequest(BaseModel):
     robot: dict[str, Any]
     s1_checkpoint: str
@@ -316,6 +335,8 @@ _active_command: str | None = None
 _flash_live_path: Path | None = None
 _flash_telemetry_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gui-flash-telemetry")
 _flash_config_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gui-flash-config")
+_flash_candidate_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gui-flash-candidate")
+_flash_tracker_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gui-flash-tracker")
 _active_config: dict | None = None
 _debug_process: asyncio.subprocess.Process | None = None  # optional model debug alongside teleop
 _debug_output_path: Path | None = None  # log file for debug model output
@@ -1114,22 +1135,124 @@ async def flash_tracker_replay(dataset_root: str, episode: int = 0) -> dict:
 
 
 @router.get("/flash/demo/replay")
-async def flash_demo_replay(dataset_root: str, bundle_path: str, episode: int = 0) -> dict:
+async def flash_demo_replay(
+    dataset_root: str, bundle_path: str, episode: int = 0, candidate_id: str | None = None
+) -> dict:
     """Play the original camera frames with the exact prepared spatial samples."""
     from lerobot.policies.flash.demo_replay import load_legacy_demo_replay
+    from lerobot.policies.flash.demo_tracker_candidates import load_candidate_set
 
     if episode < 0:
         raise HTTPException(400, "Episode must be nonnegative")
     try:
-        return await asyncio.get_running_loop().run_in_executor(
-            _flash_telemetry_pool,
-            load_legacy_demo_replay,
-            Path(dataset_root),
-            episode,
-            Path(bundle_path),
-        )
+
+        def read() -> dict:
+            result = load_legacy_demo_replay(Path(dataset_root), episode, Path(bundle_path))
+            if candidate_id is not None:
+                manifest, poses_by_role = load_candidate_set(
+                    Path(dataset_root), Path(bundle_path), candidate_id
+                )
+                for frame in result["frames"]:
+                    for role, poses in poses_by_role.items():
+                        pose = poses.get(frame["frame_index"])
+                        if pose is not None:
+                            snapshot = frame["snapshot"]
+                            snapshot.setdefault("layers", {}).setdefault(role, {})["candidate_tracker"] = {
+                                "pose": pose.tolist(),
+                                "evidence": "candidate",
+                                "estimator": manifest["tracker"],
+                                "source_time_s": snapshot["recorded_at_s"],
+                            }
+                result["tracker_candidate"] = {"candidate_id": candidate_id, **manifest}
+            return result
+
+        return await asyncio.get_running_loop().run_in_executor(_flash_candidate_pool, read)
     except (OSError, KeyError, TypeError, ValueError) as exc:
         raise HTTPException(400, f"Cannot replay FLASH demo: {exc}") from exc
+
+
+@router.get("/flash/demo/trackers")
+async def flash_demo_trackers(dataset_root: str, bundle_path: str) -> dict:
+    """List supported trace identities and versioned proposals for this demo."""
+    from lerobot.policies.flash.demo_tracker_candidates import list_candidates, runner_availability
+
+    try:
+        trackers, candidates = await asyncio.get_running_loop().run_in_executor(
+            _flash_candidate_pool,
+            lambda: (runner_availability(), list_candidates(Path(dataset_root), Path(bundle_path))),
+        )
+    except (OSError, KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(400, f"Cannot list demo trackers: {exc}") from exc
+    return {
+        "trackers": trackers,
+        "candidates": candidates,
+    }
+
+
+@router.post("/flash/demo/trackers/process")
+async def flash_demo_tracker_process(req: FlashTrackerProcessRequest) -> dict:
+    """Run offline inference without occupying the GUI event loop or robot owner."""
+    from lerobot.policies.flash.demo_tracker_candidates import process_demo
+
+    candidate_id = f"{req.tracker}-{time.strftime('%Y%m%d-%H%M%S')}-{secrets.token_hex(3)}"
+    try:
+        return await asyncio.get_running_loop().run_in_executor(
+            _flash_tracker_pool,
+            lambda: process_demo(
+                Path(req.dataset_root),
+                Path(req.bundle_path),
+                tracker=req.tracker,
+                role=req.role,
+                candidate_id=candidate_id,
+                expected_episode=req.episode,
+            ),
+        )
+    except (OSError, KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(400, f"Cannot process FLASH demo: {exc}") from exc
+
+
+@router.post("/flash/demo/trackers/import")
+async def flash_demo_tracker_import(req: FlashTrackerImportRequest) -> dict:
+    """Validate and align a saved tracker output as a review-only proposal."""
+    from lerobot.policies.flash.demo_tracker_candidates import import_relative_trace
+
+    try:
+        return await asyncio.get_running_loop().run_in_executor(
+            _flash_candidate_pool,
+            lambda: import_relative_trace(
+                Path(req.dataset_root),
+                Path(req.bundle_path),
+                tracker=req.tracker,
+                role=req.role,
+                source_path=Path(req.source_path),
+                candidate_id=f"{req.tracker}-{time.strftime('%Y%m%d-%H%M%S')}-{secrets.token_hex(3)}",
+                expected_episode=req.episode,
+            ),
+        )
+    except (OSError, KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(400, f"Cannot import tracker output: {exc}") from exc
+
+
+@router.post("/flash/demo/trackers/apply")
+async def flash_demo_tracker_apply(req: FlashTrackerApplyRequest) -> dict:
+    """Create a new active prepared skill from one reviewed pose proposal."""
+    from lerobot.policies.flash.demo_tracker_candidates import apply_candidate
+
+    try:
+        name = req.output_name or f"flash-tracker-{time.strftime('%Y%m%d-%H%M%S')}-{secrets.token_hex(3)}"
+        bundle, report = await asyncio.get_running_loop().run_in_executor(
+            _flash_candidate_pool,
+            lambda: apply_candidate(
+                Path(req.dataset_root),
+                Path(req.bundle_path),
+                req.candidate_id,
+                output_name=name,
+                expected_episode=req.episode,
+            ),
+        )
+    except (OSError, KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(400, f"Cannot apply tracker output: {exc}") from exc
+    return {"bundle_path": str(bundle), "report": report}
 
 
 @router.get("/flash/demo/raw-replay")

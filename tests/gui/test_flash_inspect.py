@@ -509,6 +509,13 @@ def test_run_flash_lists_demos_and_shows_extracted_pose_overlay(gui_page):
                 "available": True,
                 "kind": "demo",
                 "bundle_path": parse_qs(urlsplit(route.request.url).query)["bundle_path"][0],
+                "tracker_candidate": {
+                    "candidate_id": "test-tracker",
+                    "tracker": "trackeverything",
+                    "role": "object",
+                }
+                if "candidate_id" in parse_qs(urlsplit(route.request.url).query)
+                else None,
                 "fps": 30,
                 "geometry": {
                     "points_object_m": {"object": [[0, 0, 1], [0.1, 0, 1], [0, 0.1, 1]]},
@@ -541,6 +548,18 @@ def test_run_flash_lists_demos_and_shows_extracted_pose_overlay(gui_page):
                                 },
                             },
                             "held_prediction": None,
+                            "layers": {
+                                "object": {
+                                    "candidate_tracker": {
+                                        "pose": identity,
+                                        "evidence": "candidate",
+                                        "estimator": "trackeverything",
+                                        "source_time_s": 1.0,
+                                    }
+                                }
+                            }
+                            if "candidate_id" in parse_qs(urlsplit(route.request.url).query)
+                            else {},
                             "demo": {
                                 "phase": "demonstrated_sample",
                                 "time_s": 1.0,
@@ -611,6 +630,29 @@ def test_run_flash_lists_demos_and_shows_extracted_pose_overlay(gui_page):
             }
         ),
     )
+    candidate = {
+        "candidate_id": "test-tracker",
+        "tracker": "trackeverything",
+        "role": "object",
+        "valid_frames": 1,
+        "total_frames": 1,
+    }
+    page.route(
+        "**/api/run/flash/demo/trackers?*",
+        lambda route: route.fulfill(
+            json={
+                "trackers": [{"id": "trackeverything", "name": "TrackEverything", "runnable": True}],
+                "candidates": [candidate],
+            }
+        ),
+    )
+    process_requests = []
+
+    def process_tracker(route):
+        process_requests.append(route.request.post_data_json)
+        route.fulfill(json=candidate)
+
+    page.route("**/api/run/flash/demo/trackers/process", process_tracker)
     page.locator("#flash-demo-edit-toggle").click()
     page.wait_for_function("() => !!document.querySelector('#flash-demo-editor')")
     assert "Demo preparation" in page.locator("#flash-demo-editor").inner_text()
@@ -625,7 +667,47 @@ def test_run_flash_lists_demos_and_shows_extracted_pose_overlay(gui_page):
     page.get_by_role("button", name="Finish polygon").click()
     assert "Manual object mask: 3 vertices" in page.locator("#flash-demo-editor-polygon-status").inner_text()
     assert len(page.evaluate("flashDemoEditor.annotation.reference_polygons_by_role.object")) == 3
-    page.locator("#flash-demo-edit-toggle").click()
+    page.get_by_role("button", name="Trackers", exact=True).click()
+    assert page.get_by_label("Processing scope", exact=True).input_value() == ""
+    page.get_by_role("button", name="Process demo and preview", exact=True).click()
+    page.wait_for_function("() => flashReplay.tracker_candidate?.candidate_id === 'test-tracker'")
+    assert process_requests == [
+        {
+            "dataset_root": "/tmp/one-demo",
+            "bundle_path": "/tmp/one-demo/flash/v1/prepared/new-skill/bundle.json",
+            "episode": 2,
+            "tracker": "trackeverything",
+            "role": None,
+        }
+    ]
+    assert "Candidate pose on this camera frame" in page.locator("#flash-tracker-content").inner_text()
+    colors = page.evaluate("""() => {
+        const colors = [], original = CanvasRenderingContext2D.prototype.stroke;
+        CanvasRenderingContext2D.prototype.stroke = function(...args) {
+            colors.push(this.strokeStyle); return original.apply(this, args);
+        };
+        try { _flashDrawOverlay(); } finally { CanvasRenderingContext2D.prototype.stroke = original; }
+        return colors;
+    }""")
+    assert colors[-1] == "#f472b6", "candidate must remain visible above the saved pose"
+    page.locator(".flash-editor-keypoint").filter(has_text="trackeverything").hover()
+    assert page.evaluate("flashHighlightedOverlay?.estimator") == "candidate_tracker"
+    assert page.locator("#flash-demo-editor .flash-editor-footer").is_hidden()
+    applied = []
+
+    def apply_tracker(route):
+        applied.append(route.request.post_data_json)
+        route.fulfill(
+            json={
+                "bundle_path": "/tmp/one-demo/flash/v1/prepared/applied/bundle.json",
+                "report": {"changed_reference_samples": 1, "changed_held_samples": 0},
+            }
+        )
+
+    page.route("**/api/run/flash/demo/trackers/apply", apply_tracker)
+    page.get_by_role("button", name="Apply as new demo version", exact=True).click()
+    page.wait_for_function("() => flashReplay.bundle_path.endsWith('/applied/bundle.json')")
+    assert applied[0]["candidate_id"] == "test-tracker"
     assert page.locator("#flash-demo-editor").count() == 0
 
 
