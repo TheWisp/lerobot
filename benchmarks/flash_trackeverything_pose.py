@@ -149,6 +149,7 @@ def run(
                     "tracker": "TrackEverything",
                     "windowed_noncausal": True,
                     "mode": mode,
+                    "fit_threshold_m": fit_threshold_m,
                     "first_frame": first_frame,
                     "query_counts": {
                         spec["role"]: len(query) for spec, query in zip(specs, queries_by_role, strict=True)

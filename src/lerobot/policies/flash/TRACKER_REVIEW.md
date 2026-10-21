@@ -62,6 +62,42 @@ The review card reports fits whose frame-to-frame pose motion disagrees with the
 motion of tracked points that supported the previous fit. This uses the saved
 registration tolerance rather than a fixed speed limit. It is a warning, not
 proof that other frames are accurate.
+Previewing a TrackEverything candidate also loads its retained raw query tracks
+into the same demo replay. **Points** toggles them; the adjacent slider changes
+the length of their visible trails. Cyan, green, and subsequent colors distinguish
+objects, while each dot retains its point identity across frames. Filled dots
+agree with that frame's rigid fit within its saved registration tolerance; hollow
+dots disagree. Click a dot to isolate its whole visible trajectory and show its
+fit residual. This layer is projected directly from TrackEverything's 3D output;
+it does not use the fitted pose to position points. Occluded points are absent,
+and trails do not connect across visibility gaps. Fit agreement alone is not
+evidence that a track still belongs to the object.
+
+The independently generated SAM3 masks and aligned RGB-D depths available for
+this insertion experiment provide a diagnostic check, not ground truth. At camera
+frame 454, 87 dowel queries are marked visible by TrackEverything; 37 land inside
+the SAM3 dowel mask and within 10 mm of measured depth. Only 3 of the rigid fit's
+17 inliers satisfy both checks. Rigid registration of just the 37 supported
+tracks cannot find the configured 12 mutually consistent correspondences at the
+5 mm fit tolerance. Thus the bad outline is partly a fitter choosing a spurious
+cluster, but the available point identities are also too inconsistent to prove
+a reliable 6D pose at that frame. The 10 mm depth band is a generous offline
+diagnostic, not a new pose acceptance threshold.
+
+Across frames 400–500, only 15% of the dowel fit's point supporters pass that
+same mask-and-depth check, versus 75% for the ring under the same camera and
+test. Using 5 or 20 mm depth bands gives 8% or 26% for the dowel, versus 56%
+or 80% for the ring. This contrast persists across the diagnostic band choice;
+it is not a threshold-tuned conclusion. Of all model-visible queries, 36% for
+the dowel and 73% for the ring pass the 10 mm mask-and-depth check. The dowel
+fit selects an especially poor subset of already mixed raw tracks.
+
+Temporal smoothness alone gives the opposite impression. For dowel queries
+visible at least ten times during held frames 400–500, the median point's median
+deviation in the recorded gripper frame is only 2.4 mm (99 such tracks). That
+supports stable _motion_ for many tracks, but it does not prove they stayed on
+the dowel: the gripper is rigid and moves with it. The image/depth check above
+is needed to catch stable tracks attached to the wrong visible surface.
 Rigid fitting uses the selected demo's registration threshold, minimum inliers and
 trial count. TrackEverything receives measured depth and camera intrinsics and runs
 with future context within temporal windows. This is an offline demo extractor; this

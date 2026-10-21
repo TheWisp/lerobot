@@ -492,6 +492,96 @@ def load_candidate_set(dataset_root: Path, bundle_path: Path, candidate_id: str)
     return manifest, poses_by_role
 
 
+def load_candidate_point_tracks(dataset_root: Path, bundle_path: Path, candidate_id: str) -> dict:
+    """Project the model's raw query tracks, without using the fitted poses.
+
+    The residual is supplied separately so the replay can distinguish a point
+    trajectory from the rigid fit imposed on those trajectories. TrackEverything
+    currently runs with an identity camera extrinsic on fixed-camera demos.
+    """
+    root, bundle = _dataset_bundle(dataset_root, bundle_path)
+    manifest, _ = load_candidate_set(root, bundle, candidate_id)
+    if manifest.get("tracker") != "trackeverything" or not manifest.get("raw_query_trace"):
+        return {"available": False, "reason": "This candidate did not retain raw point tracks."}
+    trace_path = Path(manifest["raw_query_trace"]).resolve()
+    if not trace_path.is_relative_to((root / "flash/v1/tracker-runs").resolve()):
+        raise ValueError("raw point trace is outside this dataset's tracker runs")
+    intrinsics = np.loadtxt(root / "recording/cam_K.txt").reshape(3, 3)
+    with np.load(trace_path, allow_pickle=False) as data:
+        frames = np.asarray(data["frames"], dtype=int)
+        xyz = np.asarray(data["query_coords_m"], dtype=np.float64)
+        visible = np.asarray(data["query_visibility_logits"]) > 0
+        queries = np.asarray(data["query_points_2d"])
+        roles = [str(role) for role in data["roles"]]
+        poses = np.asarray(data["poses"], dtype=np.float64)
+        lost = np.asarray(data["lost"], dtype=bool)
+        metadata = json.loads(str(data["metadata"]))
+    if "fit_threshold_m" in metadata:
+        threshold_mm = float(metadata["fit_threshold_m"]) * 1000
+    else:
+        # Older retained traces did not save their fit tolerance. Their source
+        # preparation is immutable; use the annotation that generated it.
+        annotation = json.loads(
+            _input_path(root, bundle, "annotation.json", Path("flash/v1/import-annotations.json")).read_text(
+                encoding="utf-8"
+            )
+        )
+        threshold_mm = float(annotation["registration_threshold_m"]) * 1000
+    counts = [int(metadata["query_counts"][role]) for role in roles]
+    if roles != manifest["roles"] or xyz.shape != (len(frames), sum(counts), 3):
+        raise ValueError("raw point trace does not match the candidate")
+    if visible.shape != xyz.shape[:2] or queries.shape != (sum(counts), 3):
+        raise ValueError("raw point visibility or origins do not match the trace")
+    if poses.shape != (len(roles), len(frames), 4, 4) or lost.shape != (len(roles), len(frames)):
+        raise ValueError("raw pose diagnostics do not match the point trace")
+    offset = 0
+    output_roles = []
+    for role_index, (role, count) in enumerate(zip(roles, counts, strict=True)):
+        source_frame = int(queries[offset, 0])
+        if not 0 <= source_frame < len(frames) or not np.all(
+            queries[offset : offset + count, 0] == source_frame
+        ):
+            raise ValueError("raw point origins for one object have different frames")
+        source_points = xyz[source_frame, offset : offset + count]
+        positions = []
+        for index in range(len(frames)):
+            current = xyz[index, offset : offset + count]
+            if lost[role_index, index]:
+                residual_mm = np.full(count, np.nan)
+            else:
+                fit = poses[role_index, index]
+                expected = source_points @ fit[:3, :3].T + fit[:3, 3]
+                residual_mm = np.linalg.norm(expected - current, axis=1) * 1000
+            row = []
+            for point_index, point in enumerate(current):
+                if not visible[index, offset + point_index] or not np.isfinite(point).all() or point[2] <= 0:
+                    row.append(None)
+                    continue
+                u = intrinsics[0, 0] * point[0] / point[2] + intrinsics[0, 2]
+                v = intrinsics[1, 1] * point[1] / point[2] + intrinsics[1, 2]
+                if not np.isfinite([u, v]).all():
+                    row.append(None)
+                    continue
+                residual = residual_mm[point_index]
+                row.append(
+                    [
+                        round(float(u), 2),
+                        round(float(v), 2),
+                        round(float(residual), 2) if np.isfinite(residual) else None,
+                    ]
+                )
+            positions.append(row)
+        output_roles.append({"role": role, "count": count, "positions": positions})
+        offset += count
+    return {
+        "available": True,
+        "candidate_id": candidate_id,
+        "frames": frames.tolist(),
+        "fit_threshold_mm": threshold_mm,
+        "roles": output_roles,
+    }
+
+
 def apply_candidate(
     dataset_root: Path,
     bundle_path: Path,

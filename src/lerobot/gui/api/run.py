@@ -1171,6 +1171,23 @@ async def flash_demo_replay(
         raise HTTPException(400, f"Cannot replay FLASH demo: {exc}") from exc
 
 
+@router.get("/flash/demo/track-points")
+async def flash_demo_track_points(dataset_root: str, bundle_path: str, candidate_id: str) -> dict:
+    """Read the candidate's raw model tracks for replay; no fitting runs here."""
+    from lerobot.policies.flash.demo_tracker_candidates import load_candidate_point_tracks
+
+    try:
+        return await asyncio.get_running_loop().run_in_executor(
+            _flash_candidate_pool,
+            load_candidate_point_tracks,
+            Path(dataset_root),
+            Path(bundle_path),
+            candidate_id,
+        )
+    except (OSError, KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(400, f"Cannot read FLASH point tracks: {exc}") from exc
+
+
 @router.get("/flash/demo/trackers")
 async def flash_demo_trackers(dataset_root: str, bundle_path: str) -> dict:
     """List supported trace identities and versioned proposals for this demo."""

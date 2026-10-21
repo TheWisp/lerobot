@@ -653,6 +653,20 @@ def test_run_flash_lists_demos_and_shows_extracted_pose_overlay(gui_page):
         route.fulfill(json=candidate)
 
     page.route("**/api/run/flash/demo/trackers/process", process_tracker)
+    page.route(
+        "**/api/run/flash/demo/track-points?*",
+        lambda route: route.fulfill(
+            json={
+                "available": True,
+                "candidate_id": "test-tracker",
+                "frames": [4],
+                "fit_threshold_mm": 5,
+                "roles": [
+                    {"role": "object", "count": 3, "positions": [[[600, 400, 0], [610, 400, 7], None]]}
+                ],
+            }
+        ),
+    )
     page.locator("#flash-demo-edit-toggle").click()
     page.wait_for_function("() => !!document.querySelector('#flash-demo-editor')")
     assert "Demo preparation" in page.locator("#flash-demo-editor").inner_text()
@@ -671,6 +685,32 @@ def test_run_flash_lists_demos_and_shows_extracted_pose_overlay(gui_page):
     assert page.get_by_label("Processing scope", exact=True).input_value() == ""
     page.get_by_role("button", name="Process demo and preview", exact=True).click()
     page.wait_for_function("() => flashReplay.tracker_candidate?.candidate_id === 'test-tracker'")
+    page.wait_for_function("() => !document.getElementById('flash-track-tools').hidden")
+    assert "Raw 3D point paths" in page.locator("#flash-tracker-content").inner_text()
+    arc_count = page.evaluate("""() => {
+        let n = 0; const original = CanvasRenderingContext2D.prototype.arc;
+        CanvasRenderingContext2D.prototype.arc = function(...args) { n++; return original.apply(this, args); };
+        try { _flashDrawOverlay(); } finally { CanvasRenderingContext2D.prototype.arc = original; }
+        return n;
+    }""")
+    page.locator("#flash-track-visible").uncheck()
+    without_points = page.evaluate("""() => {
+        let n = 0; const original = CanvasRenderingContext2D.prototype.arc;
+        CanvasRenderingContext2D.prototype.arc = function(...args) { n++; return original.apply(this, args); };
+        try { _flashDrawOverlay(); } finally { CanvasRenderingContext2D.prototype.arc = original; }
+        return n;
+    }""")
+    assert arc_count - without_points == 2
+    page.locator("#flash-track-visible").check()
+    point_xy = page.evaluate("""() => {
+        const box = document.querySelector('#rerun-viewer .flash-pose-canvas').getBoundingClientRect();
+        const camera = flashSnapshot.camera;
+        const scale = Math.min(box.width / camera.width, box.height / camera.height);
+        return [box.left + (box.width - camera.width * scale) / 2 + 600 * scale,
+            box.top + (box.height - camera.height * scale) / 2 + 400 * scale];
+    }""")
+    page.mouse.click(*point_xy)
+    assert page.evaluate("flashSelectedTrack") == {"role": "object", "index": 0}
     assert process_requests == [
         {
             "dataset_root": "/tmp/one-demo",
@@ -689,7 +729,8 @@ def test_run_flash_lists_demos_and_shows_extracted_pose_overlay(gui_page):
         try { _flashDrawOverlay(); } finally { CanvasRenderingContext2D.prototype.stroke = original; }
         return colors;
     }""")
-    assert colors[-1] == "#f472b6", "candidate must remain visible above the saved pose"
+    assert "#f472b6" in colors, "candidate must remain visible above the saved pose"
+    assert colors.index("#f472b6") < colors.index("#22d3ee"), "raw points must remain visible above the fit"
     page.locator(".flash-editor-keypoint").filter(has_text="trackeverything").hover()
     assert page.evaluate("flashHighlightedOverlay?.estimator") == "candidate_tracker"
     assert page.locator("#flash-demo-editor .flash-editor-footer").is_hidden()

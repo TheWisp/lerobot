@@ -412,6 +412,8 @@ let flashReplay = null;
 let flashReplayTimer = null;
 let flashOverlayRows = [];
 let flashHighlightedOverlay = null;
+let flashTrackPoints = null;
+let flashSelectedTrack = null;
 let flashDemoEditor = null;
 
 function closeFlashDemoEditor() {
@@ -632,8 +634,11 @@ function renderFlashDemoSnapshot(snapshot) {
     panel.querySelector('.flash-tracker-heading strong').textContent = 'FLASH demo extraction';
     document.getElementById('flash-tracker-mode').textContent = 'Demo';
     const demo = snapshot.demo;
-    let html = `<div class="flash-tracker-legend">Demo time ${demo.time_s.toFixed(2)} s · nearest arm reading ${(demo.camera_arm_delta_s * 1000).toFixed(0)} ms from this RGB frame. Outlines project the sampled reference surface, not a complete object mesh. These are the poses stored in the selected prepared skill. Preparation did not save the segmentation or raw tracker history, so no mask here does not mean segmentation was lost.</div>`;
+    let html = `<div class="flash-tracker-legend">Demo time ${demo.time_s.toFixed(2)} s · nearest arm reading ${(demo.camera_arm_delta_s * 1000).toFixed(0)} ms from this RGB frame. Outlines project the sampled reference surface, not a complete object mesh. These are the poses stored in the selected prepared skill. Preparation did not save its segmentation history, so no mask here does not mean segmentation was lost. A preview candidate may have its own retained raw tracks.</div>`;
     if (flashReplay.tracker_candidate) {
+        if (flashTrackPoints?.available && flashTrackPoints.candidate_id === flashReplay.tracker_candidate.candidate_id) {
+            html += '<div class="flash-tracker-legend">Dots and trails are the model’s raw point tracks, projected into this RGB frame without the rigid fit. Filled dots agree with the fitted pose within its registration tolerance; hollow dots disagree. Click a dot to follow that point’s full visible path. Fit agreement is not evidence that a point is on the object.</div>';
+        }
         for (const role of flashReplay.tracker_candidate.roles || [flashReplay.tracker_candidate.role]) {
             const proposal = snapshot.layers?.[role]?.candidate_tracker;
             html += `<div class="flash-tracker-role"><strong>${_esc(flashReplay.tracker_candidate.tracker)} proposal · ${_esc(role)}</strong>`;
@@ -641,6 +646,20 @@ function renderFlashDemoSnapshot(snapshot) {
                 ? _flashOverlayRow('layer', role, 'candidate_tracker', 'flash-tracker-layer',
                     `<span class="flash-tracker-dot" style="background:#f472b6"></span>Candidate pose on this camera frame <small>Preview only; hover to highlight the pink outline</small>`)
                 : '<div class="flash-tracker-unavailable">No candidate pose at this camera frame</div>';
+            const pointRole = flashTrackPoints?.roles?.find(item => item.role === role);
+            const pointFrame = flashTrackPoints?.frameLookup?.get(flashReplay.frames[Number(document.getElementById('flash-tracker-scrub').value)]?.frame_index);
+            if (pointRole && pointFrame !== undefined) {
+                const current = pointRole.positions[pointFrame];
+                const visible = current.filter(Boolean).length;
+                const selected = flashSelectedTrack?.role === role
+                    ? ` · selected point ${flashSelectedTrack.index}` : '';
+                html += _flashOverlayRow('raw_track', role, '', 'flash-tracker-layer',
+                    `<span class="flash-tracker-dot" style="background:${_flashTrackColor(flashTrackPoints.roles.indexOf(pointRole))}"></span>` +
+                    `Raw 3D point paths <small>${visible}/${pointRole.count} model-visible${selected}; hover to isolate</small>`);
+            } else if (flashReplay.tracker_candidate.tracker === 'trackeverything') {
+                html += `<div class="flash-tracker-unavailable">${flashTrackPoints?.available
+                    ? 'No raw point tracks at this camera frame' : 'Loading raw point tracks…'}</div>`;
+            }
             html += '</div>';
         }
     }
@@ -734,6 +753,100 @@ function _flashHull(points) {
     }
     lower.pop(); upper.pop();
     return lower.concat(upper);
+}
+
+function _flashTrackColor(index) {
+    return ['#22d3ee', '#a3e635', '#fbbf24', '#c4b5fd'][index % 4];
+}
+
+function _flashRawTrackFrame() {
+    if (!flashTrackPoints?.available || !flashReplay?.frames?.length) return null;
+    const replayFrame = flashReplay.frames[Number(document.getElementById('flash-tracker-scrub').value)];
+    return flashTrackPoints.frameLookup.get(replayFrame?.frame_index);
+}
+
+function _flashDrawPointTracks(context, pixel) {
+    if (!document.getElementById('flash-track-visible')?.checked) return;
+    const at = _flashRawTrackFrame();
+    if (at === undefined || at === null) return;
+    const seconds = Number(document.getElementById('flash-track-trail')?.value || 0);
+    const trailFrames = Math.round(seconds * (flashReplay.fps || 30));
+    for (const [roleIndex, role] of flashTrackPoints.roles.entries()) {
+        const color = _flashTrackColor(roleIndex);
+        const selectedRole = flashSelectedTrack?.role === role.role;
+        const isolated = flashHighlightedOverlay?.kind === 'raw_track' &&
+            (flashHighlightedOverlay.role === role.role || flashHighlightedOverlay.role === null);
+        const dimmed = !!flashHighlightedOverlay && !isolated;
+        const current = role.positions[at];
+        for (let id = 0; id < role.count; id++) {
+            const selected = selectedRole && flashSelectedTrack.index === id;
+            const alpha = dimmed || (flashSelectedTrack && !selected) ? 0.1 : 1;
+            const start = selected ? 0 : Math.max(0, at - trailFrames);
+            if (selected || trailFrames) {
+                context.strokeStyle = color;
+                context.lineWidth = selected ? 2.5 : 1;
+                context.globalAlpha = alpha * (selected ? 0.9 : 0.25);
+                context.beginPath();
+                let connected = false;
+                for (let frame = start; frame <= at; frame++) {
+                    const point = role.positions[frame][id];
+                    if (!point) { connected = false; continue; }
+                    const xy = pixel(point);
+                    if (connected) context.lineTo(...xy);
+                    else context.moveTo(...xy);
+                    connected = true;
+                }
+                context.stroke();
+            }
+            const point = current[id];
+            if (!point) continue;
+            const [x, y] = pixel(point);
+            const agreesWithFit = point[2] !== null && point[2] <= flashTrackPoints.fit_threshold_mm;
+            context.globalAlpha = alpha;
+            context.beginPath();
+            context.arc(x, y, selected ? 5 : 2.5, 0, 2 * Math.PI);
+            if (agreesWithFit) {
+                context.fillStyle = color;
+                context.fill();
+            } else {
+                context.strokeStyle = color;
+                context.lineWidth = selected ? 2.5 : 1.5;
+                context.stroke();
+            }
+            if (selected) {
+                context.font = 'bold 12px sans-serif';
+                context.fillStyle = '#fff';
+                context.fillText(`${role.role} point ${id} · ${point[2] === null ? 'no fit' : `${point[2]} mm from fit`}`, x + 9, y - 9);
+            }
+        }
+    }
+    context.globalAlpha = 1;
+}
+
+function _flashSelectPointAt(event) {
+    if (flashDemoEditor?.drawing || !flashTrackPoints?.available || !document.getElementById('flash-track-visible')?.checked) return;
+    const at = _flashRawTrackFrame();
+    if (at === undefined || at === null) return;
+    const canvas = document.querySelector('#rerun-viewer .flash-replay-grid .flash-pose-canvas');
+    const camera = flashSnapshot?.camera;
+    if (!canvas || !camera?.width || !camera?.height) return;
+    const bounds = canvas.getBoundingClientRect();
+    const scale = Math.min(bounds.width / camera.width, bounds.height / camera.height);
+    const left = (bounds.width - camera.width * scale) / 2;
+    const top = (bounds.height - camera.height * scale) / 2;
+    const x = event.clientX - bounds.left, y = event.clientY - bounds.top;
+    let closest = null, distance = 12;
+    for (const role of flashTrackPoints.roles) {
+        for (const [index, point] of role.positions[at].entries()) {
+            if (!point) continue;
+            const gap = Math.hypot(x - left - point[0] * scale, y - top - point[1] * scale);
+            if (gap < distance) { closest = {role: role.role, index}; distance = gap; }
+        }
+    }
+    flashSelectedTrack = closest;
+    if (closest && flashReplayTimer) toggleFlashReplay();
+    const selected = flashReplay.frames[Number(document.getElementById('flash-tracker-scrub').value)];
+    renderFlashDemoSnapshot({ ...selected.snapshot, ...flashReplay.geometry });
 }
 
 function _flashDrawOverlay() {
@@ -831,6 +944,7 @@ function _flashDrawOverlay() {
             if (layers.candidate_tracker) draw(role, 'candidate_tracker', layers.candidate_tracker,
                 false, 'layer', 'candidate_tracker');
         }
+        _flashDrawPointTracks(context, pixel);
     });
 }
 
@@ -890,6 +1004,9 @@ function _flashInstallReplay(replay, imageAlt) {
     clearInterval(flashReplayTimer);
     flashReplayTimer = null;
     flashReplay = replay;
+    flashTrackPoints = null;
+    flashSelectedTrack = null;
+    document.getElementById('flash-track-tools').hidden = true;
     flashUiMode = 'review';
     _flashUpdateWorkspace();
     flashHighlightedOverlay = null;
@@ -902,6 +1019,7 @@ function _flashInstallReplay(replay, imageAlt) {
     const canvas = document.createElement('canvas');
     canvas.className = 'flash-pose-canvas';
     grid.append(image, canvas);
+    grid.addEventListener('click', _flashSelectPointAt);
     viewer.prepend(grid);
     document.getElementById('rerun-placeholder').style.display = 'none';
     document.getElementById('flash-tracker-replay-controls').hidden = false;
@@ -997,6 +1115,8 @@ async function loadFlashDemoReplay(datasetRoot, episodeIndex, bundlePath, candid
             if (meta) meta.textContent = `Viewing: ${bundlePath.split('/').slice(-2, -1)[0]} · Play with extracted poses`;
         }
         seekFlashReplay(0);
+        if (candidateId && result.tracker_candidate?.tracker === 'trackeverything')
+            void _flashLoadCandidatePoints(replay, candidateId);
         toggleFlashReplay();
         if (status) status.textContent = `${result.skill_sample_count} spatial samples from ${bundlePath.split('/').slice(-2, -1)[0]} are shown on the original camera frames.`;
         void _flashLoadPreparationForTimeline(replay, query);
@@ -1020,7 +1140,34 @@ async function previewFlashDemoTrackerCandidate(candidateId) {
     replay.frames = result.frames;
     replay.geometry = result.geometry;
     replay.tracker_candidate = result.tracker_candidate || null;
+    flashTrackPoints = null;
+    flashSelectedTrack = null;
+    document.getElementById('flash-track-tools').hidden = true;
     seekFlashReplay(current);
+    if (result.tracker_candidate?.tracker === 'trackeverything')
+        void _flashLoadCandidatePoints(replay, candidateId);
+}
+
+async function _flashLoadCandidatePoints(replay, candidateId) {
+    try {
+        const query = new URLSearchParams({dataset_root: replay.datasetRoot,
+            bundle_path: replay.bundle_path, candidate_id: candidateId});
+        const response = await fetch(`/api/run/flash/demo/track-points?${query}`);
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.detail || 'Cannot read raw point tracks');
+        if (flashReplay !== replay || flashReplay.tracker_candidate?.candidate_id !== candidateId) return;
+        if (!result.available) throw new Error(result.reason);
+        result.frameLookup = new Map(result.frames.map((frame, index) => [frame, index]));
+        flashTrackPoints = result;
+        document.getElementById('flash-track-tools').hidden = false;
+        const selected = replay.frames[Number(document.getElementById('flash-tracker-scrub').value)];
+        renderFlashDemoSnapshot({ ...selected.snapshot, ...replay.geometry });
+    } catch (error) {
+        if (flashReplay === replay && flashReplay.tracker_candidate?.candidate_id === candidateId) {
+            const status = document.getElementById('run-flash-status');
+            if (status) status.textContent = `Cannot inspect raw point tracks: ${error.message}`;
+        }
+    }
 }
 
 async function loadFlashRawDemoReplay(datasetRoot, episodeIndex) {

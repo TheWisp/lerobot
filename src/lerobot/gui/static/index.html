@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>LeRobot GUI</title>
     <script>document.title = `LeRobot GUI [${window.location.host}]`;</script>
-    <link rel="stylesheet" href="/static/style.css?v=136">
+    <link rel="stylesheet" href="/static/style.css?v=137">
 </head>
 <body>
     <div class="tab-bar">
@@ -315,6 +315,7 @@
                     </div>
                     <button type="button" class="flash-frame-step" onclick="stepFlashReplay(1)" aria-label="Next frame" title="Next frame">›</button>
                     <span id="flash-tracker-frame">0 / 0</span>
+                    <label id="flash-track-tools" class="flash-track-tools" hidden><input id="flash-track-visible" type="checkbox" checked onchange="_flashDrawOverlay()">Points <input id="flash-track-trail" type="range" min="0" max="3" step="0.25" value="0.75" oninput="document.getElementById('flash-track-trail-value').textContent = this.value + 's'; _flashDrawOverlay()" aria-label="Point trail duration"><output id="flash-track-trail-value">0.75s</output></label>
                     <button type="button" id="flash-demo-edit-toggle" onclick="toggleFlashDemoEditor()" hidden>Edit demo</button>
                 </div>
                 <div class="run-split-handle" id="run-split-handle"></div>
@@ -802,7 +803,7 @@ nebius iam auth-public-key generate \
     <script src="/static/add_feature_dialog.js?v=6"></script>
     <script src="/static/charts.js?v=5"></script>
     <script src="/static/robot.js?v=27"></script>
-    <script src="/static/run.js?v=112"></script>
+    <script src="/static/run.js?v=113"></script>
     <script src="/static/flash_demo_editor.js?v=8"></script>
     <script src="/static/overlay_gate.js?v=1"></script>
     <script src="/static/mask_seed.js?v=4"></script>

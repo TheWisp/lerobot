@@ -14,6 +14,7 @@ from lerobot.policies.flash.demo_tracker_candidates import (
     import_relative_trace,
     import_relative_traces,
     load_candidate,
+    load_candidate_point_tracks,
     load_candidate_set,
     process_demo,
     runner_availability,
@@ -87,7 +88,9 @@ def _demo(tmp_path):
         "descriptor-v1",
     )
     bundle = prepared.save(root / "flash/v1/prepared/original")
-    (bundle.parent / "annotation.json").write_text(json.dumps({"calibration_path": str(calibration)}))
+    (bundle.parent / "annotation.json").write_text(
+        json.dumps({"calibration_path": str(calibration), "registration_threshold_m": 0.005})
+    )
     (bundle.parent / "keypoints.json").write_text('{"keypoints": []}')
     return root, bundle
 
@@ -226,6 +229,50 @@ def test_scene_runner_defaults_to_every_object(tmp_path, monkeypatch):
     assert traces["target"][2][0, 3] == pytest.approx(0.96)
 
 
+def test_raw_point_replay_preserves_model_tracks_separately_from_pose_fit(tmp_path):
+    root, bundle = _demo(tmp_path)
+    np.savetxt(root / "recording/cam_K.txt", np.eye(3))
+    source = tmp_path / "relative.npz"
+    poses = np.stack([_pose(0), _pose(0.1), _pose(0.2)])
+    np.savez(source, frames=np.arange(3), poses=poses, lost=np.zeros(3, dtype=bool))
+    import_relative_trace(
+        root, bundle, tracker="trackeverything", role="object", source_path=source, candidate_id="raw-points"
+    )
+    raw = root / "flash/v1/tracker-runs/raw-points/scene.npz"
+    raw.parent.mkdir(parents=True)
+    reference = np.array([[0, 0, 1], [0.1, 0, 1], [0, 0.1, 1]], dtype=float)
+    tracked = np.stack([reference, reference + [0.1, 0, 0], reference + [0.2, 0, 0]])
+    tracked[1, 2, 0] = 0.2  # raw point did not follow the rigid fit
+    visibility = np.ones((3, 3))
+    visibility[1, 1] = -1
+    np.savez(
+        raw,
+        frames=np.arange(3),
+        roles=np.array(["object"]),
+        query_points_2d=np.array([[0, 0, 0], [0, 1, 0], [0, 0, 1]]),
+        query_coords_m=tracked,
+        query_visibility_logits=visibility,
+        poses=poses[None],
+        lost=np.zeros((1, 3), dtype=bool),
+        metadata=np.asarray(json.dumps({"query_counts": {"object": 3}})),
+    )
+    manifest_path = root / "flash/v1/tracker-candidates/raw-points/manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["raw_query_trace"] = str(raw)
+    manifest_path.write_text(json.dumps(manifest))
+    result = load_candidate_point_tracks(root, bundle, "raw-points")
+    assert result["fit_threshold_mm"] == 5
+    assert result["frames"] == [0, 1, 2]
+    points = result["roles"][0]["positions"]
+    assert points[1][0] == [0.1, 0.0, 0.0]
+    assert points[1][1] is None
+    assert points[1][2] == [0.2, 0.1, 100.0]
+    manifest["raw_query_trace"] = str(source)
+    manifest_path.write_text(json.dumps(manifest))
+    with pytest.raises(ValueError, match="outside this dataset"):
+        load_candidate_point_tracks(root, bundle, "raw-points")
+
+
 def test_trackeverything_shares_inference_but_fits_each_object_at_its_reference(tmp_path, monkeypatch):
     """Exercise the adapter boundary with independent known motions and seed times."""
     import importlib.util
@@ -302,6 +349,7 @@ def test_trackeverything_shares_inference_but_fits_each_object_at_its_reference(
     assert calls[0][1] == "dense"
     with np.load(output) as trace:
         assert trace["roles"].tolist() == ["a", "b"]
+        assert json.loads(str(trace["metadata"]))["fit_threshold_m"] == 1e-5
         assert not trace["lost"].any()
         assert not trace["temporal_conflicts"].any()
         assert trace["query_coords_m"].shape == (2, 8, 3)
