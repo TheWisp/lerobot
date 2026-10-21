@@ -1,9 +1,10 @@
-"""Replay-only adapter: replace Point2Pose's current SAM2 mask with a supplied mask.
+"""Replay-only adapter for supplied masks and an optional feature-crop ablation.
 
 The pinned sealed bridge and Point2Pose checkout remain untouched. The bridge
 still initializes its SAM2 session from the usual first mask; every subsequent
-frame uses the caller's current causal SAM3 mask. This ablates segmentation,
-not pose fitting, and is not a production integration.
+frame uses the caller's current causal SAM3 mask. The optional crop switch
+changes seed-point extraction, not rigid fitting. This is not a production
+integration.
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ def main() -> None:
     parser.add_argument("--repo", required=True, type=Path)
     parser.add_argument("--config", required=True, type=Path)
     parser.add_argument("--honor-initial-mask", action="store_true")
+    parser.add_argument("--crop-from-uneroded-mask", action="store_true")
     args = parser.parse_args()
 
     specification = importlib.util.spec_from_file_location("sealed_p2p_bridge", args.sealed_bridge)
@@ -87,6 +89,32 @@ def main() -> None:
                 frontend.segmenter.segment = original_segment
 
         FrontEnd.initialize = initialize_with_exact_mask
+    if args.crop_from_uneroded_mask:
+        # Diagnose the sampler's coupling between boundary rejection and the
+        # RGB crop. Preserve its normal inside-mask filtering; change only the
+        # box passed to SuperPoint's feature extraction.
+        sys.path.insert(0, str(args.repo))
+        from point2pose.modules.sampler.super_point_balanced_sampler import SuperPointBalancedSampler
+
+        original_sample = SuperPointBalancedSampler.sample
+
+        def sample_with_raw_mask_crop(sampler, context, obj_id):
+            frame = context.frame
+            raw_mask = (frame.mask[obj_id, 0] > 0).to("cpu").numpy().astype(np.uint8) * 255
+            had_instance_override = "_compute_crop_from_mask" in sampler.__dict__
+            original_crop = sampler._compute_crop_from_mask
+            sampler._compute_crop_from_mask = lambda _filtered, height, width, pad=0: original_crop(
+                raw_mask, height, width, pad=pad
+            )
+            try:
+                return original_sample(sampler, context, obj_id)
+            finally:
+                if had_instance_override:
+                    sampler._compute_crop_from_mask = original_crop
+                else:
+                    del sampler._compute_crop_from_mask
+
+        SuperPointBalancedSampler.sample = sample_with_raw_mask_crop
     sys.argv = [str(args.sealed_bridge), "--repo", str(args.repo), "--config", str(args.config)]
     bridge.main()
 

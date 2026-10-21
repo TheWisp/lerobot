@@ -1,4 +1,4 @@
-"""Run the pinned Point2Pose pipeline with current-frame external masks.
+"""Run the pinned Point2Pose pipeline with replay-only mask/crop ablations.
 
 This is an offline, causal segmentation ablation. The initial mask can come
 from the sealed recording or a supplied image; subsequent masks come from
@@ -55,6 +55,7 @@ def main() -> None:
     parser.add_argument("--role", required=True, choices=("dowel", "ring"))
     parser.add_argument("--mask-source", choices=("external", "internal"), default="external")
     parser.add_argument("--honor-initial-mask", action="store_true")
+    parser.add_argument("--crop-from-uneroded-mask", action="store_true")
     parser.add_argument("--label", default="sam3")
     parser.add_argument("--save-masks", action="store_true")
     parser.add_argument("--diagnostic-frames", type=int, nargs="*", default=())
@@ -74,6 +75,8 @@ def main() -> None:
         parser.error("external mask source needs --current-masks")
     if args.honor_initial_mask and args.mask_source != "external":
         parser.error("honoring the initial mask requires the external-mask bridge")
+    if args.crop_from_uneroded_mask and args.mask_source != "external":
+        parser.error("the raw-mask crop ablation requires the external-mask bridge")
     args.output.mkdir(parents=True, exist_ok=True)
     log_path = args.output / f"p2p_{args.role}_{args.label}_worker.log"
     bridge_script = (
@@ -96,6 +99,8 @@ def main() -> None:
                 command.extend(("--sealed-bridge", str(args.sealed_bridge)))
             if args.honor_initial_mask:
                 command.append("--honor-initial-mask")
+            if args.crop_from_uneroded_mask:
+                command.append("--crop-from-uneroded-mask")
             if args.worker_diagnostic:
                 command.extend(("--diagnostic", str(args.worker_diagnostic)))
             command.extend(("--repo", str(args.p2p_repo), "--config", str(args.p2p_config)))
