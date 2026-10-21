@@ -106,7 +106,39 @@ requires one appearance reference per object and the existing fixed-camera RGB-D
 
 All selected objects share one TrackEverything inference call, including objects seeded at
 different reference frames. Each object gets its own rigid fit. It tracks a fixed reference
-query set; adding points on newly revealed surfaces is not implemented.
+query set; adding points on newly revealed surfaces is not implemented in the
+FLASH preparation or live paths.
+
+### Multi-view visible-surface experiment (2026-10-21)
+
+`benchmarks/flash_expand_trackeverything_points.py` is an offline experiment
+that starts from a saved query trace. It chooses a later SAM3-mask view with the
+most depth-backed pixels not covered by existing mask-and-depth-supported
+tracks, seeds additional TrackEverything queries there, and reruns the model
+with all old and new queries. The source frame is selected from evidence, not
+from an object-specific timestamp. The full raw result and query birth frames
+are saved, but the coverage report counts only model-visible points that also
+project inside that frame's SAM3 mask and agree with its measured depth. The
+10 mm depth band is the same configurable diagnostic used above; hidden-point
+predictions are deliberately excluded. This does not fit or apply an object pose.
+
+On the insertion demo, a first dowel pass seeded 111 queries at frame 361 and a
+second pass seeded 88 at frame 409. At frame 454, the supported visible dowel
+points increased from 93 after one pass to 141 after two. At frame 500 the
+count increased from 101 to 141. At the configured query spacing, coverage of
+the visible SAM3 mask rose from 77% to 93% at frame 454 and from 77% to 91%
+at frame 500. Both views visibly populate parts of the dowel missed by the
+single initial view. The results and a six-frame contact sheet are in the local
+demo dataset under `flash/v1/tracker-runs/trackeverything-expanded-20261021-2/`.
+
+More dots do not imply stable identities. Among points that still pass the mask
+and depth check, the second dowel cohort's median change in pairwise 3D
+separation from its birth frame is 6.8 mm at frame 454 and 11.1 mm at frame 500. A corresponding ring expansion has 0.9 mm and 1.1 mm at those frames.
+This makes visible-surface expansion promising, especially for the target,
+but dowel correspondence drift remains measurable even after rejecting points
+outside the observed surface. Mask and depth agreement validate where a point
+is now, not whether it retained the same physical identity. These outputs are
+an offline research result, not a revised prepared skill or live tracker.
 
 Other trackers register an argv template under their tracker ID:
 
