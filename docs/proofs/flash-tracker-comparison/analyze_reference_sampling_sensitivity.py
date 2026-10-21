@@ -20,10 +20,10 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-from analyze_multiview import frame_points, move, surface_p90_mm
+from analyze_multiview import build_models, frame_points, move, surface_p90_mm
 
 from lerobot.policies.flash.perception import RGBDFrame
-from lerobot.policies.flash.pose_disagreement import surface_support
+from lerobot.policies.flash.pose_disagreement import free_space_support, surface_support
 
 
 def _eroded_first_view(dataset: Path, masks: Path, intrinsics: np.ndarray) -> np.ndarray:
@@ -49,8 +49,15 @@ def main() -> None:
     parser.add_argument("--dataset", type=Path, required=True)
     parser.add_argument("--masks", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--source-trace",
+        type=Path,
+        default=Path(__file__).with_name("p2p_dowel_internal_control_100_550.npz"),
+    )
     parser.add_argument("--repeats", type=int, default=100)
     parser.add_argument("--max-local-depth-span-m", type=float, default=0.01)
+    parser.add_argument("--depth-tolerance-m", type=float, default=0.005)
+    parser.add_argument("--multiview-support-radius-m", type=float, default=0.003)
     args = parser.parse_args()
     if args.repeats < 1:
         parser.error("repeats must be positive")
@@ -85,7 +92,21 @@ def main() -> None:
         raise ValueError("no depth-backed dowel pixels in the recorded contact frame")
     eroded = _eroded_first_view(args.dataset, args.masks, intrinsics)
     selected = np.linspace(0, len(eroded) - 1, min(4000, len(eroded)), dtype=int)
-    models = [("service_full", 0, full), ("eroded_cap4000", 0, eroded[selected])]
+    with np.load(args.source_trace) as trace:
+        _, multiview, _ = build_models(
+            args.dataset,
+            args.masks,
+            "dowel",
+            intrinsics,
+            trace["poses"],
+            trace["lost"],
+            args.multiview_support_radius_m,
+        )
+    models = [
+        ("service_full", 0, full),
+        ("eroded_cap4000", 0, eroded[selected]),
+        ("confirmed_multiview", 0, multiview),
+    ]
     rng = np.random.default_rng(20261021)
     for fraction in (0.9, 0.75, 0.5, 0.25):
         size = max(3, int(len(full) * fraction))
@@ -97,6 +118,20 @@ def main() -> None:
     for name, replicate, model in models:
         direct_support = surface_support(frame, mask, model, direct)
         motion_support = surface_support(frame, mask, model, motion)
+        direct_free = free_space_support(
+            frame,
+            model,
+            direct,
+            depth_tolerance_m=args.depth_tolerance_m,
+            max_local_depth_span_m=args.max_local_depth_span_m,
+        )
+        motion_free = free_space_support(
+            frame,
+            model,
+            motion,
+            depth_tolerance_m=args.depth_tolerance_m,
+            max_local_depth_span_m=args.max_local_depth_span_m,
+        )
         direct_surface_mm = surface_p90_mm(observed, move(model, direct))
         motion_surface_mm = surface_p90_mm(observed, move(model, motion))
         rows.append(
@@ -112,6 +147,10 @@ def main() -> None:
                 motion_support.projected_point_mask_fraction,
                 direct_support.depth_residual_p90_m * 1000,
                 motion_support.depth_residual_p90_m * 1000,
+                direct_free.valid_depth_pixels,
+                motion_free.valid_depth_pixels,
+                direct_free.contradiction_fraction,
+                motion_free.contradiction_fraction,
             )
         )
     args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -130,6 +169,10 @@ def main() -> None:
                 "motion_projected_mask_fraction",
                 "direct_conditional_depth_p90_mm",
                 "motion_conditional_depth_p90_mm",
+                "direct_valid_projected_depth_pixels",
+                "motion_valid_projected_depth_pixels",
+                "direct_free_space_contradiction_fraction",
+                "motion_free_space_contradiction_fraction",
             )
         )
         writer.writerows(rows)
