@@ -23,7 +23,11 @@ def main() -> None:
     parser.add_argument("--masks", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--candidate", action="append", default=[], help="extra NAME=POSE_TRACE.npz")
+    parser.add_argument("--first-frame", type=int, default=400)
+    parser.add_argument("--last-frame", type=int, default=500)
     args = parser.parse_args()
+    if args.first_frame > args.last_frame:
+        parser.error("first frame must not follow last frame")
 
     root = Path(__file__).parent
     with np.load(root / "pose_traces.npz") as reference:
@@ -60,7 +64,7 @@ def main() -> None:
     length_m = float(offsets[1] - offsets[0])
     endpoints = [center + offset * shaft for offset in offsets]
     rows = []
-    for frame in range(400, 501):
+    for frame in range(args.first_frame, args.last_frame + 1):
         points, _ = frame_points(args.dataset, args.masks, "dowel", frame, intrinsics, edge_limit_m=0.01)
         if len(points) < 3:
             continue
