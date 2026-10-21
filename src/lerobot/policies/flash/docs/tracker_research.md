@@ -85,6 +85,8 @@ In the [recorded insertion comparison](../../../../../docs/proofs/flash-tracker-
 
 For this insertion, comparing task features is more informative than comparing all six pose coordinates: the dowel's candidate insertion end and unoriented shaft axis differ sharply between the two trackers after occlusion, whereas axial roll is geometrically irrelevant. A unified pose estimate remains useful internally, but the planner should consume a belief over the selected end, shaft and target opening rather than requiring confidence in an arbitrary full object frame. The current `SpatialSample` and `PoseRelationCriterion` still use full rigid transforms, so this task-feature constraint is **not implemented** by the present planner.
 
+The [same replay evidence](../../../../../docs/proofs/flash-tracker-comparison/EVIDENCE.md#what-the-visible-shaft-still-measures) shows a narrower opportunity: the insertion end is partly hidden, but the opposite end and central shaft remain visible. During insertion, Point2Pose's shaft differs by a median 2.5° from a central-shaft depth fit and 3.3° from the SAM3 mask's image axis; a reconstructed rigid-grasp prior differs by 10.4° from that image axis. The exposed end also supports the Point2Pose track along the shaft more strongly than the grasp prior. A tracker can therefore update observable pose components and propagate a hidden contact point through learned rigid geometry. The lateral centerline and hidden-tip error are not independently measured, so this is evidence for a partial-update path, not proof of insertion accuracy.
+
 ```mermaid
 flowchart TD
     IN[Synchronized RGB-D and calibration] --> PT[Shared causal point tracks]
