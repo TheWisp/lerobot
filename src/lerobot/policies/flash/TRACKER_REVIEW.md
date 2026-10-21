@@ -145,6 +145,27 @@ registration tolerance and 100 trials, at frame 454 the frame-361 dowel cohort
 has 42 rigid-consistent tracks among its 58 mask/depth-supported tracks; the
 frame-409 cohort has 28 among 47. At frame 550 those counts are 31/56 and
 21/47. The ring cohort retains 74/74 at frame 454 and 71/75 at frame 550.
+
+The Run → FLASH demo editor now exposes bounded growth for TrackEverything:
+maximum points per object, maximum additions per newly exposed view, and the
+depth-agreement tolerance. Processing segments the selected demo's full RGB
+sequence with the saved object prompts in a separate process, tracks all query
+cohorts together, and saves query birth frames and measured visible-surface
+support for replay. The pink pose candidate remains the original-query fit;
+the new points are review evidence, not silently promoted to planner pose.
+A full two-object pass on the 613-frame insertion demo with a 320-point total
+cap, 96-point per-view cap and 10 mm depth tolerance finished in 180 s. It
+added four later cohorts per object without exceeding either cap.
+
+Can those new points improve pose? A preliminary rigid fit anchored each later
+cohort to the original pose at its birth view. On 38 sampled dowel frames,
+held-out new-track median residual fell from 29.4 to 4.5 mm. Yet the fitted
+orientation changed by 55.9° on median, the estimated object center by 20.5 mm,
+and the original reference surface's mask-and-depth support improved on 24
+frames but worsened on 13. This is not proof of a better 6D pose: birth anchors
+inherit earlier pose error and smooth dowel surfaces permit coherent track
+drift. A revised pose should be accepted only after independent surface,
+free-space, temporal and task-point checks, with symmetry handled explicitly.
 These are within-cohort checks anchored at each cohort's birth frame; they do
 not establish alignment between cohorts or prove a stable relative dowel-ring
 cloud. A next experiment must link overlapping cohorts and reject drifting

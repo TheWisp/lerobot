@@ -273,6 +273,59 @@ def test_raw_point_replay_preserves_model_tracks_separately_from_pose_fit(tmp_pa
         load_candidate_point_tracks(root, bundle, "raw-points")
 
 
+def test_grown_point_replay_shows_only_visible_mask_and_depth_supported_points(tmp_path):
+    import cv2
+
+    root, bundle = _demo(tmp_path)
+    np.savetxt(root / "recording/cam_K.txt", np.eye(3))
+    (root / "recording/depth").mkdir()
+    for frame in range(3):
+        cv2.imwrite(str(root / "recording/depth" / f"{frame:06d}.png"), np.full((4, 4), 1000, np.uint16))
+    source = tmp_path / "relative.npz"
+    poses = np.repeat(np.eye(4)[None], 3, axis=0)
+    np.savez(source, frames=np.arange(3), poses=poses, lost=np.zeros(3, bool))
+    import_relative_trace(
+        root,
+        bundle,
+        tracker="trackeverything",
+        role="object",
+        source_path=source,
+        candidate_id="grown-points",
+    )
+    raw = root / "flash/v1/tracker-runs/grown-points/scene.npz"
+    raw.parent.mkdir(parents=True)
+    masks = raw.parent / "segmentation/masks/0"
+    masks.mkdir(parents=True)
+    for frame in range(3):
+        cv2.imwrite(str(masks / f"{frame:06d}.png"), np.full((4, 4), 255, np.uint8))
+    queries = np.array([[0, 0, 0], [0, 1, 0], [0, 0, 1], [1, 1, 1]])
+    xyz = np.repeat(np.column_stack((queries[:, 1:], np.ones(4)))[None].astype(float), 3, axis=0)
+    xyz[2, 3, 2] = 1.1  # model-visible but contradicted by measured depth
+    np.savez(
+        raw,
+        frames=np.arange(3),
+        roles=np.array(["object"]),
+        query_roles=np.array(["object"] * 4),
+        query_points_2d=queries,
+        query_coords_m=xyz,
+        query_visibility_logits=np.ones((3, 4)),
+        poses=poses[None],
+        lost=np.zeros((1, 3), bool),
+        metadata=np.asarray(json.dumps({"query_counts": {"object": 4}, "fit_threshold_m": 0.005})),
+    )
+    manifest_path = root / "flash/v1/tracker-candidates/grown-points/manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["raw_query_trace"] = str(raw)
+    manifest["point_growth"] = {"surface_tolerance_m": 0.01}
+    manifest_path.write_text(json.dumps(manifest))
+    points = load_candidate_point_tracks(root, bundle, "grown-points")
+    assert points["surface_filtered"]
+    assert points["roles"][0]["birth_frames"] == [0, 0, 0, 1]
+    assert points["roles"][0]["positions"][0][3] is None
+    assert points["roles"][0]["positions"][1][3] == [1.0, 1.0, 0.0]
+    assert points["roles"][0]["positions"][2][3] is None
+
+
 def test_trackeverything_shares_inference_but_fits_each_object_at_its_reference(tmp_path, monkeypatch):
     """Exercise the adapter boundary with independent known motions and seed times."""
     import importlib.util

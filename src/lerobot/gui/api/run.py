@@ -276,6 +276,9 @@ class FlashTrackerProcessRequest(FlashDatasetInspectRequest):
     bundle_path: str
     tracker: str
     role: str | None = None
+    max_points_per_object: int | None = None
+    new_points_per_view: int | None = None
+    surface_tolerance_m: float | None = None
 
 
 class FlashTrackerApplyRequest(FlashDatasetInspectRequest):
@@ -1222,6 +1225,9 @@ async def flash_demo_tracker_process(req: FlashTrackerProcessRequest) -> dict:
                 role=req.role,
                 candidate_id=candidate_id,
                 expected_episode=req.episode,
+                max_points_per_object=req.max_points_per_object,
+                new_points_per_view=req.new_points_per_view,
+                surface_tolerance_m=req.surface_tolerance_m,
             ),
         )
     except (OSError, KeyError, TypeError, ValueError) as exc:

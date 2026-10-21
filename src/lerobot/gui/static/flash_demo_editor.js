@@ -257,6 +257,35 @@ function _flashEditorRender() {
             value => { state.trackerRole = value; }, ['', ...roles]);
         roleSelect.options[0].textContent = 'All annotated objects';
         roleSelect.disabled = state.running;
+        if (state.tracker === 'trackeverything' && selectedTracker?.supports_point_growth !== false) {
+            const growth = _flashEditorSection(trackers, 'Visible-surface point growth',
+                'Seed additional TrackEverything queries in later SAM3 masks where aligned depth shows uncovered surface. The saved pose fit still uses the initial reference points; inspect the new visible tracks before treating them as pose evidence.');
+            const toggle = document.createElement('input');
+            toggle.type = 'checkbox';
+            toggle.checked = state.growPoints;
+            toggle.disabled = state.running;
+            toggle.setAttribute('aria-label', 'Grow points from later views');
+            toggle.onchange = () => { state.growPoints = toggle.checked; _flashEditorRender(); };
+            const label = document.createElement('label');
+            label.textContent = 'Grow points from later views';
+            label.append(toggle);
+            growth.append(label);
+            if (state.growPoints) {
+                const total = _flashEditorField(growth, 'Maximum points per object', state.maxPoints,
+                    value => { state.maxPoints = value; }, null, 'number');
+                total.min = String(selectedTracker.initial_points_per_object || 3);
+                total.step = '1';
+                const added = _flashEditorField(growth, 'Maximum new points per view', state.pointsPerView,
+                    value => { state.pointsPerView = value; }, null, 'number');
+                added.min = '3';
+                added.step = '1';
+                const tolerance = _flashEditorField(growth, 'Visible depth agreement (mm)', state.surfaceToleranceMm,
+                    value => { state.surfaceToleranceMm = value; }, null, 'number');
+                tolerance.min = '0.1';
+                tolerance.step = '0.1';
+                for (const input of [total, added, tolerance]) input.disabled = state.running;
+            }
+        }
         const processButton = _flashEditorButton(trackers, 'Process demo and preview',
             () => void _flashEditorProcessTracker());
         processButton.disabled = state.running || !selectedTracker?.runnable;
@@ -287,7 +316,7 @@ function _flashEditorRender() {
                 const item = document.createElement('div');
                 item.className = 'flash-editor-keypoint';
                 const label = document.createElement('strong');
-                label.textContent = `${candidate.tracker}${candidate.inference_mode ? ` (${candidate.inference_mode} context, fixed-query pose fit)` : ''} · ${_flashTrackerCoverage(candidate)}`;
+                label.textContent = `${candidate.tracker}${candidate.inference_mode ? ` (${candidate.inference_mode} context, initial-query pose fit)` : ''} · ${_flashTrackerCoverage(candidate)}`;
                 item.append(label);
                 const hasConflicts = Object.values(candidate.coverage_by_role || {}).some(info => info.temporal_conflict_frames > 0);
                 const missingEvidence = candidate.tracker === 'trackeverything' && !candidate.inference_mode;
@@ -302,7 +331,9 @@ function _flashEditorRender() {
                 if (candidate.tracker === 'trackeverything' && !missingEvidence) {
                     const note = document.createElement('p');
                     note.className = 'flash-editor-status';
-                    note.textContent = 'This pose is fitted from fixed reference-point tracks. New scene points are not associated with objects; coverage and fit support do not establish pose accuracy.';
+                    note.textContent = candidate.point_growth
+                        ? `Visible-surface review: ${candidate.point_growth.events.length} added views, capped at ${candidate.point_growth.max_points_per_object} points per object and ${candidate.point_growth.new_points_per_view} per view. The pink pose is still fitted from the original points.`
+                        : 'This pose is fitted from fixed reference-point tracks. New scene points are not associated with objects; coverage and fit support do not establish pose accuracy.';
                     item.append(note);
                 }
                 const highlight = () => {
@@ -615,6 +646,10 @@ async function toggleFlashDemoEditor() {
             original: JSON.stringify([result.annotation, result.keypoints_document]),
             drawing: false, vertices: [], running: false, message: '',
             trackers, tracker: trackers.trackers.find(item => item.runnable)?.id || 'point2pose',
+            growPoints: true,
+            maxPoints: (trackers.trackers.find(item => item.id === 'trackeverything')?.initial_points_per_object || 128) * 3,
+            pointsPerView: trackers.trackers.find(item => item.id === 'trackeverything')?.initial_points_per_object || 128,
+            surfaceToleranceMm: Number(result.annotation.registration_threshold_m || 0.005) * 1000,
             trackerRole: '',
             trackerImportRole: result.annotation.held_role,
             trackerSource: '', trackerMessage,
@@ -662,6 +697,8 @@ async function _flashEditorProcessTracker() {
     const state = flashDemoEditor;
     if (!state || state.running) return;
     const replay = flashReplay;
+    const growthEnabled = state.tracker === 'trackeverything' && state.growPoints &&
+        state.trackers.trackers.find(item => item.id === state.tracker)?.supports_point_growth !== false;
     state.running = true;
     state.trackerMessage = `Processing ${state.trackerRole || 'all annotated objects'} with ${state.tracker} on the recorded RGB-D frames…`;
     _flashEditorRender();
@@ -669,7 +706,11 @@ async function _flashEditorProcessTracker() {
         const response = await fetch('/api/run/flash/demo/trackers/process', {
             method: 'POST', headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({dataset_root: flashReplay.datasetRoot, bundle_path: flashReplay.bundle_path,
-                episode: flashReplay.episode, tracker: state.tracker, role: state.trackerRole || null}),
+                episode: flashReplay.episode, tracker: state.tracker, role: state.trackerRole || null,
+                max_points_per_object: growthEnabled ? state.maxPoints : null,
+                new_points_per_view: growthEnabled ? state.pointsPerView : null,
+                surface_tolerance_m: growthEnabled
+                    ? state.surfaceToleranceMm / 1000 : null}),
         });
         const result = await response.json();
         if (!response.ok) throw new Error(result.detail || 'Tracker could not process the demo');

@@ -19,6 +19,7 @@ import numpy as np
 import torch
 
 from lerobot.policies.flash.registration import DegenerateRegistrationError, register_object
+from lerobot.policies.flash.visible_points import read_mask, select_growth_view, surface_support
 
 
 def _query_pixels(mask: np.ndarray, depth: np.ndarray, count: int) -> np.ndarray:
@@ -53,6 +54,10 @@ def run(
     fit_trials: int,
     reference_specs: list[dict] | None = None,
     mode: str = "dense",
+    growth_masks: Path | None = None,
+    max_points_per_role: int | None = None,
+    points_per_view: int | None = None,
+    support_tolerance_m: float | None = None,
 ) -> dict:
     if mode not in ("dense", "sparse"):
         raise ValueError("TrackEverything mode must be dense or sparse")
@@ -60,6 +65,15 @@ def run(
         raise ValueError("invalid demo span or fit support settings")
     if not checkpoint.is_file() or not (repository / "demo_hf.py").is_file():
         raise ValueError("TrackEverything source and checkpoint must be installed locally")
+    if growth_masks is not None and (
+        max_points_per_role is None
+        or points_per_view is None
+        or support_tolerance_m is None
+        or max_points_per_role < query_count
+        or points_per_view < 3
+        or support_tolerance_m <= 0
+    ):
+        raise ValueError("point growth needs a total cap, per-view cap and positive surface tolerance")
     sys.path.insert(0, str(repository.parent))
     from trackeverything.demo_hf import TrackEverything  # noqa: PLC0415
 
@@ -87,22 +101,38 @@ def run(
         query_xy = _query_pixels(reference_mask > 0, depths[reference_index], query_count)
         queries_by_role.append(np.column_stack((np.full(len(query_xy), reference_index), query_xy)))
     queries = np.concatenate(queries_by_role)
+    query_roles = np.concatenate(
+        [
+            np.repeat(spec["role"], len(role_queries))
+            for spec, role_queries in zip(specs, queries_by_role, strict=True)
+        ]
+    )
     intrinsics = np.loadtxt(recording / "cam_K.txt").reshape(3, 3)
     cameras = np.repeat(np.eye(4)[None], len(frames), axis=0)
+    video = np.stack(rgbs)
+    depth_stack = np.stack(depths)
+    rgbs.clear()
+    depths.clear()
+    camera_intrinsics = np.repeat(intrinsics[None], len(frames), axis=0)
     model = TrackEverything.from_pretrained(str(checkpoint), device="cuda")
-    start = time.perf_counter()
-    with torch.inference_mode():
-        tracked = model.infer(
-            video=np.stack(rgbs),
-            depths=np.stack(depths),
-            intrinsics=np.repeat(intrinsics[None], len(frames), axis=0),
-            extrinsics=cameras,
-            query_points_2d=queries,
-            mode=mode,
+
+    def infer(query_points: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        with torch.inference_mode():
+            tracked = model.infer(
+                video=video,
+                depths=depth_stack,
+                intrinsics=camera_intrinsics,
+                extrinsics=cameras,
+                query_points_2d=query_points,
+                mode=mode,
+            )
+        return (
+            tracked.query_coords[0].float().cpu().numpy() * tracked.norm_factor,
+            tracked.query_visibs[0].float().cpu().numpy(),
         )
-    elapsed_s = time.perf_counter() - start
-    points = tracked.query_coords[0].float().cpu().numpy() * tracked.norm_factor
-    visibility = tracked.query_visibs[0].float().cpu().numpy()
+
+    start = time.perf_counter()
+    points, visibility = infer(queries)
     if points.shape != (len(frames), len(queries), 3) or visibility.shape != points.shape[:2]:
         raise ValueError("TrackEverything returned an unexpected query-track shape")
     traces, offset = [], 0
@@ -130,6 +160,69 @@ def run(
         traces.append(trace)
         offset = end
     arrays = {key: np.stack([trace[key] for trace in traces]) for key in traces[0]}
+    original_query_count = len(queries)
+    growth_events = []
+    if growth_masks is not None and any(len(query) < max_points_per_role for query in queries_by_role):
+        while True:
+            additions = []
+            for spec_index, spec in enumerate(specs):
+                role = spec["role"]
+                role_indices = np.flatnonzero(query_roles == role)
+                remaining = max_points_per_role - len(role_indices)
+                if remaining < 3:
+                    continue
+                view = select_growth_view(
+                    frames,
+                    points[:, role_indices],
+                    visibility[:, role_indices],
+                    queries[role_indices, 0].astype(int),
+                    depth_stack,
+                    growth_masks / str(spec_index),
+                    intrinsics,
+                    support_tolerance_m,
+                    min(points_per_view, remaining),
+                )
+                if view is None:
+                    continue
+                birth, novel = view
+                if int(novel.sum()) < 3:
+                    continue
+                xy = _query_pixels(novel, depth_stack[birth], min(points_per_view, remaining))
+                if len(xy) < 3:
+                    continue
+                additions.append((role, birth, np.column_stack((np.full(len(xy), birth), xy))))
+            if not additions:
+                break
+            queries = np.concatenate([queries, *(entry[2] for entry in additions)])
+            query_roles = np.concatenate(
+                [query_roles, *(np.repeat(entry[0], len(entry[2])) for entry in additions)]
+            )
+            growth_events.extend(
+                {"role": role, "frame": int(frames[birth]), "count": len(new_queries)}
+                for role, birth, new_queries in additions
+            )
+            points, visibility = infer(queries)
+            if points.shape != (len(frames), len(queries), 3) or visibility.shape != points.shape[:2]:
+                raise ValueError("TrackEverything returned an unexpected grown query-track shape")
+    elapsed_s = time.perf_counter() - start
+    visible_surface_support = None
+    if growth_masks is not None:
+        visible_surface_support = np.zeros(visibility.shape, dtype=bool)
+        for index, frame in enumerate(frames):
+            for spec_index, spec in enumerate(specs):
+                mask = read_mask(growth_masks / str(spec_index), int(frame), depth_stack[index].shape)
+                if mask is None:
+                    continue
+                role_indices = np.flatnonzero(query_roles == spec["role"])
+                supported, _, _ = surface_support(
+                    points[index, role_indices],
+                    np.where(queries[role_indices, 0] <= index, visibility[index, role_indices], -np.inf),
+                    mask,
+                    depth_stack[index],
+                    intrinsics,
+                    support_tolerance_m,
+                )
+                visible_surface_support[index, role_indices] = supported
     if reference_specs is None:
         arrays = {key: value[0] for key, value in arrays.items()}
     else:
@@ -141,6 +234,13 @@ def run(
         query_points_2d=queries,
         query_coords_m=points,
         query_visibility_logits=visibility,
+        query_roles=query_roles,
+        original_query_count=np.asarray(original_query_count),
+        **(
+            {"visible_surface_support": visible_surface_support}
+            if visible_surface_support is not None
+            else {}
+        ),
         **arrays,
         elapsed_s=np.asarray(elapsed_s),
         metadata=np.asarray(
@@ -152,8 +252,10 @@ def run(
                     "fit_threshold_m": fit_threshold_m,
                     "first_frame": first_frame,
                     "query_counts": {
-                        spec["role"]: len(query) for spec, query in zip(specs, queries_by_role, strict=True)
+                        spec["role"]: int((query_roles == spec["role"]).sum()) for spec in specs
                     },
+                    "growth_events": growth_events,
+                    "support_tolerance_m": support_tolerance_m,
                 }
             )
         ),
@@ -250,6 +352,10 @@ def main() -> None:
     parser.add_argument("--fit-threshold-m", type=float, required=True)
     parser.add_argument("--min-inliers", type=int, required=True)
     parser.add_argument("--fit-trials", type=int, required=True)
+    parser.add_argument("--growth-masks", type=Path)
+    parser.add_argument("--max-points-per-role", type=int)
+    parser.add_argument("--points-per-view", type=int)
+    parser.add_argument("--support-tolerance-m", type=float)
     args = parser.parse_args()
     print(
         json.dumps(
@@ -269,6 +375,10 @@ def main() -> None:
                 reference_specs=json.loads(args.reference_specs.read_text())
                 if args.reference_specs
                 else None,
+                growth_masks=args.growth_masks,
+                max_points_per_role=args.max_points_per_role,
+                points_per_view=args.points_per_view,
+                support_tolerance_m=args.support_tolerance_m,
             )
         ),
         flush=True,

@@ -683,6 +683,11 @@ def test_run_flash_lists_demos_and_shows_extracted_pose_overlay(gui_page):
     assert len(page.evaluate("flashDemoEditor.annotation.reference_polygons_by_role.object")) == 3
     page.get_by_role("button", name="Trackers", exact=True).click()
     assert page.get_by_label("Processing scope", exact=True).input_value() == ""
+    assert page.get_by_label("Grow points from later views").is_checked()
+    page.get_by_label("Maximum points per object").fill("256")
+    page.get_by_label("Maximum points per object").press("Tab")
+    page.get_by_label("Maximum new points per view").fill("64")
+    page.get_by_label("Maximum new points per view").press("Tab")
     page.get_by_role("button", name="Process demo and preview", exact=True).click()
     page.wait_for_function("() => flashReplay.tracker_candidate?.candidate_id === 'test-tracker'")
     page.wait_for_function("() => !document.getElementById('flash-track-tools').hidden")
@@ -718,6 +723,9 @@ def test_run_flash_lists_demos_and_shows_extracted_pose_overlay(gui_page):
             "episode": 2,
             "tracker": "trackeverything",
             "role": None,
+            "max_points_per_object": 256,
+            "new_points_per_view": 64,
+            "surface_tolerance_m": 0.005,
         }
     ]
     assert "Candidate pose on this camera frame" in page.locator("#flash-tracker-content").inner_text()

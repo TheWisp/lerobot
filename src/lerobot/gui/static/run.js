@@ -637,7 +637,9 @@ function renderFlashDemoSnapshot(snapshot) {
     let html = `<div class="flash-tracker-legend">Demo time ${demo.time_s.toFixed(2)} s · nearest arm reading ${(demo.camera_arm_delta_s * 1000).toFixed(0)} ms from this RGB frame. Outlines project the sampled reference surface, not a complete object mesh. These are the poses stored in the selected prepared skill. Preparation did not save its segmentation history, so no mask here does not mean segmentation was lost. A preview candidate may have its own retained raw tracks.</div>`;
     if (flashReplay.tracker_candidate) {
         if (flashTrackPoints?.available && flashTrackPoints.candidate_id === flashReplay.tracker_candidate.candidate_id) {
-            html += '<div class="flash-tracker-legend">Dots and trails are the model’s raw point tracks, projected into this RGB frame without the rigid fit. Filled dots agree with the fitted pose within its registration tolerance; hollow dots disagree. Click a dot to follow that point’s full visible path. Fit agreement is not evidence that a point is on the object.</div>';
+            html += flashTrackPoints.surface_filtered
+                ? '<div class="flash-tracker-legend">Dots and trails are tracked points visible on the SAM3 mask and agreeing with measured RGB-D depth at this camera frame. Original points use the object color; later cohorts use orange, violet, pink and yellow. Filled dots agree with the pose propagated from their birth-frame anchor; hollow dots disagree. Click a dot to follow its visible path and birth frame.</div>'
+                : '<div class="flash-tracker-legend">Dots and trails are the model’s raw point tracks, projected into this RGB frame without the rigid fit. Filled dots agree with the fitted pose within its registration tolerance; hollow dots disagree. Click a dot to follow that point’s full visible path. Fit agreement is not evidence that a point is on the object.</div>';
         }
         for (const role of flashReplay.tracker_candidate.roles || [flashReplay.tracker_candidate.role]) {
             const proposal = snapshot.layers?.[role]?.candidate_tracker;
@@ -655,7 +657,7 @@ function renderFlashDemoSnapshot(snapshot) {
                     ? ` · selected point ${flashSelectedTrack.index}` : '';
                 html += _flashOverlayRow('raw_track', role, '', 'flash-tracker-layer',
                     `<span class="flash-tracker-dot" style="background:${_flashTrackColor(flashTrackPoints.roles.indexOf(pointRole))}"></span>` +
-                    `Raw 3D point paths <small>${visible}/${pointRole.count} model-visible${selected}; hover to isolate</small>`);
+                    `${flashTrackPoints.surface_filtered ? 'Visible surface point paths' : 'Raw 3D point paths'} <small>${visible}/${pointRole.count} ${flashTrackPoints.surface_filtered ? 'mask + depth supported' : 'model-visible'}${selected}; hover to isolate</small>`);
             } else if (flashReplay.tracker_candidate.tracker === 'trackeverything') {
                 html += `<div class="flash-tracker-unavailable">${flashTrackPoints?.available
                     ? 'No raw point tracks at this camera frame' : 'Loading raw point tracks…'}</div>`;
@@ -759,6 +761,14 @@ function _flashTrackColor(index) {
     return ['#22d3ee', '#a3e635', '#fbbf24', '#c4b5fd'][index % 4];
 }
 
+function _flashPointColor(roleIndex, role, pointIndex) {
+    if (!flashTrackPoints?.surface_filtered || !role.birth_frames?.length) return _flashTrackColor(roleIndex);
+    const births = [...new Set(role.birth_frames)].sort((a, b) => a - b);
+    const cohort = births.indexOf(role.birth_frames[pointIndex]);
+    return cohort === 0 ? _flashTrackColor(roleIndex)
+        : ['#fb923c', '#c4b5fd', '#f472b6', '#fde047'][(cohort - 1) % 4];
+}
+
 function _flashRawTrackFrame() {
     if (!flashTrackPoints?.available || !flashReplay?.frames?.length) return null;
     const replayFrame = flashReplay.frames[Number(document.getElementById('flash-tracker-scrub').value)];
@@ -772,18 +782,18 @@ function _flashDrawPointTracks(context, pixel) {
     const seconds = Number(document.getElementById('flash-track-trail')?.value || 0);
     const trailFrames = Math.round(seconds * (flashReplay.fps || 30));
     for (const [roleIndex, role] of flashTrackPoints.roles.entries()) {
-        const color = _flashTrackColor(roleIndex);
         const selectedRole = flashSelectedTrack?.role === role.role;
         const isolated = flashHighlightedOverlay?.kind === 'raw_track' &&
             (flashHighlightedOverlay.role === role.role || flashHighlightedOverlay.role === null);
         const dimmed = !!flashHighlightedOverlay && !isolated;
         const current = role.positions[at];
         for (let id = 0; id < role.count; id++) {
+            const pointColor = _flashPointColor(roleIndex, role, id);
             const selected = selectedRole && flashSelectedTrack.index === id;
             const alpha = dimmed || (flashSelectedTrack && !selected) ? 0.1 : 1;
             const start = selected ? 0 : Math.max(0, at - trailFrames);
             if (selected || trailFrames) {
-                context.strokeStyle = color;
+                context.strokeStyle = pointColor;
                 context.lineWidth = selected ? 2.5 : 1;
                 context.globalAlpha = alpha * (selected ? 0.9 : 0.25);
                 context.beginPath();
@@ -806,17 +816,17 @@ function _flashDrawPointTracks(context, pixel) {
             context.beginPath();
             context.arc(x, y, selected ? 5 : 2.5, 0, 2 * Math.PI);
             if (agreesWithFit) {
-                context.fillStyle = color;
+                context.fillStyle = pointColor;
                 context.fill();
             } else {
-                context.strokeStyle = color;
+                context.strokeStyle = pointColor;
                 context.lineWidth = selected ? 2.5 : 1.5;
                 context.stroke();
             }
             if (selected) {
                 context.font = 'bold 12px sans-serif';
                 context.fillStyle = '#fff';
-                context.fillText(`${role.role} point ${id} · ${point[2] === null ? 'no fit' : `${point[2]} mm from fit`}`, x + 9, y - 9);
+                context.fillText(`${role.role} point ${id} · born frame ${role.birth_frames?.[id] ?? '?'} · ${point[2] === null ? 'no fit' : `${point[2]} mm from fit`}`, x + 9, y - 9);
             }
         }
     }

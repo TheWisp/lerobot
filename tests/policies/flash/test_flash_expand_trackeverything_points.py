@@ -88,3 +88,82 @@ def test_later_queries_only_count_when_visible_on_the_measured_object(tmp_path, 
     assert int(rows[1]["new_visible"]) == report["new_queries"] - 1
     assert int(rows[1]["new_mask_depth_supported"]) == report["new_queries"] - 2
     assert (output / "seed-mask.png").is_file()
+
+
+def test_bounded_growth_keeps_initial_pose_fit_and_birth_identity(tmp_path, monkeypatch):
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[3] / "benchmarks"))
+    from flash_trackeverything_pose import run
+
+    recording = tmp_path / "recording"
+    masks = tmp_path / "masks" / "0"
+    for directory in (recording / "rgb", recording / "depth", masks):
+        directory.mkdir(parents=True)
+    np.savetxt(recording / "cam_K.txt", np.eye(3))
+    for frame in range(3):
+        cv2.imwrite(str(recording / "rgb" / f"{frame:06d}.jpg"), np.zeros((16, 16, 3), np.uint8))
+        cv2.imwrite(str(recording / "depth" / f"{frame:06d}.png"), np.full((16, 16), 1000, np.uint16))
+        mask = np.zeros((16, 16), np.uint8)
+        mask[:4] = 255 if frame == 0 else 0
+        if frame:
+            mask[:] = 255
+        cv2.imwrite(str(masks / f"{frame:06d}.png"), mask)
+    reference = masks / "000000.png"
+    repository = tmp_path / "trackeverything"
+    repository.mkdir()
+    (repository / "demo_hf.py").touch()
+    checkpoint = tmp_path / "weights"
+    checkpoint.touch()
+    calls = []
+
+    class FakeModel:
+        @classmethod
+        def from_pretrained(cls, *args, **kwargs):
+            return cls()
+
+        def infer(self, **kwargs):
+            queries = kwargs["query_points_2d"]
+            calls.append(queries.copy())
+            xyz = np.repeat(np.column_stack((queries[:, 1:], np.ones(len(queries))))[None], 3, axis=0)
+            return SimpleNamespace(
+                query_coords=torch.tensor(xyz[None]),
+                query_visibs=torch.ones((1, 3, len(queries))),
+                norm_factor=1,
+            )
+
+    fake = ModuleType("trackeverything.demo_hf")
+    fake.TrackEverything = FakeModel
+    monkeypatch.setitem(sys.modules, "trackeverything.demo_hf", fake)
+    output = tmp_path / "scene.npz"
+    run(
+        recording,
+        None,
+        repository=repository,
+        checkpoint=checkpoint,
+        first_frame=0,
+        last_frame=2,
+        output=output,
+        query_count=4,
+        fit_threshold_m=0.001,
+        min_inliers=3,
+        fit_trials=16,
+        reference_specs=[{"role": "object", "frame_index": 0, "mask_path": str(reference)}],
+        growth_masks=masks.parent,
+        max_points_per_role=7,
+        points_per_view=3,
+        support_tolerance_m=0.01,
+    )
+    assert len(calls) >= 2
+    with np.load(output) as trace:
+        original = int(trace["original_query_count"])
+        assert original == 4
+        assert 4 < len(trace["query_points_2d"]) <= 7
+        assert set(trace["query_points_2d"][original:, 0]) <= {1, 2}
+        assert trace["query_roles"].tolist() == ["object"] * len(trace["query_points_2d"])
+        assert not trace["lost"].any()
+        assert trace["visible_surface_support"].shape == trace["query_visibility_logits"].shape
+        assert not trace["visible_surface_support"][0, original:].any()
+        np.testing.assert_allclose(trace["poses"], np.broadcast_to(np.eye(4), trace["poses"].shape))
+        assert (
+            sum(event["count"] for event in json.loads(str(trace["metadata"]))["growth_events"])
+            == len(trace["query_points_2d"]) - original
+        )

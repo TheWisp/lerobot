@@ -12,13 +12,16 @@ import json
 import re
 import shutil
 import subprocess
+import sys
 from dataclasses import replace
 from pathlib import Path
 
+import cv2
 import numpy as np
 
 from .prepared import PreparedFlashSkill
 from .skill import Relation
+from .visible_points import read_mask, surface_support
 
 TRACKER_NAMES = {
     "sam3_dino_rgbd": "SAM3 + DINO + RGB-D",
@@ -65,7 +68,11 @@ def runner_availability(config: dict | None = None) -> list[dict]:
                 and Path(str(setup["command"][0])).is_file()
             )
         )
-        result.append({"id": tracker, "name": name, "runnable": runnable})
+        item = {"id": tracker, "name": name, "runnable": runnable}
+        if tracker == "trackeverything" and isinstance(setup, dict) and "command" not in setup:
+            item["initial_points_per_object"] = int(setup.get("query_count", 128))
+            item["supports_point_growth"] = True
+        result.append(item)
     return result
 
 
@@ -77,6 +84,9 @@ def process_demo(
     role: str | None = None,
     candidate_id: str,
     expected_episode: int | None = None,
+    max_points_per_object: int | None = None,
+    new_points_per_view: int | None = None,
+    surface_tolerance_m: float | None = None,
 ) -> dict:
     """Run a configured offline tracker and import its trace for review.
 
@@ -94,9 +104,27 @@ def process_demo(
         raise ValueError("this runner needs a single appearance reference view per object")
     if tracker not in TRACKER_NAMES:
         raise ValueError("unknown tracker")
+    growth = max_points_per_object is not None
+    if not growth and (new_points_per_view is not None or surface_tolerance_m is not None):
+        raise ValueError("point growth settings need a total point cap")
+    if growth and (
+        tracker != "trackeverything" or new_points_per_view is None or surface_tolerance_m is None
+    ):
+        raise ValueError("point growth needs TrackEverything and complete growth settings")
+    if growth and (
+        max_points_per_object < 3
+        or new_points_per_view < 3
+        or not np.isfinite(surface_tolerance_m)
+        or surface_tolerance_m <= 0
+    ):
+        raise ValueError("point growth limits and surface tolerance must be positive")
     _candidate_dir(root, candidate_id)
     config = tracker_runner_config()
     setup = config.get(tracker)
+    if growth and isinstance(setup, dict) and "command" in setup:
+        raise ValueError("the configured external TrackEverything adapter does not support point growth")
+    if growth and isinstance(setup, dict) and max_points_per_object < int(setup.get("query_count", 128)):
+        raise ValueError("total point cap must include the initial reference queries")
     if not isinstance(setup, dict) or not next(
         (entry for entry in runner_availability(config) if entry["id"] == tracker), {}
     ).get("runnable"):
@@ -123,6 +151,29 @@ def process_demo(
         # separately. Different reference timestamps are supported by the model.
         specs_path = run_dir / "references.json"
         specs_path.write_text(json.dumps(specs), encoding="utf-8")
+        if growth:
+            segment_dir = run_dir / "segmentation"
+            segment_dir.mkdir()
+            prompts_path = run_dir / "prompts.json"
+            prompts_path.write_text(json.dumps(prepared.prompts_by_role), encoding="utf-8")
+            segment_script = (
+                Path(__file__).resolve().parents[4] / "benchmarks" / "flash_segment_demo_masks.py"
+            )
+            segment_args = [
+                sys.executable,
+                str(segment_script),
+                "--recording",
+                str(root / "recording"),
+                "--reference-specs",
+                str(specs_path),
+                "--prompts",
+                str(prompts_path),
+                "--output",
+                str(segment_dir / "masks"),
+            ]
+            if annotation.get("sam_resolution") is not None:
+                segment_args.extend(("--resolution", str(annotation["sam_resolution"])))
+            _run_tracker(segment_args, segment_dir, setup)
         output = run_dir / "scene.npz"
         script = Path(__file__).resolve().parents[4] / "benchmarks" / "flash_trackeverything_pose.py"
         args = [
@@ -153,6 +204,19 @@ def process_demo(
             "--fit-trials",
             str(annotation["registration_trials"]),
         ]
+        if growth:
+            args.extend(
+                (
+                    "--growth-masks",
+                    str(segment_dir / "masks"),
+                    "--max-points-per-role",
+                    str(max_points_per_object),
+                    "--points-per-view",
+                    str(new_points_per_view),
+                    "--support-tolerance-m",
+                    str(surface_tolerance_m),
+                )
+            )
         import os
 
         env = os.environ.copy()
@@ -163,11 +227,22 @@ def process_demo(
             if data["roles"].tolist() != [spec["role"] for spec in specs]:
                 raise ValueError("tracker output object identities differ from the requested objects")
             metadata = json.loads(str(data["metadata"]))
-            offset = 0
+            query_roles = (
+                data["query_roles"]
+                if "query_roles" in data
+                else np.concatenate(
+                    [np.repeat(spec["role"], int(metadata["query_counts"][spec["role"]])) for spec in specs]
+                )
+            )
+            initial_count = (
+                int(data["original_query_count"]) if "original_query_count" in data else len(query_roles)
+            )
             for index, spec in enumerate(specs):
                 source = run_dir / f"object-{index}.npz"
-                count = int(metadata["query_counts"][spec["role"]])
-                visible = (data["query_visibility_logits"][:, offset : offset + count] > 0).sum(axis=1)
+                initial_role = query_roles[:initial_count] == spec["role"]
+                visible = (data["query_visibility_logits"][:, :initial_count][:, initial_role] > 0).sum(
+                    axis=1
+                )
                 np.savez_compressed(
                     source,
                     frames=data["frames"],
@@ -177,7 +252,6 @@ def process_demo(
                     visible_queries=visible,
                     temporal_conflicts=data["temporal_conflicts"][index],
                 )
-                offset += count
                 sources[spec["role"]] = source
     else:
         # External single-object adapters still receive every annotated object,
@@ -218,8 +292,20 @@ def process_demo(
         manifest = json.loads(destination.read_text(encoding="utf-8"))
         manifest["inference_mode"] = str(setup.get("mode", "dense"))
         manifest["raw_query_trace"] = str(output)
+        if growth:
+            manifest["point_growth"] = {
+                "max_points_per_object": max_points_per_object,
+                "new_points_per_view": new_points_per_view,
+                "surface_tolerance_m": surface_tolerance_m,
+                "events": metadata["growth_events"],
+                "pose_fit": "initial_reference_queries_only",
+            }
         destination.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
-        result.update(inference_mode=manifest["inference_mode"], raw_query_trace=manifest["raw_query_trace"])
+        result.update(
+            inference_mode=manifest["inference_mode"],
+            raw_query_trace=manifest["raw_query_trace"],
+            point_growth=manifest.get("point_growth"),
+        )
     return result
 
 
@@ -516,6 +602,16 @@ def load_candidate_point_tracks(dataset_root: Path, bundle_path: Path, candidate
         poses = np.asarray(data["poses"], dtype=np.float64)
         lost = np.asarray(data["lost"], dtype=bool)
         metadata = json.loads(str(data["metadata"]))
+        supported_trace = (
+            np.asarray(data["visible_surface_support"], dtype=bool)
+            if "visible_surface_support" in data
+            else None
+        )
+        query_roles = (
+            np.asarray(data["query_roles"])
+            if "query_roles" in data
+            else np.concatenate([np.repeat(role, int(metadata["query_counts"][role])) for role in roles])
+        )
     if "fit_threshold_m" in metadata:
         threshold_mm = float(metadata["fit_threshold_m"]) * 1000
     else:
@@ -527,25 +623,54 @@ def load_candidate_point_tracks(dataset_root: Path, bundle_path: Path, candidate
             )
         )
         threshold_mm = float(annotation["registration_threshold_m"]) * 1000
-    counts = [int(metadata["query_counts"][role]) for role in roles]
+    counts = [int((query_roles == role).sum()) for role in roles]
     if roles != manifest["roles"] or xyz.shape != (len(frames), sum(counts), 3):
         raise ValueError("raw point trace does not match the candidate")
     if visible.shape != xyz.shape[:2] or queries.shape != (sum(counts), 3):
         raise ValueError("raw point visibility or origins do not match the trace")
+    if supported_trace is not None and supported_trace.shape != visible.shape:
+        raise ValueError("visible surface support does not match the point trace")
     if poses.shape != (len(roles), len(frames), 4, 4) or lost.shape != (len(roles), len(frames)):
         raise ValueError("raw pose diagnostics do not match the point trace")
-    offset = 0
+    growth = manifest.get("point_growth")
+    masks_root = trace_path.parent / "segmentation" / "masks" if growth else None
     output_roles = []
     for role_index, (role, count) in enumerate(zip(roles, counts, strict=True)):
-        source_frame = int(queries[offset, 0])
-        if not 0 <= source_frame < len(frames) or not np.all(
-            queries[offset : offset + count, 0] == source_frame
-        ):
-            raise ValueError("raw point origins for one object have different frames")
-        source_points = xyz[source_frame, offset : offset + count]
+        role_indices = np.flatnonzero(query_roles == role)
+        births = queries[role_indices, 0].astype(int)
+        if np.any((births < 0) | (births >= len(frames))):
+            raise ValueError("raw point birth frame lies outside the trace")
+        source_points = np.full((count, 3), np.nan)
+        for point_index, (column, birth) in enumerate(zip(role_indices, births, strict=True)):
+            if not lost[role_index, birth]:
+                fit = poses[role_index, birth]
+                source_points[point_index] = (xyz[birth, column] - fit[:3, 3]) @ fit[:3, :3]
         positions = []
         for index in range(len(frames)):
-            current = xyz[index, offset : offset + count]
+            current = xyz[index, role_indices]
+            point_visible = visible[index, role_indices] & (births <= index)
+            if masks_root is not None and supported_trace is not None:
+                point_visible &= supported_trace[index, role_indices]
+            elif masks_root is not None:
+                raw_depth = cv2.imread(
+                    str(root / "recording" / "depth" / f"{frames[index]:06d}.png"),
+                    cv2.IMREAD_UNCHANGED,
+                )
+                if raw_depth is None:
+                    raise ValueError(f"missing recorded depth frame {frames[index]}")
+                depth = raw_depth.astype(np.float32) * 0.001
+                mask = read_mask(masks_root / str(role_index), int(frames[index]), depth.shape)
+                if mask is None:
+                    point_visible[:] = False
+                else:
+                    point_visible, _, _ = surface_support(
+                        current,
+                        point_visible.astype(float),
+                        mask,
+                        depth,
+                        intrinsics,
+                        float(growth["surface_tolerance_m"]),
+                    )
             if lost[role_index, index]:
                 residual_mm = np.full(count, np.nan)
             else:
@@ -554,7 +679,7 @@ def load_candidate_point_tracks(dataset_root: Path, bundle_path: Path, candidate
                 residual_mm = np.linalg.norm(expected - current, axis=1) * 1000
             row = []
             for point_index, point in enumerate(current):
-                if not visible[index, offset + point_index] or not np.isfinite(point).all() or point[2] <= 0:
+                if not point_visible[point_index] or not np.isfinite(point).all() or point[2] <= 0:
                     row.append(None)
                     continue
                 u = intrinsics[0, 0] * point[0] / point[2] + intrinsics[0, 2]
@@ -571,13 +696,15 @@ def load_candidate_point_tracks(dataset_root: Path, bundle_path: Path, candidate
                     ]
                 )
             positions.append(row)
-        output_roles.append({"role": role, "count": count, "positions": positions})
-        offset += count
+        output_roles.append(
+            {"role": role, "count": count, "positions": positions, "birth_frames": frames[births].tolist()}
+        )
     return {
         "available": True,
         "candidate_id": candidate_id,
         "frames": frames.tolist(),
         "fit_threshold_mm": threshold_mm,
+        "surface_filtered": masks_root is not None,
         "roles": output_roles,
     }
 
