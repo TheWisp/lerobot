@@ -151,10 +151,61 @@ def pareto_compare_dowel(rows: list[tuple], first_frame: int, last_frame: int) -
     return counts
 
 
+def cross_score_dowel_masks(
+    dataset: Path,
+    masks: Path,
+    intrinsics: np.ndarray,
+    center: np.ndarray,
+    axis: np.ndarray,
+    first_view: np.ndarray,
+    traces: dict[str, np.lib.npyio.NpzFile],
+    edge_limit_m: float,
+) -> None:
+    """Repeat insertion scoring with another causal outline stream."""
+    scores: dict[str, list[float]] = {backend: [] for backend in traces}
+    angles: dict[str, list[float]] = {backend: [] for backend in traces}
+    sam2_dominates = 0
+    common = 0
+    for frame in range(400, 501):
+        live, _ = frame_points(dataset, masks, "dowel", frame, intrinsics, edge_limit_m=edge_limit_m)
+        mask = cv2.imread(str(masks / "dowel" / f"{frame:06d}.png"), cv2.IMREAD_GRAYSCALE)
+        if mask is None:
+            raise ValueError(f"missing alternate mask at frame {frame}")
+        current = {}
+        for backend, trace in traces.items():
+            index = frame - 100
+            if trace["lost"][index]:
+                continue
+            pose = trace["poses"][index]
+            score = surface_p90_mm(live, move(first_view, pose))
+            angle, _ = projected_axis_error_deg(mask > 0, pose, intrinsics, center, axis)
+            scores[backend].append(score)
+            angles[backend].append(angle)
+            current[backend] = (score, angle)
+        if len(current) == 2:
+            common += 1
+            sam2_dominates += (
+                current["sam2"][0] < current["sam3"][0] and current["sam2"][1] < current["sam3"][1]
+            )
+    print(
+        "alternate dowel scoring masks",
+        masks,
+        "common frames",
+        common,
+        "sam2 dominates",
+        sam2_dominates,
+        "median surface p90 mm",
+        {backend: round(float(np.median(values)), 2) for backend, values in scores.items()},
+        "median axis error deg",
+        {backend: round(float(np.median(values)), 2) for backend, values in angles.items()},
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset", required=True, type=Path)
     parser.add_argument("--masks", required=True, type=Path, help="saved causal SAM3 masks")
+    parser.add_argument("--alternate-dowel-masks", type=Path, help="optional saved internal SAM2 masks")
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--edge-limit-mm", type=float, default=10.0)
     parser.add_argument("--map-support-radius-mm", type=float, default=3.0)
@@ -275,6 +326,18 @@ def main() -> None:
             first,
             last,
             dict(pareto_compare_dowel(rows, first, last)),
+        )
+    if args.alternate_dowel_masks is not None:
+        first_view, _ = frame_points(args.dataset, args.masks, "dowel", 100, intrinsics, max_points=4000)
+        cross_score_dowel_masks(
+            args.dataset,
+            args.alternate_dowel_masks,
+            intrinsics,
+            center,
+            axis,
+            first_view,
+            traces["dowel"],
+            args.edge_limit_mm / 1000,
         )
 
 
