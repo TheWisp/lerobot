@@ -91,6 +91,8 @@ The [causal multiview ablation](../../../../../docs/proofs/flash-tracker-compari
 
 [Reacquisition frames](../../../../../docs/proofs/flash-tracker-comparison/EVIDENCE.md#reacquisition-is-evidence-not-an-instant-full-pose-reset) show why backend status cannot be the scene belief. Point2Pose first returns a dowel pose after an 88-frame loss, yet subsequent frames have visible RGB masks with missing or contaminated depth; both its candidate and the gripper prior then have unreliable surface scores. Once metric depth returns at frame 276, it strongly favors Point2Pose over the grasp-time attachment, which differs by about 29 mm at the reference-surface centre. The scene estimator should carry the pose as a prediction through occlusion, condition corrections on measured support, and distinguish a direct track from a verified contact-tip state. This is a general evidence lifecycle, not a dowel-specific timeout.
 
+A naive local ICP refit of the visible middle shaft did not pass a withheld-end check: it improved the middle fit in 59/100 insertion frames, but the withheld ends in only 48/100, while sometimes moving the predicted insertion end by 13 mm. Improving a partial surface residual is not enough to revise the hidden contact point. The next fitting attempt should explicitly model which pose dimensions the current view observes and validate task-point uncertainty, rather than optimizing an unrestricted six-axis fit against any currently visible pixels.
+
 ```mermaid
 flowchart TD
     IN[Synchronized RGB-D and calibration] --> PT[Shared causal point tracks]
