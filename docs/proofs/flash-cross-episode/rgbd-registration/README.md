@@ -77,6 +77,33 @@ A direct **screened-to-screened** comparison answers that missing question. Keep
 
 Only the **two front-of-depth points** are candidate free-space conflicts. They are adjacent at live pixels `(303, 235)` and `(303, 236)`, where the transformed demo surface is 7.7 and 6.6 mm in front of the screened live depth at those exact pixels. Their nearest screened live 3D surface points are 2.9 and 2.1 mm away. The five points behind live depth can be explained by a changed visible surface or occlusion and are not counted as conflicts. The two remaining front points are a local pixel-level discrepancy; this experiment does not determine whether it comes from the transform or the depth measurement.
 
+The two live pixels read 351 mm, with complete 5×5 depth neighborhoods spanning 347–353 mm. The nearest screened live surface is around pixel `(300, 238)` at 345 mm. Thus the discrepancy is a roughly three-pixel local reprojection offset across a depth slope, **not** a retained no-reading pixel or a discontinuity in either clean cloud. Strong alternative fits from the same candidate set still left at least two front-of-depth points. The saved aligned depth cannot determine whether the offset comes from the estimated rigid transform, RGB-to-depth alignment, or a measurement bias.
+
+I repeated the same five-pixel mask-interior and 5×5 depth-neighborhood fit on two demo views and seven distinct live camera frames from the same trial. Each row independently selects the best sampled rigid fit by balanced 3D surface coverage; counts are mapped source **points**, not unique image pixels.
+
+| Demo frame | Live frame | Median nearest-surface distance, demo/live (mm) | Within 6 mm, demo/live | Front-of-depth points / valid pixel comparisons |
+| ---------- | ---------: | ----------------------------------------------: | ---------------------: | ----------------------------------------------: |
+| 400        |        472 |                                     1.08 / 0.87 |          78.9% / 99.9% |                                        19 / 979 |
+| 400        |        485 |                                     0.80 / 0.66 |          97.3% / 99.3% |                                       13 / 1150 |
+| 400        |        490 |                                     0.83 / 0.65 |          95.6% / 99.7% |                                        4 / 1174 |
+| 400        |        496 |                                     0.77 / 0.62 |          98.0% / 98.6% |                                        2 / 1129 |
+| 400        |        502 |                                     0.82 / 0.95 |          99.3% / 88.8% |                                        0 / 1295 |
+| 400        |        510 |                                     0.77 / 0.90 |          98.6% / 87.9% |                                        0 / 1252 |
+| 400        |        515 |                                     1.29 / 0.61 |          94.2% / 94.3% |                                        26 / 820 |
+| 500        |        472 |                                     0.98 / 0.70 |          87.1% / 97.6% |                                         1 / 991 |
+| 500        |        485 |                                     0.75 / 0.69 |          98.6% / 98.7% |                                        0 / 1109 |
+| 500        |        490 |                                     0.75 / 0.63 |          98.8% / 99.6% |                                       20 / 1166 |
+| 500        |        496 |                                     0.78 / 0.73 |          98.8% / 97.5% |                                        0 / 1077 |
+| 500        |        502 |                                     0.71 / 0.84 |          99.3% / 88.4% |                                        0 / 1236 |
+| 500        |        510 |                                     0.70 / 0.92 |          96.4% / 86.8% |                                        0 / 1185 |
+| 500        |        515 |                                     1.45 / 1.00 |          97.6% / 87.4% |                                        15 / 714 |
+
+The flags vary with view and visibility; their cause is not established. Frame 515 shows the dowel rotated much farther sideways, and frame 472 has less usable surface than frame 496. The frame-500 demo view produces no front-of-depth flags at live frame 496, but 99 mapped points lie **behind** measured depth; absent a visibility model, that is not evidence that its physical tip mapping is more accurate. These independent pairwise fits do not establish temporally consistent pose or the identity of the insertion end.
+
+I also repeated the same check on eight independent camera frames of a **different** 20:18 trial. The earlier demo frame 400 was a poor direct match there: demo-to-live median nearest-surface distances ranged from 4.6 to 6.9 mm, with 15–292 front-of-depth points per frame. Demo frame 500 fit much better: corresponding medians were 0.69–1.45 mm, with 0–18 front points. At live frame 540 specifically, frame 400 gave 6.00/3.10 mm median distances and 292 front points, whereas frame 500 gave 0.95/0.79 mm and zero front points. Thus a single demo view does **not** reliably transfer to every held view, even when another frame of the same demo does. The [full pairwise results](screened-multiframe-results.json) retain the counts for both trials.
+
+As a bridge check, the separately fitted frame-400→frame-500 and frame-500→live-540 transforms, when composed, explained 98.5% of the visible live surface within 6 mm, but only 70.0% of the frame-400 source surface. The missing source support is compatible with changed visibility; it is not evidence by itself of a wrong bridge. Re-running the existing trimmed ICP directly on that composed transform degraded balanced coverage from 70.0% to 49.7%, showing that this refinement objective can pull an otherwise plausible partial-view bridge away from the visible geometry. The bridge does not yet verify the hidden tip's identity.
+
 The fitting objective matters too. A local refit with a strong one-sided penalty on points in front of measured depth reduced the front fraction to 0.7%, but moved 18.5% of source points behind measured depth and reduced mask-and-depth support to 76.4%. That pose merely hides the disagreement and is **not** a better registration. A symmetric depth refit kept about 92.6% support but still had 2.6% front disagreement. A useful visibility objective must reward explained measured surface, model occlusion and depth uncertainty, and reject such tradeoffs rather than demand zero threshold violations. None of these offline refits has been applied to the FLASH runtime.
 
 ## A later demo view bridges to a held live view
