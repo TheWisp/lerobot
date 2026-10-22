@@ -4,6 +4,37 @@ The [frame-by-frame diagram](experiment-pipeline.md) shows exactly which demo
 and replay frames were used, what the saved TrackEverything points looked
 like, and how this limited experiment differs from a demo-to-live tracker.
 
+## What a point-group action could store
+
+[Watch the 7.2-second insertion illustration](insertion-relative-motion.mp4).
+The camera side shows actual frame-by-frame TrackEverything points retained only
+when they lie within the saved object mask and agree with aligned RGB-D depth.
+Newly visible points join the dowel's or ring's rigid group at their birth
+frame. This is an **offline illustration**, not the value currently stored by
+the FLASH skill or used to control the robot.
+
+At demo frame 320, a hand-picked surface point near the dowel's inserted end
+is called `P`; its other visible end provides a direction. The ring-hole image
+location is called `H`. Because the hole pixel sees background, a ring plane is
+estimated from its tracked visible surface points and the hole image ray is
+intersected with that plane. Each frame's tracked point groups move `P`, `H`,
+and the ring-attached axes. The possible stored value is the **3D vector**
+`v_R(t) = R_ring(t)^T [P_dowel(t) - H_ring(t)]`, in millimetres, plus the
+dowel/ring axis difference. The video also shows the vector's lateral magnitude
+and signed axial component: positive means above the estimated ring plane.
+Neither origin is an object centroid; dynamically visible surface points only
+provide motion of the annotated landmarks.
+
+The video deliberately keeps the late jumps. By frame 530, only 22 of 53
+shared dowel points agree with its selected rigid fit within the 5 mm
+_visualization_ band; adjacent estimates can change by more than 10 mm. Those
+values are **not reliable enough to call physical insertion accuracy**. The
+marked surface proxy is not the exact physical tip, and the hole plane is an
+approximation. The [per-frame values and evidence counts](insertion-relative-motion.json)
+and [rendering code](../../../../benchmarks/flash_te_insertion_relation_video.py)
+make the illustration reproducible. It does not establish a demo-to-live
+landmark transfer.
+
 This is an offline test of carrying point identity through the demo instead of
 independently registering distant demo frames. It uses the saved
 `trackeverything-growth-ui-20261021-a` run of the 613-frame insertion demo and

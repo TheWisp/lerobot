@@ -27,7 +27,12 @@ RIGID_INLIER_M = 0.005  # Offline co-motion diagnostic, not a controller thresho
 
 
 def supported_ids(
-    frame: int, scene: dict, demo: Path, mask_root: Path, intrinsics: np.ndarray
+    frame: int,
+    scene: dict,
+    demo: Path,
+    mask_root: Path,
+    intrinsics: np.ndarray,
+    role: str = "dowel",
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     frame_index = int(np.flatnonzero(scene["frames"] == frame)[0])
     mask = cv2.imread(str(mask_root / f"{frame:06d}.png"), cv2.IMREAD_GRAYSCALE) > 0
@@ -39,7 +44,7 @@ def supported_ids(
     x, y = projected[:, 0], projected[:, 1]
     supported = valid_xyz & (scene["query_visibility_logits"][frame_index] > 0)
     supported &= scene["query_points_2d"][:, 0] <= frame_index
-    supported &= scene["query_roles"] == "dowel"
+    supported &= scene["query_roles"] == role
     supported &= (x >= 0) & (x < mask.shape[1]) & (y >= 0) & (y < mask.shape[0])
     inside = np.flatnonzero(supported)
     supported[inside] &= mask[y[inside], x[inside]] & (depth[y[inside], x[inside]] > 0)
