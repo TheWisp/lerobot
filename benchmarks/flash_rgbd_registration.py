@@ -333,6 +333,49 @@ def surface_refinements(
     return output, errors
 
 
+def projection_evidence(
+    moved: np.ndarray,
+    target_mask: np.ndarray,
+    target_depth: np.ndarray,
+    k: np.ndarray,
+    proximity_m: float,
+) -> tuple[dict, np.ndarray, np.ndarray]:
+    pixels = np.full((len(moved), 2), -1, dtype=int)
+    in_front_of_camera = moved[:, 2] > 0
+    pixels[in_front_of_camera] = np.rint(_project(moved[in_front_of_camera], k)).astype(int)
+    inside = (
+        in_front_of_camera
+        & (pixels[:, 0] >= 0)
+        & (pixels[:, 0] < target_mask.shape[1])
+        & (pixels[:, 1] >= 0)
+        & (pixels[:, 1] < target_mask.shape[0])
+    )
+    x = np.clip(pixels[:, 0], 0, target_mask.shape[1] - 1)
+    y = np.clip(pixels[:, 1], 0, target_mask.shape[0] - 1)
+    observed_depth = target_depth[y, x].astype(np.float64) * 0.001
+    valid_depth = inside & (observed_depth > 0)
+    mask_hit = inside & target_mask[y, x]
+    depth_delta = moved[:, 2] - observed_depth
+    supported = mask_hit & valid_depth & (np.abs(depth_delta) <= proximity_m)
+    front = valid_depth & (depth_delta < -proximity_m)
+    behind = valid_depth & (depth_delta > proximity_m)
+    return (
+        {
+            "projection_mask_fraction": float(mask_hit.mean()),
+            "projection_mask_and_depth_fraction": float(supported.mean()),
+            "projection_front_of_depth_fraction": float(front.mean()),
+            "projection_behind_depth_fraction": float(behind.mean()),
+            "projection_surface_median_mm": float(
+                np.median(np.abs(depth_delta[mask_hit & valid_depth])) * 1000
+            )
+            if (mask_hit & valid_depth).any()
+            else None,
+        },
+        pixels,
+        supported,
+    )
+
+
 def score(
     source: np.ndarray,
     target: np.ndarray,
@@ -346,27 +389,13 @@ def score(
     moved = apply(source, rotation, translation)
     source_to_target = cKDTree(target).query(moved)[0]
     target_to_source = cKDTree(moved).query(target)[0]
-    pixels = np.rint(_project(moved, k)).astype(int)
-    inside = (
-        (pixels[:, 0] >= 0)
-        & (pixels[:, 0] < target_mask.shape[1])
-        & (pixels[:, 1] >= 0)
-        & (pixels[:, 1] < target_mask.shape[0])
-    )
-    mask_hit = np.zeros(len(moved), dtype=bool)
-    surface_error = np.full(len(moved), np.nan)
-    x, y = pixels[inside, 0], pixels[inside, 1]
-    mask_hit[inside] = target_mask[y, x]
-    surface_error[inside] = np.abs(moved[inside, 2] - target_depth[y, x] * 0.001)
+    projection, _, _ = projection_evidence(moved, target_mask, target_depth, k, proximity_m)
     return {
         "source_to_target_median_mm": float(np.median(source_to_target) * 1000),
         "target_to_source_median_mm": float(np.median(target_to_source) * 1000),
         "source_supported_fraction": float(np.mean(source_to_target < proximity_m)),
         "target_supported_fraction": float(np.mean(target_to_source < proximity_m)),
-        "projection_mask_fraction": float(mask_hit.mean()),
-        "projection_surface_median_mm": float(np.nanmedian(surface_error[mask_hit]) * 1000)
-        if mask_hit.any()
-        else None,
+        **projection,
     }
 
 
@@ -557,10 +586,12 @@ def run(args: argparse.Namespace) -> dict:
     for index, candidate in enumerate(candidates[: args.show_top]):
         color = [(0, 255, 0), (255, 0, 255), (255, 255, 0), (0, 165, 255), (255, 255, 255)][index % 5]
         rotation, translation = np.asarray(candidate["rotation"]), np.asarray(candidate["translation_m"])
-        pixels = _project(apply(source[::8], rotation, translation), k)
-        for x, y in pixels.astype(int):
+        _, pixels, supported = projection_evidence(
+            apply(source, rotation, translation), live_mask, live_depth, k, args.proximity_m
+        )
+        for x, y in pixels[supported][::8]:
             if 0 <= x < overlay.shape[1] and 0 <= y < overlay.shape[0]:
-                cv2.circle(overlay, (x, y), 1, color, -1)
+                cv2.circle(overlay, (int(x), int(y)), 1, color, -1)
         if "landmark_projection_xy" in candidate:
             x, y = np.rint(candidate["landmark_projection_xy"]).astype(int)
             cv2.circle(overlay, (x, y), 6, color, 2)

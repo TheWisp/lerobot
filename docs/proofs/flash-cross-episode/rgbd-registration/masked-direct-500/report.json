@@ -1,0 +1,988 @@
+{
+  "demo_frame": 500,
+  "live_frame": 496,
+  "target_kind": "live_trial",
+  "source_points": 1261,
+  "target_points": 1207,
+  "seconds": 3.1245653869991656,
+  "timings_s": {
+    "pca_hypotheses": 0.0006710450106766075,
+    "sift": 0.06420924499980174,
+    "orb": 0.27139745600288734,
+    "fpfh_global": 0.29471187401213683,
+    "trimmed_icp_and_scoring": 1.424446691002231,
+    "surface_refinements": 0.002148696017684415
+  },
+  "settings": {
+    "edge_pixels": 5,
+    "voxel_m": 0.003,
+    "feature_trials": 2000,
+    "feature_tolerance_m": 0.008,
+    "icp_iterations": 40,
+    "trim_fraction": 0.8,
+    "proximity_m": 0.006
+  },
+  "method_details": {
+    "sift": {
+      "source_keypoints": 4,
+      "target_keypoints": 10,
+      "depth_backed_matches": 0
+    },
+    "orb": {
+      "source_keypoints": 106,
+      "target_keypoints": 162,
+      "depth_backed_matches": 1
+    },
+    "surface_refinement_errors": {
+      "colored_icp": "[Open3D Error] (virtual Eigen::Matrix4d open3d::pipelines::registration::TransformationEstimationForColoredICP::ComputeTransformation(const open3d::geometry::PointCloud&, const open3d::geometry::PointCloud&, const CorrespondenceSet&) const) /root/Open3D/cpp/open3d/pipelines/registration/ColoredICP.cpp:102: No correspondences found between source and target pointcloud.\n"
+    }
+  },
+  "candidates": [
+    {
+      "method": "pca_09",
+      "quality": 0.9668599834299917,
+      "source_to_target_median_mm": 0.7966258273814295,
+      "target_to_source_median_mm": 0.8067425326140109,
+      "source_supported_fraction": 0.9762093576526566,
+      "target_supported_fraction": 0.9668599834299917,
+      "projection_mask_fraction": 0.9936558287073751,
+      "projection_mask_and_depth_fraction": 0.8651863600317209,
+      "projection_front_of_depth_fraction": 0.0055511498810467885,
+      "projection_behind_depth_fraction": 0.07930214115781126,
+      "projection_surface_median_mm": 1.153832396489557,
+      "rotation": [
+        [
+          0.9659174217315903,
+          0.11917225369341791,
+          -0.22978578795266888
+        ],
+        [
+          -0.1666619849079122,
+          0.9655560491461236,
+          -0.1998131595863587
+        ],
+        [
+          0.19805887301999892,
+          0.23129956745951868,
+          0.9525088938750584
+        ]
+      ],
+      "translation_m": [
+        0.1373594548416519,
+        0.11196998979516706,
+        0.014671397401231301
+      ]
+    },
+    {
+      "method": "pca_14",
+      "quality": 0.9668599834299917,
+      "source_to_target_median_mm": 0.7664314625895636,
+      "target_to_source_median_mm": 0.7691464660307311,
+      "source_supported_fraction": 0.9809674861221253,
+      "target_supported_fraction": 0.9668599834299917,
+      "projection_mask_fraction": 0.9952418715305313,
+      "projection_mask_and_depth_fraction": 0.8651863600317209,
+      "projection_front_of_depth_fraction": 0.0023790642347343376,
+      "projection_behind_depth_fraction": 0.08326724821570182,
+      "projection_surface_median_mm": 1.1211813702414197,
+      "rotation": [
+        [
+          0.9629954101970019,
+          0.12582262817898734,
+          -0.2383453506524542
+        ],
+        [
+          -0.17647578844296977,
+          0.9627685390200739,
+          -0.20477557561043727
+        ],
+        [
+          0.20370600391971982,
+          0.23926012311140785,
+          0.9493463316702571
+        ]
+      ],
+      "translation_m": [
+        0.1408890574161556,
+        0.11249854796004122,
+        0.017356421437192626
+      ]
+    },
+    {
+      "method": "pca_11",
+      "quality": 0.9660314830157415,
+      "source_to_target_median_mm": 0.7733553201241244,
+      "target_to_source_median_mm": 0.7767375020524815,
+      "source_supported_fraction": 0.9825535289452815,
+      "target_supported_fraction": 0.9660314830157415,
+      "projection_mask_fraction": 0.9976209357652657,
+      "projection_mask_and_depth_fraction": 0.865979381443299,
+      "projection_front_of_depth_fraction": 0.003965107057890563,
+      "projection_behind_depth_fraction": 0.08326724821570182,
+      "projection_surface_median_mm": 1.1147837086265544,
+      "rotation": [
+        [
+          0.9595273485450178,
+          0.14512897331251565,
+          -0.24133969524183913
+        ],
+        [
+          -0.19623425668147407,
+          0.9592375036533617,
+          -0.20336058637193616
+        ],
+        [
+          0.2019885736838541,
+          0.2424891599435394,
+          0.9488938947063783
+        ]
+      ],
+      "translation_m": [
+        0.14282363492325484,
+        0.10934902759021972,
+        0.017415302691055956
+      ]
+    },
+    {
+      "method": "pca_19",
+      "quality": 0.9660314830157415,
+      "source_to_target_median_mm": 0.7720612565614927,
+      "target_to_source_median_mm": 0.7830291057137819,
+      "source_supported_fraction": 0.9873116574147502,
+      "target_supported_fraction": 0.9660314830157415,
+      "projection_mask_fraction": 0.9992069785884219,
+      "projection_mask_and_depth_fraction": 0.8643933386201428,
+      "projection_front_of_depth_fraction": 0.003965107057890563,
+      "projection_behind_depth_fraction": 0.08564631245043616,
+      "projection_surface_median_mm": 1.117132360525408,
+      "rotation": [
+        [
+          0.9575492322668535,
+          0.15927582017570122,
+          -0.24027209761542778
+        ],
+        [
+          -0.21105950966804907,
+          0.9550851383512353,
+          -0.20800543713875802
+        ],
+        [
+          0.19635007299169127,
+          0.24988715774917414,
+          0.9481577174859662
+        ]
+      ],
+      "translation_m": [
+        0.14310253199319728,
+        0.10906524571861873,
+        0.017464811768364286
+      ]
+    },
+    {
+      "method": "fpfh_ransac",
+      "quality": 0.9652029826014913,
+      "source_to_target_median_mm": 0.8209893761968303,
+      "target_to_source_median_mm": 0.840952841230715,
+      "source_supported_fraction": 0.9968279143536876,
+      "target_supported_fraction": 0.9652029826014913,
+      "projection_mask_fraction": 1.0,
+      "projection_mask_and_depth_fraction": 0.9206978588421887,
+      "projection_front_of_depth_fraction": 0.0031720856463124504,
+      "projection_behind_depth_fraction": 0.063441712926249,
+      "projection_surface_median_mm": 1.2498875857973046,
+      "rotation": [
+        [
+          0.958553544739267,
+          0.21905719625068684,
+          -0.1821786119130741
+        ],
+        [
+          -0.25917457303413066,
+          0.9359943911230765,
+          -0.23820797736162674
+        ],
+        [
+          0.11833698728784006,
+          0.2755511650436796,
+          0.9539747967754225
+        ]
+      ],
+      "translation_m": [
+        0.12478001409113104,
+        0.1138680061607812,
+        0.007595815295702413
+      ]
+    },
+    {
+      "method": "pca_02",
+      "quality": 0.9610604805302403,
+      "source_to_target_median_mm": 0.8452749574054943,
+      "target_to_source_median_mm": 0.9096643501818285,
+      "source_supported_fraction": 0.9960348929421095,
+      "target_supported_fraction": 0.9610604805302403,
+      "projection_mask_fraction": 1.0,
+      "projection_mask_and_depth_fraction": 0.9238699444885012,
+      "projection_front_of_depth_fraction": 0.006344171292624901,
+      "projection_behind_depth_fraction": 0.06026962727993656,
+      "projection_surface_median_mm": 1.3953584793757745,
+      "rotation": [
+        [
+          0.9402842266451173,
+          0.2712495735068855,
+          -0.2056434827431331
+        ],
+        [
+          -0.3148071530720811,
+          0.9227624605496644,
+          -0.22227437498501737
+        ],
+        [
+          0.12946825671586035,
+          0.27373912813600787,
+          0.9530502926028059
+        ]
+      ],
+      "translation_m": [
+        0.13512363348442064,
+        0.09983991460506224,
+        0.008500758552269061
+      ]
+    },
+    {
+      "method": "pca_06",
+      "quality": 0.9610604805302403,
+      "source_to_target_median_mm": 0.8456274705031679,
+      "target_to_source_median_mm": 0.9184566017284221,
+      "source_supported_fraction": 0.9960348929421095,
+      "target_supported_fraction": 0.9610604805302403,
+      "projection_mask_fraction": 1.0,
+      "projection_mask_and_depth_fraction": 0.9246629659000793,
+      "projection_front_of_depth_fraction": 0.006344171292624901,
+      "projection_behind_depth_fraction": 0.05947660586835844,
+      "projection_surface_median_mm": 1.392392147135213,
+      "rotation": [
+        [
+          0.9401611482501668,
+          0.2716602479075368,
+          -0.2056641072908531
+        ],
+        [
+          -0.3152173096610199,
+          0.9226200792856547,
+          -0.22228413571148378
+        ],
+        [
+          0.1293640715616059,
+          0.2738117948623627,
+          0.9530435656271201
+        ]
+      ],
+      "translation_m": [
+        0.13513443211204995,
+        0.09977151509957488,
+        0.008467128358826626
+      ]
+    },
+    {
+      "method": "pca_12",
+      "quality": 0.9602319801159901,
+      "source_to_target_median_mm": 0.8541391510805416,
+      "target_to_source_median_mm": 0.9299846414810883,
+      "source_supported_fraction": 0.9960348929421095,
+      "target_supported_fraction": 0.9602319801159901,
+      "projection_mask_fraction": 1.0,
+      "projection_mask_and_depth_fraction": 0.9254559873116575,
+      "projection_front_of_depth_fraction": 0.007137192704203013,
+      "projection_behind_depth_fraction": 0.05789056304520222,
+      "projection_surface_median_mm": 1.400044783628096,
+      "rotation": [
+        [
+          0.9428354986844697,
+          0.2658490092213451,
+          -0.2009615055587453
+        ],
+        [
+          -0.3081613319855751,
+          0.925063156631736,
+          -0.22202420974165343
+        ],
+        [
+          0.12687716851066838,
+          0.27126087174260627,
+          0.954106767386207
+        ]
+      ],
+      "translation_m": [
+        0.13327736341592233,
+        0.10064237446417629,
+        0.007488841884091657
+      ]
+    },
+    {
+      "method": "pca_15",
+      "quality": 0.9569179784589892,
+      "source_to_target_median_mm": 0.9806165710806722,
+      "target_to_source_median_mm": 1.0282100142987778,
+      "source_supported_fraction": 0.9817605075337034,
+      "target_supported_fraction": 0.9569179784589892,
+      "projection_mask_fraction": 1.0,
+      "projection_mask_and_depth_fraction": 0.8683584456780333,
+      "projection_front_of_depth_fraction": 0.017446471054718478,
+      "projection_behind_depth_fraction": 0.10150674068199841,
+      "projection_surface_median_mm": 1.7546518832101121,
+      "rotation": [
+        [
+          0.7683194530905202,
+          0.5241908433783645,
+          -0.3672998471561947
+        ],
+        [
+          -0.5869008028552518,
+          0.8059428334473004,
+          -0.07748288083698379
+        ],
+        [
+          0.25540686288849973,
+          0.2751001798131308,
+          0.9268695838445874
+        ]
+      ],
+      "translation_m": [
+        0.19367646903088895,
+        0.003859817639631587,
+        0.03375637648013702
+      ]
+    },
+    {
+      "method": "pca_21",
+      "quality": 0.9486329743164872,
+      "source_to_target_median_mm": 1.3037808803428812,
+      "target_to_source_median_mm": 1.3417650440992568,
+      "source_supported_fraction": 0.9785884218873909,
+      "target_supported_fraction": 0.9486329743164872,
+      "projection_mask_fraction": 1.0,
+      "projection_mask_and_depth_fraction": 0.8247422680412371,
+      "projection_front_of_depth_fraction": 0.061855670103092786,
+      "projection_behind_depth_fraction": 0.0943695479777954,
+      "projection_surface_median_mm": 2.2400039099552127,
+      "rotation": [
+        [
+          0.7910781129929346,
+          0.5125873963005405,
+          -0.33384065105581545
+        ],
+        [
+          -0.5567520935431312,
+          0.8294157225467065,
+          -0.04578936041992867
+        ],
+        [
+          0.2534216357750033,
+          0.2220894422212778,
+          0.9415167306930682
+        ]
+      ],
+      "translation_m": [
+        0.18216650496743939,
+        -0.0032720352650670997,
+        0.023235056152932865
+      ]
+    },
+    {
+      "method": "pca_18",
+      "quality": 0.8128469468675654,
+      "source_to_target_median_mm": 2.023990379105136,
+      "target_to_source_median_mm": 1.966599145310567,
+      "source_supported_fraction": 0.8128469468675654,
+      "target_supported_fraction": 0.831814415907208,
+      "projection_mask_fraction": 0.880253766851705,
+      "projection_mask_and_depth_fraction": 0.6320380650277557,
+      "projection_front_of_depth_fraction": 0.28152260111023,
+      "projection_behind_depth_fraction": 0.07771609833465504,
+      "projection_surface_median_mm": 3.702690432817346,
+      "rotation": [
+        [
+          -0.5789847667493179,
+          0.6654860051461662,
+          -0.471067953512903
+        ],
+        [
+          0.6305517045590279,
+          -0.0008085293266324474,
+          -0.7761468251291321
+        ],
+        [
+          -0.516895722317318,
+          -0.746409889561308,
+          -0.4191552087415032
+        ]
+      ],
+      "translation_m": [
+        0.08176663876954865,
+        0.3544816619693052,
+        0.37277284246014997
+      ]
+    },
+    {
+      "method": "pca_08",
+      "quality": 0.8120539254559873,
+      "source_to_target_median_mm": 2.073554252898505,
+      "target_to_source_median_mm": 2.0286154338994584,
+      "source_supported_fraction": 0.8120539254559873,
+      "target_supported_fraction": 0.8351284175642087,
+      "projection_mask_fraction": 0.880253766851705,
+      "projection_mask_and_depth_fraction": 0.6312450436161776,
+      "projection_front_of_depth_fraction": 0.2839016653449643,
+      "projection_behind_depth_fraction": 0.07692307692307693,
+      "projection_surface_median_mm": 3.7629567269482633,
+      "rotation": [
+        [
+          -0.586463349608687,
+          0.6668577993402897,
+          -0.4597405953630657
+        ],
+        [
+          0.612073994636748,
+          -0.0068835548654956275,
+          -0.7907705367309972
+        ],
+        [
+          -0.5304961495196493,
+          -0.745153200443668,
+          -0.40412936445324765
+        ]
+      ],
+      "translation_m": [
+        0.07670522520413563,
+        0.3571803719377039,
+        0.36549024404199076
+      ]
+    },
+    {
+      "method": "pca_10",
+      "quality": 0.8065027755749405,
+      "source_to_target_median_mm": 2.157816715771654,
+      "target_to_source_median_mm": 2.13554202745573,
+      "source_supported_fraction": 0.8065027755749405,
+      "target_supported_fraction": 0.8301574150787076,
+      "projection_mask_fraction": 0.880253766851705,
+      "projection_mask_and_depth_fraction": 0.6161776367961935,
+      "projection_front_of_depth_fraction": 0.3021411578112609,
+      "projection_behind_depth_fraction": 0.0761300555114988,
+      "projection_surface_median_mm": 3.8959394205680953,
+      "rotation": [
+        [
+          -0.5945548711999435,
+          0.6454359380721897,
+          -0.47949656409331115
+        ],
+        [
+          0.6114484144963679,
+          -0.024323360099094103,
+          -0.7909103682234594
+        ],
+        [
+          -0.5221449430400495,
+          -0.7634270259811102,
+          -0.3801892087623492
+        ]
+      ],
+      "translation_m": [
+        0.08147642470022134,
+        0.35557641115838645,
+        0.3558447326239087
+      ]
+    },
+    {
+      "method": "pca_22",
+      "quality": 0.8028169014084507,
+      "source_to_target_median_mm": 1.7546359901049626,
+      "target_to_source_median_mm": 1.8820708306922007,
+      "source_supported_fraction": 0.8398096748612213,
+      "target_supported_fraction": 0.8028169014084507,
+      "projection_mask_fraction": 0.880253766851705,
+      "projection_mask_and_depth_fraction": 0.682791435368755,
+      "projection_front_of_depth_fraction": 0.21808088818398097,
+      "projection_behind_depth_fraction": 0.09278350515463918,
+      "projection_surface_median_mm": 3.3508832740399566,
+      "rotation": [
+        [
+          -0.5384292699767271,
+          0.6649890230859141,
+          -0.5175746520141519
+        ],
+        [
+          0.7209944525787882,
+          0.04561555295688204,
+          -0.691437792342197
+        ],
+        [
+          -0.4361890881062275,
+          -0.745458798662729,
+          -0.5040141455488908
+        ]
+      ],
+      "translation_m": [
+        0.10402594970072973,
+        0.3376786556422722,
+        0.4154641348570627
+      ]
+    },
+    {
+      "method": "pca_23",
+      "quality": 0.7995028997514498,
+      "source_to_target_median_mm": 1.998822249781906,
+      "target_to_source_median_mm": 2.0687693043003903,
+      "source_supported_fraction": 0.8104678826328311,
+      "target_supported_fraction": 0.7995028997514498,
+      "projection_mask_fraction": 0.880253766851705,
+      "projection_mask_and_depth_fraction": 0.6241078509119746,
+      "projection_front_of_depth_fraction": 0.2942109436954798,
+      "projection_behind_depth_fraction": 0.07454401268834258,
+      "projection_surface_median_mm": 3.6199812614675086,
+      "rotation": [
+        [
+          -0.5694146899703522,
+          0.5983938139966193,
+          -0.5636415121480569
+        ],
+        [
+          0.7088556127593182,
+          0.010207074344445642,
+          -0.705279757183588
+        ],
+        [
+          -0.41628191301758527,
+          -0.8011371037493571,
+          -0.429986871765305
+        ]
+      ],
+      "translation_m": [
+        0.11222284142677652,
+        0.33823030842086577,
+        0.3844292921641385
+      ]
+    },
+    {
+      "method": "pca_13",
+      "quality": 0.7716098334655036,
+      "source_to_target_median_mm": 2.650079893152662,
+      "target_to_source_median_mm": 2.962827545558663,
+      "source_supported_fraction": 0.7716098334655036,
+      "target_supported_fraction": 0.8218724109362054,
+      "projection_mask_fraction": 0.8326724821570183,
+      "projection_mask_and_depth_fraction": 0.5519429024583664,
+      "projection_front_of_depth_fraction": 0.34417129262490087,
+      "projection_behind_depth_fraction": 0.05313243457573354,
+      "projection_surface_median_mm": 4.691082217466946,
+      "rotation": [
+        [
+          -0.4909853859453607,
+          0.4464528880797491,
+          -0.748072970714312
+        ],
+        [
+          0.7486311778744837,
+          -0.22291458718607074,
+          -0.6243880574882308
+        ],
+        [
+          -0.4455162289999636,
+          -0.8665961605874527,
+          -0.22478074684620367
+        ]
+      ],
+      "translation_m": [
+        0.17871147979771074,
+        0.29394669721817673,
+        0.29719036595839776
+      ]
+    },
+    {
+      "method": "pca_20",
+      "quality": 0.767644726407613,
+      "source_to_target_median_mm": 2.529961284003365,
+      "target_to_source_median_mm": 2.8889291033763276,
+      "source_supported_fraction": 0.767644726407613,
+      "target_supported_fraction": 0.8210439105219552,
+      "projection_mask_fraction": 0.8310864393338621,
+      "projection_mask_and_depth_fraction": 0.56304520222046,
+      "projection_front_of_depth_fraction": 0.34099920697858843,
+      "projection_behind_depth_fraction": 0.045995241871530534,
+      "projection_surface_median_mm": 4.501593243084412,
+      "rotation": [
+        [
+          -0.6198733816486224,
+          0.40324742660519663,
+          -0.6731630587456416
+        ],
+        [
+          0.6991717936021997,
+          -0.10564127498272498,
+          -0.7071058789538571
+        ],
+        [
+          -0.3562524298227094,
+          -0.9089727355406818,
+          -0.2164550121598133
+        ]
+      ],
+      "translation_m": [
+        0.13226464961483708,
+        0.3274067609119495,
+        0.30154884857267067
+      ]
+    },
+    {
+      "method": "pca_01",
+      "quality": 0.748135874067937,
+      "source_to_target_median_mm": 1.413100873555456,
+      "target_to_source_median_mm": 2.2122172209307696,
+      "source_supported_fraction": 0.8540840602696272,
+      "target_supported_fraction": 0.748135874067937,
+      "projection_mask_fraction": 0.880253766851705,
+      "projection_mask_and_depth_fraction": 0.725614591593973,
+      "projection_front_of_depth_fraction": 0.15305313243457574,
+      "projection_behind_depth_fraction": 0.11181601903251388,
+      "projection_surface_median_mm": 2.4161277271287362,
+      "rotation": [
+        [
+          -0.4872174205074454,
+          0.6502030550559944,
+          -0.5829709875713563
+        ],
+        [
+          0.8167024794797594,
+          0.10287941764867041,
+          -0.567814129302788
+        ],
+        [
+          -0.3092187658692209,
+          -0.7527627864208761,
+          -0.581147091719639
+        ]
+      ],
+      "translation_m": [
+        0.1336787875753664,
+        0.3076959621634715,
+        0.4615440716542092
+      ]
+    },
+    {
+      "method": "pca_04",
+      "quality": 0.7448218724109362,
+      "source_to_target_median_mm": 1.4012029620568076,
+      "target_to_source_median_mm": 2.2109415269242936,
+      "source_supported_fraction": 0.8540840602696272,
+      "target_supported_fraction": 0.7448218724109362,
+      "projection_mask_fraction": 0.880253766851705,
+      "projection_mask_and_depth_fraction": 0.7264076130055511,
+      "projection_front_of_depth_fraction": 0.1522601110229976,
+      "projection_behind_depth_fraction": 0.11181601903251388,
+      "projection_surface_median_mm": 2.388000217317665,
+      "rotation": [
+        [
+          -0.4861522306295937,
+          0.6504331886919384,
+          -0.5836031834233824
+        ],
+        [
+          0.8176444339342728,
+          0.10287470657451751,
+          -0.5664577428224528
+        ],
+        [
+          -0.30840490967261086,
+          -0.7525645897829919,
+          -0.5818358444566516
+        ]
+      ],
+      "translation_m": [
+        0.1340600095435751,
+        0.30731141455643984,
+        0.4619495314798995
+      ]
+    },
+    {
+      "method": "pca_00",
+      "quality": 0.7431648715824358,
+      "source_to_target_median_mm": 1.3997902127692148,
+      "target_to_source_median_mm": 2.2134909491398655,
+      "source_supported_fraction": 0.8540840602696272,
+      "target_supported_fraction": 0.7431648715824358,
+      "projection_mask_fraction": 0.880253766851705,
+      "projection_mask_and_depth_fraction": 0.7264076130055511,
+      "projection_front_of_depth_fraction": 0.1514670896114195,
+      "projection_behind_depth_fraction": 0.11102299762093576,
+      "projection_surface_median_mm": 2.4100846193668146,
+      "rotation": [
+        [
+          -0.4849637974287178,
+          0.6506079075306458,
+          -0.5843966682332414
+        ],
+        [
+          0.8186750641027837,
+          0.10274925701374131,
+          -0.5649900261061502
+        ],
+        [
+          -0.3075406551983359,
+          -0.7524306883970906,
+          -0.5824661402677923
+        ]
+      ],
+      "translation_m": [
+        0.13451535000400847,
+        0.30688080800896067,
+        0.4623128717585837
+      ]
+    },
+    {
+      "method": "pca_17",
+      "quality": 0.7224523612261806,
+      "source_to_target_median_mm": 1.1620236192191282,
+      "target_to_source_median_mm": 2.1943239554363587,
+      "source_supported_fraction": 0.9064234734337827,
+      "target_supported_fraction": 0.7224523612261806,
+      "projection_mask_fraction": 0.9944488501189532,
+      "projection_mask_and_depth_fraction": 0.7557494052339413,
+      "projection_front_of_depth_fraction": 0.2212529738302934,
+      "projection_behind_depth_fraction": 0.008723235527359239,
+      "projection_surface_median_mm": 2.5673677949293316,
+      "rotation": [
+        [
+          -0.9721004724166157,
+          -0.07544170841892597,
+          0.22210182385164226
+        ],
+        [
+          0.220715782830347,
+          -0.6147270668811594,
+          0.7572286157121069
+        ],
+        [
+          0.0794053822922563,
+          0.7851236729805822,
+          0.6142276478541979
+        ]
+      ],
+      "translation_m": [
+        -0.27471523646291984,
+        -0.3082209088687446,
+        0.16372282350558073
+      ]
+    },
+    {
+      "method": "fpfh_fgr",
+      "quality": 0.7216238608119304,
+      "source_to_target_median_mm": 1.1649338162241085,
+      "target_to_source_median_mm": 2.2637843635227237,
+      "source_supported_fraction": 0.9183187946074544,
+      "target_supported_fraction": 0.7216238608119304,
+      "projection_mask_fraction": 0.9920697858842189,
+      "projection_mask_and_depth_fraction": 0.7494052339413164,
+      "projection_front_of_depth_fraction": 0.2196669310071372,
+      "projection_behind_depth_fraction": 0.011102299762093577,
+      "projection_surface_median_mm": 2.6053735211118703,
+      "rotation": [
+        [
+          -0.973067111300328,
+          -0.08453606161771454,
+          0.21446223721626004
+        ],
+        [
+          0.22092099040193847,
+          -0.6076737796103037,
+          0.7628410670473605
+        ],
+        [
+          0.06583549882444714,
+          0.7896747633426657,
+          0.6099831597956137
+        ]
+      ],
+      "translation_m": [
+        -0.27236758981482395,
+        -0.3095429723579176,
+        0.16529195171876482
+      ]
+    },
+    {
+      "method": "pca_03",
+      "quality": 0.7207953603976802,
+      "source_to_target_median_mm": 1.157208306882928,
+      "target_to_source_median_mm": 2.1535437318528894,
+      "source_supported_fraction": 0.9008723235527359,
+      "target_supported_fraction": 0.7207953603976802,
+      "projection_mask_fraction": 0.9944488501189532,
+      "projection_mask_and_depth_fraction": 0.7573354480570975,
+      "projection_front_of_depth_fraction": 0.2204599524187153,
+      "projection_behind_depth_fraction": 0.007137192704203013,
+      "projection_surface_median_mm": 2.5892908086580513,
+      "rotation": [
+        [
+          -0.9746842379787739,
+          -0.06630810075517618,
+          0.21352721608727246
+        ],
+        [
+          0.20847051466693986,
+          -0.6146957629842916,
+          0.7607162174448913
+        ],
+        [
+          0.08081262741824594,
+          0.7859722353514802,
+          0.6129575552241423
+        ]
+      ],
+      "translation_m": [
+        -0.2712807403119647,
+        -0.31106416905463646,
+        0.16393636124779865
+      ]
+    },
+    {
+      "method": "pca_07",
+      "quality": 0.7207953603976802,
+      "source_to_target_median_mm": 1.156961690503271,
+      "target_to_source_median_mm": 2.158666065629901,
+      "source_supported_fraction": 0.9008723235527359,
+      "target_supported_fraction": 0.7207953603976802,
+      "projection_mask_fraction": 0.9944488501189532,
+      "projection_mask_and_depth_fraction": 0.7573354480570975,
+      "projection_front_of_depth_fraction": 0.2212529738302934,
+      "projection_behind_depth_fraction": 0.007137192704203013,
+      "projection_surface_median_mm": 2.594387445045865,
+      "rotation": [
+        [
+          -0.9743625766794797,
+          -0.06752947852207682,
+          0.2146097357928151
+        ],
+        [
+          0.210056056813058,
+          -0.6147221657790832,
+          0.7602585822573944
+        ],
+        [
+          0.08058549598206104,
+          0.7858475860053334,
+          0.6131472493674869
+        ]
+      ],
+      "translation_m": [
+        -0.2717328035960094,
+        -0.31070319666363,
+        0.16383408116107476
+      ]
+    },
+    {
+      "method": "pca_05",
+      "quality": 0.6826843413421707,
+      "source_to_target_median_mm": 1.26594928456419,
+      "target_to_source_median_mm": 2.000822653385901,
+      "source_supported_fraction": 0.8707375099127677,
+      "target_supported_fraction": 0.6826843413421707,
+      "projection_mask_fraction": 0.9516256938937351,
+      "projection_mask_and_depth_fraction": 0.767644726407613,
+      "projection_front_of_depth_fraction": 0.1823949246629659,
+      "projection_behind_depth_fraction": 0.006344171292624901,
+      "projection_surface_median_mm": 2.4759496190748242,
+      "rotation": [
+        [
+          0.4046830037936536,
+          -0.7777122043408469,
+          0.4810357509165486
+        ],
+        [
+          -0.9081317822952667,
+          -0.4035512734877082,
+          0.11154835566548178
+        ],
+        [
+          0.10737007230029073,
+          -0.4819855774665362,
+          -0.8695755117805928
+        ]
+      ],
+      "translation_m": [
+        -0.2565364676577157,
+        -0.18492906566862855,
+        0.6399196210277878
+      ]
+    },
+    {
+      "method": "pca_16",
+      "quality": 0.6661143330571665,
+      "source_to_target_median_mm": 1.4960743080590482,
+      "target_to_source_median_mm": 2.7145069208326142,
+      "source_supported_fraction": 0.8588421887390959,
+      "target_supported_fraction": 0.6661143330571665,
+      "projection_mask_fraction": 0.9468675654242664,
+      "projection_mask_and_depth_fraction": 0.7375099127676448,
+      "projection_front_of_depth_fraction": 0.1895321173671689,
+      "projection_behind_depth_fraction": 0.0317208564631245,
+      "projection_surface_median_mm": 3.052522194692764,
+      "rotation": [
+        [
+          0.4487050301596749,
+          -0.7465424787627375,
+          0.4912617665890489
+        ],
+        [
+          -0.8847382878258944,
+          -0.4486454354338932,
+          0.12631482620515
+        ],
+        [
+          0.12610296572369023,
+          -0.49131619214831546,
+          -0.8618041780872091
+        ]
+      ],
+      "translation_m": [
+        -0.2535128666705147,
+        -0.1915771919599766,
+        0.6360087954194598
+      ]
+    },
+    {
+      "method": "point_to_plane_icp",
+      "seed": "pca_09",
+      "quality": 0.0,
+      "source_to_target_median_mm": 40.46295491649001,
+      "target_to_source_median_mm": 34.432570487075246,
+      "source_supported_fraction": 0.0,
+      "target_supported_fraction": 0.0,
+      "projection_mask_fraction": 0.0,
+      "projection_mask_and_depth_fraction": 0.0,
+      "projection_front_of_depth_fraction": 0.9666931007137193,
+      "projection_behind_depth_fraction": 0.0,
+      "projection_surface_median_mm": null,
+      "rotation": [
+        [
+          0.9125383557013814,
+          -0.3026420477499603,
+          -0.2751027813518613
+        ],
+        [
+          0.3412210874197293,
+          0.9341960020966549,
+          0.10414412689501279
+        ],
+        [
+          0.2254815266799406,
+          -0.18890638051780523,
+          0.9557575322882605
+        ]
+      ],
+      "translation_m": [
+        0.09218563060908047,
+        0.032441586002749684,
+        -0.05662929853008972
+      ]
+    }
+  ]
+}

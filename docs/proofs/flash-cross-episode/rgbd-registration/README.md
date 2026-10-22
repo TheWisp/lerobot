@@ -31,6 +31,20 @@ The clear dowel start was also tested in four other saved trials, with the same 
 
 The `trial-*` reports and overlays in this directory contain each result. They show that the clear-view registration was not peculiar to one replay. They still do not identify an unmarked physical endpoint independently of shape.
 
+## Direct fit of two masked partial surfaces
+
+To isolate object registration from the dowel–ring relationship and from any demo-frame chain, I fitted one masked demo dowel cloud directly to the masked held dowel in live frame 496 of the 20:33 trial. The source points were back-projected from aligned RGB-D pixels _inside_ the saved segmentation mask. The figure shows demo frame 400 and one candidate transform into the live frame; green points also pass an independent live mask-and-depth check. Red marks front-of-depth disagreement inside an eroded live mask core, orange marks disagreement near its boundary, and grey marks possible occlusion behind measured depth.
+
+![Direct masked RGB-D fit from one demo frame to one held live frame](single-frame-interior-fit.png)
+
+| Demo source | Mask interior used for fitting | Source points | Project inside live mask | Agree with mask and depth within 6 mm | Predict a surface in front of measured depth |
+| ----------- | -----------------------------: | ------------: | -----------------------: | ------------------------------------: | -------------------------------------------: |
+| Frame 400   |                        1 pixel |         2,655 |                    90.2% |                                 78.9% |                                         6.7% |
+| Frame 400   |                       5 pixels |         1,437 |                    99.9% |                                 91.9% |                                         2.2% |
+| Frame 500   |                       5 pixels |         1,261 |                   100.0% |                                 92.5% |                                         0.7% |
+
+Each row reports the candidate with the highest mask-and-depth agreement among that run's proposed transforms, rather than the first candidate in nearest-cloud order. The [frame-400 one-pixel report](masked-direct-400-edge1/report.json), [frame-400 five-pixel report](masked-direct-400/report.json), and [frame-500 report](masked-direct-500/report.json) retain every candidate and its separate pixel evidence. The six-millimetre depth band is the benchmark's diagnostic tolerance, not a claimed task accuracy. The five-pixel interior is a _sensitivity check_, not a chosen FLASH constant: it discards nearly half the frame-400 source points, so a later estimator should model depth reliability around boundaries instead of blindly eroding every mask by five pixels. The improvement confirms that direct partial-surface matching is feasible on these frames; it does not establish material-point identity or prove that the unseen object surface is mapped correctly.
+
 ## A later demo view bridges to a held live view
 
 The first view of an object need not stay visible throughout a demonstration. I tested a two-link route from the marked dowel end in clear demo frame 100, through later demo frame 500 after the grasp, to held-object frame 496 of the 20:33 live trial. The benchmark now accepts either another RGB-D recording or a saved FLASH trial as its target. Both links use measured masked clouds, not point-tracker correspondences.
@@ -44,7 +58,7 @@ The first view of an object need not stay visible throughout a demonstration. I 
 
 The figure uses the deterministic `pca_11` demo-link candidate. Its demo-frame projection is about two pixels from a separate TrackEverything prediction of the same annotated point. The composed live point lies inside the recorded dowel mask and is 4.4 mm from measured depth at that pixel. A separate TrackEverything demo-to-live transfer landed at `(270.4, 206.6)` in that live frame, about nine pixels away. This is a plausible bridge across a large pose change and grasp, **not** ground truth for the physical endpoint or insertion accuracy. The [demo-link report](demo-100-to-500/report.json) and [live-link report](demo-500-to-live-496/report.json) retain the other candidate transforms. A stochastic FPFH run ranked a different demo-link transform higher by surface coverage, so choosing by surface coverage alone is insufficient.
 
-The following crop checks what happens if the measured surfaces from **both** demo views are combined through those two transforms. White is the live dowel mask; green points agree with its mask and depth within the 6 mm diagnostic radius. Grey points lie behind measured depth and may simply be hidden. Orange points predict a surface more than 6 mm **in front of** measured depth near or outside the mask boundary, where depth and segmentation edges are less reliable. Red points make the same prediction at least three pixels inside the mask, a stronger conflict with the saved observation. The three-pixel erosion is only a diagnostic sensitivity check.
+The following crop checks what happens if the measured surfaces from **both** demo views are combined through those two transforms using the earlier one-pixel mask interior. White is the live dowel mask; green points agree with its mask and depth within the 6 mm diagnostic radius. Grey points lie behind measured depth and may simply be hidden. Orange points predict a surface more than 6 mm **in front of** measured depth near or outside the mask boundary, where depth and segmentation edges are less reliable. Red points make the same prediction at least three pixels inside the mask, a stronger conflict with the saved observation. The three-pixel erosion is only a diagnostic sensitivity check.
 
 ![Measured live dowel, directly matched demo frame 500, and demo frame 100 transferred through frame 500](two-view-contradiction.png)
 
