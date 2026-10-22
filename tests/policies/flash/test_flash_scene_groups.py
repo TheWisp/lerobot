@@ -613,7 +613,23 @@ def test_scene_tracks_keep_identities_on_every_frame():
     after = second.base_xyz[np.searchsorted(second.ids, shared)]
     assert np.median(after[:, 0] - before[:, 0]) == pytest.approx(0.02, abs=0.004)
 
-    interrupted = _camera_frame(shifted, 2)
+    missing = _camera_frame(shifted, 2)
+    missing = RGBDFrame(
+        missing.frame_id,
+        missing.rgb,
+        np.zeros_like(missing.depth),
+        missing.intrinsics,
+        missing.depth_m_per_unit,
+        missing.base_from_camera,
+        missing.source_time_s,
+        missing.available_time_s,
+        missing.calibration_version,
+    )
+    assert len(tracker.update(missing).ids) == 0
+    restored = tracker.update(_camera_frame(shifted, 3))
+    assert len(np.intersect1d(second.ids, restored.ids)) >= 12
+
+    interrupted = _camera_frame(shifted, 4)
     interrupted = RGBDFrame(
         interrupted.frame_id,
         interrupted.rgb,

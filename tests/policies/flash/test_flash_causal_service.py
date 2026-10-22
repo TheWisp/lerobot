@@ -53,6 +53,11 @@ def test_causal_config_rejects_unbounded_or_invalid_tracking():
         "max_pose_disagreement_rotation_rad": 0.15,
     }
     assert CausalTrackingConfig.from_config(complete).scene_max_points == 800
+    assert CausalTrackingConfig.from_config(complete).depth_support_radius_px == 1
+    assert (
+        CausalTrackingConfig.from_config({**complete, "depth_support_radius_px": 0}).depth_support_radius_px
+        == 0
+    )
     with pytest.raises(ValueError, match="causal tracking keys differ"):
         CausalTrackingConfig.from_config(
             {key: value for key, value in complete.items() if key != "scene_max_points"}

@@ -43,6 +43,11 @@ def test_causal_points_recover_metric_motion_and_abstain_without_depth(image_sca
     no_depth = tracker.update(frame(shifted, 0.066, np.zeros(gray.shape, dtype=np.uint16)))
     assert no_depth.base_motion_from_seed is None
     assert no_depth.depth_points == 0
+    assert no_depth.tracked_points >= 12
+
+    recovered = tracker.update(frame(shifted, 0.099))
+    assert recovered.base_motion_from_seed is not None
+    assert recovered.inliers >= 12
 
 
 def test_causal_points_reject_unobserved_frame_gap():
@@ -52,6 +57,24 @@ def test_causal_points_reject_unobserved_frame_gap():
     tracker.seed(frame(rgb, 0), np.ones(gray.shape, dtype=bool))
     with pytest.raises(ValueError, match="lost a camera-frame interval"):
         tracker.update(frame(rgb, 0.2))
+
+
+def test_hole_adjacent_to_rgb_track_withholds_only_its_metric_sample():
+    gray = np.random.default_rng(5).integers(0, 255, (96, 96), dtype=np.uint8)
+    rgb = np.repeat(gray[:, :, None], 3, axis=2)
+    mask = np.zeros(gray.shape, dtype=bool)
+    mask[20:76, 20:76] = True
+    direct = CausalRigidPointTracker(min_inliers=12, depth_support_radius_px=0)
+    guarded = CausalRigidPointTracker(min_inliers=12, depth_support_radius_px=1)
+    assert direct.seed(frame(rgb, 0), mask) == guarded.seed(frame(rgb, 0), mask)
+    x, y = guarded.current_pixels(gray.shape)[0]
+    depth = np.full(gray.shape, 1000, dtype=np.uint16)
+    depth[y, x + 1] = 0
+
+    direct_motion = direct.update(frame(rgb, 0.033, depth))
+    guarded_motion = guarded.update(frame(rgb, 0.033, depth))
+    assert guarded_motion.tracked_points == direct_motion.tracked_points
+    assert guarded_motion.depth_points < direct_motion.depth_points
 
 
 def test_half_scale_tracking_keeps_features_on_small_object():

@@ -157,6 +157,7 @@ class FlashRuntime:
                 max_frame_gap_s=causal_tracking.max_frame_gap_s,
                 fit_threshold_m=causal_tracking.fit_threshold_m,
                 image_scale=causal_tracking.image_scale,
+                depth_support_radius_px=causal_tracking.depth_support_radius_px,
                 scene_max_points=causal_tracking.scene_max_points,
                 environment_context_radius_m=causal_tracking.environment_context_radius_m,
                 environment_min_motion_m=causal_tracking.environment_min_motion_m,

@@ -64,6 +64,7 @@ class CausalTrackingConfig:
     max_frame_gap_s: float
     fit_threshold_m: float
     image_scale: float = 1.0
+    depth_support_radius_px: int = 1
     scene_max_points: int = 800
     environment_context_radius_m: float = 0.25
     environment_min_motion_m: float = 0.008
@@ -77,8 +78,10 @@ class CausalTrackingConfig:
     def from_config(cls, config: dict[str, Any]) -> CausalTrackingConfig:
         """Require each live tracker limit to be visible in the rig configuration."""
         expected = {field.name for field in fields(cls)}
-        if set(config) != expected:
-            raise ValueError(f"causal tracking keys differ: {sorted(set(config) ^ expected)}")
+        # Recordings written before this depth-quality setting remain readable.
+        required = expected - {"depth_support_radius_px"}
+        if not required <= set(config) or not set(config) <= expected:
+            raise ValueError(f"causal tracking keys differ: {sorted(set(config) ^ required)}")
         return cls(**config)
 
     def __post_init__(self) -> None:
@@ -92,6 +95,9 @@ class CausalTrackingConfig:
             or self.fit_threshold_m <= 0
             or not isfinite(self.image_scale)
             or not 0 < self.image_scale <= 1
+            or isinstance(self.depth_support_radius_px, bool)
+            or not isinstance(self.depth_support_radius_px, int)
+            or self.depth_support_radius_px < 0
             or self.scene_max_points < 16
             or not isfinite(self.environment_context_radius_m)
             or self.environment_context_radius_m <= 0
@@ -130,6 +136,7 @@ class CausalPoseService:
         max_frame_gap_s: float = 0.1,
         fit_threshold_m: float = 0.005,
         image_scale: float = 1.0,
+        depth_support_radius_px: int = 1,
         scene_max_points: int = 800,
         environment_context_radius_m: float = 0.25,
         environment_min_motion_m: float = 0.008,
@@ -158,6 +165,7 @@ class CausalPoseService:
             "max_frame_gap_s": max_frame_gap_s,
             "fit_threshold_m": fit_threshold_m,
             "image_scale": image_scale,
+            "depth_support_radius_px": depth_support_radius_px,
         }
         self.active: dict[str, tuple[CausalRigidPointTracker, PoseEstimate]] = {}
         self.pending: dict[str, _PendingTrack] = {}
@@ -166,6 +174,7 @@ class CausalPoseService:
             max_points=scene_max_points,
             max_frame_gap_s=max_frame_gap_s,
             image_scale=image_scale,
+            depth_support_radius_px=depth_support_radius_px,
         )
         self.environment_context_radius_m = environment_context_radius_m
         self.environment_min_motion_m = environment_min_motion_m

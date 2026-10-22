@@ -12,6 +12,7 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
+from .depth_quality import depth_support_mask
 from .perception import RGBDFrame
 from .registration import DegenerateRegistrationError, register_object, transform_points, unproject_pixels
 
@@ -44,6 +45,7 @@ class CausalRigidPointTracker:
         fb_threshold_px: float = 1.0,
         fit_threshold_m: float = 0.005,
         image_scale: float = 1.0,
+        depth_support_radius_px: int = 1,
     ) -> None:
         if (
             max_points < min_inliers
@@ -56,6 +58,9 @@ class CausalRigidPointTracker:
             or fit_threshold_m <= 0
             or not np.isfinite(image_scale)
             or not 0 < image_scale <= 1
+            or isinstance(depth_support_radius_px, bool)
+            or not isinstance(depth_support_radius_px, int)
+            or depth_support_radius_px < 0
         ):
             raise ValueError("invalid causal point-tracker limits")
         self.max_points = max_points
@@ -64,6 +69,7 @@ class CausalRigidPointTracker:
         self.fb_threshold_px = fb_threshold_px
         self.fit_threshold_m = fit_threshold_m
         self.image_scale = image_scale
+        self.depth_support_radius_px = depth_support_radius_px
         self._gray: np.ndarray | None = None
         self._uv = np.empty((0, 2), dtype=np.float32)
         self._base_seed = np.empty((0, 3), dtype=float)
@@ -86,7 +92,8 @@ class CausalRigidPointTracker:
         full_uv = corners.reshape(-1, 2) if corners is not None else np.empty((0, 2), dtype=np.float32)
         if len(full_uv):
             px = np.rint(full_uv).astype(int)
-            valid = frame.depth[px[:, 1], px[:, 0]] > 0
+            depth_supported = depth_support_mask(frame.depth, radius_px=self.depth_support_radius_px)
+            valid = depth_supported[px[:, 1], px[:, 0]]
             full_uv = full_uv[valid]
         self._uv = (full_uv * self.image_scale).astype(np.float32)
         self._base_seed = (
@@ -137,7 +144,8 @@ class CausalRigidPointTracker:
         live = np.flatnonzero(self._valid)
         if len(live):
             px = self._full_pixels(self._uv[live], frame.depth.shape)
-            depth_ok = frame.depth[px[:, 1], px[:, 0]] > 0
+            depth_supported = depth_support_mask(frame.depth, radius_px=self.depth_support_radius_px)
+            depth_ok = depth_supported[px[:, 1], px[:, 0]]
             live = live[depth_ok]
         if len(live) < self.min_inliers:
             return RigidPointMotion(

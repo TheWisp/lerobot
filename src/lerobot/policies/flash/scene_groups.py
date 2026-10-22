@@ -14,6 +14,7 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
+from .depth_quality import depth_support_mask
 from .geometry import inverse, transform
 from .perception import RGBDFrame
 from .registration import (
@@ -58,6 +59,7 @@ class ScenePointTracker:
         max_frame_gap_s: float = 0.1,
         image_scale: float = 0.5,
         fb_threshold_px: float = 1.0,
+        depth_support_radius_px: int = 1,
     ) -> None:
         if (
             max_points < 16
@@ -66,12 +68,16 @@ class ScenePointTracker:
             or not 0 < image_scale <= 1
             or not np.isfinite(fb_threshold_px)
             or fb_threshold_px <= 0
+            or isinstance(depth_support_radius_px, bool)
+            or not isinstance(depth_support_radius_px, int)
+            or depth_support_radius_px < 0
         ):
             raise ValueError("invalid scene point tracking limits")
         self.max_points = max_points
         self.max_frame_gap_s = max_frame_gap_s
         self.image_scale = image_scale
         self.fb_threshold_px = fb_threshold_px
+        self.depth_support_radius_px = depth_support_radius_px
         self._gray: np.ndarray | None = None
         self._uv = np.empty((0, 2), dtype=np.float32)
         self._ids = np.empty(0, dtype=np.int64)
@@ -127,8 +133,9 @@ class ScenePointTracker:
 
         # Feature replenishment is causal and bounded. Existing identities are
         # never renamed, and new points cannot appear in earlier snapshots.
+        depth_supported = depth_support_mask(frame.depth, radius_px=self.depth_support_radius_px)
         if len(self._uv) < self.max_points:
-            valid_depth = (np.isfinite(frame.depth) & (frame.depth > 0)).astype(np.uint8)
+            valid_depth = depth_supported.astype(np.uint8)
             valid_depth = cv2.resize(
                 valid_depth, (gray.shape[1], gray.shape[0]), interpolation=cv2.INTER_NEAREST
             )
@@ -151,16 +158,14 @@ class ScenePointTracker:
         pixels = np.rint(self._uv / self.image_scale).astype(int)
         pixels[:, 0] = np.clip(pixels[:, 0], 0, frame.depth.shape[1] - 1)
         pixels[:, 1] = np.clip(pixels[:, 1], 0, frame.depth.shape[0] - 1)
-        valid = np.isfinite(frame.depth[pixels[:, 1], pixels[:, 0]]) & (
-            frame.depth[pixels[:, 1], pixels[:, 0]] > 0
-        )
-        self._uv, self._ids, pixels = self._uv[valid], self._ids[valid], pixels[valid]
-        camera_xyz = unproject_pixels(frame.depth, frame.intrinsics, pixels, frame.depth_m_per_unit)
+        valid = depth_supported[pixels[:, 1], pixels[:, 0]]
+        measured_pixels = pixels[valid]
+        camera_xyz = unproject_pixels(frame.depth, frame.intrinsics, measured_pixels, frame.depth_m_per_unit)
         return SceneTracks(
             frame.frame_id,
             frame.source_time_s,
-            self._ids.copy(),
-            pixels.copy(),
+            self._ids[valid].copy(),
+            measured_pixels.copy(),
             transform_points(frame.base_from_camera, camera_xyz),
         )
 
