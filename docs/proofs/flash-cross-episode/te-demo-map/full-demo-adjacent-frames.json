@@ -1,0 +1,182 @@
+{
+  "demo": "/home/feit/.cache/huggingface/lerobot/demos/insertion/recording",
+  "tracker_run": "/home/feit/.cache/huggingface/lerobot/demos/insertion/flash/v1/tracker-runs/trackeverything-growth-ui-20261021-a/scene.npz",
+  "full_demo_frames": [
+    0,
+    712
+  ],
+  "saved_tracker_frames": [
+    100,
+    712
+  ],
+  "method": "Mask/depth-supported TrackEverything points; robust adjacent-frame rigid fits. Each connected segment seeds a local triplet at its midpoint from its more temporally self-consistent half of supported IDs. Broken segments are not registered to each other.",
+  "limitations": "This is a future-aware offline diagnostic, not a causal live tracker, a verified 6D material frame, or a demo-to-live object registration.",
+  "objects": {
+    "dowel": {
+      "segments": [
+        {
+          "number": 1,
+          "frames": [
+            100,
+            172
+          ],
+          "seed_frame": 136,
+          "anchor_track_ids": [
+            66,
+            18,
+            112
+          ],
+          "initial_ab_mm": 75.14946746826172,
+          "initial_c_distance_from_ab_mm": 25.591144561767578,
+          "raw_anchor_supported_frames": [
+            51,
+            43,
+            60
+          ],
+          "raw_anchor_residual_p90_mm": [
+            0.33154819107393935,
+            0.5052223123868922,
+            0.22776422888470954
+          ],
+          "adjacent_fit_inliers_min": 6
+        },
+        {
+          "number": 2,
+          "frames": [
+            217,
+            259
+          ],
+          "seed_frame": 238,
+          "anchor_track_ids": [
+            104,
+            103,
+            79
+          ],
+          "initial_ab_mm": 27.3914852142334,
+          "initial_c_distance_from_ab_mm": 14.393820762634277,
+          "raw_anchor_supported_frames": [
+            37,
+            23,
+            8
+          ],
+          "raw_anchor_residual_p90_mm": [
+            1.4197870988375267,
+            1.2479712415961508,
+            0.603653497797045
+          ],
+          "adjacent_fit_inliers_min": 3
+        },
+        {
+          "number": 3,
+          "frames": [
+            267,
+            712
+          ],
+          "seed_frame": 489,
+          "anchor_track_ids": [
+            93,
+            298,
+            111
+          ],
+          "initial_ab_mm": 40.296180725097656,
+          "initial_c_distance_from_ab_mm": 11.754733085632324,
+          "raw_anchor_supported_frames": [
+            430,
+            137,
+            182
+          ],
+          "raw_anchor_residual_p90_mm": [
+            6.107434969340355,
+            4.7426816836456105,
+            6.738717546309734
+          ],
+          "adjacent_fit_inliers_min": 3
+        }
+      ],
+      "unlinked_frames": [
+        173,
+        174,
+        175,
+        176,
+        177,
+        178,
+        179,
+        180,
+        181,
+        182,
+        183,
+        184,
+        185,
+        186,
+        187,
+        188,
+        189,
+        190,
+        191,
+        192,
+        193,
+        194,
+        195,
+        196,
+        197,
+        198,
+        199,
+        200,
+        201,
+        202,
+        203,
+        204,
+        205,
+        206,
+        207,
+        208,
+        209,
+        210,
+        211,
+        212,
+        213,
+        214,
+        215,
+        216,
+        260,
+        261,
+        262,
+        263,
+        264,
+        265,
+        266
+      ]
+    },
+    "ring": {
+      "segments": [
+        {
+          "number": 1,
+          "frames": [
+            100,
+            712
+          ],
+          "seed_frame": 406,
+          "anchor_track_ids": [
+            215,
+            182,
+            142
+          ],
+          "initial_ab_mm": 39.60628128051758,
+          "initial_c_distance_from_ab_mm": 33.0958137512207,
+          "raw_anchor_supported_frames": [
+            597,
+            289,
+            597
+          ],
+          "raw_anchor_residual_p90_mm": [
+            3.489580635906021,
+            3.1574441724063536,
+            3.273003376305625
+          ],
+          "adjacent_fit_inliers_min": 6
+        }
+      ],
+      "unlinked_frames": []
+    }
+  }
+}

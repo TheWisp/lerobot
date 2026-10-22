@@ -171,6 +171,40 @@ not establish alignment between cohorts or prove a stable relative dowel-ring
 cloud. A next experiment must link overlapping cohorts and reject drifting
 identities before using their relative motion for control.
 
+### Adjacent-frame fits across the insertion demo (2026-10-22)
+
+The [full-demo playback](../../../../docs/proofs/flash-cross-episode/te-demo-map/full-demo-adjacent-frames.mp4)
+fits rigid motion between adjacent mask/depth-supported TrackEverything
+points for **both** labeled objects. The saved run covers frames 100–712 of
+the 713-frame demo; the first 100 RGB frames have no saved point tracks.
+The ring has one connected visual-motion segment, 100–712. The dowel has
+three, 100–172, 217–259 and 267–712. Frames 173–216 have no supported
+dowel pose, and 260–266 cannot be connected to the next segment by an
+adjacent fit. Reseeding an A/B/C display frame after either gap does not
+establish how that frame relates to the prior one. The
+[per-segment evidence](../../../../docs/proofs/flash-cross-episode/te-demo-map/full-demo-adjacent-frames.json)
+records anchor IDs, fit support and raw-track disagreements.
+
+This clarifies the earlier visually stable dense point overlay. On the same
+saved tracks and original anchor IDs, replacing distant-reference refits with
+adjacent fits reduced the 95th-percentile inferred anchor-position step
+from 5.71 to 2.29 mm and direction step from 6.92° to 1.80°. Those numbers
+measure smoothness, not accuracy. A raw dowel ID still moves onto the ring,
+and the better selected triplet's maximum pairwise-distance change is 2.4 mm
+at the 90th percentile of jointly supported frames. Point identity, inferred
+object pose and physical task-point accuracy need separate checks.
+
+Keep a stable abstract object frame within each **validated connected**
+segment while adding newly visible point tracks to its bank. Do not require
+three original surface IDs to stay visible; do not reset the object frame
+merely because a manipulation stage changes. An occlusion or contradictory
+co-motion may split the graph. A gripper-attachment prediction or independent
+geometry registration can propose a cross-gap transform, but its provenance
+and uncertainty must be checked before joining segments or extracting one
+continuous demo relation. The saved TrackEverything pass took 151 s for 613
+frames and uses future context. It is suitable for offline preparation and
+shadow evaluation, not a drop-in causal source for the 30 Hz run engine.
+
 Other trackers register an argv template under their tracker ID:
 
 ```json

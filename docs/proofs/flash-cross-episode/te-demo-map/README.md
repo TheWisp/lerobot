@@ -4,6 +4,40 @@ The [frame-by-frame diagram](experiment-pipeline.md) shows exactly which demo
 and replay frames were used, what the saved TrackEverything points looked
 like, and how this limited experiment differs from a demo-to-live tracker.
 
+## Full-demo adjacent-frame playback
+
+[Watch the full insertion demo with point-group frames](full-demo-adjacent-frames.mp4).
+It plays all 713 recorded RGB frames at 30 fps. The saved TrackEverything run
+begins at frame 100, so the opening 100 frames have no point annotations.
+Starting there, cyan dots are mask/depth-supported tracks for both objects;
+amber and green A/B/C triangles are the dowel's and ring's **inferred local
+frames**. Filled anchors agree with their raw track at that frame; hollow
+anchors are inferred. The video displays adjacent fit support and explicitly
+removes a frame when its supported-motion graph breaks. A newly visible dowel
+segment is labeled as a **new, unlinked frame**, not silently aligned to the
+previous one. The [summary](full-demo-adjacent-frames.json) and
+[renderer](../../../../benchmarks/flash_te_full_demo_frames.py) reproduce it.
+The mask/depth check uses the existing 10 mm agreement band and the rigid fit
+uses a 5 mm inlier band. Both are offline diagnostics, not controller limits.
+
+The ring has one linked segment from frames 100–712. The dowel has three:
+100–172, 217–259 and 267–712. Frames 173–216 have no mask/depth-supported
+dowel pose; frames 260–266 also lack a usable adjacent-motion bridge. The
+three anchor IDs are selected offline within each segment from the more
+temporally self-consistent half of visible tracks, and a segment's middle
+frame seeds its local coordinates. This uses future frames. The fits use the
+selected IDs too, so filled markers are **not independent accuracy checks**;
+the dedicated three-point clip below holds its anchors out of the fit.
+
+This playback demonstrates a practical point-bank rule: add or retire
+visible tracks as surfaces appear or disappear, but keep an object's chosen
+coordinate frame across a **validated connected segment**. A motion-stage
+boundary alone does not require a new frame. When the point graph breaks,
+robot/gripper attachment, geometry registration or another source must
+explicitly bridge the two frames. Without that bridge, their relative motion
+is unknown. The apparent 3D smoothness in a segment is not proof of the
+correct physical point identities or contact pose.
+
 ## What a point-group action could store
 
 [Watch the corrected three-point tracking video](three-point-demo-frame.mp4).

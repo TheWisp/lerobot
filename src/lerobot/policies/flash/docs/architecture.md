@@ -202,6 +202,21 @@ When two valid proposals disagree, first test whether either contradicts measure
 
 Demo processing preserves both a causal estimate stream and, optionally, an offline refined reference. The latter may use later views to describe the demonstrated interaction more accurately, but it carries uncertainty and cannot masquerade as information available during a live rollout. Evaluation compares both modes. If live attachment is uncertain, the policy uses that uncertainty; it does not deliberately corrupt the demo to recreate coincidental cancellation. ([O3](#o3), [R2](#r2).)
 
+For a rigid object, a few non-collinear coordinates define an arbitrary local
+frame, but its originally visible surface tracks need not survive the entire
+episode. Track point cohorts as they become visible, align new cohorts through
+independently supported co-motion, and propagate the same object frame only
+along validated links. Manipulation stages do not themselves reset that
+frame. If the visual point graph breaks, preserve the last estimate and its
+time, start a new unlinked segment, and require explicit gripper, scene-group
+or geometry evidence before joining the segments. Offline processing may
+choose better reference views using later frames; a live tracker must instead
+publish causal, timestamped evidence. The
+[insertion demo's adjacent-frame audit](../../../../../docs/proofs/flash-cross-episode/te-demo-map/README.md#full-demo-adjacent-frame-playback)
+has a continuous ring track but two dowel gaps during grasp/rotation, so
+visible-point continuity alone cannot yet supply its whole demonstrated
+object-object motion.
+
 ### Spatial objective and task progress
 
 Use one transform convention: `T_A_B` maps coordinates in frame B into frame A. Object coordinate frames are arbitrary but fixed within a skill; cross-episode registration establishes their correspondence. Let E be the end effector, H the held object, B the target and W the robot base. At a keyframe, or local demo time `tau` within a replayed interaction interval:
