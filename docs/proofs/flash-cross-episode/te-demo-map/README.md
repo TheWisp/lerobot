@@ -1,5 +1,9 @@
 # Growing TrackEverything demo map, then matching a live view
 
+The [frame-by-frame diagram](experiment-pipeline.md) shows exactly which demo
+and replay frames were used, what the saved TrackEverything points looked
+like, and how this limited experiment differs from a demo-to-live tracker.
+
 This is an offline test of carrying point identity through the demo instead of
 independently registering distant demo frames. It uses the saved
 `trackeverything-growth-ui-20261021-a` run of the 613-frame insertion demo and
