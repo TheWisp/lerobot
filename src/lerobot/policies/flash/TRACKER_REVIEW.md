@@ -53,7 +53,8 @@ to dense context took 27.1 s versus 27.9 s and improved median held-dowel RGB-D
 surface discrepancy over frames 400–500 from about 27 mm to 18 mm. The dowel fit still
 had only 18 inliers from a median 83.5 visible queries, and the native scene output
 represented its reference mask with just 9 distinct tracks after deduplication at the
-upstream default 20 mm voxel size. The candidate is therefore still an inaccurate
+upstream default 0.02 normalized-scene voxel setting. The candidate is
+therefore still an inaccurate
 pose estimate, not a corrected skill. Use segmentation across later views to associate
 new points with an object, then check temporal rigidity and RGB-D surface agreement
 before accepting a pose. Reducing voxel size may retain more scene detail but costs
@@ -204,6 +205,38 @@ and uncertainty must be checked before joining segments or extracting one
 continuous demo relation. The saved TrackEverything pass took 151 s for 613
 frames and uses future context. It is suitable for offline preparation and
 shadow evaluation, not a drop-in causal source for the 30 Hz run engine.
+
+### Forward-only point growth audit (2026-10-22)
+
+The 151 s point-growth result is **five whole-video inference calls** on the
+same 613 frames: one reference-query pass followed by four rounds that add
+query points and restart from the beginning. This is an adapter limitation,
+not TrackEverything's normal temporal execution. One measured dense pass took
+27.8 s and produced 1,708 native scene tracks, 884 of them born after the
+first frame. The model carries scene memory forward through consecutive,
+non-overlapping 16-frame windows; it does not rerun all prior windows as
+surfaces appear.
+
+Native scene growth is not yet a drop-in replacement for explicit queries.
+With the default 0.02 normalized-scene voxel setting and a strict birth-frame
+SAM-mask/depth association, only 11 of those later native tracks (six dowel,
+five ring) were usable as new object tracks in a one-pass prototype. The 151 s
+result added 318 higher-resolution query tracks. That prototype was **not
+applied** to the demo editor because it lost most of the new object-point
+coverage. The native
+association rule may itself be too restrictive; the count does not establish
+that only 11 physical object tracks exist.
+
+The desired architecture is one forward stateful tracker: per window, accept
+new depth-backed points from current object masks, retain valid co-moving
+identities, and stop using contradicted identities for object estimation.
+The released high-resolution query API currently takes its query list before
+inference; choosing later queries based on previous predictions led our
+adapter to restart the video. A stateful query-injection path, or an offline
+one-pass pre-seeding scheme that preserves point coverage, needs validation
+before replacing the existing research result. A short window may repeat
+local frames while the buffer fills, but never the entire history for each
+new surface.
 
 Other trackers register an argv template under their tracker ID:
 
