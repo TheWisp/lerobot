@@ -61,6 +61,8 @@ The saved depth around two red clusters is a structured surface with missing pix
 
 ![Live RGB-D depth profiles through two red residual clusters](depth-profiles.png)
 
+The [recorded live depth image](raw-depth-frame-496.png) shows the full frame and a dowel–ring crop alongside RGB. Black pixels have no depth reading; the crop uses a narrower color scale to reveal the measured surface shape.
+
 The fitting objective matters too. A local refit with a strong one-sided penalty on points in front of measured depth reduced the front fraction to 0.7%, but moved 18.5% of source points behind measured depth and reduced mask-and-depth support to 76.4%. That pose merely hides the disagreement and is **not** a better registration. A symmetric depth refit kept about 92.6% support but still had 2.6% front disagreement. A useful visibility objective must reward explained measured surface, model occlusion and depth uncertainty, and reject such tradeoffs rather than demand zero threshold violations. None of these offline refits has been applied to the FLASH runtime.
 
 ## A later demo view bridges to a held live view
