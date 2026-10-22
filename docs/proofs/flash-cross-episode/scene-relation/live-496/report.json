@@ -1,0 +1,5378 @@
+{
+  "live_frame": 496,
+  "live_points": {
+    "held": 700,
+    "target": 700
+  },
+  "settings": {
+    "demo_start": 350,
+    "demo_end": 550,
+    "demo_stride": 5,
+    "edge_pixels": 1,
+    "max_points": 700,
+    "icp_iterations": 25,
+    "trim_fraction": 0.8,
+    "proximity_m": 0.006
+  },
+  "frames": [
+    {
+      "demo_frame": 350,
+      "status": "measured_object_pair",
+      "source_points": {
+        "held": 700,
+        "target": 700
+      },
+      "candidates": [
+        {
+          "initializer": "pca_7",
+          "balanced_coverage": 0.3342857142857143,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.33714285714285713,
+              "target_to_source_coverage": 0.5057142857142857,
+              "source_to_target_median_mm": 8.2495347419682,
+              "target_to_source_median_mm": 5.8440026025265555
+            },
+            "target": {
+              "source_to_target_coverage": 0.48714285714285716,
+              "target_to_source_coverage": 0.3342857142857143,
+              "source_to_target_median_mm": 6.110927392986449,
+              "target_to_source_median_mm": 7.725682332580739
+            }
+          },
+          "rotation": [
+            [
+              0.4572386503490793,
+              -0.8368587541973789,
+              0.30099874111059405
+            ],
+            [
+              0.7004198539148994,
+              0.5474170369385546,
+              0.45798102134394275
+            ],
+            [
+              -0.5480372659489317,
+              0.001418870192453936,
+              0.836452713510211
+            ]
+          ],
+          "translation_m": [
+            -0.17338855613650045,
+            -0.06436563728909714,
+            -0.0063814399631599295
+          ]
+        },
+        {
+          "initializer": "pca_13",
+          "balanced_coverage": 0.31285714285714283,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.3757142857142857,
+              "target_to_source_coverage": 0.5657142857142857,
+              "source_to_target_median_mm": 7.180622084406292,
+              "target_to_source_median_mm": 5.338845125250653
+            },
+            "target": {
+              "source_to_target_coverage": 0.5285714285714286,
+              "target_to_source_coverage": 0.31285714285714283,
+              "source_to_target_median_mm": 5.753423638600909,
+              "target_to_source_median_mm": 8.269033823229968
+            }
+          },
+          "rotation": [
+            [
+              0.9115163317998438,
+              -0.3150283392405967,
+              0.26437685666009214
+            ],
+            [
+              0.24120156302231782,
+              0.9301722600239812,
+              0.2767695298935043
+            ],
+            [
+              -0.333106263612305,
+              -0.1885118355891525,
+              0.9238525342201854
+            ]
+          ],
+          "translation_m": [
+            -0.08446063336399198,
+            -0.028580359606621628,
+            -0.023516372864882007
+          ]
+        },
+        {
+          "initializer": "pca_23",
+          "balanced_coverage": 0.2757142857142857,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.51,
+              "target_to_source_coverage": 0.6485714285714286,
+              "source_to_target_median_mm": 5.910027737912874,
+              "target_to_source_median_mm": 4.465839657704214
+            },
+            "target": {
+              "source_to_target_coverage": 0.5014285714285714,
+              "target_to_source_coverage": 0.2757142857142857,
+              "source_to_target_median_mm": 5.995042424357192,
+              "target_to_source_median_mm": 9.062874682867303
+            }
+          },
+          "rotation": [
+            [
+              0.9693278485285921,
+              0.17496286156444366,
+              0.17260219911724983
+            ],
+            [
+              -0.206033292116993,
+              0.9613641396439833,
+              0.1825630673110466
+            ],
+            [
+              -0.13399180798229135,
+              -0.21252526456815732,
+              0.9679252074999759
+            ]
+          ],
+          "translation_m": [
+            -0.019934784398716397,
+            -0.0388787013551463,
+            -0.01893837247235186
+          ]
+        }
+      ]
+    },
+    {
+      "demo_frame": 355,
+      "status": "measured_object_pair",
+      "source_points": {
+        "held": 700,
+        "target": 700
+      },
+      "candidates": [
+        {
+          "initializer": "pca_3",
+          "balanced_coverage": 0.5271428571428571,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.5628571428571428,
+              "target_to_source_coverage": 0.6314285714285715,
+              "source_to_target_median_mm": 5.534387044481618,
+              "target_to_source_median_mm": 4.909778045386707
+            },
+            "target": {
+              "source_to_target_coverage": 0.6042857142857143,
+              "target_to_source_coverage": 0.5271428571428571,
+              "source_to_target_median_mm": 5.059253189363929,
+              "target_to_source_median_mm": 5.772314120550088
+            }
+          },
+          "rotation": [
+            [
+              0.9741654193245143,
+              0.15771358204077374,
+              0.1616420793981628
+            ],
+            [
+              -0.18563622585047096,
+              0.9668302749703401,
+              0.17543776974405823
+            ],
+            [
+              -0.12861153697972305,
+              -0.20091203408617522,
+              0.9711299743675242
+            ]
+          ],
+          "translation_m": [
+            -0.016471668305900397,
+            -0.035998449068610966,
+            -0.02027526138087471
+          ]
+        },
+        {
+          "initializer": "pca_23",
+          "balanced_coverage": 0.5157142857142857,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.5157142857142857,
+              "target_to_source_coverage": 0.6142857142857143,
+              "source_to_target_median_mm": 5.845012050027599,
+              "target_to_source_median_mm": 5.056428348401327
+            },
+            "target": {
+              "source_to_target_coverage": 0.6114285714285714,
+              "target_to_source_coverage": 0.5742857142857143,
+              "source_to_target_median_mm": 4.632260441888832,
+              "target_to_source_median_mm": 5.322385290849543
+            }
+          },
+          "rotation": [
+            [
+              0.9787293966071685,
+              0.12993717837410543,
+              0.15876113470602016
+            ],
+            [
+              -0.159599463136203,
+              0.9684786404052773,
+              0.19125149527619667
+            ],
+            [
+              -0.1289060882332679,
+              -0.21252165243786575,
+              0.968616419260729
+            ]
+          ],
+          "translation_m": [
+            -0.016438970015870497,
+            -0.03888263206674344,
+            -0.02041546196646865
+          ]
+        },
+        {
+          "initializer": "pca_13",
+          "balanced_coverage": 0.5042857142857143,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.5042857142857143,
+              "target_to_source_coverage": 0.6014285714285714,
+              "source_to_target_median_mm": 5.96611085051767,
+              "target_to_source_median_mm": 5.137028056044768
+            },
+            "target": {
+              "source_to_target_coverage": 0.6185714285714285,
+              "target_to_source_coverage": 0.59,
+              "source_to_target_median_mm": 4.648755759952571,
+              "target_to_source_median_mm": 5.198208194615964
+            }
+          },
+          "rotation": [
+            [
+              0.9800542723802165,
+              0.12285075322527964,
+              0.15620920466241545
+            ],
+            [
+              -0.15253779097934633,
+              0.9688564469048125,
+              0.19506257358633092
+            ],
+            [
+              -0.12738071091191247,
+              -0.21499971563461007,
+              0.9682712826293117
+            ]
+          ],
+          "translation_m": [
+            -0.015831227047658457,
+            -0.039534676841086934,
+            -0.020372038475181375
+          ]
+        }
+      ]
+    },
+    {
+      "demo_frame": 360,
+      "status": "measured_object_pair",
+      "source_points": {
+        "held": 700,
+        "target": 700
+      },
+      "candidates": [
+        {
+          "initializer": "pca_13",
+          "balanced_coverage": 0.2814285714285714,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.4085714285714286,
+              "target_to_source_coverage": 0.5857142857142857,
+              "source_to_target_median_mm": 8.10928696392155,
+              "target_to_source_median_mm": 4.908398717059403
+            },
+            "target": {
+              "source_to_target_coverage": 0.3414285714285714,
+              "target_to_source_coverage": 0.2814285714285714,
+              "source_to_target_median_mm": 8.211675338787629,
+              "target_to_source_median_mm": 8.485334221908767
+            }
+          },
+          "rotation": [
+            [
+              -0.13344056483547612,
+              -0.931095654846754,
+              0.3394915274081004
+            ],
+            [
+              0.8144005872909159,
+              0.09218417096707068,
+              0.5729343435711681
+            ],
+            [
+              -0.564752422816052,
+              0.3529347817212263,
+              0.7459837402884799
+            ]
+          ],
+          "translation_m": [
+            -0.25711762055078424,
+            -0.11772108348313917,
+            0.04411235126478935
+          ]
+        },
+        {
+          "initializer": "pca_23",
+          "balanced_coverage": 0.2757142857142857,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.3842857142857143,
+              "target_to_source_coverage": 0.5471428571428572,
+              "source_to_target_median_mm": 7.580285562265497,
+              "target_to_source_median_mm": 5.556345553545875
+            },
+            "target": {
+              "source_to_target_coverage": 0.5071428571428571,
+              "target_to_source_coverage": 0.2757142857142857,
+              "source_to_target_median_mm": 5.865880060627068,
+              "target_to_source_median_mm": 9.087480198892472
+            }
+          },
+          "rotation": [
+            [
+              0.964379207180762,
+              0.2204744224034494,
+              0.1461635174155042
+            ],
+            [
+              -0.24473608101636923,
+              0.9533502136357392,
+              0.17671338605051903
+            ],
+            [
+              -0.10038423883337605,
+              -0.20619020157746534,
+              0.9733491692950111
+            ]
+          ],
+          "translation_m": [
+            -0.0076183408727373905,
+            -0.041751567571136766,
+            -0.017179860762015997
+          ]
+        },
+        {
+          "initializer": "pca_3",
+          "balanced_coverage": 0.2714285714285714,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.3942857142857143,
+              "target_to_source_coverage": 0.5685714285714286,
+              "source_to_target_median_mm": 7.321431690710681,
+              "target_to_source_median_mm": 5.3754940305386985
+            },
+            "target": {
+              "source_to_target_coverage": 0.5042857142857143,
+              "target_to_source_coverage": 0.2714285714285714,
+              "source_to_target_median_mm": 5.888265950310601,
+              "target_to_source_median_mm": 9.350085635924197
+            }
+          },
+          "rotation": [
+            [
+              0.9545391029460564,
+              0.26535319219537823,
+              0.13580421325811923
+            ],
+            [
+              -0.28544611569455036,
+              0.9449508473159475,
+              0.15996378087481494
+            ],
+            [
+              -0.08588140649656131,
+              -0.1914564690695904,
+              0.9777365721244023
+            ]
+          ],
+          "translation_m": [
+            -0.0024667121194962977,
+            -0.04044647115353744,
+            -0.016341570674510808
+          ]
+        }
+      ]
+    },
+    {
+      "demo_frame": 365,
+      "status": "measured_object_pair",
+      "source_points": {
+        "held": 700,
+        "target": 700
+      },
+      "candidates": [
+        {
+          "initializer": "pca_3",
+          "balanced_coverage": 0.48857142857142855,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.48857142857142855,
+              "target_to_source_coverage": 0.6871428571428572,
+              "source_to_target_median_mm": 6.118410702024886,
+              "target_to_source_median_mm": 4.687613637843453
+            },
+            "target": {
+              "source_to_target_coverage": 0.7014285714285714,
+              "target_to_source_coverage": 0.5657142857142857,
+              "source_to_target_median_mm": 4.241199968171187,
+              "target_to_source_median_mm": 5.490936446529448
+            }
+          },
+          "rotation": [
+            [
+              0.9641988685126357,
+              0.23993984961822384,
+              0.11291328763318388
+            ],
+            [
+              -0.2533255887542301,
+              0.9593114475260156,
+              0.12469038747177454
+            ],
+            [
+              -0.0784008165854956,
+              -0.14883015558253943,
+              0.985749915925943
+            ]
+          ],
+          "translation_m": [
+            0.004506344411410679,
+            -0.022903919263712713,
+            -0.02049153058612946
+          ]
+        },
+        {
+          "initializer": "pca_23",
+          "balanced_coverage": 0.4742857142857143,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.4742857142857143,
+              "target_to_source_coverage": 0.6585714285714286,
+              "source_to_target_median_mm": 6.326802054155756,
+              "target_to_source_median_mm": 4.910981679994659
+            },
+            "target": {
+              "source_to_target_coverage": 0.7228571428571429,
+              "target_to_source_coverage": 0.6071428571428571,
+              "source_to_target_median_mm": 3.8742898647903443,
+              "target_to_source_median_mm": 5.08374871007279
+            }
+          },
+          "rotation": [
+            [
+              0.9696903012810859,
+              0.21710143814583152,
+              0.11210568744006383
+            ],
+            [
+              -0.2315933454645753,
+              0.9629038487048273,
+              0.1384944059735158
+            ],
+            [
+              -0.0778796631857349,
+              -0.16025961345405387,
+              0.9839977715206646
+            ]
+          ],
+          "translation_m": [
+            0.004312820314649898,
+            -0.025873028352127167,
+            -0.020531536702018183
+          ]
+        },
+        {
+          "initializer": "pca_13",
+          "balanced_coverage": 0.4442857142857143,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.4442857142857143,
+              "target_to_source_coverage": 0.5671428571428572,
+              "source_to_target_median_mm": 7.00544017722827,
+              "target_to_source_median_mm": 5.228307640314357
+            },
+            "target": {
+              "source_to_target_coverage": 0.46714285714285714,
+              "target_to_source_coverage": 0.48,
+              "source_to_target_median_mm": 6.431475981563928,
+              "target_to_source_median_mm": 6.190808313009431
+            }
+          },
+          "rotation": [
+            [
+              -0.4189846392965671,
+              -0.8697302202233863,
+              0.26080877298071314
+            ],
+            [
+              0.7533278533793746,
+              -0.1726129316507359,
+              0.6345879932284898
+            ],
+            [
+              -0.5069013881972989,
+              0.46235713453684063,
+              0.7275141667256614
+            ]
+          ],
+          "translation_m": [
+            -0.2564745242414047,
+            -0.1622257572775399,
+            0.061459815568990606
+          ]
+        }
+      ]
+    },
+    {
+      "demo_frame": 370,
+      "status": "measured_object_pair",
+      "source_points": {
+        "held": 700,
+        "target": 700
+      },
+      "candidates": [
+        {
+          "initializer": "pca_3",
+          "balanced_coverage": 0.5,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.5,
+              "target_to_source_coverage": 0.6442857142857142,
+              "source_to_target_median_mm": 6.014138369561342,
+              "target_to_source_median_mm": 4.931921524055371
+            },
+            "target": {
+              "source_to_target_coverage": 0.6785714285714286,
+              "target_to_source_coverage": 0.5671428571428572,
+              "source_to_target_median_mm": 4.183716414399195,
+              "target_to_source_median_mm": 5.510473315561999
+            }
+          },
+          "rotation": [
+            [
+              0.9617647411393208,
+              0.2502682526389293,
+              0.11124021045589166
+            ],
+            [
+              -0.263824453187822,
+              0.9556339493005049,
+              0.13099775892917603
+            ],
+            [
+              -0.07352034141216246,
+              -0.15533691340237382,
+              0.9851219227756849
+            ]
+          ],
+          "translation_m": [
+            0.005336957273812046,
+            -0.026217581224826474,
+            -0.019603405123368278
+          ]
+        },
+        {
+          "initializer": "pca_23",
+          "balanced_coverage": 0.46285714285714286,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.46285714285714286,
+              "target_to_source_coverage": 0.5985714285714285,
+              "source_to_target_median_mm": 6.334571063418917,
+              "target_to_source_median_mm": 5.300579362773979
+            },
+            "target": {
+              "source_to_target_coverage": 0.7057142857142857,
+              "target_to_source_coverage": 0.6114285714285714,
+              "source_to_target_median_mm": 3.9457496637338805,
+              "target_to_source_median_mm": 5.134530962704015
+            }
+          },
+          "rotation": [
+            [
+              0.9702273630090056,
+              0.21388939495335016,
+              0.1136230205331657
+            ],
+            [
+              -0.22967832925640713,
+              0.9614178829535326,
+              0.15140514986991901
+            ],
+            [
+              -0.07685524795728359,
+              -0.1729941648253991,
+              0.9819196962062564
+            ]
+          ],
+          "translation_m": [
+            0.003733908166862643,
+            -0.030398543145091564,
+            -0.019688111398892094
+          ]
+        },
+        {
+          "initializer": "pca_13",
+          "balanced_coverage": 0.4542857142857143,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.4542857142857143,
+              "target_to_source_coverage": 0.5771428571428572,
+              "source_to_target_median_mm": 6.78389032598654,
+              "target_to_source_median_mm": 5.068310496743294
+            },
+            "target": {
+              "source_to_target_coverage": 0.4928571428571429,
+              "target_to_source_coverage": 0.55,
+              "source_to_target_median_mm": 6.141653634628685,
+              "target_to_source_median_mm": 5.5116119981790535
+            }
+          },
+          "rotation": [
+            [
+              -0.4181616601617339,
+              -0.8709673132710433,
+              0.2579859786581463
+            ],
+            [
+              0.75406911604692,
+              -0.1744810810581468,
+              0.6331951678408455
+            ],
+            [
+              -0.5064786216564313,
+              0.4593172014699638,
+              0.7297308505461462
+            ]
+          ],
+          "translation_m": [
+            -0.25567002214277423,
+            -0.16168282139039628,
+            0.06039917641366144
+          ]
+        }
+      ]
+    },
+    {
+      "demo_frame": 375,
+      "status": "measured_object_pair",
+      "source_points": {
+        "held": 700,
+        "target": 700
+      },
+      "candidates": [
+        {
+          "initializer": "pca_3",
+          "balanced_coverage": 0.5071428571428571,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.5128571428571429,
+              "target_to_source_coverage": 0.7142857142857143,
+              "source_to_target_median_mm": 5.882531565425323,
+              "target_to_source_median_mm": 4.556239646285467
+            },
+            "target": {
+              "source_to_target_coverage": 0.69,
+              "target_to_source_coverage": 0.5071428571428571,
+              "source_to_target_median_mm": 4.309983463376909,
+              "target_to_source_median_mm": 5.97867739006906
+            }
+          },
+          "rotation": [
+            [
+              0.957393244859845,
+              0.2668437447958612,
+              0.11042006411907376
+            ],
+            [
+              -0.27906880216541075,
+              0.9532327717382553,
+              0.11605122378573442
+            ],
+            [
+              -0.07428848063261267,
+              -0.14192145273891743,
+              0.9870863806667448
+            ]
+          ],
+          "translation_m": [
+            0.0059804419557491495,
+            -0.0218808974847816,
+            -0.020110605734271148
+          ]
+        },
+        {
+          "initializer": "pca_13",
+          "balanced_coverage": 0.46285714285714286,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.46285714285714286,
+              "target_to_source_coverage": 0.5485714285714286,
+              "source_to_target_median_mm": 6.584283382479885,
+              "target_to_source_median_mm": 5.369185351082034
+            },
+            "target": {
+              "source_to_target_coverage": 0.48714285714285716,
+              "target_to_source_coverage": 0.5057142857142857,
+              "source_to_target_median_mm": 6.200257189817709,
+              "target_to_source_median_mm": 5.915544683170203
+            }
+          },
+          "rotation": [
+            [
+              -0.4232166902673036,
+              -0.8693586265532148,
+              0.2551533098290101
+            ],
+            [
+              0.7514156613480859,
+              -0.1794418469122663,
+              0.6349607290671874
+            ],
+            [
+              -0.5062234061755821,
+              0.4604521712558475,
+              0.7291924718658086
+            ]
+          ],
+          "translation_m": [
+            -0.2549399336563596,
+            -0.16299970535702857,
+            0.060518753764233824
+          ]
+        },
+        {
+          "initializer": "pca_7",
+          "balanced_coverage": 0.46,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.46,
+              "target_to_source_coverage": 0.56,
+              "source_to_target_median_mm": 6.759919176356477,
+              "target_to_source_median_mm": 5.329879940665375
+            },
+            "target": {
+              "source_to_target_coverage": 0.4757142857142857,
+              "target_to_source_coverage": 0.4957142857142857,
+              "source_to_target_median_mm": 6.190549780503188,
+              "target_to_source_median_mm": 6.040326454026419
+            }
+          },
+          "rotation": [
+            [
+              -0.04123644584392308,
+              -0.9381528163419501,
+              0.3437569617096181
+            ],
+            [
+              0.8376987398919479,
+              0.1550573363633256,
+              0.5236583271784697
+            ],
+            [
+              -0.5445735732824392,
+              0.30955858190264585,
+              0.7794954186220845
+            ]
+          ],
+          "translation_m": [
+            -0.25009505521916037,
+            -0.09604670696051176,
+            0.029748084461972024
+          ]
+        }
+      ]
+    },
+    {
+      "demo_frame": 380,
+      "status": "measured_object_pair",
+      "source_points": {
+        "held": 700,
+        "target": 700
+      },
+      "candidates": [
+        {
+          "initializer": "pca_6",
+          "balanced_coverage": 0.7257142857142858,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.7257142857142858,
+              "target_to_source_coverage": 0.7314285714285714,
+              "source_to_target_median_mm": 4.003252378110952,
+              "target_to_source_median_mm": 3.8295400845323666
+            },
+            "target": {
+              "source_to_target_coverage": 0.8057142857142857,
+              "target_to_source_coverage": 0.7728571428571429,
+              "source_to_target_median_mm": 2.462300107407377,
+              "target_to_source_median_mm": 2.6976100661332554
+            }
+          },
+          "rotation": [
+            [
+              0.41910514863479187,
+              0.8868973315109671,
+              -0.19432961109037877
+            ],
+            [
+              -0.8830189504268312,
+              0.4479572879639109,
+              0.1400421413258024
+            ],
+            [
+              0.2112543669960635,
+              0.11290434676639474,
+              0.9708883565613231
+            ]
+          ],
+          "translation_m": [
+            0.0918660714599273,
+            -0.12370161443734427,
+            0.028138884229384653
+          ]
+        },
+        {
+          "initializer": "pca_12",
+          "balanced_coverage": 0.7171428571428572,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.7171428571428572,
+              "target_to_source_coverage": 0.7628571428571429,
+              "source_to_target_median_mm": 3.9171676124902244,
+              "target_to_source_median_mm": 3.6505265909602773
+            },
+            "target": {
+              "source_to_target_coverage": 0.83,
+              "target_to_source_coverage": 0.8014285714285714,
+              "source_to_target_median_mm": 2.5569961093860694,
+              "target_to_source_median_mm": 2.553536046344234
+            }
+          },
+          "rotation": [
+            [
+              0.6112380209999583,
+              0.780178125385193,
+              -0.13307957902887285
+            ],
+            [
+              -0.7732002635101104,
+              0.624541591618284,
+              0.11004159598441385
+            ],
+            [
+              0.16896577816809769,
+              0.03563555821574845,
+              0.9849774986255786
+            ]
+          ],
+          "translation_m": [
+            0.08430800105445446,
+            -0.09095953528048845,
+            0.01403590822252293
+          ]
+        },
+        {
+          "initializer": "pca_23",
+          "balanced_coverage": 0.6971428571428572,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.6971428571428572,
+              "target_to_source_coverage": 0.75,
+              "source_to_target_median_mm": 4.279331181355119,
+              "target_to_source_median_mm": 3.9880317275869173
+            },
+            "target": {
+              "source_to_target_coverage": 0.8557142857142858,
+              "target_to_source_coverage": 0.9,
+              "source_to_target_median_mm": 2.2473689926961384,
+              "target_to_source_median_mm": 2.1036610535051183
+            }
+          },
+          "rotation": [
+            [
+              0.967737300917164,
+              0.23188428460168045,
+              0.09856061570592504
+            ],
+            [
+              -0.24076080648050638,
+              0.9663673582769035,
+              0.09037899600999781
+            ],
+            [
+              -0.07428829299708332,
+              -0.1111926589828922,
+              0.9910183863641954
+            ]
+          ],
+          "translation_m": [
+            0.0072472802263686825,
+            -0.008024990644467945,
+            -0.022804594906014775
+          ]
+        }
+      ]
+    },
+    {
+      "demo_frame": 385,
+      "status": "measured_object_pair",
+      "source_points": {
+        "held": 700,
+        "target": 700
+      },
+      "candidates": [
+        {
+          "initializer": "pca_18",
+          "balanced_coverage": 0.73,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.73,
+              "target_to_source_coverage": 0.7914285714285715,
+              "source_to_target_median_mm": 4.323537950777877,
+              "target_to_source_median_mm": 3.6973747814718148
+            },
+            "target": {
+              "source_to_target_coverage": 0.8485714285714285,
+              "target_to_source_coverage": 0.7585714285714286,
+              "source_to_target_median_mm": 3.2419205840944625,
+              "target_to_source_median_mm": 3.692958835307444
+            }
+          },
+          "rotation": [
+            [
+              0.9062849558217055,
+              0.42193785250718957,
+              0.02481990074256807
+            ],
+            [
+              -0.42266711195684453,
+              0.9047627960492071,
+              0.05250519360293085
+            ],
+            [
+              -0.00030219415921447503,
+              -0.0580752228307594,
+              0.9983121641910649
+            ]
+          ],
+          "translation_m": [
+            0.04007258830499659,
+            -0.01528242131716907,
+            -0.014281018055210759
+          ]
+        },
+        {
+          "initializer": "pca_3",
+          "balanced_coverage": 0.7271428571428571,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.7271428571428571,
+              "target_to_source_coverage": 0.8028571428571428,
+              "source_to_target_median_mm": 4.509126496405849,
+              "target_to_source_median_mm": 3.930134690244746
+            },
+            "target": {
+              "source_to_target_coverage": 0.8214285714285714,
+              "target_to_source_coverage": 0.8371428571428572,
+              "source_to_target_median_mm": 2.9927838961127837,
+              "target_to_source_median_mm": 3.322464466536672
+            }
+          },
+          "rotation": [
+            [
+              0.9746065804935582,
+              0.20115905324498917,
+              0.09837199070993422
+            ],
+            [
+              -0.21052361626495308,
+              0.9728213113183317,
+              0.09642874695654048
+            ],
+            [
+              -0.07630085355605479,
+              -0.11468971855603016,
+              0.9904667829887867
+            ]
+          ],
+          "translation_m": [
+            0.008451485112671589,
+            -0.004603751535849521,
+            -0.022435469243045958
+          ]
+        },
+        {
+          "initializer": "pca_12",
+          "balanced_coverage": 0.7042857142857143,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.7614285714285715,
+              "target_to_source_coverage": 0.8042857142857143,
+              "source_to_target_median_mm": 3.8111756908235797,
+              "target_to_source_median_mm": 3.462044009484741
+            },
+            "target": {
+              "source_to_target_coverage": 0.8071428571428572,
+              "target_to_source_coverage": 0.7042857142857143,
+              "source_to_target_median_mm": 3.544165778451793,
+              "target_to_source_median_mm": 4.426574687399175
+            }
+          },
+          "rotation": [
+            [
+              0.8406001792286437,
+              0.5415886384766352,
+              -0.008548997239329061
+            ],
+            [
+              -0.5400300790640699,
+              0.839194374465552,
+              0.06418968430694229
+            ],
+            [
+              0.04193867411860839,
+              -0.0493411444779726,
+              0.9979010968401515
+            ]
+          ],
+          "translation_m": [
+            0.05238086288471096,
+            -0.0351436942829971,
+            -0.008268073083829264
+          ]
+        }
+      ]
+    },
+    {
+      "demo_frame": 390,
+      "status": "measured_object_pair",
+      "source_points": {
+        "held": 700,
+        "target": 700
+      },
+      "candidates": [
+        {
+          "initializer": "pca_6",
+          "balanced_coverage": 0.7857142857142857,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.7857142857142857,
+              "target_to_source_coverage": 0.8157142857142857,
+              "source_to_target_median_mm": 2.8764177682383427,
+              "target_to_source_median_mm": 2.73455642866119
+            },
+            "target": {
+              "source_to_target_coverage": 0.8771428571428571,
+              "target_to_source_coverage": 0.8728571428571429,
+              "source_to_target_median_mm": 2.3173591039269827,
+              "target_to_source_median_mm": 2.664533122055288
+            }
+          },
+          "rotation": [
+            [
+              0.5435774752361462,
+              0.8172902690952901,
+              -0.19120707219673075
+            ],
+            [
+              -0.8154452620504109,
+              0.5681949689008621,
+              0.11046946146010042
+            ],
+            [
+              0.1989285123239833,
+              0.09587019014217679,
+              0.975313464290671
+            ]
+          ],
+          "translation_m": [
+            0.10418731653595037,
+            -0.09869302982861437,
+            0.022008089320112556
+          ]
+        },
+        {
+          "initializer": "pca_12",
+          "balanced_coverage": 0.7757142857142857,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.7757142857142857,
+              "target_to_source_coverage": 0.83,
+              "source_to_target_median_mm": 2.7079177423678744,
+              "target_to_source_median_mm": 2.6203930311443173
+            },
+            "target": {
+              "source_to_target_coverage": 0.9,
+              "target_to_source_coverage": 0.9085714285714286,
+              "source_to_target_median_mm": 2.1991609272981667,
+              "target_to_source_median_mm": 2.5014329722750013
+            }
+          },
+          "rotation": [
+            [
+              0.687245522080301,
+              0.7136027361740065,
+              -0.13588497821888015
+            ],
+            [
+              -0.7099971753292065,
+              0.6994039891289453,
+              0.0820857540323877
+            ],
+            [
+              0.15361511450740345,
+              0.04006488381973238,
+              0.987318186644705
+            ]
+          ],
+          "translation_m": [
+            0.09328798058044345,
+            -0.06865486626793513,
+            0.009172521406056677
+          ]
+        },
+        {
+          "initializer": "pca_21",
+          "balanced_coverage": 0.7757142857142857,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.7757142857142857,
+              "target_to_source_coverage": 0.83,
+              "source_to_target_median_mm": 2.6928698809329124,
+              "target_to_source_median_mm": 2.5909967402754623
+            },
+            "target": {
+              "source_to_target_coverage": 0.8942857142857142,
+              "target_to_source_coverage": 0.9085714285714286,
+              "source_to_target_median_mm": 2.211544516062179,
+              "target_to_source_median_mm": 2.4857051875515936
+            }
+          },
+          "rotation": [
+            [
+              0.68548909338138,
+              0.7151290253615771,
+              -0.13673031829325266
+            ],
+            [
+              -0.711452419088762,
+              0.6978226620940826,
+              0.08293966265108346
+            ],
+            [
+              0.1547260748158561,
+              0.04042288155646236,
+              0.9871300990339369
+            ]
+          ],
+          "translation_m": [
+            0.09351214099488941,
+            -0.06922581471201159,
+            0.009421514343480986
+          ]
+        }
+      ]
+    },
+    {
+      "demo_frame": 395,
+      "status": "measured_object_pair",
+      "source_points": {
+        "held": 700,
+        "target": 700
+      },
+      "candidates": [
+        {
+          "initializer": "pca_6",
+          "balanced_coverage": 0.8014285714285714,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.81,
+              "target_to_source_coverage": 0.8014285714285714,
+              "source_to_target_median_mm": 3.0932825765626952,
+              "target_to_source_median_mm": 3.180717335511388
+            },
+            "target": {
+              "source_to_target_coverage": 0.8414285714285714,
+              "target_to_source_coverage": 0.8271428571428572,
+              "source_to_target_median_mm": 2.5566603971904502,
+              "target_to_source_median_mm": 2.916825216925779
+            }
+          },
+          "rotation": [
+            [
+              0.5332987400328872,
+              0.8241638218035021,
+              -0.19064744611344334
+            ],
+            [
+              -0.821921190025271,
+              0.558143038605761,
+              0.11367456110919935
+            ],
+            [
+              0.2000950056017786,
+              0.09607467557151317,
+              0.9750546884390905
+            ]
+          ],
+          "translation_m": [
+            0.10386916362953907,
+            -0.10089308211026898,
+            0.022244712267239175
+          ]
+        },
+        {
+          "initializer": "pca_12",
+          "balanced_coverage": 0.8014285714285714,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.8014285714285714,
+              "target_to_source_coverage": 0.8271428571428572,
+              "source_to_target_median_mm": 2.8735274886273907,
+              "target_to_source_median_mm": 2.901630746529372
+            },
+            "target": {
+              "source_to_target_coverage": 0.8714285714285714,
+              "target_to_source_coverage": 0.8714285714285714,
+              "source_to_target_median_mm": 2.3847864271269086,
+              "target_to_source_median_mm": 2.7504875364392873
+            }
+          },
+          "rotation": [
+            [
+              0.7127658004139651,
+              0.6912557161391008,
+              -0.11887156373691884
+            ],
+            [
+              -0.6880501539610056,
+              0.7219937995158332,
+              0.07288305080694912
+            ],
+            [
+              0.1362053574367665,
+              0.02984105168574524,
+              0.9902310903217553
+            ]
+          ],
+          "translation_m": [
+            0.08875177559857775,
+            -0.06126919427798648,
+            0.00556425648067721
+          ]
+        },
+        {
+          "initializer": "pca_21",
+          "balanced_coverage": 0.8014285714285714,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.8014285714285714,
+              "target_to_source_coverage": 0.8228571428571428,
+              "source_to_target_median_mm": 2.8585912962001294,
+              "target_to_source_median_mm": 2.882678775814098
+            },
+            "target": {
+              "source_to_target_coverage": 0.8771428571428571,
+              "target_to_source_coverage": 0.8771428571428571,
+              "source_to_target_median_mm": 2.428247981078692,
+              "target_to_source_median_mm": 2.7213732811271285
+            }
+          },
+          "rotation": [
+            [
+              0.7216121600142542,
+              0.682912806435157,
+              -0.1136045303956676
+            ],
+            [
+              -0.6797452089175287,
+              0.7300304065113394,
+              0.0707252184341173
+            ],
+            [
+              0.131233918912861,
+              0.026185957606057565,
+              0.9910055268014535
+            ]
+          ],
+          "translation_m": [
+            0.08725912327515728,
+            -0.05910160671921824,
+            0.004540712289717697
+          ]
+        }
+      ]
+    },
+    {
+      "demo_frame": 400,
+      "status": "measured_object_pair",
+      "source_points": {
+        "held": 700,
+        "target": 700
+      },
+      "candidates": [
+        {
+          "initializer": "pca_6",
+          "balanced_coverage": 0.8257142857142857,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.8257142857142857,
+              "target_to_source_coverage": 0.8385714285714285,
+              "source_to_target_median_mm": 2.8569340059854675,
+              "target_to_source_median_mm": 2.7983721423275494
+            },
+            "target": {
+              "source_to_target_coverage": 0.8357142857142857,
+              "target_to_source_coverage": 0.8328571428571429,
+              "source_to_target_median_mm": 2.665078683023148,
+              "target_to_source_median_mm": 3.2440059035403515
+            }
+          },
+          "rotation": [
+            [
+              0.5686632111027139,
+              0.7978868452148467,
+              -0.19999683640360896
+            ],
+            [
+              -0.7927543894403335,
+              0.5964730092553976,
+              0.12554054027641737
+            ],
+            [
+              0.21945986047893828,
+              0.08715808317598353,
+              0.9717205556000418
+            ]
+          ],
+          "translation_m": [
+            0.1117960142399479,
+            -0.10139869595990246,
+            0.026025801581116836
+          ]
+        },
+        {
+          "initializer": "pca_12",
+          "balanced_coverage": 0.8257142857142857,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.8257142857142857,
+              "target_to_source_coverage": 0.8657142857142858,
+              "source_to_target_median_mm": 2.629000013688637,
+              "target_to_source_median_mm": 2.606770473823612
+            },
+            "target": {
+              "source_to_target_coverage": 0.8771428571428571,
+              "target_to_source_coverage": 0.8657142857142858,
+              "source_to_target_median_mm": 2.47528529638809,
+              "target_to_source_median_mm": 2.959092751206046
+            }
+          },
+          "rotation": [
+            [
+              0.7444447274100248,
+              0.6553736823902296,
+              -0.12762203674006364
+            ],
+            [
+              -0.6497972326321956,
+              0.7550898747218739,
+              0.08719425185208181
+            ],
+            [
+              0.15351092565336483,
+              0.018017145244833818,
+              0.9879826811145392
+            ]
+          ],
+          "translation_m": [
+            0.0959218364356198,
+            -0.0613588308348864,
+            0.008382030817053077
+          ]
+        },
+        {
+          "initializer": "pca_21",
+          "balanced_coverage": 0.8228571428571428,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.8228571428571428,
+              "target_to_source_coverage": 0.8671428571428571,
+              "source_to_target_median_mm": 2.6189587709103903,
+              "target_to_source_median_mm": 2.590155434107325
+            },
+            "target": {
+              "source_to_target_coverage": 0.8842857142857142,
+              "target_to_source_coverage": 0.8642857142857143,
+              "source_to_target_median_mm": 2.5221470649494235,
+              "target_to_source_median_mm": 2.930835629534991
+            }
+          },
+          "rotation": [
+            [
+              0.7749038866078082,
+              0.6221073441372442,
+              -0.11183210134222799
+            ],
+            [
+              -0.6169334773927738,
+              0.7829030300827322,
+              0.0803488018537746
+            ],
+            [
+              0.13753927072721017,
+              0.006730368324431164,
+              0.9904734479783118
+            ]
+          ],
+          "translation_m": [
+            0.09145998958706093,
+            -0.053503946612823004,
+            0.0049454611699453754
+          ]
+        }
+      ]
+    },
+    {
+      "demo_frame": 405,
+      "status": "measured_object_pair",
+      "source_points": {
+        "held": 700,
+        "target": 700
+      },
+      "candidates": [
+        {
+          "initializer": "pca_19",
+          "balanced_coverage": 0.81,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.81,
+              "target_to_source_coverage": 0.9242857142857143,
+              "source_to_target_median_mm": 2.948937922187162,
+              "target_to_source_median_mm": 2.674133487163799
+            },
+            "target": {
+              "source_to_target_coverage": 0.9185714285714286,
+              "target_to_source_coverage": 0.8828571428571429,
+              "source_to_target_median_mm": 2.5678170730323346,
+              "target_to_source_median_mm": 2.872112248820526
+            }
+          },
+          "rotation": [
+            [
+              0.9830792604699405,
+              0.1760346047075991,
+              0.0506654278508692
+            ],
+            [
+              -0.17815176032279673,
+              0.9831563001431601,
+              0.0408122503998587
+            ],
+            [
+              -0.04262766622466401,
+              -0.04914781210034679,
+              0.9978814431774884
+            ]
+          ],
+          "translation_m": [
+            0.029693611642193543,
+            0.02111319921579852,
+            -0.02148241447237792
+          ]
+        },
+        {
+          "initializer": "pca_0",
+          "balanced_coverage": 0.8085714285714286,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.8085714285714286,
+              "target_to_source_coverage": 0.9185714285714286,
+              "source_to_target_median_mm": 3.4067726442389508,
+              "target_to_source_median_mm": 3.078958767443819
+            },
+            "target": {
+              "source_to_target_coverage": 0.9085714285714286,
+              "target_to_source_coverage": 0.9528571428571428,
+              "source_to_target_median_mm": 2.2212242680554337,
+              "target_to_source_median_mm": 2.3388127279498945
+            }
+          },
+          "rotation": [
+            [
+              0.9954205738385736,
+              0.04952337769915481,
+              0.0817637831815128
+            ],
+            [
+              -0.05468836470576026,
+              0.9965650725464632,
+              0.062187128461378464
+            ],
+            [
+              -0.07840321386713854,
+              -0.06637387469275173,
+              0.9947097289227518
+            ]
+          ],
+          "translation_m": [
+            0.012147017346477343,
+            0.027508472668024902,
+            -0.025944879946239507
+          ]
+        },
+        {
+          "initializer": "pca_22",
+          "balanced_coverage": 0.8014285714285714,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.8014285714285714,
+              "target_to_source_coverage": 0.9242857142857143,
+              "source_to_target_median_mm": 3.606298170424657,
+              "target_to_source_median_mm": 3.1984767982770888
+            },
+            "target": {
+              "source_to_target_coverage": 0.89,
+              "target_to_source_coverage": 0.9542857142857143,
+              "source_to_target_median_mm": 2.3190113700891106,
+              "target_to_source_median_mm": 2.4491741846676676
+            }
+          },
+          "rotation": [
+            [
+              0.993516082755466,
+              -0.03439407399724517,
+              0.10836438981560415
+            ],
+            [
+              0.027052281839346888,
+              0.9972837587087411,
+              0.068507508077957
+            ],
+            [
+              -0.11042629828768499,
+              -0.06513180705030976,
+              0.9917478915313316
+            ]
+          ],
+          "translation_m": [
+            -0.0028609847322902116,
+            0.03411201669198051,
+            -0.028445332922854227
+          ]
+        }
+      ]
+    },
+    {
+      "demo_frame": 410,
+      "status": "measured_object_pair",
+      "source_points": {
+        "held": 700,
+        "target": 700
+      },
+      "candidates": [
+        {
+          "initializer": "pca_0",
+          "balanced_coverage": 0.8014285714285714,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.8014285714285714,
+              "target_to_source_coverage": 0.9014285714285715,
+              "source_to_target_median_mm": 3.565175502028558,
+              "target_to_source_median_mm": 3.263472600573582
+            },
+            "target": {
+              "source_to_target_coverage": 0.91,
+              "target_to_source_coverage": 0.9485714285714286,
+              "source_to_target_median_mm": 2.1260020943309206,
+              "target_to_source_median_mm": 2.17457798738926
+            }
+          },
+          "rotation": [
+            [
+              0.9959589615139217,
+              0.04969002093137103,
+              0.0748107532374381
+            ],
+            [
+              -0.05436255204450075,
+              0.9966085838043195,
+              0.06177413392964624
+            ],
+            [
+              -0.07148748082931615,
+              -0.06559140574335039,
+              0.9952825265105835
+            ]
+          ],
+          "translation_m": [
+            0.015324237033553081,
+            0.027356678594693283,
+            -0.025374545803308557
+          ]
+        },
+        {
+          "initializer": "pca_22",
+          "balanced_coverage": 0.7971428571428572,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.7971428571428572,
+              "target_to_source_coverage": 0.9085714285714286,
+              "source_to_target_median_mm": 3.7213673200409483,
+              "target_to_source_median_mm": 3.4027852342347504
+            },
+            "target": {
+              "source_to_target_coverage": 0.8928571428571429,
+              "target_to_source_coverage": 0.9557142857142857,
+              "source_to_target_median_mm": 2.1501472622011812,
+              "target_to_source_median_mm": 2.2174644702127444
+            }
+          },
+          "rotation": [
+            [
+              0.9950013889038285,
+              -0.023615340502320104,
+              0.09702861316340176
+            ],
+            [
+              0.017020804088807354,
+              0.9975237963381077,
+              0.06823905016469972
+            ],
+            [
+              -0.09839983896137246,
+              -0.06624644467569077,
+              0.9929395149052168
+            ]
+          ],
+          "translation_m": [
+            0.0026990792413495446,
+            0.0328860945344886,
+            -0.02763578990851895
+          ]
+        },
+        {
+          "initializer": "pca_14",
+          "balanced_coverage": 0.7842857142857143,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.7842857142857143,
+              "target_to_source_coverage": 0.8742857142857143,
+              "source_to_target_median_mm": 2.9313718290945547,
+              "target_to_source_median_mm": 2.7116434060814782
+            },
+            "target": {
+              "source_to_target_coverage": 0.9228571428571428,
+              "target_to_source_coverage": 0.9357142857142857,
+              "source_to_target_median_mm": 2.5879516268416194,
+              "target_to_source_median_mm": 2.9447128715682935
+            }
+          },
+          "rotation": [
+            [
+              0.8633844675597154,
+              0.49777343968707666,
+              -0.08239456243418769
+            ],
+            [
+              -0.4942855679960776,
+              0.8672382255031352,
+              0.05983007184491431
+            ],
+            [
+              0.10123753477550029,
+              -0.010929911631310093,
+              0.9948022409425453
+            ]
+          ],
+          "translation_m": [
+            0.08488250520410859,
+            -0.028618227591164253,
+            -0.002060514705527261
+          ]
+        }
+      ]
+    },
+    {
+      "demo_frame": 415,
+      "status": "measured_object_pair",
+      "source_points": {
+        "held": 700,
+        "target": 700
+      },
+      "candidates": [
+        {
+          "initializer": "pca_0",
+          "balanced_coverage": 0.8,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.8,
+              "target_to_source_coverage": 0.89,
+              "source_to_target_median_mm": 3.284091151822117,
+              "target_to_source_median_mm": 3.1556293495839314
+            },
+            "target": {
+              "source_to_target_coverage": 0.9171428571428571,
+              "target_to_source_coverage": 0.9557142857142857,
+              "source_to_target_median_mm": 2.121161143693519,
+              "target_to_source_median_mm": 2.245313940766716
+            }
+          },
+          "rotation": [
+            [
+              0.9947378000511259,
+              0.07594750473689302,
+              0.06876543952951263
+            ],
+            [
+              -0.07978771082150218,
+              0.9952970590142887,
+              0.05493346447632473
+            ],
+            [
+              -0.06426998017201892,
+              -0.06013103060606029,
+              0.9961192844267907
+            ]
+          ],
+          "translation_m": [
+            0.018663696980762007,
+            0.027496514910997354,
+            -0.024578878985213715
+          ]
+        },
+        {
+          "initializer": "pca_22",
+          "balanced_coverage": 0.7885714285714286,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.7885714285714286,
+              "target_to_source_coverage": 0.8971428571428571,
+              "source_to_target_median_mm": 3.6446408094990472,
+              "target_to_source_median_mm": 3.4403179962796804
+            },
+            "target": {
+              "source_to_target_coverage": 0.91,
+              "target_to_source_coverage": 0.9614285714285714,
+              "source_to_target_median_mm": 2.1494914739725743,
+              "target_to_source_median_mm": 2.1963658963644774
+            }
+          },
+          "rotation": [
+            [
+              0.9950604957309486,
+              -0.021747269460526603,
+              0.0968590011650402
+            ],
+            [
+              0.01560989432582486,
+              0.9978484710431157,
+              0.06367699769974348
+            ],
+            [
+              -0.0980354070467125,
+              -0.061850506125073805,
+              0.9932590668386864
+            ]
+          ],
+          "translation_m": [
+            0.0026959285297507435,
+            0.034805164789539544,
+            -0.027450514180150987
+          ]
+        },
+        {
+          "initializer": "pca_4",
+          "balanced_coverage": 0.7871428571428571,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.7871428571428571,
+              "target_to_source_coverage": 0.8457142857142858,
+              "source_to_target_median_mm": 3.23057480491675,
+              "target_to_source_median_mm": 3.0805733493130933
+            },
+            "target": {
+              "source_to_target_coverage": 0.8428571428571429,
+              "target_to_source_coverage": 0.8471428571428572,
+              "source_to_target_median_mm": 2.6436217794106063,
+              "target_to_source_median_mm": 3.0653066144877683
+            }
+          },
+          "rotation": [
+            [
+              0.5374301164286803,
+              0.8100964470037807,
+              -0.2343344117011123
+            ],
+            [
+              -0.805525243911465,
+              0.5753774646678553,
+              0.14166811417452357
+            ],
+            [
+              0.2495955756355272,
+              0.11262557304734198,
+              0.9617783158914157
+            ]
+          ],
+          "translation_m": [
+            0.12298356191350523,
+            -0.11201801189274228,
+            0.034426860598683884
+          ]
+        }
+      ]
+    },
+    {
+      "demo_frame": 420,
+      "status": "measured_object_pair",
+      "source_points": {
+        "held": 700,
+        "target": 700
+      },
+      "candidates": [
+        {
+          "initializer": "pca_20",
+          "balanced_coverage": 0.78,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.78,
+              "target_to_source_coverage": 0.8857142857142857,
+              "source_to_target_median_mm": 2.2382469722796112,
+              "target_to_source_median_mm": 1.7174093437374187
+            },
+            "target": {
+              "source_to_target_coverage": 0.8771428571428571,
+              "target_to_source_coverage": 0.91,
+              "source_to_target_median_mm": 1.885656031260815,
+              "target_to_source_median_mm": 1.8159364292471927
+            }
+          },
+          "rotation": [
+            [
+              0.7940122215939776,
+              0.5874402917292791,
+              -0.15639212132462296
+            ],
+            [
+              -0.588132805329265,
+              0.8074088962869979,
+              0.04680467382795571
+            ],
+            [
+              0.15376734131448377,
+              0.054815853998929145,
+              0.9865854382137637
+            ]
+          ],
+          "translation_m": [
+            0.109747521647923,
+            -0.03867728695963567,
+            0.006594481472306235
+          ]
+        },
+        {
+          "initializer": "pca_14",
+          "balanced_coverage": 0.7771428571428571,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.7771428571428571,
+              "target_to_source_coverage": 0.8871428571428571,
+              "source_to_target_median_mm": 2.1216254916928365,
+              "target_to_source_median_mm": 1.6421586533024324
+            },
+            "target": {
+              "source_to_target_coverage": 0.8814285714285715,
+              "target_to_source_coverage": 0.9185714285714286,
+              "source_to_target_median_mm": 1.8598077629080803,
+              "target_to_source_median_mm": 1.807482734252343
+            }
+          },
+          "rotation": [
+            [
+              0.8252522458315734,
+              0.547834075606675,
+              -0.13724633457445942
+            ],
+            [
+              -0.5480392902142768,
+              0.8355095021676695,
+              0.03970904391904279
+            ],
+            [
+              0.13642458404325727,
+              0.04244640611068346,
+              0.9897406910281661
+            ]
+          ],
+          "translation_m": [
+            0.10364613741875928,
+            -0.029905314323072186,
+            0.0024387852801049936
+          ]
+        },
+        {
+          "initializer": "pca_4",
+          "balanced_coverage": 0.7757142857142857,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.7757142857142857,
+              "target_to_source_coverage": 0.8557142857142858,
+              "source_to_target_median_mm": 2.481806643961456,
+              "target_to_source_median_mm": 1.9832218558818708
+            },
+            "target": {
+              "source_to_target_coverage": 0.8271428571428572,
+              "target_to_source_coverage": 0.84,
+              "source_to_target_median_mm": 1.9533170816990733,
+              "target_to_source_median_mm": 1.8906918023629846
+            }
+          },
+          "rotation": [
+            [
+              0.581308984889463,
+              0.7732498938527842,
+              -0.25330705821875515
+            ],
+            [
+              -0.7787224831250055,
+              0.618959526047624,
+              0.10237382180287077
+            ],
+            [
+              0.2359473635419724,
+              0.13774507893771756,
+              0.9619538111915944
+            ]
+          ],
+          "translation_m": [
+            0.13311736989157105,
+            -0.0923915250362522,
+            0.03000273113524593
+          ]
+        }
+      ]
+    },
+    {
+      "demo_frame": 425,
+      "status": "measured_object_pair",
+      "source_points": {
+        "held": 700,
+        "target": 700
+      },
+      "candidates": [
+        {
+          "initializer": "pca_19",
+          "balanced_coverage": 0.8242857142857143,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.8242857142857143,
+              "target_to_source_coverage": 0.8928571428571429,
+              "source_to_target_median_mm": 1.7488867254301141,
+              "target_to_source_median_mm": 1.4801542541651824
+            },
+            "target": {
+              "source_to_target_coverage": 0.9,
+              "target_to_source_coverage": 0.9142857142857143,
+              "source_to_target_median_mm": 1.76553771256526,
+              "target_to_source_median_mm": 1.824870955736752
+            }
+          },
+          "rotation": [
+            [
+              0.8288814365879066,
+              0.5435708560331133,
+              -0.13223573099353575
+            ],
+            [
+              -0.5424765588680242,
+              0.8387347473501514,
+              0.047362502744084746
+            ],
+            [
+              0.13665557858599883,
+              0.03247688499385598,
+              0.990086109781579
+            ]
+          ],
+          "translation_m": [
+            0.10221950108289123,
+            -0.03159681445101271,
+            0.0024682738119065073
+          ]
+        },
+        {
+          "initializer": "pca_14",
+          "balanced_coverage": 0.8228571428571428,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.8228571428571428,
+              "target_to_source_coverage": 0.8928571428571429,
+              "source_to_target_median_mm": 1.7333265447675126,
+              "target_to_source_median_mm": 1.5018381601271005
+            },
+            "target": {
+              "source_to_target_coverage": 0.9014285714285715,
+              "target_to_source_coverage": 0.91,
+              "source_to_target_median_mm": 1.7531519593499476,
+              "target_to_source_median_mm": 1.7927570015394634
+            }
+          },
+          "rotation": [
+            [
+              0.8276065573649929,
+              0.5456650194398002,
+              -0.13159434929443664
+            ],
+            [
+              -0.5445251774895528,
+              0.8373859275963408,
+              0.047719381215462854
+            ],
+            [
+              0.13623405332894992,
+              0.0321635635988586,
+              0.990154426284197
+            ]
+          ],
+          "translation_m": [
+            0.10192631698837587,
+            -0.031986492500744264,
+            0.0023766223987475854
+          ]
+        },
+        {
+          "initializer": "pca_20",
+          "balanced_coverage": 0.8228571428571428,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.8228571428571428,
+              "target_to_source_coverage": 0.8914285714285715,
+              "source_to_target_median_mm": 1.8540590201326752,
+              "target_to_source_median_mm": 1.5819324794862362
+            },
+            "target": {
+              "source_to_target_coverage": 0.8957142857142857,
+              "target_to_source_coverage": 0.8985714285714286,
+              "source_to_target_median_mm": 1.7861351824106166,
+              "target_to_source_median_mm": 1.8063700839612804
+            }
+          },
+          "rotation": [
+            [
+              0.7830480216862158,
+              0.6019333448958764,
+              -0.15656322695883723
+            ],
+            [
+              -0.6013015903286536,
+              0.7970005471539324,
+              0.05680251142831155
+            ],
+            [
+              0.1589723032529083,
+              0.04966262315658686,
+              0.9860331792894556
+            ]
+          ],
+          "translation_m": [
+            0.10961148143955,
+            -0.04394289076776857,
+            0.007756008374006529
+          ]
+        }
+      ]
+    },
+    {
+      "demo_frame": 430,
+      "status": "measured_object_pair",
+      "source_points": {
+        "held": 700,
+        "target": 700
+      },
+      "candidates": [
+        {
+          "initializer": "pca_14",
+          "balanced_coverage": 0.8214285714285714,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.8214285714285714,
+              "target_to_source_coverage": 0.8914285714285715,
+              "source_to_target_median_mm": 1.674744666449278,
+              "target_to_source_median_mm": 1.4022110383731485
+            },
+            "target": {
+              "source_to_target_coverage": 0.8985714285714286,
+              "target_to_source_coverage": 0.9185714285714286,
+              "source_to_target_median_mm": 1.7406672868485449,
+              "target_to_source_median_mm": 1.7276156069105943
+            }
+          },
+          "rotation": [
+            [
+              0.8274196162163686,
+              0.5465763288147316,
+              -0.1289616046727346
+            ],
+            [
+              -0.5452897306858062,
+              0.8368575291511259,
+              0.048255419505716435
+            ],
+            [
+              0.13429775988063836,
+              0.03039395799302524,
+              0.9904747947366253
+            ]
+          ],
+          "translation_m": [
+            0.10093055514459166,
+            -0.032273826859141555,
+            0.001783258033333568
+          ]
+        },
+        {
+          "initializer": "pca_20",
+          "balanced_coverage": 0.8214285714285714,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.8214285714285714,
+              "target_to_source_coverage": 0.8914285714285715,
+              "source_to_target_median_mm": 1.6968178687678341,
+              "target_to_source_median_mm": 1.4313116753266941
+            },
+            "target": {
+              "source_to_target_coverage": 0.9,
+              "target_to_source_coverage": 0.9157142857142857,
+              "source_to_target_median_mm": 1.7790908981060474,
+              "target_to_source_median_mm": 1.7075377986953826
+            }
+          },
+          "rotation": [
+            [
+              0.816449836366534,
+              0.5613226797899461,
+              -0.1353754551257084
+            ],
+            [
+              -0.5601015396316172,
+              0.826877158375131,
+              0.0506006942616426
+            ],
+            [
+              0.14034218895026287,
+              0.034511072294289395,
+              0.989501417831095
+            ]
+          ],
+          "translation_m": [
+            0.10302651011606297,
+            -0.03530562535042073,
+            0.003225885718591226
+          ]
+        },
+        {
+          "initializer": "pca_4",
+          "balanced_coverage": 0.82,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.82,
+              "target_to_source_coverage": 0.8685714285714285,
+              "source_to_target_median_mm": 2.197628809828907,
+              "target_to_source_median_mm": 1.9105356540464007
+            },
+            "target": {
+              "source_to_target_coverage": 0.8271428571428572,
+              "target_to_source_coverage": 0.8271428571428572,
+              "source_to_target_median_mm": 1.962230595343845,
+              "target_to_source_median_mm": 2.051093767733349
+            }
+          },
+          "rotation": [
+            [
+              0.5528890929664924,
+              0.7925381128561448,
+              -0.2572877582573859
+            ],
+            [
+              -0.795810824019661,
+              0.5937628623186362,
+              0.11887302345077709
+            ],
+            [
+              0.24697931745763374,
+              0.13902878479509673,
+              0.9589954190435741
+            ]
+          ],
+          "translation_m": [
+            0.1325913933330603,
+            -0.1014556984938047,
+            0.032872756594795494
+          ]
+        }
+      ]
+    },
+    {
+      "demo_frame": 435,
+      "status": "measured_object_pair",
+      "source_points": {
+        "held": 700,
+        "target": 700
+      },
+      "candidates": [
+        {
+          "initializer": "pca_18",
+          "balanced_coverage": 0.8014285714285714,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.8014285714285714,
+              "target_to_source_coverage": 0.9071428571428571,
+              "source_to_target_median_mm": 3.1082873149094463,
+              "target_to_source_median_mm": 3.1929402485803844
+            },
+            "target": {
+              "source_to_target_coverage": 0.8928571428571429,
+              "target_to_source_coverage": 0.8957142857142857,
+              "source_to_target_median_mm": 2.2564666422786237,
+              "target_to_source_median_mm": 2.144224496610568
+            }
+          },
+          "rotation": [
+            [
+              0.8105241521155562,
+              0.5671315671552043,
+              -0.14632971117800572
+            ],
+            [
+              -0.5689806133583029,
+              0.8216875686001389,
+              0.03302425215505923
+            ],
+            [
+              0.13896640047064363,
+              0.056491814841375755,
+              0.988684486778345
+            ]
+          ],
+          "translation_m": [
+            0.10550543036206038,
+            -0.030557658776386425,
+            0.0031857686243396133
+          ]
+        },
+        {
+          "initializer": "pca_6",
+          "balanced_coverage": 0.7957142857142857,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.7957142857142857,
+              "target_to_source_coverage": 0.8585714285714285,
+              "source_to_target_median_mm": 3.3949109545807334,
+              "target_to_source_median_mm": 3.5932511236129643
+            },
+            "target": {
+              "source_to_target_coverage": 0.8171428571428572,
+              "target_to_source_coverage": 0.81,
+              "source_to_target_median_mm": 2.132258829333678,
+              "target_to_source_median_mm": 1.9204948017109893
+            }
+          },
+          "rotation": [
+            [
+              0.4629241310222038,
+              0.8395902547185082,
+              -0.2842348555315673
+            ],
+            [
+              -0.8501243135120142,
+              0.5113286782310654,
+              0.12582382284050786
+            ],
+            [
+              0.25097788845447255,
+              0.1833880775846255,
+              0.9504624729607953
+            ]
+          ],
+          "translation_m": [
+            0.13426749583549197,
+            -0.11506727876914218,
+            0.03755570987640644
+          ]
+        },
+        {
+          "initializer": "pca_12",
+          "balanced_coverage": 0.7885714285714286,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.7885714285714286,
+              "target_to_source_coverage": 0.7985714285714286,
+              "source_to_target_median_mm": 3.6177767716984772,
+              "target_to_source_median_mm": 4.568651664671851
+            },
+            "target": {
+              "source_to_target_coverage": 0.86,
+              "target_to_source_coverage": 0.8428571428571429,
+              "source_to_target_median_mm": 2.0536485279802075,
+              "target_to_source_median_mm": 2.077452213759308
+            }
+          },
+          "rotation": [
+            [
+              0.5787592496737716,
+              0.7793026867667205,
+              -0.2402603864877022
+            ],
+            [
+              -0.7872111692719299,
+              0.6108101580032895,
+              0.08490892681877542
+            ],
+            [
+              0.21292323943283578,
+              0.13999383300047102,
+              0.9669878080054898
+            ]
+          ],
+          "translation_m": [
+            0.12728979339576674,
+            -0.08554591043952965,
+            0.02581597663573404
+          ]
+        }
+      ]
+    },
+    {
+      "demo_frame": 440,
+      "status": "measured_object_pair",
+      "source_points": {
+        "held": 700,
+        "target": 700
+      },
+      "candidates": [
+        {
+          "initializer": "pca_22",
+          "balanced_coverage": 0.8214285714285714,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.8214285714285714,
+              "target_to_source_coverage": 0.9242857142857143,
+              "source_to_target_median_mm": 2.9488810347315755,
+              "target_to_source_median_mm": 3.0240902258448066
+            },
+            "target": {
+              "source_to_target_coverage": 0.9242857142857143,
+              "target_to_source_coverage": 0.87,
+              "source_to_target_median_mm": 2.4981684736772616,
+              "target_to_source_median_mm": 2.4798045552001122
+            }
+          },
+          "rotation": [
+            [
+              0.9967690424706107,
+              0.0685258600668692,
+              0.04190086483971586
+            ],
+            [
+              -0.06835376175997793,
+              0.9976458315744564,
+              -0.005527928669139568
+            ],
+            [
+              -0.04218102921314834,
+              0.002645986433593095,
+              0.9991064805766761
+            ]
+          ],
+          "translation_m": [
+            0.026727469644396054,
+            0.048326684628522784,
+            -0.02522372340843393
+          ]
+        },
+        {
+          "initializer": "pca_0",
+          "balanced_coverage": 0.8185714285714286,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.8185714285714286,
+              "target_to_source_coverage": 0.9257142857142857,
+              "source_to_target_median_mm": 2.9138557109058105,
+              "target_to_source_median_mm": 3.0138192614550428
+            },
+            "target": {
+              "source_to_target_coverage": 0.9214285714285714,
+              "target_to_source_coverage": 0.8714285714285714,
+              "source_to_target_median_mm": 2.445444018727095,
+              "target_to_source_median_mm": 2.335953495814001
+            }
+          },
+          "rotation": [
+            [
+              0.9911606263293816,
+              0.12960302038121127,
+              0.028349072690607397
+            ],
+            [
+              -0.12935957295717462,
+              0.9915445980786389,
+              -0.010266981319209393
+            ],
+            [
+              -0.02944000167607712,
+              0.006509003697870733,
+              0.9995453562356109
+            ]
+          ],
+          "translation_m": [
+            0.034563377228248524,
+            0.04314244984298411,
+            -0.023819469069487842
+          ]
+        },
+        {
+          "initializer": "pca_19",
+          "balanced_coverage": 0.8042857142857143,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.8342857142857143,
+              "target_to_source_coverage": 0.8042857142857143,
+              "source_to_target_median_mm": 3.0438555294087606,
+              "target_to_source_median_mm": 4.430707101509879
+            },
+            "target": {
+              "source_to_target_coverage": 0.9342857142857143,
+              "target_to_source_coverage": 0.9214285714285714,
+              "source_to_target_median_mm": 2.631156975822248,
+              "target_to_source_median_mm": 2.662154294219146
+            }
+          },
+          "rotation": [
+            [
+              0.9702501334807784,
+              0.24198356014954414,
+              0.007657355802444701
+            ],
+            [
+              -0.24160094215128824,
+              0.9697861819615761,
+              -0.033819314422363286
+            ],
+            [
+              -0.015609715953314092,
+              0.030963169956268327,
+              0.9993986286132858
+            ]
+          ],
+          "translation_m": [
+            0.046775055906975976,
+            0.0388050801582721,
+            -0.01850985209193029
+          ]
+        }
+      ]
+    },
+    {
+      "demo_frame": 445,
+      "status": "measured_object_pair",
+      "source_points": {
+        "held": 700,
+        "target": 700
+      },
+      "candidates": [
+        {
+          "initializer": "pca_3",
+          "balanced_coverage": 0.7928571428571428,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.8242857142857143,
+              "target_to_source_coverage": 0.7928571428571428,
+              "source_to_target_median_mm": 2.8461927725036382,
+              "target_to_source_median_mm": 3.9380079535368124
+            },
+            "target": {
+              "source_to_target_coverage": 0.91,
+              "target_to_source_coverage": 0.8457142857142858,
+              "source_to_target_median_mm": 2.511292136188453,
+              "target_to_source_median_mm": 2.291826870842115
+            }
+          },
+          "rotation": [
+            [
+              0.9968210259388587,
+              0.05300043407690046,
+              0.05948778222342038
+            ],
+            [
+              -0.051358718409022286,
+              0.9982650219729633,
+              -0.028796318318503742
+            ],
+            [
+              -0.06091078959908263,
+              0.025649559313522894,
+              0.9978135977312785
+            ]
+          ],
+          "translation_m": [
+            0.019216235366000728,
+            0.06171176169671126,
+            -0.027120514349525282
+          ]
+        },
+        {
+          "initializer": "pca_23",
+          "balanced_coverage": 0.6614285714285715,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.7985714285714286,
+              "target_to_source_coverage": 0.6614285714285715,
+              "source_to_target_median_mm": 3.0270520287049676,
+              "target_to_source_median_mm": 4.5708617384888015
+            },
+            "target": {
+              "source_to_target_coverage": 0.9228571428571428,
+              "target_to_source_coverage": 0.8728571428571429,
+              "source_to_target_median_mm": 2.499813394826184,
+              "target_to_source_median_mm": 2.431827959776466
+            }
+          },
+          "rotation": [
+            [
+              0.9936884883403608,
+              -0.04787027322846986,
+              0.10144764699528744
+            ],
+            [
+              0.049965604607522626,
+              0.9985848521226739,
+              -0.018213496845552065
+            ],
+            [
+              -0.10043219850254013,
+              0.023167435165978755,
+              0.9946741393299503
+            ]
+          ],
+          "translation_m": [
+            -0.002340413631114535,
+            0.06910594430942835,
+            -0.02940854117364744
+          ]
+        },
+        {
+          "initializer": "pca_2",
+          "balanced_coverage": 0.49,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.7514285714285714,
+              "target_to_source_coverage": 0.49,
+              "source_to_target_median_mm": 3.435371235906657,
+              "target_to_source_median_mm": 6.322823627916238
+            },
+            "target": {
+              "source_to_target_coverage": 0.6171428571428571,
+              "target_to_source_coverage": 0.5128571428571429,
+              "source_to_target_median_mm": 4.409310195363038,
+              "target_to_source_median_mm": 5.924374311184355
+            }
+          },
+          "rotation": [
+            [
+              -0.8797679212489807,
+              0.39308225259303625,
+              -0.2673850172272794
+            ],
+            [
+              -0.46862968419998324,
+              -0.6224558079369791,
+              0.6268452649993846
+            ],
+            [
+              0.07996639186478811,
+              0.6767829119163017,
+              0.7318266641153628
+            ]
+          ],
+          "translation_m": [
+            -0.04626195047623755,
+            -0.3223717664025385,
+            0.1278371581078951
+          ]
+        }
+      ]
+    },
+    {
+      "demo_frame": 450,
+      "status": "measured_object_pair",
+      "source_points": {
+        "held": 700,
+        "target": 700
+      },
+      "candidates": [
+        {
+          "initializer": "pca_3",
+          "balanced_coverage": 0.7257142857142858,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.8085714285714286,
+              "target_to_source_coverage": 0.7257142857142858,
+              "source_to_target_median_mm": 2.7410760416581774,
+              "target_to_source_median_mm": 4.538385951574907
+            },
+            "target": {
+              "source_to_target_coverage": 0.9214285714285714,
+              "target_to_source_coverage": 0.8614285714285714,
+              "source_to_target_median_mm": 2.526345291466438,
+              "target_to_source_median_mm": 2.3865865875189547
+            }
+          },
+          "rotation": [
+            [
+              0.9928194649998884,
+              0.11391833924744671,
+              0.03649824516931012
+            ],
+            [
+              -0.11324599118042537,
+              0.9933657809555808,
+              -0.01999426688010185
+            ],
+            [
+              -0.03853382149357135,
+              0.01571741739642261,
+              0.999133678439221
+            ]
+          ],
+          "translation_m": [
+            0.030716226260673538,
+            0.05143979499326601,
+            -0.025385757372135276
+          ]
+        },
+        {
+          "initializer": "pca_23",
+          "balanced_coverage": 0.5871428571428572,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.7757142857142857,
+              "target_to_source_coverage": 0.5871428571428572,
+              "source_to_target_median_mm": 3.0116360630049854,
+              "target_to_source_median_mm": 4.9037508292241885
+            },
+            "target": {
+              "source_to_target_coverage": 0.9242857142857143,
+              "target_to_source_coverage": 0.8914285714285715,
+              "source_to_target_median_mm": 2.61503680337697,
+              "target_to_source_median_mm": 2.6236963503649524
+            }
+          },
+          "rotation": [
+            [
+              0.9972698391613021,
+              0.035877211450372606,
+              0.06454218463714793
+            ],
+            [
+              -0.034810889079333523,
+              0.9992394406059084,
+              -0.017571065394476056
+            ],
+            [
+              -0.06512349730087295,
+              0.015276322729500288,
+              0.9977602738449586
+            ]
+          ],
+          "translation_m": [
+            0.016816907350401783,
+            0.0596556922146327,
+            -0.026374982092305377
+          ]
+        },
+        {
+          "initializer": "pca_18",
+          "balanced_coverage": 0.4928571428571429,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.7585714285714286,
+              "target_to_source_coverage": 0.4928571428571429,
+              "source_to_target_median_mm": 3.1202811446534042,
+              "target_to_source_median_mm": 6.343721205855368
+            },
+            "target": {
+              "source_to_target_coverage": 0.8871428571428571,
+              "target_to_source_coverage": 0.8785714285714286,
+              "source_to_target_median_mm": 1.8961064252964281,
+              "target_to_source_median_mm": 1.9578303782599098
+            }
+          },
+          "rotation": [
+            [
+              0.7569508383808903,
+              0.6270171512272295,
+              -0.1840514067899498
+            ],
+            [
+              -0.636680439025622,
+              0.7710820154533944,
+              0.00839904795046429
+            ],
+            [
+              0.14718507681354778,
+              0.11082426409060245,
+              0.9828807331778193
+            ]
+          ],
+          "translation_m": [
+            0.11812809634717301,
+            -0.029833234181016178,
+            0.009483550902447457
+          ]
+        }
+      ]
+    },
+    {
+      "demo_frame": 455,
+      "status": "measured_object_pair",
+      "source_points": {
+        "held": 700,
+        "target": 700
+      },
+      "candidates": [
+        {
+          "initializer": "pca_22",
+          "balanced_coverage": 0.41714285714285715,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.7571428571428571,
+              "target_to_source_coverage": 0.41714285714285715,
+              "source_to_target_median_mm": 3.507690069544424,
+              "target_to_source_median_mm": 8.615834729095896
+            },
+            "target": {
+              "source_to_target_coverage": 0.8714285714285714,
+              "target_to_source_coverage": 0.7714285714285715,
+              "source_to_target_median_mm": 2.8401526572185665,
+              "target_to_source_median_mm": 3.7745321412903574
+            }
+          },
+          "rotation": [
+            [
+              0.9993969916427787,
+              0.02330834785977386,
+              0.025736627895129476
+            ],
+            [
+              -0.022093285405546267,
+              0.9986726829987349,
+              -0.046526970373089636
+            ],
+            [
+              -0.026786934041686562,
+              0.0459303075556549,
+              0.9985854330063555
+            ]
+          ],
+          "translation_m": [
+            0.03034560553666775,
+            0.06975218609508858,
+            -0.01914894900377534
+          ]
+        },
+        {
+          "initializer": "pca_0",
+          "balanced_coverage": 0.4114285714285714,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.7428571428571429,
+              "target_to_source_coverage": 0.4114285714285714,
+              "source_to_target_median_mm": 3.3988701111626995,
+              "target_to_source_median_mm": 8.801522266458253
+            },
+            "target": {
+              "source_to_target_coverage": 0.9471428571428572,
+              "target_to_source_coverage": 0.9114285714285715,
+              "source_to_target_median_mm": 2.5828171738510597,
+              "target_to_source_median_mm": 2.7071028122967595
+            }
+          },
+          "rotation": [
+            [
+              0.9608534885937497,
+              0.27218235873410357,
+              -0.05174299035771377
+            ],
+            [
+              -0.274560415984246,
+              0.9604571955193248,
+              -0.04624449750737712
+            ],
+            [
+              0.03710999099672215,
+              0.05864076371511135,
+              0.9975891485973224
+            ]
+          ],
+          "translation_m": [
+            0.06890269555939257,
+            0.039988104449098325,
+            -0.011438706346954097
+          ]
+        },
+        {
+          "initializer": "pca_21",
+          "balanced_coverage": 0.3985714285714286,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.7,
+              "target_to_source_coverage": 0.3985714285714286,
+              "source_to_target_median_mm": 4.1546446497238465,
+              "target_to_source_median_mm": 9.546064504866457
+            },
+            "target": {
+              "source_to_target_coverage": 0.5971428571428572,
+              "target_to_source_coverage": 0.5328571428571428,
+              "source_to_target_median_mm": 4.931478216363012,
+              "target_to_source_median_mm": 5.694481865346972
+            }
+          },
+          "rotation": [
+            [
+              -0.989074084298345,
+              0.029829154000848703,
+              -0.14436993226078423
+            ],
+            [
+              -0.1261581242256755,
+              -0.67791084516848,
+              0.724238229931848
+            ],
+            [
+              -0.0762665291018854,
+              0.734538703932305,
+              0.6742672385369175
+            ]
+          ],
+          "translation_m": [
+            -0.1205219347284984,
+            -0.3223984933976898,
+            0.13660052725215582
+          ]
+        }
+      ]
+    },
+    {
+      "demo_frame": 460,
+      "status": "measured_object_pair",
+      "source_points": {
+        "held": 700,
+        "target": 700
+      },
+      "candidates": [
+        {
+          "initializer": "pca_0",
+          "balanced_coverage": 0.4042857142857143,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.7542857142857143,
+              "target_to_source_coverage": 0.4042857142857143,
+              "source_to_target_median_mm": 3.363654322181622,
+              "target_to_source_median_mm": 10.587834197553478
+            },
+            "target": {
+              "source_to_target_coverage": 0.9642857142857143,
+              "target_to_source_coverage": 0.9071428571428571,
+              "source_to_target_median_mm": 2.4973175812316093,
+              "target_to_source_median_mm": 2.6532297422066833
+            }
+          },
+          "rotation": [
+            [
+              0.97749427511083,
+              0.209922920168853,
+              -0.020911951447265188
+            ],
+            [
+              -0.2107467838098497,
+              0.9761637418546885,
+              -0.0518665807823991
+            ],
+            [
+              0.009525504677231079,
+              0.05510641229506773,
+              0.9984350495072823
+            ]
+          ],
+          "translation_m": [
+            0.05545969994129499,
+            0.05022584486658369,
+            -0.014274973716048356
+          ]
+        },
+        {
+          "initializer": "pca_22",
+          "balanced_coverage": 0.4014285714285714,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.75,
+              "target_to_source_coverage": 0.4014285714285714,
+              "source_to_target_median_mm": 3.4735023004713805,
+              "target_to_source_median_mm": 10.771125323791539
+            },
+            "target": {
+              "source_to_target_coverage": 0.9,
+              "target_to_source_coverage": 0.8442857142857143,
+              "source_to_target_median_mm": 2.7045461089597302,
+              "target_to_source_median_mm": 3.3830135891394906
+            }
+          },
+          "rotation": [
+            [
+              0.9990077562751973,
+              0.016732291666852517,
+              0.04127388178463071
+            ],
+            [
+              -0.014723680848851131,
+              0.9987147360104477,
+              -0.04849834324844964
+            ],
+            [
+              -0.04203232237525603,
+              0.04784251760890794,
+              0.9979701285031457
+            ]
+          ],
+          "translation_m": [
+            0.02373647808302827,
+            0.07158201354125253,
+            -0.020008712733891265
+          ]
+        },
+        {
+          "initializer": "pca_1",
+          "balanced_coverage": 0.3985714285714286,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.71,
+              "target_to_source_coverage": 0.3985714285714286,
+              "source_to_target_median_mm": 3.8292341021251755,
+              "target_to_source_median_mm": 11.074407882640704
+            },
+            "target": {
+              "source_to_target_coverage": 0.6,
+              "target_to_source_coverage": 0.4928571428571429,
+              "source_to_target_median_mm": 4.95286587155593,
+              "target_to_source_median_mm": 6.084649842822488
+            }
+          },
+          "rotation": [
+            [
+              -0.949674257008735,
+              0.24382257293151507,
+              -0.19664526056827408
+            ],
+            [
+              -0.31033830085263975,
+              -0.6471318641199016,
+              0.6963551460746152
+            ],
+            [
+              0.04253168934812321,
+              0.7223371119981018,
+              0.6902319552378294
+            ]
+          ],
+          "translation_m": [
+            -0.08791022097201819,
+            -0.33033225676665284,
+            0.14210198045701614
+          ]
+        }
+      ]
+    },
+    {
+      "demo_frame": 465,
+      "status": "measured_object_pair",
+      "source_points": {
+        "held": 700,
+        "target": 700
+      },
+      "candidates": [
+        {
+          "initializer": "pca_3",
+          "balanced_coverage": 0.4228571428571429,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.76,
+              "target_to_source_coverage": 0.4228571428571429,
+              "source_to_target_median_mm": 3.298234857085965,
+              "target_to_source_median_mm": 10.371987415981845
+            },
+            "target": {
+              "source_to_target_coverage": 0.9428571428571428,
+              "target_to_source_coverage": 0.9314285714285714,
+              "source_to_target_median_mm": 2.727219602001586,
+              "target_to_source_median_mm": 3.031433809082877
+            }
+          },
+          "rotation": [
+            [
+              0.9788133067544001,
+              0.20294538644656002,
+              -0.02716027688694108
+            ],
+            [
+              -0.2042482065085663,
+              0.9770884619072067,
+              -0.05983985081736419
+            ],
+            [
+              0.014393771519400531,
+              0.0641194800966673,
+              0.9978384195918601
+            ]
+          ],
+          "translation_m": [
+            0.05774846680348966,
+            0.053587579581788086,
+            -0.013047551978002225
+          ]
+        },
+        {
+          "initializer": "pca_23",
+          "balanced_coverage": 0.41285714285714287,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.7414285714285714,
+              "target_to_source_coverage": 0.41285714285714287,
+              "source_to_target_median_mm": 3.55510124104654,
+              "target_to_source_median_mm": 10.61774494075215
+            },
+            "target": {
+              "source_to_target_coverage": 0.9028571428571428,
+              "target_to_source_coverage": 0.8742857142857143,
+              "source_to_target_median_mm": 2.8259848364500715,
+              "target_to_source_median_mm": 3.438383025386399
+            }
+          },
+          "rotation": [
+            [
+              0.9988600342367081,
+              0.01751539189295123,
+              0.04440543943569102
+            ],
+            [
+              -0.015174451866840985,
+              0.9985047234881915,
+              -0.05251717035703293
+            ],
+            [
+              -0.04525889984501854,
+              0.05178347437749815,
+              0.9976322487601395
+            ]
+          ],
+          "translation_m": [
+            0.022862584093227153,
+            0.07282406999630389,
+            -0.01999268115314351
+          ]
+        },
+        {
+          "initializer": "pca_2",
+          "balanced_coverage": 0.41,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.7057142857142857,
+              "target_to_source_coverage": 0.41,
+              "source_to_target_median_mm": 3.7081254501389704,
+              "target_to_source_median_mm": 10.460690702384115
+            },
+            "target": {
+              "source_to_target_coverage": 0.6,
+              "target_to_source_coverage": 0.4828571428571429,
+              "source_to_target_median_mm": 4.978800772058145,
+              "target_to_source_median_mm": 6.232542222646487
+            }
+          },
+          "rotation": [
+            [
+              -0.9444248878011474,
+              0.2568348857050079,
+              -0.2051766867523831
+            ],
+            [
+              -0.3254589449918411,
+              -0.642748304756665,
+              0.6935063747776449
+            ],
+            [
+              0.04623966291602731,
+              0.7217412681961098,
+              0.6906167065428425
+            ]
+          ],
+          "translation_m": [
+            -0.08323041240604184,
+            -0.3307731563536427,
+            0.14225855237828328
+          ]
+        }
+      ]
+    },
+    {
+      "demo_frame": 470,
+      "status": "measured_object_pair",
+      "source_points": {
+        "held": 700,
+        "target": 700
+      },
+      "candidates": [
+        {
+          "initializer": "pca_3",
+          "balanced_coverage": 0.41285714285714287,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.7585714285714286,
+              "target_to_source_coverage": 0.41285714285714287,
+              "source_to_target_median_mm": 3.300891155317603,
+              "target_to_source_median_mm": 11.071715929555705
+            },
+            "target": {
+              "source_to_target_coverage": 0.9642857142857143,
+              "target_to_source_coverage": 0.9457142857142857,
+              "source_to_target_median_mm": 2.4333338504789785,
+              "target_to_source_median_mm": 2.7741359043710925
+            }
+          },
+          "rotation": [
+            [
+              0.9792975656516351,
+              0.2017019988581238,
+              -0.01710501579706743
+            ],
+            [
+              -0.20234517142001107,
+              0.9777929503770966,
+              -0.05456535343840712
+            ],
+            [
+              0.00571922300553499,
+              0.05689683514475241,
+              0.9983636815503271
+            ]
+          ],
+          "translation_m": [
+            0.05380105802907563,
+            0.05223316599318744,
+            -0.014212725692322792
+          ]
+        },
+        {
+          "initializer": "pca_23",
+          "balanced_coverage": 0.4085714285714286,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.76,
+              "target_to_source_coverage": 0.4085714285714286,
+              "source_to_target_median_mm": 3.3709836615732978,
+              "target_to_source_median_mm": 11.079761083657692
+            },
+            "target": {
+              "source_to_target_coverage": 0.8985714285714286,
+              "target_to_source_coverage": 0.8714285714285714,
+              "source_to_target_median_mm": 2.606527040641488,
+              "target_to_source_median_mm": 3.3952698517882554
+            }
+          },
+          "rotation": [
+            [
+              0.9988100139896423,
+              0.024521806958787938,
+              0.04215728807079283
+            ],
+            [
+              -0.02221542026724293,
+              0.9982757032905367,
+              -0.05433318803578424
+            ],
+            [
+              -0.0434169443461609,
+              0.05333199043030467,
+              0.9976325314164445
+            ]
+          ],
+          "translation_m": [
+            0.02385977837550564,
+            0.07291763173864771,
+            -0.01959785632574934
+          ]
+        },
+        {
+          "initializer": "pca_2",
+          "balanced_coverage": 0.4057142857142857,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.69,
+              "target_to_source_coverage": 0.4057142857142857,
+              "source_to_target_median_mm": 3.911293263477637,
+              "target_to_source_median_mm": 11.361621804097865
+            },
+            "target": {
+              "source_to_target_coverage": 0.6,
+              "target_to_source_coverage": 0.5071428571428571,
+              "source_to_target_median_mm": 5.0161518404105845,
+              "target_to_source_median_mm": 5.883856508975996
+            }
+          },
+          "rotation": [
+            [
+              -0.9354779636994549,
+              0.26724535370785085,
+              -0.2312161334212799
+            ],
+            [
+              -0.35155931667223134,
+              -0.6373722279577408,
+              0.6856841035703971
+            ],
+            [
+              0.03587514869202585,
+              0.7227285548183019,
+              0.6902002678618532
+            ]
+          ],
+          "translation_m": [
+            -0.07030927437092267,
+            -0.33027837672431937,
+            0.14220512350508538
+          ]
+        }
+      ]
+    },
+    {
+      "demo_frame": 475,
+      "status": "measured_object_pair",
+      "source_points": {
+        "held": 700,
+        "target": 700
+      },
+      "candidates": [
+        {
+          "initializer": "pca_22",
+          "balanced_coverage": 0.45,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.7942857142857143,
+              "target_to_source_coverage": 0.45,
+              "source_to_target_median_mm": 3.1893378990047636,
+              "target_to_source_median_mm": 9.221460819863752
+            },
+            "target": {
+              "source_to_target_coverage": 0.7971428571428572,
+              "target_to_source_coverage": 0.67,
+              "source_to_target_median_mm": 3.1446894285027516,
+              "target_to_source_median_mm": 4.274704872653869
+            }
+          },
+          "rotation": [
+            [
+              0.999570770289632,
+              -0.0033054318169469456,
+              0.02910926490132702
+            ],
+            [
+              0.005455653194494816,
+              0.9972358420958801,
+              -0.07410068209904443
+            ],
+            [
+              -0.028783867544399256,
+              0.07422768593877735,
+              0.9968258321338593
+            ]
+          ],
+          "translation_m": [
+            0.02701698569923916,
+            0.08261955039774699,
+            -0.017933930271696263
+          ]
+        },
+        {
+          "initializer": "pca_0",
+          "balanced_coverage": 0.43714285714285717,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.8171428571428572,
+              "target_to_source_coverage": 0.43714285714285717,
+              "source_to_target_median_mm": 3.09426327830059,
+              "target_to_source_median_mm": 9.235943926563124
+            },
+            "target": {
+              "source_to_target_coverage": 0.7957142857142857,
+              "target_to_source_coverage": 0.72,
+              "source_to_target_median_mm": 3.0625800330255397,
+              "target_to_source_median_mm": 4.005214640875408
+            }
+          },
+          "rotation": [
+            [
+              0.9861686603278548,
+              0.16281722872860796,
+              -0.03101489023517156
+            ],
+            [
+              -0.16497315845375216,
+              0.982275167937395,
+              -0.08899073796387845
+            ],
+            [
+              0.015975931176520564,
+              0.09287650124061865,
+              0.9955494589121854
+            ]
+          ],
+          "translation_m": [
+            0.05740988306788393,
+            0.06876536509795524,
+            -0.011190046507734808
+          ]
+        },
+        {
+          "initializer": "pca_1",
+          "balanced_coverage": 0.4042857142857143,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.7242857142857143,
+              "target_to_source_coverage": 0.4042857142857143,
+              "source_to_target_median_mm": 4.007371152255894,
+              "target_to_source_median_mm": 12.859025028551178
+            },
+            "target": {
+              "source_to_target_coverage": 0.5614285714285714,
+              "target_to_source_coverage": 0.4442857142857143,
+              "source_to_target_median_mm": 5.465805373969044,
+              "target_to_source_median_mm": 6.772292394309752
+            }
+          },
+          "rotation": [
+            [
+              -0.9929699155389905,
+              -0.002203407504299852,
+              -0.11834649056841416
+            ],
+            [
+              -0.08900711614255875,
+              -0.6451964540535866,
+              0.7588143837281045
+            ],
+            [
+              -0.07802871337190449,
+              0.7640135343513541,
+              0.6404645495400015
+            ]
+          ],
+          "translation_m": [
+            -0.1318828000958519,
+            -0.32990965614067924,
+            0.1492638424025112
+          ]
+        }
+      ]
+    },
+    {
+      "demo_frame": 480,
+      "status": "measured_object_pair",
+      "source_points": {
+        "held": 700,
+        "target": 700
+      },
+      "candidates": [
+        {
+          "initializer": "pca_23",
+          "balanced_coverage": 0.41714285714285715,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.7742857142857142,
+              "target_to_source_coverage": 0.41714285714285715,
+              "source_to_target_median_mm": 3.580714368839324,
+              "target_to_source_median_mm": 11.265906696586791
+            },
+            "target": {
+              "source_to_target_coverage": 0.9457142857142857,
+              "target_to_source_coverage": 0.9114285714285715,
+              "source_to_target_median_mm": 2.989050104648586,
+              "target_to_source_median_mm": 3.5084109831217662
+            }
+          },
+          "rotation": [
+            [
+              0.9994437241702409,
+              -0.003863530274743171,
+              0.03312575056563101
+            ],
+            [
+              0.0059841180648214955,
+              0.9979217991051959,
+              -0.06415818888992861
+            ],
+            [
+              -0.03280903149601552,
+              0.06432072764253835,
+              0.9973897991496747
+            ]
+          ],
+          "translation_m": [
+            0.025597771112304615,
+            0.07852963514055529,
+            -0.01931567532366274
+          ]
+        },
+        {
+          "initializer": "pca_3",
+          "balanced_coverage": 0.4042857142857143,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.7628571428571429,
+              "target_to_source_coverage": 0.4042857142857143,
+              "source_to_target_median_mm": 3.502950624341153,
+              "target_to_source_median_mm": 10.889395923984157
+            },
+            "target": {
+              "source_to_target_coverage": 0.9385714285714286,
+              "target_to_source_coverage": 0.8985714285714286,
+              "source_to_target_median_mm": 2.4923016911953595,
+              "target_to_source_median_mm": 2.480670941624404
+            }
+          },
+          "rotation": [
+            [
+              0.9784515845046545,
+              0.2039937503999252,
+              -0.03192250895692022
+            ],
+            [
+              -0.20571008717730405,
+              0.9764068535702436,
+              -0.06567355886933268
+            ],
+            [
+              0.017772360952828765,
+              0.07082517983620404,
+              0.9973304051754022
+            ]
+          ],
+          "translation_m": [
+            0.0591804666112989,
+            0.054902017378679294,
+            -0.013632046240786011
+          ]
+        },
+        {
+          "initializer": "pca_20",
+          "balanced_coverage": 0.39,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.6957142857142857,
+              "target_to_source_coverage": 0.39,
+              "source_to_target_median_mm": 3.753229428063422,
+              "target_to_source_median_mm": 14.60214980736952
+            },
+            "target": {
+              "source_to_target_coverage": 0.6171428571428571,
+              "target_to_source_coverage": 0.4742857142857143,
+              "source_to_target_median_mm": 4.860858128402962,
+              "target_to_source_median_mm": 6.44316600363199
+            }
+          },
+          "rotation": [
+            [
+              -0.9220250696510801,
+              0.2969427465797625,
+              -0.24838433160847312
+            ],
+            [
+              -0.3834372444758794,
+              -0.61207003280773,
+              0.6916257329564092
+            ],
+            [
+              0.05334463875279359,
+              0.7329360682845483,
+              0.6782028231465291
+            ]
+          ],
+          "translation_m": [
+            -0.059527483620031234,
+            -0.33451425824609093,
+            0.14918783344386066
+          ]
+        }
+      ]
+    },
+    {
+      "demo_frame": 485,
+      "status": "measured_object_pair",
+      "source_points": {
+        "held": 700,
+        "target": 700
+      },
+      "candidates": [
+        {
+          "initializer": "pca_23",
+          "balanced_coverage": 0.43857142857142856,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.7742857142857142,
+              "target_to_source_coverage": 0.43857142857142856,
+              "source_to_target_median_mm": 3.388029763038564,
+              "target_to_source_median_mm": 11.023601361436231
+            },
+            "target": {
+              "source_to_target_coverage": 0.9585714285714285,
+              "target_to_source_coverage": 0.9057142857142857,
+              "source_to_target_median_mm": 2.9257082262096588,
+              "target_to_source_median_mm": 3.5306647549105303
+            }
+          },
+          "rotation": [
+            [
+              0.9986556631700014,
+              -0.02503778143160032,
+              0.045386957592116396
+            ],
+            [
+              0.028460995702993253,
+              0.9966696573533982,
+              -0.0764170519887668
+            ],
+            [
+              -0.04332249002630608,
+              0.07760607973633919,
+              0.9960423978154129
+            ]
+          ],
+          "translation_m": [
+            0.019345814532469932,
+            0.08648152366783718,
+            -0.01908548878337113
+          ]
+        },
+        {
+          "initializer": "pca_3",
+          "balanced_coverage": 0.43714285714285717,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.7714285714285715,
+              "target_to_source_coverage": 0.43714285714285717,
+              "source_to_target_median_mm": 3.3462962523691084,
+              "target_to_source_median_mm": 9.963893539345051
+            },
+            "target": {
+              "source_to_target_coverage": 0.9557142857142857,
+              "target_to_source_coverage": 0.8971428571428571,
+              "source_to_target_median_mm": 2.6542364794206463,
+              "target_to_source_median_mm": 2.768545901025408
+            }
+          },
+          "rotation": [
+            [
+              0.9883680302362213,
+              0.15132205113685607,
+              -0.015174770070866187
+            ],
+            [
+              -0.1520587983560699,
+              0.9849975180452889,
+              -0.08159663771950262
+            ],
+            [
+              0.002599740271125342,
+              0.08295496539902948,
+              0.9965499059586365
+            ]
+          ],
+          "translation_m": [
+            0.050976470187900316,
+            0.06817807427284134,
+            -0.014297144529808292
+          ]
+        },
+        {
+          "initializer": "pca_20",
+          "balanced_coverage": 0.39285714285714285,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.68,
+              "target_to_source_coverage": 0.39285714285714285,
+              "source_to_target_median_mm": 3.864386351771831,
+              "target_to_source_median_mm": 15.000894267401137
+            },
+            "target": {
+              "source_to_target_coverage": 0.6085714285714285,
+              "target_to_source_coverage": 0.4785714285714286,
+              "source_to_target_median_mm": 4.86541785634615,
+              "target_to_source_median_mm": 6.366968963185393
+            }
+          },
+          "rotation": [
+            [
+              -0.9257677829062713,
+              0.283443322733772,
+              -0.25022768617889724
+            ],
+            [
+              -0.37502509953992924,
+              -0.6042541352385953,
+              0.7030171511151934
+            ],
+            [
+              0.04806440312613663,
+              0.7446722922498834,
+              0.6656973714139426
+            ]
+          ],
+          "translation_m": [
+            -0.059519623652144804,
+            -0.3381476699691597,
+            0.15456710197843307
+          ]
+        }
+      ]
+    },
+    {
+      "demo_frame": 490,
+      "status": "measured_object_pair",
+      "source_points": {
+        "held": 700,
+        "target": 700
+      },
+      "candidates": [
+        {
+          "initializer": "pca_0",
+          "balanced_coverage": 0.4228571428571429,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.78,
+              "target_to_source_coverage": 0.4228571428571429,
+              "source_to_target_median_mm": 3.5789622528197214,
+              "target_to_source_median_mm": 9.8475812116947
+            },
+            "target": {
+              "source_to_target_coverage": 0.96,
+              "target_to_source_coverage": 0.92,
+              "source_to_target_median_mm": 2.4239357070015304,
+              "target_to_source_median_mm": 2.5015771507265865
+            }
+          },
+          "rotation": [
+            [
+              0.9874291469572963,
+              0.15651938722331546,
+              -0.022030913790044203
+            ],
+            [
+              -0.15777518657566064,
+              0.9844114446018267,
+              -0.07772450217248118
+            ],
+            [
+              0.009522092217681655,
+              0.08022337041151,
+              0.996731428520048
+            ]
+          ],
+          "translation_m": [
+            0.05400465351782442,
+            0.06623037848008252,
+            -0.013432325605844064
+          ]
+        },
+        {
+          "initializer": "pca_22",
+          "balanced_coverage": 0.4114285714285714,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.7771428571428571,
+              "target_to_source_coverage": 0.4114285714285714,
+              "source_to_target_median_mm": 3.654164513305956,
+              "target_to_source_median_mm": 10.9297908168282
+            },
+            "target": {
+              "source_to_target_coverage": 0.9628571428571429,
+              "target_to_source_coverage": 0.9214285714285714,
+              "source_to_target_median_mm": 2.754237756405374,
+              "target_to_source_median_mm": 3.0421933477817595
+            }
+          },
+          "rotation": [
+            [
+              0.9946196835396698,
+              -0.07796782645545143,
+              0.06821072608658534
+            ],
+            [
+              0.08252776969075475,
+              0.9943473225170415,
+              -0.0668024657708117
+            ],
+            [
+              -0.06261670979312463,
+              0.07207232645754785,
+              0.9954319300754224
+            ]
+          ],
+          "translation_m": [
+            0.0076408635684858395,
+            0.0888000201999175,
+            -0.021314950291396628
+          ]
+        },
+        {
+          "initializer": "pca_1",
+          "balanced_coverage": 0.39714285714285713,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.7057142857142857,
+              "target_to_source_coverage": 0.39714285714285713,
+              "source_to_target_median_mm": 3.9874543709961223,
+              "target_to_source_median_mm": 14.546869120415918
+            },
+            "target": {
+              "source_to_target_coverage": 0.6,
+              "target_to_source_coverage": 0.49714285714285716,
+              "source_to_target_median_mm": 5.010370207739219,
+              "target_to_source_median_mm": 6.039448799980302
+            }
+          },
+          "rotation": [
+            [
+              -0.9547702109030357,
+              0.20209640290487127,
+              -0.21810751547135104
+            ],
+            [
+              -0.2971214565200709,
+              -0.620026240363278,
+              0.7261448211867733
+            ],
+            [
+              0.011518873537170512,
+              0.7581058667454639,
+              0.6520297618656247
+            ]
+          ],
+          "translation_m": [
+            -0.07884219212847093,
+            -0.33922986925064164,
+            0.15606244093223365
+          ]
+        }
+      ]
+    },
+    {
+      "demo_frame": 495,
+      "status": "measured_object_pair",
+      "source_points": {
+        "held": 700,
+        "target": 700
+      },
+      "candidates": [
+        {
+          "initializer": "pca_0",
+          "balanced_coverage": 0.4,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.7471428571428571,
+              "target_to_source_coverage": 0.4,
+              "source_to_target_median_mm": 3.2462851762927234,
+              "target_to_source_median_mm": 14.167669509691077
+            },
+            "target": {
+              "source_to_target_coverage": 0.9328571428571428,
+              "target_to_source_coverage": 0.8971428571428571,
+              "source_to_target_median_mm": 2.0712366901081505,
+              "target_to_source_median_mm": 2.242144637423255
+            }
+          },
+          "rotation": [
+            [
+              0.9328884773614688,
+              0.343731635047699,
+              -0.10755301889597986
+            ],
+            [
+              -0.35309393950428924,
+              0.9317257468662364,
+              -0.08492233223303054
+            ],
+            [
+              0.07101942474805135,
+              0.11719938435841634,
+              0.9905657704637612
+            ]
+          ],
+          "translation_m": [
+            0.09223723392588129,
+            0.04856101200996503,
+            -0.003083847547419305
+          ]
+        },
+        {
+          "initializer": "pca_22",
+          "balanced_coverage": 0.39714285714285713,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.7371428571428571,
+              "target_to_source_coverage": 0.39714285714285713,
+              "source_to_target_median_mm": 3.7945965897407645,
+              "target_to_source_median_mm": 13.1753568456066
+            },
+            "target": {
+              "source_to_target_coverage": 0.9757142857142858,
+              "target_to_source_coverage": 0.9428571428571428,
+              "source_to_target_median_mm": 2.577401118035131,
+              "target_to_source_median_mm": 2.8809190029725062
+            }
+          },
+          "rotation": [
+            [
+              0.9925470491017252,
+              -0.09212304899110871,
+              0.07977279714312818
+            ],
+            [
+              0.09808105715878036,
+              0.9924009916692689,
+              -0.07429924602892482
+            ],
+            [
+              -0.0723219299111463,
+              0.0815696976728033,
+              0.9940402018406974
+            ]
+          ],
+          "translation_m": [
+            0.001874343268706169,
+            0.09700095294638328,
+            -0.0220568926651018
+          ]
+        },
+        {
+          "initializer": "pca_1",
+          "balanced_coverage": 0.3871428571428571,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.7028571428571428,
+              "target_to_source_coverage": 0.3871428571428571,
+              "source_to_target_median_mm": 3.6865468445245524,
+              "target_to_source_median_mm": 13.865931318155628
+            },
+            "target": {
+              "source_to_target_coverage": 0.5828571428571429,
+              "target_to_source_coverage": 0.5,
+              "source_to_target_median_mm": 5.191797172542531,
+              "target_to_source_median_mm": 6.001632918080056
+            }
+          },
+          "rotation": [
+            [
+              -0.9955606286429228,
+              -0.0021640775233336307,
+              -0.09409756354221728
+            ],
+            [
+              -0.07185598479166799,
+              -0.6282437506035302,
+              0.7746912335099894
+            ],
+            [
+              -0.06079269812837912,
+              0.7780135645321888,
+              0.6252992413702333
+            ]
+          ],
+          "translation_m": [
+            -0.14213845217459603,
+            -0.3371841494299898,
+            0.15972882072484812
+          ]
+        }
+      ]
+    },
+    {
+      "demo_frame": 500,
+      "status": "measured_object_pair",
+      "source_points": {
+        "held": 700,
+        "target": 700
+      },
+      "candidates": [
+        {
+          "initializer": "pca_0",
+          "balanced_coverage": 0.4042857142857143,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.7957142857142857,
+              "target_to_source_coverage": 0.4042857142857143,
+              "source_to_target_median_mm": 2.7315608060823893,
+              "target_to_source_median_mm": 11.989903779583546
+            },
+            "target": {
+              "source_to_target_coverage": 0.7057142857142857,
+              "target_to_source_coverage": 0.5971428571428572,
+              "source_to_target_median_mm": 3.4561094231700507,
+              "target_to_source_median_mm": 4.892719320618384
+            }
+          },
+          "rotation": [
+            [
+              0.9850163551805238,
+              0.03757754146569591,
+              -0.16831728492424927
+            ],
+            [
+              -0.07268659061909874,
+              0.9755127959452372,
+              -0.20758478867989602
+            ],
+            [
+              0.15639513921809897,
+              0.21670882151979728,
+              0.9636274420669289
+            ]
+          ],
+          "translation_m": [
+            0.11312398754816565,
+            0.1336354998681796,
+            0.02194125012189979
+          ]
+        },
+        {
+          "initializer": "pca_1",
+          "balanced_coverage": 0.38142857142857145,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.6957142857142857,
+              "target_to_source_coverage": 0.38142857142857145,
+              "source_to_target_median_mm": 4.105469387188577,
+              "target_to_source_median_mm": 12.379008512769362
+            },
+            "target": {
+              "source_to_target_coverage": 0.5971428571428572,
+              "target_to_source_coverage": 0.43714285714285717,
+              "source_to_target_median_mm": 4.821108509298192,
+              "target_to_source_median_mm": 7.170003116498378
+            }
+          },
+          "rotation": [
+            [
+              -0.7352343010846916,
+              0.6044712049666332,
+              -0.30666771084464023
+            ],
+            [
+              -0.5975360792765056,
+              -0.36444488783152085,
+              0.714234245675976
+            ],
+            [
+              0.31997055563186694,
+              0.708374538009136,
+              0.6291457362400042
+            ]
+          ],
+          "translation_m": [
+            -0.00048174584319707336,
+            -0.3666807465668615,
+            0.20187450355367753
+          ]
+        },
+        {
+          "initializer": "pca_21",
+          "balanced_coverage": 0.37142857142857144,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.7242857142857143,
+              "target_to_source_coverage": 0.37142857142857144,
+              "source_to_target_median_mm": 4.117532311167126,
+              "target_to_source_median_mm": 13.86229995680243
+            },
+            "target": {
+              "source_to_target_coverage": 0.5442857142857143,
+              "target_to_source_coverage": 0.4657142857142857,
+              "source_to_target_median_mm": 5.51330641945472,
+              "target_to_source_median_mm": 6.580590047636886
+            }
+          },
+          "rotation": [
+            [
+              -0.9969459986046436,
+              -0.021264685136103224,
+              0.0751431236524836
+            ],
+            [
+              0.07408197170660262,
+              -0.5619636614803717,
+              0.8238377902497779
+            ],
+            [
+              0.02470905368993732,
+              0.8268885392491764,
+              0.5618227534766739
+            ]
+          ],
+          "translation_m": [
+            -0.21577232570943372,
+            -0.3412300061406664,
+            0.20069557585295097
+          ]
+        }
+      ]
+    },
+    {
+      "demo_frame": 505,
+      "status": "measured_object_pair",
+      "source_points": {
+        "held": 700,
+        "target": 700
+      },
+      "candidates": [
+        {
+          "initializer": "pca_3",
+          "balanced_coverage": 0.34714285714285714,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.76,
+              "target_to_source_coverage": 0.34714285714285714,
+              "source_to_target_median_mm": 3.020154158975229,
+              "target_to_source_median_mm": 13.148958835848692
+            },
+            "target": {
+              "source_to_target_coverage": 0.8714285714285714,
+              "target_to_source_coverage": 0.7114285714285714,
+              "source_to_target_median_mm": 1.505248086353098,
+              "target_to_source_median_mm": 1.6955369788754007
+            }
+          },
+          "rotation": [
+            [
+              0.9066816711451695,
+              0.2821584661838164,
+              -0.31355214426024297
+            ],
+            [
+              -0.3038596003465889,
+              0.9524731730069171,
+              -0.02154525421863063
+            ],
+            [
+              0.29257082986280797,
+              0.11481051634292934,
+              0.9493265269918761
+            ]
+          ],
+          "translation_m": [
+            0.18017191242520014,
+            0.030565515079806538,
+            0.0384544028052452
+          ]
+        },
+        {
+          "initializer": "pca_20",
+          "balanced_coverage": 0.34714285714285714,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.7571428571428571,
+              "target_to_source_coverage": 0.34714285714285714,
+              "source_to_target_median_mm": 3.701328969491216,
+              "target_to_source_median_mm": 12.931204457694703
+            },
+            "target": {
+              "source_to_target_coverage": 0.5414285714285715,
+              "target_to_source_coverage": 0.4442857142857143,
+              "source_to_target_median_mm": 5.437668743646266,
+              "target_to_source_median_mm": 6.899753059047699
+            }
+          },
+          "rotation": [
+            [
+              -0.979548465076111,
+              0.18963544221865675,
+              0.0672547665342098
+            ],
+            [
+              -0.05655803248789483,
+              -0.580283655098532,
+              0.8124481944017029
+            ],
+            [
+              0.19309581437238618,
+              0.7920285845094371,
+              0.5791413711623813
+            ]
+          ],
+          "translation_m": [
+            -0.20280962352341364,
+            -0.352301765449718,
+            0.21024536855015846
+          ]
+        },
+        {
+          "initializer": "pca_2",
+          "balanced_coverage": 0.3457142857142857,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.7585714285714286,
+              "target_to_source_coverage": 0.3457142857142857,
+              "source_to_target_median_mm": 3.7253971420991285,
+              "target_to_source_median_mm": 13.033050432352406
+            },
+            "target": {
+              "source_to_target_coverage": 0.5485714285714286,
+              "target_to_source_coverage": 0.4442857142857143,
+              "source_to_target_median_mm": 5.508992513716943,
+              "target_to_source_median_mm": 6.920006629826456
+            }
+          },
+          "rotation": [
+            [
+              -0.972871130958979,
+              0.22540642492935978,
+              0.05209324473637312
+            ],
+            [
+              -0.08958580790418079,
+              -0.5746596204453567,
+              0.8134744640440507
+            ],
+            [
+              0.2132982549594677,
+              0.7867390064247256,
+              0.579262971543221
+            ]
+          ],
+          "translation_m": [
+            -0.19405782291830817,
+            -0.3562684352971624,
+            0.2125378456569841
+          ]
+        }
+      ]
+    },
+    {
+      "demo_frame": 510,
+      "status": "measured_object_pair",
+      "source_points": {
+        "held": 700,
+        "target": 700
+      },
+      "candidates": [
+        {
+          "initializer": "pca_21",
+          "balanced_coverage": 0.3842857142857143,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.76,
+              "target_to_source_coverage": 0.3842857142857143,
+              "source_to_target_median_mm": 3.385758403837162,
+              "target_to_source_median_mm": 13.531555575400617
+            },
+            "target": {
+              "source_to_target_coverage": 0.5542857142857143,
+              "target_to_source_coverage": 0.42428571428571427,
+              "source_to_target_median_mm": 5.337990393590946,
+              "target_to_source_median_mm": 7.202947528875535
+            }
+          },
+          "rotation": [
+            [
+              -0.962647802515997,
+              0.26593604285855954,
+              0.05086481514616267
+            ],
+            [
+              -0.11264993825830125,
+              -0.5642142888198026,
+              0.8179072243854839
+            ],
+            [
+              0.24620966618214657,
+              0.7816266739309088,
+              0.5730973240891825
+            ]
+          ],
+          "translation_m": [
+            -0.19064182373399463,
+            -0.3600949261970414,
+            0.2188175186325176
+          ]
+        },
+        {
+          "initializer": "pca_1",
+          "balanced_coverage": 0.38285714285714284,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.7685714285714286,
+              "target_to_source_coverage": 0.38285714285714284,
+              "source_to_target_median_mm": 3.4360754240619134,
+              "target_to_source_median_mm": 13.758212902145054
+            },
+            "target": {
+              "source_to_target_coverage": 0.5585714285714286,
+              "target_to_source_coverage": 0.42714285714285716,
+              "source_to_target_median_mm": 5.3647393255800795,
+              "target_to_source_median_mm": 7.17460697151052
+            }
+          },
+          "rotation": [
+            [
+              -0.9164012631280924,
+              0.39885271737216754,
+              -0.03354451940443451
+            ],
+            [
+              -0.2546501069944097,
+              -0.5163148401998766,
+              0.8176627109004736
+            ],
+            [
+              0.30880746096066447,
+              0.7578492565373494,
+              0.574719458884779
+            ]
+          ],
+          "translation_m": [
+            -0.1445442354937141,
+            -0.3745320625619227,
+            0.22499989104932513
+          ]
+        },
+        {
+          "initializer": "pca_0",
+          "balanced_coverage": 0.3485714285714286,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.72,
+              "target_to_source_coverage": 0.3485714285714286,
+              "source_to_target_median_mm": 3.3475837505292554,
+              "target_to_source_median_mm": 13.49848197496879
+            },
+            "target": {
+              "source_to_target_coverage": 0.88,
+              "target_to_source_coverage": 0.7214285714285714,
+              "source_to_target_median_mm": 1.4851687449969797,
+              "target_to_source_median_mm": 1.7071319285789683
+            }
+          },
+          "rotation": [
+            [
+              0.9190227928958449,
+              0.24208607796018408,
+              -0.3111132221487479
+            ],
+            [
+              -0.2623474674492429,
+              0.9646665807829904,
+              -0.02433504147155814
+            ],
+            [
+              0.29422935349976415,
+              0.10398422369912556,
+              0.9500612447420439
+            ]
+          ],
+          "translation_m": [
+            0.17895175954480413,
+            0.037107021574074806,
+            0.038094206459954816
+          ]
+        }
+      ]
+    },
+    {
+      "demo_frame": 515,
+      "status": "measured_object_pair",
+      "source_points": {
+        "held": 700,
+        "target": 700
+      },
+      "candidates": [
+        {
+          "initializer": "pca_21",
+          "balanced_coverage": 0.3742857142857143,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.7314285714285714,
+              "target_to_source_coverage": 0.3742857142857143,
+              "source_to_target_median_mm": 3.531563315729217,
+              "target_to_source_median_mm": 12.315594215183637
+            },
+            "target": {
+              "source_to_target_coverage": 0.5742857142857143,
+              "target_to_source_coverage": 0.43142857142857144,
+              "source_to_target_median_mm": 5.2631613516157145,
+              "target_to_source_median_mm": 7.014986414417177
+            }
+          },
+          "rotation": [
+            [
+              -0.9528387567948958,
+              0.30186560911866217,
+              0.03123231629224136
+            ],
+            [
+              -0.15081125784002747,
+              -0.5603015446362571,
+              0.814443456347299
+            ],
+            [
+              0.2633519851040968,
+              0.7713231055204068,
+              0.5794017594313015
+            ]
+          ],
+          "translation_m": [
+            -0.17991740711325768,
+            -0.36331659692296814,
+            0.2173193336274138
+          ]
+        },
+        {
+          "initializer": "pca_1",
+          "balanced_coverage": 0.37142857142857144,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.74,
+              "target_to_source_coverage": 0.37142857142857144,
+              "source_to_target_median_mm": 3.6832941396257937,
+              "target_to_source_median_mm": 12.657142703416124
+            },
+            "target": {
+              "source_to_target_coverage": 0.57,
+              "target_to_source_coverage": 0.43142857142857144,
+              "source_to_target_median_mm": 5.300661537906457,
+              "target_to_source_median_mm": 7.005632468427944
+            }
+          },
+          "rotation": [
+            [
+              -0.8819773800320967,
+              0.46597056997460967,
+              -0.07062102398900308
+            ],
+            [
+              -0.3230620696557877,
+              -0.4886526294294765,
+              0.8104625265250558
+            ],
+            [
+              0.3431425363627136,
+              0.7376245899298609,
+              0.5815179825846896
+            ]
+          ],
+          "translation_m": [
+            -0.1222870846209802,
+            -0.3786633072305098,
+            0.2248817528676909
+          ]
+        },
+        {
+          "initializer": "pca_0",
+          "balanced_coverage": 0.3485714285714286,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.7471428571428571,
+              "target_to_source_coverage": 0.3485714285714286,
+              "source_to_target_median_mm": 3.1369842929773015,
+              "target_to_source_median_mm": 13.027981198985415
+            },
+            "target": {
+              "source_to_target_coverage": 0.9028571428571428,
+              "target_to_source_coverage": 0.7242857142857143,
+              "source_to_target_median_mm": 1.5084664570978783,
+              "target_to_source_median_mm": 1.7179362413353463
+            }
+          },
+          "rotation": [
+            [
+              0.902124799596408,
+              0.28516280717671144,
+              -0.3238101594395057
+            ],
+            [
+              -0.304664098643259,
+              0.9524068462711657,
+              -0.010049187713562512
+            ],
+            [
+              0.30553335816409777,
+              0.10771895180937151,
+              0.9460687049416971
+            ]
+          ],
+          "translation_m": [
+            0.18428537742851814,
+            0.02552977012304953,
+            0.04102180644984388
+          ]
+        }
+      ]
+    },
+    {
+      "demo_frame": 520,
+      "status": "measured_object_pair",
+      "source_points": {
+        "held": 700,
+        "target": 700
+      },
+      "candidates": [
+        {
+          "initializer": "pca_0",
+          "balanced_coverage": 0.38285714285714284,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.7671428571428571,
+              "target_to_source_coverage": 0.38285714285714284,
+              "source_to_target_median_mm": 2.973319461965807,
+              "target_to_source_median_mm": 12.81367225163918
+            },
+            "target": {
+              "source_to_target_coverage": 0.8942857142857142,
+              "target_to_source_coverage": 0.7042857142857143,
+              "source_to_target_median_mm": 1.5375523527723491,
+              "target_to_source_median_mm": 1.8409959997666732
+            }
+          },
+          "rotation": [
+            [
+              0.9237779396511328,
+              0.24149680806709026,
+              -0.2971760587720965
+            ],
+            [
+              -0.25889449770774825,
+              0.9656982123556076,
+              -0.02001503709309927
+            ],
+            [
+              0.2821488211397698,
+              0.095426696194474,
+              0.954612899757198
+            ]
+          ],
+          "translation_m": [
+            0.17341319360385166,
+            0.03564985976526667,
+            0.0343129263506643
+          ]
+        },
+        {
+          "initializer": "pca_21",
+          "balanced_coverage": 0.37857142857142856,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.7657142857142857,
+              "target_to_source_coverage": 0.4228571428571429,
+              "source_to_target_median_mm": 3.204751684545842,
+              "target_to_source_median_mm": 11.762083632954393
+            },
+            "target": {
+              "source_to_target_coverage": 0.5514285714285714,
+              "target_to_source_coverage": 0.37857142857142856,
+              "source_to_target_median_mm": 5.527307168385471,
+              "target_to_source_median_mm": 8.269787941916896
+            }
+          },
+          "rotation": [
+            [
+              -0.9532735167301527,
+              0.2957522618078625,
+              0.06164577792889636
+            ],
+            [
+              -0.12494914525274821,
+              -0.5717508484115147,
+              0.8108567558091379
+            ],
+            [
+              0.2750587453645727,
+              0.7652656839139238,
+              0.5819889342781537
+            ]
+          ],
+          "translation_m": [
+            -0.19258294468361203,
+            -0.35960529127239643,
+            0.2167285744449387
+          ]
+        },
+        {
+          "initializer": "pca_1",
+          "balanced_coverage": 0.37142857142857144,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.77,
+              "target_to_source_coverage": 0.4185714285714286,
+              "source_to_target_median_mm": 3.27688513958216,
+              "target_to_source_median_mm": 12.04922377611896
+            },
+            "target": {
+              "source_to_target_coverage": 0.5485714285714286,
+              "target_to_source_coverage": 0.37142857142857144,
+              "source_to_target_median_mm": 5.416251018757078,
+              "target_to_source_median_mm": 8.112119934858438
+            }
+          },
+          "rotation": [
+            [
+              -0.9060265816019397,
+              0.4231673312403275,
+              -0.0067263066867479454
+            ],
+            [
+              -0.2531134247405461,
+              -0.5290565820125435,
+              0.8099584725436966
+            ],
+            [
+              0.3391893684165492,
+              0.7355464246396313,
+              0.5864486589233866
+            ]
+          ],
+          "translation_m": [
+            -0.15329740455535967,
+            -0.3722859606172543,
+            0.22165564426683154
+          ]
+        }
+      ]
+    },
+    {
+      "demo_frame": 525,
+      "status": "measured_object_pair",
+      "source_points": {
+        "held": 700,
+        "target": 700
+      },
+      "candidates": [
+        {
+          "initializer": "pca_0",
+          "balanced_coverage": 0.3842857142857143,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.7628571428571429,
+              "target_to_source_coverage": 0.3842857142857143,
+              "source_to_target_median_mm": 3.095275327508887,
+              "target_to_source_median_mm": 12.719617425604945
+            },
+            "target": {
+              "source_to_target_coverage": 0.9085714285714286,
+              "target_to_source_coverage": 0.6942857142857143,
+              "source_to_target_median_mm": 1.6560477849984494,
+              "target_to_source_median_mm": 2.0306148105417066
+            }
+          },
+          "rotation": [
+            [
+              0.9129674876476477,
+              0.2626077789450583,
+              -0.31229396557712674
+            ],
+            [
+              -0.28196262420886503,
+              0.9592629804598518,
+              -0.017652559829451447
+            ],
+            [
+              0.29493634066963353,
+              0.10417143925676298,
+              0.9498214917528346
+            ]
+          ],
+          "translation_m": [
+            0.17934786199855715,
+            0.03138515018500192,
+            0.03825371916933251
+          ]
+        },
+        {
+          "initializer": "pca_21",
+          "balanced_coverage": 0.36857142857142855,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.7642857142857142,
+              "target_to_source_coverage": 0.4228571428571429,
+              "source_to_target_median_mm": 3.1821616929867504,
+              "target_to_source_median_mm": 11.856864609782765
+            },
+            "target": {
+              "source_to_target_coverage": 0.5514285714285714,
+              "target_to_source_coverage": 0.36857142857142855,
+              "source_to_target_median_mm": 5.438410651594675,
+              "target_to_source_median_mm": 8.272276543542086
+            }
+          },
+          "rotation": [
+            [
+              -0.9543661088524352,
+              0.29164843633769866,
+              0.06423799386372327
+            ],
+            [
+              -0.12033961600058875,
+              -0.5724346065107347,
+              0.8110715123154869
+            ],
+            [
+              0.2733197890652835,
+              0.7663287876953829,
+              0.5814090488241759
+            ]
+          ],
+          "translation_m": [
+            -0.19420574625743883,
+            -0.35914446058283983,
+            0.21688471232707565
+          ]
+        },
+        {
+          "initializer": "pca_1",
+          "balanced_coverage": 0.3657142857142857,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.7642857142857142,
+              "target_to_source_coverage": 0.42,
+              "source_to_target_median_mm": 3.2820947584251265,
+              "target_to_source_median_mm": 12.097057218444808
+            },
+            "target": {
+              "source_to_target_coverage": 0.5585714285714286,
+              "target_to_source_coverage": 0.3657142857142857,
+              "source_to_target_median_mm": 5.44977913243156,
+              "target_to_source_median_mm": 8.194596012973738
+            }
+          },
+          "rotation": [
+            [
+              -0.9042766295892117,
+              0.426840973987908,
+              -0.00951630725803135
+            ],
+            [
+              -0.2559162032801029,
+              -0.52405631434094,
+              0.8123249819487806
+            ],
+            [
+              0.34174650558194736,
+              0.7370018740304833,
+              0.5831273991145366
+            ]
+          ],
+          "translation_m": [
+            -0.15207939228298337,
+            -0.3733398964952544,
+            0.2234100977986826
+          ]
+        }
+      ]
+    },
+    {
+      "demo_frame": 530,
+      "status": "measured_object_pair",
+      "source_points": {
+        "held": 700,
+        "target": 700
+      },
+      "candidates": [
+        {
+          "initializer": "pca_0",
+          "balanced_coverage": 0.38,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.7414285714285714,
+              "target_to_source_coverage": 0.38,
+              "source_to_target_median_mm": 3.3235144728899324,
+              "target_to_source_median_mm": 13.436058448273682
+            },
+            "target": {
+              "source_to_target_coverage": 0.8642857142857143,
+              "target_to_source_coverage": 0.7414285714285714,
+              "source_to_target_median_mm": 1.7542016104652423,
+              "target_to_source_median_mm": 2.1169298986573675
+            }
+          },
+          "rotation": [
+            [
+              0.945414876086685,
+              0.1727016344040947,
+              -0.2763419214454293
+            ],
+            [
+              -0.18889940364112906,
+              0.9814452268614827,
+              -0.0328980542713146
+            ],
+            [
+              0.2655329120429767,
+              0.0833031340644931,
+              0.9604961532858992
+            ]
+          ],
+          "translation_m": [
+            0.16423470671923018,
+            0.04923311723153159,
+            0.029365434125747714
+          ]
+        },
+        {
+          "initializer": "pca_1",
+          "balanced_coverage": 0.3742857142857143,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.7514285714285714,
+              "target_to_source_coverage": 0.4114285714285714,
+              "source_to_target_median_mm": 3.6263295040865313,
+              "target_to_source_median_mm": 12.873963014273196
+            },
+            "target": {
+              "source_to_target_coverage": 0.52,
+              "target_to_source_coverage": 0.3742857142857143,
+              "source_to_target_median_mm": 5.807898520324823,
+              "target_to_source_median_mm": 8.096337337512256
+            }
+          },
+          "rotation": [
+            [
+              -0.7634431307367728,
+              0.6232900935434588,
+              -0.16930459362173475
+            ],
+            [
+              -0.5064431481617099,
+              -0.4150158235756958,
+              0.7558288191527514
+            ],
+            [
+              0.4008365300354875,
+              0.6627754713870853,
+              0.6325019768480858
+            ]
+          ],
+          "translation_m": [
+            -0.06101861921960954,
+            -0.37653409134745197,
+            0.2085484817016213
+          ]
+        },
+        {
+          "initializer": "pca_4",
+          "balanced_coverage": 0.36857142857142855,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.8342857142857143,
+              "target_to_source_coverage": 0.36857142857142855,
+              "source_to_target_median_mm": 2.9528787120468536,
+              "target_to_source_median_mm": 15.064468593660507
+            },
+            "target": {
+              "source_to_target_coverage": 0.7742857142857142,
+              "target_to_source_coverage": 0.58,
+              "source_to_target_median_mm": 2.74743998835143,
+              "target_to_source_median_mm": 4.46348019802079
+            }
+          },
+          "rotation": [
+            [
+              0.6807319215111006,
+              0.5925288238793913,
+              -0.4307129483866353
+            ],
+            [
+              -0.6152267624592505,
+              0.7816060279745412,
+              0.10289823996439042
+            ],
+            [
+              0.39761800989104173,
+              0.19494001617411788,
+              0.8966037632668743
+            ]
+          ],
+          "translation_m": [
+            0.2163730797327355,
+            -0.06793992630901134,
+            0.08004437144914184
+          ]
+        }
+      ]
+    },
+    {
+      "demo_frame": 535,
+      "status": "measured_object_pair",
+      "source_points": {
+        "held": 700,
+        "target": 700
+      },
+      "candidates": [
+        {
+          "initializer": "pca_21",
+          "balanced_coverage": 0.41,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.7242857142857143,
+              "target_to_source_coverage": 0.41,
+              "source_to_target_median_mm": 3.483954375952482,
+              "target_to_source_median_mm": 13.167965880376704
+            },
+            "target": {
+              "source_to_target_coverage": 0.5114285714285715,
+              "target_to_source_coverage": 0.42,
+              "source_to_target_median_mm": 5.803974597462166,
+              "target_to_source_median_mm": 7.284053291767069
+            }
+          },
+          "rotation": [
+            [
+              -0.8972334474827602,
+              0.43709647214092473,
+              -0.06260043737992481
+            ],
+            [
+              -0.3167276532809302,
+              -0.5383011347212995,
+              0.7809708586144013
+            ],
+            [
+              0.30766172066956093,
+              0.7205404654838752,
+              0.6214223227684424
+            ]
+          ],
+          "translation_m": [
+            -0.12930397066514676,
+            -0.36971630373524894,
+            0.2051009123851629
+          ]
+        },
+        {
+          "initializer": "pca_1",
+          "balanced_coverage": 0.3842857142857143,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.6928571428571428,
+              "target_to_source_coverage": 0.3842857142857143,
+              "source_to_target_median_mm": 3.9698520726116304,
+              "target_to_source_median_mm": 13.401186871935007
+            },
+            "target": {
+              "source_to_target_coverage": 0.5485714285714286,
+              "target_to_source_coverage": 0.4142857142857143,
+              "source_to_target_median_mm": 5.298483158523324,
+              "target_to_source_median_mm": 7.368440266245262
+            }
+          },
+          "rotation": [
+            [
+              -0.6687641083515785,
+              0.6996568555674265,
+              -0.2514654088303635
+            ],
+            [
+              -0.611895883353417,
+              -0.3258504630466216,
+              0.7206975119059633
+            ],
+            [
+              0.42230083508781224,
+              0.6358472774100746,
+              0.6460342440570261
+            ]
+          ],
+          "translation_m": [
+            -0.012719227802420595,
+            -0.3709854059407599,
+            0.20557275468328481
+          ]
+        },
+        {
+          "initializer": "pca_0",
+          "balanced_coverage": 0.37714285714285717,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.72,
+              "target_to_source_coverage": 0.37714285714285717,
+              "source_to_target_median_mm": 3.6583734116033444,
+              "target_to_source_median_mm": 13.89420548516591
+            },
+            "target": {
+              "source_to_target_coverage": 0.8628571428571429,
+              "target_to_source_coverage": 0.7657142857142857,
+              "source_to_target_median_mm": 1.7348453743171244,
+              "target_to_source_median_mm": 1.8663374432300703
+            }
+          },
+          "rotation": [
+            [
+              0.966001549498816,
+              0.09281010860095387,
+              -0.24130331557475052
+            ],
+            [
+              -0.10575095269669019,
+              0.9935381723781862,
+              -0.041214512385285854
+            ],
+            [
+              0.2359189317745203,
+              0.06533133833692437,
+              0.9695741714079829
+            ]
+          ],
+          "translation_m": [
+            0.14865251009040825,
+            0.06290010888365175,
+            0.02131090289297094
+          ]
+        }
+      ]
+    },
+    {
+      "demo_frame": 540,
+      "status": "measured_object_pair",
+      "source_points": {
+        "held": 700,
+        "target": 700
+      },
+      "candidates": [
+        {
+          "initializer": "pca_21",
+          "balanced_coverage": 0.3985714285714286,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.7171428571428572,
+              "target_to_source_coverage": 0.3985714285714286,
+              "source_to_target_median_mm": 3.612580652564582,
+              "target_to_source_median_mm": 14.93740268860549
+            },
+            "target": {
+              "source_to_target_coverage": 0.5728571428571428,
+              "target_to_source_coverage": 0.49,
+              "source_to_target_median_mm": 5.1227930758335445,
+              "target_to_source_median_mm": 6.189012193325568
+            }
+          },
+          "rotation": [
+            [
+              -0.8382066535590732,
+              0.5233700407024566,
+              -0.15327558978652792
+            ],
+            [
+              -0.44136809478739214,
+              -0.48595534277727986,
+              0.7543484670428937
+            ],
+            [
+              0.32031829612597335,
+              0.699950859218935,
+              0.6383298393821397
+            ]
+          ],
+          "translation_m": [
+            -0.08231588356759813,
+            -0.3711082776985643,
+            0.20060306875849518
+          ]
+        },
+        {
+          "initializer": "pca_1",
+          "balanced_coverage": 0.3942857142857143,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.6928571428571428,
+              "target_to_source_coverage": 0.3942857142857143,
+              "source_to_target_median_mm": 4.005318846947463,
+              "target_to_source_median_mm": 14.902337888355461
+            },
+            "target": {
+              "source_to_target_coverage": 0.6185714285714285,
+              "target_to_source_coverage": 0.5214285714285715,
+              "source_to_target_median_mm": 4.631925081532711,
+              "target_to_source_median_mm": 5.551414647273002
+            }
+          },
+          "rotation": [
+            [
+              -0.6502273617431511,
+              0.7083080236703582,
+              -0.2747801332788309
+            ],
+            [
+              -0.6449250301014492,
+              -0.3234175001111444,
+              0.6924397635682844
+            ],
+            [
+              0.40159193665857507,
+              0.6274558663571876,
+              0.6671004813255389
+            ]
+          ],
+          "translation_m": [
+            -0.001621974114031463,
+            -0.363045255679767,
+            0.19546657577044782
+          ]
+        },
+        {
+          "initializer": "pca_0",
+          "balanced_coverage": 0.3842857142857143,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.7614285714285715,
+              "target_to_source_coverage": 0.3842857142857143,
+              "source_to_target_median_mm": 3.518785425643584,
+              "target_to_source_median_mm": 14.782466123046742
+            },
+            "target": {
+              "source_to_target_coverage": 0.8885714285714286,
+              "target_to_source_coverage": 0.9285714285714286,
+              "source_to_target_median_mm": 2.062290732213845,
+              "target_to_source_median_mm": 1.8837352264954565
+            }
+          },
+          "rotation": [
+            [
+              0.9759591885121698,
+              0.05129500882609707,
+              -0.21183126404805694
+            ],
+            [
+              -0.06534417475453035,
+              0.9960657697401449,
+              -0.05985917788961593
+            ],
+            [
+              0.20792739402088528,
+              0.07226205381458466,
+              0.9754713703611098
+            ]
+          ],
+          "translation_m": [
+            0.1358175363485856,
+            0.07556017340444679,
+            0.017293102393693083
+          ]
+        }
+      ]
+    },
+    {
+      "demo_frame": 545,
+      "status": "measured_object_pair",
+      "source_points": {
+        "held": 700,
+        "target": 700
+      },
+      "candidates": [
+        {
+          "initializer": "pca_0",
+          "balanced_coverage": 0.4142857142857143,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.7614285714285715,
+              "target_to_source_coverage": 0.4142857142857143,
+              "source_to_target_median_mm": 3.903727127121631,
+              "target_to_source_median_mm": 11.214527785071297
+            },
+            "target": {
+              "source_to_target_coverage": 0.9014285714285715,
+              "target_to_source_coverage": 0.9328571428571428,
+              "source_to_target_median_mm": 2.2784226164539554,
+              "target_to_source_median_mm": 1.9619652449917804
+            }
+          },
+          "rotation": [
+            [
+              0.9845887428067104,
+              -0.1248671745363979,
+              -0.12244670784303739
+            ],
+            [
+              0.11587334218443278,
+              0.9901938771370903,
+              -0.07803495531636047
+            ],
+            [
+              0.13098998476719806,
+              0.06264402927265934,
+              0.9894025214679693
+            ]
+          ],
+          "translation_m": [
+            0.09193399277060753,
+            0.10423085372260014,
+            0.0016207614640671442
+          ]
+        },
+        {
+          "initializer": "pca_1",
+          "balanced_coverage": 0.38571428571428573,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.6985714285714286,
+              "target_to_source_coverage": 0.38571428571428573,
+              "source_to_target_median_mm": 4.195893199720425,
+              "target_to_source_median_mm": 15.273928880120087
+            },
+            "target": {
+              "source_to_target_coverage": 0.6614285714285715,
+              "target_to_source_coverage": 0.55,
+              "source_to_target_median_mm": 3.9320300393368024,
+              "target_to_source_median_mm": 5.252609135359364
+            }
+          },
+          "rotation": [
+            [
+              -0.5554705495252587,
+              0.768480227039859,
+              -0.31763282144462596
+            ],
+            [
+              -0.7172804411580532,
+              -0.24957076841554135,
+              0.6505560700543683
+            ],
+            [
+              0.42066760909560763,
+              0.5891965480221715,
+              0.6898450481496136
+            ]
+          ],
+          "translation_m": [
+            0.030148503492060816,
+            -0.3513706471699947,
+            0.18727383366505734
+          ]
+        },
+        {
+          "initializer": "pca_21",
+          "balanced_coverage": 0.3757142857142857,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.7028571428571428,
+              "target_to_source_coverage": 0.3757142857142857,
+              "source_to_target_median_mm": 4.126761953414526,
+              "target_to_source_median_mm": 16.04993373193435
+            },
+            "target": {
+              "source_to_target_coverage": 0.6485714285714286,
+              "target_to_source_coverage": 0.5371428571428571,
+              "source_to_target_median_mm": 4.249907493912425,
+              "target_to_source_median_mm": 5.582508395255854
+            }
+          },
+          "rotation": [
+            [
+              -0.6466728003393404,
+              0.7109261775006025,
+              -0.2764023506514702
+            ],
+            [
+              -0.655632372183065,
+              -0.332873822741853,
+              0.6777471583701661
+            ],
+            [
+              0.3898210895358084,
+              0.619498981659864,
+              0.6813666633138927
+            ]
+          ],
+          "translation_m": [
+            -5.423174115712359e-06,
+            -0.3589409934148579,
+            0.18918140894930732
+          ]
+        }
+      ]
+    },
+    {
+      "demo_frame": 550,
+      "status": "measured_object_pair",
+      "source_points": {
+        "held": 700,
+        "target": 700
+      },
+      "candidates": [
+        {
+          "initializer": "pca_0",
+          "balanced_coverage": 0.41285714285714287,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.7585714285714286,
+              "target_to_source_coverage": 0.41285714285714287,
+              "source_to_target_median_mm": 3.770215983210807,
+              "target_to_source_median_mm": 11.467662100370617
+            },
+            "target": {
+              "source_to_target_coverage": 0.9071428571428571,
+              "target_to_source_coverage": 0.9171428571428571,
+              "source_to_target_median_mm": 2.5170885988569376,
+              "target_to_source_median_mm": 2.2039798466584406
+            }
+          },
+          "rotation": [
+            [
+              0.9847554858751636,
+              -0.1256640755475162,
+              -0.12027124824978618
+            ],
+            [
+              0.11639452470700788,
+              0.9898744680048954,
+              -0.08124562886861249
+            ],
+            [
+              0.1292630947215919,
+              0.06600816395579076,
+              0.9894109230416769
+            ]
+          ],
+          "translation_m": [
+            0.09104561118489711,
+            0.10579459954327446,
+            0.0012876154485908509
+          ]
+        },
+        {
+          "initializer": "pca_1",
+          "balanced_coverage": 0.4014285714285714,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.71,
+              "target_to_source_coverage": 0.4014285714285714,
+              "source_to_target_median_mm": 3.7568770630943114,
+              "target_to_source_median_mm": 14.734641293858944
+            },
+            "target": {
+              "source_to_target_coverage": 0.6042857142857143,
+              "target_to_source_coverage": 0.5142857142857142,
+              "source_to_target_median_mm": 4.6401162760074595,
+              "target_to_source_median_mm": 5.723936583381335
+            }
+          },
+          "rotation": [
+            [
+              -0.7138285598915741,
+              0.6571938230458094,
+              -0.24196087707221126
+            ],
+            [
+              -0.5899208922519632,
+              -0.3780745501698361,
+              0.7134794849177678
+            ],
+            [
+              0.3774150606000873,
+              0.6520398097235391,
+              0.6575727781530524
+            ]
+          ],
+          "translation_m": [
+            -0.025069046481594144,
+            -0.3677103166290141,
+            0.19705249468149674
+          ]
+        },
+        {
+          "initializer": "pca_21",
+          "balanced_coverage": 0.39571428571428574,
+          "objects": {
+            "held": {
+              "source_to_target_coverage": 0.7242857142857143,
+              "target_to_source_coverage": 0.39571428571428574,
+              "source_to_target_median_mm": 3.4791324306098796,
+              "target_to_source_median_mm": 15.141913321976713
+            },
+            "target": {
+              "source_to_target_coverage": 0.5714285714285714,
+              "target_to_source_coverage": 0.49714285714285716,
+              "source_to_target_median_mm": 5.138388286020811,
+              "target_to_source_median_mm": 6.040895082653525
+            }
+          },
+          "rotation": [
+            [
+              -0.8829701846836334,
+              0.4538822924555421,
+              -0.11981033993379663
+            ],
+            [
+              -0.374128295614024,
+              -0.5262529215604013,
+              0.7636006030446069
+            ],
+            [
+              0.283534250807015,
+              0.7190610037711985,
+              0.6344758478262675
+            ]
+          ],
+          "translation_m": [
+            -0.10433971593779293,
+            -0.3687545811702954,
+            0.1985197512111946
+          ]
+        }
+      ]
+    }
+  ],
+  "status": "measured_object_pair",
+  "best_demo_frame": 400,
+  "best_pixel_evidence": {
+    "held": {
+      "source_points": 2655,
+      "projected_in_frame": 2655,
+      "inside_live_mask": 2314,
+      "mask_and_depth_supported": 1446,
+      "mask_and_depth_supported_fraction": 0.5446327683615819,
+      "behind_measured_surface_possible_occlusion": 524,
+      "in_front_of_measured_surface_contradiction": 561,
+      "in_front_of_measured_surface_fraction": 0.21129943502824858,
+      "outside_mask_with_matching_depth": 56,
+      "no_live_depth": 68
+    },
+    "target": {
+      "source_points": 2513,
+      "projected_in_frame": 2513,
+      "inside_live_mask": 1831,
+      "mask_and_depth_supported": 1421,
+      "mask_and_depth_supported_fraction": 0.5654596100278552,
+      "behind_measured_surface_possible_occlusion": 564,
+      "in_front_of_measured_surface_contradiction": 181,
+      "in_front_of_measured_surface_fraction": 0.07202546756864306,
+      "outside_mask_with_matching_depth": 311,
+      "no_live_depth": 36
+    }
+  },
+  "seconds": 16.9748675180017
+}

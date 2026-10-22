@@ -6,6 +6,12 @@ point tracker's hard-cut predictions as correspondences. The TrackEverything
 experiment below remains as evidence about that model's behavior, not as the
 registration method FLASH should use for the episode boundary.
 
+The [labelled object-pair cloud benchmark](scene-relation/README.md) tested
+whether a live held-object/target configuration could retrieve a demonstrated
+interaction phase without an annotated task point. Its high nearest-cloud score
+failed a separate depth-projection check; it is a negative result for this
+single-frame pair-fitting method, not evidence of accurate tracking.
+
 This pilot asks whether TrackEverything proposes geometrically coherent
 demo-to-live point matches on the **same physical dowel**. It does not assume
 that the annotated tool tip is visible or even queried. If these matches
