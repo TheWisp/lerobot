@@ -6,6 +6,24 @@ like, and how this limited experiment differs from a demo-to-live tracker.
 
 ## What a point-group action could store
 
+[Watch the three-point tracking video](three-point-demo-frame.mp4). It uses
+three non-collinear TrackEverything surface tracks on the dowel at demo frame
+361, selected offline for spatial spread and co-motion across this segment.
+Their labels `A`, `B`, and `C` are **arbitrary reference anchors**, not
+task landmarks or an object center. `A` supplies a location, `B - A` supplies
+a direction, and `C` resolves rotation about that direction. The video shows
+their 3D position and direction in the camera frame while the dowel moves.
+Each frame fits the dowel's rigid motion from **all** supported co-moving
+TrackEverything points, then carries the fixed anchors with that motion. A
+hollow anchor is inferred when its own raw track is unsupported or disagrees
+with that fit; a red X shows the rejected raw track. In the last part, `A`'s
+raw track moves onto the ring while its group-inferred position remains on the
+dowel. The late group fit is also unstable, so neither route is ground truth.
+The [per-frame values and support evidence](three-point-demo-frame.json) and
+[renderer](../../../../benchmarks/flash_te_three_anchor_video.py) reproduce
+this demo-time test. It does **not** prove that the same three material points
+can be matched in a live run.
+
 [Watch the 7.2-second insertion illustration](insertion-relative-motion.mp4).
 The camera side shows actual frame-by-frame TrackEverything points retained only
 when they lie within the saved object mask and agree with aligned RGB-D depth.
