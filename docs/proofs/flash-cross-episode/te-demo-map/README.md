@@ -6,19 +6,36 @@ like, and how this limited experiment differs from a demo-to-live tracker.
 
 ## What a point-group action could store
 
-[Watch the three-point tracking video](three-point-demo-frame.mp4). It uses
-three non-collinear TrackEverything surface tracks on the dowel at demo frame
-361, selected offline for spatial spread and co-motion across this segment.
+[Watch the corrected three-point tracking video](three-point-demo-frame.mp4).
+It uses three non-collinear TrackEverything surface tracks on the dowel at demo
+frame 361, selected offline for spatial spread and measured co-motion across
+this segment.
 Their labels `A`, `B`, and `C` are **arbitrary reference anchors**, not
 task landmarks or an object center. `A` supplies a location, `B - A` supplies
 a direction, and `C` resolves rotation about that direction. The video shows
 their 3D position and direction in the camera frame while the dowel moves.
-Each frame fits the dowel's rigid motion from **all** supported co-moving
-TrackEverything points, then carries the fixed anchors with that motion. A
-hollow anchor is inferred when its own raw track is unsupported or disagrees
-with that fit; a red X shows the rejected raw track. In the last part, `A`'s
-raw track moves onto the ring while its group-inferred position remains on the
-dowel. The late group fit is also unstable, so neither route is ground truth.
+Each **adjacent pair of frames** fits the dowel's rigid motion from supported
+co-moving TrackEverything points **excluding A/B/C**. Composing these small
+motions carries the fixed anchors through occlusion. A hollow anchor is
+inferred when its own raw track is unsupported or disagrees with that fit; a
+red X shows where the raw ID went. In the last part, `A`'s raw track moves
+onto the ring while its group-inferred position remains on the dowel.
+Holding A/B/C out exposes this identity drift, but it does not make the
+inferred position ground truth: chained small motions can also drift.
+
+The previous version of this video independently refitted each frame to an
+old fixed reference. Its apparent jumps were substantially an **estimator
+artifact**, not a sudden loss of the entire visible point cloud. On the same
+saved tracks **and the same original A/B/C IDs**, the 95th-percentile
+frame-to-frame change of the inferred A position fell from 5.71 to 2.29 mm,
+and the inferred A-to-B direction from 6.92° to 1.80°, after switching only
+the fitting method. The corrected video additionally uses a more co-moving
+triplet (2.28 mm and 1.68°). These numbers measure display stability,
+**not point accuracy**. The chosen triplet's largest pairwise-distance change
+across its jointly visible frames is still 2.4 mm at the 90th percentile;
+`A`'s unsupported raw ID is about 33 mm from its inferred position at frame 535. The earlier editor overlay showed 2D point locations moving smoothly
+with the dowel. That is compatible with individual IDs drifting over longer
+time spans, and with a distant-reference 3D fitter jumping between subsets.
 The [per-frame values and support evidence](three-point-demo-frame.json) and
 [renderer](../../../../benchmarks/flash_te_three_anchor_video.py) reproduce
 this demo-time test. It does **not** prove that the same three material points
@@ -43,10 +60,11 @@ and signed axial component: positive means above the estimated ring plane.
 Neither origin is an object centroid; dynamically visible surface points only
 provide motion of the annotated landmarks.
 
-The video deliberately keeps the late jumps. By frame 530, only 22 of 53
-shared dowel points agree with its selected rigid fit within the 5 mm
-_visualization_ band; adjacent estimates can change by more than 10 mm. Those
-values are **not reliable enough to call physical insertion accuracy**. The
+This older video deliberately keeps the late jumps from its independent
+fixed-reference fits. By frame 530, only 22 of 53 shared dowel points agree
+with its selected rigid fit within the 5 mm _visualization_ band; adjacent
+estimates can change by more than 10 mm. These jumps do not measure
+TrackEverything's adjacent-frame coherence or physical insertion accuracy. The
 marked surface proxy is not the exact physical tip, and the hole plane is an
 approximation. The [per-frame values and evidence counts](insertion-relative-motion.json)
 and [rendering code](../../../../benchmarks/flash_te_insertion_relation_video.py)

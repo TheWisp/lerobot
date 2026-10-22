@@ -2,8 +2,9 @@
 
 This offline illustration uses the saved TrackEverything result. Three
 non-collinear surface tracks at frame 361 define a location and orientation.
-Every later frame fits a rigid transform from *all* visible, consistent tracks;
-the transform carries an anchor when its own TE track is occluded or rejected.
+Each adjacent pair of frames fits a rigid transform from supported tracks other
+than the three anchors. Composing those transforms carries an anchor when its
+own TE track is occluded or rejected, and lets us hold it out as a check.
 It does not establish demo-to-live point correspondence or change FLASH control.
 """
 
@@ -16,6 +17,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 from flash_cross_episode_trackeverything import _project
+from flash_te_demo_map_consistency import supported_ids
 from flash_te_insertion_relation_video import (
     BG,
     DEMO,
@@ -28,13 +30,13 @@ from flash_te_insertion_relation_video import (
     PANEL,
     WHITE,
     WIDTH,
-    collect_group,
     f,
+    fit_group,
 )
 from PIL import Image, ImageDraw
 
 FIRST, LAST = 361, 535
-ANCHOR_IDS = (295, 252, 261)  # A, B, C: validated TE IDs in this saved demo.
+ANCHOR_IDS = (295, 279, 298)  # A, B, C: co-moving IDs checked over this segment.
 ANCHOR_COLORS = ((255, 190, 76), (255, 113, 217), (147, 221, 118))
 OUTPUT = (
     Path(__file__).resolve().parents[1]
@@ -42,47 +44,59 @@ OUTPUT = (
 )
 
 
-def camera_to_local(p: np.ndarray, anchor_fit: dict) -> np.ndarray:
-    return (p - anchor_fit["shift"]) @ anchor_fit["rotation"]
-
-
-def local_to_camera(p: np.ndarray, frame_fit: dict) -> np.ndarray:
-    return p @ frame_fit["rotation"].T + frame_fit["shift"]
-
-
 def make_records(scene: dict, k: np.ndarray) -> tuple[list[dict], dict]:
-    fits, supports = collect_group("dowel", scene, k)
-    base = scene["query_coords_m"][FIRST - int(scene["frames"][0]), list(ANCHOR_IDS)]
-    local = camera_to_local(base, fits[FIRST])
+    first_saved = int(scene["frames"][0])
+    mask_dir = GROWTH / "segmentation/masks/0"
+    supports = {
+        frame: supported_ids(frame, scene, DEMO, mask_dir, k, "dowel")[0] for frame in range(FIRST, LAST + 1)
+    }
+    base = scene["query_coords_m"][FIRST - first_saved, list(ANCHOR_IDS)]
     edges = np.linalg.norm(base[:, None, :] - base[None, :, :], axis=-1)
     triangle_area = float(np.linalg.norm(np.cross(base[1] - base[0], base[2] - base[0])))
     records = []
+    rotation, shift = np.eye(3), np.zeros(3)
     for frame in range(FIRST, LAST + 1):
-        fit = fits[frame]
+        current_support = supports[frame]
+        if frame == FIRST:
+            shared = current_support.copy()
+            shared[list(ANCHOR_IDS)] = False
+            inliers = int(shared.sum())
+            median_inlier_mm = 0.0
+        else:
+            shared = supports[frame - 1] & current_support
+            shared[list(ANCHOR_IDS)] = False
+            ids = np.flatnonzero(shared)
+            previous = scene["query_coords_m"][frame - 1 - first_saved, ids]
+            current = scene["query_coords_m"][frame - first_saved, ids]
+            step_rotation, step_shift, inlier_mask = fit_group(previous, current, frame)
+            residual = np.linalg.norm(previous @ step_rotation.T + step_shift - current, axis=1)
+            inliers = int(inlier_mask.sum())
+            median_inlier_mm = float(np.median(residual[inlier_mask]) * 1000)
+            rotation, shift = step_rotation @ rotation, step_rotation @ shift + step_shift
         item = {
             "frame": frame,
-            "fit_supported": fit["supported"],
-            "fit_shared": fit["shared"],
-            "fit_inliers": fit["inliers"],
-            "fit_median_inlier_mm": fit["median_inlier_mm"],
-            "support": supports[frame],
+            "fit_supported": int(current_support.sum()),
+            "fit_shared": int(shared.sum()),
+            "fit_inliers": inliers,
+            "fit_median_inlier_mm": median_inlier_mm,
+            "support": current_support,
         }
-        if fit["rotation"] is not None:
-            anchors = local_to_camera(local, fit)
+        if inliers >= 3:
+            anchors = base @ rotation.T + shift
             primary = anchors[1] - anchors[0]
             primary /= np.linalg.norm(primary)
             secondary = anchors[2] - anchors[0]
             secondary -= np.dot(secondary, primary) * primary
             secondary /= np.linalg.norm(secondary)
             normal = np.cross(primary, secondary)
-            index = frame - int(scene["frames"][0])
+            index = frame - first_saved
             raw = scene["query_coords_m"][index, list(ANCHOR_IDS)]
             residual_mm = np.linalg.norm(raw - anchors, axis=1) * 1000
             item.update(
                 anchor_xyz_m=anchors.tolist(),
                 anchor_px=_project(anchors, k).tolist(),
                 raw_anchor_px=_project(raw, k).tolist(),
-                raw_supported=[bool(supports[frame][i]) for i in ANCHOR_IDS],
+                raw_supported=[bool(current_support[i]) for i in ANCHOR_IDS],
                 raw_residual_mm=residual_mm.tolist(),
                 origin_camera_mm=(anchors[0] * 1000).tolist(),
                 direction_camera=primary.tolist(),
@@ -90,18 +104,26 @@ def make_records(scene: dict, k: np.ndarray) -> tuple[list[dict], dict]:
                 third_axis_camera=normal.tolist(),
             )
         records.append(item)
+    joint_frames = [item for item in records if all(item["raw_supported"])]
+    pairwise_change_mm = []
+    for item in joint_frames:
+        raw = scene["query_coords_m"][item["frame"] - first_saved, list(ANCHOR_IDS)]
+        distances = np.linalg.norm(raw[:, None, :] - raw[None, :, :], axis=-1)
+        pairwise_change_mm.append(float(np.max(np.abs(distances - edges)) * 1000))
     metadata = {
         "demo": str(DEMO),
         "trackeverything": str(GROWTH / "scene.npz"),
         "frames": [FIRST, LAST],
         "fps": FPS,
         "anchor_track_ids": {name: int(track_id) for name, track_id in zip("ABC", ANCHOR_IDS, strict=True)},
-        "anchor_selection": "Three separated, non-collinear surface tracks from frame 361 whose co-motion was checked across the saved demo segment; not semantic task landmarks.",
+        "anchor_selection": "Three non-collinear surface tracks selected offline for spatial spread and measured co-motion; not semantic task landmarks.",
+        "jointly_supported_frames": len(joint_frames),
+        "max_pairwise_distance_change_p90_mm": float(np.quantile(pairwise_change_mm, 0.9)),
         "initial_pairwise_distances_mm": (edges * 1000).tolist(),
         "initial_triangle_area_mm2": triangle_area * 1e6 / 2,
         "frame_rule": "origin=A; X=unit(B-A); Y=unit((C-A)-dot(C-A,X)X); Z=X cross Y",
-        "propagation": "Each frame fits a rigid transform using all currently supported TrackEverything points, then applies it to fixed A/B/C reference coordinates.",
-        "limitation": "This is within-demo propagation only. A live run still needs demonstrated cross-episode material-point correspondence; a rigid fit can also be wrong under occlusion.",
+        "propagation": "Each adjacent frame pair fits a rigid transform using shared supported TrackEverything points excluding A/B/C; the composed transform carries their frame-361 coordinates.",
+        "limitation": "Adjacent-frame coherence does not prove long-term material identity: chaining can drift, and even a supported raw point can change physical location. This is within-demo propagation only; a live run still needs cross-episode correspondence.",
     }
     return records, metadata
 
@@ -213,7 +235,7 @@ def render(record: dict, scene: dict, k: np.ndarray) -> Image.Image:
         status = (
             f"observed  •  {residual:.1f} mm from fit"
             if consistent
-            else "inferred; red X marks rejected raw track"
+            else "inferred; red X is raw track location"
         )
         color = ANCHOR_COLORS[n]
         draw.ellipse((845, y + 8, 858, y + 21), fill=color if consistent else None, outline=color, width=3)
@@ -221,19 +243,24 @@ def render(record: dict, scene: dict, k: np.ndarray) -> Image.Image:
     draw.line((845, 733, 1528, 733), fill=(65, 78, 92), width=2)
     draw.text(
         (845, 751),
-        f"Dowel fit: {record['fit_inliers']}/{record['fit_shared']} co-moving points",
+        f"Adjacent fit: {record['fit_inliers']}/{record['fit_shared']} co-moving points",
         font=f(22, True),
         fill=WHITE,
     )
     draw.text(
-        (845, 788), "A/B/C can be hidden; all visible points carry their frame.", font=f(18), fill=MUTED
+        (845, 788), "A/B/C held out; nearby frames carry their estimated frame.", font=f(18), fill=MUTED
     )
-    if frame >= 500:
+    if any(
+        observed and residual > INLIER_BAND_M * 1000
+        for observed, residual in zip(
+            record.get("raw_supported", []), record.get("raw_residual_mm", []), strict=True
+        )
+    ):
         draw.rounded_rectangle((1353, 148, 1530, 178), radius=6, fill=(84, 47, 34))
-        draw.text((1360, 153), "FIT UNSTABLE", font=f(16, True), fill=ANCHOR_COLORS[0])
+        draw.text((1360, 153), "DISAGREEMENT", font=f(16, True), fill=ANCHOR_COLORS[0])
     draw.text(
         (55, 867),
-        "A, B, C are arbitrary surface anchors, not object centers or task landmarks. This shows demo-time tracking only.",
+        "A, B, C are arbitrary surface anchors, not object centers or task landmarks. Short-term fits can still drift.",
         font=f(17),
         fill=MUTED,
     )
