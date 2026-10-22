@@ -29,6 +29,30 @@ frame seeds its local coordinates. This uses future frames. The fits use the
 selected IDs too, so filled markers are **not independent accuracy checks**;
 the dedicated three-point clip below holds its anchors out of the fit.
 
+The [start-of-segment diagnostic](anchor-start-diagnostic.png) exposes a
+limitation of this visualization. Segment 3 starts at frame 267, but its
+A/B/C frame is seeded at frame 489 and propagated **222 frames backward**.
+At frame 267 only four dowel tracks pass the mask/depth check, and none of the
+three displayed anchors is confirmed by its own raw track within the video's
+5 mm diagnostic band. Anchor B was not even queried until frame 361. It is a
+virtual point inferred from the group before then, not an observed material
+point. At frame 270 there are nine supported dowel tracks; by frame 489 there
+are 66, and all three raw anchors agree at the seed. Thus the early amber
+triangle is weakly constrained and should not be read as a measured dowel
+pose. A connected chain of adjacent rigid fits only proves local co-motion;
+its composition may drift across an occluded interval. The triangle's rigid
+shape is imposed by the renderer and is not an accuracy check.
+
+There is also a separate raw-ID failure near insertion: anchor B agrees with
+the inferred group to 0.1 mm at frame 490, starts diverging around frame 496,
+is outside the dowel mask by frame 505, and is 47.8 mm from its group-inferred
+position at frame 540. It does not recover in the saved run. The robust group
+fit can ignore that individual track while many other points remain, but its
+own 3D pose has not been independently checked against the task's tip/hole
+alignment. These are two different failure modes: long-chain frame drift and
+a later point-identity loss. Neither can be ruled out by a high adjacent-fit
+inlier count alone.
+
 This playback demonstrates a practical point-bank rule: add or retire
 visible tracks as surfaces appear or disappear, but keep an object's chosen
 coordinate frame across a **validated connected segment**. A motion-stage
