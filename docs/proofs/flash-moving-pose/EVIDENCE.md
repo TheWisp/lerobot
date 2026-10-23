@@ -1,6 +1,6 @@
 # Moving-object pose check — 2026-10-23
 
-[Watch the phone-friendly video](https://github.com/TheWisp/lerobot/releases/download/flash-visible-tracking-20261023/FLASH_moving_objects_pose_check.mp4) · 27 s, 1080 × 1440, H.264.
+[Watch the phone-friendly gizmo video](https://github.com/TheWisp/lerobot/releases/download/flash-visible-tracking-20261023/FLASH_moving_objects_pose_gizmo.mp4) · 27 s, 1080 × 1440, H.264. The [earlier triangle view](https://github.com/TheWisp/lerobot/releases/download/flash-visible-tracking-20261023/FLASH_moving_objects_pose_check.mp4) remains available.
 
 ![Dowel rotation after the final local reseed](cover.jpg)
 
@@ -12,12 +12,14 @@ stationary objects and excluded the yellow block because its depth check was
 weaker. That selection made the tracker look more reliable than the evidence
 supports.
 
-In the video, the **left triangle** is an inferred rigid frame carried by a fit
-to other depth-backed TrackEverything tracks; the **right triangle** follows
-the same three raw point IDs. The white outline is the current SAM3 mask.
-Hollow markers are raw IDs that no longer pass the mask/depth support check.
-A→B is a fixed direction only _within one local frame_. After a reseed, A/B/C
-are newly chosen points and their physical identity is **not** transferred.
+In the video, the left close-up shows an inferred rigid fit carried by other
+depth-backed TrackEverything tracks. Its red X, green Y and blue Z axes start
+at landmark A: X follows A→B, Y follows the component of A→C perpendicular to
+X, and Z is their cross product. The right close-up shows the same three raw
+point IDs without the fit. The white outline is the current SAM3 mask. Hollow
+raw markers no longer pass the mask/depth support check. The axes describe a
+local frame only _within one tracking segment_. After a reseed, A/B/C are
+newly chosen points and their physical identity is **not** transferred.
 The headings show lost tracking, unverified fits and unlinked reseeds rather
 than silently filling those intervals. Each source frame is shown twice at
 30 fps; this is half-speed playback, not measured live tracking speed.

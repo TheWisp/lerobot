@@ -16,12 +16,12 @@ import numpy as np
 from lerobot.policies.flash.registration import transform_points
 
 ROOT = Path("/tmp/flash-moving-check")
-OUT = ROOT / "FLASH_moving_objects_pose_check.mp4"
+OUT = ROOT / "FLASH_moving_objects_pose_gizmo.mp4"
 W, H, FPS = 1080, 1440, 30
 BG = (22, 24, 27)
 WHITE = (248, 248, 248)
 CYAN = (236, 216, 27)
-COLORS = [(60, 75, 255), (63, 225, 85), (255, 150, 70)]
+AXIS_COLORS = ((60, 75, 255), (63, 225, 85), (255, 150, 70))  # X/Y/Z in BGR
 DEMO = Path("/home/feit/.cache/huggingface/lerobot/demos/insertion/recording")
 GROWTH = Path(
     "/home/feit/.cache/huggingface/lerobot/demos/insertion/flash/v1/tracker-runs/trackeverything-growth-ui-20261021-a"
@@ -72,35 +72,66 @@ def mask_contour(im, mask, offset=(0, 0), scale=1.0):
         cv2.drawContours(im, [q], -1, WHITE, 2, cv2.LINE_AA)
 
 
-def marks(im, uv, offset=(0, 0), scale=1.0, support=None, labels=False, fit=False):
+def marks(im, uv, offset=(0, 0), scale=1.0, support=None, labels=False):
     if uv is None:
         return
     q = (np.asarray(uv) - np.array(offset)) * scale
     if not np.isfinite(q).all():
         return
     q = np.rint(q).astype(int)
-    if fit or support is None or all(support):
-        cv2.polylines(im, [q], True, CYAN, 4 if labels else 2, cv2.LINE_AA)
-        cv2.arrowedLine(
-            im, tuple(q[0]), tuple(q[1]), (80, 245, 240), 4 if labels else 2, cv2.LINE_AA, tipLength=0.18
-        )
     for n, (x, y) in enumerate(q):
         if not (-35 < x < im.shape[1] + 35 and -35 < y < im.shape[0] + 35):
             continue
         r = 13 if labels else 7
         cv2.circle(im, (int(x), int(y)), r, (0, 0, 0), -1, cv2.LINE_AA)
-        if support is None or support[n]:
-            cv2.circle(im, (int(x), int(y)), r - 3, COLORS[n], -1, cv2.LINE_AA)
-        else:
-            cv2.circle(im, (int(x), int(y)), r - 3, COLORS[n], 2, cv2.LINE_AA)
+        cv2.circle(
+            im, (int(x), int(y)), r - 3, WHITE, -1 if support is None or support[n] else 2, cv2.LINE_AA
+        )
         if labels:
-            txt(im, "ABC"[n], int(x) + 17, int(y) - 11, 0.85, COLORS[n], 3)
+            txt(im, "ABC"[n], int(x) + 17, int(y) - 11, 0.85, WHITE, 3)
 
 
-def draw(rgb, mask, fit_uv, raw_uv, raw_support, title, side=235):
+def gizmo_points(landmarks):
+    """A is the origin; AB and the component of AC normal to AB define X/Y."""
+    a, b, c = np.asarray(landmarks, dtype=float)
+    x = b - a
+    x_norm = np.linalg.norm(x)
+    if not np.isfinite(x_norm) or x_norm <= 0:
+        return None
+    x /= x_norm
+    y = c - a - np.dot(c - a, x) * x
+    y_norm = np.linalg.norm(y)
+    if not np.isfinite(y_norm) or y_norm <= 0:
+        return None
+    y /= y_norm
+    z = np.cross(x, y)
+    # Keep all three axes readable while their scale follows the local landmark spread.
+    axis_length = 0.65 * max(np.linalg.norm(b - a), np.linalg.norm(c - a))
+    return np.stack((a, a + axis_length * x, a + axis_length * y, a + axis_length * z))
+
+
+def draw_gizmo(im, landmarks, k, offset=(0, 0), scale=1.0, labels=False):
+    axes = gizmo_points(landmarks)
+    if axes is None or np.any(axes[:, 2] <= 0):
+        return
+    q = np.rint((project(axes, k) - np.asarray(offset)) * scale).astype(int)
+    origin = tuple(q[0])
+    for n, end in enumerate(q[1:]):
+        tip = tuple(end)
+        cv2.arrowedLine(im, origin, tip, (0, 0, 0), 7 if labels else 4, cv2.LINE_AA, tipLength=0.25)
+        cv2.arrowedLine(im, origin, tip, AXIS_COLORS[n], 4 if labels else 2, cv2.LINE_AA, tipLength=0.25)
+        if labels:
+            txt(im, "XYZ"[n], tip[0] + 7, tip[1] - 7, 0.75, AXIS_COLORS[n], 2)
+
+
+def draw(rgb, mask, fit_xyz, raw_xyz, raw_support, title, k, side=235):
+    fit_uv = None if fit_xyz is None else project(fit_xyz, k)
+    raw_uv = None if raw_xyz is None else project(raw_xyz, k)
     full = rgb.copy()
     mask_contour(full, mask)
-    marks(full, fit_uv, fit=True)
+    if fit_xyz is not None:
+        draw_gizmo(full, fit_xyz, k)
+    marks(full, fit_uv)
     canvas = np.full((H, W, 3), BG, "uint8")
     txt(canvas, title, 34, 80, 0.91)
     cv2.line(canvas, (34, 106), (1046, 106), CYAN, 3)
@@ -119,8 +150,8 @@ def draw(rgb, mask, fit_uv, raw_uv, raw_support, title, side=235):
     fit_label = (
         "FIT (UNVERIFIED)" if "UNVERIFIED" in title else ("RIGID FIT" if fit_uv is not None else "NO POSE")
     )
-    for ri, (label, uv, support, fit) in enumerate(
-        ((fit_label, fit_uv, None, True), ("SAME RAW IDS", raw_uv, raw_support, False))
+    for ri, (label, uv, xyz, support) in enumerate(
+        ((fit_label, fit_uv, fit_xyz, None), ("SAME RAW IDS", raw_uv, raw_xyz, raw_support))
     ):
         x0 = 20 + ri * 530
         cv2.rectangle(canvas, (x0, 770), (x0 + 510, 1395), (39, 42, 45), -1)
@@ -129,7 +160,9 @@ def draw(rgb, mask, fit_uv, raw_uv, raw_support, title, side=235):
             rgb[top : top + side, left : left + side], (480, 480), interpolation=cv2.INTER_LINEAR
         )
         mask_contour(crop, mask, (left, top), 480 / side)
-        marks(crop, uv, (left, top), 480 / side, support, True, fit)
+        if ri == 0 and xyz is not None:
+            draw_gizmo(crop, xyz, k, (left, top), 480 / side, True)
+        marks(crop, uv, (left, top), 480 / side, support, True)
         canvas[850:1330, x0 + 15 : x0 + 495] = crop
     return canvas
 
@@ -154,8 +187,8 @@ def dowel_frames():
         if segment:
             item = segments[segment - 1]
             ids = np.array(item["anchor_track_ids"])
-            fit_uv = project(local["anchors_by_frame"][i], k)
-            raw_uv = project(scene["query_coords_m"][i, ids], k)
+            fit_xyz = local["anchors_by_frame"][i]
+            raw_xyz = scene["query_coords_m"][i, ids]
             support = local["observed_by_frame"][i].tolist()
             title = f"DOWEL ROTATION - LOCAL FRAME {segment}"
             if segment > 1 and frame - item["frames"][0] < 12:
@@ -168,11 +201,11 @@ def dowel_frames():
         else:
             previous = next((x for x in reversed(segments) if x["frames"][0] < frame), None)
             ids = np.array(previous["anchor_track_ids"]) if previous is not None else np.array([], int)
-            raw_uv = project(scene["query_coords_m"][i, ids], k) if len(ids) == 3 else None
+            raw_xyz = scene["query_coords_m"][i, ids] if len(ids) == 3 else None
             support = local["support"][i, ids].tolist() if len(ids) == 3 else None
-            fit_uv = None
+            fit_xyz = None
             title = "DOWEL ROTATION - TRACK LOST"
-        yield frame, draw(rgb, mask, fit_uv, raw_uv, support, title, 225)
+        yield frame, draw(rgb, mask, fit_xyz, raw_xyz, support, title, k, 225)
 
 
 def yellow_frames():
@@ -188,10 +221,10 @@ def yellow_frames():
         rgb = cv2.imread(str(YELLOW / "recording/rgb" / f"{frame:06d}.jpg"))
         mask = read_mask(YELLOW / "masks/1" / f"{frame:06d}.png")
         pose = scene["poses"][role, frame] @ np.linalg.inv(origin)
-        fit_uv = None if scene["lost"][role, frame] else project(transform_points(pose, base), k)
-        raw_uv = project(scene["query_coords_m"][frame, ids], k)
+        fit_xyz = None if scene["lost"][role, frame] else transform_points(pose, base)
+        raw_xyz = scene["query_coords_m"][frame, ids]
         support = scene["visible_surface_support"][frame, ids].tolist()
-        yield frame, draw(rgb, mask, fit_uv, raw_uv, support, "YELLOW LEGO - MOVING ON TRAY", 225)
+        yield frame, draw(rgb, mask, fit_xyz, raw_xyz, support, "YELLOW LEGO - MOVING ON TRAY", k, 225)
 
 
 def gamepad_frames():
@@ -212,17 +245,17 @@ def gamepad_frames():
             i = frame - first
             rgb = cv2.imread(str(GAMEPAD / "recording/rgb" / f"{frame:06d}.jpg"))
             mask = read_mask(GAMEPAD / "masks/0" / f"{frame:06d}.png")
-            fit_uv = (
+            fit_xyz = (
                 None
                 if scene["lost"][i]
-                else project(transform_points(scene["poses"][i] @ np.linalg.inv(origin), base), k)
+                else transform_points(scene["poses"][i] @ np.linalg.inv(origin), base)
             )
-            raw_uv = project(scene["query_coords_m"][i, ids], k)
+            raw_xyz = scene["query_coords_m"][i, ids]
             support = scene["visible_surface_support"][i, ids].tolist()
             title = f"HELD GAMEPAD - LOCAL FRAME {stage}"
             if stage > 1 and frame - lo < 12:
                 title = f"GAMEPAD - UNLINKED RESEED {stage}"
-            yield frame, draw(rgb, mask, fit_uv, raw_uv, support, title, 240)
+            yield frame, draw(rgb, mask, fit_xyz, raw_xyz, support, title, k, 240)
 
 
 def main():
