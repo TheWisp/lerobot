@@ -27,6 +27,24 @@
     },
     {
       "clip": "plane-tilt-smooth",
+      "model": "cotracker3",
+      "mode": "full-clip offline; may use future frames",
+      "eligible_point_frames": 1816,
+      "labelled_visible_fraction": 0.9153225806451613,
+      "reference_depth_gap_median_mm": 0.27631195521943264,
+      "coverage_2px": 0.5473568281938326,
+      "coverage_5mm": 0.5936123348017621,
+      "coverage_10mm": 0.7087004405286343,
+      "predicted_visible_fraction": 0.7340308370044053,
+      "available_error_2d_median_px": 1.3110226392745972,
+      "available_error_3d_median_mm": 2.7634639739990234,
+      "model_only_fps": 115.16181955513017,
+      "decode_plus_model_fps": 103.60503408006241,
+      "gpu_peak_gib": 4.397039890289307,
+      "geometry_source": "sensor_at_prediction"
+    },
+    {
+      "clip": "plane-tilt-smooth",
       "model": "litetracker",
       "mode": "causal per-frame upstream Point2Pose frontend, no pose estimator",
       "eligible_point_frames": 1816,
@@ -149,6 +167,24 @@
       "model_only_fps": 43.00745697800835,
       "decode_plus_model_fps": 41.4733382567841,
       "gpu_peak_gib": 0.5466275215148926,
+      "geometry_source": "sensor_at_prediction"
+    },
+    {
+      "clip": "plane-tilt-textured",
+      "model": "cotracker3",
+      "mode": "full-clip offline; may use future frames",
+      "eligible_point_frames": 1816,
+      "labelled_visible_fraction": 0.9153225806451613,
+      "reference_depth_gap_median_mm": 0.27631195521943264,
+      "coverage_2px": 0.8959251101321586,
+      "coverage_5mm": 0.8595814977973568,
+      "coverage_10mm": 0.8595814977973568,
+      "predicted_visible_fraction": 0.9801762114537445,
+      "available_error_2d_median_px": 0.3157287985086441,
+      "available_error_3d_median_mm": 0.76543128490448,
+      "model_only_fps": 114.12750348960228,
+      "decode_plus_model_fps": 102.62873030477947,
+      "gpu_peak_gib": 4.397039890289307,
       "geometry_source": "sensor_at_prediction"
     },
     {
@@ -279,6 +315,24 @@
     },
     {
       "clip": "plane-translation",
+      "model": "cotracker3",
+      "mode": "full-clip offline; may use future frames",
+      "eligible_point_frames": 1984,
+      "labelled_visible_fraction": 1.0,
+      "reference_depth_gap_median_mm": 0.0,
+      "coverage_2px": 0.9082661290322581,
+      "coverage_5mm": 0.8765120967741935,
+      "coverage_10mm": 0.8765120967741935,
+      "predicted_visible_fraction": 0.9979838709677419,
+      "available_error_2d_median_px": 0.2385038509964943,
+      "available_error_3d_median_mm": 0.47793373465538025,
+      "model_only_fps": 115.37482670623992,
+      "decode_plus_model_fps": 103.82208514492203,
+      "gpu_peak_gib": 4.397039890289307,
+      "geometry_source": "sensor_at_prediction"
+    },
+    {
+      "clip": "plane-translation",
       "model": "litetracker",
       "mode": "causal per-frame upstream Point2Pose frontend, no pose estimator",
       "eligible_point_frames": 1984,
@@ -395,6 +449,15 @@
       "median_model_only_fps": 43.276391782686915,
       "median_decode_plus_model_fps": 41.788903917181464,
       "peak_gpu_gib": 0.5466275215148926
+    },
+    {
+      "model": "cotracker3",
+      "clips": 3,
+      "clip_mean_coverage_2px": 0.7838493557860832,
+      "clip_mean_coverage_5mm": 0.7765686431244374,
+      "median_model_only_fps": 115.16181955513017,
+      "median_decode_plus_model_fps": 103.60503408006241,
+      "peak_gpu_gib": 4.397039890289307
     },
     {
       "model": "litetracker",

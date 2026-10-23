@@ -16,6 +16,7 @@ from benchmarks.flash_surface_benchmark import (
     timing,
     validate_prediction,
 )
+from benchmarks.flash_surface_growth import build as build_growth
 from benchmarks.flash_surface_lk import run as run_lk
 from benchmarks.flash_surface_synthetic import build as build_synthetic
 from benchmarks.flash_surface_ycbineoat import build as build_ycb
@@ -149,6 +150,21 @@ def test_ycb_pose_reference_transports_same_material_point(tmp_path):
         )
         assert reference["truth_visible"].all()
     assert manifest["labelled_visible_fraction"] == 1
+
+    grown = tmp_path / "grown"
+    growth_manifest = build_growth(output, grown, [1], points_per_birth=1, min_spacing_px=2)
+    with np.load(grown / "queries.npz", allow_pickle=False) as reference:
+        assert reference["queries"][:, 0].tolist() == [0, 1]
+        assert np.isnan(reference["truth_xy"][0, 1]).all()
+        assert not reference["truth_visible"][0, 1]
+        np.testing.assert_allclose(reference["truth_xy"][1, 1], reference["queries"][1, 1:], atol=1e-5)
+        np.testing.assert_allclose(
+            reference["truth_xy"][2, 1, 0] - reference["truth_xy"][1, 1, 0], 1, atol=1e-5
+        )
+        assert reference["truth_visible"][1, 1]
+        assert reference["truth_visible"][2, 1]
+        assert reference["initial_depth_m"].tolist() == pytest.approx([1, 1])
+    assert growth_manifest["base_query_sha256"] == manifest["queries_sha256"]
 
 
 def test_lk_adapter_tracks_known_pixel_translation(tmp_path):

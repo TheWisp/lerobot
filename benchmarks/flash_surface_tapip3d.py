@@ -57,8 +57,8 @@ def run(
             saved["intrinsics"],
             saved["initial_depth_m"],
         )
-    if np.any(queries[:, 0] != 0):
-        raise ValueError("this TAPIP3D adapter currently supports queries seeded on frame zero")
+    if np.any(queries[:, 0] < 0) or np.any(queries[:, 0] >= len(frames)):
+        raise ValueError("TAPIP3D query birth is outside the source clip")
     recording = Path(manifest["recording"])
     if _sha256(recording / "rgb" / f"{frames[0]:06d}.jpg") != manifest["first_rgb_sha256"]:
         raise ValueError("source RGB changed")
@@ -110,6 +110,8 @@ def run(
     depth_t = torch.from_numpy(filtered_depth).float().cuda()
     k_t = torch.from_numpy(intrinsics).float().cuda()
     extrinsics_t = torch.eye(4, dtype=torch.float32, device="cuda").repeat(len(frames), 1, 1)
+    # Each depth belongs to its query's birth frame. The static benchmark
+    # camera makes camera and world coordinates coincide across births.
     source_xyz = np.column_stack(
         ((queries[:, 1] - k[0, 2]) * z / k[0, 0], (queries[:, 2] - k[1, 2]) * z / k[1, 1], z)
     )

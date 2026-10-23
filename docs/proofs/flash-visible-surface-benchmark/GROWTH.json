@@ -1,0 +1,2818 @@
+{
+  "status": "development clips; labels are pose-derived with measured-depth uncertainty; no held-out test",
+  "cohort_rule": "new queries are seeded on GT mask plus measured depth, spaced from old projected material points; only post-birth frames are scored",
+  "timing_rule": "full-clip methods may use future frames; causal stage time excludes segmentation/fit/robot work",
+  "schedule": [
+    [
+      10,
+      32
+    ],
+    [
+      20,
+      32
+    ]
+  ],
+  "minimum_old_query_spacing_px": 5.0,
+  "rows": [
+    {
+      "clip": "ycb-bleach0-444",
+      "model": "bootstapir",
+      "mode": "causal per-frame upstream Point2Pose frontend, no pose estimator",
+      "point_schedule": {
+        "0": 64,
+        "10": 32,
+        "20": 32
+      },
+      "initial_fixed": {
+        "eligible": 1009,
+        "coverage_2px": 0.13577799801783944,
+        "coverage_5mm": 0.09712586719524281,
+        "available_fraction": 0.9207135777998018
+      },
+      "initial_grown": {
+        "eligible": 1009,
+        "coverage_2px": 0.13577799801783944,
+        "coverage_5mm": 0.09712586719524281,
+        "available_fraction": 0.9207135777998018
+      },
+      "after_birth_cohorts": {
+        "0": {
+          "eligible": 945,
+          "coverage_2px": 0.07936507936507936,
+          "coverage_5mm": 0.06031746031746032,
+          "available_fraction": 0.9153439153439153
+        },
+        "10": {
+          "eligible": 343,
+          "coverage_2px": 0.27113702623906705,
+          "coverage_5mm": 0.27405247813411077,
+          "available_fraction": 0.9766763848396501
+        },
+        "20": {
+          "eligible": 235,
+          "coverage_2px": 0.23404255319148937,
+          "coverage_5mm": 0.19574468085106383,
+          "available_fraction": 0.9957446808510638
+        }
+      },
+      "model_fps_fixed": 43.62024770335395,
+      "model_fps_grown": 31.63129250045522,
+      "adapter_fps_fixed": 38.9512025295789,
+      "adapter_fps_grown": 29.07908455764558,
+      "steady_tracker_ms_fixed": [
+        15.039607998915017,
+        14.971500029787421,
+        15.132015018025413
+      ],
+      "steady_tracker_ms_grown": [
+        15.08991897571832,
+        26.841604034416378,
+        26.880897028604522
+      ],
+      "birth_tracker_ms_grown": {
+        "10": 34.29301897995174,
+        "20": 31.011510989628732
+      }
+    },
+    {
+      "clip": "ycb-bleach0-444",
+      "model": "cotracker3",
+      "mode": "full-clip offline; may use future frames",
+      "point_schedule": {
+        "0": 64,
+        "10": 32,
+        "20": 32
+      },
+      "initial_fixed": {
+        "eligible": 1009,
+        "coverage_2px": 0.17046580773042616,
+        "coverage_5mm": 0.18731417244796827,
+        "available_fraction": 0.889990089197225
+      },
+      "initial_grown": {
+        "eligible": 1009,
+        "coverage_2px": 0.1774033696729435,
+        "coverage_5mm": 0.17641228939544104,
+        "available_fraction": 0.8959365708622399
+      },
+      "after_birth_cohorts": {
+        "0": {
+          "eligible": 945,
+          "coverage_2px": 0.12169312169312169,
+          "coverage_5mm": 0.12063492063492064,
+          "available_fraction": 0.8888888888888888
+        },
+        "10": {
+          "eligible": 343,
+          "coverage_2px": 0.21282798833819241,
+          "coverage_5mm": 0.27988338192419826,
+          "available_fraction": 1.0
+        },
+        "20": {
+          "eligible": 235,
+          "coverage_2px": 0.3148936170212766,
+          "coverage_5mm": 0.39148936170212767,
+          "available_fraction": 1.0
+        }
+      },
+      "model_fps_fixed": 115.4409309314779,
+      "model_fps_grown": 110.84731277791946,
+      "adapter_fps_fixed": 81.30275293570286,
+      "adapter_fps_grown": 78.72636946848503
+    },
+    {
+      "clip": "ycb-bleach0-444",
+      "model": "litetracker",
+      "mode": "causal per-frame upstream Point2Pose frontend, no pose estimator",
+      "point_schedule": {
+        "0": 64,
+        "10": 32,
+        "20": 32
+      },
+      "initial_fixed": {
+        "eligible": 1009,
+        "coverage_2px": 0.2001982160555005,
+        "coverage_5mm": 0.17938553022794845,
+        "available_fraction": 0.9732408325074331
+      },
+      "initial_grown": {
+        "eligible": 1009,
+        "coverage_2px": 0.199207135777998,
+        "coverage_5mm": 0.18334985133795836,
+        "available_fraction": 0.9712586719524281
+      },
+      "after_birth_cohorts": {
+        "0": {
+          "eligible": 945,
+          "coverage_2px": 0.14497354497354498,
+          "coverage_5mm": 0.12804232804232804,
+          "available_fraction": 0.9693121693121693
+        },
+        "10": {
+          "eligible": 343,
+          "coverage_2px": 0.16034985422740525,
+          "coverage_5mm": 0.25072886297376096,
+          "available_fraction": 1.0
+        },
+        "20": {
+          "eligible": 235,
+          "coverage_2px": 0.3191489361702128,
+          "coverage_5mm": 0.35319148936170214,
+          "available_fraction": 1.0
+        }
+      },
+      "model_fps_fixed": 76.42963844571003,
+      "model_fps_grown": 75.77245156702882,
+      "adapter_fps_fixed": 63.16652422646156,
+      "adapter_fps_grown": 62.455531408230605,
+      "steady_tracker_ms_fixed": [
+        5.3808760130777955,
+        5.014713038690388,
+        4.998147516744211
+      ],
+      "steady_tracker_ms_grown": [
+        5.397778993938118,
+        5.344118981156498,
+        4.996570496587083
+      ],
+      "birth_tracker_ms_grown": {
+        "10": 6.226147001143545,
+        "20": 5.82959596067667
+      }
+    },
+    {
+      "clip": "ycb-bleach0-444",
+      "model": "lk",
+      "mode": "causal per-frame optical flow; no object mask after seeding",
+      "point_schedule": {
+        "0": 64,
+        "10": 32,
+        "20": 32
+      },
+      "initial_fixed": {
+        "eligible": 1009,
+        "coverage_2px": 0.12289395441030723,
+        "coverage_5mm": 0.1199207135777998,
+        "available_fraction": 0.9871159563924677
+      },
+      "initial_grown": {
+        "eligible": 1009,
+        "coverage_2px": 0.12289395441030723,
+        "coverage_5mm": 0.1199207135777998,
+        "available_fraction": 0.9871159563924677
+      },
+      "after_birth_cohorts": {
+        "0": {
+          "eligible": 945,
+          "coverage_2px": 0.06349206349206349,
+          "coverage_5mm": 0.06031746031746032,
+          "available_fraction": 0.9862433862433863
+        },
+        "10": {
+          "eligible": 343,
+          "coverage_2px": 0.07580174927113703,
+          "coverage_5mm": 0.08746355685131195,
+          "available_fraction": 0.8746355685131195
+        },
+        "20": {
+          "eligible": 235,
+          "coverage_2px": 0.14893617021276595,
+          "coverage_5mm": 0.225531914893617,
+          "available_fraction": 0.9829787234042553
+        }
+      },
+      "model_fps_fixed": 2141.499805344316,
+      "model_fps_grown": 2439.4218850586753,
+      "adapter_fps_fixed": 225.69377903224887,
+      "adapter_fps_grown": 257.98602327188155,
+      "steady_tracker_ms_fixed": [
+        0.4773709806613624,
+        0.3580880002118647,
+        0.33758001518435776
+      ],
+      "steady_tracker_ms_grown": [
+        0.3673959872685373,
+        0.38626196328550577,
+        0.47012799768708646
+      ],
+      "birth_tracker_ms_grown": {
+        "10": 0.32756099244579673,
+        "20": 0.32412499422207475
+      }
+    },
+    {
+      "clip": "ycb-bleach0-444",
+      "model": "tapip3d_unfiltered",
+      "mode": "full-clip model; no causal publication rate measured",
+      "point_schedule": {
+        "0": 64,
+        "10": 32,
+        "20": 32
+      },
+      "initial_fixed": {
+        "eligible": 1009,
+        "coverage_2px": 0.2358771060455897,
+        "coverage_5mm": 0.29534192269573833,
+        "available_fraction": 0.981169474727453
+      },
+      "initial_grown": {
+        "eligible": 1009,
+        "coverage_2px": 0.2398414271555996,
+        "coverage_5mm": 0.2983151635282458,
+        "available_fraction": 0.9762140733399405
+      },
+      "after_birth_cohorts": {
+        "0": {
+          "eligible": 945,
+          "coverage_2px": 0.18835978835978837,
+          "coverage_5mm": 0.2507936507936508,
+          "available_fraction": 0.9746031746031746
+        },
+        "10": {
+          "eligible": 343,
+          "coverage_2px": 0.24489795918367346,
+          "coverage_5mm": 0.3965014577259475,
+          "available_fraction": 0.9825072886297376
+        },
+        "20": {
+          "eligible": 235,
+          "coverage_2px": 0.3702127659574468,
+          "coverage_5mm": 0.46382978723404256,
+          "available_fraction": 0.9787234042553191
+        }
+      },
+      "model_fps_fixed": 37.26887051887886,
+      "model_fps_grown": 23.060623061338845,
+      "adapter_fps_fixed": 31.5416363266488,
+      "adapter_fps_grown": 20.85165657274631
+    },
+    {
+      "clip": "ycb-bleach0-444",
+      "model": "tapnext",
+      "mode": "causal per-frame upstream Point2Pose frontend, no pose estimator",
+      "point_schedule": {
+        "0": 64,
+        "10": 32,
+        "20": 32
+      },
+      "initial_fixed": {
+        "eligible": 1009,
+        "coverage_2px": 0.19226957383548068,
+        "coverage_5mm": 0.17938553022794845,
+        "available_fraction": 0.981169474727453
+      },
+      "initial_grown": {
+        "eligible": 1009,
+        "coverage_2px": 0.20812685827552033,
+        "coverage_5mm": 0.1863230921704658,
+        "available_fraction": 0.9890981169474727
+      },
+      "after_birth_cohorts": {
+        "0": {
+          "eligible": 945,
+          "coverage_2px": 0.1544973544973545,
+          "coverage_5mm": 0.14074074074074075,
+          "available_fraction": 0.9883597883597883
+        },
+        "10": {
+          "eligible": 343,
+          "coverage_2px": 0.23615160349854228,
+          "coverage_5mm": 0.30612244897959184,
+          "available_fraction": 1.0
+        },
+        "20": {
+          "eligible": 235,
+          "coverage_2px": 0.3617021276595745,
+          "coverage_5mm": 0.425531914893617,
+          "available_fraction": 1.0
+        }
+      },
+      "model_fps_fixed": 66.5190855368602,
+      "model_fps_grown": 65.12603931512572,
+      "adapter_fps_fixed": 56.23855074555001,
+      "adapter_fps_grown": 55.215171436874506,
+      "steady_tracker_ms_fixed": [
+        8.190587046556175,
+        8.18361301207915,
+        8.183854020899162
+      ],
+      "steady_tracker_ms_grown": [
+        8.41343100182712,
+        8.29765503294766,
+        8.408021472860128
+      ],
+      "birth_tracker_ms_grown": {
+        "10": 9.132193983532488,
+        "20": 8.69065901497379
+      }
+    },
+    {
+      "clip": "ycb-bleach0-444",
+      "model": "trackeverything",
+      "mode": "full-clip, windowed, may use future frames",
+      "point_schedule": {
+        "0": 64,
+        "10": 32,
+        "20": 32
+      },
+      "initial_fixed": {
+        "eligible": 1009,
+        "coverage_2px": 0.11694747274529237,
+        "coverage_5mm": 0.0931615460852329,
+        "available_fraction": 0.9682854311199207
+      },
+      "initial_grown": {
+        "eligible": 1009,
+        "coverage_2px": 0.11694747274529237,
+        "coverage_5mm": 0.10307234886025768,
+        "available_fraction": 0.9623389494549058
+      },
+      "after_birth_cohorts": {
+        "0": {
+          "eligible": 945,
+          "coverage_2px": 0.05714285714285714,
+          "coverage_5mm": 0.042328042328042326,
+          "available_fraction": 0.9597883597883597
+        },
+        "10": {
+          "eligible": 343,
+          "coverage_2px": 0.27696793002915454,
+          "coverage_5mm": 0.22157434402332363,
+          "available_fraction": 0.956268221574344
+        },
+        "20": {
+          "eligible": 235,
+          "coverage_2px": 0.23829787234042554,
+          "coverage_5mm": 0.2765957446808511,
+          "available_fraction": 1.0
+        }
+      },
+      "model_fps_fixed": 7.901759375142202,
+      "model_fps_grown": 7.867761874540145,
+      "adapter_fps_fixed": 7.714567794436032,
+      "adapter_fps_grown": 7.679764671904102
+    },
+    {
+      "clip": "ycb-bleach0-444",
+      "model": "trackon_r",
+      "mode": "causal streaming, all source frames",
+      "point_schedule": {
+        "0": 64,
+        "10": 32,
+        "20": 32
+      },
+      "initial_fixed": {
+        "eligible": 1009,
+        "coverage_2px": 0.16253716551040634,
+        "coverage_5mm": 0.1635282457879088,
+        "available_fraction": 0.9494549058473737
+      },
+      "initial_grown": {
+        "eligible": 1009,
+        "coverage_2px": 0.15857284440039643,
+        "coverage_5mm": 0.155599603567889,
+        "available_fraction": 0.9514370664023786
+      },
+      "after_birth_cohorts": {
+        "0": {
+          "eligible": 945,
+          "coverage_2px": 0.10158730158730159,
+          "coverage_5mm": 0.09841269841269841,
+          "available_fraction": 0.9481481481481482
+        },
+        "10": {
+          "eligible": 343,
+          "coverage_2px": 0.3177842565597668,
+          "coverage_5mm": 0.3469387755102041,
+          "available_fraction": 1.0
+        },
+        "20": {
+          "eligible": 235,
+          "coverage_2px": 0.35319148936170214,
+          "coverage_5mm": 0.42127659574468085,
+          "available_fraction": 1.0
+        }
+      },
+      "model_fps_fixed": 37.95795917236068,
+      "model_fps_grown": 37.633441510643074,
+      "adapter_fps_fixed": 33.87068924942685,
+      "adapter_fps_grown": 33.73624354138666,
+      "steady_tracker_ms_fixed": [
+        17.954787996131927,
+        18.374562030658126,
+        18.052434985293075
+      ],
+      "steady_tracker_ms_grown": [
+        17.89710100274533,
+        18.335129017941654,
+        18.864367011701688
+      ],
+      "birth_tracker_ms_grown": {
+        "10": 18.635671003721654,
+        "20": 19.064480031374842
+      }
+    },
+    {
+      "clip": "ycb-cracker_box_reorient-191",
+      "model": "bootstapir",
+      "mode": "causal per-frame upstream Point2Pose frontend, no pose estimator",
+      "point_schedule": {
+        "0": 64,
+        "10": 32,
+        "20": 32
+      },
+      "initial_fixed": {
+        "eligible": 814,
+        "coverage_2px": 0.1928746928746929,
+        "coverage_5mm": 0.21007371007371006,
+        "available_fraction": 0.9828009828009828
+      },
+      "initial_grown": {
+        "eligible": 814,
+        "coverage_2px": 0.1928746928746929,
+        "coverage_5mm": 0.21007371007371006,
+        "available_fraction": 0.9828009828009828
+      },
+      "after_birth_cohorts": {
+        "0": {
+          "eligible": 750,
+          "coverage_2px": 0.12533333333333332,
+          "coverage_5mm": 0.16266666666666665,
+          "available_fraction": 0.9813333333333333
+        },
+        "10": {
+          "eligible": 195,
+          "coverage_2px": 0.02564102564102564,
+          "coverage_5mm": 0.07179487179487179,
+          "available_fraction": 1.0
+        },
+        "20": {
+          "eligible": 88,
+          "coverage_2px": 0.011363636363636364,
+          "coverage_5mm": 0.011363636363636364,
+          "available_fraction": 0.9886363636363636
+        }
+      },
+      "model_fps_fixed": 42.742832956140504,
+      "model_fps_grown": 31.95292574228238,
+      "adapter_fps_fixed": 37.99365786682498,
+      "adapter_fps_grown": 29.273574571738898,
+      "steady_tracker_ms_fixed": [
+        15.392737986985594,
+        15.485420008189976,
+        15.52429303410463
+      ],
+      "steady_tracker_ms_grown": [
+        15.502109017688781,
+        26.497590995859355,
+        26.59154200227931
+      ],
+      "birth_tracker_ms_grown": {
+        "10": 32.93972200481221,
+        "20": 30.25963599793613
+      }
+    },
+    {
+      "clip": "ycb-cracker_box_reorient-191",
+      "model": "cotracker3",
+      "mode": "full-clip offline; may use future frames",
+      "point_schedule": {
+        "0": 64,
+        "10": 32,
+        "20": 32
+      },
+      "initial_fixed": {
+        "eligible": 814,
+        "coverage_2px": 0.22972972972972974,
+        "coverage_5mm": 0.2592137592137592,
+        "available_fraction": 0.8525798525798526
+      },
+      "initial_grown": {
+        "eligible": 814,
+        "coverage_2px": 0.22604422604422605,
+        "coverage_5mm": 0.2727272727272727,
+        "available_fraction": 0.9385749385749386
+      },
+      "after_birth_cohorts": {
+        "0": {
+          "eligible": 750,
+          "coverage_2px": 0.16,
+          "coverage_5mm": 0.21066666666666667,
+          "available_fraction": 0.9333333333333333
+        },
+        "10": {
+          "eligible": 195,
+          "coverage_2px": 0.05128205128205128,
+          "coverage_5mm": 0.05641025641025641,
+          "available_fraction": 0.9641025641025641
+        },
+        "20": {
+          "eligible": 88,
+          "coverage_2px": 0.03409090909090909,
+          "coverage_5mm": 0.03409090909090909,
+          "available_fraction": 0.9431818181818182
+        }
+      },
+      "model_fps_fixed": 115.82373173948783,
+      "model_fps_grown": 110.44636650236345,
+      "adapter_fps_fixed": 80.87802013416862,
+      "adapter_fps_grown": 78.15868545602173
+    },
+    {
+      "clip": "ycb-cracker_box_reorient-191",
+      "model": "litetracker",
+      "mode": "causal per-frame upstream Point2Pose frontend, no pose estimator",
+      "point_schedule": {
+        "0": 64,
+        "10": 32,
+        "20": 32
+      },
+      "initial_fixed": {
+        "eligible": 814,
+        "coverage_2px": 0.22972972972972974,
+        "coverage_5mm": 0.25552825552825553,
+        "available_fraction": 0.9975429975429976
+      },
+      "initial_grown": {
+        "eligible": 814,
+        "coverage_2px": 0.22972972972972974,
+        "coverage_5mm": 0.25307125307125306,
+        "available_fraction": 0.9975429975429976
+      },
+      "after_birth_cohorts": {
+        "0": {
+          "eligible": 750,
+          "coverage_2px": 0.164,
+          "coverage_5mm": 0.18933333333333333,
+          "available_fraction": 0.9973333333333333
+        },
+        "10": {
+          "eligible": 195,
+          "coverage_2px": 0.06666666666666667,
+          "coverage_5mm": 0.09743589743589744,
+          "available_fraction": 0.9743589743589743
+        },
+        "20": {
+          "eligible": 88,
+          "coverage_2px": 0.011363636363636364,
+          "coverage_5mm": 0.03409090909090909,
+          "available_fraction": 1.0
+        }
+      },
+      "model_fps_fixed": 75.9343054474136,
+      "model_fps_grown": 74.55208910355815,
+      "adapter_fps_fixed": 61.84153282439,
+      "adapter_fps_grown": 61.20294899488228,
+      "steady_tracker_ms_fixed": [
+        5.253890005405992,
+        5.245944019407034,
+        5.263997503789142
+      ],
+      "steady_tracker_ms_grown": [
+        5.571854999288917,
+        5.409001023508608,
+        5.341299518477172
+      ],
+      "birth_tracker_ms_grown": {
+        "10": 6.280447996687144,
+        "20": 6.16162596270442
+      }
+    },
+    {
+      "clip": "ycb-cracker_box_reorient-191",
+      "model": "lk",
+      "mode": "causal per-frame optical flow; no object mask after seeding",
+      "point_schedule": {
+        "0": 64,
+        "10": 32,
+        "20": 32
+      },
+      "initial_fixed": {
+        "eligible": 814,
+        "coverage_2px": 0.22358722358722358,
+        "coverage_5mm": 0.25675675675675674,
+        "available_fraction": 0.9914004914004914
+      },
+      "initial_grown": {
+        "eligible": 814,
+        "coverage_2px": 0.22358722358722358,
+        "coverage_5mm": 0.25675675675675674,
+        "available_fraction": 0.9914004914004914
+      },
+      "after_birth_cohorts": {
+        "0": {
+          "eligible": 750,
+          "coverage_2px": 0.15733333333333333,
+          "coverage_5mm": 0.19333333333333333,
+          "available_fraction": 0.9906666666666667
+        },
+        "10": {
+          "eligible": 195,
+          "coverage_2px": 0.041025641025641026,
+          "coverage_5mm": 0.05128205128205128,
+          "available_fraction": 1.0
+        },
+        "20": {
+          "eligible": 88,
+          "coverage_2px": 0.011363636363636364,
+          "coverage_5mm": 0.011363636363636364,
+          "available_fraction": 1.0
+        }
+      },
+      "model_fps_fixed": 2974.4736893182194,
+      "model_fps_grown": 2406.5832192741664,
+      "adapter_fps_fixed": 300.00519822420966,
+      "adapter_fps_grown": 248.01536887008558,
+      "steady_tracker_ms_fixed": [
+        0.3312579938210547,
+        0.29794604051858187,
+        0.3061015158891678
+      ],
+      "steady_tracker_ms_grown": [
+        0.463034026324749,
+        0.3839670098386705,
+        0.40350304334424436
+      ],
+      "birth_tracker_ms_grown": {
+        "10": 0.389126013033092,
+        "20": 0.3495829878374934
+      }
+    },
+    {
+      "clip": "ycb-cracker_box_reorient-191",
+      "model": "tapip3d_unfiltered",
+      "mode": "full-clip model; no causal publication rate measured",
+      "point_schedule": {
+        "0": 64,
+        "10": 32,
+        "20": 32
+      },
+      "initial_fixed": {
+        "eligible": 814,
+        "coverage_2px": 0.2985257985257985,
+        "coverage_5mm": 0.40171990171990174,
+        "available_fraction": 0.972972972972973
+      },
+      "initial_grown": {
+        "eligible": 814,
+        "coverage_2px": 0.300982800982801,
+        "coverage_5mm": 0.4103194103194103,
+        "available_fraction": 0.972972972972973
+      },
+      "after_birth_cohorts": {
+        "0": {
+          "eligible": 750,
+          "coverage_2px": 0.24133333333333334,
+          "coverage_5mm": 0.36,
+          "available_fraction": 0.9706666666666667
+        },
+        "10": {
+          "eligible": 195,
+          "coverage_2px": 0.06153846153846154,
+          "coverage_5mm": 0.11282051282051282,
+          "available_fraction": 0.9692307692307692
+        },
+        "20": {
+          "eligible": 88,
+          "coverage_2px": 0.011363636363636364,
+          "coverage_5mm": 0.03409090909090909,
+          "available_fraction": 0.8181818181818182
+        }
+      },
+      "model_fps_fixed": 36.69878099617913,
+      "model_fps_grown": 22.715184535207047,
+      "adapter_fps_fixed": 31.03774220539341,
+      "adapter_fps_grown": 20.514255132617652
+    },
+    {
+      "clip": "ycb-cracker_box_reorient-191",
+      "model": "tapnext",
+      "mode": "causal per-frame upstream Point2Pose frontend, no pose estimator",
+      "point_schedule": {
+        "0": 64,
+        "10": 32,
+        "20": 32
+      },
+      "initial_fixed": {
+        "eligible": 814,
+        "coverage_2px": 0.2321867321867322,
+        "coverage_5mm": 0.2788697788697789,
+        "available_fraction": 0.9778869778869779
+      },
+      "initial_grown": {
+        "eligible": 814,
+        "coverage_2px": 0.22972972972972974,
+        "coverage_5mm": 0.28255528255528256,
+        "available_fraction": 0.9778869778869779
+      },
+      "after_birth_cohorts": {
+        "0": {
+          "eligible": 750,
+          "coverage_2px": 0.164,
+          "coverage_5mm": 0.23333333333333334,
+          "available_fraction": 0.976
+        },
+        "10": {
+          "eligible": 195,
+          "coverage_2px": 0.035897435897435895,
+          "coverage_5mm": 0.06666666666666667,
+          "available_fraction": 0.9692307692307692
+        },
+        "20": {
+          "eligible": 88,
+          "coverage_2px": 0.011363636363636364,
+          "coverage_5mm": 0.011363636363636364,
+          "available_fraction": 0.9545454545454546
+        }
+      },
+      "model_fps_fixed": 65.35970369761577,
+      "model_fps_grown": 64.13839277675334,
+      "adapter_fps_fixed": 54.9667157384215,
+      "adapter_fps_grown": 54.23260339944416,
+      "steady_tracker_ms_fixed": [
+        8.51510203210637,
+        8.495756017509848,
+        8.525031473254785
+      ],
+      "steady_tracker_ms_grown": [
+        8.181418001186103,
+        8.606100978795439,
+        8.696554490597919
+      ],
+      "birth_tracker_ms_grown": {
+        "10": 8.691060007549822,
+        "20": 8.954941993579268
+      }
+    },
+    {
+      "clip": "ycb-cracker_box_reorient-191",
+      "model": "trackeverything",
+      "mode": "full-clip, windowed, may use future frames",
+      "point_schedule": {
+        "0": 64,
+        "10": 32,
+        "20": 32
+      },
+      "initial_fixed": {
+        "eligible": 814,
+        "coverage_2px": 0.23095823095823095,
+        "coverage_5mm": 0.1904176904176904,
+        "available_fraction": 0.9656019656019657
+      },
+      "initial_grown": {
+        "eligible": 814,
+        "coverage_2px": 0.22358722358722358,
+        "coverage_5mm": 0.18796068796068796,
+        "available_fraction": 0.9680589680589681
+      },
+      "after_birth_cohorts": {
+        "0": {
+          "eligible": 750,
+          "coverage_2px": 0.15733333333333333,
+          "coverage_5mm": 0.11866666666666667,
+          "available_fraction": 0.9653333333333334
+        },
+        "10": {
+          "eligible": 195,
+          "coverage_2px": 0.015384615384615385,
+          "coverage_5mm": 0.0,
+          "available_fraction": 0.9487179487179487
+        },
+        "20": {
+          "eligible": 88,
+          "coverage_2px": 0.0,
+          "coverage_5mm": 0.0,
+          "available_fraction": 0.9659090909090909
+        }
+      },
+      "model_fps_fixed": 7.652905145448083,
+      "model_fps_grown": 7.5862734615590615,
+      "adapter_fps_fixed": 7.46798930523541,
+      "adapter_fps_grown": 7.4084617847272645
+    },
+    {
+      "clip": "ycb-cracker_box_reorient-191",
+      "model": "trackon_r",
+      "mode": "causal streaming, all source frames",
+      "point_schedule": {
+        "0": 64,
+        "10": 32,
+        "20": 32
+      },
+      "initial_fixed": {
+        "eligible": 814,
+        "coverage_2px": 0.2285012285012285,
+        "coverage_5mm": 0.2641277641277641,
+        "available_fraction": 0.9705159705159705
+      },
+      "initial_grown": {
+        "eligible": 814,
+        "coverage_2px": 0.22604422604422605,
+        "coverage_5mm": 0.2628992628992629,
+        "available_fraction": 0.972972972972973
+      },
+      "after_birth_cohorts": {
+        "0": {
+          "eligible": 750,
+          "coverage_2px": 0.16,
+          "coverage_5mm": 0.20266666666666666,
+          "available_fraction": 0.9706666666666667
+        },
+        "10": {
+          "eligible": 195,
+          "coverage_2px": 0.046153846153846156,
+          "coverage_5mm": 0.06153846153846154,
+          "available_fraction": 0.9641025641025641
+        },
+        "20": {
+          "eligible": 88,
+          "coverage_2px": 0.03409090909090909,
+          "coverage_5mm": 0.011363636363636364,
+          "available_fraction": 0.9545454545454546
+        }
+      },
+      "model_fps_fixed": 38.42361993503207,
+      "model_fps_grown": 37.756044806506765,
+      "adapter_fps_fixed": 34.05029979684244,
+      "adapter_fps_grown": 33.45151254571957,
+      "steady_tracker_ms_fixed": [
+        17.894034972414374,
+        17.830334953032434,
+        17.922628001542762
+      ],
+      "steady_tracker_ms_grown": [
+        17.804728006012738,
+        18.36578600341454,
+        18.931362486910075
+      ],
+      "birth_tracker_ms_grown": {
+        "10": 18.636321008671075,
+        "20": 19.008055969607085
+      }
+    },
+    {
+      "clip": "ycb-mustard-100-130",
+      "model": "bootstapir",
+      "mode": "causal per-frame upstream Point2Pose frontend, no pose estimator",
+      "point_schedule": {
+        "0": 64,
+        "10": 32,
+        "20": 32
+      },
+      "initial_fixed": {
+        "eligible": 1399,
+        "coverage_2px": 0.45675482487491065,
+        "coverage_5mm": 0.4274481772694782,
+        "available_fraction": 1.0
+      },
+      "initial_grown": {
+        "eligible": 1399,
+        "coverage_2px": 0.45675482487491065,
+        "coverage_5mm": 0.4274481772694782,
+        "available_fraction": 1.0
+      },
+      "after_birth_cohorts": {
+        "0": {
+          "eligible": 1335,
+          "coverage_2px": 0.4307116104868914,
+          "coverage_5mm": 0.40973782771535583,
+          "available_fraction": 1.0
+        },
+        "10": {
+          "eligible": 473,
+          "coverage_2px": 0.47780126849894294,
+          "coverage_5mm": 0.42283298097251587,
+          "available_fraction": 1.0
+        },
+        "20": {
+          "eligible": 219,
+          "coverage_2px": 0.6164383561643836,
+          "coverage_5mm": 0.771689497716895,
+          "available_fraction": 1.0
+        }
+      },
+      "model_fps_fixed": 42.693945012620674,
+      "model_fps_grown": 31.336723150950082,
+      "adapter_fps_fixed": 38.64814238877272,
+      "adapter_fps_grown": 29.03652331087923,
+      "steady_tracker_ms_fixed": [
+        15.399408992379904,
+        15.380204014945775,
+        15.430662489961833
+      ],
+      "steady_tracker_ms_grown": [
+        15.178475005086511,
+        26.9697229960002,
+        27.82763499999419
+      ],
+      "birth_tracker_ms_grown": {
+        "10": 34.02114100754261,
+        "20": 31.360843044240028
+      }
+    },
+    {
+      "clip": "ycb-mustard-100-130",
+      "model": "cotracker3",
+      "mode": "full-clip offline; may use future frames",
+      "point_schedule": {
+        "0": 64,
+        "10": 32,
+        "20": 32
+      },
+      "initial_fixed": {
+        "eligible": 1399,
+        "coverage_2px": 0.49177984274481773,
+        "coverage_5mm": 0.4746247319513939,
+        "available_fraction": 0.9456754824874911
+      },
+      "initial_grown": {
+        "eligible": 1399,
+        "coverage_2px": 0.49749821300929237,
+        "coverage_5mm": 0.4789135096497498,
+        "available_fraction": 0.949964260185847
+      },
+      "after_birth_cohorts": {
+        "0": {
+          "eligible": 1335,
+          "coverage_2px": 0.47340823970037454,
+          "coverage_5mm": 0.45393258426966293,
+          "available_fraction": 0.947565543071161
+        },
+        "10": {
+          "eligible": 473,
+          "coverage_2px": 0.4587737843551797,
+          "coverage_5mm": 0.452431289640592,
+          "available_fraction": 0.9492600422832981
+        },
+        "20": {
+          "eligible": 219,
+          "coverage_2px": 0.863013698630137,
+          "coverage_5mm": 0.8447488584474886,
+          "available_fraction": 1.0
+        }
+      },
+      "model_fps_fixed": 116.20380708939781,
+      "model_fps_grown": 110.73092184803978,
+      "adapter_fps_fixed": 83.4876645378758,
+      "adapter_fps_grown": 81.13975453225876
+    },
+    {
+      "clip": "ycb-mustard-100-130",
+      "model": "litetracker",
+      "mode": "causal per-frame upstream Point2Pose frontend, no pose estimator",
+      "point_schedule": {
+        "0": 64,
+        "10": 32,
+        "20": 32
+      },
+      "initial_fixed": {
+        "eligible": 1399,
+        "coverage_2px": 0.49392423159399573,
+        "coverage_5mm": 0.46890636168691924,
+        "available_fraction": 1.0
+      },
+      "initial_grown": {
+        "eligible": 1399,
+        "coverage_2px": 0.496783416726233,
+        "coverage_5mm": 0.4710507505360972,
+        "available_fraction": 1.0
+      },
+      "after_birth_cohorts": {
+        "0": {
+          "eligible": 1335,
+          "coverage_2px": 0.47265917602996255,
+          "coverage_5mm": 0.44569288389513106,
+          "available_fraction": 1.0
+        },
+        "10": {
+          "eligible": 473,
+          "coverage_2px": 0.5623678646934461,
+          "coverage_5mm": 0.6025369978858351,
+          "available_fraction": 0.9873150105708245
+        },
+        "20": {
+          "eligible": 219,
+          "coverage_2px": 0.817351598173516,
+          "coverage_5mm": 0.8858447488584474,
+          "available_fraction": 1.0
+        }
+      },
+      "model_fps_fixed": 76.2674491890457,
+      "model_fps_grown": 74.64514887156602,
+      "adapter_fps_fixed": 64.23230405001662,
+      "adapter_fps_grown": 63.05994404146449,
+      "steady_tracker_ms_fixed": [
+        5.426780960988253,
+        5.329117993824184,
+        5.292029003612697
+      ],
+      "steady_tracker_ms_grown": [
+        5.076839996036142,
+        4.989867971744388,
+        5.016939016059041
+      ],
+      "birth_tracker_ms_grown": {
+        "10": 5.9905959642492235,
+        "20": 5.851296009495854
+      }
+    },
+    {
+      "clip": "ycb-mustard-100-130",
+      "model": "lk",
+      "mode": "causal per-frame optical flow; no object mask after seeding",
+      "point_schedule": {
+        "0": 64,
+        "10": 32,
+        "20": 32
+      },
+      "initial_fixed": {
+        "eligible": 1399,
+        "coverage_2px": 0.34739099356683345,
+        "coverage_5mm": 0.30879199428162973,
+        "available_fraction": 0.9914224446032881
+      },
+      "initial_grown": {
+        "eligible": 1399,
+        "coverage_2px": 0.34739099356683345,
+        "coverage_5mm": 0.30879199428162973,
+        "available_fraction": 0.9914224446032881
+      },
+      "after_birth_cohorts": {
+        "0": {
+          "eligible": 1335,
+          "coverage_2px": 0.3161048689138577,
+          "coverage_5mm": 0.27565543071161047,
+          "available_fraction": 0.9910112359550561
+        },
+        "10": {
+          "eligible": 473,
+          "coverage_2px": 0.346723044397463,
+          "coverage_5mm": 0.33192389006342493,
+          "available_fraction": 1.0
+        },
+        "20": {
+          "eligible": 219,
+          "coverage_2px": 0.7671232876712328,
+          "coverage_5mm": 0.817351598173516,
+          "available_fraction": 1.0
+        }
+      },
+      "model_fps_fixed": 3132.639910093997,
+      "model_fps_grown": 2425.9281718367547,
+      "adapter_fps_fixed": 359.3677502840252,
+      "adapter_fps_grown": 229.45335787477853,
+      "steady_tracker_ms_fixed": [
+        0.30671199783682823,
+        0.303405977319926,
+        0.3059410082641989
+      ],
+      "steady_tracker_ms_grown": [
+        0.4791149985976517,
+        0.39783300599083304,
+        0.3417280095163733
+      ],
+      "birth_tracker_ms_grown": {
+        "10": 0.5614979891106486,
+        "20": 0.37894799606874585
+      }
+    },
+    {
+      "clip": "ycb-mustard-100-130",
+      "model": "tapip3d_unfiltered",
+      "mode": "full-clip model; no causal publication rate measured",
+      "point_schedule": {
+        "0": 64,
+        "10": 32,
+        "20": 32
+      },
+      "initial_fixed": {
+        "eligible": 1399,
+        "coverage_2px": 0.6897784131522516,
+        "coverage_5mm": 0.7541100786275912,
+        "available_fraction": 0.9907076483202287
+      },
+      "initial_grown": {
+        "eligible": 1399,
+        "coverage_2px": 0.6761972837741244,
+        "coverage_5mm": 0.7205146533238027,
+        "available_fraction": 0.9899928520371694
+      },
+      "after_birth_cohorts": {
+        "0": {
+          "eligible": 1335,
+          "coverage_2px": 0.6606741573033708,
+          "coverage_5mm": 0.7071161048689139,
+          "available_fraction": 0.9895131086142323
+        },
+        "10": {
+          "eligible": 473,
+          "coverage_2px": 0.7526427061310782,
+          "coverage_5mm": 0.8520084566596194,
+          "available_fraction": 0.9978858350951374
+        },
+        "20": {
+          "eligible": 219,
+          "coverage_2px": 0.7990867579908676,
+          "coverage_5mm": 0.9817351598173516,
+          "available_fraction": 0.9817351598173516
+        }
+      },
+      "model_fps_fixed": 34.924598298435406,
+      "model_fps_grown": 20.92421667004221,
+      "adapter_fps_fixed": 30.13289637659757,
+      "adapter_fps_grown": 19.222623894154832
+    },
+    {
+      "clip": "ycb-mustard-100-130",
+      "model": "tapnext",
+      "mode": "causal per-frame upstream Point2Pose frontend, no pose estimator",
+      "point_schedule": {
+        "0": 64,
+        "10": 32,
+        "20": 32
+      },
+      "initial_fixed": {
+        "eligible": 1399,
+        "coverage_2px": 0.6504646175839885,
+        "coverage_5mm": 0.636168691922802,
+        "available_fraction": 0.9971408148677627
+      },
+      "initial_grown": {
+        "eligible": 1399,
+        "coverage_2px": 0.6411722659042173,
+        "coverage_5mm": 0.6397426733380986,
+        "available_fraction": 0.9971408148677627
+      },
+      "after_birth_cohorts": {
+        "0": {
+          "eligible": 1335,
+          "coverage_2px": 0.6239700374531835,
+          "coverage_5mm": 0.6292134831460674,
+          "available_fraction": 0.997003745318352
+        },
+        "10": {
+          "eligible": 473,
+          "coverage_2px": 0.5010570824524313,
+          "coverage_5mm": 0.5983086680761099,
+          "available_fraction": 1.0
+        },
+        "20": {
+          "eligible": 219,
+          "coverage_2px": 0.776255707762557,
+          "coverage_5mm": 0.8812785388127854,
+          "available_fraction": 1.0
+        }
+      },
+      "model_fps_fixed": 66.38523265810821,
+      "model_fps_grown": 63.89692469383064,
+      "adapter_fps_fixed": 56.85294152938266,
+      "adapter_fps_grown": 54.94856627998631,
+      "steady_tracker_ms_fixed": [
+        8.191236003767699,
+        8.467711042612791,
+        8.178732503438368
+      ],
+      "steady_tracker_ms_grown": [
+        8.374178025405854,
+        8.649912953842431,
+        8.700843522092327
+      ],
+      "birth_tracker_ms_grown": {
+        "10": 11.117010028101504,
+        "20": 9.066010010428727
+      }
+    },
+    {
+      "clip": "ycb-mustard-100-130",
+      "model": "trackeverything",
+      "mode": "full-clip, windowed, may use future frames",
+      "point_schedule": {
+        "0": 64,
+        "10": 32,
+        "20": 32
+      },
+      "initial_fixed": {
+        "eligible": 1399,
+        "coverage_2px": 0.4381701215153681,
+        "coverage_5mm": 0.4681915654038599,
+        "available_fraction": 1.0
+      },
+      "initial_grown": {
+        "eligible": 1399,
+        "coverage_2px": 0.4424588992137241,
+        "coverage_5mm": 0.48034310221586846,
+        "available_fraction": 1.0
+      },
+      "after_birth_cohorts": {
+        "0": {
+          "eligible": 1335,
+          "coverage_2px": 0.4157303370786517,
+          "coverage_5mm": 0.45543071161048687,
+          "available_fraction": 1.0
+        },
+        "10": {
+          "eligible": 473,
+          "coverage_2px": 0.53276955602537,
+          "coverage_5mm": 0.48414376321353064,
+          "available_fraction": 1.0
+        },
+        "20": {
+          "eligible": 219,
+          "coverage_2px": 0.6529680365296804,
+          "coverage_5mm": 0.8401826484018264,
+          "available_fraction": 1.0
+        }
+      },
+      "model_fps_fixed": 11.705864389407111,
+      "model_fps_grown": 11.544540321710707,
+      "adapter_fps_fixed": 11.34216566898207,
+      "adapter_fps_grown": 11.18652378190405
+    },
+    {
+      "clip": "ycb-mustard-100-130",
+      "model": "trackon_r",
+      "mode": "causal streaming, all source frames",
+      "point_schedule": {
+        "0": 64,
+        "10": 32,
+        "20": 32
+      },
+      "initial_fixed": {
+        "eligible": 1399,
+        "coverage_2px": 0.546819156540386,
+        "coverage_5mm": 0.5389563974267334,
+        "available_fraction": 0.9828448892065761
+      },
+      "initial_grown": {
+        "eligible": 1399,
+        "coverage_2px": 0.5475339528234453,
+        "coverage_5mm": 0.5439599714081487,
+        "available_fraction": 0.9828448892065761
+      },
+      "after_birth_cohorts": {
+        "0": {
+          "eligible": 1335,
+          "coverage_2px": 0.5258426966292135,
+          "coverage_5mm": 0.5220973782771535,
+          "available_fraction": 0.9820224719101124
+        },
+        "10": {
+          "eligible": 473,
+          "coverage_2px": 0.4714587737843552,
+          "coverage_5mm": 0.6511627906976745,
+          "available_fraction": 0.9809725158562368
+        },
+        "20": {
+          "eligible": 219,
+          "coverage_2px": 0.8447488584474886,
+          "coverage_5mm": 0.863013698630137,
+          "available_fraction": 1.0
+        }
+      },
+      "model_fps_fixed": 38.046230112627676,
+      "model_fps_grown": 37.27878025434437,
+      "adapter_fps_fixed": 34.31317265871707,
+      "adapter_fps_grown": 33.66757535725983,
+      "steady_tracker_ms_fixed": [
+        17.890178016386926,
+        18.072738021146506,
+        17.89127947995439
+      ],
+      "steady_tracker_ms_grown": [
+        18.038645037449896,
+        18.744722998235375,
+        18.854728987207636
+      ],
+      "birth_tracker_ms_grown": {
+        "10": 19.01451696176082,
+        "20": 19.115104980301112
+      }
+    },
+    {
+      "clip": "ycb-mustard_easy_00_02-127",
+      "model": "bootstapir",
+      "mode": "causal per-frame upstream Point2Pose frontend, no pose estimator",
+      "point_schedule": {
+        "0": 64,
+        "10": 32,
+        "20": 32
+      },
+      "initial_fixed": {
+        "eligible": 1019,
+        "coverage_2px": 0.2747791952894995,
+        "coverage_5mm": 0.20314033366045142,
+        "available_fraction": 1.0
+      },
+      "initial_grown": {
+        "eligible": 1019,
+        "coverage_2px": 0.2747791952894995,
+        "coverage_5mm": 0.20314033366045142,
+        "available_fraction": 1.0
+      },
+      "after_birth_cohorts": {
+        "0": {
+          "eligible": 955,
+          "coverage_2px": 0.22722513089005236,
+          "coverage_5mm": 0.18010471204188483,
+          "available_fraction": 1.0
+        },
+        "10": {
+          "eligible": 418,
+          "coverage_2px": 0.22248803827751196,
+          "coverage_5mm": 0.21291866028708134,
+          "available_fraction": 0.9354066985645934
+        },
+        "20": {
+          "eligible": 215,
+          "coverage_2px": 0.33488372093023255,
+          "coverage_5mm": 0.4511627906976744,
+          "available_fraction": 0.9813953488372092
+        }
+      },
+      "model_fps_fixed": 43.54842031381355,
+      "model_fps_grown": 32.16968871989879,
+      "adapter_fps_fixed": 39.302194316183794,
+      "adapter_fps_grown": 29.778230558760743,
+      "steady_tracker_ms_fixed": [
+        15.126871003303677,
+        15.071898989845067,
+        15.07737350766547
+      ],
+      "steady_tracker_ms_grown": [
+        14.981766988057643,
+        26.43510402413085,
+        26.45405547809787
+      ],
+      "birth_tracker_ms_grown": {
+        "10": 32.974636007566005,
+        "20": 30.50945303402841
+      }
+    },
+    {
+      "clip": "ycb-mustard_easy_00_02-127",
+      "model": "cotracker3",
+      "mode": "full-clip offline; may use future frames",
+      "point_schedule": {
+        "0": 64,
+        "10": 32,
+        "20": 32
+      },
+      "initial_fixed": {
+        "eligible": 1019,
+        "coverage_2px": 0.2875368007850834,
+        "coverage_5mm": 0.23846908734052993,
+        "available_fraction": 1.0
+      },
+      "initial_grown": {
+        "eligible": 1019,
+        "coverage_2px": 0.2787046123650638,
+        "coverage_5mm": 0.2325809617271835,
+        "available_fraction": 1.0
+      },
+      "after_birth_cohorts": {
+        "0": {
+          "eligible": 955,
+          "coverage_2px": 0.23036649214659685,
+          "coverage_5mm": 0.181151832460733,
+          "available_fraction": 1.0
+        },
+        "10": {
+          "eligible": 418,
+          "coverage_2px": 0.35406698564593303,
+          "coverage_5mm": 0.37799043062200954,
+          "available_fraction": 0.9832535885167464
+        },
+        "20": {
+          "eligible": 215,
+          "coverage_2px": 0.4418604651162791,
+          "coverage_5mm": 0.5720930232558139,
+          "available_fraction": 0.986046511627907
+        }
+      },
+      "model_fps_fixed": 115.26840709638294,
+      "model_fps_grown": 110.5226166040113,
+      "adapter_fps_fixed": 82.85327254930694,
+      "adapter_fps_grown": 80.7748414810179
+    },
+    {
+      "clip": "ycb-mustard_easy_00_02-127",
+      "model": "litetracker",
+      "mode": "causal per-frame upstream Point2Pose frontend, no pose estimator",
+      "point_schedule": {
+        "0": 64,
+        "10": 32,
+        "20": 32
+      },
+      "initial_fixed": {
+        "eligible": 1019,
+        "coverage_2px": 0.2718351324828263,
+        "coverage_5mm": 0.2325809617271835,
+        "available_fraction": 1.0
+      },
+      "initial_grown": {
+        "eligible": 1019,
+        "coverage_2px": 0.2728164867517174,
+        "coverage_5mm": 0.23454367026496564,
+        "available_fraction": 1.0
+      },
+      "after_birth_cohorts": {
+        "0": {
+          "eligible": 955,
+          "coverage_2px": 0.22408376963350785,
+          "coverage_5mm": 0.18324607329842932,
+          "available_fraction": 1.0
+        },
+        "10": {
+          "eligible": 418,
+          "coverage_2px": 0.3373205741626794,
+          "coverage_5mm": 0.38995215311004783,
+          "available_fraction": 0.9043062200956937
+        },
+        "20": {
+          "eligible": 215,
+          "coverage_2px": 0.5255813953488372,
+          "coverage_5mm": 0.6046511627906976,
+          "available_fraction": 0.9488372093023256
+        }
+      },
+      "model_fps_fixed": 78.19340643689655,
+      "model_fps_grown": 75.32946309713384,
+      "adapter_fps_fixed": 65.31940907529426,
+      "adapter_fps_grown": 63.269515229685716,
+      "steady_tracker_ms_fixed": [
+        5.029593012295663,
+        5.0125919515267015,
+        4.967908025719225
+      ],
+      "steady_tracker_ms_grown": [
+        5.403389979619533,
+        5.317198985721916,
+        5.396512511651963
+      ],
+      "birth_tracker_ms_grown": {
+        "10": 6.280998990405351,
+        "20": 6.1583000351674855
+      }
+    },
+    {
+      "clip": "ycb-mustard_easy_00_02-127",
+      "model": "lk",
+      "mode": "causal per-frame optical flow; no object mask after seeding",
+      "point_schedule": {
+        "0": 64,
+        "10": 32,
+        "20": 32
+      },
+      "initial_fixed": {
+        "eligible": 1019,
+        "coverage_2px": 0.29538763493621195,
+        "coverage_5mm": 0.24533856722276742,
+        "available_fraction": 0.9950932286555446
+      },
+      "initial_grown": {
+        "eligible": 1019,
+        "coverage_2px": 0.29538763493621195,
+        "coverage_5mm": 0.24533856722276742,
+        "available_fraction": 0.9950932286555446
+      },
+      "after_birth_cohorts": {
+        "0": {
+          "eligible": 955,
+          "coverage_2px": 0.2481675392670157,
+          "coverage_5mm": 0.19476439790575917,
+          "available_fraction": 0.9947643979057592
+        },
+        "10": {
+          "eligible": 418,
+          "coverage_2px": 0.2607655502392344,
+          "coverage_5mm": 0.2799043062200957,
+          "available_fraction": 1.0
+        },
+        "20": {
+          "eligible": 215,
+          "coverage_2px": 0.4325581395348837,
+          "coverage_5mm": 0.6186046511627907,
+          "available_fraction": 1.0
+        }
+      },
+      "model_fps_fixed": 3224.5541545494957,
+      "model_fps_grown": 2507.0500891596425,
+      "adapter_fps_fixed": 352.14305456024954,
+      "adapter_fps_grown": 285.5950579076837,
+      "steady_tracker_ms_fixed": [
+        0.34021498868241906,
+        0.2940490376204252,
+        0.31232801848091185
+      ],
+      "steady_tracker_ms_grown": [
+        0.363529019523412,
+        0.3539210301823914,
+        0.4264414601493627
+      ],
+      "birth_tracker_ms_grown": {
+        "10": 0.33794098999351263,
+        "20": 0.5251300171948969
+      }
+    },
+    {
+      "clip": "ycb-mustard_easy_00_02-127",
+      "model": "tapip3d_unfiltered",
+      "mode": "full-clip model; no causal publication rate measured",
+      "point_schedule": {
+        "0": 64,
+        "10": 32,
+        "20": 32
+      },
+      "initial_fixed": {
+        "eligible": 1019,
+        "coverage_2px": 0.39450441609421,
+        "coverage_5mm": 0.46712463199214915,
+        "available_fraction": 0.9941118743866536
+      },
+      "initial_grown": {
+        "eligible": 1019,
+        "coverage_2px": 0.39646712463199213,
+        "coverage_5mm": 0.465161923454367,
+        "available_fraction": 0.9950932286555446
+      },
+      "after_birth_cohorts": {
+        "0": {
+          "eligible": 955,
+          "coverage_2px": 0.35602094240837695,
+          "coverage_5mm": 0.4293193717277487,
+          "available_fraction": 0.9947643979057592
+        },
+        "10": {
+          "eligible": 418,
+          "coverage_2px": 0.41626794258373206,
+          "coverage_5mm": 0.5215311004784688,
+          "available_fraction": 1.0
+        },
+        "20": {
+          "eligible": 215,
+          "coverage_2px": 0.6046511627906976,
+          "coverage_5mm": 0.6930232558139535,
+          "available_fraction": 1.0
+        }
+      },
+      "model_fps_fixed": 35.707303577389645,
+      "model_fps_grown": 21.23520186530043,
+      "adapter_fps_fixed": 30.643192596721736,
+      "adapter_fps_grown": 19.4352684396827
+    },
+    {
+      "clip": "ycb-mustard_easy_00_02-127",
+      "model": "tapnext",
+      "mode": "causal per-frame upstream Point2Pose frontend, no pose estimator",
+      "point_schedule": {
+        "0": 64,
+        "10": 32,
+        "20": 32
+      },
+      "initial_fixed": {
+        "eligible": 1019,
+        "coverage_2px": 0.3297350343473994,
+        "coverage_5mm": 0.26398429833169773,
+        "available_fraction": 1.0
+      },
+      "initial_grown": {
+        "eligible": 1019,
+        "coverage_2px": 0.30323846908734053,
+        "coverage_5mm": 0.2423945044160942,
+        "available_fraction": 1.0
+      },
+      "after_birth_cohorts": {
+        "0": {
+          "eligible": 955,
+          "coverage_2px": 0.25654450261780104,
+          "coverage_5mm": 0.20837696335078534,
+          "available_fraction": 1.0
+        },
+        "10": {
+          "eligible": 418,
+          "coverage_2px": 0.3349282296650718,
+          "coverage_5mm": 0.36363636363636365,
+          "available_fraction": 1.0
+        },
+        "20": {
+          "eligible": 215,
+          "coverage_2px": 0.4325581395348837,
+          "coverage_5mm": 0.5813953488372093,
+          "available_fraction": 1.0
+        }
+      },
+      "model_fps_fixed": 66.80217583365106,
+      "model_fps_grown": 65.27660626108302,
+      "adapter_fps_fixed": 57.367991912834924,
+      "adapter_fps_grown": 56.21811356612889,
+      "steady_tracker_ms_fixed": [
+        8.22287000482902,
+        8.15335096558556,
+        8.15319549292326
+      ],
+      "steady_tracker_ms_grown": [
+        8.182329998817295,
+        8.314616978168488,
+        8.394596021389589
+      ],
+      "birth_tracker_ms_grown": {
+        "10": 8.696258999407291,
+        "20": 8.702450955752283
+      }
+    },
+    {
+      "clip": "ycb-mustard_easy_00_02-127",
+      "model": "trackeverything",
+      "mode": "full-clip, windowed, may use future frames",
+      "point_schedule": {
+        "0": 64,
+        "10": 32,
+        "20": 32
+      },
+      "initial_fixed": {
+        "eligible": 1019,
+        "coverage_2px": 0.33464180569185475,
+        "coverage_5mm": 0.18842001962708538,
+        "available_fraction": 1.0
+      },
+      "initial_grown": {
+        "eligible": 1019,
+        "coverage_2px": 0.3228655544651619,
+        "coverage_5mm": 0.19627085377821393,
+        "available_fraction": 1.0
+      },
+      "after_birth_cohorts": {
+        "0": {
+          "eligible": 955,
+          "coverage_2px": 0.2774869109947644,
+          "coverage_5mm": 0.1424083769633508,
+          "available_fraction": 1.0
+        },
+        "10": {
+          "eligible": 418,
+          "coverage_2px": 0.2822966507177033,
+          "coverage_5mm": 0.11722488038277512,
+          "available_fraction": 0.9976076555023924
+        },
+        "20": {
+          "eligible": 215,
+          "coverage_2px": 0.5395348837209303,
+          "coverage_5mm": 0.4511627906976744,
+          "available_fraction": 1.0
+        }
+      },
+      "model_fps_fixed": 10.985970624542032,
+      "model_fps_grown": 10.912710831294946,
+      "adapter_fps_fixed": 10.659209188830228,
+      "adapter_fps_grown": 10.586805120137683
+    },
+    {
+      "clip": "ycb-mustard_easy_00_02-127",
+      "model": "trackon_r",
+      "mode": "causal streaming, all source frames",
+      "point_schedule": {
+        "0": 64,
+        "10": 32,
+        "20": 32
+      },
+      "initial_fixed": {
+        "eligible": 1019,
+        "coverage_2px": 0.2561334641805692,
+        "coverage_5mm": 0.2296368989205103,
+        "available_fraction": 1.0
+      },
+      "initial_grown": {
+        "eligible": 1019,
+        "coverage_2px": 0.25711481844946027,
+        "coverage_5mm": 0.22178606476938176,
+        "available_fraction": 1.0
+      },
+      "after_birth_cohorts": {
+        "0": {
+          "eligible": 955,
+          "coverage_2px": 0.20732984293193718,
+          "coverage_5mm": 0.17277486910994763,
+          "available_fraction": 1.0
+        },
+        "10": {
+          "eligible": 418,
+          "coverage_2px": 0.33253588516746413,
+          "coverage_5mm": 0.38516746411483255,
+          "available_fraction": 0.9473684210526315
+        },
+        "20": {
+          "eligible": 215,
+          "coverage_2px": 0.4418604651162791,
+          "coverage_5mm": 0.6093023255813953,
+          "available_fraction": 0.986046511627907
+        }
+      },
+      "model_fps_fixed": 38.56532631819208,
+      "model_fps_grown": 37.55563318024198,
+      "adapter_fps_fixed": 34.3722917365556,
+      "adapter_fps_grown": 33.983474190256096,
+      "steady_tracker_ms_fixed": [
+        17.89148000534624,
+        17.89494598051533,
+        17.781083995942026
+      ],
+      "steady_tracker_ms_grown": [
+        17.78056303737685,
+        18.405459995847195,
+        18.800017016474158
+      ],
+      "birth_tracker_ms_grown": {
+        "10": 18.658783985301852,
+        "20": 19.108092004898936
+      }
+    },
+    {
+      "clip": "ycb-sugar_box1-221",
+      "model": "bootstapir",
+      "mode": "causal per-frame upstream Point2Pose frontend, no pose estimator",
+      "point_schedule": {
+        "0": 64,
+        "10": 32,
+        "20": 32
+      },
+      "initial_fixed": {
+        "eligible": 1183,
+        "coverage_2px": 0.16990701606086223,
+        "coverage_5mm": 0.18258664412510567,
+        "available_fraction": 0.9949281487743026
+      },
+      "initial_grown": {
+        "eligible": 1183,
+        "coverage_2px": 0.16990701606086223,
+        "coverage_5mm": 0.18258664412510567,
+        "available_fraction": 0.9949281487743026
+      },
+      "after_birth_cohorts": {
+        "0": {
+          "eligible": 1119,
+          "coverage_2px": 0.12332439678284182,
+          "coverage_5mm": 0.15192135835567472,
+          "available_fraction": 0.9946380697050938
+        },
+        "10": {
+          "eligible": 367,
+          "coverage_2px": 0.37329700272479566,
+          "coverage_5mm": 0.335149863760218,
+          "available_fraction": 0.9264305177111717
+        },
+        "20": {
+          "eligible": 225,
+          "coverage_2px": 0.5466666666666666,
+          "coverage_5mm": 0.5511111111111111,
+          "available_fraction": 0.9911111111111112
+        }
+      },
+      "model_fps_fixed": 43.71206901308818,
+      "model_fps_grown": 31.622663070499684,
+      "adapter_fps_fixed": 38.946655399939985,
+      "adapter_fps_grown": 28.99112005035064,
+      "steady_tracker_ms_fixed": [
+        15.120077994652092,
+        15.060267003718764,
+        15.063252008985728
+      ],
+      "steady_tracker_ms_grown": [
+        14.936772990040481,
+        27.242513024248183,
+        27.228756487602368
+      ],
+      "birth_tracker_ms_grown": {
+        "10": 33.17933902144432,
+        "20": 31.004597956780344
+      }
+    },
+    {
+      "clip": "ycb-sugar_box1-221",
+      "model": "cotracker3",
+      "mode": "full-clip offline; may use future frames",
+      "point_schedule": {
+        "0": 64,
+        "10": 32,
+        "20": 32
+      },
+      "initial_fixed": {
+        "eligible": 1183,
+        "coverage_2px": 0.19188503803888418,
+        "coverage_5mm": 0.2256973795435334,
+        "available_fraction": 0.9163144547759933
+      },
+      "initial_grown": {
+        "eligible": 1183,
+        "coverage_2px": 0.17413355874894337,
+        "coverage_5mm": 0.22907861369399832,
+        "available_fraction": 0.8884192730346576
+      },
+      "after_birth_cohorts": {
+        "0": {
+          "eligible": 1119,
+          "coverage_2px": 0.12689901697944594,
+          "coverage_5mm": 0.18498659517426275,
+          "available_fraction": 0.8820375335120644
+        },
+        "10": {
+          "eligible": 367,
+          "coverage_2px": 0.30517711171662126,
+          "coverage_5mm": 0.23978201634877383,
+          "available_fraction": 0.7629427792915532
+        },
+        "20": {
+          "eligible": 225,
+          "coverage_2px": 0.5688888888888889,
+          "coverage_5mm": 0.5288888888888889,
+          "available_fraction": 0.9333333333333333
+        }
+      },
+      "model_fps_fixed": 115.85569760913192,
+      "model_fps_grown": 110.57568027154335,
+      "adapter_fps_fixed": 81.33337110430621,
+      "adapter_fps_grown": 78.46563019357811
+    },
+    {
+      "clip": "ycb-sugar_box1-221",
+      "model": "litetracker",
+      "mode": "causal per-frame upstream Point2Pose frontend, no pose estimator",
+      "point_schedule": {
+        "0": 64,
+        "10": 32,
+        "20": 32
+      },
+      "initial_fixed": {
+        "eligible": 1183,
+        "coverage_2px": 0.19949281487743026,
+        "coverage_5mm": 0.231614539306847,
+        "available_fraction": 0.9230769230769231
+      },
+      "initial_grown": {
+        "eligible": 1183,
+        "coverage_2px": 0.1952662721893491,
+        "coverage_5mm": 0.23668639053254437,
+        "available_fraction": 0.9112426035502958
+      },
+      "after_birth_cohorts": {
+        "0": {
+          "eligible": 1119,
+          "coverage_2px": 0.14924039320822163,
+          "coverage_5mm": 0.19302949061662197,
+          "available_fraction": 0.9061662198391421
+        },
+        "10": {
+          "eligible": 367,
+          "coverage_2px": 0.3678474114441417,
+          "coverage_5mm": 0.25885558583106266,
+          "available_fraction": 0.8474114441416893
+        },
+        "20": {
+          "eligible": 225,
+          "coverage_2px": 0.5511111111111111,
+          "coverage_5mm": 0.5288888888888889,
+          "available_fraction": 0.9733333333333334
+        }
+      },
+      "model_fps_fixed": 77.99144946948451,
+      "model_fps_grown": 74.91374509411878,
+      "adapter_fps_fixed": 63.95911784105666,
+      "adapter_fps_grown": 61.650969786017825,
+      "steady_tracker_ms_fixed": [
+        5.238472018390894,
+        4.9857000121846795,
+        5.2650615107268095
+      ],
+      "steady_tracker_ms_grown": [
+        5.389823985751718,
+        5.373354011680931,
+        5.353171523893252
+      ],
+      "birth_tracker_ms_grown": {
+        "10": 6.233300024177879,
+        "20": 6.756837014108896
+      }
+    },
+    {
+      "clip": "ycb-sugar_box1-221",
+      "model": "lk",
+      "mode": "causal per-frame optical flow; no object mask after seeding",
+      "point_schedule": {
+        "0": 64,
+        "10": 32,
+        "20": 32
+      },
+      "initial_fixed": {
+        "eligible": 1183,
+        "coverage_2px": 0.07016060862214708,
+        "coverage_5mm": 0.06931530008453085,
+        "available_fraction": 0.9171597633136095
+      },
+      "initial_grown": {
+        "eligible": 1183,
+        "coverage_2px": 0.07016060862214708,
+        "coverage_5mm": 0.06931530008453085,
+        "available_fraction": 0.9171597633136095
+      },
+      "after_birth_cohorts": {
+        "0": {
+          "eligible": 1119,
+          "coverage_2px": 0.016979445933869526,
+          "coverage_5mm": 0.0160857908847185,
+          "available_fraction": 0.9124218051831993
+        },
+        "10": {
+          "eligible": 367,
+          "coverage_2px": 0.28610354223433243,
+          "coverage_5mm": 0.20435967302452315,
+          "available_fraction": 1.0
+        },
+        "20": {
+          "eligible": 225,
+          "coverage_2px": 0.4311111111111111,
+          "coverage_5mm": 0.41333333333333333,
+          "available_fraction": 0.9733333333333334
+        }
+      },
+      "model_fps_fixed": 3213.3699356924108,
+      "model_fps_grown": 2468.474770784164,
+      "adapter_fps_fixed": 316.2383902633908,
+      "adapter_fps_grown": 255.3639061349703,
+      "steady_tracker_ms_fixed": [
+        0.3348949830979109,
+        0.31408597715198994,
+        0.31883499468676746
+      ],
+      "steady_tracker_ms_grown": [
+        0.3683679969981313,
+        0.3380519920028746,
+        0.40489149978384376
+      ],
+      "birth_tracker_ms_grown": {
+        "10": 0.418150972109288,
+        "20": 0.44321699533611536
+      }
+    },
+    {
+      "clip": "ycb-sugar_box1-221",
+      "model": "tapip3d_unfiltered",
+      "mode": "full-clip model; no causal publication rate measured",
+      "point_schedule": {
+        "0": 64,
+        "10": 32,
+        "20": 32
+      },
+      "initial_fixed": {
+        "eligible": 1183,
+        "coverage_2px": 0.055790363482671176,
+        "coverage_5mm": 0.08368554522400676,
+        "available_fraction": 0.9695688926458157
+      },
+      "initial_grown": {
+        "eligible": 1183,
+        "coverage_2px": 0.0566356720202874,
+        "coverage_5mm": 0.07438715131022823,
+        "available_fraction": 0.9687235841081995
+      },
+      "after_birth_cohorts": {
+        "0": {
+          "eligible": 1119,
+          "coverage_2px": 0.002680965147453083,
+          "coverage_5mm": 0.021447721179624665,
+          "available_fraction": 0.966934763181412
+        },
+        "10": {
+          "eligible": 367,
+          "coverage_2px": 0.8174386920980926,
+          "coverage_5mm": 0.662125340599455,
+          "available_fraction": 0.989100817438692
+        },
+        "20": {
+          "eligible": 225,
+          "coverage_2px": 0.6311111111111111,
+          "coverage_5mm": 0.6577777777777778,
+          "available_fraction": 0.9777777777777777
+        }
+      },
+      "model_fps_fixed": 37.21349105028622,
+      "model_fps_grown": 23.073882636977064,
+      "adapter_fps_fixed": 31.385578133904755,
+      "adapter_fps_grown": 20.798596545163342
+    },
+    {
+      "clip": "ycb-sugar_box1-221",
+      "model": "tapnext",
+      "mode": "causal per-frame upstream Point2Pose frontend, no pose estimator",
+      "point_schedule": {
+        "0": 64,
+        "10": 32,
+        "20": 32
+      },
+      "initial_fixed": {
+        "eligible": 1183,
+        "coverage_2px": 0.13440405748098055,
+        "coverage_5mm": 0.16990701606086223,
+        "available_fraction": 0.9957734573119188
+      },
+      "initial_grown": {
+        "eligible": 1183,
+        "coverage_2px": 0.11496196111580727,
+        "coverage_5mm": 0.15384615384615385,
+        "available_fraction": 0.9957734573119188
+      },
+      "after_birth_cohorts": {
+        "0": {
+          "eligible": 1119,
+          "coverage_2px": 0.064343163538874,
+          "coverage_5mm": 0.11349419124218052,
+          "available_fraction": 0.9955317247542449
+        },
+        "10": {
+          "eligible": 367,
+          "coverage_2px": 0.41689373297002724,
+          "coverage_5mm": 0.329700272479564,
+          "available_fraction": 0.9318801089918256
+        },
+        "20": {
+          "eligible": 225,
+          "coverage_2px": 0.4888888888888889,
+          "coverage_5mm": 0.4577777777777778,
+          "available_fraction": 0.9777777777777777
+        }
+      },
+      "model_fps_fixed": 66.94148360212698,
+      "model_fps_grown": 65.11343948478616,
+      "adapter_fps_fixed": 56.344381013474184,
+      "adapter_fps_grown": 55.072426650428696,
+      "steady_tracker_ms_fixed": [
+        8.182955032680184,
+        8.163749007508159,
+        8.195864007575437
+      ],
+      "steady_tracker_ms_grown": [
+        8.444037986919284,
+        8.315018028952181,
+        8.423525519901887
+      ],
+      "birth_tracker_ms_grown": {
+        "10": 8.708150999154896,
+        "20": 8.742354984860867
+      }
+    },
+    {
+      "clip": "ycb-sugar_box1-221",
+      "model": "trackeverything",
+      "mode": "full-clip, windowed, may use future frames",
+      "point_schedule": {
+        "0": 64,
+        "10": 32,
+        "20": 32
+      },
+      "initial_fixed": {
+        "eligible": 1183,
+        "coverage_2px": 0.12256973795435334,
+        "coverage_5mm": 0.11496196111580727,
+        "available_fraction": 0.9256128486897718
+      },
+      "initial_grown": {
+        "eligible": 1183,
+        "coverage_2px": 0.13693998309382924,
+        "coverage_5mm": 0.1242603550295858,
+        "available_fraction": 0.9230769230769231
+      },
+      "after_birth_cohorts": {
+        "0": {
+          "eligible": 1119,
+          "coverage_2px": 0.08757819481680071,
+          "coverage_5mm": 0.07506702412868632,
+          "available_fraction": 0.9186773905272565
+        },
+        "10": {
+          "eligible": 367,
+          "coverage_2px": 0.4904632152588556,
+          "coverage_5mm": 0.4877384196185286,
+          "available_fraction": 0.9918256130790191
+        },
+        "20": {
+          "eligible": 225,
+          "coverage_2px": 0.5422222222222223,
+          "coverage_5mm": 0.56,
+          "available_fraction": 0.9955555555555555
+        }
+      },
+      "model_fps_fixed": 8.369522629441962,
+      "model_fps_grown": 8.329317478222672,
+      "adapter_fps_fixed": 8.157671171564726,
+      "adapter_fps_grown": 8.116837128097528
+    },
+    {
+      "clip": "ycb-sugar_box1-221",
+      "model": "trackon_r",
+      "mode": "causal streaming, all source frames",
+      "point_schedule": {
+        "0": 64,
+        "10": 32,
+        "20": 32
+      },
+      "initial_fixed": {
+        "eligible": 1183,
+        "coverage_2px": 0.24175824175824176,
+        "coverage_5mm": 0.2958579881656805,
+        "available_fraction": 0.9002535925612849
+      },
+      "initial_grown": {
+        "eligible": 1183,
+        "coverage_2px": 0.23584108199492815,
+        "coverage_5mm": 0.2933220625528318,
+        "available_fraction": 0.8926458157227388
+      },
+      "after_birth_cohorts": {
+        "0": {
+          "eligible": 1119,
+          "coverage_2px": 0.19213583556747096,
+          "coverage_5mm": 0.2529043789097408,
+          "available_fraction": 0.8865058087578195
+        },
+        "10": {
+          "eligible": 367,
+          "coverage_2px": 0.4822888283378747,
+          "coverage_5mm": 0.35967302452316074,
+          "available_fraction": 0.9100817438692098
+        },
+        "20": {
+          "eligible": 225,
+          "coverage_2px": 0.5377777777777778,
+          "coverage_5mm": 0.5688888888888889,
+          "available_fraction": 0.9288888888888889
+        }
+      },
+      "model_fps_fixed": 38.42991178304943,
+      "model_fps_grown": 36.75418364306036,
+      "adapter_fps_fixed": 34.27175611249422,
+      "adapter_fps_grown": 32.85416392871786,
+      "steady_tracker_ms_fixed": [
+        17.85682502668351,
+        17.867564980406314,
+        17.85243200720288
+      ],
+      "steady_tracker_ms_grown": [
+        17.90145895211026,
+        18.483054998796433,
+        19.015905010746792
+      ],
+      "birth_tracker_ms_grown": {
+        "10": 18.734204000793397,
+        "20": 19.16808501118794
+      }
+    },
+    {
+      "clip": "ycb-tomato_soup_can_yalehand0-654",
+      "model": "bootstapir",
+      "mode": "causal per-frame upstream Point2Pose frontend, no pose estimator",
+      "point_schedule": {
+        "0": 64,
+        "10": 32,
+        "20": 32
+      },
+      "initial_fixed": {
+        "eligible": 1018,
+        "coverage_2px": 0.27111984282907664,
+        "coverage_5mm": 0.206286836935167,
+        "available_fraction": 0.9538310412573674
+      },
+      "initial_grown": {
+        "eligible": 1018,
+        "coverage_2px": 0.27111984282907664,
+        "coverage_5mm": 0.206286836935167,
+        "available_fraction": 0.9538310412573674
+      },
+      "after_birth_cohorts": {
+        "0": {
+          "eligible": 954,
+          "coverage_2px": 0.22431865828092243,
+          "coverage_5mm": 0.1750524109014675,
+          "available_fraction": 0.950733752620545
+        },
+        "10": {
+          "eligible": 508,
+          "coverage_2px": 0.1437007874015748,
+          "coverage_5mm": 0.14763779527559054,
+          "available_fraction": 1.0
+        },
+        "20": {
+          "eligible": 261,
+          "coverage_2px": 0.8582375478927203,
+          "coverage_5mm": 0.7203065134099617,
+          "available_fraction": 1.0
+        }
+      },
+      "model_fps_fixed": 43.93676006313139,
+      "model_fps_grown": 32.28337121627394,
+      "adapter_fps_fixed": 39.58253721965776,
+      "adapter_fps_grown": 29.852030436261803,
+      "steady_tracker_ms_fixed": [
+        14.963726978749037,
+        14.939261018298566,
+        14.950340992072597
+      ],
+      "steady_tracker_ms_grown": [
+        14.982207037974149,
+        26.301365054678172,
+        26.383102493127808
+      ],
+      "birth_tracker_ms_grown": {
+        "10": 33.228950982447714,
+        "20": 30.13197804102674
+      }
+    },
+    {
+      "clip": "ycb-tomato_soup_can_yalehand0-654",
+      "model": "cotracker3",
+      "mode": "full-clip offline; may use future frames",
+      "point_schedule": {
+        "0": 64,
+        "10": 32,
+        "20": 32
+      },
+      "initial_fixed": {
+        "eligible": 1018,
+        "coverage_2px": 0.25736738703339884,
+        "coverage_5mm": 0.2220039292730845,
+        "available_fraction": 1.0
+      },
+      "initial_grown": {
+        "eligible": 1018,
+        "coverage_2px": 0.25343811394891946,
+        "coverage_5mm": 0.22102161100196463,
+        "available_fraction": 0.9960707269155207
+      },
+      "after_birth_cohorts": {
+        "0": {
+          "eligible": 954,
+          "coverage_2px": 0.20335429769392033,
+          "coverage_5mm": 0.16876310272536688,
+          "available_fraction": 0.9958071278825996
+        },
+        "10": {
+          "eligible": 508,
+          "coverage_2px": 0.19094488188976377,
+          "coverage_5mm": 0.15748031496062992,
+          "available_fraction": 1.0
+        },
+        "20": {
+          "eligible": 261,
+          "coverage_2px": 0.8122605363984674,
+          "coverage_5mm": 0.735632183908046,
+          "available_fraction": 1.0
+        }
+      },
+      "model_fps_fixed": 114.43035339815674,
+      "model_fps_grown": 110.87874026818014,
+      "adapter_fps_fixed": 82.12954098785495,
+      "adapter_fps_grown": 79.74923526245618
+    },
+    {
+      "clip": "ycb-tomato_soup_can_yalehand0-654",
+      "model": "litetracker",
+      "mode": "causal per-frame upstream Point2Pose frontend, no pose estimator",
+      "point_schedule": {
+        "0": 64,
+        "10": 32,
+        "20": 32
+      },
+      "initial_fixed": {
+        "eligible": 1018,
+        "coverage_2px": 0.23477406679764243,
+        "coverage_5mm": 0.2151277013752456,
+        "available_fraction": 0.9430255402750491
+      },
+      "initial_grown": {
+        "eligible": 1018,
+        "coverage_2px": 0.2357563850687623,
+        "coverage_5mm": 0.21414538310412573,
+        "available_fraction": 0.931237721021611
+      },
+      "after_birth_cohorts": {
+        "0": {
+          "eligible": 954,
+          "coverage_2px": 0.18448637316561844,
+          "coverage_5mm": 0.16142557651991615,
+          "available_fraction": 0.9266247379454927
+        },
+        "10": {
+          "eligible": 508,
+          "coverage_2px": 0.19488188976377951,
+          "coverage_5mm": 0.16141732283464566,
+          "available_fraction": 1.0
+        },
+        "20": {
+          "eligible": 261,
+          "coverage_2px": 0.8084291187739464,
+          "coverage_5mm": 0.7509578544061303,
+          "available_fraction": 1.0
+        }
+      },
+      "model_fps_fixed": 76.71008763741254,
+      "model_fps_grown": 73.56559693606263,
+      "adapter_fps_fixed": 64.12883545646777,
+      "adapter_fps_grown": 61.897155025775945,
+      "steady_tracker_ms_fixed": [
+        5.098841967992485,
+        5.298494012095034,
+        5.25244849268347
+      ],
+      "steady_tracker_ms_grown": [
+        5.406204960308969,
+        5.550834990572184,
+        5.089218495413661
+      ],
+      "birth_tracker_ms_grown": {
+        "10": 6.255030049942434,
+        "20": 6.157408002763987
+      }
+    },
+    {
+      "clip": "ycb-tomato_soup_can_yalehand0-654",
+      "model": "lk",
+      "mode": "causal per-frame optical flow; no object mask after seeding",
+      "point_schedule": {
+        "0": 64,
+        "10": 32,
+        "20": 32
+      },
+      "initial_fixed": {
+        "eligible": 1018,
+        "coverage_2px": 0.2770137524557957,
+        "coverage_5mm": 0.22986247544204322,
+        "available_fraction": 1.0
+      },
+      "initial_grown": {
+        "eligible": 1018,
+        "coverage_2px": 0.2770137524557957,
+        "coverage_5mm": 0.22986247544204322,
+        "available_fraction": 1.0
+      },
+      "after_birth_cohorts": {
+        "0": {
+          "eligible": 954,
+          "coverage_2px": 0.22851153039832284,
+          "coverage_5mm": 0.17819706498951782,
+          "available_fraction": 1.0
+        },
+        "10": {
+          "eligible": 508,
+          "coverage_2px": 0.19488188976377951,
+          "coverage_5mm": 0.18110236220472442,
+          "available_fraction": 1.0
+        },
+        "20": {
+          "eligible": 261,
+          "coverage_2px": 0.9846743295019157,
+          "coverage_5mm": 0.9655172413793104,
+          "available_fraction": 1.0
+        }
+      },
+      "model_fps_fixed": 3242.1856597471,
+      "model_fps_grown": 2316.4108011903045,
+      "adapter_fps_fixed": 349.9172708892078,
+      "adapter_fps_grown": 271.9571865598617,
+      "steady_tracker_ms_fixed": [
+        0.3268200089223683,
+        0.30052103102207184,
+        0.3019430150743574
+      ],
+      "steady_tracker_ms_grown": [
+        0.4359839949756861,
+        0.44356903526932,
+        0.41341199539601803
+      ],
+      "birth_tracker_ms_grown": {
+        "10": 0.41547598084434867,
+        "20": 0.4020810010842979
+      }
+    },
+    {
+      "clip": "ycb-tomato_soup_can_yalehand0-654",
+      "model": "tapip3d_unfiltered",
+      "mode": "full-clip model; no causal publication rate measured",
+      "point_schedule": {
+        "0": 64,
+        "10": 32,
+        "20": 32
+      },
+      "initial_fixed": {
+        "eligible": 1018,
+        "coverage_2px": 0.2691552062868369,
+        "coverage_5mm": 0.2544204322200393,
+        "available_fraction": 0.9980353634577603
+      },
+      "initial_grown": {
+        "eligible": 1018,
+        "coverage_2px": 0.2730844793713163,
+        "coverage_5mm": 0.24950884086444008,
+        "available_fraction": 0.9960707269155207
+      },
+      "after_birth_cohorts": {
+        "0": {
+          "eligible": 954,
+          "coverage_2px": 0.22431865828092243,
+          "coverage_5mm": 0.19916142557651992,
+          "available_fraction": 0.9958071278825996
+        },
+        "10": {
+          "eligible": 508,
+          "coverage_2px": 0.2047244094488189,
+          "coverage_5mm": 0.18700787401574803,
+          "available_fraction": 1.0
+        },
+        "20": {
+          "eligible": 261,
+          "coverage_2px": 0.9961685823754789,
+          "coverage_5mm": 0.9846743295019157,
+          "available_fraction": 0.9961685823754789
+        }
+      },
+      "model_fps_fixed": 34.11274954084479,
+      "model_fps_grown": 20.574771466339453,
+      "adapter_fps_fixed": 29.493796861470305,
+      "adapter_fps_grown": 18.900474228525788
+    },
+    {
+      "clip": "ycb-tomato_soup_can_yalehand0-654",
+      "model": "tapnext",
+      "mode": "causal per-frame upstream Point2Pose frontend, no pose estimator",
+      "point_schedule": {
+        "0": 64,
+        "10": 32,
+        "20": 32
+      },
+      "initial_fixed": {
+        "eligible": 1018,
+        "coverage_2px": 0.27996070726915523,
+        "coverage_5mm": 0.23477406679764243,
+        "available_fraction": 1.0
+      },
+      "initial_grown": {
+        "eligible": 1018,
+        "coverage_2px": 0.27897838899803534,
+        "coverage_5mm": 0.23477406679764243,
+        "available_fraction": 1.0
+      },
+      "after_birth_cohorts": {
+        "0": {
+          "eligible": 954,
+          "coverage_2px": 0.23060796645702306,
+          "coverage_5mm": 0.1928721174004193,
+          "available_fraction": 1.0
+        },
+        "10": {
+          "eligible": 508,
+          "coverage_2px": 0.2047244094488189,
+          "coverage_5mm": 0.17519685039370078,
+          "available_fraction": 1.0
+        },
+        "20": {
+          "eligible": 261,
+          "coverage_2px": 0.9808429118773946,
+          "coverage_5mm": 0.9042145593869731,
+          "available_fraction": 1.0
+        }
+      },
+      "model_fps_fixed": 66.34782486978635,
+      "model_fps_grown": 65.03542599472033,
+      "adapter_fps_fixed": 56.916373401763444,
+      "adapter_fps_grown": 55.89006309940673,
+      "steady_tracker_ms_fixed": [
+        8.162235957570374,
+        8.145636005792767,
+        8.152948983479291
+      ],
+      "steady_tracker_ms_grown": [
+        8.451932983007282,
+        8.320336986798793,
+        8.417072996962816
+      ],
+      "birth_tracker_ms_grown": {
+        "10": 8.70861200382933,
+        "20": 8.749859989620745
+      }
+    },
+    {
+      "clip": "ycb-tomato_soup_can_yalehand0-654",
+      "model": "trackeverything",
+      "mode": "full-clip, windowed, may use future frames",
+      "point_schedule": {
+        "0": 64,
+        "10": 32,
+        "20": 32
+      },
+      "initial_fixed": {
+        "eligible": 1018,
+        "coverage_2px": 0.293713163064833,
+        "coverage_5mm": 0.24950884086444008,
+        "available_fraction": 0.9990176817288802
+      },
+      "initial_grown": {
+        "eligible": 1018,
+        "coverage_2px": 0.25736738703339884,
+        "coverage_5mm": 0.2288801571709234,
+        "available_fraction": 0.9990176817288802
+      },
+      "after_birth_cohorts": {
+        "0": {
+          "eligible": 954,
+          "coverage_2px": 0.20754716981132076,
+          "coverage_5mm": 0.18029350104821804,
+          "available_fraction": 0.9989517819706499
+        },
+        "10": {
+          "eligible": 508,
+          "coverage_2px": 0.2125984251968504,
+          "coverage_5mm": 0.17125984251968504,
+          "available_fraction": 1.0
+        },
+        "20": {
+          "eligible": 261,
+          "coverage_2px": 0.9961685823754789,
+          "coverage_5mm": 0.8697318007662835,
+          "available_fraction": 1.0
+        }
+      },
+      "model_fps_fixed": 10.19111411421111,
+      "model_fps_grown": 10.178841927672169,
+      "adapter_fps_fixed": 9.905373278927863,
+      "adapter_fps_grown": 9.889353419034594
+    },
+    {
+      "clip": "ycb-tomato_soup_can_yalehand0-654",
+      "model": "trackon_r",
+      "mode": "causal streaming, all source frames",
+      "point_schedule": {
+        "0": 64,
+        "10": 32,
+        "20": 32
+      },
+      "initial_fixed": {
+        "eligible": 1018,
+        "coverage_2px": 0.26227897838899805,
+        "coverage_5mm": 0.23084479371316308,
+        "available_fraction": 1.0
+      },
+      "initial_grown": {
+        "eligible": 1018,
+        "coverage_2px": 0.26227897838899805,
+        "coverage_5mm": 0.23084479371316308,
+        "available_fraction": 1.0
+      },
+      "after_birth_cohorts": {
+        "0": {
+          "eligible": 954,
+          "coverage_2px": 0.21278825995807127,
+          "coverage_5mm": 0.1792452830188679,
+          "available_fraction": 1.0
+        },
+        "10": {
+          "eligible": 508,
+          "coverage_2px": 0.19291338582677164,
+          "coverage_5mm": 0.16535433070866143,
+          "available_fraction": 1.0
+        },
+        "20": {
+          "eligible": 261,
+          "coverage_2px": 0.7816091954022989,
+          "coverage_5mm": 0.735632183908046,
+          "available_fraction": 1.0
+        }
+      },
+      "model_fps_fixed": 38.568047475503796,
+      "model_fps_grown": 37.1696089512767,
+      "adapter_fps_fixed": 34.76376574448199,
+      "adapter_fps_grown": 33.29856024895009,
+      "steady_tracker_ms_fixed": [
+        17.792285012546927,
+        17.75069796713069,
+        17.77709150337614
+      ],
+      "steady_tracker_ms_grown": [
+        17.83135801088065,
+        18.521076010074466,
+        18.934107472887263
+      ],
+      "birth_tracker_ms_grown": {
+        "10": 19.552261976059526,
+        "20": 19.167542981449515
+      }
+    }
+  ],
+  "macro_equal_clip_weight": [
+    {
+      "model": "bootstapir",
+      "clips": 6,
+      "initial_fixed_2px": 0.25020226165781356,
+      "initial_grown_2px": 0.25020226165781356,
+      "cohorts_2px": {
+        "0": 0.20171303485652012,
+        "10": 0.25234419146381964,
+        "20": 0.4336054135348548
+      },
+      "median_model_fps_fixed": 43.58433400858375,
+      "median_model_fps_grown": 31.7921091213688,
+      "median_adapter_fps_fixed": 38.948928964759446,
+      "median_adapter_fps_grown": 29.17632956469224,
+      "median_steady_tracker_ms_fixed": [
+        15.123474498977885,
+        15.066082996781915,
+        15.104694262845442
+      ],
+      "median_steady_tracker_ms_grown": [
+        15.036063006846234,
+        26.669597515137866,
+        26.736219515441917
+      ]
+    },
+    {
+      "model": "cotracker3",
+      "clips": 6,
+      "initial_fixed_2px": 0.2714607676770567,
+      "initial_grown_2px": 0.2678703489648981,
+      "cohorts_2px": {
+        "0": 0.21928686136890993,
+        "10": 0.2621788005379569,
+        "20": 0.5058346858576597
+      },
+      "median_model_fps_fixed": 115.63233133548286,
+      "median_model_fps_grown": 110.65330105979157,
+      "median_adapter_fps_fixed": 81.73145604608058,
+      "median_adapter_fps_grown": 79.2378023654706
+    },
+    {
+      "model": "litetracker",
+      "clips": 6,
+      "initial_fixed_2px": 0.2716590319228542,
+      "initial_grown_2px": 0.2715932377072982,
+      "cohorts_2px": {
+        "0": 0.22324054283514258,
+        "10": 0.2815723768263531,
+        "20": 0.5054976326568766
+      },
+      "median_model_fps_fixed": 76.56986304156129,
+      "median_model_fps_grown": 74.7794469828424,
+      "median_adapter_fps_fixed": 64.04397664876221,
+      "median_adapter_fps_grown": 62.17634321700328,
+      "median_steady_tracker_ms_fixed": [
+        5.246181011898443,
+        5.130328529048711,
+        5.258222998236306
+      ],
+      "median_steady_tracker_ms_grown": [
+        5.4005844867788255,
+        5.3587364964187145,
+        5.215259006945416
+      ]
+    },
+    {
+      "model": "lk",
+      "clips": 6,
+      "initial_fixed_2px": 0.22273902792975317,
+      "initial_grown_2px": 0.22273902792975317,
+      "cohorts_2px": {
+        "0": 0.17176479688974378,
+        "10": 0.2008835694885979,
+        "20": 0.4626277790659243
+      },
+      "median_model_fps_fixed": 3173.004922893204,
+      "median_model_fps_grown": 2432.675028447715,
+      "median_adapter_fps_fixed": 333.07783057629933,
+      "median_adapter_fps_grown": 256.6749647034259,
+      "median_steady_tracker_ms_fixed": [
+        0.3330764884594828,
+        0.30196350417099893,
+        0.3092147671850398
+      ],
+      "median_steady_tracker_ms_grown": [
+        0.4021759959869087,
+        0.38511448656208813,
+        0.4091517475899309
+      ]
+    },
+    {
+      "model": "tapip3d_unfiltered",
+      "clips": 6,
+      "initial_fixed_2px": 0.323938550597893,
+      "initial_grown_2px": 0.3238681313226868,
+      "cohorts_2px": {
+        "0": 0.2788979741388741,
+        "10": 0.41625169516397614,
+        "20": 0.5687656694315397
+      },
+      "median_model_fps_fixed": 36.20304228678439,
+      "median_model_fps_grown": 21.975193200253738,
+      "median_adapter_fps_fixed": 30.840467401057573,
+      "median_adapter_fps_grown": 19.974761786150175
+    },
+    {
+      "model": "tapnext",
+      "clips": 6,
+      "initial_fixed_2px": 0.3031701204506228,
+      "initial_grown_2px": 0.29603461218510835,
+      "cohorts_2px": {
+        "0": 0.2489938374273727,
+        "10": 0.2882754156553879,
+        "20": 0.5086019020144891
+      },
+      "median_model_fps_fixed": 66.45215909748421,
+      "median_model_fps_grown": 65.07443273975323,
+      "median_adapter_fps_fixed": 56.598661271428426,
+      "median_adapter_fps_grown": 55.1437990436516,
+      "median_steady_tracker_ms_fixed": [
+        8.190911525161937,
+        8.173681009793654,
+        8.181293262168765
+      ],
+      "median_steady_tracker_ms_grown": [
+        8.393804513616487,
+        8.317677507875487,
+        8.420299258432351
+      ]
+    },
+    {
+      "model": "trackeverything",
+      "clips": 6,
+      "initial_fixed_2px": 0.25616675532165545,
+      "initial_grown_2px": 0.2500277533564383,
+      "cohorts_2px": {
+        "0": 0.20046980052962135,
+        "10": 0.3017467321020915,
+        "20": 0.49486526619812293
+      },
+      "median_model_fps_fixed": 9.280318371826535,
+      "median_model_fps_grown": 9.25407970294742,
+      "median_adapter_fps_fixed": 9.031522225246295,
+      "median_adapter_fps_grown": 9.00309527356606
+    },
+    {
+      "model": "trackon_r",
+      "clips": 6,
+      "initial_fixed_2px": 0.283004705813305,
+      "initial_grown_2px": 0.2812309836835757,
+      "cohorts_2px": {
+        "0": 0.2332806561123324,
+        "10": 0.30718916263834645,
+        "20": 0.4988797825327426
+      },
+      "median_model_fps_fixed": 38.42676585904075,
+      "median_model_fps_grown": 37.417206717293176,
+      "median_adapter_fps_fixed": 34.29246438560564,
+      "median_adapter_fps_grown": 33.5595439514897,
+      "median_steady_tracker_ms_fixed": [
+        17.890829010866582,
+        17.881255480460823,
+        17.871855743578635
+      ],
+      "median_steady_tracker_ms_grown": [
+        17.86422950681299,
+        18.444257497321814,
+        18.89786474930588
+      ]
+    }
+  ]
+}

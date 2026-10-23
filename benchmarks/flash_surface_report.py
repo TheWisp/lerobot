@@ -176,7 +176,7 @@ def markdown(report: dict) -> str:
     lines.extend(
         [
             "",
-            "Model FPS is full-clip throughput for TrackEverything and TAPIP3D, and causal per-frame tracker "
+            "Model FPS is full-clip throughput for CoTracker3, TrackEverything and TAPIP3D, and causal per-frame tracker "
             "throughput for the other adapters. Adapter FPS includes recorded RGB-D decoding and each adapter's "
             "preprocessing."
             + depth_filter_note
