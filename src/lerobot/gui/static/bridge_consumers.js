@@ -20,6 +20,10 @@
       _openDatasetThenMaybe(params.repo_id, null);
     } else if (view === "episode" && params && params.repo_id && params.episode_id != null) {
       _openDatasetThenMaybe(params.repo_id, Number(params.episode_id));
+    } else if (view === "local-episode" && params && params.path && params.episode_id != null) {
+      _openDatasetThenMaybe(params.path, Number(params.episode_id));
+    } else if (view === "run" && params?.run_id === "flash" && typeof window.selectWorkflow === "function") {
+      window.selectWorkflow("flash");
     }
   });
 
@@ -40,19 +44,22 @@
 
     // After the open completes, episodes should be populated. Pick the row
     // and call selectEpisode with its length.
-    const ds = (window.datasets || window.openedDatasets || {})[repoId];
+    const opened = typeof datasets !== "undefined" ? datasets : (window.datasets || {});
+    const id = opened[repoId] ? repoId : Object.keys(opened).find(key => opened[key].repo_id === repoId);
+    const ds = opened[id];
     if (!ds) {
       console.warn(LOG_PREFIX, "dataset not found in registry after open:", repoId);
       return;
     }
-    const episodes = (window.episodes || {})[repoId];
-    if (!episodes || !episodes[episodeId]) {
-      console.warn(LOG_PREFIX, "episode row not yet loaded; deferring");
-      return;
+    const rows = (typeof episodes !== "undefined" ? episodes : (window.episodes || {}))[id];
+    const episode = rows?.find(row => Number(row.episode_index) === episodeId);
+    if (!episode) {
+        console.warn(LOG_PREFIX, "episode row not yet loaded; deferring");
+        return;
     }
-    const length = episodes[episodeId].length;
+    const length = episode.length;
     if (typeof window.selectEpisode === "function") {
-      window.selectEpisode(repoId, Number(episodeId), Number(length));
+      window.selectEpisode(id, Number(episodeId), Number(length));
     }
   }
 

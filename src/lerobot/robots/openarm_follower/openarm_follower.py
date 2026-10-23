@@ -290,9 +290,9 @@ class OpenArmFollower(Robot):
         )
 
     @check_if_not_connected
-    def get_observation(self) -> RobotObservation:
+    def get_state_observation(self) -> RobotObservation:
         """
-        Get current observation from robot including position, velocity, and torque.
+        Get current motor position, velocity, and torque without camera reads.
 
         Reads all motor states (pos/vel/torque) in one CAN refresh cycle
         instead of 3 separate reads.
@@ -310,6 +310,14 @@ class OpenArmFollower(Robot):
                 obs_dict[f"{motor}.vel"] = state.get("velocity", 0.0)
                 obs_dict[f"{motor}.torque"] = state.get("torque", 0.0)
 
+        dt_ms = (time.perf_counter() - start) * 1e3
+        logger.debug(f"{self} read state: {dt_ms:.1f}ms")
+        return obs_dict
+
+    @check_if_not_connected
+    def get_observation(self) -> RobotObservation:
+        observation_start = time.perf_counter()
+        obs_dict = self.get_state_observation()
         # Capture images from cameras
         for cam_key, cam in self.cameras.items():
             if getattr(cam, "stereo_split", False):
@@ -333,7 +341,7 @@ class OpenArmFollower(Robot):
                 dt_ms = (time.perf_counter() - start) * 1e3
                 logger.debug(f"{self} read {cam_key} depth: {dt_ms:.1f}ms")
 
-        dt_ms = (time.perf_counter() - start) * 1e3
+        dt_ms = (time.perf_counter() - observation_start) * 1e3
         logger.debug(f"{self} get_observation took: {dt_ms:.1f}ms")
 
         return obs_dict

@@ -1,0 +1,17 @@
+{
+  "gamepad_moving_padded_native.npz": "e2d78a8640510d6ba0aa652d989617a337ba717456bc95d841c002736ec2815b",
+  "yellow_original.npz": "d2059cd236aa89691d27e32ecebfe1822cc5eb6bda50c441869966da74e696ef",
+  "dowel_rotation_padded_native.npz": "69089f98ff45a7ea2567ec118e9ab57e8af4cf612184c6e7a6beea60d3e4d44c",
+  "yellow_full_default.npz": "3aa2c0745efbf00dc7199db5e49eb788fd021d3cb0afdd9d4143381c306b7e07",
+  "gamepad_moving_flat_default.npz": "ef881b51104be73ba81fabb43ec88291e42c06ce67b7e4dd90b03cf551dc3b4a",
+  "gamepad_moving_default.npz": "42c2d305a1c5fae58a92fc1f6ff86e7c6c440551da90cc53acbee6e766a746ce",
+  "yellow_full_padded_native.npz": "8450118c583b3637550af79752a0e00917b0ac57b265c8d627ace9b735ac904e",
+  "dowel_rotation_flat_default.npz": "5f1700b8d84d63c92540e11a60ca3a184e3d1cba31347b8699c5064e6c425c3d",
+  "dowel_original.npz": "4328edbde2ced7c6c08ae0300fbab6d154debea1552ffdcb972ee7ee15ab8bc0",
+  "held_gamepad_padded_native.npz": "0fb007c7412f00b6a4095dd4eb53d551204c9f677ea2bf31ffa090d95a636e38",
+  "held_gamepad_default.npz": "35f692e7a140e276958a904618dcd7ddab41f36b24362e03428515c401e79a30",
+  "yellow_clear_default.npz": "7b6756c9cc87533cdf390dc2843dd3ec426d04bf5dfa3c2381c9ac25f422fdd1",
+  "yellow_clear_padded_native.npz": "06e66a04898336c2a2220fe1986a3dd9e6891556f4b362e2f27d52c4cc1c80f2",
+  "dowel_rotation_default.npz": "40c59da68b4d02f7f89bed335c16f0d135951cccd7f6e532ed98567c619d7e5d",
+  "yellow_full_flat_default.npz": "6158989a870cd1374327188908d030be14b659acb1d7413a0f2fbda29c6f6e13"
+}

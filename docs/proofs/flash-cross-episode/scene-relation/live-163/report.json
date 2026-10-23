@@ -1,0 +1,20 @@
+{
+  "live_frame": 163,
+  "live_points": {
+    "held": 0,
+    "target": 0
+  },
+  "settings": {
+    "demo_start": 350,
+    "demo_end": 550,
+    "demo_stride": 5,
+    "edge_pixels": 1,
+    "max_points": 700,
+    "icp_iterations": 25,
+    "trim_fraction": 0.8,
+    "proximity_m": 0.006
+  },
+  "frames": [],
+  "status": "no_measured_object_pair",
+  "seconds": 1.0754737980023492
+}

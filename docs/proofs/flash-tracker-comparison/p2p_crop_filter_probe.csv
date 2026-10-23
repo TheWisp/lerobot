@@ -1,0 +1,13 @@
+edge_margin_px,feature_crop_mask,seed_valid_points,frame341_fit_points,frame341_fit_inliers,frame341_lost
+0,filtered,17,14,9,False
+0,uneroded,17,14,9,False
+1,filtered,18,17,12,False
+1,uneroded,19,18,11,False
+2,filtered,18,18,13,False
+2,uneroded,20,20,12,False
+3,filtered,20,20,12,False
+3,uneroded,15,15,10,False
+4,filtered,12,12,7,False
+4,uneroded,11,11,7,False
+5,filtered,2,2,0,True
+5,uneroded,4,4,3,False

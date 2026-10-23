@@ -1,0 +1,188 @@
+"""Single-owner FLASH attempt state over an asynchronous plan handoff."""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from dataclasses import dataclass
+from queue import Empty, Full, Queue
+from threading import Lock
+
+from .execution import (
+    ActionQueue,
+    ActionReceipt,
+    MissedEventError,
+    MotorLoop,
+    MotorTick,
+    PlanRejectedError,
+    RobotIO,
+    TimedAction,
+)
+from .progress import MilestoneUpdate, Phase, Progress, Verdict
+from .skill import FlashSkill
+
+
+@dataclass(frozen=True)
+class PoseChange:
+    roles: frozenset[str]
+    source_id: str
+    source_time_s: float
+
+
+class FlashSession:
+    """Motor-loop owner; perception and planning publish without holding it.
+
+    The producer owns IK and calls :meth:`publish_plan` with future commands.
+    Pose and milestone workers post versioned evidence; only ``step`` mutates
+    progress. A physical host still needs a registered pose backend and a
+    robot-specific kinematics adapter before creating this session.
+    """
+
+    def __init__(
+        self,
+        skill: FlashSkill,
+        robot: RobotIO,
+        *,
+        on_receipt: Callable[[ActionReceipt], None] | None = None,
+        on_tick: Callable[[MotorTick], None] | None = None,
+        fps: float = 30.0,
+        max_starved_ticks: int = 2,
+        max_splice_delta: dict[str, float] | None = None,
+        clock=None,
+        sleep=None,
+    ) -> None:
+        self.progress = Progress(skill)
+        if max_starved_ticks < 1:
+            raise ValueError("max_starved_ticks must be positive")
+        self.actions = ActionQueue(max_splice_delta=max_splice_delta)
+        self._plan_gate_lock = Lock()
+        self._evidence: Queue[MilestoneUpdate | PoseChange] = Queue(maxsize=128)
+        self._receipt_sink = on_receipt
+        self._starved_in_a_row = 0
+        self.max_starved_ticks = max_starved_ticks
+        kwargs = {}
+        if clock is not None:
+            kwargs["clock"] = clock
+        if sleep is not None:
+            kwargs["sleep"] = sleep
+        self.motor = MotorLoop(
+            robot, self.actions, self._on_receipt, self._allow_action, on_tick=on_tick, fps=fps, **kwargs
+        )
+        self.motor.start()
+
+    def post_evidence(self, item: MilestoneUpdate | PoseChange) -> None:
+        try:
+            self._evidence.put_nowait(item)
+        except Full as exc:
+            raise RuntimeError("FLASH evidence queue overflow") from exc
+
+    def publish_plan(self, revision: int, commands: list[TimedAction]) -> None:
+        with self._plan_gate_lock:
+            if (
+                not commands
+                or self.progress.phase not in (Phase.WAITING, Phase.MOVING)
+                or any(command.interval != self.progress.interval.name for command in commands)
+            ):
+                raise PlanRejectedError("planner result belongs to an interval that is no longer active")
+            self.actions.publish(revision, commands)
+
+    def suspend_connection(self, reason: str) -> None:
+        """Atomically drop unissued free-space actions and wait for fresh pose evidence."""
+        with self._plan_gate_lock:
+            events = {sample.event_id for sample in self.progress.interval.samples if sample.event_id}
+            if events & self.actions.snapshot().issued_events:
+                raise ValueError("cannot suspend after a connection's semantic event was issued")
+            self.actions.cancel_unissued(reason)
+            self.progress.suspend_connection(self.motor.clock(), reason)
+            self._starved_in_a_row = 0
+
+    def _allow_action(self, action: TimedAction) -> bool:
+        return action.interval == self.progress.interval.name and self.progress.allows_milestone(
+            action.requires_milestone
+        )
+
+    def _on_receipt(self, receipt: ActionReceipt) -> None:
+        self.progress.receipt(receipt.dispatched_s, receipt.requested.interval_complete)
+        if self._receipt_sink is not None:
+            self._receipt_sink(receipt)
+
+    def _take_evidence(self) -> None:
+        while True:
+            try:
+                item = self._evidence.get_nowait()
+            except Empty:
+                return
+            if isinstance(item, MilestoneUpdate):
+                self.progress.update_milestone(item)
+            else:
+                self.progress.invalidate_changed_roles(set(item.roles), item.source_id, item.source_time_s)
+
+    def _idle_tick(self, reason: str) -> ActionReceipt | None:
+        try:
+            return self.motor.tick(idle_reason=reason)
+        except MissedEventError as exc:
+            self.actions.cancel_unissued(str(exc))
+            self.progress.fail(self.motor.clock(), str(exc))
+            return None
+
+    def _advance_verified(self, now_s: float) -> None:
+        with self._plan_gate_lock:
+            if self.progress.advance(now_s):
+                # Advance and clear as one operation relative to asynchronous
+                # plan publication, including when the receipt itself finishes
+                # an interval in this very tick.
+                self.actions.cancel_unissued("interval completed")
+
+    def step(self) -> ActionReceipt | None:
+        self._take_evidence()
+        now_s = self.motor.clock()
+        if self.progress.phase == Phase.VERIFYING:
+            self._advance_verified(now_s)
+        try:
+            self.motor.align_to_clock()
+        except MissedEventError as exc:
+            self.actions.cancel_unissued(str(exc))
+            self.progress.fail(now_s, str(exc))
+            return self._idle_tick("missed required action")
+        tick = self.motor.metrics.ticks
+        if self.progress.phase == Phase.WAITING:
+            # Publication and the idle decision must be one transaction. A
+            # planner can otherwise publish tick N after has_due(N) returns
+            # false but before skip(N), making an ordinary startup race fatal.
+            with self._plan_gate_lock:
+                if self.progress.can_begin() and self.actions.has_tick(tick):
+                    self.progress.begin(self.motor.epoch_s + tick * self.motor.period_s)
+                else:
+                    if self.actions.has_due(tick):
+                        reason = "entry milestone not satisfied or first command expired"
+                        events = self.actions.cancel_unissued(reason)
+                        self.progress.events.append(
+                            {"type": "plan_cancelled", "reason": reason, "events": events}
+                        )
+                    return self._idle_tick("awaiting interval entry")
+        if self.progress.phase != Phase.MOVING:
+            if self.actions.has_due(tick):
+                reason = f"no motion permitted in {self.progress.phase.value}"
+                events = self.actions.cancel_unissued(reason)
+                self.progress.events.append({"type": "plan_cancelled", "reason": reason, "events": events})
+            return self._idle_tick(self.progress.phase.value)
+        try:
+            receipt = self.motor.tick()
+        except MissedEventError as exc:
+            self.actions.cancel_unissued(str(exc))
+            self.progress.fail(self.motor.clock(), str(exc))
+            return None
+        except PlanRejectedError as exc:
+            self.progress.interrupt(self.motor.clock(), str(exc))
+            return None
+        if receipt is None:
+            self._starved_in_a_row += 1
+            if self._starved_in_a_row >= self.max_starved_ticks:
+                self.progress.fail(self.motor.clock(), "motor action queue starved")
+            return None
+        self._starved_in_a_row = 0
+        if self.progress.phase == Phase.VERIFYING:
+            self._advance_verified(receipt.dispatched_s)
+        return receipt
+
+    def finish(self, verdict: Verdict, reason: str) -> None:
+        self.progress.finish(self.motor.clock(), verdict, reason)

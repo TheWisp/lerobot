@@ -9,14 +9,18 @@ import json
 import logging
 import os
 import re
+import secrets
 import signal
 import sys
+import tempfile
 import time
+from bisect import bisect_left
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
 if TYPE_CHECKING:
@@ -236,6 +240,53 @@ class ReplayRequest(BaseModel):
     # `dataset.fps` directly, so the field is dead config.
 
 
+class FlashInspectRequest(BaseModel):
+    skill_path: str
+
+
+class FlashDatasetInspectRequest(BaseModel):
+    dataset_root: str
+    episode: int
+
+
+class FlashRunRequest(FlashDatasetInspectRequest):
+    bundle_path: str
+    config_path: str
+
+
+class FlashConfigInspectRequest(BaseModel):
+    config_path: str
+
+
+class FlashDemoPrepareRequest(FlashDatasetInspectRequest):
+    bundle_path: str | None = None
+    annotation: dict[str, Any]
+    keypoints_document: dict[str, Any]
+    output_name: str | None = None
+
+
+class FlashTrackerImportRequest(FlashDatasetInspectRequest):
+    bundle_path: str
+    tracker: str
+    role: str
+    source_path: str
+
+
+class FlashTrackerProcessRequest(FlashDatasetInspectRequest):
+    bundle_path: str
+    tracker: str
+    role: str | None = None
+    max_points_per_object: int | None = None
+    new_points_per_view: int | None = None
+    surface_tolerance_m: float | None = None
+
+
+class FlashTrackerApplyRequest(FlashDatasetInspectRequest):
+    bundle_path: str
+    candidate_id: str
+    output_name: str | None = None
+
+
 class HVLARunRequest(BaseModel):
     robot: dict[str, Any]
     s1_checkpoint: str
@@ -284,6 +335,11 @@ _active_process: asyncio.subprocess.Process | None = None
 # when it did.
 _active_loop: asyncio.AbstractEventLoop | None = None
 _active_command: str | None = None
+_flash_live_path: Path | None = None
+_flash_telemetry_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gui-flash-telemetry")
+_flash_config_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gui-flash-config")
+_flash_candidate_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gui-flash-candidate")
+_flash_tracker_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gui-flash-tracker")
 _active_config: dict | None = None
 _debug_process: asyncio.subprocess.Process | None = None  # optional model debug alongside teleop
 _debug_output_path: Path | None = None  # log file for debug model output
@@ -930,6 +986,642 @@ async def start_record(req: RecordRequest) -> dict:
         return {"status": "started", "command": "record", "pid": _active_process.pid}
 
 
+@router.post("/flash/inspect")
+async def inspect_flash_skill(req: FlashInspectRequest) -> dict:
+    """Inspect a local FLASH sidecar without loading it on the GUI event loop."""
+    return await _inspect_flash_subprocess(req.skill_path)
+
+
+@router.post("/flash/dataset-inspect")
+async def inspect_flash_dataset(req: FlashDatasetInspectRequest) -> dict:
+    """Discover FLASH data beside an ordinary local LeRobot episode."""
+    return await _inspect_flash_subprocess("--dataset-root", req.dataset_root, "--episode", str(req.episode))
+
+
+@router.post("/flash/config-inspect")
+async def inspect_flash_config(req: FlashConfigInspectRequest) -> dict:
+    """Show the exact trial parameters without connecting to a robot."""
+    from lerobot.policies.flash.causal_service import CausalTrackingConfig
+    from lerobot.policies.flash.runtime import AttachmentRuntimeLimits
+
+    def read() -> dict:
+        path = Path(req.config_path).expanduser().resolve()
+        if not path.is_file():
+            raise ValueError("Select an existing local robot/camera trial config")
+        settings = json.loads(path.read_text(encoding="utf-8"))
+        AttachmentRuntimeLimits.from_config(settings["attachment"])
+        if settings.get("causal_tracking") is not None:
+            CausalTrackingConfig.from_config(settings["causal_tracking"])
+        return {"path": str(path), "settings": settings}
+
+    try:
+        return await asyncio.get_running_loop().run_in_executor(_flash_config_pool, read)
+    except (KeyError, TypeError, ValueError, OSError) as exc:
+        raise HTTPException(400, f"Invalid FLASH trial config: {exc}") from exc
+
+
+@router.post("/flash/run")
+async def start_flash(req: FlashRunRequest) -> dict:
+    """Launch a prepared spatial skill through the shared Run process owner."""
+    async with _launch_lock:
+        _ensure_no_active_process()
+        inspection = await _inspect_flash_subprocess(
+            "--dataset-root", req.dataset_root, "--episode", str(req.episode)
+        )
+        bundle = Path(req.bundle_path).expanduser().resolve()
+        if not any(
+            item["kind"] == "prepared"
+            and Path(item["path"]).resolve() == bundle
+            and item["inspection"]["runtime_bindings_complete"]
+            for item in inspection["skills"]
+        ):
+            raise HTTPException(400, "Select a complete prepared FLASH skill from this dataset episode")
+        config = Path(req.config_path).expanduser().resolve()
+        if not config.is_file():
+            raise HTTPException(400, "Select an existing local robot/camera trial config")
+        await _release_preview_cameras()
+        global _flash_live_path
+        _flash_live_path = Path(tempfile.gettempdir()) / f"lerobot-flash-{secrets.token_hex(16)}.json"
+        args = [
+            sys.executable,
+            "-u",
+            "-m",
+            "lerobot.policies.flash.live_trial",
+            str(bundle),
+            str(config),
+            "--auto-output",
+            "--source-dataset-root",
+            str(Path(req.dataset_root).expanduser().resolve()),
+            "--telemetry-path",
+            str(_flash_live_path),
+        ]
+        await _launch_subprocess(args, command="flash", config=req.model_dump())
+        return {"status": "started", "command": "flash", "pid": _active_process.pid}
+
+
+@router.get("/flash/telemetry/live")
+async def flash_live_telemetry() -> dict:
+    """Return the current trial's latest tracker layers without touching its loops."""
+    path = _flash_live_path if _active_command == "flash" and is_run_active() else None
+    if path is None:
+        return {"available": False}
+
+    def read() -> dict:
+        try:
+            return {"available": True, "snapshot": json.loads(path.read_text(encoding="utf-8"))}
+        except FileNotFoundError:
+            return {"available": False}
+
+    return await asyncio.get_running_loop().run_in_executor(_flash_telemetry_pool, read)
+
+
+def _flash_tracker_replay(root: Path, episode: int) -> dict:
+    extension = root.expanduser().resolve() / "flash" / "v1"
+    trace_path = extension / f"episode_{episode:06d}.jsonl"
+    if not trace_path.is_file():
+        raise HTTPException(404, "No FLASH trace is stored for this episode")
+    ticks = [json.loads(line) for line in trace_path.open(encoding="utf-8") if line.strip()]
+    if not ticks:
+        raise HTTPException(404, "FLASH trace has no frames")
+    camera_ticks = [tick for tick in ticks if tick.get("camera_source_time_s") is not None]
+    times = [tick["camera_source_time_s"] for tick in camera_ticks]
+    layers_path = extension / f"tracker_episode_{episode:06d}.jsonl"
+    snapshots = (
+        [json.loads(line) for line in layers_path.open(encoding="utf-8") if line.strip()]
+        if layers_path.is_file()
+        else []
+    )
+    if snapshots:
+        frames = []
+        for snapshot in snapshots:
+            camera = snapshot.get("camera")
+            source_s = camera.get("source_time_s") if camera else None
+            if source_s is not None and camera_ticks:
+                pos = bisect_left(times, source_s)
+                pos = min(pos, len(camera_ticks) - 1)
+                if pos and abs(times[pos - 1] - source_s) < abs(times[pos] - source_s):
+                    pos -= 1
+                frame_index = camera_ticks[pos]["frame_index"]
+            else:
+                frame_index = 0
+            frames.append({"frame_index": frame_index, "snapshot": snapshot})
+        return {"available": True, "layer_history": True, "frames": frames}
+    # Older trials recorded the accepted planner pose at motor ticks, but not
+    # every rejected/direct/group layer. Show only what those traces establish.
+    return {
+        "available": True,
+        "layer_history": False,
+        "frames": [
+            {
+                "frame_index": tick["frame_index"],
+                "snapshot": {
+                    "recorded_at_s": tick.get("observed_at_s") or tick.get("scheduled_s"),
+                    "camera": None,
+                    "centers_object_m": {},
+                    "proposals": {},
+                    "layers": {},
+                    "accepted": tick.get("poses", {}),
+                },
+            }
+            for tick in ticks
+        ],
+    }
+
+
+@router.get("/flash/telemetry/replay")
+async def flash_tracker_replay(dataset_root: str, episode: int = 0) -> dict:
+    if episode < 0:
+        raise HTTPException(400, "Episode must be nonnegative")
+    return await asyncio.get_running_loop().run_in_executor(
+        _flash_telemetry_pool, _flash_tracker_replay, Path(dataset_root), episode
+    )
+
+
+@router.get("/flash/demo/replay")
+async def flash_demo_replay(
+    dataset_root: str, bundle_path: str, episode: int = 0, candidate_id: str | None = None
+) -> dict:
+    """Play the original camera frames with the exact prepared spatial samples."""
+    from lerobot.policies.flash.demo_replay import load_legacy_demo_replay
+    from lerobot.policies.flash.demo_tracker_candidates import load_candidate_set
+
+    if episode < 0:
+        raise HTTPException(400, "Episode must be nonnegative")
+    try:
+
+        def read() -> dict:
+            result = load_legacy_demo_replay(Path(dataset_root), episode, Path(bundle_path))
+            if candidate_id is not None:
+                manifest, poses_by_role = load_candidate_set(
+                    Path(dataset_root), Path(bundle_path), candidate_id
+                )
+                for frame in result["frames"]:
+                    for role, poses in poses_by_role.items():
+                        pose = poses.get(frame["frame_index"])
+                        if pose is not None:
+                            snapshot = frame["snapshot"]
+                            snapshot.setdefault("layers", {}).setdefault(role, {})["candidate_tracker"] = {
+                                "pose": pose.tolist(),
+                                "evidence": "candidate",
+                                "estimator": manifest["tracker"],
+                                "source_time_s": snapshot["recorded_at_s"],
+                            }
+                result["tracker_candidate"] = {"candidate_id": candidate_id, **manifest}
+            return result
+
+        return await asyncio.get_running_loop().run_in_executor(_flash_candidate_pool, read)
+    except (OSError, KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(400, f"Cannot replay FLASH demo: {exc}") from exc
+
+
+@router.get("/flash/demo/track-points")
+async def flash_demo_track_points(dataset_root: str, bundle_path: str, candidate_id: str) -> dict:
+    """Read the candidate's raw model tracks for replay; no fitting runs here."""
+    from lerobot.policies.flash.demo_tracker_candidates import load_candidate_point_tracks
+
+    try:
+        return await asyncio.get_running_loop().run_in_executor(
+            _flash_candidate_pool,
+            load_candidate_point_tracks,
+            Path(dataset_root),
+            Path(bundle_path),
+            candidate_id,
+        )
+    except (OSError, KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(400, f"Cannot read FLASH point tracks: {exc}") from exc
+
+
+@router.get("/flash/demo/trackers")
+async def flash_demo_trackers(dataset_root: str, bundle_path: str) -> dict:
+    """List supported trace identities and versioned proposals for this demo."""
+    from lerobot.policies.flash.demo_tracker_candidates import list_candidates, runner_availability
+
+    try:
+        trackers, candidates = await asyncio.get_running_loop().run_in_executor(
+            _flash_candidate_pool,
+            lambda: (runner_availability(), list_candidates(Path(dataset_root), Path(bundle_path))),
+        )
+    except (OSError, KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(400, f"Cannot list demo trackers: {exc}") from exc
+    return {
+        "trackers": trackers,
+        "candidates": candidates,
+    }
+
+
+@router.post("/flash/demo/trackers/process")
+async def flash_demo_tracker_process(req: FlashTrackerProcessRequest) -> dict:
+    """Run offline inference without occupying the GUI event loop or robot owner."""
+    from lerobot.policies.flash.demo_tracker_candidates import process_demo
+
+    candidate_id = f"{req.tracker}-{time.strftime('%Y%m%d-%H%M%S')}-{secrets.token_hex(3)}"
+    try:
+        return await asyncio.get_running_loop().run_in_executor(
+            _flash_tracker_pool,
+            lambda: process_demo(
+                Path(req.dataset_root),
+                Path(req.bundle_path),
+                tracker=req.tracker,
+                role=req.role,
+                candidate_id=candidate_id,
+                expected_episode=req.episode,
+                max_points_per_object=req.max_points_per_object,
+                new_points_per_view=req.new_points_per_view,
+                surface_tolerance_m=req.surface_tolerance_m,
+            ),
+        )
+    except (OSError, KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(400, f"Cannot process FLASH demo: {exc}") from exc
+
+
+@router.post("/flash/demo/trackers/import")
+async def flash_demo_tracker_import(req: FlashTrackerImportRequest) -> dict:
+    """Validate and align a saved tracker output as a review-only proposal."""
+    from lerobot.policies.flash.demo_tracker_candidates import import_relative_trace
+
+    try:
+        return await asyncio.get_running_loop().run_in_executor(
+            _flash_candidate_pool,
+            lambda: import_relative_trace(
+                Path(req.dataset_root),
+                Path(req.bundle_path),
+                tracker=req.tracker,
+                role=req.role,
+                source_path=Path(req.source_path),
+                candidate_id=f"{req.tracker}-{time.strftime('%Y%m%d-%H%M%S')}-{secrets.token_hex(3)}",
+                expected_episode=req.episode,
+            ),
+        )
+    except (OSError, KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(400, f"Cannot import tracker output: {exc}") from exc
+
+
+@router.post("/flash/demo/trackers/apply")
+async def flash_demo_tracker_apply(req: FlashTrackerApplyRequest) -> dict:
+    """Create a new active prepared skill from one reviewed pose proposal."""
+    from lerobot.policies.flash.demo_tracker_candidates import apply_candidate
+
+    try:
+        name = req.output_name or f"flash-tracker-{time.strftime('%Y%m%d-%H%M%S')}-{secrets.token_hex(3)}"
+        bundle, report = await asyncio.get_running_loop().run_in_executor(
+            _flash_candidate_pool,
+            lambda: apply_candidate(
+                Path(req.dataset_root),
+                Path(req.bundle_path),
+                req.candidate_id,
+                output_name=name,
+                expected_episode=req.episode,
+            ),
+        )
+    except (OSError, KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(400, f"Cannot apply tracker output: {exc}") from exc
+    return {"bundle_path": str(bundle), "report": report}
+
+
+@router.get("/flash/demo/raw-replay")
+async def flash_raw_demo_replay(dataset_root: str, episode: int = 0) -> dict:
+    """Review a raw RGB-D demo before any object roles or skill are prepared."""
+    from lerobot.policies.flash.demo_replay import load_raw_legacy_demo_replay
+
+    try:
+        return await asyncio.get_running_loop().run_in_executor(
+            _flash_telemetry_pool, load_raw_legacy_demo_replay, Path(dataset_root), episode
+        )
+    except (OSError, KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(400, f"Cannot replay raw FLASH demo: {exc}") from exc
+
+
+@router.get("/flash/demo/frame")
+def flash_demo_frame(dataset_root: str, frame_index: int) -> FileResponse:
+    """Serve the same numbered JPEG frame the preparation adapter consumed."""
+    root = Path(dataset_root).expanduser().resolve()
+    if frame_index < 0 or not (root / "meta" / "info.json").is_file():
+        raise HTTPException(400, "Select a valid local demo dataset and frame")
+    path = root / "recording" / "rgb" / f"{frame_index:06d}.jpg"
+    if not path.is_file():
+        raise HTTPException(404, "Demo camera frame is missing")
+    return FileResponse(path, media_type="image/jpeg")
+
+
+def _flash_demo_paths(dataset_root: str, bundle_path: str) -> tuple[Path, Path]:
+    root = Path(dataset_root).expanduser().resolve()
+    bundle = Path(bundle_path).expanduser().resolve()
+    prepared_root = root / "flash" / "v1" / "prepared"
+    try:
+        relative = bundle.relative_to(prepared_root)
+    except ValueError as exc:
+        raise ValueError("selected skill must be stored with this demo dataset") from exc
+    if (
+        relative.parts != (bundle.parent.name, "bundle.json")
+        or not bundle.is_file()
+        or not (root / "meta" / "info.json").is_file()
+    ):
+        raise ValueError("select a prepared FLASH skill beside a local demo")
+    return root, bundle
+
+
+def _flash_demo_preparation(dataset_root: str, bundle_path: str, episode: int) -> dict:
+    root, bundle = _flash_demo_paths(dataset_root, bundle_path)
+    manifest = json.loads(bundle.read_text(encoding="utf-8"))
+    skill = json.loads((bundle.parent / manifest["skill"]).read_text(encoding="utf-8"))
+    if skill["source_episode"] != episode:
+        raise ValueError("prepared skill belongs to a different demo episode")
+    annotation_path = bundle.parent / "annotation.json"
+    if not annotation_path.is_file():
+        annotation_path = root / "flash" / "v1" / "import-annotations.json"
+    keypoints_path = bundle.parent / "keypoints.json"
+    if not keypoints_path.is_file():
+        keypoints_path = root / "keypoints.json"
+    annotation = json.loads(annotation_path.read_text(encoding="utf-8"))
+    keypoints = json.loads(keypoints_path.read_text(encoding="utf-8"))
+    if annotation["episode"] != episode or not isinstance(keypoints["keypoints"], list):
+        raise ValueError("preparation inputs do not match the selected demo episode")
+    report_path = bundle.parent / "preparation-report.json"
+    report = json.loads(report_path.read_text(encoding="utf-8")) if report_path.is_file() else None
+    return {
+        "annotation": annotation,
+        "keypoints_document": keypoints,
+        "preparation_report": report,
+        "annotation_source": str(annotation_path),
+        "keypoints_source": str(keypoints_path),
+        "reference_masks": {
+            reference["role"]: {
+                "frame_index": reference["snippets"][0]["frame_index"],
+                "available": (root / reference["snippets"][0]["mask_artifact"]).is_file(),
+            }
+            for reference in manifest["references"]
+            if reference.get("snippets")
+        },
+    }
+
+
+@router.get("/flash/demo/preparation")
+async def flash_demo_preparation(dataset_root: str, bundle_path: str, episode: int = 0) -> dict:
+    """Read the selected demo's editable recipe without loading GPU models."""
+    try:
+        return await asyncio.get_running_loop().run_in_executor(
+            _flash_config_pool, _flash_demo_preparation, dataset_root, bundle_path, episode
+        )
+    except (OSError, KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(400, f"Cannot load FLASH demo preparation: {exc}") from exc
+
+
+@router.get("/flash/demo/reference-mask")
+def flash_demo_reference_mask(dataset_root: str, bundle_path: str, role: str) -> FileResponse:
+    """Serve a prepared reference mask from its dataset, not an arbitrary path."""
+    try:
+        root, bundle = _flash_demo_paths(dataset_root, bundle_path)
+        manifest = json.loads(bundle.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise HTTPException(400, f"Cannot read prepared reference mask: {exc}") from exc
+    reference = next((item for item in manifest["references"] if item["role"] == role), None)
+    if reference is None or not reference["snippets"]:
+        raise HTTPException(404, "Selected role has no prepared reference mask")
+    mask = (root / reference["snippets"][0]["mask_artifact"]).resolve()
+    try:
+        mask.relative_to((root / "flash" / "v1" / "masks").resolve())
+    except ValueError as exc:
+        raise HTTPException(400, "Reference mask is outside this dataset") from exc
+    if not mask.is_file():
+        raise HTTPException(404, "Prepared reference mask is missing")
+    return FileResponse(mask, media_type="image/png")
+
+
+@router.post("/flash/demo/prepare")
+async def prepare_flash_demo(req: FlashDemoPrepareRequest) -> dict:
+    """Version the edited inputs and launch offline preparation asynchronously."""
+    async with _launch_lock:
+        _ensure_no_active_process()
+
+        def save_inputs() -> tuple[Path, Path, Path, str]:
+            if req.bundle_path is not None:
+                root, _ = _flash_demo_paths(req.dataset_root, req.bundle_path)
+                current = _flash_demo_preparation(req.dataset_root, req.bundle_path, req.episode)
+                if set(req.annotation.get("prompts_by_role", {})) != set(
+                    current["annotation"]["prompts_by_role"]
+                ):
+                    raise ValueError("this importer cannot change the prepared object roles")
+            else:
+                root = Path(req.dataset_root).expanduser().resolve()
+                if (
+                    req.episode != 0
+                    or not (root / "showservo_demo.npz").is_file()
+                    or not (root / "meta" / "info.json").is_file()
+                ):
+                    raise ValueError("select episode 0 of a local raw RGB-D demo")
+                roles = req.annotation.get("prompts_by_role", {})
+                held, target = req.annotation.get("held_role"), req.annotation.get("target_role")
+                if (
+                    not isinstance(roles, dict)
+                    or set(roles) != {held, target}
+                    or held == target
+                    or any(
+                        not isinstance(role, str)
+                        or re.fullmatch(r"[A-Za-z][A-Za-z0-9 _-]{0,39}", role) is None
+                        or not isinstance(prompt, str)
+                        or not prompt.strip()
+                        for role, prompt in roles.items()
+                    )
+                ):
+                    raise ValueError("name two distinct objects and give each a segmentation prompt")
+            if req.annotation.get("episode") != req.episode:
+                raise ValueError("annotation episode differs from the selected demo")
+            keypoints = req.keypoints_document.get("keypoints")
+            if not isinstance(keypoints, list) or not keypoints:
+                raise ValueError("the edited demo needs at least one keypoint")
+            name = (
+                req.output_name or f"flash-prepared-{time.strftime('%Y%m%d-%H%M%S')}-{secrets.token_hex(3)}"
+            )
+            if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", name) is None:
+                raise ValueError(
+                    "prepared version name must use letters, digits, dots, dashes or underscores"
+                )
+            if (root / "flash" / "v1" / "prepared" / name).exists():
+                raise ValueError("that prepared version already exists")
+            input_dir = root / "flash" / "v1" / "preparation-inputs" / name
+            input_dir.mkdir(parents=True, exist_ok=False)
+            annotation_path = input_dir / "annotation.json"
+            keypoints_path = input_dir / "keypoints.json"
+            annotation_path.write_text(json.dumps(req.annotation, indent=2) + "\n", encoding="utf-8")
+            keypoints_path.write_text(json.dumps(req.keypoints_document, indent=2) + "\n", encoding="utf-8")
+            return root, annotation_path, keypoints_path, name
+
+        try:
+            root, annotation_path, keypoints_path, name = await asyncio.get_running_loop().run_in_executor(
+                _flash_config_pool, save_inputs
+            )
+        except (OSError, KeyError, TypeError, ValueError) as exc:
+            raise HTTPException(400, f"Cannot prepare FLASH demo: {exc}") from exc
+        importer = Path(__file__).resolve().parents[4] / "benchmarks" / "flash_prepare_legacy.py"
+        args = [
+            sys.executable,
+            "-u",
+            str(importer),
+            str(root),
+            str(annotation_path),
+            "--keypoints",
+            str(keypoints_path),
+            "--output-name",
+            name,
+        ]
+        await _launch_subprocess(args, command="flash_prepare", config=req.model_dump())
+        return {
+            "status": "started",
+            "command": "flash_prepare",
+            "pid": _active_process.pid,
+            "bundle_path": str(root / "flash" / "v1" / "prepared" / name / "bundle.json"),
+            "output_name": name,
+        }
+
+
+def _flash_recordings(source_paths: tuple[Path, ...]) -> list[dict]:
+    """Find demo episodes and rollouts under the same bounded source folders as Data."""
+    extensions: set[Path] = set()
+    for source in source_paths:
+        root = source.expanduser()
+        for depth in range(4):
+            pattern = "/".join(["*"] * depth + ["flash", "v1"])
+            extensions.update(path for path in root.glob(pattern) if path.is_dir())
+            raw_pattern = "/".join(["*"] * depth + ["meta", "info.json"])
+            for info_path in root.glob(raw_pattern):
+                dataset_root = info_path.parent.parent
+                if (dataset_root / "showservo_demo.npz").is_file() and (
+                    dataset_root / "recording" / "times.txt"
+                ).is_file():
+                    extensions.add(dataset_root / "flash" / "v1")
+    found = []
+    for extension in extensions:
+        dataset_root = extension.parent.parent
+        info_path = dataset_root / "meta" / "info.json"
+        if not info_path.is_file():
+            continue
+        try:
+            episode_count = json.loads(info_path.read_text(encoding="utf-8"))["total_episodes"]
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+        if not isinstance(episode_count, int) or episode_count < 0:
+            continue
+        demos: dict[int, dict] = {}
+        raw_arm = dataset_root / "showservo_demo.npz"
+        if episode_count > 0 and raw_arm.is_file() and (dataset_root / "recording" / "times.txt").is_file():
+            demos[0] = {
+                "kind": "demo",
+                "dataset_root": str(dataset_root.resolve()),
+                "episode": 0,
+                "modified_at_s": raw_arm.stat().st_mtime,
+                "skills": [],
+                "prepared_versions": [],
+                "bundle_path": None,
+                "prepared_skill": None,
+            }
+        skill_paths = list((extension / "prepared").glob("*/bundle.json"))
+        skill_paths += list((extension / "skills").glob("*.json"))
+        skill_paths.sort(key=lambda path: path.stat().st_mtime)
+        for path in skill_paths:
+            try:
+                if path.stat().st_size > 16 * 1024 * 1024:
+                    continue
+                metadata = json.loads(path.read_text(encoding="utf-8"))
+                if path.name == "bundle.json":
+                    path_to_skill = path.parent / metadata["skill"]
+                    if path_to_skill.stat().st_size > 16 * 1024 * 1024:
+                        continue
+                    metadata = json.loads(path_to_skill.read_text(encoding="utf-8"))
+                episode = metadata["source_episode"]
+                if not isinstance(episode, int) or not 0 <= episode < episode_count:
+                    continue
+                modified_at_s = path.stat().st_mtime
+            except (OSError, ValueError, KeyError, TypeError):
+                continue
+            demo = demos.setdefault(
+                episode,
+                {
+                    "kind": "demo",
+                    "dataset_root": str(dataset_root.resolve()),
+                    "episode": episode,
+                    "modified_at_s": 0,
+                    "skills": [],
+                    "prepared_versions": [],
+                    "bundle_path": None,
+                    "prepared_skill": None,
+                },
+            )
+            demo["modified_at_s"] = max(demo["modified_at_s"], modified_at_s)
+            demo["skills"].append(path.parent.name if path.name == "bundle.json" else path.stem)
+            if path.name == "bundle.json":
+                report = path.parent / "preparation-report.json"
+                try:
+                    candidate = (
+                        json.loads(report.read_text(encoding="utf-8")).get("review_status") == "candidate"
+                    )
+                except (OSError, ValueError, TypeError):
+                    candidate = False
+                demo["prepared_versions"].append(
+                    {"name": path.parent.name, "bundle_path": str(path.resolve()), "candidate": candidate}
+                )
+                if not candidate:
+                    demo["bundle_path"] = str(path.resolve())
+                    demo["prepared_skill"] = path.parent.name
+        for demo in demos.values():
+            if demo["bundle_path"] is None and demo["prepared_versions"]:
+                chosen = demo["prepared_versions"][-1]
+                demo["bundle_path"] = chosen["bundle_path"]
+                demo["prepared_skill"] = chosen["name"]
+        found.extend(demos.values())
+        manifest_path = extension / "manifest.json"
+        try:
+            episodes = json.loads(manifest_path.read_text(encoding="utf-8")).get("episodes", {})
+        except (OSError, ValueError):
+            episodes = {}
+        for trace in extension.glob("episode_*.jsonl"):
+            try:
+                episode = int(trace.stem.removeprefix("episode_"))
+            except ValueError:
+                continue
+            detail = episodes.get(str(episode), {})
+            found.append(
+                {
+                    "kind": "rollout",
+                    "dataset_root": str(dataset_root.resolve()),
+                    "episode": episode,
+                    "modified_at_s": trace.stat().st_mtime,
+                    "frames": detail.get("frames"),
+                    "outcome": detail.get("outcome", "recording"),
+                    "reason": detail.get("reason", ""),
+                }
+            )
+    return sorted(found, key=lambda item: item["modified_at_s"], reverse=True)
+
+
+@router.get("/flash/recordings")
+async def flash_recordings() -> list[dict]:
+    from lerobot.gui.api.datasets import _read_sources
+
+    sources = tuple(Path(item["path"]) for item in _read_sources())
+    return await asyncio.get_running_loop().run_in_executor(_flash_telemetry_pool, _flash_recordings, sources)
+
+
+async def _inspect_flash_subprocess(*args: str) -> dict:
+    process = await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-m",
+        "lerobot.policies.flash.inspect",
+        *args,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        out, err = await asyncio.wait_for(process.communicate(), timeout=20)
+    except _TIMEOUT_EXCS as exc:
+        process.kill()
+        await process.wait()
+        raise HTTPException(408, "FLASH skill inspection timed out") from exc
+    if process.returncode:
+        message = err.decode(errors="replace").strip().splitlines()
+        raise HTTPException(400, message[-1] if message else "Invalid FLASH skill")
+    return json.loads(out)
+
+
 @router.post("/replay")
 async def start_replay(req: ReplayRequest) -> dict:
     async with _launch_lock:
@@ -1304,6 +1996,18 @@ async def stop_process() -> dict:
             graceful = True
         except (*_TIMEOUT_EXCS, BrokenPipeError, ConnectionResetError, OSError) as e:
             logger.warning(f"Graceful stop failed for PID {pid} ({e}); escalating to SIGINT")
+        finally:
+            _graceful_stop_inflight = False
+
+    if _active_command == "flash" and proc.returncode is None and not _graceful_stop_inflight:
+        _graceful_stop_inflight = True
+        try:
+            proc.send_signal(signal.SIGINT)
+            _append_output(f"\n--- Stop requested: saving FLASH trial (PID {pid}) ---\n")
+            await asyncio.wait_for(proc.wait(), timeout=STOP_GRACE_S)
+            graceful = True
+        except (*_TIMEOUT_EXCS, ProcessLookupError) as e:
+            logger.warning(f"Graceful FLASH stop failed for PID {pid} ({e}); escalating")
         finally:
             _graceful_stop_inflight = False
 

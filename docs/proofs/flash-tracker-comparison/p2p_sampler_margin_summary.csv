@@ -1,0 +1,7 @@
+seed_frame,edge_margin_px,seed_valid_points,insertion_valid_frames_of_101,surface_p90_median_mm,inferred_hidden_end_gap_median_mm
+340,0,17,101,13.308,17.38
+340,1,18,101,6.46,12.919
+340,2,18,101,6.328,10.35
+340,3,20,101,6.657,11.193
+340,4,12,100,6.281,12.686
+380,2,19,101,7.557,3.261

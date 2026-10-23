@@ -24,12 +24,12 @@
     "v": "1"
   },
   "bridge.js": {
-    "sha256_16": "90194f7e2e20630e",
-    "v": "1"
+    "sha256_16": "2291ba63c489789d",
+    "v": "3"
   },
   "bridge_consumers.js": {
-    "sha256_16": "8fe211b16ae7676f",
-    "v": "1"
+    "sha256_16": "dae8a0616091754c",
+    "v": "3"
   },
   "bug_report.js": {
     "sha256_16": "494caaadacba39e3",
@@ -58,6 +58,10 @@
   "feature_editing.js": {
     "sha256_16": "d3bc22d5096c2f9c",
     "v": "89"
+  },
+  "flash_demo_editor.js": {
+    "sha256_16": "b60be28a5584e27c",
+    "v": "5"
   },
   "live_video.js": {
     "sha256_16": "6c7352e2876a04e6",
@@ -108,12 +112,12 @@
     "v": "27"
   },
   "run.js": {
-    "sha256_16": "e6f57815e7b534d1",
-    "v": "76"
+    "sha256_16": "45c54be2d830ae06",
+    "v": "110"
   },
   "style.css": {
-    "sha256_16": "8d7c9b87552b13c3",
-    "v": "127"
+    "sha256_16": "a30876238c3bf6f0",
+    "v": "136"
   },
   "timeline_lanes.js": {
     "sha256_16": "e77d56c09759662d",
