@@ -18,6 +18,7 @@ from benchmarks.flash_surface_benchmark import (
 )
 from benchmarks.flash_surface_growth import build as build_growth
 from benchmarks.flash_surface_lk import run as run_lk
+from benchmarks.flash_surface_nested_budget import build as build_nested_budget
 from benchmarks.flash_surface_npz_rgbd import build as build_npz_rgbd
 from benchmarks.flash_surface_point4d import project_model_tracks
 from benchmarks.flash_surface_report import collect as collect_report, markdown as report_markdown
@@ -68,6 +69,43 @@ def test_prediction_must_retain_query_identity():
     }
     with pytest.raises(ValueError, match="exact source frames and query identities"):
         validate_prediction(reference, prediction)
+
+
+def test_nested_budget_preserves_material_point_identity_and_labels(tmp_path):
+    master = tmp_path / "master"
+    (master / "recording").mkdir(parents=True)
+    (master / "masks").mkdir()
+    xy = np.array([(x, y) for y in range(4) for x in range(4)], dtype=np.float32)
+    queries = np.column_stack((np.zeros(len(xy)), xy))
+    truth_xy = np.stack((xy, xy + [1, 0]))
+    np.savez_compressed(
+        master / "queries.npz",
+        frames=np.arange(2),
+        queries=queries,
+        initial_depth_m=np.ones(len(xy)),
+        truth_xy=truth_xy,
+        truth_xyz=np.ones((2, len(xy), 3)),
+        truth_visible=np.ones((2, len(xy)), bool),
+        reference_depth_gap_m=np.zeros((2, len(xy))),
+    )
+    (master / "manifest.json").write_text(
+        json.dumps({"recording": str(master / "recording"), "mask_dir": str(master / "masks")})
+    )
+    output = tmp_path / "nested"
+    build_nested_budget(master, output, (3, 6, 16))
+    with (
+        np.load(output / "budget-3" / "queries.npz") as small,
+        np.load(output / "budget-6" / "queries.npz") as medium,
+        np.load(output / "budget-16" / "queries.npz") as large,
+    ):
+        assert np.array_equal(small["queries"], medium["queries"][:3])
+        assert np.array_equal(medium["queries"], large["queries"][:6])
+        for point, path in enumerate(small["queries"]):
+            source_id = np.flatnonzero(np.all(queries == path, axis=1))
+            assert len(source_id) == 1
+            assert np.array_equal(small["truth_xy"][:, point], truth_xy[:, source_id[0]])
+    # Regeneration must keep the frozen source links rather than replacing data.
+    build_nested_budget(master, output, (3, 6, 16))
 
 
 def test_timing_reports_old_results_even_when_published_often():
