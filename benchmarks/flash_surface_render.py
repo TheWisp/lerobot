@@ -111,9 +111,16 @@ def render(experiment: Path, models: list[str], output: Path, roi: tuple[int, in
         for index in indices:
             frame_id = frames[index]
             rgb = cv2.imread(str(recording / "rgb" / f"{frame_id:06d}.jpg"), cv2.IMREAD_COLOR)
-            mask = cv2.imread(str(Path(manifest["mask_dir"]) / f"{frame_id:06d}.png"), cv2.IMREAD_GRAYSCALE)
-            if rgb is None or mask is None or mask.shape != rgb.shape[:2]:
-                raise ValueError(f"bad RGB/mask frame {frame_id}")
+            if rgb is None:
+                raise ValueError(f"bad RGB frame {frame_id}")
+            if "mask_dir" in manifest:
+                mask = cv2.imread(
+                    str(Path(manifest["mask_dir"]) / f"{frame_id:06d}.png"), cv2.IMREAD_GRAYSCALE
+                )
+                if mask is None or mask.shape != rgb.shape[:2]:
+                    raise ValueError(f"bad aligned mask at frame {frame_id}")
+            else:
+                mask = np.zeros(rgb.shape[:2], np.uint8)
             truth_xy = reference["truth_xy"][index] if "truth_xy" in reference else None
             truth_visible = reference["truth_visible"][index] if "truth_visible" in reference else None
             panels = [

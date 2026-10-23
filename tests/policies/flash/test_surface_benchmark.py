@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 
 import cv2
 import numpy as np
@@ -11,6 +12,7 @@ import pytest
 from benchmarks.flash_surface_benchmark import (
     diagnostic,
     lift_measured_depth,
+    main as benchmark_main,
     prepare_local,
     score,
     timing,
@@ -18,6 +20,7 @@ from benchmarks.flash_surface_benchmark import (
 )
 from benchmarks.flash_surface_growth import build as build_growth
 from benchmarks.flash_surface_lk import run as run_lk
+from benchmarks.flash_surface_lsfodyssey import build as build_lsfodyssey
 from benchmarks.flash_surface_nested_budget import build as build_nested_budget
 from benchmarks.flash_surface_npz_rgbd import build as build_npz_rgbd
 from benchmarks.flash_surface_point4d import project_model_tracks
@@ -348,3 +351,63 @@ def test_2d_only_candidate_stays_in_accuracy_report_without_fake_metric_depth(tm
     assert result["macro_equal_clip_weight"][0]["clip_mean_coverage_2px"] == 1
     assert result["macro_equal_clip_weight"][0]["clip_mean_coverage_5mm"] is None
     assert "n/a" in report_markdown(result)
+
+
+def test_labelled_rgbd_import_scores_without_masks_and_keeps_missing_points(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    source.mkdir()
+    depth = np.ones((2, 16, 16), np.float32)
+    np.savez_compressed(source / "deps.npz", deps=depth[:, None])
+    k = np.array([[20, 0, 8], [0, 20, 8], [0, 0, 1]], np.float32)
+    np.savez_compressed(source / "intris.npz", intris=np.tile(k, (1, 2, 1, 1)))
+    tracks = np.zeros((2, 4, 5), np.float32)
+    tracks[0, :, :3] = [[2, 2, 1], [12, 2, 1], [2, 12, 1], [12, 12, 1]]
+    tracks[1, :, :3] = tracks[0, :, :3] + [1, 0, 0]
+    tracks[:, :, 3:] = 1
+    tracks[1, 3, 3] = 0
+    np.savez_compressed(source / "track.npz", track_g=tracks)
+    video = cv2.VideoWriter(str(source / "rgb.mp4"), cv2.VideoWriter_fourcc(*"mp4v"), 24, (16, 16))
+    assert video.isOpened()
+    for index in range(2):
+        video.write(np.full((16, 16, 3), index * 70, np.uint8))
+    video.release()
+
+    experiment = tmp_path / "experiment"
+    manifest = build_lsfodyssey(source, experiment, 4)
+    assert "mask_dir" not in manifest
+    assert sorted(manifest["source_track_ids"]) == [0, 1, 2, 3]
+    with np.load(experiment / "queries.npz", allow_pickle=False) as reference:
+        selected = manifest["source_track_ids"]
+        np.testing.assert_allclose(reference["truth_xy"], tracks[:, selected, :2])
+        assert np.all(reference["truth_xy"][1, :, 0] == reference["queries"][:, 1] + 1)
+        assert reference["truth_visible"].sum() == 7
+        visible = reference["truth_visible"].copy()
+        visible[1, selected.index(0)] = False
+        prediction = experiment / "pred.npz"
+        np.savez_compressed(
+            prediction,
+            frames=reference["frames"],
+            queries=reference["queries"],
+            xy=reference["truth_xy"],
+            visible=visible,
+        )
+    output = experiment / "evaluation.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "benchmark",
+            "evaluate",
+            "--experiment",
+            str(experiment),
+            "--prediction",
+            str(prediction),
+            "--output",
+            str(output),
+        ],
+    )
+    benchmark_main()
+    report = json.loads(output.read_text())
+    assert "diagnostic" not in report
+    assert report["accuracy"]["eligible_point_frames"] == 7
+    assert report["accuracy"]["coverage_px"]["2"] == pytest.approx(6 / 7)

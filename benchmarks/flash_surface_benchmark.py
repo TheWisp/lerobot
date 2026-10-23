@@ -349,13 +349,14 @@ def main() -> None:
         reference = _load(experiment / "queries.npz")
         prediction = _load(args.prediction)
         report = {"schema": SCHEMA, "manifest": manifest, "prediction": str(args.prediction.resolve())}
-        report["diagnostic"] = diagnostic(
-            Path(manifest["recording"]),
-            Path(manifest["mask_dir"]),
-            reference,
-            prediction,
-            args.depth_tolerance_m,
-        )
+        if "mask_dir" in manifest:
+            report["diagnostic"] = diagnostic(
+                Path(manifest["recording"]),
+                Path(manifest["mask_dir"]),
+                reference,
+                prediction,
+                args.depth_tolerance_m,
+            )
         if "truth_visible" in reference:
             report["accuracy"] = score(reference, prediction)
         if "publication_s" in prediction:
