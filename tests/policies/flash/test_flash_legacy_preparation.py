@@ -14,6 +14,12 @@ from lerobot.policies.flash.sealed_demo_import import (
 from lerobot.policies.flash.skill import EndpointRequirement, Relation
 
 
+def test_prepared_skill_auditor_imports_the_production_legacy_adapter():
+    from benchmarks.flash_audit_legacy_skill import audit
+
+    assert callable(audit)
+
+
 def test_lift_uses_grasp_anchor_until_nearest_recorded_boundary():
     # A 9.7-second event is represented by the 9.71-second arm sample. The
     # previous float comparison incorrectly made this entire lift target-relative.

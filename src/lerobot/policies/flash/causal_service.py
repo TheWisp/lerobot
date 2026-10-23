@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass, fields, replace
+from dataclasses import asdict, dataclass, fields, replace
 from math import isfinite
 from queue import Full, Queue
 from threading import Lock, Thread
@@ -281,6 +281,38 @@ class CausalPoseService:
     ) -> None:
         self._submit(_Anchor(frame_id, estimates, masks, source_time_s, calibration_version))
 
+    def process_offline(
+        self,
+        frame: RGBDFrame,
+        estimates: tuple[PoseEstimate, ...],
+        masks: dict[str, np.ndarray],
+        *,
+        attached_role: str | None = None,
+    ) -> dict[str, PoseEstimate]:
+        """Apply one recorded frame through the same scene estimator as live.
+
+        Offline extraction has every camera frame and its direct proposal in
+        source order. It can therefore run synchronously without a worker queue
+        or artificial perception delay. This does not reproduce the scheduling
+        of delayed live proposals; it shares their pose arbitration and group
+        tracking rules.
+        """
+        if self._started:
+            raise RuntimeError("offline pose processing cannot share a running worker")
+        self.set_attached_role(attached_role)
+        self._frame(frame)
+        self._anchor(
+            _Anchor(
+                frame.frame_id,
+                estimates,
+                masks,
+                frame.source_time_s,
+                frame.calibration_version,
+            )
+        )
+        self._drain_pending()
+        return self.store.snapshot()[1]
+
     def set_attached_role(self, role: str | None) -> None:
         """Withdraw support assumptions when an object is grasped or released."""
         with self._attachment_lock:
@@ -329,27 +361,26 @@ class CausalPoseService:
                 # between incoming camera events. Each step is interruptible
                 # by the next queued frame, so replay cannot starve the
                 # current scene state for the duration of its whole history.
-                while self.pending and self.queue.empty():
-                    attached_role = self._sync_attachment()
-                    replay_role = next(
-                        (
-                            role
-                            for role in self.pending
-                            if role == attached_role or role not in self.relationships
-                        ),
-                        None,
-                    )
-                    if replay_role is None:
-                        break
-                    replay_started_s = time.perf_counter()
-                    if not self._replay_one(replay_role):
-                        break
-                    elapsed_s = time.perf_counter() - replay_started_s
-                    self.replay_compute_total_s += elapsed_s
-                    self.replay_compute_max_s = max(self.replay_compute_max_s, elapsed_s)
+                self._drain_pending(while_queue_empty=True)
         except Exception as exc:
             with self._lock:
                 self._error = exc
+
+    def _drain_pending(self, *, while_queue_empty: bool = False) -> None:
+        while self.pending and (not while_queue_empty or self.queue.empty()):
+            attached_role = self._sync_attachment()
+            replay_role = next(
+                (role for role in self.pending if role == attached_role or role not in self.relationships),
+                None,
+            )
+            if replay_role is None:
+                break
+            replay_started_s = time.perf_counter()
+            if not self._replay_one(replay_role):
+                break
+            elapsed_s = time.perf_counter() - replay_started_s
+            self.replay_compute_total_s += elapsed_s
+            self.replay_compute_max_s = max(self.replay_compute_max_s, elapsed_s)
 
     def _frame(self, frame: RGBDFrame) -> None:
         attached_role = self._sync_attachment()
@@ -989,3 +1020,31 @@ class CausalPoseService:
         if self._thread.is_alive():
             raise RuntimeError("causal pose service did not stop")
         self._started = False
+
+
+def build_causal_pose_service(
+    store: LatestPoseStore,
+    config: CausalTrackingConfig,
+    *,
+    object_centers_by_role: dict[str, np.ndarray] | None = None,
+    object_points_by_role: dict[str, np.ndarray] | None = None,
+    axial_symmetries: tuple[AxialSymmetry, ...] = (),
+    on_layer: Callable[[PoseEstimate], None] | None = None,
+    on_comparison: Callable[[str, PoseComparison], None] | None = None,
+    on_point_comparison: Callable[[str, PoseComparison], None] | None = None,
+    on_free_space_comparison: Callable[[str, FreeSpaceComparison], None] | None = None,
+    on_direct_observation: Callable[[PoseEstimate], None] | None = None,
+) -> CausalPoseService:
+    """Construct the identical estimator policy for recorded and live frames."""
+    return CausalPoseService(
+        store,
+        **asdict(config),
+        object_centers_by_role=object_centers_by_role,
+        object_points_by_role=object_points_by_role,
+        axial_symmetries=axial_symmetries,
+        on_layer=on_layer,
+        on_comparison=on_comparison,
+        on_point_comparison=on_point_comparison,
+        on_free_space_comparison=on_free_space_comparison,
+        on_direct_observation=on_direct_observation,
+    )

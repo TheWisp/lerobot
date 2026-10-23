@@ -35,6 +35,11 @@ That command is a compatibility entry point; the importer is
    live matches visible points and fits a rigid transform. The importer keeps
    the demo's shape fallback **off**; the live factory enables that fallback
    explicitly. Both call [`build_appearance_pose_backend`](appearance.py).
+   When the import annotation contains `causal_tracking`, demo extraction also
+   passes every recorded frame and its direct proposal through the same
+   [`CausalPoseService`](causal_service.py) used by the live run. The import
+   report states whether that path ran. Existing bundles are unchanged until
+   explicitly regenerated; an absent setting preserves direct-only imports.
 4. The recorded arm poses and gripper commands become dense demonstrated
    intervals or generated connections according to the keyframe annotation.
    After grasp, the held-object demo pose is a **prediction** from the selected
@@ -55,6 +60,11 @@ An attached object instead has a gripper-relative prediction. These paths
 publish provenance and do not turn an occluded pose into a direct measurement.
 The robot's fixed-rate command loop consumes the latest accepted belief; its
 30 Hz tick does not imply a fresh 30 Hz direct pose.
+Demo extraction uses that estimator synchronously, while the live run keeps
+perception asynchronous and may receive delayed proposals. Demo and live
+still have distinct gripper attachment handling: the importer predicts held
+motion from recorded gripper poses, and the run updates its attachment from
+live observations.
 
 Point2Pose, BundleSDF, TrackEverything and other offline runners are
 **review candidates** in [`demo_tracker_candidates.py`](demo_tracker_candidates.py).

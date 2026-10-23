@@ -13,9 +13,9 @@ from pathlib import Path
 
 import numpy as np
 
-from benchmarks.flash_prepare_legacy import _endpoint_requirement, _nearest_index
 from lerobot.policies.flash.geometry import inverse
 from lerobot.policies.flash.prepared import PreparedFlashSkill
+from lerobot.policies.flash.sealed_demo_import import _endpoint_requirement, _nearest_index
 from lerobot.policies.flash.skill import MotionMode, Relation
 
 

@@ -12,7 +12,7 @@ from typing import Protocol
 import numpy as np
 
 from .attachment_lifecycle import AttachmentLifecycle
-from .causal_service import CausalPoseService, CausalTrackingConfig
+from .causal_service import CausalTrackingConfig, build_causal_pose_service
 from .execution import MotorTick, RobotIO
 from .live_telemetry import FlashLiveTelemetry
 from .milestones import PoseMilestonePublisher
@@ -149,23 +149,9 @@ class FlashRuntime:
         self.poses = LatestPoseStore()
         accepted_direct: SimpleQueue[PoseEstimate] = SimpleQueue()
         self.causal = (
-            CausalPoseService(
+            build_causal_pose_service(
                 self.poses,
-                history_frames=causal_tracking.history_frames,
-                queue_frames=causal_tracking.queue_frames,
-                min_inliers=causal_tracking.min_inliers,
-                max_frame_gap_s=causal_tracking.max_frame_gap_s,
-                fit_threshold_m=causal_tracking.fit_threshold_m,
-                image_scale=causal_tracking.image_scale,
-                depth_support_radius_px=causal_tracking.depth_support_radius_px,
-                scene_max_points=causal_tracking.scene_max_points,
-                environment_context_radius_m=causal_tracking.environment_context_radius_m,
-                environment_min_motion_m=causal_tracking.environment_min_motion_m,
-                environment_prediction_max_s=causal_tracking.environment_prediction_max_s,
-                environment_min_inliers=causal_tracking.environment_min_inliers,
-                static_prediction_max_s=causal_tracking.static_prediction_max_s,
-                max_pose_disagreement_translation_m=causal_tracking.max_pose_disagreement_translation_m,
-                max_pose_disagreement_rotation_rad=causal_tracking.max_pose_disagreement_rotation_rad,
+                causal_tracking,
                 object_centers_by_role=object_centers_by_role,
                 object_points_by_role=object_points_by_role,
                 axial_symmetries=grasp_symmetries,

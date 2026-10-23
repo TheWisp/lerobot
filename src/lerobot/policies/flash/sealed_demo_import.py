@@ -23,8 +23,10 @@ from lerobot.policies.flash.appearance import (
     build_appearance_model,
     build_appearance_pose_backend,
 )
+from lerobot.policies.flash.causal_service import CausalTrackingConfig
 from lerobot.policies.flash.dino_features import DinoPatchExtractor
 from lerobot.policies.flash.geometry import inverse
+from lerobot.policies.flash.offline_perception import extract_pose_trace
 from lerobot.policies.flash.perception import ObjectReference, ReferenceSnippet, RGBDFrame
 from lerobot.policies.flash.prepared import PreparedFlashSkill
 from lerobot.policies.flash.skill import (
@@ -324,6 +326,12 @@ def prepare(
         )
     }
     cache_identity["reference_polygons_by_role"] = annotation.get("reference_polygons_by_role", {})
+    causal_config = (
+        CausalTrackingConfig.from_config(annotation["causal_tracking"])
+        if annotation.get("causal_tracking") is not None
+        else None
+    )
+    cache_identity["causal_tracking"] = annotation.get("causal_tracking")
     cache_key = hashlib.sha256(
         json.dumps(cache_identity, sort_keys=True).encode()
         + intrinsics.tobytes()
@@ -353,8 +361,33 @@ def prepare(
                         index / 30,
                         evidence,
                         f"{output_name}:{version}",
-                        (available,) * 3,
-                        (available,) * 3,
+                        tuple(bool(value) for value in cache[f"{role}_translation_supported"][index])
+                        if f"{role}_translation_supported" in cache
+                        else (available,) * 3,
+                        tuple(bool(value) for value in cache[f"{role}_rotation_supported"][index])
+                        if f"{role}_rotation_supported" in cache
+                        else (available,) * 3,
+                        direct_translation_observed=(
+                            bool(cache[f"{role}_direct_translation"][index])
+                            if f"{role}_direct_translation" in cache
+                            else False
+                        ),
+                        estimator=(
+                            str(cache[f"{role}_estimator"][index])
+                            if f"{role}_estimator" in cache
+                            else "legacy_demo_cache"
+                        ),
+                        last_direct_observation_s=(
+                            float(cache[f"{role}_last_direct_s"][index])
+                            if f"{role}_last_direct_s" in cache
+                            and np.isfinite(cache[f"{role}_last_direct_s"][index])
+                            else None
+                        ),
+                        symmetry_canonicalized=(
+                            bool(cache[f"{role}_symmetry_canonicalized"][index])
+                            if f"{role}_symmetry_canonicalized" in cache
+                            else False
+                        ),
                     )
                     observed_counts[role] += evidence == Evidence.OBSERVED
                 estimates.append(row)
@@ -371,12 +404,25 @@ def prepare(
             visible_shape_fallback=False,
             clock=lambda: 0.0,
         )
-        backend.initialize(tuple(references))
-        for index in range(through_frame + 1):
-            found = backend.update(_frame(root, index, intrinsics, base_from_camera, version))
-            estimates.append({estimate.role: estimate for estimate in found})
-            for estimate in found:
-                observed_counts[estimate.role] += estimate.evidence == Evidence.OBSERVED
+        grasp_camera = _nearest_index(camera_times, times[grasp])
+        release_camera = _nearest_index(camera_times, times[release])
+        estimates = extract_pose_trace(
+            (
+                _frame(root, index, intrinsics, base_from_camera, version)
+                for index in range(through_frame + 1)
+            ),
+            backend,
+            tuple(references),
+            causal_tracking=causal_config,
+            object_points_by_role={model.points.role: model.points.points_object_m for model in models},
+            axial_symmetries=tuple(axial_symmetries),
+            attached_role_at_frame=(
+                lambda frame_id: held if grasp_camera <= frame_id < release_camera else None
+            ),
+        )
+        for row in estimates:
+            for role, estimate in row.items():
+                observed_counts[role] += estimate.evidence == Evidence.OBSERVED
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         arrays = {"frames": through_frame + 1}
         for role in prompts:
@@ -384,6 +430,27 @@ def prepare(
                 [row[role].evidence == Evidence.OBSERVED for row in estimates], dtype=bool
             )
             arrays[f"{role}_evidence"] = np.array([row[role].evidence.value for row in estimates])
+            arrays[f"{role}_estimator"] = np.array([row[role].estimator for row in estimates])
+            arrays[f"{role}_translation_supported"] = np.array(
+                [row[role].translation_supported for row in estimates], dtype=bool
+            )
+            arrays[f"{role}_rotation_supported"] = np.array(
+                [row[role].rotation_supported for row in estimates], dtype=bool
+            )
+            arrays[f"{role}_direct_translation"] = np.array(
+                [row[role].direct_translation_observed for row in estimates], dtype=bool
+            )
+            arrays[f"{role}_symmetry_canonicalized"] = np.array(
+                [row[role].symmetry_canonicalized for row in estimates], dtype=bool
+            )
+            arrays[f"{role}_last_direct_s"] = np.array(
+                [
+                    row[role].last_direct_observation_s
+                    if row[role].last_direct_observation_s is not None
+                    else np.nan
+                    for row in estimates
+                ]
+            )
             arrays[f"{role}_poses"] = np.stack(
                 [row[role].pose if row[role].pose is not None else np.eye(4) for row in estimates]
             )
@@ -499,6 +566,14 @@ def prepare(
             role: {
                 evidence.value: sum(row[role].evidence == evidence for row in estimates)
                 for evidence in Evidence
+            }
+            for role in prompts
+        },
+        "pose_pipeline": "direct_plus_causal_scene" if causal_config is not None else "direct_only",
+        "pose_estimator_frames": {
+            role: {
+                estimator: sum(row[role].estimator == estimator for row in estimates)
+                for estimator in sorted({row[role].estimator for row in estimates})
             }
             for role in prompts
         },
