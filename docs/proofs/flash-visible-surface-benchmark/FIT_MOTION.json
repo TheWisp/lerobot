@@ -1,0 +1,672 @@
+{
+  "status": "same estimator, pose-derived reference, no robot validation or symmetry-aware task score",
+  "residual_mm": 10.0,
+  "success_probability": 0.99,
+  "prior_inlier_fraction": 0.5,
+  "ransac_trials_per_frame": 35,
+  "anchor_frame_excluded": true,
+  "rows": [
+    {
+      "clip": "ycb-bleach_hard_00_03_chaitanya-38",
+      "model": "bootstapir",
+      "evaluated_frames": 30,
+      "available_fraction": 1.0,
+      "transported_cloud_coverage": {
+        "5": 0.2,
+        "10": 0.9,
+        "20": 1.0
+      },
+      "cloud_error_mm_median_when_available": 6.7662716803787415,
+      "cloud_error_mm_p90_when_available": 9.67573483124867,
+      "rotation_error_deg_median_when_available": 3.7518854896756757,
+      "median_inliers": 25.0,
+      "fit_ms_median": 2.0042849937453866,
+      "fit_ms_p90": 2.7490122651215643
+    },
+    {
+      "clip": "ycb-bleach_hard_00_03_chaitanya-38",
+      "model": "cotracker3",
+      "evaluated_frames": 30,
+      "available_fraction": 1.0,
+      "transported_cloud_coverage": {
+        "5": 0.26666666666666666,
+        "10": 0.8,
+        "20": 1.0
+      },
+      "cloud_error_mm_median_when_available": 6.274693538233841,
+      "cloud_error_mm_p90_when_available": 11.827233112497588,
+      "rotation_error_deg_median_when_available": 3.6803534413224996,
+      "median_inliers": 29.0,
+      "fit_ms_median": 2.1299994841683656,
+      "fit_ms_p90": 2.720471686916426
+    },
+    {
+      "clip": "ycb-bleach_hard_00_03_chaitanya-38",
+      "model": "litetracker",
+      "evaluated_frames": 30,
+      "available_fraction": 1.0,
+      "transported_cloud_coverage": {
+        "5": 0.2,
+        "10": 0.8666666666666667,
+        "20": 1.0
+      },
+      "cloud_error_mm_median_when_available": 6.8003905772607895,
+      "cloud_error_mm_p90_when_available": 10.848556047175482,
+      "rotation_error_deg_median_when_available": 4.352941046639206,
+      "median_inliers": 29.0,
+      "fit_ms_median": 2.0233254763297737,
+      "fit_ms_p90": 2.744561672443524
+    },
+    {
+      "clip": "ycb-bleach_hard_00_03_chaitanya-38",
+      "model": "lk",
+      "evaluated_frames": 30,
+      "available_fraction": 1.0,
+      "transported_cloud_coverage": {
+        "5": 0.23333333333333334,
+        "10": 0.7,
+        "20": 0.8666666666666667
+      },
+      "cloud_error_mm_median_when_available": 7.8530607367820355,
+      "cloud_error_mm_p90_when_available": 31.25322202695614,
+      "rotation_error_deg_median_when_available": 4.210637372362768,
+      "median_inliers": 14.0,
+      "fit_ms_median": 2.241328009404242,
+      "fit_ms_p90": 2.5701045873574913
+    },
+    {
+      "clip": "ycb-bleach_hard_00_03_chaitanya-38",
+      "model": "spatracker2",
+      "evaluated_frames": 30,
+      "available_fraction": 1.0,
+      "transported_cloud_coverage": {
+        "5": 0.03333333333333333,
+        "10": 0.4,
+        "20": 0.8666666666666667
+      },
+      "cloud_error_mm_median_when_available": 11.689963896395753,
+      "cloud_error_mm_p90_when_available": 23.580182204181828,
+      "rotation_error_deg_median_when_available": 9.887609517026561,
+      "median_inliers": 12.5,
+      "fit_ms_median": 1.344674004940316,
+      "fit_ms_p90": 2.5213948159944266
+    },
+    {
+      "clip": "ycb-bleach_hard_00_03_chaitanya-38",
+      "model": "spatracker2_sensor",
+      "evaluated_frames": 30,
+      "available_fraction": 1.0,
+      "transported_cloud_coverage": {
+        "5": 0.4,
+        "10": 0.8666666666666667,
+        "20": 1.0
+      },
+      "cloud_error_mm_median_when_available": 5.955261943273301,
+      "cloud_error_mm_p90_when_available": 10.570983096877693,
+      "rotation_error_deg_median_when_available": 3.787483699134299,
+      "median_inliers": 26.5,
+      "fit_ms_median": 1.5334169729612768,
+      "fit_ms_p90": 2.6313627837225795
+    },
+    {
+      "clip": "ycb-bleach_hard_00_03_chaitanya-38",
+      "model": "tapip3d",
+      "evaluated_frames": 30,
+      "available_fraction": 1.0,
+      "transported_cloud_coverage": {
+        "5": 0.5333333333333333,
+        "10": 0.9,
+        "20": 1.0
+      },
+      "cloud_error_mm_median_when_available": 4.903546524938829,
+      "cloud_error_mm_p90_when_available": 9.927221734732491,
+      "rotation_error_deg_median_when_available": 3.6036572366634068,
+      "median_inliers": 39.0,
+      "fit_ms_median": 2.1240889909677207,
+      "fit_ms_p90": 2.7270889608189464
+    },
+    {
+      "clip": "ycb-bleach_hard_00_03_chaitanya-38",
+      "model": "tapip3d_unfiltered",
+      "evaluated_frames": 30,
+      "available_fraction": 1.0,
+      "transported_cloud_coverage": {
+        "5": 0.5333333333333333,
+        "10": 0.9,
+        "20": 1.0
+      },
+      "cloud_error_mm_median_when_available": 4.903868284280726,
+      "cloud_error_mm_p90_when_available": 9.944789478487142,
+      "rotation_error_deg_median_when_available": 3.652514894528707,
+      "median_inliers": 39.0,
+      "fit_ms_median": 2.1238730114419013,
+      "fit_ms_p90": 2.716162003343925
+    },
+    {
+      "clip": "ycb-bleach_hard_00_03_chaitanya-38",
+      "model": "tapnext",
+      "evaluated_frames": 30,
+      "available_fraction": 1.0,
+      "transported_cloud_coverage": {
+        "5": 0.23333333333333334,
+        "10": 0.8666666666666667,
+        "20": 1.0
+      },
+      "cloud_error_mm_median_when_available": 6.3855212926744045,
+      "cloud_error_mm_p90_when_available": 10.642758149227946,
+      "rotation_error_deg_median_when_available": 4.35502038827849,
+      "median_inliers": 31.0,
+      "fit_ms_median": 2.2017639712430537,
+      "fit_ms_p90": 2.5503588374704123
+    },
+    {
+      "clip": "ycb-bleach_hard_00_03_chaitanya-38",
+      "model": "trackeverything",
+      "evaluated_frames": 30,
+      "available_fraction": 1.0,
+      "transported_cloud_coverage": {
+        "5": 0.26666666666666666,
+        "10": 0.8666666666666667,
+        "20": 1.0
+      },
+      "cloud_error_mm_median_when_available": 7.2548174043034965,
+      "cloud_error_mm_p90_when_available": 10.447786332659883,
+      "rotation_error_deg_median_when_available": 4.587867660355278,
+      "median_inliers": 46.5,
+      "fit_ms_median": 1.6943395021371543,
+      "fit_ms_p90": 1.8936322128865868
+    },
+    {
+      "clip": "ycb-bleach_hard_00_03_chaitanya-38",
+      "model": "trackon_r",
+      "evaluated_frames": 30,
+      "available_fraction": 1.0,
+      "transported_cloud_coverage": {
+        "5": 0.23333333333333334,
+        "10": 0.9,
+        "20": 1.0
+      },
+      "cloud_error_mm_median_when_available": 6.326071184039224,
+      "cloud_error_mm_p90_when_available": 9.590016993069861,
+      "rotation_error_deg_median_when_available": 4.102484208136324,
+      "median_inliers": 29.0,
+      "fit_ms_median": 2.2696059895679355,
+      "fit_ms_p90": 2.6966016041114926
+    },
+    {
+      "clip": "ycb-cracker_box_yalehand0-1253",
+      "model": "bootstapir",
+      "evaluated_frames": 30,
+      "available_fraction": 1.0,
+      "transported_cloud_coverage": {
+        "5": 0.13333333333333333,
+        "10": 0.2,
+        "20": 0.4666666666666667
+      },
+      "cloud_error_mm_median_when_available": 21.096379582163486,
+      "cloud_error_mm_p90_when_available": 34.26026812212501,
+      "rotation_error_deg_median_when_available": 11.364226720459854,
+      "median_inliers": 10.0,
+      "fit_ms_median": 2.0566524763125926,
+      "fit_ms_p90": 2.3966049251612276
+    },
+    {
+      "clip": "ycb-cracker_box_yalehand0-1253",
+      "model": "cotracker3",
+      "evaluated_frames": 30,
+      "available_fraction": 1.0,
+      "transported_cloud_coverage": {
+        "5": 0.06666666666666667,
+        "10": 0.26666666666666666,
+        "20": 0.5666666666666667
+      },
+      "cloud_error_mm_median_when_available": 17.8916632597562,
+      "cloud_error_mm_p90_when_available": 30.029568170096436,
+      "rotation_error_deg_median_when_available": 8.145813690890751,
+      "median_inliers": 12.0,
+      "fit_ms_median": 1.7997320101130754,
+      "fit_ms_p90": 2.622814691858366
+    },
+    {
+      "clip": "ycb-cracker_box_yalehand0-1253",
+      "model": "litetracker",
+      "evaluated_frames": 30,
+      "available_fraction": 1.0,
+      "transported_cloud_coverage": {
+        "5": 0.1,
+        "10": 0.26666666666666666,
+        "20": 0.5666666666666667
+      },
+      "cloud_error_mm_median_when_available": 18.83930134819049,
+      "cloud_error_mm_p90_when_available": 29.094555053313222,
+      "rotation_error_deg_median_when_available": 8.337405114166003,
+      "median_inliers": 13.0,
+      "fit_ms_median": 1.54376748832874,
+      "fit_ms_p90": 2.6146847812924534
+    },
+    {
+      "clip": "ycb-cracker_box_yalehand0-1253",
+      "model": "lk",
+      "evaluated_frames": 30,
+      "available_fraction": 1.0,
+      "transported_cloud_coverage": {
+        "5": 0.1,
+        "10": 0.26666666666666666,
+        "20": 0.5333333333333333
+      },
+      "cloud_error_mm_median_when_available": 19.288270601982678,
+      "cloud_error_mm_p90_when_available": 30.267724362280443,
+      "rotation_error_deg_median_when_available": 7.331251921112408,
+      "median_inliers": 14.0,
+      "fit_ms_median": 1.846108993049711,
+      "fit_ms_p90": 2.6325206097681075
+    },
+    {
+      "clip": "ycb-cracker_box_yalehand0-1253",
+      "model": "spatracker2",
+      "evaluated_frames": 30,
+      "available_fraction": 0.43333333333333335,
+      "transported_cloud_coverage": {
+        "5": 0.0,
+        "10": 0.0,
+        "20": 0.0
+      },
+      "cloud_error_mm_median_when_available": 1153.3679528998846,
+      "cloud_error_mm_p90_when_available": 1500.3529576659307,
+      "rotation_error_deg_median_when_available": 111.40516514133846,
+      "median_inliers": 0.0,
+      "fit_ms_median": 1.781225495506078,
+      "fit_ms_p90": 2.137041697278619
+    },
+    {
+      "clip": "ycb-cracker_box_yalehand0-1253",
+      "model": "spatracker2_sensor",
+      "evaluated_frames": 30,
+      "available_fraction": 1.0,
+      "transported_cloud_coverage": {
+        "5": 0.06666666666666667,
+        "10": 0.23333333333333334,
+        "20": 0.5333333333333333
+      },
+      "cloud_error_mm_median_when_available": 19.738378509647788,
+      "cloud_error_mm_p90_when_available": 30.3063937516193,
+      "rotation_error_deg_median_when_available": 8.317197973435874,
+      "median_inliers": 13.0,
+      "fit_ms_median": 1.5929079672787338,
+      "fit_ms_p90": 2.640068222535774
+    },
+    {
+      "clip": "ycb-cracker_box_yalehand0-1253",
+      "model": "tapip3d",
+      "evaluated_frames": 30,
+      "available_fraction": 1.0,
+      "transported_cloud_coverage": {
+        "5": 0.1,
+        "10": 0.23333333333333334,
+        "20": 0.6
+      },
+      "cloud_error_mm_median_when_available": 17.39227561115434,
+      "cloud_error_mm_p90_when_available": 28.801864709343487,
+      "rotation_error_deg_median_when_available": 7.430599361280553,
+      "median_inliers": 24.0,
+      "fit_ms_median": 1.7720900068525225,
+      "fit_ms_p90": 2.6571086200419813
+    },
+    {
+      "clip": "ycb-cracker_box_yalehand0-1253",
+      "model": "tapip3d_unfiltered",
+      "evaluated_frames": 30,
+      "available_fraction": 1.0,
+      "transported_cloud_coverage": {
+        "5": 0.13333333333333333,
+        "10": 0.23333333333333334,
+        "20": 0.6
+      },
+      "cloud_error_mm_median_when_available": 17.420341497728124,
+      "cloud_error_mm_p90_when_available": 28.85099485565618,
+      "rotation_error_deg_median_when_available": 7.392264896438469,
+      "median_inliers": 24.0,
+      "fit_ms_median": 2.0608199993148446,
+      "fit_ms_p90": 2.7548092184588313
+    },
+    {
+      "clip": "ycb-cracker_box_yalehand0-1253",
+      "model": "tapnext",
+      "evaluated_frames": 30,
+      "available_fraction": 1.0,
+      "transported_cloud_coverage": {
+        "5": 0.2,
+        "10": 0.26666666666666666,
+        "20": 0.5333333333333333
+      },
+      "cloud_error_mm_median_when_available": 19.137837720341636,
+      "cloud_error_mm_p90_when_available": 30.520228563748947,
+      "rotation_error_deg_median_when_available": 8.791090095110533,
+      "median_inliers": 15.0,
+      "fit_ms_median": 2.0147140021435916,
+      "fit_ms_p90": 2.5455210357904434
+    },
+    {
+      "clip": "ycb-cracker_box_yalehand0-1253",
+      "model": "trackeverything",
+      "evaluated_frames": 30,
+      "available_fraction": 1.0,
+      "transported_cloud_coverage": {
+        "5": 0.03333333333333333,
+        "10": 0.2,
+        "20": 0.5333333333333333
+      },
+      "cloud_error_mm_median_when_available": 18.166723865412614,
+      "cloud_error_mm_p90_when_available": 27.98689274505275,
+      "rotation_error_deg_median_when_available": 4.03565158417263,
+      "median_inliers": 16.5,
+      "fit_ms_median": 1.4703350025229156,
+      "fit_ms_p90": 2.748458686983213
+    },
+    {
+      "clip": "ycb-cracker_box_yalehand0-1253",
+      "model": "trackon_r",
+      "evaluated_frames": 30,
+      "available_fraction": 1.0,
+      "transported_cloud_coverage": {
+        "5": 0.13333333333333333,
+        "10": 0.23333333333333334,
+        "20": 0.5333333333333333
+      },
+      "cloud_error_mm_median_when_available": 18.22622992781536,
+      "cloud_error_mm_p90_when_available": 30.130945800027806,
+      "rotation_error_deg_median_when_available": 6.611659300166368,
+      "median_inliers": 14.0,
+      "fit_ms_median": 1.868715015007183,
+      "fit_ms_p90": 2.3586862604133785
+    },
+    {
+      "clip": "ycb-sugar_box_yalehand0-619",
+      "model": "bootstapir",
+      "evaluated_frames": 30,
+      "available_fraction": 1.0,
+      "transported_cloud_coverage": {
+        "5": 1.0,
+        "10": 1.0,
+        "20": 1.0
+      },
+      "cloud_error_mm_median_when_available": 2.845720598166044,
+      "cloud_error_mm_p90_when_available": 3.2727754680757513,
+      "rotation_error_deg_median_when_available": 1.3063616595721492,
+      "median_inliers": 41.0,
+      "fit_ms_median": 1.7598275153432041,
+      "fit_ms_p90": 2.7415081684011966
+    },
+    {
+      "clip": "ycb-sugar_box_yalehand0-619",
+      "model": "cotracker3",
+      "evaluated_frames": 30,
+      "available_fraction": 1.0,
+      "transported_cloud_coverage": {
+        "5": 1.0,
+        "10": 1.0,
+        "20": 1.0
+      },
+      "cloud_error_mm_median_when_available": 1.7958567539735846,
+      "cloud_error_mm_p90_when_available": 2.716555450192316,
+      "rotation_error_deg_median_when_available": 0.8269936653535958,
+      "median_inliers": 32.0,
+      "fit_ms_median": 1.8861484713852406,
+      "fit_ms_p90": 2.738633955596015
+    },
+    {
+      "clip": "ycb-sugar_box_yalehand0-619",
+      "model": "litetracker",
+      "evaluated_frames": 30,
+      "available_fraction": 1.0,
+      "transported_cloud_coverage": {
+        "5": 1.0,
+        "10": 1.0,
+        "20": 1.0
+      },
+      "cloud_error_mm_median_when_available": 2.104399116507275,
+      "cloud_error_mm_p90_when_available": 3.0703628176635793,
+      "rotation_error_deg_median_when_available": 1.0869928632804031,
+      "median_inliers": 38.0,
+      "fit_ms_median": 1.864177465904504,
+      "fit_ms_p90": 2.719403215451166
+    },
+    {
+      "clip": "ycb-sugar_box_yalehand0-619",
+      "model": "lk",
+      "evaluated_frames": 30,
+      "available_fraction": 1.0,
+      "transported_cloud_coverage": {
+        "5": 1.0,
+        "10": 1.0,
+        "20": 1.0
+      },
+      "cloud_error_mm_median_when_available": 1.8972979062327877,
+      "cloud_error_mm_p90_when_available": 3.0909685000467118,
+      "rotation_error_deg_median_when_available": 0.6833990910350709,
+      "median_inliers": 46.5,
+      "fit_ms_median": 1.911942003061995,
+      "fit_ms_p90": 2.7865976269822568
+    },
+    {
+      "clip": "ycb-sugar_box_yalehand0-619",
+      "model": "spatracker2",
+      "evaluated_frames": 30,
+      "available_fraction": 1.0,
+      "transported_cloud_coverage": {
+        "5": 0.16666666666666666,
+        "10": 0.6333333333333333,
+        "20": 1.0
+      },
+      "cloud_error_mm_median_when_available": 7.866119486468994,
+      "cloud_error_mm_p90_when_available": 13.979313250879873,
+      "rotation_error_deg_median_when_available": 1.7229832297669054,
+      "median_inliers": 31.0,
+      "fit_ms_median": 1.7394620226696134,
+      "fit_ms_p90": 2.224842633586377
+    },
+    {
+      "clip": "ycb-sugar_box_yalehand0-619",
+      "model": "spatracker2_sensor",
+      "evaluated_frames": 30,
+      "available_fraction": 1.0,
+      "transported_cloud_coverage": {
+        "5": 1.0,
+        "10": 1.0,
+        "20": 1.0
+      },
+      "cloud_error_mm_median_when_available": 2.0755174808204706,
+      "cloud_error_mm_p90_when_available": 2.9299735993767686,
+      "rotation_error_deg_median_when_available": 0.8713028637696829,
+      "median_inliers": 40.5,
+      "fit_ms_median": 1.9707445171661675,
+      "fit_ms_p90": 2.6053254085127264
+    },
+    {
+      "clip": "ycb-sugar_box_yalehand0-619",
+      "model": "tapip3d",
+      "evaluated_frames": 30,
+      "available_fraction": 1.0,
+      "transported_cloud_coverage": {
+        "5": 1.0,
+        "10": 1.0,
+        "20": 1.0
+      },
+      "cloud_error_mm_median_when_available": 2.087990476794314,
+      "cloud_error_mm_p90_when_available": 3.2896197267665297,
+      "rotation_error_deg_median_when_available": 1.4770448191798808,
+      "median_inliers": 62.0,
+      "fit_ms_median": 1.8736555066425353,
+      "fit_ms_p90": 2.7503675839398056
+    },
+    {
+      "clip": "ycb-sugar_box_yalehand0-619",
+      "model": "tapip3d_unfiltered",
+      "evaluated_frames": 30,
+      "available_fraction": 1.0,
+      "transported_cloud_coverage": {
+        "5": 1.0,
+        "10": 1.0,
+        "20": 1.0
+      },
+      "cloud_error_mm_median_when_available": 2.0793249129208524,
+      "cloud_error_mm_p90_when_available": 3.245939243080625,
+      "rotation_error_deg_median_when_available": 1.479919530663925,
+      "median_inliers": 62.0,
+      "fit_ms_median": 1.7834760074038059,
+      "fit_ms_p90": 2.7373464254196733
+    },
+    {
+      "clip": "ycb-sugar_box_yalehand0-619",
+      "model": "tapnext",
+      "evaluated_frames": 30,
+      "available_fraction": 1.0,
+      "transported_cloud_coverage": {
+        "5": 1.0,
+        "10": 1.0,
+        "20": 1.0
+      },
+      "cloud_error_mm_median_when_available": 1.8586185961738255,
+      "cloud_error_mm_p90_when_available": 3.074342292717802,
+      "rotation_error_deg_median_when_available": 1.3856907003943217,
+      "median_inliers": 49.0,
+      "fit_ms_median": 1.7734630091581494,
+      "fit_ms_p90": 2.7514681860338897
+    },
+    {
+      "clip": "ycb-sugar_box_yalehand0-619",
+      "model": "trackeverything",
+      "evaluated_frames": 30,
+      "available_fraction": 1.0,
+      "transported_cloud_coverage": {
+        "5": 0.9,
+        "10": 1.0,
+        "20": 1.0
+      },
+      "cloud_error_mm_median_when_available": 2.9801127434572887,
+      "cloud_error_mm_p90_when_available": 4.851580726713196,
+      "rotation_error_deg_median_when_available": 1.3721099306397364,
+      "median_inliers": 64.0,
+      "fit_ms_median": 1.9707769970409572,
+      "fit_ms_p90": 2.769433392677456
+    },
+    {
+      "clip": "ycb-sugar_box_yalehand0-619",
+      "model": "trackon_r",
+      "evaluated_frames": 30,
+      "available_fraction": 1.0,
+      "transported_cloud_coverage": {
+        "5": 1.0,
+        "10": 1.0,
+        "20": 1.0
+      },
+      "cloud_error_mm_median_when_available": 1.8571542118809594,
+      "cloud_error_mm_p90_when_available": 2.8512943005284828,
+      "rotation_error_deg_median_when_available": 0.6006527668495754,
+      "median_inliers": 43.5,
+      "fit_ms_median": 1.6227509768214077,
+      "fit_ms_p90": 1.7587320995517075
+    }
+  ],
+  "macro_equal_clip_weight": [
+    {
+      "model": "bootstapir",
+      "clips": 3,
+      "available_fraction": 1.0,
+      "cloud_coverage_5mm": 0.4444444444444445,
+      "cloud_coverage_10mm": 0.7000000000000001,
+      "cloud_coverage_20mm": 0.8222222222222223,
+      "median_fit_ms": 2.0042849937453866
+    },
+    {
+      "model": "cotracker3",
+      "clips": 3,
+      "available_fraction": 1.0,
+      "cloud_coverage_5mm": 0.4444444444444444,
+      "cloud_coverage_10mm": 0.6888888888888888,
+      "cloud_coverage_20mm": 0.8555555555555555,
+      "median_fit_ms": 1.8861484713852406
+    },
+    {
+      "model": "litetracker",
+      "clips": 3,
+      "available_fraction": 1.0,
+      "cloud_coverage_5mm": 0.43333333333333335,
+      "cloud_coverage_10mm": 0.7111111111111111,
+      "cloud_coverage_20mm": 0.8555555555555555,
+      "median_fit_ms": 1.864177465904504
+    },
+    {
+      "model": "lk",
+      "clips": 3,
+      "available_fraction": 1.0,
+      "cloud_coverage_5mm": 0.4444444444444445,
+      "cloud_coverage_10mm": 0.6555555555555556,
+      "cloud_coverage_20mm": 0.7999999999999999,
+      "median_fit_ms": 1.911942003061995
+    },
+    {
+      "model": "spatracker2",
+      "clips": 3,
+      "available_fraction": 0.8111111111111112,
+      "cloud_coverage_5mm": 0.06666666666666667,
+      "cloud_coverage_10mm": 0.3444444444444444,
+      "cloud_coverage_20mm": 0.6222222222222222,
+      "median_fit_ms": 1.7394620226696134
+    },
+    {
+      "model": "spatracker2_sensor",
+      "clips": 3,
+      "available_fraction": 1.0,
+      "cloud_coverage_5mm": 0.48888888888888893,
+      "cloud_coverage_10mm": 0.7000000000000001,
+      "cloud_coverage_20mm": 0.8444444444444444,
+      "median_fit_ms": 1.5929079672787338
+    },
+    {
+      "model": "tapip3d",
+      "clips": 3,
+      "available_fraction": 1.0,
+      "cloud_coverage_5mm": 0.5444444444444444,
+      "cloud_coverage_10mm": 0.7111111111111111,
+      "cloud_coverage_20mm": 0.8666666666666667,
+      "median_fit_ms": 1.8736555066425353
+    },
+    {
+      "model": "tapip3d_unfiltered",
+      "clips": 3,
+      "available_fraction": 1.0,
+      "cloud_coverage_5mm": 0.5555555555555555,
+      "cloud_coverage_10mm": 0.7111111111111111,
+      "cloud_coverage_20mm": 0.8666666666666667,
+      "median_fit_ms": 2.0608199993148446
+    },
+    {
+      "model": "tapnext",
+      "clips": 3,
+      "available_fraction": 1.0,
+      "cloud_coverage_5mm": 0.4777777777777778,
+      "cloud_coverage_10mm": 0.7111111111111111,
+      "cloud_coverage_20mm": 0.8444444444444444,
+      "median_fit_ms": 2.0147140021435916
+    },
+    {
+      "model": "trackeverything",
+      "clips": 3,
+      "available_fraction": 1.0,
+      "cloud_coverage_5mm": 0.39999999999999997,
+      "cloud_coverage_10mm": 0.6888888888888888,
+      "cloud_coverage_20mm": 0.8444444444444444,
+      "median_fit_ms": 1.6943395021371543
+    },
+    {
+      "model": "trackon_r",
+      "clips": 3,
+      "available_fraction": 1.0,
+      "cloud_coverage_5mm": 0.45555555555555555,
+      "cloud_coverage_10mm": 0.7111111111111111,
+      "cloud_coverage_20mm": 0.8444444444444444,
+      "median_fit_ms": 1.868715015007183
+    }
+  ]
+}

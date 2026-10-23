@@ -13,10 +13,21 @@ from pathlib import Path
 
 import numpy as np
 
-from benchmarks.flash_surface_benchmark import _load, score
+from benchmarks.flash_surface_benchmark import _load, diagnostic, score
 
 
-def collect(root: Path) -> dict:
+def _mean_available(values: list[float | None]) -> float | None:
+    available = [value for value in values if value is not None]
+    return float(np.mean(available)) if available else None
+
+
+def _format_coverage(value: float | None) -> str:
+    return f"{value:.3f}" if value is not None else "n/a"
+
+
+def collect(root: Path, cohort: str = "development") -> dict:
+    if cohort not in {"development", "midpoint-holdout", "motion-holdout"}:
+        raise ValueError("unknown cohort")
     rows = []
     reference_kinds = set()
     for experiment in sorted(root.iterdir()):
@@ -74,7 +85,7 @@ def collect(root: Path) -> dict:
                 "model": model,
                 "clips": len(subset),
                 "clip_mean_coverage_2px": float(np.mean([row["coverage_2px"] for row in subset])),
-                "clip_mean_coverage_5mm": float(np.mean([row["coverage_5mm"] for row in subset])),
+                "clip_mean_coverage_5mm": _mean_available([row["coverage_5mm"] for row in subset]),
                 "median_model_only_fps": float(np.median([row["model_only_fps"] for row in subset])),
                 "median_decode_plus_model_fps": float(
                     np.median([row["decode_plus_model_fps"] for row in subset])
@@ -89,8 +100,13 @@ def collect(root: Path) -> dict:
         "status": (
             "exact-motion synthetic controls; these do not measure real-sensor generalization"
             if synthetic
-            else "development pilot; clips are not a held-out or independent-source result"
+            else {
+                "development": "development pilot; clips are not a held-out or independent-source result",
+                "midpoint-holdout": "frozen midpoint sequence holdout within YCBInEOAT; not an independent source",
+                "motion-holdout": "frozen visible-motion sequence holdout within YCBInEOAT; not an independent source",
+            }[cohort]
         ),
+        "cohort": cohort,
         "reference": sorted(reference_kinds),
         "description": (
             "Coverage includes missing point predictions in its denominator. These procedural rigid-plane "
@@ -151,6 +167,131 @@ def collect_paced(root: Path) -> dict:
     }
 
 
+def collect_unlabelled(root: Path) -> dict:
+    rows = []
+    for experiment in sorted(root.iterdir()):
+        manifest_path = experiment / "manifest.json"
+        if not manifest_path.is_file():
+            continue
+        manifest = json.loads(manifest_path.read_text())
+        reference = _load(experiment / "queries.npz")
+        if "truth_visible" in reference:
+            raise ValueError("unlabelled report received a labelled reference")
+        for prediction_path in sorted(experiment.glob("*.npz")):
+            if prediction_path.name == "queries.npz":
+                continue
+            prediction = _load(prediction_path)
+            timing = json.loads(prediction_path.with_suffix(".timing.json").read_text())
+            rows.append(
+                {
+                    "clip": experiment.name,
+                    "model": prediction_path.stem,
+                    "mode": timing["mode"],
+                    "source_frames": len(reference["frames"]),
+                    "queries": len(reference["queries"]),
+                    "model_only_fps": timing.get(
+                        "model_only_fps", timing.get("unique_source_frame_fps_model_only")
+                    ),
+                    "adapter_fps": timing.get(
+                        "decode_track_lift_fps", timing.get("unique_source_frame_fps_decode_plus_model")
+                    ),
+                    "peak_gpu_gib": timing.get("cuda_peak_allocated_bytes", 0) / (1024**3),
+                    "predicted_visible_fraction_not_accuracy": float(prediction["visible"].mean()),
+                    "source_sha256": manifest["source_npz_sha256"],
+                    "timestamp_provenance": manifest["timestamp_provenance"],
+                    "mask_scope": manifest["mask_scope"],
+                }
+            )
+    if not rows:
+        raise ValueError("no unlabelled benchmark predictions")
+    return {
+        "status": "second public RGB-D source; visual and throughput evidence only, no material-point labels",
+        "rows": rows,
+    }
+
+
+def collect_local_unlabelled(root: Path, depth_tolerance_mm: float) -> dict:
+    if depth_tolerance_mm <= 0:
+        raise ValueError("depth tolerance must be positive")
+    rows = []
+    for experiment in sorted(root.iterdir()):
+        manifest_path = experiment / "manifest.json"
+        if not manifest_path.is_file():
+            continue
+        manifest = json.loads(manifest_path.read_text())
+        reference = _load(experiment / "queries.npz")
+        if "truth_visible" in reference:
+            raise ValueError("local unlabelled report received independent labels")
+        for path in sorted(experiment.glob("*.npz")):
+            if path.name == "queries.npz":
+                continue
+            prediction = _load(path)
+            timing = json.loads(path.with_suffix(".timing.json").read_text())
+            check = diagnostic(
+                Path(manifest["recording"]),
+                Path(manifest["mask_dir"]),
+                reference,
+                prediction,
+                depth_tolerance_mm / 1000,
+            )
+            births = reference["queries"][:, 0].astype(int)
+            numbers = np.arange(len(births))
+            source_xy = prediction["xy"][births, numbers]
+            source_error = np.linalg.norm(source_xy - reference["queries"][:, 1:3], axis=1)
+            rows.append(
+                {
+                    "clip": experiment.name,
+                    "model": path.stem,
+                    "mode": timing["mode"],
+                    "source_query_error_px_median": float(np.nanmedian(source_error)),
+                    "source_query_error_px_p90": float(np.nanquantile(source_error, 0.9)),
+                    "mask_fraction_diagnostic": check.get("mask_fraction"),
+                    "depth_fraction_diagnostic": check.get("within_depth_tolerance_fraction"),
+                    "predicted_visible_fraction": check.get("predicted_visible_fraction"),
+                    "model_only_fps": timing.get(
+                        "model_only_fps", timing.get("unique_source_frame_fps_model_only")
+                    ),
+                    "adapter_fps": timing.get(
+                        "decode_track_lift_fps", timing.get("unique_source_frame_fps_decode_plus_model")
+                    ),
+                    "peak_gpu_gib": timing.get("cuda_peak_allocated_bytes", 0) / (1024**3),
+                    "diagnostic": check,
+                }
+            )
+    if not rows:
+        raise ValueError("no local unlabelled results")
+    return {
+        "status": "local moving-object stress clips; no independent material-point truth",
+        "depth_tolerance_mm": depth_tolerance_mm,
+        "rows": rows,
+    }
+
+
+def local_unlabelled_markdown(report: dict) -> str:
+    lines = [
+        "# FLASH local moving-object stress clips",
+        "",
+        report["status"],
+        "",
+        "First-frame error checks the adapter's query-coordinate contract. The mask column measures whether "
+        "published points fall in the recorded object mask, and the depth column measures native 3D "
+        f"agreement within {report['depth_tolerance_mm']:g} mm of aligned sensor depth. Neither proves "
+        "material-point identity. A 2D-only or sensor-depth-lifted method has no independent depth score. "
+        "FPS is isolated adapter throughput, not FLASH or robot-loop FPS.",
+        "",
+        "| Clip | Model | Query error median | In mask | Native depth agreement | Model FPS | Adapter FPS |",
+        "| --- | --- | ---: | ---: | ---: | ---: | ---: |",
+    ]
+    for row in report["rows"]:
+        lines.append(
+            f"| {row['clip']} | {row['model']} | {row['source_query_error_px_median']:.1f} px | "
+            f"{_format_coverage(row['mask_fraction_diagnostic'])} | "
+            f"{_format_coverage(row['depth_fraction_diagnostic'])} | "
+            f"{row['model_only_fps']:.1f} | {row['adapter_fps']:.1f} |"
+        )
+    return "\n".join(lines) + "\n"
+
+
 def markdown(report: dict) -> str:
     depth_filter_note = (
         " TAPIP3D's upstream depth filter dominates its wall time."
@@ -158,7 +299,11 @@ def markdown(report: dict) -> str:
         else ""
     )
     lines = [
-        "# FLASH exact-motion controls" if report["synthetic"] else "# FLASH visible-surface pilot",
+        (
+            "# FLASH exact-motion controls"
+            if report["synthetic"]
+            else f"# FLASH visible-surface {report['cohort']}"
+        ),
         "",
         report["status"],
         "",
@@ -170,15 +315,16 @@ def markdown(report: dict) -> str:
     for row in report["rows"]:
         lines.append(
             f"| {row['clip']} | {row['model']} | {row['coverage_2px']:.3f} | "
-            f"{row['coverage_5mm']:.3f} | {row['reference_depth_gap_median_mm']:.1f} mm | "
+            f"{_format_coverage(row['coverage_5mm'])} | {row['reference_depth_gap_median_mm']:.1f} mm | "
             f"{row['model_only_fps']:.1f} | {row['decode_plus_model_fps']:.1f} |"
         )
     lines.extend(
         [
             "",
-            "Model FPS is full-clip throughput for CoTracker3, TrackEverything and TAPIP3D, and causal per-frame tracker "
-            "throughput for the other adapters. Adapter FPS includes recorded RGB-D decoding and each adapter's "
-            "preprocessing."
+            "The Mode field in the JSON distinguishes full-clip throughput from causal per-frame throughput; "
+            "their FPS values cannot be treated as equivalent publication rates. Adapter FPS includes "
+            "recorded RGB-D decoding and each adapter's preprocessing. A 3D coverage of n/a means that "
+            "the model predicts unscaled geometry or that the adapter does not publish 3D points."
             + depth_filter_note
             + " Neither includes shared segmentation, pose fitting, FLASH planning, motor IO, recording, or a "
             "30 Hz consumer. They are not measured live-loop FPS.",
@@ -190,7 +336,7 @@ def markdown(report: dict) -> str:
     for row in report["macro_equal_clip_weight"]:
         lines.append(
             f"| {row['model']} | {row['clips']} | {row['clip_mean_coverage_2px']:.3f} | "
-            f"{row['clip_mean_coverage_5mm']:.3f} | {row['median_model_only_fps']:.1f} | "
+            f"{_format_coverage(row['clip_mean_coverage_5mm'])} | {row['median_model_only_fps']:.1f} | "
             f"{row['median_decode_plus_model_fps']:.1f} | "
             f"{row['peak_gpu_gib']:.2f} GiB |"
         )
@@ -229,15 +375,70 @@ def paced_markdown(report: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
+def unlabelled_markdown(report: dict) -> str:
+    lines = [
+        "# FLASH second-source RGB-D stress clip",
+        "",
+        report["status"],
+        "",
+        "A manually supplied first-frame polygon seeds the same measured-depth points for each adapter. "
+        "There are no later object masks or independent point identities. The video can expose obvious "
+        "point bleeding or loss, but it cannot establish material-point accuracy. The source has no timestamps; "
+        "30 fps is a declared playback rate, not a measured capture rate.",
+        "",
+        "| Clip | Model | Mode | Model FPS | Decode + adapter FPS | Peak GPU memory |",
+        "| --- | --- | --- | ---: | ---: | ---: |",
+    ]
+    for row in report["rows"]:
+        lines.append(
+            f"| {row['clip']} | {row['model']} | {row['mode']} | "
+            f"{row['model_only_fps']:.1f} | {row['adapter_fps']:.1f} | {row['peak_gpu_gib']:.2f} GiB |"
+        )
+    lines.extend(
+        [
+            "",
+            "Full-clip methods may use future frames and cannot be assigned a causal update rate from these "
+            "numbers. Adapter FPS excludes segmentation, common rigid fitting, FLASH planning and robot IO. "
+            "All GPU measurements used the RTX 5090. The raw per-frame predictions and stage timings remain "
+            "in the local experiment cache; the video shows every source frame.",
+        ]
+    )
+    return "\n".join(lines) + "\n"
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--paced", action="store_true")
+    parser.add_argument("--unlabelled", action="store_true")
+    parser.add_argument("--local-unlabelled", action="store_true")
+    parser.add_argument("--depth-tolerance-mm", type=float, default=10.0)
+    parser.add_argument(
+        "--cohort", choices=("development", "midpoint-holdout", "motion-holdout"), default="development"
+    )
     args = parser.parse_args()
-    result = collect_paced(args.root) if args.paced else collect(args.root)
+    if sum((args.paced, args.unlabelled, args.local_unlabelled)) > 1:
+        parser.error("choose one report type")
+    result = (
+        collect_paced(args.root)
+        if args.paced
+        else collect_unlabelled(args.root)
+        if args.unlabelled
+        else collect_local_unlabelled(args.root, args.depth_tolerance_mm)
+        if args.local_unlabelled
+        else collect(args.root, args.cohort)
+    )
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(paced_markdown(result) if args.paced else markdown(result))
+    args.output.write_text(
+        paced_markdown(result)
+        if args.paced
+        else unlabelled_markdown(result)
+        if args.unlabelled
+        else local_unlabelled_markdown(result)
+        if args.local_unlabelled
+        else markdown(result)
+    )
     args.output.with_suffix(".json").write_text(json.dumps(result, indent=2) + "\n")
     print(args.output)
 

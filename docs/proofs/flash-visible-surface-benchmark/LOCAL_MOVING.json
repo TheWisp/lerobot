@@ -1,0 +1,490 @@
+{
+  "status": "local moving-object stress clips; no independent material-point truth",
+  "depth_tolerance_mm": 10.0,
+  "rows": [
+    {
+      "clip": "gamepad-90-145",
+      "model": "bootstapir",
+      "mode": "causal per-frame upstream Point2Pose frontend, no pose estimator",
+      "source_query_error_px_median": 1.0685229301452637,
+      "source_query_error_px_p90": 1.8492918014526367,
+      "mask_fraction_diagnostic": 0.4765625,
+      "depth_fraction_diagnostic": null,
+      "predicted_visible_fraction": 0.8761160714285714,
+      "model_only_fps": 48.8193354022893,
+      "adapter_fps": 41.964869348365866,
+      "peak_gpu_gib": 0.5466275215148926,
+      "diagnostic": {
+        "status": "diagnostic only; mask and depth cannot prove point identity",
+        "geometry_source": "sensor_at_prediction",
+        "eligible_birth_to_end": 3584,
+        "predicted_visible_fraction": 0.8761160714285714,
+        "mask_fraction": 0.4765625,
+        "mask_and_depth_fraction": 0.388671875,
+        "within_depth_tolerance_fraction": null,
+        "depth_gap_mm_when_masked": null
+      }
+    },
+    {
+      "clip": "gamepad-90-145",
+      "model": "cotracker3",
+      "mode": "full-clip offline; may use future frames",
+      "source_query_error_px_median": 3.0517578125e-05,
+      "source_query_error_px_p90": 4.31583721365314e-05,
+      "mask_fraction_diagnostic": 0.16880580357142858,
+      "depth_fraction_diagnostic": null,
+      "predicted_visible_fraction": 0.17522321428571427,
+      "model_only_fps": 170.93759018857497,
+      "adapter_fps": 96.80400371729922,
+      "peak_gpu_gib": 8.486746311187744,
+      "diagnostic": {
+        "status": "diagnostic only; mask and depth cannot prove point identity",
+        "geometry_source": "sensor_at_prediction",
+        "eligible_birth_to_end": 3584,
+        "predicted_visible_fraction": 0.17522321428571427,
+        "mask_fraction": 0.16880580357142858,
+        "mask_and_depth_fraction": 0.10881696428571429,
+        "within_depth_tolerance_fraction": null,
+        "depth_gap_mm_when_masked": null
+      }
+    },
+    {
+      "clip": "gamepad-90-145",
+      "model": "litetracker",
+      "mode": "causal per-frame upstream Point2Pose frontend, no pose estimator",
+      "source_query_error_px_median": 3.0517578125e-05,
+      "source_query_error_px_p90": 4.31583721365314e-05,
+      "mask_fraction_diagnostic": 0.6841517857142857,
+      "depth_fraction_diagnostic": null,
+      "predicted_visible_fraction": 0.998046875,
+      "model_only_fps": 101.31077797337181,
+      "adapter_fps": 75.93754030300026,
+      "peak_gpu_gib": 0.2451467514038086,
+      "diagnostic": {
+        "status": "diagnostic only; mask and depth cannot prove point identity",
+        "geometry_source": "sensor_at_prediction",
+        "eligible_birth_to_end": 3584,
+        "predicted_visible_fraction": 0.998046875,
+        "mask_fraction": 0.6841517857142857,
+        "mask_and_depth_fraction": 0.5412946428571429,
+        "within_depth_tolerance_fraction": null,
+        "depth_gap_mm_when_masked": null
+      }
+    },
+    {
+      "clip": "gamepad-90-145",
+      "model": "lk",
+      "mode": "causal per-frame optical flow; no object mask after seeding",
+      "source_query_error_px_median": 0.0,
+      "source_query_error_px_p90": 0.0,
+      "mask_fraction_diagnostic": 0.6925223214285714,
+      "depth_fraction_diagnostic": null,
+      "predicted_visible_fraction": 1.0,
+      "model_only_fps": 2931.984453074284,
+      "adapter_fps": 250.9340502341707,
+      "peak_gpu_gib": 0.0,
+      "diagnostic": {
+        "status": "diagnostic only; mask and depth cannot prove point identity",
+        "geometry_source": "sensor_at_prediction",
+        "eligible_birth_to_end": 3584,
+        "predicted_visible_fraction": 1.0,
+        "mask_fraction": 0.6925223214285714,
+        "mask_and_depth_fraction": 0.5982142857142857,
+        "within_depth_tolerance_fraction": null,
+        "depth_gap_mm_when_masked": null
+      }
+    },
+    {
+      "clip": "gamepad-90-145",
+      "model": "point4d",
+      "mode": "RGB full-clip model with predicted camera geometry; in-view, not occlusion visibility",
+      "source_query_error_px_median": 0.5975944399833679,
+      "source_query_error_px_p90": 0.8804925084114075,
+      "mask_fraction_diagnostic": 0.5806361607142857,
+      "depth_fraction_diagnostic": null,
+      "predicted_visible_fraction": 1.0,
+      "model_only_fps": 18.039512381675447,
+      "adapter_fps": 17.635730717929725,
+      "peak_gpu_gib": 20.272098064422607,
+      "diagnostic": {
+        "status": "diagnostic only; mask and depth cannot prove point identity",
+        "geometry_source": "model_3d_unscaled_projected_2d",
+        "eligible_birth_to_end": 3584,
+        "predicted_visible_fraction": 1.0,
+        "mask_fraction": 0.5806361607142857,
+        "mask_and_depth_fraction": 0.47572544642857145,
+        "within_depth_tolerance_fraction": null,
+        "depth_gap_mm_when_masked": null
+      }
+    },
+    {
+      "clip": "gamepad-90-145",
+      "model": "spatracker2",
+      "mode": "full-clip windowed RGB-D model; no causal publication rate measured",
+      "source_query_error_px_median": 0.08961425721645355,
+      "source_query_error_px_p90": 0.1686239391565323,
+      "mask_fraction_diagnostic": 0.29324776785714285,
+      "depth_fraction_diagnostic": 0.14006696428571427,
+      "predicted_visible_fraction": 0.40011160714285715,
+      "model_only_fps": 7.211704011864201,
+      "adapter_fps": 7.013806826889708,
+      "peak_gpu_gib": 10.270725727081299,
+      "diagnostic": {
+        "status": "diagnostic only; mask and depth cannot prove point identity",
+        "geometry_source": "model_3d",
+        "eligible_birth_to_end": 3584,
+        "predicted_visible_fraction": 0.40011160714285715,
+        "mask_fraction": 0.29324776785714285,
+        "mask_and_depth_fraction": 0.20005580357142858,
+        "within_depth_tolerance_fraction": 0.14006696428571427,
+        "depth_gap_mm_when_masked": {
+          "median": 2.882717609405505,
+          "p90": 122.94572081565858,
+          "max": 412.4465223401785
+        }
+      }
+    },
+    {
+      "clip": "gamepad-90-145",
+      "model": "tapip3d_unfiltered",
+      "mode": "full-clip model; no causal publication rate measured",
+      "source_query_error_px_median": 0.04349222034215927,
+      "source_query_error_px_p90": 0.10070040076971054,
+      "mask_fraction_diagnostic": 0.3588169642857143,
+      "depth_fraction_diagnostic": 0.3052455357142857,
+      "predicted_visible_fraction": 0.525390625,
+      "model_only_fps": 31.572601121042204,
+      "adapter_fps": 26.97484912901952,
+      "peak_gpu_gib": 3.392585277557373,
+      "diagnostic": {
+        "status": "diagnostic only; mask and depth cannot prove point identity",
+        "geometry_source": "model_3d",
+        "eligible_birth_to_end": 3584,
+        "predicted_visible_fraction": 0.525390625,
+        "mask_fraction": 0.3588169642857143,
+        "mask_and_depth_fraction": 0.31417410714285715,
+        "within_depth_tolerance_fraction": 0.3052455357142857,
+        "depth_gap_mm_when_masked": {
+          "median": 0.40487408638001376,
+          "p90": 1.3780606985092092,
+          "max": 141.69057261943817
+        }
+      }
+    },
+    {
+      "clip": "gamepad-90-145",
+      "model": "tapnext",
+      "mode": "causal per-frame upstream Point2Pose frontend, no pose estimator",
+      "source_query_error_px_median": 0.7792492508888245,
+      "source_query_error_px_p90": 1.1333976984024048,
+      "mask_fraction_diagnostic": 0.15485491071428573,
+      "depth_fraction_diagnostic": null,
+      "predicted_visible_fraction": 0.17661830357142858,
+      "model_only_fps": 78.83271199095351,
+      "adapter_fps": 62.19402469442768,
+      "peak_gpu_gib": 1.6247553825378418,
+      "diagnostic": {
+        "status": "diagnostic only; mask and depth cannot prove point identity",
+        "geometry_source": "sensor_at_prediction",
+        "eligible_birth_to_end": 3584,
+        "predicted_visible_fraction": 0.17661830357142858,
+        "mask_fraction": 0.15485491071428573,
+        "mask_and_depth_fraction": 0.146484375,
+        "within_depth_tolerance_fraction": null,
+        "depth_gap_mm_when_masked": null
+      }
+    },
+    {
+      "clip": "gamepad-90-145",
+      "model": "trackeverything",
+      "mode": "full-clip, windowed, may use future frames",
+      "source_query_error_px_median": 0.7314778566360474,
+      "source_query_error_px_p90": 1.2370274066925049,
+      "mask_fraction_diagnostic": 0.4213169642857143,
+      "depth_fraction_diagnostic": 0.2720424107142857,
+      "predicted_visible_fraction": 0.654296875,
+      "model_only_fps": 19.156002831917288,
+      "adapter_fps": 17.875673186782226,
+      "peak_gpu_gib": 2.3502893447875977,
+      "diagnostic": {
+        "status": "diagnostic only; mask and depth cannot prove point identity",
+        "geometry_source": "model_3d",
+        "eligible_birth_to_end": 3584,
+        "predicted_visible_fraction": 0.654296875,
+        "mask_fraction": 0.4213169642857143,
+        "mask_and_depth_fraction": 0.3392857142857143,
+        "within_depth_tolerance_fraction": 0.2720424107142857,
+        "depth_gap_mm_when_masked": {
+          "median": 1.3382776975631727,
+          "p90": 115.26934802532196,
+          "max": 126.76600980758667
+        }
+      }
+    },
+    {
+      "clip": "gamepad-90-145",
+      "model": "trackon_r",
+      "mode": "causal streaming, all source frames",
+      "source_query_error_px_median": 0.2884400486946106,
+      "source_query_error_px_p90": 0.4112355411052704,
+      "mask_fraction_diagnostic": 0.5281808035714286,
+      "depth_fraction_diagnostic": null,
+      "predicted_visible_fraction": 0.8116629464285714,
+      "model_only_fps": 44.09418344978291,
+      "adapter_fps": 37.65740669571893,
+      "peak_gpu_gib": 0.303955078125,
+      "diagnostic": {
+        "status": "diagnostic only; mask and depth cannot prove point identity",
+        "geometry_source": "sensor_at_prediction",
+        "eligible_birth_to_end": 3584,
+        "predicted_visible_fraction": 0.8116629464285714,
+        "mask_fraction": 0.5281808035714286,
+        "mask_and_depth_fraction": 0.416015625,
+        "within_depth_tolerance_fraction": null,
+        "depth_gap_mm_when_masked": null
+      }
+    },
+    {
+      "clip": "yellow-0-74",
+      "model": "bootstapir",
+      "mode": "causal per-frame upstream Point2Pose frontend, no pose estimator",
+      "source_query_error_px_median": 0.9180842638015747,
+      "source_query_error_px_p90": 1.9832779169082642,
+      "mask_fraction_diagnostic": 0.670625,
+      "depth_fraction_diagnostic": null,
+      "predicted_visible_fraction": 0.9385416666666667,
+      "model_only_fps": 53.075287635722425,
+      "adapter_fps": 45.280931529489344,
+      "peak_gpu_gib": 0.5466275215148926,
+      "diagnostic": {
+        "status": "diagnostic only; mask and depth cannot prove point identity",
+        "geometry_source": "sensor_at_prediction",
+        "eligible_birth_to_end": 4800,
+        "predicted_visible_fraction": 0.9385416666666667,
+        "mask_fraction": 0.670625,
+        "mask_and_depth_fraction": 0.653125,
+        "within_depth_tolerance_fraction": null,
+        "depth_gap_mm_when_masked": null
+      }
+    },
+    {
+      "clip": "yellow-0-74",
+      "model": "cotracker3",
+      "mode": "full-clip offline; may use future frames",
+      "source_query_error_px_median": 3.0517578125e-05,
+      "source_query_error_px_p90": 3.4119690099032596e-05,
+      "mask_fraction_diagnostic": 0.5733333333333334,
+      "depth_fraction_diagnostic": null,
+      "predicted_visible_fraction": 0.6614583333333334,
+      "model_only_fps": 198.0039198399173,
+      "adapter_fps": 96.45073697842824,
+      "peak_gpu_gib": 10.933660984039307,
+      "diagnostic": {
+        "status": "diagnostic only; mask and depth cannot prove point identity",
+        "geometry_source": "sensor_at_prediction",
+        "eligible_birth_to_end": 4800,
+        "predicted_visible_fraction": 0.6614583333333334,
+        "mask_fraction": 0.5733333333333334,
+        "mask_and_depth_fraction": 0.5570833333333334,
+        "within_depth_tolerance_fraction": null,
+        "depth_gap_mm_when_masked": null
+      }
+    },
+    {
+      "clip": "yellow-0-74",
+      "model": "litetracker",
+      "mode": "causal per-frame upstream Point2Pose frontend, no pose estimator",
+      "source_query_error_px_median": 3.0517578125e-05,
+      "source_query_error_px_p90": 3.4119690099032596e-05,
+      "mask_fraction_diagnostic": 0.6820833333333334,
+      "depth_fraction_diagnostic": null,
+      "predicted_visible_fraction": 0.82625,
+      "model_only_fps": 116.44341025441004,
+      "adapter_fps": 84.4870919592459,
+      "peak_gpu_gib": 0.2451467514038086,
+      "diagnostic": {
+        "status": "diagnostic only; mask and depth cannot prove point identity",
+        "geometry_source": "sensor_at_prediction",
+        "eligible_birth_to_end": 4800,
+        "predicted_visible_fraction": 0.82625,
+        "mask_fraction": 0.6820833333333334,
+        "mask_and_depth_fraction": 0.648125,
+        "within_depth_tolerance_fraction": null,
+        "depth_gap_mm_when_masked": null
+      }
+    },
+    {
+      "clip": "yellow-0-74",
+      "model": "lk",
+      "mode": "causal per-frame optical flow; no object mask after seeding",
+      "source_query_error_px_median": 0.0,
+      "source_query_error_px_p90": 0.0,
+      "mask_fraction_diagnostic": 0.5375,
+      "depth_fraction_diagnostic": null,
+      "predicted_visible_fraction": 1.0,
+      "model_only_fps": 2269.9757262961557,
+      "adapter_fps": 227.19397554106814,
+      "peak_gpu_gib": 0.0,
+      "diagnostic": {
+        "status": "diagnostic only; mask and depth cannot prove point identity",
+        "geometry_source": "sensor_at_prediction",
+        "eligible_birth_to_end": 4800,
+        "predicted_visible_fraction": 1.0,
+        "mask_fraction": 0.5375,
+        "mask_and_depth_fraction": 0.5039583333333333,
+        "within_depth_tolerance_fraction": null,
+        "depth_gap_mm_when_masked": null
+      }
+    },
+    {
+      "clip": "yellow-0-74",
+      "model": "point4d",
+      "mode": "RGB full-clip model with predicted camera geometry; in-view, not occlusion visibility",
+      "source_query_error_px_median": 1.0432499647140503,
+      "source_query_error_px_p90": 2.157069683074951,
+      "mask_fraction_diagnostic": 0.6710416666666666,
+      "depth_fraction_diagnostic": null,
+      "predicted_visible_fraction": 1.0,
+      "model_only_fps": 18.62957857639665,
+      "adapter_fps": 18.20879429658386,
+      "peak_gpu_gib": 23.1506290435791,
+      "diagnostic": {
+        "status": "diagnostic only; mask and depth cannot prove point identity",
+        "geometry_source": "model_3d_unscaled_projected_2d",
+        "eligible_birth_to_end": 4800,
+        "predicted_visible_fraction": 1.0,
+        "mask_fraction": 0.6710416666666666,
+        "mask_and_depth_fraction": 0.646875,
+        "within_depth_tolerance_fraction": null,
+        "depth_gap_mm_when_masked": null
+      }
+    },
+    {
+      "clip": "yellow-0-74",
+      "model": "spatracker2",
+      "mode": "full-clip windowed RGB-D model; no causal publication rate measured",
+      "source_query_error_px_median": 0.11406594514846802,
+      "source_query_error_px_p90": 0.30673229694366455,
+      "mask_fraction_diagnostic": 0.6860416666666667,
+      "depth_fraction_diagnostic": 0.40125,
+      "predicted_visible_fraction": 0.9658333333333333,
+      "model_only_fps": 7.2489857117669905,
+      "adapter_fps": 7.05209715020652,
+      "peak_gpu_gib": 13.570282459259033,
+      "diagnostic": {
+        "status": "diagnostic only; mask and depth cannot prove point identity",
+        "geometry_source": "model_3d",
+        "eligible_birth_to_end": 4800,
+        "predicted_visible_fraction": 0.9658333333333333,
+        "mask_fraction": 0.6860416666666667,
+        "mask_and_depth_fraction": 0.6660416666666666,
+        "within_depth_tolerance_fraction": 0.40125,
+        "depth_gap_mm_when_masked": {
+          "median": 9.058193922042879,
+          "p90": 14.669912433624301,
+          "max": 125.17745327949525
+        }
+      }
+    },
+    {
+      "clip": "yellow-0-74",
+      "model": "tapip3d_unfiltered",
+      "mode": "full-clip model; no causal publication rate measured",
+      "source_query_error_px_median": 0.03160177916288376,
+      "source_query_error_px_p90": 0.07247089594602585,
+      "mask_fraction_diagnostic": 0.6760416666666667,
+      "depth_fraction_diagnostic": 0.6541666666666667,
+      "predicted_visible_fraction": 0.8633333333333333,
+      "model_only_fps": 26.196449114019813,
+      "adapter_fps": 22.324069010830854,
+      "peak_gpu_gib": 4.775191783905029,
+      "diagnostic": {
+        "status": "diagnostic only; mask and depth cannot prove point identity",
+        "geometry_source": "model_3d",
+        "eligible_birth_to_end": 4800,
+        "predicted_visible_fraction": 0.8633333333333333,
+        "mask_fraction": 0.6760416666666667,
+        "mask_and_depth_fraction": 0.6591666666666667,
+        "within_depth_tolerance_fraction": 0.6541666666666667,
+        "depth_gap_mm_when_masked": {
+          "median": 0.6578457355499445,
+          "p90": 2.957488560676565,
+          "max": 81.70702385902406
+        }
+      }
+    },
+    {
+      "clip": "yellow-0-74",
+      "model": "tapnext",
+      "mode": "causal per-frame upstream Point2Pose frontend, no pose estimator",
+      "source_query_error_px_median": 0.5773526430130005,
+      "source_query_error_px_p90": 1.188476800918579,
+      "mask_fraction_diagnostic": 0.27270833333333333,
+      "depth_fraction_diagnostic": null,
+      "predicted_visible_fraction": 0.42020833333333335,
+      "model_only_fps": 83.68985509923372,
+      "adapter_fps": 65.05245053503256,
+      "peak_gpu_gib": 1.6249384880065918,
+      "diagnostic": {
+        "status": "diagnostic only; mask and depth cannot prove point identity",
+        "geometry_source": "sensor_at_prediction",
+        "eligible_birth_to_end": 4800,
+        "predicted_visible_fraction": 0.42020833333333335,
+        "mask_fraction": 0.27270833333333333,
+        "mask_and_depth_fraction": 0.2633333333333333,
+        "within_depth_tolerance_fraction": null,
+        "depth_gap_mm_when_masked": null
+      }
+    },
+    {
+      "clip": "yellow-0-74",
+      "model": "trackeverything",
+      "mode": "full-clip, windowed, may use future frames",
+      "source_query_error_px_median": 0.39860403537750244,
+      "source_query_error_px_p90": 0.6188520193099976,
+      "mask_fraction_diagnostic": 0.78,
+      "depth_fraction_diagnostic": 0.7247916666666666,
+      "predicted_visible_fraction": 0.9627083333333334,
+      "model_only_fps": 18.462769220434225,
+      "adapter_fps": 17.266632578193587,
+      "peak_gpu_gib": 2.7353429794311523,
+      "diagnostic": {
+        "status": "diagnostic only; mask and depth cannot prove point identity",
+        "geometry_source": "model_3d",
+        "eligible_birth_to_end": 4800,
+        "predicted_visible_fraction": 0.9627083333333334,
+        "mask_fraction": 0.78,
+        "mask_and_depth_fraction": 0.7610416666666666,
+        "within_depth_tolerance_fraction": 0.7247916666666666,
+        "depth_gap_mm_when_masked": {
+          "median": 1.6886916160583354,
+          "p90": 6.905608701705959,
+          "max": 81.97017431259157
+        }
+      }
+    },
+    {
+      "clip": "yellow-0-74",
+      "model": "trackon_r",
+      "mode": "causal streaming, all source frames",
+      "source_query_error_px_median": 0.2874659299850464,
+      "source_query_error_px_p90": 0.5445957183837891,
+      "mask_fraction_diagnostic": 0.7791666666666667,
+      "depth_fraction_diagnostic": null,
+      "predicted_visible_fraction": 0.98,
+      "model_only_fps": 46.464415113104714,
+      "adapter_fps": 39.726929870712766,
+      "peak_gpu_gib": 0.303955078125,
+      "diagnostic": {
+        "status": "diagnostic only; mask and depth cannot prove point identity",
+        "geometry_source": "sensor_at_prediction",
+        "eligible_birth_to_end": 4800,
+        "predicted_visible_fraction": 0.98,
+        "mask_fraction": 0.7791666666666667,
+        "mask_and_depth_fraction": 0.7447916666666666,
+        "within_depth_tolerance_fraction": null,
+        "depth_gap_mm_when_masked": null
+      }
+    }
+  ]
+}

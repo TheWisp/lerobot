@@ -18,6 +18,10 @@ from benchmarks.flash_surface_benchmark import (
 )
 from benchmarks.flash_surface_growth import build as build_growth
 from benchmarks.flash_surface_lk import run as run_lk
+from benchmarks.flash_surface_npz_rgbd import build as build_npz_rgbd
+from benchmarks.flash_surface_point4d import project_model_tracks
+from benchmarks.flash_surface_report import collect as collect_report, markdown as report_markdown
+from benchmarks.flash_surface_rigid_fit import robust_fit
 from benchmarks.flash_surface_synthetic import build as build_synthetic
 from benchmarks.flash_surface_ycbineoat import build as build_ycb
 
@@ -124,6 +128,14 @@ def test_sensor_depth_lift_does_not_score_its_own_depth_as_independent_agreement
     assert report["within_depth_tolerance_fraction"] is None
     prediction["geometry_source"] = np.asarray("model_3d")
     assert diagnostic(recording, masks, reference, prediction, 0.01)["within_depth_tolerance_fraction"] == 1
+    prediction["xyz"][:] = np.nan
+    check = diagnostic(recording, masks, reference, prediction, 0.01)
+    assert check["mask_fraction"] == 1  # 2D correspondence does not depend on native depth validity.
+    assert check["within_depth_tolerance_fraction"] == 0
+    del prediction["xyz"]
+    check = diagnostic(recording, masks, reference, prediction, 0.01)
+    assert check["mask_fraction"] == 1
+    assert check["within_depth_tolerance_fraction"] is None
 
 
 def test_ycb_pose_reference_transports_same_material_point(tmp_path):
@@ -220,3 +232,81 @@ def test_exact_motion_control_distinguishes_visible_drift_from_good_tracking(tmp
     prediction["xyz"] += [0.006, 0, 0]
     assert score(ref, prediction)["coverage_px"]["2"] == 0.0
     assert score(ref, prediction)["coverage_mm"]["5"] == 0.0
+
+
+def test_unlabelled_rgbd_import_does_not_invent_later_masks_or_timestamps(tmp_path):
+    source = tmp_path / "sample.npz"
+    np.savez_compressed(
+        source,
+        video=np.full((3, 12, 12, 3), 120, np.uint8),
+        depths=np.full((3, 12, 12), 0.85, np.float32),
+        intrinsics=np.repeat(np.array([[[20, 0, 6], [0, 20, 6], [0, 0, 1]]], np.float32), 3, axis=0),
+        extrinsics=np.repeat(np.eye(4, dtype=np.float32)[None], 3, axis=0),
+    )
+    output = tmp_path / "clip"
+    manifest = build_npz_rgbd(source, output, [2, 2, 9, 2, 9, 9, 2, 9], fps=25, points=4)
+    with np.load(output / "queries.npz", allow_pickle=False) as reference:
+        np.testing.assert_allclose(reference["capture_s"], [0, 0.04, 0.08])
+        np.testing.assert_allclose(reference["initial_depth_m"], 0.85)
+        assert "truth_visible" not in reference
+    assert cv2.imread(str(output / "masks" / "000000.png"), 0).sum() > 0
+    assert cv2.imread(str(output / "masks" / "000001.png"), 0).sum() == 0
+    assert manifest["ground_truth"].startswith("unlabelled")
+
+
+def test_common_rigid_fit_rejects_coherent_background_outliers():
+    rng = np.random.default_rng(41)
+    source = rng.uniform(-0.05, 0.05, (32, 3))
+    angle = np.deg2rad(24)
+    rotation = np.array([[np.cos(angle), -np.sin(angle), 0], [np.sin(angle), np.cos(angle), 0], [0, 0, 1]])
+    target = (rotation @ source.T).T + [0.06, -0.02, 0.01]
+    target += rng.normal(0, 0.0002, target.shape)
+    target[::4] += [0.04, -0.01, 0.02]
+    transform, inliers, trials = robust_fit(source, target, 0.002, 0.99, 0.5, np.random.default_rng(7))
+    assert trials == 35
+    assert transform is not None
+    assert inliers.sum() == 24
+    np.testing.assert_allclose(transform[:3, :3], rotation, atol=0.003)
+    np.testing.assert_allclose(transform[:3, 3], [0.06, -0.02, 0.01], atol=0.001)
+
+
+def test_point4d_projection_uses_its_predicted_camera_before_2d_scoring():
+    rotation = np.array([[0, -1, 0], [1, 0, 0], [0, 0, 1]], np.float32)
+    geometry = {
+        "cam_R": rotation[None],
+        "cam_t": np.array([[1, 2, 0]], np.float32),
+        "intrinsics": np.array([[[20, 0, 50], [0, 20, 40], [0, 0, 1]]], np.float32),
+        "image_hw": (80, 100),
+    }
+    tracks = np.array([[[1, 3, 1], [1, 2, -1]]], np.float32)
+    projected, in_view = project_model_tracks(tracks, geometry, (80, 100))
+    np.testing.assert_allclose(projected[0, 0], [70, 40])
+    assert in_view.tolist() == [[True, False]]
+
+
+def test_2d_only_candidate_stays_in_accuracy_report_without_fake_metric_depth(tmp_path):
+    clip = tmp_path / "clip"
+    clip.mkdir()
+    reference = {
+        "frames": np.arange(2),
+        "queries": np.array([[0, 2, 3]], np.float32),
+        "truth_visible": np.ones((2, 1), bool),
+        "truth_xy": np.array([[[2, 3]], [[3, 3]]], np.float32),
+    }
+    np.savez_compressed(clip / "queries.npz", **reference)
+    (clip / "manifest.json").write_text(json.dumps({"ground_truth": "analytic material-point control"}))
+    np.savez_compressed(
+        clip / "point4d.npz",
+        frames=reference["frames"],
+        queries=reference["queries"],
+        xy=reference["truth_xy"],
+        visible=reference["truth_visible"],
+        geometry_source=np.asarray("model_3d_unscaled_projected_2d"),
+    )
+    (clip / "point4d.timing.json").write_text(
+        json.dumps({"mode": "full clip", "model_only_fps": 5, "decode_track_lift_fps": 4})
+    )
+    result = collect_report(tmp_path)
+    assert result["macro_equal_clip_weight"][0]["clip_mean_coverage_2px"] == 1
+    assert result["macro_equal_clip_weight"][0]["clip_mean_coverage_5mm"] is None
+    assert "n/a" in report_markdown(result)

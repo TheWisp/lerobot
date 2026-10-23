@@ -1,0 +1,10 @@
+# Preserved local moving-object clips
+
+These clips are qualitative stress tests. Their masks were generated in an earlier tracking audit; they are useful for seeding identical queries and diagnosing whether a predicted pixel remains in the segmented object, but are not independently annotated material-point tracks. The staged RGB-D, masks and timestamps were copied with symlinks resolved into `/home/feit/.cache/flash-visible-local-cases/` before benchmarking, so the inputs do not depend on temporary directories surviving.
+
+| Clip                | Original recording                                                                | Staged frames | Query SHA-256                                                      | First RGB SHA-256                                                  |
+| ------------------- | --------------------------------------------------------------------------------- | ------------: | ------------------------------------------------------------------ | ------------------------------------------------------------------ |
+| yellow block        | insertion act `20261016_112149`, starting at source camera frame 331              |          0–74 | `6dfe2714462b1776a944738b58f7fd9e7eaf1953e6f804668388180969bb3c4f` | `dfc0dfc03bb5a1f733dcd845668a3a26083dda0d1ae34ceabd43dd21ae24d360` |
+| partly held gamepad | pick/place act `20261012_194250`, staged frame 90 corresponds to source frame 160 |        90–145 | `b01460e8d8a3b7936081e1ec6a4dc7d996dd255d1eefb60d16d194269a06a376` | `17ffd9bd3814661cb8b141e644cf274790c882d5decbdebf8fb1cf80854baf62` |
+
+The local data files remain outside git. `LOCAL_MOVING.md` and its JSON report contain the output diagnostics and per-adapter timing. Recreate the seed sets with `flash_surface_benchmark prepare-local` and the staged recording/mask paths; the committed hashes detect any changed first frame or query selection. Do not compare the mask fractions with labelled point coverage from YCBInEOAT as though they were the same measure.

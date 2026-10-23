@@ -235,12 +235,10 @@ def diagnostic(
 ) -> dict:
     """Predicted-surface check; never substitute for independently labelled accuracy."""
     validate_prediction(reference, prediction)
-    if "xyz" not in prediction:
-        return {"status": "3d output unavailable"}
-    points, frames = prediction["xyz"], reference["frames"]
+    points, frames = prediction.get("xyz"), reference["frames"]
     geometry_source = str(prediction.get("geometry_source", "unknown"))
     xy = prediction["xy"]
-    t, n = points.shape[:2]
+    t, n = xy.shape[:2]
     in_mask = np.zeros((t, n), bool)
     depth_valid = np.zeros((t, n), bool)
     depth_gap_mm = np.full((t, n), np.nan)
@@ -253,8 +251,7 @@ def diagnostic(
         y = np.rint(np.nan_to_num(xy[index, :, 1], nan=-1)).astype(int)
         valid = (
             prediction["visible"][index]
-            & np.isfinite(points[index]).all(axis=1)
-            & (points[index, :, 2] > 0)
+            & np.isfinite(xy[index]).all(axis=1)
             & (x >= 0)
             & (x < depth.shape[1])
             & (y >= 0)
@@ -263,7 +260,11 @@ def diagnostic(
         ids = np.flatnonzero(valid)
         in_mask[index, ids] = mask[y[ids], x[ids]] > 0
         depth_valid[index, ids] = depth[y[ids], x[ids]] > 0
-        depth_gap_mm[index, ids] = np.abs(depth[y[ids], x[ids]] * 0.001 - points[index, ids, 2]) * MM
+        if points is not None:
+            valid_3d = ids[np.isfinite(points[index, ids]).all(axis=1) & (points[index, ids, 2] > 0)]
+            depth_gap_mm[index, valid_3d] = (
+                np.abs(depth[y[valid_3d], x[valid_3d]] * 0.001 - points[index, valid_3d, 2]) * MM
+            )
     births = reference["queries"][:, 0].astype(int)
     born = np.arange(t)[:, None] >= births
     supported = born & in_mask & depth_valid & (depth_gap_mm <= tolerance_m * MM)
@@ -275,10 +276,14 @@ def diagnostic(
         "mask_fraction": float(np.count_nonzero(born & in_mask) / born.sum()),
         "mask_and_depth_fraction": float(np.count_nonzero(born & in_mask & depth_valid) / born.sum()),
         "within_depth_tolerance_fraction": (
-            float(np.count_nonzero(supported) / born.sum()) if geometry_source == "model_3d" else None
+            float(np.count_nonzero(supported) / born.sum())
+            if geometry_source == "model_3d" and points is not None
+            else None
         ),
         "depth_gap_mm_when_masked": (
-            _quantiles(depth_gap_mm[born & in_mask & depth_valid]) if geometry_source == "model_3d" else None
+            _quantiles(depth_gap_mm[born & in_mask & depth_valid])
+            if geometry_source == "model_3d" and points is not None
+            else None
         ),
     }
 
