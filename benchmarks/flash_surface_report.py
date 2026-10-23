@@ -18,6 +18,7 @@ from benchmarks.flash_surface_benchmark import _load, score
 
 def collect(root: Path) -> dict:
     rows = []
+    reference_kinds = set()
     for experiment in sorted(root.iterdir()):
         manifest_path, query_path = experiment / "manifest.json", experiment / "queries.npz"
         if not manifest_path.is_file() or not query_path.is_file():
@@ -26,6 +27,7 @@ def collect(root: Path) -> dict:
         reference = _load(query_path)
         if "truth_visible" not in reference:
             continue
+        reference_kinds.add(manifest.get("ground_truth", "unknown"))
         for prediction_path in sorted(experiment.glob("*.npz")):
             if prediction_path.name == "queries.npz" or prediction_path.stem.endswith("_paced"):
                 continue
@@ -80,9 +82,26 @@ def collect(root: Path) -> dict:
                 "peak_gpu_gib": max(row["gpu_peak_gib"] for row in subset),
             }
         )
+    synthetic = len(reference_kinds) == 1 and next(iter(reference_kinds)).startswith(
+        "analytic material-point"
+    )
     return {
-        "status": "development pilot; clips are not a held-out or independent-source result",
-        "reference": "YCBInEOAT object pose plus source depth; visibility gated by GT mask/raw depth",
+        "status": (
+            "exact-motion synthetic controls; these do not measure real-sensor generalization"
+            if synthetic
+            else "development pilot; clips are not a held-out or independent-source result"
+        ),
+        "reference": sorted(reference_kinds),
+        "description": (
+            "Coverage includes missing point predictions in its denominator. These procedural rigid-plane "
+            "clips provide exact object motion, with first-frame depth quantized to millimetres. "
+            "They validate conventions and expose obvious drift, not real-scene tracking quality."
+            if synthetic
+            else "Coverage includes missing point predictions in its denominator. The public reference "
+            "transports source-depth points through object-pose annotations; its own measured-depth "
+            "disagreement is shown alongside scores. Every number below is developmental."
+        ),
+        "synthetic": synthetic,
         "modes_not_interchangeable": "full-clip windowed inference may use future frames; causal throughput excludes SAM/fit/consumer",
         "rows": rows,
         "macro_equal_clip_weight": macro,
@@ -133,16 +152,19 @@ def collect_paced(root: Path) -> dict:
 
 
 def markdown(report: dict) -> str:
+    depth_filter_note = (
+        " TAPIP3D's upstream depth filter dominates its wall time."
+        if any(row["model"] == "tapip3d" for row in report["rows"])
+        else ""
+    )
     lines = [
-        "# FLASH visible-surface pilot",
+        "# FLASH exact-motion controls" if report["synthetic"] else "# FLASH visible-surface pilot",
         "",
         report["status"],
         "",
-        "Coverage includes missing point predictions in its denominator. The reference transports source-depth "
-        "points through object-pose annotations; its own measured-depth disagreement is shown alongside scores. "
-        "Every number below is a development result, not a tracker selection.",
+        report["description"],
         "",
-        "| Clip | Model | 2 px coverage | 5 mm coverage | Median reference depth gap | Model FPS | Full decode FPS |",
+        "| Clip | Model | 2 px coverage | 5 mm coverage | Median reference depth gap | Model FPS | Adapter FPS |",
         "| --- | --- | ---: | ---: | ---: | ---: | ---: |",
     ]
     for row in report["rows"]:
@@ -154,18 +176,22 @@ def markdown(report: dict) -> str:
     lines.extend(
         [
             "",
-            "Model FPS is full-clip throughput for TrackEverything and causal per-frame tracker throughput for "
-            "the other adapters. Full decode FPS includes recorded RGB-D loading; neither includes segmentation, "
-            "pose fitting, network transfer, recording, or a 30 Hz consumer. They are not measured live-loop FPS.",
+            "Model FPS is full-clip throughput for TrackEverything and TAPIP3D, and causal per-frame tracker "
+            "throughput for the other adapters. Adapter FPS includes recorded RGB-D decoding and each adapter's "
+            "preprocessing."
+            + depth_filter_note
+            + " Neither includes shared segmentation, pose fitting, FLASH planning, motor IO, recording, or a "
+            "30 Hz consumer. They are not measured live-loop FPS.",
             "",
-            "| Model | Clips | Mean 2 px coverage | Mean 5 mm coverage | Median model FPS | Peak GPU memory |",
-            "| --- | ---: | ---: | ---: | ---: | ---: |",
+            "| Model | Clips | Mean 2 px coverage | Mean 5 mm coverage | Median model FPS | Median adapter FPS | Peak GPU memory |",
+            "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
         ]
     )
     for row in report["macro_equal_clip_weight"]:
         lines.append(
             f"| {row['model']} | {row['clips']} | {row['clip_mean_coverage_2px']:.3f} | "
             f"{row['clip_mean_coverage_5mm']:.3f} | {row['median_model_only_fps']:.1f} | "
+            f"{row['median_decode_plus_model_fps']:.1f} | "
             f"{row['peak_gpu_gib']:.2f} GiB |"
         )
     return "\n".join(lines) + "\n"

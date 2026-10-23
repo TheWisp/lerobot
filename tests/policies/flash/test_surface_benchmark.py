@@ -17,6 +17,7 @@ from benchmarks.flash_surface_benchmark import (
     validate_prediction,
 )
 from benchmarks.flash_surface_lk import run as run_lk
+from benchmarks.flash_surface_synthetic import build as build_synthetic
 from benchmarks.flash_surface_ycbineoat import build as build_ycb
 
 
@@ -180,3 +181,26 @@ def test_lk_adapter_tracks_known_pixel_translation(tmp_path):
         assert np.all(paced["publication_s"] >= np.asarray([0, 1 / 30, 2 / 30])[indices])
         assert paced_report["pacing"]["consumer_ticks"] > 1
         assert paced_report["pacing"]["skipped_source_frames"] == 3 - len(indices)
+
+
+def test_exact_motion_control_distinguishes_visible_drift_from_good_tracking(tmp_path):
+    output = tmp_path / "plane"
+    build_synthetic(output, "translation", "textured", frames=5, points=9)
+    with np.load(output / "queries.npz", allow_pickle=False) as saved:
+        ref = {key: saved[key] for key in saved.files}
+    displacement = ref["truth_xy"][-1, :, 0] - ref["truth_xy"][0, :, 0]
+    np.testing.assert_allclose(displacement, 40.0, atol=0.1)
+    np.testing.assert_allclose(ref["truth_xyz"][-1, :, 0] - ref["truth_xyz"][0, :, 0], 0.08)
+    assert ref["truth_visible"].all()
+    prediction = {
+        "frames": ref["frames"],
+        "queries": ref["queries"],
+        "xy": ref["truth_xy"].copy(),
+        "xyz": ref["truth_xyz"].copy(),
+        "visible": np.ones_like(ref["truth_visible"]),
+    }
+    assert score(ref, prediction)["coverage_px"]["1"] == 1.0
+    prediction["xy"] += [3, 0]
+    prediction["xyz"] += [0.006, 0, 0]
+    assert score(ref, prediction)["coverage_px"]["2"] == 0.0
+    assert score(ref, prediction)["coverage_mm"]["5"] == 0.0

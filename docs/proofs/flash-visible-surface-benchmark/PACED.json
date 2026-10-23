@@ -122,6 +122,21 @@
       "model_only_fps_on_processed": 80.77759171031539
     },
     {
+      "clip": "dowel-280-370",
+      "model": "trackon_r",
+      "source_fps": 29.97771489261742,
+      "source_frames": 91,
+      "processed": 84,
+      "skipped": 7,
+      "first_publication_ms": 284.95888400357217,
+      "consumer_deadline_misses": 0,
+      "consumer_ticks_without_result": 9,
+      "age_median_ms": 32.266154419630766,
+      "age_p90_ms": 32.97335695242509,
+      "publication_gap_p90_ms": 35.32456036191434,
+      "model_only_fps_on_processed": 45.0012134022597
+    },
+    {
       "clip": "ycb-mustard-100-130",
       "model": "bootstapir",
       "source_fps": 16.384468285615323,
@@ -171,6 +186,23 @@
       "model_only_fps_on_processed": 57.033204510233936,
       "coverage_2px": 0.5532523230879199,
       "coverage_5mm": 0.544674767691208
+    },
+    {
+      "clip": "ycb-mustard-100-130",
+      "model": "trackon_r",
+      "source_fps": 16.384468285615323,
+      "source_frames": 31,
+      "processed": 28,
+      "skipped": 3,
+      "first_publication_ms": 279.9468949669972,
+      "consumer_deadline_misses": 0,
+      "consumer_ticks_without_result": 9,
+      "age_median_ms": 55.25775048865589,
+      "age_p90_ms": 77.94494750223849,
+      "publication_gap_p90_ms": 66.75005940487608,
+      "model_only_fps_on_processed": 35.3386768700373,
+      "coverage_2px": 0.453180843459614,
+      "coverage_5mm": 0.44603288062902074
     }
   ]
 }
