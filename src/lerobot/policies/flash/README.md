@@ -40,6 +40,13 @@ That command is a compatibility entry point; the importer is
    After grasp, the held-object demo pose is a **prediction** from the selected
    pregrasp estimate and recorded gripper motion, not a new observation.
 
+New regular LeRobot episodes have a separate, model-neutral skill compiler in
+[`compiler.py`](compiler.py): it takes dataset frames, role-indexed pose
+sidecars and explicit interval annotations. The sealed importer is an adapter
+for the historical SO-107 recording layout and its one-held/one-target
+annotation. It should not become the general demo schema; the Run → FLASH
+editor currently prepares that sealed layout only.
+
 The live trial constructs the SAM3/DINO/RGB-D direct backend in
 [`live_trial.py`](live_trial.py). When `causal_tracking` is configured, the
 scene estimator also uses frame-to-frame object and environment point motion;
