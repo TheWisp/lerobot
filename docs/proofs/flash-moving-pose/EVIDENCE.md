@@ -1,6 +1,6 @@
 # Moving-object pose check — 2026-10-23
 
-[Watch the phone-friendly video](https://github.com/TheWisp/lerobot/releases/download/flash-moving-pose-20261023/FLASH_moving_objects_pose_check.mp4) · 27 s, 1080 × 1440, H.264.
+[Watch the phone-friendly video](https://github.com/TheWisp/lerobot/releases/download/flash-visible-tracking-20261023/FLASH_moving_objects_pose_check.mp4) · 27 s, 1080 × 1440, H.264.
 
 ![Dowel rotation after the final local reseed](cover.jpg)
 
