@@ -70,6 +70,15 @@ even when every link has enough inliers. This proves some tracking/depth error,
 but does not allocate the whole gripper discrepancy between that error and
 possible slip.
 
+The fit is not simply dropping A away from its supporting cloud. For the 13
+dowel IDs supported at both frames 280 and 370, A-to-ID distances changed by
+2.0 mm median and 3.2 mm at the 90th percentile; only five of those IDs remain
+supported in every intervening frame. Thus A largely follows the selected
+point group while the group as a whole moves relative to the gripper. The
+17.9 mm gripper discrepancy could be actual movement in the grasp, coherent
+correspondence drift, or both. Accumulated adjacent-fit error is a mechanism
+to test, not a demonstrated explanation for that full discrepancy.
+
 The yellow block makes the distinction visible. At frame 58, raw display ID A
 has migrated onto the held dowel beside the gripper and is rejected by the
 yellow-block mask/depth check; C is also rejected. Only B of the chosen three
