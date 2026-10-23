@@ -1,0 +1,39 @@
+{
+  "settings": {
+    "points_per_cohort": 48,
+    "strata_per_axis": 4,
+    "edge_exclusion_px": 2,
+    "feature_block_px": 5,
+    "support_tolerance_m": 0.01,
+    "seed": 0
+  },
+  "resolutions": [
+    "default"
+  ],
+  "clips": [
+    {
+      "name": "dowel_rotation_flat",
+      "recording": "/home/feit/.cache/huggingface/lerobot/demos/insertion/recording",
+      "mask_dir": "/home/feit/.cache/huggingface/lerobot/demos/insertion/flash/v1/tracker-runs/trackeverything-growth-ui-20261021-a/segmentation/masks/0",
+      "first_frame": 280,
+      "last_frame": 370,
+      "appearance": "flat_object"
+    },
+    {
+      "name": "yellow_full_flat",
+      "recording": "/tmp/flash-multivisible/ring_yellow/recording",
+      "mask_dir": "/tmp/flash-multivisible/ring_yellow/masks/1",
+      "first_frame": 0,
+      "last_frame": 74,
+      "appearance": "flat_object"
+    },
+    {
+      "name": "gamepad_moving_flat",
+      "recording": "/tmp/flash-moving-check/held_gamepad/recording",
+      "mask_dir": "/tmp/flash-moving-check/held_gamepad/masks/0",
+      "first_frame": 90,
+      "last_frame": 145,
+      "appearance": "flat_object"
+    }
+  ]
+}
