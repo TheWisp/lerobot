@@ -1,5 +1,26 @@
 # Dowel tracking with a common RGB-D and mask-grounded fitter
 
+The [nine-second side-by-side video](dowel_trackers_side_by_side.mp4) plays
+the three-second source interval at one-third speed. The white line is the
+current SAM3 mask. Cyan is the projected convex footprint of the depth surface
+observed in frame 400 under each fitted pose; it can bridge the part later
+hidden by the gripper. Green points pass the current mask/depth gate; red
+points are predicted visible by a tracker but rejected by that gate. The
+three arrows show the fitted frame orientation; their starting directions come
+from the first visible cloud, not a labelled insertion axis. A red point can be genuinely
+occluded rather than a false track, so it is not by itself an error label.
+
+![Six trackers on the held dowel at frame 489](dowel_trackers_last_frame.jpg)
+
+At the end, LiteTracker, CoTracker3, optical flow and BootsTAPIR keep the cyan
+footprint close to the white visible outline. Optical flow, CoTracker3 and
+TrackEverything send some points onto neighboring surfaces, but the common
+gate excludes them. TrackEverything's fitted footprint remains fairly close
+after correction despite its conspicuous arc of rejected tracks. TAPNext's
+footprint shifts above the visible upper end, which matches its larger depth
+contradiction. These are visible-frame checks; a good-looking footprint still
+does not establish the hidden tip's exact position.
+
 This offline comparison uses the same 90 aligned RGB-D frames (insertion demo
 400–489), saved SAM3 dowel masks, and 64 depth-backed points sampled in frame
 400 for every point tracker. Each tracker's predicted image points are lifted
