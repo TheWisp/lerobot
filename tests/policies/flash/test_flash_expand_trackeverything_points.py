@@ -90,7 +90,7 @@ def test_later_queries_only_count_when_visible_on_the_measured_object(tmp_path, 
     assert (output / "seed-mask.png").is_file()
 
 
-def test_bounded_growth_keeps_initial_pose_fit_and_birth_identity(tmp_path, monkeypatch):
+def test_bounded_growth_refits_pose_from_new_ids_when_original_ids_disappear(tmp_path, monkeypatch):
     monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[3] / "benchmarks"))
     from flash_trackeverything_pose import run
 
@@ -124,9 +124,13 @@ def test_bounded_growth_keeps_initial_pose_fit_and_birth_identity(tmp_path, monk
             queries = kwargs["query_points_2d"]
             calls.append(queries.copy())
             xyz = np.repeat(np.column_stack((queries[:, 1:], np.ones(len(queries))))[None], 3, axis=0)
+            xyz[2, :, 0] += 0.002
+            visibility = np.ones((1, 3, len(queries)))
+            if len(queries) > 4:
+                visibility[0, 2, :4] = -1
             return SimpleNamespace(
                 query_coords=torch.tensor(xyz[None]),
-                query_visibs=torch.ones((1, 3, len(queries))),
+                query_visibs=torch.tensor(visibility),
                 norm_factor=1,
             )
 
@@ -162,7 +166,11 @@ def test_bounded_growth_keeps_initial_pose_fit_and_birth_identity(tmp_path, monk
         assert not trace["lost"].any()
         assert trace["visible_surface_support"].shape == trace["query_visibility_logits"].shape
         assert not trace["visible_surface_support"][0, original:].any()
-        np.testing.assert_allclose(trace["poses"], np.broadcast_to(np.eye(4), trace["poses"].shape))
+        assert not trace["visible_surface_support"][2, :original].any()
+        assert trace["visible_surface_support"][2, original:].sum() >= 3
+        assert trace["new_points"][0].sum() >= 3
+        np.testing.assert_allclose(trace["poses"][0, 2, 0, 3], 0.002, atol=1e-6)
+        assert json.loads(str(trace["metadata"]))["fit_mode"] == "causal_growing_rgbd"
         assert (
             sum(event["count"] for event in json.loads(str(trace["metadata"]))["growth_events"])
             == len(trace["query_points_2d"]) - original

@@ -40,13 +40,22 @@ specified query points; query points are not merged with scene points and may re
 higher resolution. The model outputs point trajectories, **not object identities or
 6D object poses**. FLASH must supply segmentation and fit or otherwise infer poses.
 
-This adapter presently fits a rigid pose independently per frame from points sampled
+The original adapter fitted a rigid pose independently per frame from points sampled
 inside one reference mask per object. Dense mode is the default because it also runs
 the model's persistent scene representation while preserving those high-resolution
-queries. It does **not** use `output.tracks()` for pose fitting or associate newly
-born scene points with an object. Thus dense mode does not by itself address a rotating
+queries. It did **not** use `output.tracks()` for pose fitting or associate newly
+born scene points with an object. Thus dense mode alone did not address a rotating
 object whose original visible surface disappears. Sparse mode remains available for
 comparison. The raw per-query tracks and visibility logits are retained for diagnosis.
+
+The 2026-10-23 growth-enabled adapter now fits a causal rigid frame from
+mask/depth-supported query IDs, adds newly visible IDs after a measured pose,
+and checks a local RGB-D surface proposal against both tracked points and
+signed depth. It still reruns TrackEverything inference to add later queries;
+the pose fit is causal over a model trace that itself uses future context.
+The [dated visible-tracking evidence](../../../../docs/proofs/flash-cross-episode/visible-rigid-tracking/EVIDENCE.md)
+gives the measured improvement and limits. The non-growth adapter retains
+its fixed-reference fit for comparison.
 
 On the evaluated 613-frame insertion demo, switching this same query fit from sparse
 to dense context took 27.1 s versus 27.9 s and improved median held-dowel RGB-D
@@ -106,9 +115,10 @@ integration does not make it a causal live perception source. The current adapte
 requires one appearance reference per object and the existing fixed-camera RGB-D recording layout.
 
 All selected objects share one TrackEverything inference call, including objects seeded at
-different reference frames. Each object gets its own rigid fit. It tracks a fixed reference
-query set; adding points on newly revealed surfaces is not implemented in the
-FLASH preparation or live paths.
+different reference frames. Each object gets its own rigid fit. Non-growth
+mode tracks a fixed reference query set. Growth-enabled offline extraction
+adds later query cohorts; the live FLASH perception path does not use
+TrackEverything.
 
 ### Multi-view visible-surface experiment (2026-10-21)
 
@@ -147,13 +157,15 @@ has 42 rigid-consistent tracks among its 58 mask/depth-supported tracks; the
 frame-409 cohort has 28 among 47. At frame 550 those counts are 31/56 and
 21/47. The ring cohort retains 74/74 at frame 454 and 71/75 at frame 550.
 
-The Run → FLASH demo editor now exposes bounded growth for TrackEverything:
+The Run → FLASH demo editor exposes bounded growth for TrackEverything:
 maximum points per object, maximum additions per newly exposed view, and the
 depth-agreement tolerance. Processing segments the selected demo's full RGB
 sequence with the saved object prompts in a separate process, tracks all query
 cohorts together, and saves query birth frames and measured visible-surface
-support for replay. The pink pose candidate remains the original-query fit;
-the new points are review evidence, not silently promoted to planner pose.
+support for replay. In the 2026-10-21 result measured below, the pink pose
+candidate remained the original-query fit; the new points were review
+evidence only. New candidates made with the 2026-10-23 runner use the growing
+point fit and record how many frames accepted an RGB-D surface correction.
 A full two-object pass on the 613-frame insertion demo with a 320-point total
 cap, 96-point per-view cap and 10 mm depth tolerance finished in 180 s. It
 added four later cohorts per object without exceeding either cap.
@@ -237,6 +249,25 @@ one-pass pre-seeding scheme that preserves point coverage, needs validation
 before replacing the existing research result. A short window may repeat
 local frames while the buffer fills, but never the entire history for each
 new surface.
+
+### Visible rigid refit and surface check (2026-10-23)
+
+The original growth runner fitted poses before expanding its query set. On
+the saved insertion demo, that made the dowel's frame-400 to frame-489 motion
+project only 11.5% of the frame-400 depth surface into the frame-489 mask;
+48.4% of projected points lay implausibly in front of measured depth. A
+causal fit that uses the same growing, depth-supported point IDs raised mask
+agreement to 81.7% and reduced foreground conflict to 4.4%. A fresh short
+model pass with a measured RGB-D surface correction reached 90.9% mask
+agreement and 0.9% foreground conflict at frame 489. The procedure,
+stationary and moving ring controls, and caveats are in the
+[evidence record](../../../../docs/proofs/flash-cross-episode/visible-rigid-tracking/EVIDENCE.md).
+
+This corrects a visible interval, not an occlusion bridge or a proven 6D
+orientation. The dowel remains partly covered by the gripper/ring. A separate
+visible moving-ring recording retained 75/75 poses with 97.8% median mask
+coverage and 0.3% median foreground-depth conflict. Model inference is still
+future-aware; a causal live tracker needs separate validation.
 
 Other trackers register an argv template under their tracker ID:
 

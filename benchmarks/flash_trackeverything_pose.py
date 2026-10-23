@@ -20,6 +20,11 @@ import torch
 
 from lerobot.policies.flash.registration import DegenerateRegistrationError, register_object
 from lerobot.policies.flash.visible_points import read_mask, select_growth_view, surface_support
+from lerobot.policies.flash.visible_rigid_tracking import (
+    VisibleRGBDFrame,
+    fit_visible_trace,
+    visible_surface_cloud,
+)
 
 
 def _query_pixels(mask: np.ndarray, depth: np.ndarray, count: int) -> np.ndarray:
@@ -58,6 +63,10 @@ def run(
     max_points_per_role: int | None = None,
     points_per_view: int | None = None,
     support_tolerance_m: float | None = None,
+    surface_icp_iterations: int = 20,
+    surface_trim_fraction: float = 0.75,
+    surface_edge_pixels: int = 2,
+    max_surface_points: int = 2000,
 ) -> dict:
     if mode not in ("dense", "sparse"):
         raise ValueError("TrackEverything mode must be dense or sparse")
@@ -74,6 +83,13 @@ def run(
         or support_tolerance_m <= 0
     ):
         raise ValueError("point growth needs a total cap, per-view cap and positive surface tolerance")
+    if (
+        surface_icp_iterations < 1
+        or not 0 < surface_trim_fraction <= 1
+        or surface_edge_pixels < 0
+        or max_surface_points < 3
+    ):
+        raise ValueError("invalid visible-surface refinement settings")
     sys.path.insert(0, str(repository.parent))
     from trackeverything.demo_hf import TrackEverything  # noqa: PLC0415
 
@@ -135,31 +151,6 @@ def run(
     points, visibility = infer(queries)
     if points.shape != (len(frames), len(queries), 3) or visibility.shape != points.shape[:2]:
         raise ValueError("TrackEverything returned an unexpected query-track shape")
-    traces, offset = [], 0
-    for spec, role_queries in zip(specs, queries_by_role, strict=True):
-        end = offset + len(role_queries)
-        object_points = points[:, offset:end]
-        object_visibility = visibility[:, offset:end]
-        trace = _fit_tracks(
-            object_points,
-            object_visibility,
-            int(spec["frame_index"]) - first_frame,
-            fit_threshold_m=fit_threshold_m,
-            min_inliers=min_inliers,
-            fit_trials=fit_trials,
-        )
-        trace["temporal_conflicts"] = _temporal_motion_conflicts(
-            object_points,
-            object_visibility,
-            trace["poses"],
-            trace["lost"],
-            reference_index=int(spec["frame_index"]) - first_frame,
-            fit_threshold_m=fit_threshold_m,
-            min_inliers=min_inliers,
-        )
-        traces.append(trace)
-        offset = end
-    arrays = {key: np.stack([trace[key] for trace in traces]) for key in traces[0]}
     original_query_count = len(queries)
     growth_events = []
     if growth_masks is not None and any(len(query) < max_points_per_role for query in queries_by_role):
@@ -206,13 +197,28 @@ def run(
                 raise ValueError("TrackEverything returned an unexpected grown query-track shape")
     elapsed_s = time.perf_counter() - start
     visible_surface_support = None
+    surface_frames = None
     if growth_masks is not None:
         visible_surface_support = np.zeros(visibility.shape, dtype=bool)
+        surface_frames = {spec["role"]: [None] * len(frames) for spec in specs}
         for index, frame in enumerate(frames):
             for spec_index, spec in enumerate(specs):
                 mask = read_mask(growth_masks / str(spec_index), int(frame), depth_stack[index].shape)
                 if mask is None:
                     continue
+                try:
+                    surface = visible_surface_cloud(
+                        depth_stack[index],
+                        mask,
+                        intrinsics,
+                        edge_pixels=surface_edge_pixels,
+                        max_points=max_surface_points,
+                    )
+                    surface_frames[spec["role"]][index] = VisibleRGBDFrame(
+                        surface, mask, depth_stack[index], intrinsics
+                    )
+                except DegenerateRegistrationError:
+                    pass
                 role_indices = np.flatnonzero(query_roles == spec["role"])
                 supported, _, _ = surface_support(
                     points[index, role_indices],
@@ -223,6 +229,62 @@ def run(
                     support_tolerance_m,
                 )
                 visible_surface_support[index, role_indices] = supported
+    traces = []
+    for spec in specs:
+        role_indices = np.flatnonzero(query_roles == spec["role"])
+        object_points = points[:, role_indices]
+        object_visibility = visibility[:, role_indices]
+        if visible_surface_support is not None:
+            # Growing query IDs are zero/undefined before their birth frame.
+            # Fit only after growth, with depth-supported IDs joining the same
+            # causal object frame when a measured pose is available.
+            role_frames = surface_frames[spec["role"]]
+            if all(frame is None for frame in role_frames):
+                raise ValueError(f"no depth-backed instance masks for {spec['role']!r} in the selected video")
+            source_index = next(
+                (
+                    index
+                    for index in range(len(frames))
+                    if visible_surface_support[index, role_indices].sum() >= min_inliers
+                ),
+                None,
+            )
+            source_frame = None if source_index is None else role_frames[source_index]
+            trace = fit_visible_trace(
+                object_points,
+                visible_surface_support[:, role_indices],
+                tolerance_m=fit_threshold_m,
+                min_inliers=min_inliers,
+                trials=fit_trials,
+                reference_surface=None if source_frame is None else source_frame.surface_m,
+                rgbd_frames=None if source_frame is None else role_frames,
+                depth_m_per_unit=1.0,
+                surface_tolerance_m=support_tolerance_m,
+                icp_iterations=surface_icp_iterations,
+                trim_fraction=surface_trim_fraction,
+            )
+            if source_frame is None:
+                trace["surface_refined"] = np.zeros(len(frames), dtype=bool)
+        else:
+            trace = _fit_tracks(
+                object_points,
+                object_visibility,
+                int(spec["frame_index"]) - first_frame,
+                fit_threshold_m=fit_threshold_m,
+                min_inliers=min_inliers,
+                fit_trials=fit_trials,
+            )
+            trace["temporal_conflicts"] = _temporal_motion_conflicts(
+                object_points,
+                object_visibility,
+                trace["poses"],
+                trace["lost"],
+                reference_index=int(spec["frame_index"]) - first_frame,
+                fit_threshold_m=fit_threshold_m,
+                min_inliers=min_inliers,
+            )
+        traces.append(trace)
+    arrays = {key: np.stack([trace[key] for trace in traces]) for key in traces[0]}
     if reference_specs is None:
         arrays = {key: value[0] for key, value in arrays.items()}
     else:
@@ -256,6 +318,15 @@ def run(
                     },
                     "growth_events": growth_events,
                     "support_tolerance_m": support_tolerance_m,
+                    "fit_mode": "causal_growing_rgbd" if growth_masks is not None else "fixed_reference",
+                    "surface_refinement": {
+                        "icp_iterations": surface_icp_iterations,
+                        "trim_fraction": surface_trim_fraction,
+                        "edge_pixels": surface_edge_pixels,
+                        "max_points": max_surface_points,
+                    }
+                    if growth_masks is not None
+                    else None,
                 }
             )
         ),
@@ -356,6 +427,10 @@ def main() -> None:
     parser.add_argument("--max-points-per-role", type=int)
     parser.add_argument("--points-per-view", type=int)
     parser.add_argument("--support-tolerance-m", type=float)
+    parser.add_argument("--surface-icp-iterations", type=int, default=20)
+    parser.add_argument("--surface-trim-fraction", type=float, default=0.75)
+    parser.add_argument("--surface-edge-pixels", type=int, default=2)
+    parser.add_argument("--max-surface-points", type=int, default=2000)
     args = parser.parse_args()
     print(
         json.dumps(
@@ -379,6 +454,10 @@ def main() -> None:
                 max_points_per_role=args.max_points_per_role,
                 points_per_view=args.points_per_view,
                 support_tolerance_m=args.support_tolerance_m,
+                surface_icp_iterations=args.surface_icp_iterations,
+                surface_trim_fraction=args.surface_trim_fraction,
+                surface_edge_pixels=args.surface_edge_pixels,
+                max_surface_points=args.max_surface_points,
             )
         ),
         flush=True,

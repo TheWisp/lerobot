@@ -316,7 +316,9 @@ function _flashEditorRender() {
                 const item = document.createElement('div');
                 item.className = 'flash-editor-keypoint';
                 const label = document.createElement('strong');
-                label.textContent = `${candidate.tracker}${candidate.inference_mode ? ` (${candidate.inference_mode} context, initial-query pose fit)` : ''} · ${_flashTrackerCoverage(candidate)}`;
+                const growingFit = candidate.point_growth?.pose_fit === 'causal_growing_rgbd';
+                const fitName = growingFit ? 'growing-point RGB-D pose fit' : 'initial-query pose fit';
+                label.textContent = `${candidate.tracker}${candidate.inference_mode ? ` (${candidate.inference_mode} context, ${fitName})` : ''} · ${_flashTrackerCoverage(candidate)}`;
                 item.append(label);
                 const hasConflicts = Object.values(candidate.coverage_by_role || {}).some(info => info.temporal_conflict_frames > 0);
                 const missingEvidence = candidate.tracker === 'trackeverything' && !candidate.inference_mode;
@@ -331,9 +333,14 @@ function _flashEditorRender() {
                 if (candidate.tracker === 'trackeverything' && !missingEvidence) {
                     const note = document.createElement('p');
                     note.className = 'flash-editor-status';
-                    note.textContent = candidate.point_growth
-                        ? `Visible-surface review: ${candidate.point_growth.events.length} added views, capped at ${candidate.point_growth.max_points_per_object} points per object and ${candidate.point_growth.new_points_per_view} per view. The pink pose is still fitted from the original points.`
-                        : 'This pose is fitted from fixed reference-point tracks. New scene points are not associated with objects; coverage and fit support do not establish pose accuracy.';
+                    if (growingFit) {
+                        const corrected = Object.values(candidate.point_growth.surface_refined_frames_by_role || {}).reduce((a, b) => a + b, 0);
+                        note.textContent = `${candidate.point_growth.events.length} added views · ${corrected} frames accepted an RGB-D surface correction. The pink pose uses depth-supported growing points. Review the mask, depth and point tracks before applying it.`;
+                    } else if (candidate.point_growth) {
+                        note.textContent = `Earlier visible-surface review: ${candidate.point_growth.events.length} added views. The pink pose still uses only the original points; regenerate to use them for the fit.`;
+                    } else {
+                        note.textContent = 'This pose is fitted from fixed reference-point tracks. New scene points are not associated with objects; coverage and fit support do not establish pose accuracy.';
+                    }
                     item.append(note);
                 }
                 const highlight = () => {

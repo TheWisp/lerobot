@@ -6,6 +6,26 @@ The source array is in the frame-100 camera/object coordinate system; target
 is in frame-101 camera coordinates. No raw RGB or depth is included. It
 captures a real false rejection caused by an extra post-consensus refit.
 
+`dowel_visible_growth_20261021.npz` contains the dowel's saved TrackEverything
+3D query tracks and SAM3/depth support from insertion demo frames 100–489,
+plus a sampled depth surface from frame 400 and the frame-489 mask/depth.
+The original fixed-reference pose displacement is retained as a negative
+control. It demonstrates that the old pose fit (computed before point growth)
+projects the frame-400 surface mostly outside the frame-489 object mask,
+whereas a causal rigid fit using newly visible point IDs remains on the
+measured object. It stores no RGB, robot commands, or full episode.
+It also includes a separately rerun 90-frame query set's frame-400/489 point
+correspondences and initial pose, so the masked RGB-D surface correction has
+an independent recorded acceptance case.
+
+`ring_visible_motion_20261016.npz` stores 75 depth-supported TrackEverything
+point frames for a visible ring moving with the tray in the 2026-10-16
+11:21:49 real rollout, plus the initial measured surface and final aligned
+mask/depth. It checks that a growing-point fit stays available and projects
+onto the final visible RGB-D observation. The point model used future video
+context, so this does not establish causal online tracking or 6D ground truth.
+It stores no RGB or robot actions.
+
 `dowel_held_frame_315.npz` contains a registered two-view dowel point model,
 its frame-315 SAM3 mask and aligned depth, the frame-315 matched-patch pose,
 and the same frame's point-group pose. The two reference views were frames

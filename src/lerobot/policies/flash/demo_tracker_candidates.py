@@ -217,6 +217,14 @@ def process_demo(
                     str(surface_tolerance_m),
                 )
             )
+            for setting, flag in (
+                ("surface_icp_iterations", "--surface-icp-iterations"),
+                ("surface_trim_fraction", "--surface-trim-fraction"),
+                ("surface_edge_pixels", "--surface-edge-pixels"),
+                ("max_surface_points", "--max-surface-points"),
+            ):
+                if setting in setup:
+                    args.extend((flag, str(setup[setting])))
         import os
 
         env = os.environ.copy()
@@ -237,12 +245,20 @@ def process_demo(
             initial_count = (
                 int(data["original_query_count"]) if "original_query_count" in data else len(query_roles)
             )
+            surface_refined_frames_by_role = (
+                {spec["role"]: int(data["surface_refined"][index].sum()) for index, spec in enumerate(specs)}
+                if growth
+                else {}
+            )
             for index, spec in enumerate(specs):
                 source = run_dir / f"object-{index}.npz"
-                initial_role = query_roles[:initial_count] == spec["role"]
-                visible = (data["query_visibility_logits"][:, :initial_count][:, initial_role] > 0).sum(
-                    axis=1
-                )
+                if growth:
+                    visible = data["visible_surface_support"][:, query_roles == spec["role"]].sum(axis=1)
+                else:
+                    initial_role = query_roles[:initial_count] == spec["role"]
+                    visible = (data["query_visibility_logits"][:, :initial_count][:, initial_role] > 0).sum(
+                        axis=1
+                    )
                 np.savez_compressed(
                     source,
                     frames=data["frames"],
@@ -298,7 +314,9 @@ def process_demo(
                 "new_points_per_view": new_points_per_view,
                 "surface_tolerance_m": surface_tolerance_m,
                 "events": metadata["growth_events"],
-                "pose_fit": "initial_reference_queries_only",
+                "pose_fit": metadata["fit_mode"],
+                "surface_refined_frames_by_role": surface_refined_frames_by_role,
+                "surface_refinement": metadata["surface_refinement"],
             }
         destination.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
         result.update(
