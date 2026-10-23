@@ -4,6 +4,8 @@ Pass this as ``--worker-bridge`` to ``run_p2p_external_mask.py`` with
 ``--mask-source internal``. The sealed bridge and pinned P2P checkout remain
 unmodified; this wrapper captures selected outputs after each normal step.
 Set ``FLASH_P2P_SDF_PROBE_OUTPUT`` to an explicit output directory.
+If ``FLASH_P2P_SDF_KEYFRAME_INPUT_OUTPUT`` is set, also capture the exact RGB-D,
+mask, and pose fed into each SDF keyframe integration.
 """
 
 from __future__ import annotations
@@ -39,6 +41,42 @@ def main() -> None:
         raise ValueError("FLASH_P2P_SDF_PROBE_OUTPUT is required")
     output = Path(output_name)
     output.mkdir(parents=True, exist_ok=True)
+    keyframe_input_name = os.environ.get("FLASH_P2P_SDF_KEYFRAME_INPUT_OUTPUT")
+    if keyframe_input_name:
+        keyframe_output = Path(keyframe_input_name)
+        keyframe_output.mkdir(parents=True, exist_ok=True)
+        ordinary_init = bridge.Session.init
+
+        def capture_keyframe_inputs(session, rgb, depth_m, k, mask):
+            from point2pose.modules.reconstruction.sdf_builder import SDFBuilder
+
+            ordinary_integrate = SDFBuilder.integrate_keyframe
+
+            def capture_integrate(builder, obj, keyframe):
+                current_frame = keyframe.frame
+                stem = f"{keyframe.frame_id + DEMO_FIRST_FRAME:06d}_{keyframe.kf_idx:02d}"
+
+                def cpu_array(value, dtype):
+                    if hasattr(value, "detach"):
+                        value = value.detach().cpu().numpy()
+                    return np.asarray(value, dtype=dtype)
+
+                np.savez_compressed(
+                    keyframe_output / f"{stem}.npz",
+                    rgb=cpu_array(current_frame.rgb, np.uint8),
+                    depth=cpu_array(current_frame.depth, np.float32),
+                    mask=cpu_array(current_frame.mask[keyframe.obj_id, 0], np.float32),
+                    pose=cpu_array(keyframe.pose, np.float64),
+                    intrinsics=cpu_array(current_frame.intrinsics, np.float64),
+                    depth_factor=np.float64(current_frame.depth_factor),
+                    dense_pts=cpu_array(keyframe.dense_pts, np.float32),
+                )
+                return ordinary_integrate(builder, obj, keyframe)
+
+            SDFBuilder.integrate_keyframe = capture_integrate
+            return ordinary_init(session, rgb, depth_m, k, mask)
+
+        bridge.Session.init = capture_keyframe_inputs
     ordinary_answer = bridge.Session._answer
 
     def capture_answer(session, frame, milliseconds):
