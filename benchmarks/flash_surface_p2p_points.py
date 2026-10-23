@@ -44,6 +44,9 @@ def run(
     backend: str,
     output: Path,
     paced: bool = False,
+    integration: str = "none",
+    sam_prompt: str | None = None,
+    sam_resolution: int | None = None,
 ) -> dict:
     manifest = json.loads((experiment / "manifest.json").read_text())
     if manifest["schema"] != "flash-visible-points-v1":
@@ -62,10 +65,17 @@ def run(
             saved["intrinsics"],
             saved["capture_s"],
         )
+        initial_depth = saved.get("initial_depth_m", None)
     if not np.array_equal(frames, np.arange(frames[0], frames[-1] + 1)):
         raise ValueError("causal adapter requires consecutive source frames")
     if paced and np.any(queries[:, 0] != 0):
         raise ValueError("paced latest-frame replay cannot preserve queries born on skipped frames")
+    if integration not in {"none", "cached-mask-fit", "sam3-mask-fit"}:
+        raise ValueError(f"unknown integration mode {integration}")
+    if integration == "sam3-mask-fit" and not sam_prompt:
+        raise ValueError("SAM3 integration needs an object prompt")
+    if integration != "none" and np.any(queries[:, 0] != 0):
+        raise ValueError("integrated first-frame fit needs first-frame query anchors")
     recording = Path(manifest["recording"])
     if _sha256(recording / "rgb" / f"{frames[0]:06d}.jpg") != manifest["first_rgb_sha256"]:
         raise ValueError("initial RGB changed")
@@ -90,6 +100,34 @@ def run(
     tracker = tracker_type(config)
     torch.cuda.synchronize()
     model_load_s = time.perf_counter() - started
+    sam_source = None
+    if integration == "sam3-mask-fit":
+        from lerobot.overlays.adapters import Sam3TrackByDetectionAdapter
+
+        # Use a supplied first-frame query, never a synthetic median pixel that
+        # might lie outside a concave object mask.
+        center = np.median(queries[:, 1:3], axis=0)
+        seed = tuple(queries[np.argmin(np.linalg.norm(queries[:, 1:3] - center, axis=1)), 1:3])
+        started = time.perf_counter()
+        sam_source = Sam3TrackByDetectionAdapter(device="cuda", resolution=sam_resolution)
+        sam_source.set_camera("surface-benchmark")
+        sam_source.set_control({"prompt": "", "text_detection": False})
+        sam_setup_s = time.perf_counter() - started
+    else:
+        sam_setup_s = 0.0
+    if integration != "none":
+        from benchmarks.flash_surface_rigid_fit import robust_fit
+
+        if initial_depth is None or np.any(~np.isfinite(initial_depth)) or np.any(initial_depth <= 0):
+            raise ValueError("integrated fit requires valid initial seed depth")
+        source_points = np.column_stack(
+            (
+                (queries[:, 1] - k[0, 2]) * initial_depth / k[0, 0],
+                (queries[:, 2] - k[1, 2]) * initial_depth / k[1, 1],
+                initial_depth,
+            )
+        )
+        fit_rng = np.random.default_rng(20261023)
     t, n = len(frames), len(queries)
     xy = np.full((t, n, 2), np.nan, dtype=np.float32)
     xyz = np.full((t, n, 3), np.nan, dtype=np.float32)
@@ -97,6 +135,10 @@ def run(
     decode_s = np.zeros(t)
     tracker_s = np.zeros(t)
     lift_s = np.zeros(t)
+    mask_s = np.zeros(t)
+    fit_s = np.zeros(t)
+    mask_pixels = np.full(t, -1, dtype=np.int32)
+    fit_available = np.zeros(t, bool)
     query_ids = np.arange(n)
     clock = PacedConsumer(capture_s) if paced else None
     index = 0
@@ -112,6 +154,29 @@ def run(
         rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
         depth = raw.astype(np.float32) * 0.001
         decode_s[index] = time.perf_counter() - start
+        if integration != "none":
+            start = time.perf_counter()
+            if sam_source is None:
+                mask = cv2.imread(
+                    str(Path(manifest["mask_dir"]) / f"{frame_id:06d}.png"), cv2.IMREAD_GRAYSCALE
+                )
+                if mask is None or mask.shape != depth.shape:
+                    raise ValueError(f"missing aligned cached mask at source frame {frame_id}")
+                mask_pixels[index] = int(np.count_nonzero(mask))
+            else:
+                if index == 0:
+                    sam_source.set_control(
+                        {
+                            "click_seq": 1,
+                            "click_name": {"surface-benchmark": sam_prompt},
+                            "clicks": {"surface-benchmark": [[float(seed[0]), float(seed[1]), 1]]},
+                        }
+                    )
+                    sam_source.segment(np.ascontiguousarray(rgb))
+                mask = sam_source.segment(np.ascontiguousarray(rgb)).get(sam_prompt)
+                mask_pixels[index] = int(np.count_nonzero(mask)) if mask is not None else 0
+                torch.cuda.synchronize()
+            mask_s[index] = time.perf_counter() - start
         frame = SimpleNamespace(id=index, rgb=rgb)
         born = query_ids[queries[:, 0].astype(int) == index]
         start = time.perf_counter()
@@ -146,6 +211,12 @@ def run(
         start = time.perf_counter()
         xyz[index, known] = lift_measured_depth(coords, depth, k)
         lift_s[index] = time.perf_counter() - start
+        if integration != "none":
+            start = time.perf_counter()
+            usable = visible[index] & np.isfinite(xyz[index]).all(axis=1)
+            fitted, _, _ = robust_fit(source_points[usable], xyz[index, usable], 0.01, 0.99, 0.5, fit_rng)
+            fit_available[index] = fitted is not None
+            fit_s[index] = time.perf_counter() - start
         if clock is not None:
             clock.publish(index)
         index += 1
@@ -161,6 +232,10 @@ def run(
         decode_s=decode_s,
         tracker_s=tracker_s,
         lift_s=lift_s,
+        mask_s=mask_s,
+        fit_s=fit_s,
+        mask_pixels=mask_pixels,
+        fit_available=fit_available,
         geometry_source=np.asarray("sensor_at_prediction"),
         **(
             {
@@ -177,10 +252,11 @@ def run(
     report = {
         "model": backend,
         "mode": (
-            "paced causal latest-frame upstream Point2Pose frontend, no pose estimator"
+            f"paced causal latest-frame upstream Point2Pose frontend; integration={integration}"
             if paced
-            else "causal per-frame upstream Point2Pose frontend, no pose estimator"
+            else f"causal per-frame upstream Point2Pose frontend; integration={integration}"
         ),
+        "integration": integration,
         "frames": t,
         "queries": n,
         "checkpoint_sha256": _sha256(checkpoint),
@@ -188,14 +264,26 @@ def run(
         "hardware": torch.cuda.get_device_name(0),
         "torch_version": torch.__version__,
         "model_load_s": model_load_s,
+        "sam_setup_s": sam_setup_s,
         "decode_s_total": float(decode_s.sum()),
+        "mask_s_total": float(mask_s.sum()),
         "tracker_s_total": float(tracker_s.sum()),
         "lift_s_total": float(lift_s.sum()),
+        "fit_s_total": float(fit_s.sum()),
+        "mask_ms_median": float(np.median(mask_s[mask_s > 0]) * 1000) if np.any(mask_s > 0) else None,
+        "mask_ms_p95": float(np.quantile(mask_s[mask_s > 0], 0.95) * 1000) if np.any(mask_s > 0) else None,
+        "fit_ms_median": float(np.median(fit_s[fit_s > 0]) * 1000) if np.any(fit_s > 0) else None,
+        "fit_available_frames": int(np.count_nonzero(fit_available)),
+        "mask_nonempty_frames": int(np.count_nonzero(mask_pixels > 0)),
         "tracker_frame_s_median": float(np.median(tracker_s)),
         "tracker_frame_s_p95": float(np.quantile(tracker_s, 0.95)),
         "model_only_fps": float(np.count_nonzero(tracker_s) / tracker_s.sum()),
         "decode_track_lift_fps": float(
             np.count_nonzero(tracker_s) / (decode_s.sum() + tracker_s.sum() + lift_s.sum())
+        ),
+        "integrated_stage_fps": float(
+            np.count_nonzero(tracker_s)
+            / (decode_s.sum() + mask_s.sum() + tracker_s.sum() + lift_s.sum() + fit_s.sum())
         ),
         "cuda_peak_allocated_bytes": torch.cuda.max_memory_allocated(),
         "pacing": pacing,
@@ -214,10 +302,23 @@ def main() -> None:
         "--paced", action="store_true", help="release frames at recorded times, drop stale source frames"
     )
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--integration", choices=("none", "cached-mask-fit", "sam3-mask-fit"), default="none")
+    parser.add_argument("--sam-prompt", help="object description for the live SAM3 mask path")
+    parser.add_argument("--sam-resolution", type=int)
     args = parser.parse_args()
     print(
         json.dumps(
-            run(args.experiment, args.repository, args.checkpoint, args.backend, args.output, args.paced),
+            run(
+                args.experiment,
+                args.repository,
+                args.checkpoint,
+                args.backend,
+                args.output,
+                args.paced,
+                args.integration,
+                args.sam_prompt,
+                args.sam_resolution,
+            ),
             indent=2,
         )
     )
