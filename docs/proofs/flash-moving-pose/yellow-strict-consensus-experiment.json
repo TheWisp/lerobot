@@ -1,0 +1,94 @@
+{
+  "scene": "/tmp/flash-multivisible/ring_yellow/scene.npz",
+  "recording": "/tmp/flash-multivisible/ring_yellow/recording",
+  "mask_dir": "/tmp/flash-multivisible/ring_yellow/masks/1",
+  "role": "block",
+  "frames": [
+    0,
+    74
+  ],
+  "fit_threshold_m": 0.005,
+  "support_tolerance_m": 0.01,
+  "birth_frames_and_counts": {
+    "0": 59,
+    "70": 29,
+    "72": 6
+  },
+  "supported_count": {
+    "median": 46.0,
+    "p90": 51.0,
+    "max": 68.0
+  },
+  "accepted_depth_error_mm": {
+    "median": 1.5815645456314087,
+    "p90": 5.629545450210572,
+    "max": 9.999781847000122
+  },
+  "endpoint_shared": {
+    "count": 35,
+    "raw_pair_distance_change_mm": {
+      "median": 3.0015460800223193,
+      "p90": 7.560300382723941,
+      "max": 15.449202802794991
+    },
+    "measured_depth_pair_distance_change_mm": {
+      "median": 3.362436589859498,
+      "p90": 8.194954685535421,
+      "max": 16.61717393517722
+    }
+  },
+  "continuously_supported": {
+    "count": 10,
+    "raw_pair_distance_change_mm": {
+      "median": 2.8224227799985466,
+      "p90": 5.727566323350432,
+      "max": 7.266334579330229
+    },
+    "measured_depth_pair_distance_change_mm": {
+      "median": 3.327360777315217,
+      "p90": 5.311253985652145,
+      "max": 6.431031985635893
+    }
+  },
+  "frozen_consensus": {
+    "seeds": 75,
+    "inlier_count": {
+      "median": 16.0,
+      "p90": 17.0,
+      "max": 18.0
+    },
+    "max_orientation_disagreement_deg": 61.58380574871548,
+    "scope": "Point bank only; identical measurements, no surface correction or new motion.",
+    "frame": 68
+  },
+  "saved_pose": {
+    "rotation_step_deg": {
+      "median": 3.0306251633148866,
+      "p90": 28.605330730321164,
+      "max": 59.26246643082583
+    },
+    "median_cloud_step_mm": {
+      "median": 1.807953949331146,
+      "p90": 8.399827965805105,
+      "max": 13.213086600048166
+    },
+    "surface_corrections": 47
+  },
+  "current_pose": {
+    "rotation_step_deg": {
+      "median": 1.7934961316335736,
+      "p90": 15.031318758438761,
+      "max": 52.320301699603725
+    },
+    "median_cloud_step_mm": {
+      "median": 1.1471060138627385,
+      "p90": 4.291605585099064,
+      "max": 12.348722333033653
+    },
+    "surface_corrections": 2,
+    "lost_frames": 0,
+    "surface_agreement_median_percent": 75.66666666666667,
+    "foreground_conflict_median_percent": 11.055555555555555
+  },
+  "experiment": "REJECTED: deterministic fitting plus surface correction required to preserve every baseline point inlier. Not the shipped policy."
+}

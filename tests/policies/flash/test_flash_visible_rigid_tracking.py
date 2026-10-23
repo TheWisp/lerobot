@@ -58,6 +58,31 @@ def test_visible_tracker_does_not_attach_new_points_when_the_pose_is_unknown():
     assert np.isnan(tracker.canonical[3:]).all()
 
 
+def test_frozen_recorded_points_do_not_rotate_the_frame_between_updates():
+    from pathlib import Path
+
+    fixture = Path(__file__).parent / "fixtures/yellow_frozen_consensus_20261016.npz"
+    with np.load(fixture, allow_pickle=False) as saved:
+        canonical, observed = saved["canonical"], saved["observed"]
+    tracker = VisibleRigidTracker(len(canonical), tolerance_m=0.005, min_inliers=12, trials=120)
+    supported = np.ones(len(canonical), dtype=bool)
+    tracker.update(canonical, supported)
+    first = tracker.update(observed, supported)
+    assert first.pose is not None
+    for _ in range(10):
+        unchanged = tracker.update(observed, supported)
+        assert unchanged.pose is not None
+        np.testing.assert_allclose(unchanged.pose, first.pose, atol=1e-12)
+
+    # Determinism must not mean retaining the old pose when the input moves.
+    delta = np.array([0.006, -0.004, 0.003])
+    moved = tracker.update(observed + delta, supported)
+    assert moved.pose is not None
+    np.testing.assert_allclose(
+        transform_points(moved.pose, canonical), transform_points(first.pose, canonical) + delta, atol=1e-10
+    )
+
+
 def test_surface_refinement_recovers_a_known_asymmetric_visible_motion():
     rng = np.random.default_rng(20)
     source = rng.uniform(-0.035, 0.035, (150, 3)) + [0, 0, 0.4]
@@ -134,7 +159,7 @@ def test_visible_moving_ring_remains_aligned_with_recorded_rgbd():
     assert np.linalg.norm(np.median(projected, axis=0) - observed_center) < 5
 
 
-def test_recorded_surface_correction_keeps_point_consensus_and_removes_foreground_conflict():
+def test_recorded_surface_correction_retains_minimum_support_and_reduces_foreground_conflict():
     from pathlib import Path
 
     fixture = Path(__file__).parent / "fixtures/dowel_visible_growth_20261021.npz"
@@ -164,6 +189,7 @@ def test_recorded_surface_correction_keeps_point_consensus_and_removes_foregroun
         trim_fraction=0.75,
     )
     assert result.accepted
+    # Minimum support is not preservation of all original material point IDs.
     assert result.point_inliers >= 12
     assert result.proposal.surface_supported > result.baseline.surface_supported
     assert result.proposal.in_front_of_depth < result.baseline.in_front_of_depth

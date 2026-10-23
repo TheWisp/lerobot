@@ -100,7 +100,6 @@ class VisibleRigidTracker:
         self.tolerance_m = tolerance_m
         self.min_inliers = min_inliers
         self.trials = trials
-        self.frame = 0
 
     def update(self, points: np.ndarray, supported: np.ndarray) -> VisibleRigidObservation:
         points = np.asarray(points, dtype=float)
@@ -109,7 +108,6 @@ class VisibleRigidTracker:
             raise ValueError("visible tracks and support have inconsistent shapes")
         if np.any(supported & (~np.isfinite(points).all(axis=1) | (points[:, 2] <= 0))):
             raise ValueError("supported tracks must have finite positive depth")
-        self.frame += 1
         count = int(supported.sum())
         known = np.isfinite(self.canonical).all(axis=1)
         if not known.any():
@@ -121,13 +119,15 @@ class VisibleRigidTracker:
         if len(ids) < self.min_inliers:
             return VisibleRigidObservation(None, count, len(ids), 0, None, 0)
         try:
+            # Use registration's deterministic sampling. Advancing a random
+            # seed on every update can change the chosen consensus even when
+            # the map and observed points have not moved.
             fitted = register_object(
                 self.canonical[ids],
                 points[ids],
                 threshold_m=self.tolerance_m,
                 min_inliers=self.min_inliers,
                 trials=self.trials,
-                seed=self.frame,
             )
         except (DegenerateRegistrationError, ValueError):
             return VisibleRigidObservation(None, count, len(ids), 0, None, 0)

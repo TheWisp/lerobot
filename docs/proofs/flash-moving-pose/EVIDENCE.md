@@ -108,3 +108,95 @@ not committed to git. The dowel local-fit result is
 are in the adjacent JSON. The yellow scene is
 `/tmp/flash-multivisible/ring_yellow/scene.npz`, and the gamepad local runs are
 `/tmp/flash-moving-check/held_gamepad/reseed{090,120,145}.npz`.
+
+### Implementation isolation and deterministic-fit correction
+
+The video above predates this correction. The audit separates three effects:
+
+1. **The supported raw points are not rigid.** Across dowel frames 280–370,
+   pairwise distances between the 13 IDs supported at both endpoints change by
+   4.73 mm median / 9.16 mm p90. Even the five continuously supported IDs deform:
+   6.89 mm median pair-distance change. This occurs before any landmark fit.
+   Replacing predicted depth with the measured depth at the same projected
+   pixel reduces the 13-ID figure only to 4.12 mm. On the yellow block it
+   worsens the equivalent figure from 3.00 to 3.36 mm. Simply snapping depth
+   does not establish correct material correspondence.
+2. **The point-bank fitter injected new randomness on every frame.**
+   `VisibleRigidTracker.update` passed its incrementing frame count as the
+   RANSAC seed. On the _identical_ yellow-block frame-68 coordinates and map,
+   75 different seeds produced 13–18 inliers and orientations up to 61.58°
+   apart. No image, depth, point or object movement was involved. It now uses
+   registration's deterministic sampling, so unchanged inputs give unchanged
+   output. This removes artificial switching, not the underlying ambiguity.
+3. **Surface refinement can discard part of the point consensus.** At yellow frame
+   50, ICP replaced 24 accepted material-point matches with 12 and changed
+   orientation by 19.37° relative to the point-only fit. The consensus check
+   requires the replacement to satisfy `min_inliers`. Requiring every old
+   inlier to remain within tolerance was tested, but **not retained**: the
+   rule can protect drifting material tracks at the expense of better
+   measured surface agreement. Neither source proves the full material frame.
+
+The frozen-frame regression includes both a no-motion case and a translated
+case; determinism must not freeze real motion. Restoring the frame-dependent
+seed makes that regression fail. No new fitting tolerance was introduced.
+The existing surface test called 13→12 inliers "keeps point consensus"; it
+establishes that a minimum consensus survives, **not that the original material
+IDs or orientation survive**. That distinction is now explicit in its name.
+
+The yellow recording still exposes unresolved disagreement among point IDs.
+With the old per-frame sampling and no surface correction, frame 68→69 changes
+the absolute point-bank orientation by 52.15° while an adjacent-frame fit to the raw points rotates
+only 0.34°. Only eight of the 16 accepted IDs are common to the two absolute
+fits. Each frame can select a different locally agreeing subset of a deformed
+map. Chaining the adjacent fits is smoother here, but the dowel audit shows
+that chaining does not establish long-term material accuracy either.
+
+Deterministic sampling was replayed on the same 75 yellow-block frames. Median
+orientation step falls from 3.03° to 2.82°, p90 from 28.61° to 15.44°, and the
+worst from 59.26° to 52.32°. All 75 frames still produce a pose. Median
+surface agreement remains similar (87.72% → 87.44%); median foreground-depth
+conflict improves from 6.28% to 5.67%, though its worst frame worsens from
+22.83% to 24.78%. The step metrics measure frame-to-frame discontinuities,
+**not independently measured pose errors**.
+Large jumps remain; this is not a solved rigid-tracking system.
+
+The [rejected stricter surface experiment](yellow-strict-consensus-experiment.json)
+reduced median orientation step further, to 1.79°, but reduced median
+mask/depth agreement to 75.67% and raised median foreground conflict to 11.06%.
+Smoother output alone was insufficient evidence to keep it. Surface refinement
+therefore retains its previous behavior; source disagreement remains unresolved.
+
+There are two further implementation limitations, left explicit rather than
+covered by new thresholds:
+
+- SAM masks seed and post-filter query tracks; they are **not inputs to
+  TrackEverything's inference**. The filter verifies surface membership and
+  depth proximity, not persistent identity. Invalid IDs are withheld from the
+  fit, not removed from model memory, and may be admitted again later.
+- Growth selects the globally largest uncovered later mask and then only
+  considers frames after that birth. Thus the old dowel queries born at frame
+  100 get no new companions until frame 361. A new offline inference seeded at
+  frame 280 increased the minimum supported count over 280–370 from 13 to 41
+  and reduced endpoint pair deformation from 4.73 to 3.05 mm, but the same A
+  still disagreed with rigid-gripper prediction by 17.91 mm versus 17.87 mm.
+  Coverage improved; the gripper-relative discrepancy remains unassigned
+  between tracking error and an inaccurate rigid-grasp assumption.
+
+The wrapper's query order `[frame, x, y]`, metric-depth input and normalized
+3D output conversion agree with the installed upstream implementation. The
+checks above do not prove that upstream tracking is optimal. They establish
+that downstream randomized selection and refinement can add instability, and
+that the remaining input tracks fail rigidity before that processing.
+
+Reproduce the saved-input audit using
+[`flash_visible_drift_audit.py`](../../../benchmarks/flash_visible_drift_audit.py).
+The [dowel report](dowel-drift-audit.json) and [yellow report](yellow-drift-audit.json)
+record the source paths, frame spans and existing tolerances. For either report,
+pass its `scene`, `recording`, `mask_dir`, `role`, and frame limits as CLI
+arguments, plus `--min-inliers 12 --trials 120 --output /tmp/audit.json`.
+Add `--compare-surface` for the full yellow scene to compare saved poses with
+the current fitter, and `--consensus-frame 68 --seeds 75` to repeat the frozen
+point-bank experiment. The frozen frame's original coordinates are also saved
+in `tests/policies/flash/fixtures/yellow_frozen_consensus_20261016.npz`.
+Source images and tracker inference outputs remain local; no demo poses were overwritten or robot run
+launched during this audit.

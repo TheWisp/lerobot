@@ -1,0 +1,55 @@
+{
+  "scene": "/home/feit/.cache/huggingface/lerobot/demos/insertion/flash/v1/tracker-runs/trackeverything-growth-ui-20261021-a/scene.npz",
+  "recording": "/home/feit/.cache/huggingface/lerobot/demos/insertion/recording",
+  "mask_dir": "/home/feit/.cache/huggingface/lerobot/demos/insertion/flash/v1/tracker-runs/trackeverything-growth-ui-20261021-a/segmentation/masks/0",
+  "role": "dowel",
+  "frames": [
+    280,
+    370
+  ],
+  "fit_threshold_m": 0.005,
+  "support_tolerance_m": 0.01,
+  "birth_frames_and_counts": {
+    "100": 114,
+    "361": 79,
+    "582": 63,
+    "692": 17,
+    "712": 3
+  },
+  "supported_count": {
+    "median": 21.0,
+    "p90": 57.0,
+    "max": 89.0
+  },
+  "accepted_depth_error_mm": {
+    "median": 2.8149783611297607,
+    "p90": 7.356745004653931,
+    "max": 9.999006986618042
+  },
+  "endpoint_shared": {
+    "count": 13,
+    "raw_pair_distance_change_mm": {
+      "median": 4.728303128808404,
+      "p90": 9.161371153272638,
+      "max": 12.810789760982818
+    },
+    "measured_depth_pair_distance_change_mm": {
+      "median": 4.1153945815482444,
+      "p90": 8.850152715573303,
+      "max": 14.34186122831814
+    }
+  },
+  "continuously_supported": {
+    "count": 5,
+    "raw_pair_distance_change_mm": {
+      "median": 6.890146458592271,
+      "p90": 11.02202196099186,
+      "max": 12.810789760982818
+    },
+    "measured_depth_pair_distance_change_mm": {
+      "median": 4.22632551034769,
+      "p90": 7.399144049027113,
+      "max": 11.418160819129813
+    }
+  }
+}
