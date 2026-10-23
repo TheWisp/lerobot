@@ -24,6 +24,45 @@ The equivalent command-line path remains available:
 python benchmarks/flash_prepare_legacy.py <dataset_root> <annotation.json> --output-name <new-name>
 ```
 
+That command is a compatibility entry point; the importer is
+[`sealed_demo_import.py`](sealed_demo_import.py). The current sealed-demo path is:
+
+1. An editor annotation identifies the object roles, one reference RGB-D frame,
+   grasp/release events, keyframes, calibration and explicit tolerances.
+2. SAM3 masks the reference objects. Aligned depth gives metric surface points;
+   DINOv2 features attached to those points form the prepared reference bank.
+3. On later demo frames the same SAM3/DINO/RGB-D direct-pose construction used
+   live matches visible points and fits a rigid transform. The importer keeps
+   the demo's shape fallback **off**; the live factory enables that fallback
+   explicitly. Both call [`build_appearance_pose_backend`](appearance.py).
+4. The recorded arm poses and gripper commands become dense demonstrated
+   intervals or generated connections according to the keyframe annotation.
+   After grasp, the held-object demo pose is a **prediction** from the selected
+   pregrasp estimate and recorded gripper motion, not a new observation.
+
+The live trial constructs the SAM3/DINO/RGB-D direct backend in
+[`live_trial.py`](live_trial.py). When `causal_tracking` is configured, the
+scene estimator also uses frame-to-frame object and environment point motion;
+a verified environment relationship can predict a partly hidden target pose.
+An attached object instead has a gripper-relative prediction. These paths
+publish provenance and do not turn an occluded pose into a direct measurement.
+The robot's fixed-rate command loop consumes the latest accepted belief; its
+30 Hz tick does not imply a fresh 30 Hz direct pose.
+
+Point2Pose, BundleSDF, TrackEverything and other offline runners are
+**review candidates** in [`demo_tracker_candidates.py`](demo_tracker_candidates.py).
+Applying one creates a new prepared skill with changed pose samples at its
+covered frames; it does not change the live backend or the original RGB-D
+episode. The [tracker review](TRACKER_REVIEW.md) explains the UI and the
+candidate format. The [tracking evidence map](docs/tracking_evidence.md) links
+the full-pose, visible-surface, rotation, cross-episode and local-trial results
+with their limits. They found no generally best
+tracker: Point2Pose held the visible dowel rotation well but failed on some
+other objects; mask/depth agreement cannot prove that a point retained its
+identity or that a hidden contact point is accurately placed. Those results
+support keeping alternate proposals behind the pose interface, not silently
+replacing the live estimator.
+
 An unused output name creates a new bundle and forces the importer to run SAM3,
 DINO and RGB-D pose extraction again; the pose cache includes the output name.
 It does not overwrite a previous bundle. New bundles retain `annotation.json`,
@@ -167,8 +206,11 @@ source-frame proposals to the causal service, which alone publishes accepted
 poses and catches delayed proposals up to its retained frame history. That is
 the first part of the [single scene-estimator contract](docs/architecture.md#one-scene-estimator-several-evidence-sources), not the complete arbitration:
 partial observability, alternative poses, and calibrated uncertainty are still
-missing. Consequently the group path is experimental, and no successful physical
-insertion has been established for this redesign.
+missing. Consequently the group path remains experimental. One redesign
+attempt visibly placed the dowel upright in the ring before an interrupted
+retreat; another completed the command sequence but the dowel fell after
+release. Neither recording independently verifies insertion or hidden
+contact-pose accuracy.
 The [recorded-evidence audit](docs/evidence_status.md) separates demo extraction,
 offline pose checks, visually successful sealed-prototype runs and the
 interrupted physical trials of this redesign.

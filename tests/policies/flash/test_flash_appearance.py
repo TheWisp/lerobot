@@ -7,12 +7,12 @@ import numpy as np
 from lerobot.policies.flash.appearance import (
     AppearanceBackendFactory,
     AppearanceModel,
-    AppearancePixelMatcher,
     ReferenceAppearanceFrame,
     Sam3MaskSource,
     build_appearance_model,
+    build_appearance_pose_backend,
 )
-from lerobot.policies.flash.matched_rgbd import MatchedRGBDPoseBackend, ObjectPointModel
+from lerobot.policies.flash.matched_rgbd import ObjectPointModel
 from lerobot.policies.flash.perception import ObjectReference, ReferenceSnippet, RGBDFrame
 from lerobot.policies.flash.trajectory import Evidence
 
@@ -52,7 +52,7 @@ def frame(frame_id, pixels, source_time):
     )
 
 
-def test_two_demo_views_register_a_new_live_view():
+def test_demo_and_live_backend_construction_register_the_same_view(monkeypatch):
     demo_xy = POINTS[:, :2] * 100 + 10
     live_xy = POINTS[:, :2] * 100 + [12, 10]
     demo0, demo1 = frame(0, demo_xy, 0.0), frame(1, demo_xy, 1.0)
@@ -75,14 +75,36 @@ def test_two_demo_views_register_a_new_live_view():
     )
     np.testing.assert_allclose(appearance.points.points_object_m, POINTS)
     masks = Masks(mask)
-    matcher = AppearancePixelMatcher((appearance,), extractor, masks, min_similarity=0.9)
-    backend = MatchedRGBDPoseBackend(
-        (appearance.points,), matcher, threshold_m=0.001, min_inliers=3, trials=20, clock=lambda: 5.1
+    backend = build_appearance_pose_backend(
+        (appearance,),
+        extractor,
+        masks,
+        min_similarity=0.9,
+        threshold_m=0.001,
+        min_inliers=3,
+        trials=20,
+        visible_shape_fallback=False,
+        clock=lambda: 5.1,
     )
     backend.initialize((reference,))
     (estimate,) = backend.update(live)
     assert estimate.evidence == Evidence.OBSERVED
     np.testing.assert_allclose(estimate.pose[:3, 3], [0.02, 0, 1], atol=1e-8)
+
+    import lerobot.policies.flash.appearance as appearance_module
+
+    monkeypatch.setattr(appearance_module, "Sam3MaskSource", lambda *args, **kwargs: Masks(mask))
+    monkeypatch.setattr(
+        "lerobot.policies.flash.dino_features.DinoPatchExtractor",
+        lambda **kwargs: Extractor(((live_xy, features),)),
+    )
+    live_backend = AppearanceBackendFactory(
+        (appearance,), {"object": "wooden tool"}, "overhead", 0.9, 0.001, 3, 20
+    )()
+    live_backend.initialize((reference,))
+    (live_estimate,) = live_backend.update(live)
+    assert live_estimate.evidence == Evidence.OBSERVED
+    np.testing.assert_allclose(live_estimate.pose, estimate.pose, atol=1e-8)
 
     masks.current = {}
     (lost,) = backend.update(live)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
@@ -229,6 +230,42 @@ class AppearancePixelMatcher:
         return tuple(out)
 
 
+def build_appearance_pose_backend(
+    models: tuple[AppearanceModel, ...],
+    extractor: PatchExtractor,
+    mask_source: MaskSource,
+    *,
+    min_similarity: float,
+    threshold_m: float,
+    min_inliers: int,
+    trials: int,
+    axial_symmetries: tuple[AxialSymmetry, ...] = (),
+    visible_shape_fallback: bool = False,
+    clock: Callable[[], float] = time.monotonic,
+) -> PoseBackend:
+    """Build the direct RGB-D estimator shared by demo extraction and live trials.
+
+    The caller owns model loading and explicitly chooses whether a failed
+    appearance match may try a local visible-shape fit. This keeps that policy
+    difference visible without duplicating the estimator's wiring.
+    """
+    matcher = AppearancePixelMatcher(models, extractor, mask_source, min_similarity=min_similarity)
+    backend: PoseBackend = MatchedRGBDPoseBackend(
+        tuple(model.points for model in models),
+        matcher,
+        threshold_m=threshold_m,
+        min_inliers=min_inliers,
+        trials=trials,
+        visible_shape_fallback=visible_shape_fallback,
+        clock=clock,
+    )
+    if axial_symmetries:
+        from .symmetry import SymmetryCanonicalizingBackend
+
+        backend = SymmetryCanonicalizingBackend(backend, axial_symmetries)
+    return backend
+
+
 @dataclass(frozen=True)
 class AppearanceBackendFactory:
     """Spawn-safe construction of the first live RGB-D pose backend.
@@ -264,22 +301,14 @@ class AppearanceBackendFactory:
             resolution=self.sam_resolution,
             seed_points_by_role=self.seed_points_by_role,
         )
-        matcher = AppearancePixelMatcher(
+        return build_appearance_pose_backend(
             self.models,
             DinoPatchExtractor(model_id=self.dino_model_id, device=self.device),
             source,
             min_similarity=self.min_similarity,
-        )
-        backend = MatchedRGBDPoseBackend(
-            tuple(model.points for model in self.models),
-            matcher,
             threshold_m=self.threshold_m,
             min_inliers=self.min_inliers,
             trials=self.trials,
+            axial_symmetries=self.axial_symmetries,
             visible_shape_fallback=True,
         )
-        if self.axial_symmetries:
-            from .symmetry import SymmetryCanonicalizingBackend
-
-            backend = SymmetryCanonicalizingBackend(backend, self.axial_symmetries)
-        return backend

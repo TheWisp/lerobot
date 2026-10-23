@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from benchmarks.flash_prepare_legacy import (
+from lerobot.policies.flash.sealed_demo_import import (
     _apply_reference_polygons,
     _endpoint_requirement,
     _interval_layout,
