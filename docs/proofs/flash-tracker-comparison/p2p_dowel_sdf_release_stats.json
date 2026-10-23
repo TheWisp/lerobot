@@ -1,0 +1,122 @@
+{
+  "source": "Exact configured Point2Pose replay of insertion demo, frames 100\u2013550; poses, lost flags, masks and fit counts bitwise equal to p2p_dowel_internal_control_100_550.npz (wall times differ)",
+  "frames": [
+    {
+      "frame": 100,
+      "num_integrated": 1,
+      "num_candidates": 0,
+      "return_refined_pose": false,
+      "sdf_refinement_applied": null,
+      "sdf_refinement_skip": null,
+      "sdf_candidate_raw": null,
+      "sdf_candidate_support": null,
+      "sdf_candidate_inlier_ratio": null,
+      "sdf_candidate_eligible": null,
+      "fit_inliers": null
+    },
+    {
+      "frame": 340,
+      "num_integrated": 7,
+      "num_candidates": 2,
+      "return_refined_pose": false,
+      "sdf_refinement_applied": false,
+      "sdf_refinement_skip": "optimizer_failed",
+      "sdf_candidate_raw": 1.0,
+      "sdf_candidate_support": 1.0,
+      "sdf_candidate_inlier_ratio": 0.03356596876038551,
+      "sdf_candidate_eligible": -1.0,
+      "fit_inliers": 49
+    },
+    {
+      "frame": 495,
+      "num_integrated": 8,
+      "num_candidates": 1,
+      "return_refined_pose": false,
+      "sdf_refinement_applied": false,
+      "sdf_refinement_skip": "optimizer_failed",
+      "sdf_candidate_raw": null,
+      "sdf_candidate_support": null,
+      "sdf_candidate_inlier_ratio": null,
+      "sdf_candidate_eligible": null,
+      "fit_inliers": 42
+    },
+    {
+      "frame": 500,
+      "num_integrated": 8,
+      "num_candidates": 1,
+      "return_refined_pose": false,
+      "sdf_refinement_applied": false,
+      "sdf_refinement_skip": "optimizer_failed",
+      "sdf_candidate_raw": null,
+      "sdf_candidate_support": null,
+      "sdf_candidate_inlier_ratio": null,
+      "sdf_candidate_eligible": null,
+      "fit_inliers": 26
+    },
+    {
+      "frame": 505,
+      "num_integrated": 10,
+      "num_candidates": 1,
+      "return_refined_pose": false,
+      "sdf_refinement_applied": false,
+      "sdf_refinement_skip": "optimizer_failed",
+      "sdf_candidate_raw": null,
+      "sdf_candidate_support": null,
+      "sdf_candidate_inlier_ratio": null,
+      "sdf_candidate_eligible": null,
+      "fit_inliers": 45
+    },
+    {
+      "frame": 514,
+      "num_integrated": 10,
+      "num_candidates": 1,
+      "return_refined_pose": false,
+      "sdf_refinement_applied": true,
+      "sdf_refinement_skip": "",
+      "sdf_candidate_raw": null,
+      "sdf_candidate_support": null,
+      "sdf_candidate_inlier_ratio": null,
+      "sdf_candidate_eligible": null,
+      "fit_inliers": 53
+    },
+    {
+      "frame": 530,
+      "num_integrated": 10,
+      "num_candidates": 2,
+      "return_refined_pose": false,
+      "sdf_refinement_applied": false,
+      "sdf_refinement_skip": "optimizer_failed",
+      "sdf_candidate_raw": 0.8399999141693115,
+      "sdf_candidate_support": 1.0,
+      "sdf_candidate_inlier_ratio": 0.0014455044810638912,
+      "sdf_candidate_eligible": -1.0,
+      "fit_inliers": 55
+    },
+    {
+      "frame": 540,
+      "num_integrated": 10,
+      "num_candidates": 2,
+      "return_refined_pose": false,
+      "sdf_refinement_applied": true,
+      "sdf_refinement_skip": "",
+      "sdf_candidate_raw": 0.8799998760223389,
+      "sdf_candidate_support": 1.0,
+      "sdf_candidate_inlier_ratio": 0.0019696117051209903,
+      "sdf_candidate_eligible": -1.0,
+      "fit_inliers": 36
+    },
+    {
+      "frame": 550,
+      "num_integrated": 11,
+      "num_candidates": 2,
+      "return_refined_pose": false,
+      "sdf_refinement_applied": true,
+      "sdf_refinement_skip": "",
+      "sdf_candidate_raw": 0.7599997520446777,
+      "sdf_candidate_support": 1.0,
+      "sdf_candidate_inlier_ratio": 0.0016533480297602646,
+      "sdf_candidate_eligible": -1.0,
+      "fit_inliers": 82
+    }
+  ]
+}
