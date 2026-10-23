@@ -217,6 +217,43 @@ has a continuous ring track but two dowel gaps during grasp/rotation, so
 visible-point continuity alone cannot yet supply its whole demonstrated
 object-object motion.
 
+**Two uses of groups have different authority.** Fitting rigid motion from
+currently visible, co-moving points _on the object_ is part of base object
+tracking: it rejects drifting point IDs, admits newly visible surface cohorts
+and carries an object's local landmarks through a validated visible interval.
+The landmarks may be virtual points in that local frame; their raw surface
+tracks need not remain visible. A gripper attachment or an environment group
+that predicts an object during total occlusion is instead a relationship
+layer above the tracker. It produces a time-stamped prediction with its last
+direct observation and uncertainty, never a new object measurement. The same
+separation applies when a target moves with its supporting tray. A fully
+hidden object's slip cannot be inferred from group or gripper motion alone.
+
+Demo preparation should extract task-relevant relative motion only from
+self-consistent object segments. For dowel insertion, a designated insertion
+end and shaft direction move relative to the ring's opening and normal; the
+recorded quantity is their relative trajectory and timing, with provenance
+and unresolved dimensions, not a demand that three particular surface IDs
+survive the entire episode. A broken point graph leaves a gap until later
+geometry, gripper evidence or another verified bridge reconnects the object
+frames. The [frame-267 audit](../../../../../docs/proofs/flash-cross-episode/te-demo-map/README.md#full-demo-adjacent-frame-playback)
+shows why a visually continuous triangle back-propagated from a much later
+frame is not such a bridge.
+
+At live time, progress narrows the reference search to compatible demo
+phases, but one or several views within the phase may propose a demo-to-live
+alignment for each object. This maps its annotated local landmarks into the
+live object's frame. Causal visible-point tracking then updates that frame
+through its supported interval. When visibility returns after loss, the
+shared estimator searches the current RGB-D observation against compatible
+live and demo references, checks object identity and geometric fit, and
+either repairs the old alignment with a documented correction or starts an
+explicitly unlinked hypothesis. The relationship prediction helps propose
+where to search; it cannot certify the repair. TrackEverything is a candidate
+for this point frontend, but the saved offline run uses future frames, so a
+live integration needs its own measured causal/windowed delay. The fixed-rate
+robot loop remains independent of that perception work.
+
 ### Spatial objective and task progress
 
 Use one transform convention: `T_A_B` maps coordinates in frame B into frame A. Object coordinate frames are arbitrary but fixed within a skill; cross-episode registration establishes their correspondence. Let E be the end effector, H the held object, B the target and W the robot base. At a keyframe, or local demo time `tau` within a replayed interaction interval:

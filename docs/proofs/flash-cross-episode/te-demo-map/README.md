@@ -49,9 +49,12 @@ is outside the dowel mask by frame 505, and is 47.8 mm from its group-inferred
 position at frame 540. It does not recover in the saved run. The robust group
 fit can ignore that individual track while many other points remain, but its
 own 3D pose has not been independently checked against the task's tip/hole
-alignment. These are two different failure modes: long-chain frame drift and
-a later point-identity loss. Neither can be ruled out by a high adjacent-fit
-inlier count alone.
+alignment. These are two different findings: an early local frame inferred
+backward through sparse visibility and a later measured point-identity loss.
+The early frame may have drifted, but an inferred point can also be hidden
+behind the gripper; this video alone cannot distinguish those cases. A high
+adjacent-fit inlier count does not validate either the composed object frame
+or the hidden contact point.
 
 This playback demonstrates a practical point-bank rule: add or retire
 visible tracks as surfaces appear or disappear, but keep an object's chosen
