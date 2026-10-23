@@ -12,12 +12,14 @@ stationary objects and excluded the yellow block because its depth check was
 weaker. That selection made the tracker look more reliable than the evidence
 supports.
 
-In the video, the left close-up shows an inferred rigid fit carried by other
-depth-backed TrackEverything tracks. Its red X, green Y and blue Z axes start
-at landmark A: X follows A→B, Y follows the component of A→C perpendicular to
-X, and Z is their cross product. The right close-up shows the same three raw
-point IDs without the fit. The white outline is the current SAM3 mask. Hollow
-raw markers no longer pass the mask/depth support check. The axes describe a
+In the video, the left close-up shows an inferred rigid fit from all available
+mask/depth-supported TrackEverything IDs, including A/B/C when supported. Its
+red X, green Y and blue Z axes start at landmark A: X follows A→B, Y follows
+the component of A→C perpendicular to X, and Z is their cross product. The
+right close-up shows the same three raw
+point IDs without the fit. **A/B/C are display probes, not the three inputs to
+the left-hand fit.** The white outline is the current SAM3 mask. Hollow raw
+markers no longer pass the mask/depth support check. The axes describe a
 local frame only _within one tracking segment_. After a reseed, A/B/C are
 newly chosen points and their physical identity is **not** transferred.
 The headings show lost tracking, unverified fits and unlinked reseeds rather
@@ -38,6 +40,54 @@ reseeding procedure does not preserve a stable frame: correctly registered
 rigid fits would have an approximately constant transform between their local
 frames during overlap. The video shows reseeding as it currently works—start a
 new local frame—rather than suggesting that the transition is solved.
+
+### Drift audit after the gizmo review
+
+The recorded measured gripper poses provide an independent rigid-grasp motion
+prediction for the dowel. Camera capture times were aligned to the recorded
+motor timestamps, and the saved camera-to-base calibration converted the fitted
+camera-frame landmarks into the gripper frame. Frame 280 starts after the
+unverified reseed and has all three selected raw IDs on the measured surface.
+Over demo frames 280–370, the
+gripper moved 40.8 mm and rotated 61.2°. If A were rigidly attached to it, its
+gripper-frame position would be constant; instead, the inferred A changed by
+17.9 mm from first to last. The complete A/B/C gizmo changed by 31.3°, but its
+X direction changed by only 4.9°: much of the angular disagreement is twist
+around the dowel's long direction. Shifting the camera-to-motor alignment by
+up to 100 ms in either direction still left a 13.9–25.1 mm first-to-last A
+discrepancy. These are **gripper-relative discrepancies**, not ground-truth
+object-pose errors: actual slip at the grasp remains possible.
+
+The point tracks themselves also fail a rigidity check that does not depend on
+the gripper. Among 18 dowel IDs passing both frame 280 and frame 330 mask/depth
+checks, pairwise 3D distances changed by 3.9 mm median and 9.2 mm at the 90th
+percentile. A rigid object's material-point separations cannot change. The
+current support check only verifies that a predicted point projects inside the
+SAM3 mask and within 10 mm of aligned depth; it cannot establish that the ID
+still marks the same piece of surface. Adjacent fits accept local agreements
+within 5 mm and compose them, so gradual correspondence drift can accumulate
+even when every link has enough inliers. This proves some tracking/depth error,
+but does not allocate the whole gripper discrepancy between that error and
+possible slip.
+
+The yellow block makes the distinction visible. At frame 58, raw display ID A
+has migrated onto the held dowel beside the gripper and is rejected by the
+yellow-block mask/depth check; C is also rejected. Only B of the chosen three
+still passes. Their raw positions therefore must not be read as an observed
+object frame. The left panel nevertheless has a rigid fit from the available
+point bank: 14 inliers among 32 surface-supported points at that frame. The
+accepted pose is not an independently verified six-axis orientation. Even
+among the 31 IDs passing the surface check in both frames 0 and 58, pairwise
+separations changed by 3.8 mm median and 7.9 mm at the 90th percentile. Across
+the 75-frame interval, its worst projected source-surface agreement with mask
+**and** depth is 57.3%, while foreground-depth conflict reaches 22.8%.
+The original A/B/C selection spans a non-degenerate triangle (A–B 53.2 mm,
+perpendicular C offset 31.7 mm); its later failure is loss of correspondence,
+not an initially collinear gizmo. Replacing these three display landmarks
+would change the drawing, but not the current all-point fit. Changing the
+number and spatial coverage of _tracked query points_ can affect that fit;
+count alone cannot turn a wrong identity or an underconstrained visible face
+into a valid material frame.
 
 TrackEverything is evaluated offline and may use future frames within its
 inference window. This experiment does not establish a causal or real-time
