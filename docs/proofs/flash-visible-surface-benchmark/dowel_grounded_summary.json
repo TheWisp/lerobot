@@ -1,0 +1,246 @@
+{
+  "frames": [
+    400,
+    489
+  ],
+  "queries": 64,
+  "settings": {
+    "track_tolerance_m": 0.005,
+    "surface_tolerance_m": 0.01,
+    "min_inliers": 12,
+    "fit_trials": 100,
+    "edge_pixels": 2,
+    "max_surface_points": 1000,
+    "icp_iterations": 20,
+    "trim_fraction": 0.75
+  },
+  "data": {
+    "recording": "insertion/recording",
+    "mask_run": "trackeverything-growth-ui-20261021-a/segmentation/masks/0",
+    "seed_sha256": "3ebb11545d481e3e899e26598fa26001647cd8e7a828f16243d218a469595fb4"
+  },
+  "results": {
+    "lk": {
+      "depth_backed_mask_points_median": 43.0,
+      "depth_backed_mask_points_last": 35,
+      "points_only": {
+        "pose_frames": 90,
+        "median_mask_fraction": 0.97,
+        "median_mask_depth_support": 0.9095,
+        "median_foreground_conflict": 0.0165,
+        "median_gripper_delta_disagreement_mm": 3.0313470151793354,
+        "surface_corrections": 0,
+        "last_frame": {
+          "frame": 489,
+          "mask_fraction": 0.898,
+          "mask_depth_support": 0.858,
+          "foreground_conflict": 0.001,
+          "inliers": 19,
+          "gripper_delta_disagreement_mm": 3.043042634660189
+        }
+      },
+      "mask_depth_surface": {
+        "pose_frames": 90,
+        "median_mask_fraction": 0.97,
+        "median_mask_depth_support": 0.9155,
+        "median_foreground_conflict": 0.014499999999999999,
+        "median_gripper_delta_disagreement_mm": 3.0313470151793354,
+        "surface_corrections": 30,
+        "last_frame": {
+          "frame": 489,
+          "mask_fraction": 0.898,
+          "mask_depth_support": 0.858,
+          "foreground_conflict": 0.001,
+          "inliers": 19,
+          "gripper_delta_disagreement_mm": 3.043042634660189
+        }
+      },
+      "source_frame_fps_decode_plus_model": 223.49064642981142
+    },
+    "litetracker": {
+      "depth_backed_mask_points_median": 45.0,
+      "depth_backed_mask_points_last": 45,
+      "points_only": {
+        "pose_frames": 90,
+        "median_mask_fraction": 0.9844999999999999,
+        "median_mask_depth_support": 0.9245000000000001,
+        "median_foreground_conflict": 0.018,
+        "median_gripper_delta_disagreement_mm": 2.8307604365746193,
+        "surface_corrections": 0,
+        "last_frame": {
+          "frame": 489,
+          "mask_fraction": 0.923,
+          "mask_depth_support": 0.865,
+          "foreground_conflict": 0.01,
+          "inliers": 28,
+          "gripper_delta_disagreement_mm": 2.5333134644065165
+        }
+      },
+      "mask_depth_surface": {
+        "pose_frames": 90,
+        "median_mask_fraction": 0.9804999999999999,
+        "median_mask_depth_support": 0.9245000000000001,
+        "median_foreground_conflict": 0.0155,
+        "median_gripper_delta_disagreement_mm": 2.8756378953096755,
+        "surface_corrections": 22,
+        "last_frame": {
+          "frame": 489,
+          "mask_fraction": 0.923,
+          "mask_depth_support": 0.865,
+          "foreground_conflict": 0.01,
+          "inliers": 28,
+          "gripper_delta_disagreement_mm": 2.5333134644065165
+        }
+      },
+      "source_frame_fps_decode_plus_model": 85.50739391175918
+    },
+    "bootstapir": {
+      "depth_backed_mask_points_median": 46.0,
+      "depth_backed_mask_points_last": 47,
+      "points_only": {
+        "pose_frames": 90,
+        "median_mask_fraction": 0.9775,
+        "median_mask_depth_support": 0.9065000000000001,
+        "median_foreground_conflict": 0.018,
+        "median_gripper_delta_disagreement_mm": 2.9120709599812766,
+        "surface_corrections": 0,
+        "last_frame": {
+          "frame": 489,
+          "mask_fraction": 0.928,
+          "mask_depth_support": 0.87,
+          "foreground_conflict": 0.01,
+          "inliers": 23,
+          "gripper_delta_disagreement_mm": 2.6706585922824004
+        }
+      },
+      "mask_depth_surface": {
+        "pose_frames": 90,
+        "median_mask_fraction": 0.9775,
+        "median_mask_depth_support": 0.9115,
+        "median_foreground_conflict": 0.016,
+        "median_gripper_delta_disagreement_mm": 2.999242117100864,
+        "surface_corrections": 32,
+        "last_frame": {
+          "frame": 489,
+          "mask_fraction": 0.93,
+          "mask_depth_support": 0.873,
+          "foreground_conflict": 0.008,
+          "inliers": 22,
+          "gripper_delta_disagreement_mm": 2.571920493792592
+        }
+      },
+      "source_frame_fps_decode_plus_model": 45.52762495908478
+    },
+    "cotracker3": {
+      "depth_backed_mask_points_median": 34.5,
+      "depth_backed_mask_points_last": 35,
+      "points_only": {
+        "pose_frames": 90,
+        "median_mask_fraction": 0.9815,
+        "median_mask_depth_support": 0.9205000000000001,
+        "median_foreground_conflict": 0.0195,
+        "median_gripper_delta_disagreement_mm": 2.8450739949445705,
+        "surface_corrections": 0,
+        "last_frame": {
+          "frame": 489,
+          "mask_fraction": 0.936,
+          "mask_depth_support": 0.866,
+          "foreground_conflict": 0.007,
+          "inliers": 26,
+          "gripper_delta_disagreement_mm": 2.3991556732921224
+        }
+      },
+      "mask_depth_surface": {
+        "pose_frames": 90,
+        "median_mask_fraction": 0.9815,
+        "median_mask_depth_support": 0.921,
+        "median_foreground_conflict": 0.018000000000000002,
+        "median_gripper_delta_disagreement_mm": 2.975298710476752,
+        "surface_corrections": 19,
+        "last_frame": {
+          "frame": 489,
+          "mask_fraction": 0.936,
+          "mask_depth_support": 0.866,
+          "foreground_conflict": 0.007,
+          "inliers": 26,
+          "gripper_delta_disagreement_mm": 2.3991556732921224
+        }
+      },
+      "source_frame_fps_decode_plus_model": 104.45158022559815
+    },
+    "trackeverything": {
+      "depth_backed_mask_points_median": 41.0,
+      "depth_backed_mask_points_last": 39,
+      "points_only": {
+        "pose_frames": 90,
+        "median_mask_fraction": 0.9464999999999999,
+        "median_mask_depth_support": 0.8705,
+        "median_foreground_conflict": 0.038,
+        "median_gripper_delta_disagreement_mm": 2.7328838685592904,
+        "surface_corrections": 0,
+        "last_frame": {
+          "frame": 489,
+          "mask_fraction": 0.889,
+          "mask_depth_support": 0.834,
+          "foreground_conflict": 0.017,
+          "inliers": 23,
+          "gripper_delta_disagreement_mm": 2.4899181927327416
+        }
+      },
+      "mask_depth_surface": {
+        "pose_frames": 90,
+        "median_mask_fraction": 0.9675,
+        "median_mask_depth_support": 0.897,
+        "median_foreground_conflict": 0.023,
+        "median_gripper_delta_disagreement_mm": 2.9186757952373568,
+        "surface_corrections": 66,
+        "last_frame": {
+          "frame": 489,
+          "mask_fraction": 0.908,
+          "mask_depth_support": 0.866,
+          "foreground_conflict": 0.005,
+          "inliers": 23,
+          "gripper_delta_disagreement_mm": 2.5885438849630824
+        }
+      },
+      "source_frame_fps_decode_plus_model": 19.02972505695563
+    },
+    "tapnext": {
+      "depth_backed_mask_points_median": 40.5,
+      "depth_backed_mask_points_last": 29,
+      "points_only": {
+        "pose_frames": 88,
+        "median_mask_fraction": 0.958,
+        "median_mask_depth_support": 0.836,
+        "median_foreground_conflict": 0.0675,
+        "median_gripper_delta_disagreement_mm": 5.588248108701365,
+        "surface_corrections": 0,
+        "last_frame": {
+          "frame": 489,
+          "mask_fraction": 0.796,
+          "mask_depth_support": 0.616,
+          "foreground_conflict": 0.195,
+          "inliers": 12,
+          "gripper_delta_disagreement_mm": 12.196624567894654
+        }
+      },
+      "mask_depth_surface": {
+        "pose_frames": 88,
+        "median_mask_fraction": 0.9624999999999999,
+        "median_mask_depth_support": 0.8485,
+        "median_foreground_conflict": 0.057,
+        "median_gripper_delta_disagreement_mm": 5.46525836625827,
+        "surface_corrections": 32,
+        "last_frame": {
+          "frame": 489,
+          "mask_fraction": 0.746,
+          "mask_depth_support": 0.618,
+          "foreground_conflict": 0.174,
+          "inliers": 12,
+          "gripper_delta_disagreement_mm": 12.090345889799305
+        }
+      },
+      "source_frame_fps_decode_plus_model": 66.46489718769497
+    }
+  }
+}
