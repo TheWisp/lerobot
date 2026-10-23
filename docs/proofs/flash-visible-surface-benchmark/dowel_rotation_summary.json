@@ -1,0 +1,306 @@
+{
+  "frames": [
+    280,
+    400
+  ],
+  "source_queries_sha256": "4dd78859013e0221c68aef60ba6035e004ea81f81549431b546ca96a5205b635",
+  "min_mask_elongation": 3.0,
+  "gripper_heading_to_mask_deg_median_when_elongated": 6.796972458088348,
+  "methods": {
+    "point2pose": {
+      "pose_frames": 118,
+      "median_shaft_to_mask_deg_when_elongated": 4.3969333766925445,
+      "median_center_to_mask_px": 8.014510603901154,
+      "median_shaft_to_gripper_3d_deg": 5.189560426031239,
+      "key_frames": {
+        "280": {
+          "shaft_to_mask_deg": 6.591895762559318,
+          "center_to_mask_px": 30.108035189270655,
+          "shaft_to_gripper_3d_deg": 0.0
+        },
+        "300": {
+          "shaft_to_mask_deg": 3.410275123855854,
+          "center_to_mask_px": 17.60964947245527,
+          "shaft_to_gripper_3d_deg": 6.623945179364679
+        },
+        "320": {
+          "shaft_to_mask_deg": 7.1325444483859,
+          "center_to_mask_px": 13.545867538740806,
+          "shaft_to_gripper_3d_deg": 2.9711497280751775
+        },
+        "340": {
+          "shaft_to_mask_deg": 4.104887694118631,
+          "center_to_mask_px": 5.910716713435699,
+          "shaft_to_gripper_3d_deg": 2.1176821954094533
+        },
+        "360": {
+          "shaft_to_mask_deg": 6.88900328392495,
+          "center_to_mask_px": 1.3988437115018295,
+          "shaft_to_gripper_3d_deg": 3.0076918823858327
+        },
+        "380": {
+          "shaft_to_mask_deg": 3.114474102242397,
+          "center_to_mask_px": 8.070706270123214,
+          "shaft_to_gripper_3d_deg": 7.014815748255112
+        },
+        "400": {
+          "shaft_to_mask_deg": 3.895056668242489,
+          "center_to_mask_px": 5.024989355028273,
+          "shaft_to_gripper_3d_deg": 5.524993074734674
+        }
+      }
+    },
+    "bundlesdf": {
+      "pose_frames": 121,
+      "median_shaft_to_mask_deg_when_elongated": 85.10522297945495,
+      "median_center_to_mask_px": 139.92374969183626,
+      "median_shaft_to_gripper_3d_deg": 70.0707019573852,
+      "key_frames": {
+        "280": {
+          "shaft_to_mask_deg": 31.94403952548953,
+          "center_to_mask_px": 157.01246099830243,
+          "shaft_to_gripper_3d_deg": 67.10735166248601
+        },
+        "300": {
+          "shaft_to_mask_deg": 32.78001180549964,
+          "center_to_mask_px": 171.74543808234588,
+          "shaft_to_gripper_3d_deg": 70.43761628849299
+        },
+        "320": {
+          "shaft_to_mask_deg": 88.64053231411913,
+          "center_to_mask_px": 154.3391160731773,
+          "shaft_to_gripper_3d_deg": 69.80314090540317
+        },
+        "340": {
+          "shaft_to_mask_deg": 83.69016423072912,
+          "center_to_mask_px": 139.3429770482982,
+          "shaft_to_gripper_3d_deg": 69.7050170501625
+        },
+        "360": {
+          "shaft_to_mask_deg": 85.23451993739269,
+          "center_to_mask_px": 136.4857990490268,
+          "shaft_to_gripper_3d_deg": 71.24920200135375
+        },
+        "380": {
+          "shaft_to_mask_deg": 87.03882742731429,
+          "center_to_mask_px": 131.3814180787347,
+          "shaft_to_gripper_3d_deg": 70.41035113533982
+        },
+        "400": {
+          "shaft_to_mask_deg": 84.4591917827243,
+          "center_to_mask_px": 128.88456306723438,
+          "shaft_to_gripper_3d_deg": 70.69593410393527
+        }
+      }
+    },
+    "trackeverything_native": {
+      "pose_frames": 121,
+      "median_shaft_to_mask_deg_when_elongated": 9.481268389106823,
+      "median_center_to_mask_px": 12.712312294552213,
+      "median_shaft_to_gripper_3d_deg": 7.591094417824076,
+      "key_frames": {
+        "280": {
+          "shaft_to_mask_deg": 6.591895762559318,
+          "center_to_mask_px": 30.108035189270655,
+          "shaft_to_gripper_3d_deg": 0.0
+        },
+        "300": {
+          "shaft_to_mask_deg": 11.248671561537037,
+          "center_to_mask_px": 19.420208961641826,
+          "shaft_to_gripper_3d_deg": 3.4489168447083896
+        },
+        "320": {
+          "shaft_to_mask_deg": 13.214798186794695,
+          "center_to_mask_px": 13.544813233996427,
+          "shaft_to_gripper_3d_deg": 6.656850206011078
+        },
+        "340": {
+          "shaft_to_mask_deg": 16.88760732590788,
+          "center_to_mask_px": 12.549389435716131,
+          "shaft_to_gripper_3d_deg": 10.425731025998044
+        },
+        "360": {
+          "shaft_to_mask_deg": 9.165494473073892,
+          "center_to_mask_px": 9.471241366774859,
+          "shaft_to_gripper_3d_deg": 8.501474769155438
+        },
+        "380": {
+          "shaft_to_mask_deg": 5.4750355283165675,
+          "center_to_mask_px": 9.80591574961771,
+          "shaft_to_gripper_3d_deg": 8.155638524060102
+        },
+        "400": {
+          "shaft_to_mask_deg": 5.773700714915691,
+          "center_to_mask_px": 6.421624676343523,
+          "shaft_to_gripper_3d_deg": 5.797258968265747
+        }
+      }
+    },
+    "lk": {
+      "pose_frames": 26,
+      "median_shaft_to_mask_deg_when_elongated": 9.328269095816381,
+      "median_center_to_mask_px": 18.60546298334844,
+      "median_shaft_to_gripper_3d_deg": 2.3974756463086226,
+      "key_frames": {
+        "280": {
+          "shaft_to_mask_deg": 6.591895762559318,
+          "center_to_mask_px": 30.108035189270655,
+          "shaft_to_gripper_3d_deg": 0.0
+        },
+        "300": {
+          "shaft_to_mask_deg": 10.290797187055148,
+          "center_to_mask_px": 15.856650176002073,
+          "shaft_to_gripper_3d_deg": 1.446969715845807
+        },
+        "320": null,
+        "340": null,
+        "360": null,
+        "380": null,
+        "400": null
+      }
+    },
+    "litetracker": {
+      "pose_frames": 53,
+      "median_shaft_to_mask_deg_when_elongated": 12.944412946454278,
+      "median_center_to_mask_px": 19.458308645354183,
+      "median_shaft_to_gripper_3d_deg": 7.285607273247012,
+      "key_frames": {
+        "280": {
+          "shaft_to_mask_deg": 6.591895762559318,
+          "center_to_mask_px": 30.108035189270655,
+          "shaft_to_gripper_3d_deg": 0.0
+        },
+        "300": {
+          "shaft_to_mask_deg": 14.106704426202725,
+          "center_to_mask_px": 19.11014420007801,
+          "shaft_to_gripper_3d_deg": 4.070573262958346
+        },
+        "320": {
+          "shaft_to_mask_deg": 27.116879424487834,
+          "center_to_mask_px": 24.13150204907365,
+          "shaft_to_gripper_3d_deg": 15.802383127699946
+        },
+        "340": null,
+        "360": null,
+        "380": null,
+        "400": null
+      }
+    },
+    "bootstapir": {
+      "pose_frames": 56,
+      "median_shaft_to_mask_deg_when_elongated": 13.853950166981775,
+      "median_center_to_mask_px": 21.759921059678312,
+      "median_shaft_to_gripper_3d_deg": 6.757387918321113,
+      "key_frames": {
+        "280": {
+          "shaft_to_mask_deg": 6.591895762559318,
+          "center_to_mask_px": 30.108035189270655,
+          "shaft_to_gripper_3d_deg": 0.0
+        },
+        "300": {
+          "shaft_to_mask_deg": 11.161962888809882,
+          "center_to_mask_px": 18.935684374481337,
+          "shaft_to_gripper_3d_deg": 5.506682982408383
+        },
+        "320": {
+          "shaft_to_mask_deg": 15.607191708249417,
+          "center_to_mask_px": 20.51584017008537,
+          "shaft_to_gripper_3d_deg": 9.96316286147351
+        },
+        "340": null,
+        "360": null,
+        "380": null,
+        "400": null
+      }
+    },
+    "tapnext": {
+      "pose_frames": 12,
+      "median_shaft_to_mask_deg_when_elongated": 6.997297788052435,
+      "median_center_to_mask_px": 30.52653433028862,
+      "median_shaft_to_gripper_3d_deg": 1.8326015557706739,
+      "key_frames": {
+        "280": {
+          "shaft_to_mask_deg": 6.591895762559318,
+          "center_to_mask_px": 30.108035189270655,
+          "shaft_to_gripper_3d_deg": 0.0
+        },
+        "300": null,
+        "320": null,
+        "340": null,
+        "360": null,
+        "380": null,
+        "400": null
+      }
+    },
+    "cotracker3": {
+      "pose_frames": 36,
+      "median_shaft_to_mask_deg_when_elongated": 9.753943789968105,
+      "median_center_to_mask_px": 19.348194562626013,
+      "median_shaft_to_gripper_3d_deg": 4.7563356416575875,
+      "key_frames": {
+        "280": {
+          "shaft_to_mask_deg": 6.591895762559318,
+          "center_to_mask_px": 30.108035189270655,
+          "shaft_to_gripper_3d_deg": 0.0
+        },
+        "300": {
+          "shaft_to_mask_deg": 12.938181090804875,
+          "center_to_mask_px": 19.340109291890194,
+          "shaft_to_gripper_3d_deg": 4.301598195356344
+        },
+        "320": {
+          "shaft_to_mask_deg": 20.416719706462672,
+          "center_to_mask_px": 22.45206785398112,
+          "shaft_to_gripper_3d_deg": 11.316500037591833
+        },
+        "340": null,
+        "360": null,
+        "380": null,
+        "400": null
+      }
+    },
+    "trackeverything_depth_lift": {
+      "pose_frames": 121,
+      "median_shaft_to_mask_deg_when_elongated": 17.794321015960534,
+      "median_center_to_mask_px": 19.18224481643049,
+      "median_shaft_to_gripper_3d_deg": 11.869143378965706,
+      "key_frames": {
+        "280": {
+          "shaft_to_mask_deg": 6.591895762559318,
+          "center_to_mask_px": 30.108035189270655,
+          "shaft_to_gripper_3d_deg": 0.0
+        },
+        "300": {
+          "shaft_to_mask_deg": 10.812318959454586,
+          "center_to_mask_px": 21.602094982668078,
+          "shaft_to_gripper_3d_deg": 6.790434020205319
+        },
+        "320": {
+          "shaft_to_mask_deg": 22.58196688297764,
+          "center_to_mask_px": 21.14271029292375,
+          "shaft_to_gripper_3d_deg": 13.07083501512933
+        },
+        "340": {
+          "shaft_to_mask_deg": 31.684060249994246,
+          "center_to_mask_px": 22.841754548394693,
+          "shaft_to_gripper_3d_deg": 20.284892708173384
+        },
+        "360": {
+          "shaft_to_mask_deg": 29.423915552549644,
+          "center_to_mask_px": 22.99310025212923,
+          "shaft_to_gripper_3d_deg": 20.16934226530324
+        },
+        "380": {
+          "shaft_to_mask_deg": 8.914271484093149,
+          "center_to_mask_px": 12.455947779010444,
+          "shaft_to_gripper_3d_deg": 10.54726368734836
+        },
+        "400": {
+          "shaft_to_mask_deg": 16.012124277001234,
+          "center_to_mask_px": 13.898420429876701,
+          "shaft_to_gripper_3d_deg": 12.694332411454685
+        }
+      }
+    }
+  }
+}

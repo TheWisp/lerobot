@@ -1,5 +1,9 @@
 # Dowel tracking with a common RGB-D and mask-grounded fitter
 
+This interval starts at frame 400, **after the dowel's difficult rotation**.
+The [rotation-pose audit](DOWEL_ROTATION.md) covers frames 280–400 and shows
+substantial differences that this later visible-surface comparison cannot reveal.
+
 The [nine-second side-by-side video](dowel_trackers_side_by_side.mp4) plays
 the three-second source interval at one-third speed. The white line is the
 current SAM3 mask. Cyan is the projected convex footprint of the depth surface

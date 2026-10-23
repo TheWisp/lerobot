@@ -159,6 +159,7 @@ def evaluate(
                     "mask_depth_support": support_fraction[-1],
                     "foreground_conflict": front_fraction[-1],
                     "inliers": int(result["inliers"][i]),
+                    "pose_camera_from_source": pose.tolist(),
                 }
                 if gripper is not None:
                     expected = transform_points(gripper[i], source)
