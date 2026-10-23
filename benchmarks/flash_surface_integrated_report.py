@@ -15,6 +15,9 @@ STAGES = ("decode_s", "mask_s", "tracker_s", "lift_s", "fit_s")
 def summarize(root: Path, output: Path) -> dict:
     records: dict[str, list[dict]] = {}
     checkpoints = set()
+    with np.load(root / "queries.npz", allow_pickle=False) as source:
+        reference_queries = source["queries"]
+        reference_frames = source["frames"]
     for mode in MODES:
         paths = sorted(root.glob(f"tapnext_integrated_{mode}_*.timing.json"))
         if len(paths) < 3:
@@ -27,6 +30,10 @@ def summarize(root: Path, output: Path) -> dict:
             checkpoints.add(report["checkpoint_sha256"])
             prediction_path = path.with_name(path.name.removesuffix(".timing.json") + ".npz")
             with np.load(prediction_path, allow_pickle=False) as trace:
+                if not np.array_equal(trace["queries"], reference_queries) or not np.array_equal(
+                    trace["frames"], reference_frames
+                ):
+                    raise ValueError(f"{path}: source frames or query points differ")
                 indices = np.asarray(report["pacing"]["publication_source_index"], int)
                 if len(indices) != report["pacing"]["processed_source_frames"]:
                     raise ValueError(f"{path}: publication/processed count differs")
@@ -51,6 +58,9 @@ def summarize(root: Path, output: Path) -> dict:
             )
     if len(checkpoints) != 1:
         raise ValueError("runs use different tracker checkpoints")
+    point_baseline = json.loads((root / "tapnext.timing.json").read_text())
+    if checkpoints != {point_baseline["checkpoint_sha256"]}:
+        raise ValueError("integrated tracker checkpoint differs from the raw-point quality comparison")
     summary = {
         "clip": root.name,
         "checkpoint_sha256": checkpoints.pop(),
@@ -90,7 +100,8 @@ def _write_markdown(summary: dict, path: Path) -> None:
         "# Paced tracker, mask and fit overhead",
         "",
         "Three independent process runs per mode on the same 91-frame, approximately 30 Hz local dowel clip. "
-        "All modes used the same TAPNext checkpoint and 64 first-frame queries. The consumer is a separate "
+        "All modes used the same TAPNext checkpoint as the labelled point-tracking comparison and 64 "
+        "first-frame queries. The consumer is a separate "
         "30 Hz Python thread; the producer processes the latest available source frame and publishes only "
         "after the selected stages finish. Live SAM3 is point-seeded on the first frame at 504 px and then "
         "propagated. This measures one serialized perception path, not the full FLASH robot or concurrent "
@@ -118,10 +129,9 @@ def _write_markdown(summary: dict, path: Path) -> None:
         "than its 33 ms tick period. No motor IO, camera capture, recording, display, planner or independent "
         "point-identity truth is part of this timing probe. Mask correctness and fit correctness must be "
         "evaluated separately; nonempty masks and available fits are not accuracy evidence. "
-        "The cached path's fit cost is near zero on many frames because the point frontend has fewer "
-        "than three visible points with valid measured depth there, so no 3D fit is possible. "
-        "The slower live-mask schedule skips source frames and therefore feeds a different sequence into "
-        "the temporal tracker; its higher fit availability must not be attributed to better masks.",
+        "Both modes with a fit produced one on every processed frame. The slower live-mask schedule skips "
+        "source frames and therefore feeds a different sequence into the temporal tracker; comparing "
+        "their pose errors would require scoring those actual processed frames against independent truth.",
         "",
     ]
     path.write_text("\n".join(lines))
