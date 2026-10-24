@@ -42,9 +42,23 @@ def main() -> None:
         boundary_margin_px = float(os.environ.get("FLASH_P2P_SDF_BOUNDARY_MARGIN_PX", "0"))
         occlusion_radius_px = int(os.environ.get("FLASH_P2P_SDF_OCCLUSION_RADIUS_PX", "0"))
         occlusion_gap_m = float(os.environ.get("FLASH_P2P_SDF_OCCLUSION_GAP_M", "0"))
+        support_window = int(os.environ.get("FLASH_P2P_SDF_SUPPORT_WINDOW", "0"))
+        support_radius_px = int(os.environ.get("FLASH_P2P_SDF_SUPPORT_RADIUS_PX", "0"))
+        support_depth_gap_m = float(os.environ.get("FLASH_P2P_SDF_SUPPORT_DEPTH_GAP_M", "0"))
         replace_nearer_old = os.environ.get("FLASH_P2P_SDF_REPLACE_NEARER_OLD", "0") == "1"
         surface_tsdf_max = float(os.environ.get("FLASH_P2P_SDF_SURFACE_TSDF_MAX", "0.15"))
-        if min(edge_m, boundary_margin_px, occlusion_radius_px, occlusion_gap_m) < 0:
+        if (
+            min(
+                edge_m,
+                boundary_margin_px,
+                occlusion_radius_px,
+                occlusion_gap_m,
+                support_window,
+                support_radius_px,
+                support_depth_gap_m,
+            )
+            < 0
+        ):
             raise ValueError("ablation filter settings must be nonnegative")
         if not 0 < surface_tsdf_max <= 1:
             raise ValueError("surface TSDF tolerance must be in (0, 1]")
@@ -64,6 +78,10 @@ def main() -> None:
                     "boundary_margin_px": boundary_margin_px,
                     "occlusion_radius_px": occlusion_radius_px,
                     "occlusion_gap_m": occlusion_gap_m,
+                    "support_window": support_window,
+                    "support_radius_px": support_radius_px,
+                    "support_depth_gap_m": support_depth_gap_m,
+                    "support_distance_m": "sqrt(3) * SDF voxel size",
                     "surface_tsdf_max": surface_tsdf_max,
                     "replace_nearer_old": replace_nearer_old,
                     "first_keyframe_unfiltered": True,
@@ -104,6 +122,7 @@ def main() -> None:
         from point2pose.modules.reconstruction.sdf_builder import SDFBuilder
 
         history: dict[int, deque[set[tuple[int, int, int]]]] = {}
+        support_history: dict[int, deque] = {}
         seen_keyframes: set[int] = set()
         ordinary_integrate = SDFBuilder.integrate_keyframe
 
@@ -178,6 +197,38 @@ def main() -> None:
                     stage_counts["rejected_nearer"] = int(np.count_nonzero(rejected[y, x] & supported))
                     supported &= ~rejected[y, x]
                     stage_counts["after_occlusion"] = int(supported.sum())
+                if support_window:
+                    from scipy.ndimage import minimum_filter
+                    from scipy.spatial import cKDTree
+
+                    k = np.asarray(frame.intrinsics)
+                    points = np.stack(((x - k[0, 2]) * z / k[0, 0], (y - k[1, 2]) * z / k[1, 1], z), axis=1)
+                    pose = np.asarray(keyframe.pose)
+                    object_points = (points - pose[:3, 3]) @ pose[:3, :3]
+                    previous_views = support_history.setdefault(obj_id, deque(maxlen=support_window))
+                    if previous_views:
+                        old_depth = old_surface_depth_image(
+                            obj.sdf_volume, pose, k, raw_depth.shape, surface_tsdf_max
+                        )
+                        nearby_old = minimum_filter(
+                            old_depth,
+                            size=2 * support_radius_px + 1,
+                            mode="constant",
+                            cval=np.inf,
+                        )[y, x]
+                        agrees_with_map = np.isfinite(nearby_old) & (
+                            np.abs(z - nearby_old) <= support_depth_gap_m
+                        )
+                        confirmed_by_view = np.zeros(len(z), dtype=bool)
+                        radius_m = float(obj.sdf_volume._voxel_size) * np.sqrt(3)
+                        for old_view in previous_views:
+                            confirmed_by_view |= old_view.query(object_points)[0] <= radius_m
+                        stage_counts["unmapped_pixels"] = int(np.count_nonzero(supported & ~agrees_with_map))
+                        stage_counts["unmapped_confirmed"] = int(
+                            np.count_nonzero(supported & ~agrees_with_map & confirmed_by_view)
+                        )
+                        supported &= agrees_with_map | confirmed_by_view
+                        stage_counts["after_view_confirmation"] = int(supported.sum())
             else:
                 supported = np.ones(len(z), dtype=bool)
             if filter_mode != "ablation":
@@ -236,6 +287,10 @@ def main() -> None:
                 seen_keyframes.add(obj_id)
                 if filter_mode == "temporal":
                     previous.append(candidate)
+                if filter_mode == "ablation" and support_window and supported.any():
+                    from scipy.spatial import cKDTree
+
+                    support_history[obj_id].append(cKDTree(object_points[supported]))
                 if snapshot_dir is not None:
                     volume = obj.sdf_volume
                     if volume.gpu_mode:

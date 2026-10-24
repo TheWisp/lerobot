@@ -1,0 +1,14 @@
+{
+  "mode": "ablation",
+  "depth_edge_m": 0.005,
+  "boundary_margin_px": 0.0,
+  "occlusion_radius_px": 3,
+  "occlusion_gap_m": 0.02,
+  "support_window": 3,
+  "support_radius_px": 3,
+  "support_depth_gap_m": 0.02,
+  "support_distance_m": "sqrt(3) * SDF voxel size",
+  "surface_tsdf_max": 0.15,
+  "replace_nearer_old": true,
+  "first_keyframe_unfiltered": true
+}
