@@ -118,7 +118,7 @@ def main():
                     cv2.circle(image, tuple(p), 5, YELLOW, -1, cv2.LINE_AA)
                     write_text(image, name, int(p[0] + 8), int(p[1] - 8), 0.57, YELLOW)
                 canvas[y + 37 : y + 37 + PANEL_HEIGHT, 8 : 8 + PANEL_WIDTH] = image
-            write_text(canvas, "Cyan: SAM mask   Yellow: tracked A/B/C", 15, 2094, 0.65)
+            write_text(canvas, "Cyan: visible mask   Yellow: fixed A/B/C, even if hidden", 15, 2094, 0.57)
             write_text(canvas, "White rings: gripper-motion reference (approx)", 15, 2129, 0.60)
             if frame in (280, 310, 340, 399):
                 cv2.imwrite(str(args.output.with_name(f"frame_{frame}.jpg")), canvas)

@@ -14,7 +14,16 @@ not a validated live tracker or a robot test.
 mask on every panel. Yellow A/B/C are three fixed 3D points transported from
 frame 280; their connecting lines show direction. White hollow circles are
 where a rigid attachment to the recorded gripper would have moved those same
-points. The gripper reference is approximate, not pose ground truth.
+points. The renderer draws a landmark even when it is hidden. The gripper
+reference is approximate, not pose ground truth.
+
+In particular, A begins near the grasped end. UFM projects A outside the
+_visible_ dowel mask in 103/120 frames; even the independent rigid-gripper
+prediction does so in 107/120. In the final frame, depth at UFM's projected A
+is about 24 mm **nearer** than the point, consistent with a foreground
+occluder. Thus A outside the outline does not alone show a tracking error.
+The landmark/axis differences below still mean the complete UFM pose was not
+confirmed by the rigid-grasp check.
 
 ![All methods at frame 399](frame_399.jpg)
 
