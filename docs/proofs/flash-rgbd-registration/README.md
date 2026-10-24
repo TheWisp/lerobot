@@ -22,8 +22,13 @@ _visible_ dowel mask in 103/120 frames; even the independent rigid-gripper
 prediction does so in 107/120. In the final frame, depth at UFM's projected A
 is about 24 mm **nearer** than the point, consistent with a foreground
 occluder. Thus A outside the outline does not alone show a tracking error.
-The landmark/axis differences below still mean the complete UFM pose was not
-confirmed by the rigid-grasp check.
+The outside-mask projection is inconclusive, but UFM's **22.9° final
+long-axis difference** from the rigid-grasp reference is a serious failure for
+insertion, not a harmless rotation around the dowel. A–B spans 58.6 mm and is
+within 4.1° of the measured surface's principal axis at frame 280. This
+benchmark does not establish which portion of the difference comes from
+tracking versus actual grasp slip or calibration/timing error; it does establish
+that the estimated pose is not validated for insertion control.
 
 ![All methods at frame 399](frame_399.jpg)
 
