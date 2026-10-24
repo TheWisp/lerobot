@@ -107,8 +107,8 @@ rate or a guarantee that all work can be overlapped with the 30 Hz robot loop.
 
 ## Re-anchoring ablation
 
-Using RoMa `fast`, each frame was instead matched directly to the latest
-clear-view keyframe. The keyframe is replaced after a fixed number of frames;
+Using RoMa `fast`, each frame was instead matched directly to a recent
+keyframe. The keyframe is replaced after a fixed number of frames;
 the new global transform comes only from earlier estimated transforms, never
 from the gripper reference. This is a controlled interval test, not a proposed
 fixed live reseed rule.
@@ -128,6 +128,40 @@ coordinates, identifies genuinely new surface, and relocalizes when overlap
 returns. The one-step matcher should provide candidate correspondences to
 that map, rather than define the object frame by chaining alone. This proposed
 map was **not implemented** here.
+
+### Four-history ablation
+
+We also tested matching each new frame to frames N−1, N−2, N−4 and the frame
+with the most clean surface samples between N−5 and N−20. All four source
+poses came from the estimator's own past; gripper poses were used only for
+evaluation. One variant selected the candidate whose transported A/B/C points
+best agreed with the other candidates. A second jointly fitted balanced 3D
+matches from the closest agreeing candidates. The latter subsampled at most
+256 matches per source to prevent one image from dominating the fit. These are
+simple causal study rules, not a validated runtime fusion policy.
+
+| Method                                 | Valid / 119 | Median landmark difference vs gripper | Median long-axis difference vs gripper | Median matcher time |
+| -------------------------------------- | ----------: | ------------------------------------: | -------------------------------------: | ------------------: |
+| Adjacent RoMa `fast`                   |         119 |                               19.3 mm |                                  17.6° |               52 ms |
+| Four-history candidate medoid          |         119 |                               19.7 mm |                                  16.9° |              205 ms |
+| Four-history joint fit                 |         119 |                               19.8 mm |                                  17.1° |              205 ms |
+| One recent anchor, up to 10 frames old |         119 |                               18.1 mm |                                  13.5° |         about 52 ms |
+
+The four-history variants did not meaningfully fix drift. Over the clearer
+frames 360–399, the median difference from the visible depth surface's
+principal axis was 34.0° for adjacent matching, 32.0° for four-history
+candidate selection, 31.1° for its joint fit and 22.7° for the recent anchor.
+This surface axis is an incomplete-view diagnostic, not ground truth. In the
+candidate-selection run, the chosen source was N−1 or N−2 on 88/119 frames;
+the older clear frame was rarely chosen. Four estimated deltas are correlated:
+their source poses already share earlier drift, and an old clear image may no
+longer overlap the rotated current surface. Adding deltas by vote or average
+does not make an absolute object anchor. A proper multi-view map or windowed
+pose graph would need persistent object coordinates and direct consistency
+checks against the current mask and depth; this experiment does not rule out
+that design. See `multi_history_ablation.py` and
+[`results/keyframe/multi_history_20.json`](results/keyframe/multi_history_20.json)
+for the exact study settings and per-frame traces.
 
 ## Reproduce
 

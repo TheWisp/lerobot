@@ -1,0 +1,18 @@
+{
+  "medoid": {
+    "valid": 119,
+    "median_landmark_error_mm": 19.717044932678736,
+    "last_landmark_error_mm": 22.65351027387792,
+    "median_axis_error_deg": 16.944412546900093,
+    "last_axis_error_deg": 18.417974574601875
+  },
+  "joint": {
+    "valid": 119,
+    "median_landmark_error_mm": 19.752636295620846,
+    "last_landmark_error_mm": 21.877496520151503,
+    "median_axis_error_deg": 17.0879250606001,
+    "last_axis_error_deg": 19.973963661482134
+  },
+  "median_inference_ms": 205.29181900201365,
+  "clear_window": 20
+}
