@@ -1,0 +1,575 @@
+{
+  "vision_input": "docs/proofs/flash-rgbd-registration/results/shape/full-demo",
+  "vision_sha256": "fc236382f3554afa8ab922967eb3fada06f9bc093d15b470d906962a469e9f3c",
+  "fusion_input": "docs/proofs/flash-rgbd-registration/results/bridges/bridge-release-refreshed",
+  "frames": [
+    230,
+    514
+  ],
+  "pose_frames": 285,
+  "missing_visual_geometry": 0,
+  "intervals": [
+    {
+      "name": "fingers_still_closing",
+      "frames": [
+        230,
+        233
+      ],
+      "seconds": [
+        7.668777942657471,
+        7.768103837966919
+      ],
+      "axis_vs_connected_depth_deg": {
+        "median": 62.920056582014645,
+        "p95": 65.49231375274604,
+        "max": 65.69707888969286
+      },
+      "visible_surface_gap_mm": {
+        "median": 6.508123020954953,
+        "p95": 7.687820972917573,
+        "max": 7.728957103036986
+      },
+      "axis_line_step_deg": {
+        "median": 2.895959999587001,
+        "p95": 54.2185450822488,
+        "max": 59.9210545358779
+      },
+      "center_step_mm": {
+        "median": 6.416828460289831,
+        "p95": 63.524535597094925,
+        "max": 69.86983639007327
+      },
+      "full_rotation_step_deg": {
+        "median": 9.889032859392081,
+        "p95": 68.86069997001668,
+        "max": 75.41310742675276
+      },
+      "axis_step_vs_gripper_deg": {
+        "median": 2.9259704373861397,
+        "p95": 54.33240312376418,
+        "max": 60.04422897780619
+      },
+      "center_step_vs_gripper_mm": {
+        "median": 6.437706219142444,
+        "p95": 63.7598788061724,
+        "max": 70.12900909362018
+      },
+      "rotation_step_vs_gripper_deg": {
+        "median": 9.983495919947824,
+        "p95": 68.99346615681004,
+        "max": 75.55012951646141
+      },
+      "center_change_in_gripper_frame_mm": {
+        "median": 3.9592381180339955,
+        "p95": 63.490662993425644,
+        "max": 73.64186797089718
+      },
+      "axis_change_in_gripper_frame_deg": {
+        "median": 2.0535559360404125,
+        "p95": 54.178083565548135,
+        "max": 63.1363983764969
+      }
+    },
+    {
+      "name": "closed_fingers_pickup_and_early_rotation",
+      "frames": [
+        234,
+        279
+      ],
+      "seconds": [
+        7.80225396156311,
+        9.302657842636108
+      ],
+      "axis_vs_connected_depth_deg": {
+        "median": 19.98589244233431,
+        "p95": 88.84704955337891,
+        "max": 89.75574347960921
+      },
+      "visible_surface_gap_mm": {
+        "median": 2.0858598977689917,
+        "p95": 43.07395444824511,
+        "max": 54.347840625021625
+      },
+      "axis_line_step_deg": {
+        "median": 2.3130177777879837,
+        "p95": 40.48312213787361,
+        "max": 77.43365225338401
+      },
+      "center_step_mm": {
+        "median": 3.0266760625153175,
+        "p95": 29.759384093535886,
+        "max": 98.82814311935394
+      },
+      "full_rotation_step_deg": {
+        "median": 5.915023018147816,
+        "p95": 91.10132171618002,
+        "max": 120.49050874380404
+      },
+      "axis_step_vs_gripper_deg": {
+        "median": 2.462134436708699,
+        "p95": 39.7868265272273,
+        "max": 101.66705801515644
+      },
+      "center_step_vs_gripper_mm": {
+        "median": 2.9496557385957045,
+        "p95": 30.41868693178035,
+        "max": 93.63286297070087
+      },
+      "rotation_step_vs_gripper_deg": {
+        "median": 6.703869531571582,
+        "p95": 90.48387005964287,
+        "max": 119.82046991715617
+      },
+      "center_change_in_gripper_frame_mm": {
+        "median": 21.086622254493157,
+        "p95": 94.34602308509989,
+        "max": 96.76773020141604
+      },
+      "axis_change_in_gripper_frame_deg": {
+        "median": 11.620302503471576,
+        "p95": 87.24978460469501,
+        "max": 168.8728977014223
+      }
+    },
+    {
+      "name": "rotation_and_carry",
+      "frames": [
+        280,
+        359
+      ],
+      "seconds": [
+        9.335898876190186,
+        11.971704959869385
+      ],
+      "axis_vs_connected_depth_deg": {
+        "median": 11.01489292395851,
+        "p95": 20.67200724966298,
+        "max": 24.120413275296507
+      },
+      "visible_surface_gap_mm": {
+        "median": 2.6926572669222253,
+        "p95": 3.612699953848703,
+        "max": 4.105143384758622
+      },
+      "axis_line_step_deg": {
+        "median": 1.0542183045127709,
+        "p95": 3.1224031330308133,
+        "max": 5.634487463994478
+      },
+      "center_step_mm": {
+        "median": 2.303504557506207,
+        "p95": 4.74594072405366,
+        "max": 5.918108983428141
+      },
+      "full_rotation_step_deg": {
+        "median": 3.698825184393258,
+        "p95": 11.487523063561346,
+        "max": 18.77115182067898
+      },
+      "axis_step_vs_gripper_deg": {
+        "median": 0.9488839787249888,
+        "p95": 2.8205174483427427,
+        "max": 5.0739722945575005
+      },
+      "center_step_vs_gripper_mm": {
+        "median": 1.6714677397761624,
+        "p95": 3.8851212882729835,
+        "max": 4.782080750032514
+      },
+      "rotation_step_vs_gripper_deg": {
+        "median": 3.64239590844829,
+        "p95": 11.19501427982043,
+        "max": 19.443524119694214
+      },
+      "center_change_in_gripper_frame_mm": {
+        "median": 12.808436068108275,
+        "p95": 17.123202237392807,
+        "max": 18.690724888261304
+      },
+      "axis_change_in_gripper_frame_deg": {
+        "median": 12.295387931690307,
+        "p95": 18.543009266834517,
+        "max": 22.186345024424412
+      }
+    },
+    {
+      "name": "previously_reviewed_clear_view",
+      "frames": [
+        360,
+        399
+      ],
+      "seconds": [
+        12.004607915878296,
+        13.305330991744995
+      ],
+      "axis_vs_connected_depth_deg": {
+        "median": 1.8494684542687323,
+        "p95": 3.5384321858856427,
+        "max": 3.877804208147282
+      },
+      "visible_surface_gap_mm": {
+        "median": 2.476991740957547,
+        "p95": 2.8843045390499222,
+        "max": 3.118720061605513
+      },
+      "axis_line_step_deg": {
+        "median": 0.4566034917992829,
+        "p95": 1.533915342935388,
+        "max": 2.032931541029966
+      },
+      "center_step_mm": {
+        "median": 0.8801130779204721,
+        "p95": 5.044712399389081,
+        "max": 6.946659341896697
+      },
+      "full_rotation_step_deg": {
+        "median": 2.5995004523335066,
+        "p95": 13.34809375772556,
+        "max": 17.55626151422396
+      },
+      "axis_step_vs_gripper_deg": {
+        "median": 0.5236040949702373,
+        "p95": 1.4613801825125168,
+        "max": 1.592180770961302
+      },
+      "center_step_vs_gripper_mm": {
+        "median": 0.9277763967363242,
+        "p95": 3.5292420383005676,
+        "max": 4.389687813159929
+      },
+      "rotation_step_vs_gripper_deg": {
+        "median": 2.614995682369378,
+        "p95": 13.324124554275159,
+        "max": 17.44083269882416
+      },
+      "center_change_in_gripper_frame_mm": {
+        "median": 2.2791145323589355,
+        "p95": 5.665950237226716,
+        "max": 6.54564098661374
+      },
+      "axis_change_in_gripper_frame_deg": {
+        "median": 2.7043081210323523,
+        "p95": 4.825691790692102,
+        "max": 5.280729611843545
+      }
+    },
+    {
+      "name": "insertion_before_opening_command",
+      "frames": [
+        400,
+        487
+      ],
+      "seconds": [
+        13.338671922683716,
+        16.241281032562256
+      ],
+      "axis_vs_connected_depth_deg": {
+        "median": 1.8413718311570964,
+        "p95": 13.383324384742291,
+        "max": 15.496712498958772
+      },
+      "visible_surface_gap_mm": {
+        "median": 2.502610015826491,
+        "p95": 3.029903463979193,
+        "max": 3.1641895069206716
+      },
+      "axis_line_step_deg": {
+        "median": 0.4275368002678564,
+        "p95": 1.0884625493577047,
+        "max": 1.8104685182224869
+      },
+      "center_step_mm": {
+        "median": 0.5801103148906911,
+        "p95": 2.7178902687054634,
+        "max": 3.964545096197189
+      },
+      "full_rotation_step_deg": {
+        "median": 1.812353799391197,
+        "p95": 6.269585334304954,
+        "max": 20.579351407568637
+      },
+      "axis_step_vs_gripper_deg": {
+        "median": 0.47483989069248633,
+        "p95": 1.111479296299631,
+        "max": 1.842179905969859
+      },
+      "center_step_vs_gripper_mm": {
+        "median": 0.6309355603606218,
+        "p95": 2.276058102228784,
+        "max": 2.597358762323949
+      },
+      "rotation_step_vs_gripper_deg": {
+        "median": 1.7011988748763394,
+        "p95": 6.373821372481149,
+        "max": 20.565595788704737
+      },
+      "center_change_in_gripper_frame_mm": {
+        "median": 3.101253093367238,
+        "p95": 5.5893512227010484,
+        "max": 7.866112834929674
+      },
+      "axis_change_in_gripper_frame_deg": {
+        "median": 0.7318664040570275,
+        "p95": 2.0050594195461247,
+        "max": 3.561517905399198
+      }
+    },
+    {
+      "name": "opening_but_annotation_still_says_held",
+      "frames": [
+        488,
+        514
+      ],
+      "seconds": [
+        16.274127960205078,
+        17.14169406890869
+      ],
+      "axis_vs_connected_depth_deg": {
+        "median": 6.09693680362617,
+        "p95": 10.109206748043434,
+        "max": 12.913903620432624
+      },
+      "visible_surface_gap_mm": {
+        "median": 2.3611561999495496,
+        "p95": 2.536525765037272,
+        "max": 2.6975718729723646
+      },
+      "axis_line_step_deg": {
+        "median": 0.6090971099726681,
+        "p95": 3.9307738239987184,
+        "max": 4.269595595176031
+      },
+      "center_step_mm": {
+        "median": 0.5061972686074588,
+        "p95": 2.5017797405598468,
+        "max": 2.9068092125950935
+      },
+      "full_rotation_step_deg": {
+        "median": 2.9992697526282814,
+        "p95": 14.214194589002176,
+        "max": 41.441735401653
+      },
+      "axis_step_vs_gripper_deg": {
+        "median": 0.5971094948411205,
+        "p95": 3.9307738239987478,
+        "max": 4.269595595176031
+      },
+      "center_step_vs_gripper_mm": {
+        "median": 0.8146047243129304,
+        "p95": 2.540331486120146,
+        "max": 2.9068092125950784
+      },
+      "rotation_step_vs_gripper_deg": {
+        "median": 3.0587717913440082,
+        "p95": 14.211432798813387,
+        "max": 41.441735401653006
+      },
+      "center_change_in_gripper_frame_mm": {
+        "median": 10.768938523285263,
+        "p95": 18.041947010036466,
+        "max": 18.453240680844743
+      },
+      "axis_change_in_gripper_frame_deg": {
+        "median": 12.374479108239795,
+        "p95": 19.439574169744848,
+        "max": 19.779670887588832
+      }
+    }
+  ],
+  "largest_rotation_steps": [
+    {
+      "frame": 279,
+      "seconds": 9.302657842636108,
+      "status": "observed",
+      "mask_pixels": 3058,
+      "connected_surface_samples": 164,
+      "shape_cost": 2.3763091591908765,
+      "coarse_reinitialization": 1,
+      "accepted_by_fusion": 0,
+      "gripper_measured": 97.80521262002743,
+      "gripper_command": 100.0,
+      "nearest_motor_offset_ms": 6.358146667480469,
+      "axis_vs_connected_depth_deg": 11.477582461992167,
+      "visible_surface_gap_mm": 2.130351330790983,
+      "axis_step_deg": 102.56634774661599,
+      "axis_line_step_deg": 77.43365225338401,
+      "center_step_mm": 30.666115127914956,
+      "full_rotation_step_deg": 120.49050874380404,
+      "axis_step_vs_gripper_deg": 101.66705801515644,
+      "center_step_vs_gripper_mm": 32.40176403680993,
+      "rotation_step_vs_gripper_deg": 119.82046991715617
+    },
+    {
+      "frame": 260,
+      "seconds": 8.668992042541504,
+      "status": "observed",
+      "mask_pixels": 1923,
+      "connected_surface_samples": 34,
+      "shape_cost": 8.959938918791133,
+      "coarse_reinitialization": 1,
+      "accepted_by_fusion": 0,
+      "gripper_measured": 97.80521262002743,
+      "gripper_command": 100.0,
+      "nearest_motor_offset_ms": 4.916191101074219,
+      "axis_vs_connected_depth_deg": 21.792815805499824,
+      "visible_surface_gap_mm": 4.516011887136695,
+      "axis_step_deg": 46.02649100826512,
+      "axis_line_step_deg": 46.02649100826512,
+      "center_step_mm": 98.82814311935394,
+      "full_rotation_step_deg": 109.08208771182206,
+      "axis_step_vs_gripper_deg": 44.90582508768913,
+      "center_step_vs_gripper_mm": 93.63286297070087,
+      "rotation_step_vs_gripper_deg": 106.97063315827127
+    },
+    {
+      "frame": 270,
+      "seconds": 9.002402067184448,
+      "status": "observed",
+      "mask_pixels": 1514,
+      "connected_surface_samples": 38,
+      "shape_cost": 22.44749822820964,
+      "coarse_reinitialization": 1,
+      "accepted_by_fusion": 0,
+      "gripper_measured": 97.80521262002743,
+      "gripper_command": 100.0,
+      "nearest_motor_offset_ms": 5.32841682434082,
+      "axis_vs_connected_depth_deg": 20.125902961114726,
+      "visible_surface_gap_mm": 1.4831939412039683,
+      "axis_step_deg": 67.02008368416027,
+      "axis_line_step_deg": 67.02008368416027,
+      "center_step_mm": 66.77162471719116,
+      "full_rotation_step_deg": 101.14348355856262,
+      "axis_step_vs_gripper_deg": 65.98721435077553,
+      "center_step_vs_gripper_mm": 70.29086347697019,
+      "rotation_step_vs_gripper_deg": 100.11829810468168
+    },
+    {
+      "frame": 233,
+      "seconds": 7.768103837966919,
+      "status": "observed",
+      "mask_pixels": 1937,
+      "connected_surface_samples": 84,
+      "shape_cost": 1.0833936759190856,
+      "coarse_reinitialization": 0,
+      "accepted_by_fusion": 0,
+      "gripper_measured": 97.66803840877914,
+      "gripper_command": 100.0,
+      "nearest_motor_offset_ms": 3.1080245971679688,
+      "axis_vs_connected_depth_deg": 19.95928916062822,
+      "visible_surface_gap_mm": 1.6943839475965912,
+      "axis_step_deg": 59.9210545358779,
+      "axis_line_step_deg": 59.9210545358779,
+      "center_step_mm": 69.86983639007327,
+      "full_rotation_step_deg": 75.41310742675276,
+      "axis_step_vs_gripper_deg": 60.04422897780619,
+      "center_step_vs_gripper_mm": 70.12900909362018,
+      "rotation_step_vs_gripper_deg": 75.55012951646141
+    },
+    {
+      "frame": 278,
+      "seconds": 9.26927399635315,
+      "status": "observed",
+      "mask_pixels": 2743,
+      "connected_surface_samples": 124,
+      "shape_cost": 6.948401645932099,
+      "coarse_reinitialization": 0,
+      "accepted_by_fusion": 0,
+      "gripper_measured": 97.80521262002743,
+      "gripper_command": 100.0,
+      "nearest_motor_offset_ms": 5.481243133544922,
+      "axis_vs_connected_depth_deg": 87.3738748705531,
+      "visible_surface_gap_mm": 7.524141959076799,
+      "axis_step_deg": 4.8465073673849375,
+      "axis_line_step_deg": 4.8465073673849375,
+      "center_step_mm": 10.147303429493078,
+      "full_rotation_step_deg": 50.932674346650344,
+      "axis_step_vs_gripper_deg": 5.667286774533924,
+      "center_step_vs_gripper_mm": 7.846911486805626,
+      "rotation_step_vs_gripper_deg": 51.94615787948828
+    },
+    {
+      "frame": 500,
+      "seconds": 16.67479705810547,
+      "status": "observed",
+      "mask_pixels": 2967,
+      "connected_surface_samples": 164,
+      "shape_cost": 2.5100725315233596,
+      "coarse_reinitialization": 0,
+      "accepted_by_fusion": 0,
+      "gripper_measured": 83.9506172839506,
+      "gripper_command": 83.86266094420601,
+      "nearest_motor_offset_ms": 14.981508255004883,
+      "axis_vs_connected_depth_deg": 7.438731249274235,
+      "visible_surface_gap_mm": 2.6975718729723646,
+      "axis_step_deg": 4.269595595176031,
+      "axis_line_step_deg": 4.269595595176031,
+      "center_step_mm": 2.363030420096644,
+      "full_rotation_step_deg": 41.441735401653,
+      "axis_step_vs_gripper_deg": 4.269595595176031,
+      "center_step_vs_gripper_mm": 2.363030420096697,
+      "rotation_step_vs_gripper_deg": 41.441735401653006
+    },
+    {
+      "frame": 261,
+      "seconds": 8.702146053314209,
+      "status": "observed",
+      "mask_pixels": 1734,
+      "connected_surface_samples": 17,
+      "shape_cost": 9.033574446387636,
+      "coarse_reinitialization": 0,
+      "accepted_by_fusion": 0,
+      "gripper_measured": 97.80521262002743,
+      "gripper_command": 100.0,
+      "nearest_motor_offset_ms": 5.094766616821289,
+      "axis_vs_connected_depth_deg": 40.31636004664653,
+      "visible_surface_gap_mm": 3.7225467791516045,
+      "axis_step_deg": 13.554569616785265,
+      "axis_line_step_deg": 13.554569616785265,
+      "center_step_mm": 3.407206987326647,
+      "full_rotation_step_deg": 32.06072497020429,
+      "axis_step_vs_gripper_deg": 12.427859973701773,
+      "center_step_vs_gripper_mm": 3.3983718686657647,
+      "rotation_step_vs_gripper_deg": 33.30932083710859
+    },
+    {
+      "frame": 255,
+      "seconds": 8.501867055892944,
+      "status": "observed",
+      "mask_pixels": 2105,
+      "connected_surface_samples": 50,
+      "shape_cost": 3.9118987902610654,
+      "coarse_reinitialization": 0,
+      "accepted_by_fusion": 0,
+      "gripper_measured": 97.80521262002743,
+      "gripper_command": 100.0,
+      "nearest_motor_offset_ms": 5.012273788452148,
+      "axis_vs_connected_depth_deg": 17.35681412332451,
+      "visible_surface_gap_mm": 1.7363191709955659,
+      "axis_step_deg": 5.313727128377497,
+      "axis_line_step_deg": 5.313727128377497,
+      "center_step_mm": 4.5053251357919795,
+      "full_rotation_step_deg": 31.815138871471426,
+      "axis_step_vs_gripper_deg": 5.333007189465584,
+      "center_step_vs_gripper_mm": 4.6761831720909495,
+      "rotation_step_vs_gripper_deg": 31.771300632504115
+    }
+  ],
+  "fusion_visual_updates_during_hold": [
+    366
+  ],
+  "reviewed_motor_events": {
+    "closure_settled_camera_frame": 234,
+    "opening_command_camera_frame": 488,
+    "measured_opening_camera_frame": 490,
+    "note": "Manually reviewed motor trace, not a new contact detector; these events do not prove physical attachment/separation times."
+  },
+  "limits": [
+    "Cached UFM plus mask/depth shape fit; no gripper input. This is not a new tracker run.",
+    "Held interval comes from existing annotations; actual contact timing is not established.",
+    "Connected depth PCA under partial visibility is not the full object's ground-truth axis.",
+    "Surface gap reuses the fitting observations and is not an independent accuracy metric.",
+    "Gripper agreement assumes rigid attachment, synchronized recordings and accurate calibration; these are imperfect here.",
+    "Low step jitter can coexist with a consistently wrong pose. Full rotation includes axial twist.",
+    "Rendered hull is the projected fixed reference surface, including occluded parts, not a reconstructed complete mesh."
+  ]
+}

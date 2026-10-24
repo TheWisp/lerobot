@@ -1,5 +1,51 @@
 # RGB-D registration of the held dowel
 
+**Vision-only held-interval audit, 2026-10-24:** the cached UFM + mask/depth
+trajectory is not uniformly stable while the fingers are closed. This audit
+reads the existing vision-only result; it does not feed gripper poses into it,
+rerun a tracker, change confidence rules, or change the live backend.
+[Uncut 7.67–17.14 s video](results/held-vision-audit/held_vision.mp4),
+[six scene views](results/held-vision-audit/held_vision.jpg),
+[measurements](results/held-vision-audit/summary.json),
+[every frame](results/held-vision-audit/trace.csv).
+White is the projected reference surface and its fixed A/B/C landmarks; cyan
+is SAM. White can extend into occluded regions because it includes the entire
+reference patch. It is not a reconstructed complete mesh.
+
+| Reviewed period                                    | Vision-only result                                                                                                                                                                                 |
+| -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Closed fingers, pickup/early rotation, 7.80–9.30 s | Estimated center jumps 98.8 mm at frame 260; the long-axis line changes 77.4° at frame 279. These include re-localization from previously wrong estimates.                                         |
+| Rotation/carry, 9.34–11.97 s                       | Estimated center changes up to 18.7 mm relative to the gripper over the interval. This is disagreement with a rigid-grasp proxy, not measured ground-truth slip or drift.                          |
+| Previously reviewed clear view, 12.00–13.31 s      | Long-axis agreement with connected measured depth: median 1.85°, maximum 3.88°. Median visible-surface distance: 2.48 mm. Full rotation still jumps 17.6° in a frame, with only 1.4° of axis tilt. |
+| Insertion before opening starts, 13.34–16.24 s     | Axis changes at most 1.81° per frame, but full rotation jumps 20.6° while the axis changes 1.69°. Axis agreement with the partial depth patch ranges up to 15.5°.                                  |
+
+The later large rotations are mostly around the long axis; the early failures
+also change its tilt and position. Low surface distance alone does not establish
+stable landmarks. The current fused trace applies only one visual correction
+during the annotated held interval (frame 366); its smooth gripper-driven output
+is not evidence that the visual estimator is stable.
+
+**Do not treat the annotated held interval as physical contact truth.** The
+motor trace settles at a closed finger position around frame 234 (7.80 s).
+Opening is commanded at frame 488 (16.27 s), measured finger opening appears
+around frame 490 (16.34 s), but the annotation keeps `held` active through
+frame 514 (17.14 s). The audit separates that opening interval from the closed
+finger analysis. These are motor events, not a new grasp detector or proof of
+the exact moments of physical contact/separation. The late 41.4° visual jump
+at frame 500 is therefore not reported as a confirmed held-object failure.
+
+Depth agreement reuses the same sensor that supplies the fit. A partial depth
+patch's principal axis is not necessarily the full object's axis. Gripper
+comparisons also inherit synchronization/calibration uncertainty and possible
+slip. None of these numbers is an independent 6D ground-truth accuracy score.
+
+```bash
+uv run --no-sync python docs/proofs/flash-rgbd-registration/audit_held_vision.py \
+  --vision docs/proofs/flash-rgbd-registration/results/shape/full-demo \
+  --fusion docs/proofs/flash-rgbd-registration/results/bridges/bridge-release-refreshed \
+  --output /tmp/held-vision-audit
+```
+
 **Pickup/release audit, 2026-10-24:** release no longer drops the estimate,
 but the held pose is still inaccurate. [Full-scene replay, all 713 frames](full_scene_release_handoff.mp4)
 shows both. This is an offline experiment, not a live-backend change.
@@ -23,7 +69,7 @@ shows both. This is an offline experiment, not a live-backend change.
   time. The archive has no sensor timestamps with which to prove synchronization.
   Calibration/kinematic error remains possible. Exact gripper algebra does not
   prove an accurate pose in the image.
-- **Release, 17.175 s:** the old fusion stopped the gripper relationship without
+- **Annotated release, 17.175 s (not established physical release):** the old fusion stopped the gripper relationship without
   a usable current object-point anchor. Its only alternative demanded enough
   visible extent to solve a fresh full pose; the partly inserted object could
   not pass. The fix keeps current masked RGB-D point tracks anchored to the
