@@ -1,0 +1,326 @@
+{
+  "dowel": {
+    "after_release": {
+      "confirmed": {
+        "by_reference": {
+          "eroded": {
+            "alternative_dominates": 25,
+            "original_dominates": 1,
+            "tradeoff": 11,
+            "unavailable": 0
+          },
+          "full": {
+            "alternative_dominates": 27,
+            "original_dominates": 1,
+            "tradeoff": 9,
+            "unavailable": 0
+          }
+        },
+        "dominates_in_both": 25
+      },
+      "depth": {
+        "by_reference": {
+          "eroded": {
+            "alternative_dominates": 26,
+            "original_dominates": 0,
+            "tradeoff": 11,
+            "unavailable": 0
+          },
+          "full": {
+            "alternative_dominates": 29,
+            "original_dominates": 0,
+            "tradeoff": 8,
+            "unavailable": 0
+          }
+        },
+        "dominates_in_both": 26
+      },
+      "two_way": {
+        "by_reference": {
+          "eroded": {
+            "alternative_dominates": 5,
+            "original_dominates": 0,
+            "tradeoff": 32,
+            "unavailable": 0
+          },
+          "full": {
+            "alternative_dominates": 18,
+            "original_dominates": 0,
+            "tradeoff": 19,
+            "unavailable": 0
+          }
+        },
+        "dominates_in_both": 5
+      }
+    },
+    "frame_540": {
+      "eroded": {
+        "confirmed": {
+          "observed_surface_p90_mm": 7.436677496334791,
+          "projected_mask_fraction": 0.8537041989836854,
+          "ray_contradiction_fraction": 0.07247956403269755,
+          "ray_support_fraction": 0.2670299727520436
+        },
+        "depth": {
+          "observed_surface_p90_mm": 7.536075691441778,
+          "projected_mask_fraction": 0.842471248997058,
+          "ray_contradiction_fraction": 0.08600979858464888,
+          "ray_support_fraction": 0.2422427871529668
+        },
+        "original": {
+          "observed_surface_p90_mm": 10.77411130717984,
+          "projected_mask_fraction": 0.5969510564322011,
+          "ray_contradiction_fraction": 0.5580855018587361,
+          "ray_support_fraction": 0.16263940520446096
+        },
+        "two_way": {
+          "observed_surface_p90_mm": 7.771966583659306,
+          "projected_mask_fraction": 0.8226798609253811,
+          "ray_contradiction_fraction": 0.15825809877854488,
+          "ray_support_fraction": 0.17472118959107807
+        }
+      },
+      "full": {
+        "confirmed": {
+          "observed_surface_p90_mm": 6.616142919554196,
+          "projected_mask_fraction": 0.815,
+          "ray_contradiction_fraction": 0.11735205616850551,
+          "ray_support_fraction": 0.2868605817452357
+        },
+        "depth": {
+          "observed_surface_p90_mm": 6.59582374060381,
+          "projected_mask_fraction": 0.80225,
+          "ray_contradiction_fraction": 0.13323278029160382,
+          "ray_support_fraction": 0.26747109100050276
+        },
+        "original": {
+          "observed_surface_p90_mm": 10.624177221277597,
+          "projected_mask_fraction": 0.57325,
+          "ray_contradiction_fraction": 0.6052745352356247,
+          "ray_support_fraction": 0.15650670125378296
+        },
+        "two_way": {
+          "observed_surface_p90_mm": 6.887124776869489,
+          "projected_mask_fraction": 0.781,
+          "ray_contradiction_fraction": 0.2073170731707317,
+          "ray_support_fraction": 0.20682926829268292
+        }
+      }
+    },
+    "insertion": {
+      "confirmed": {
+        "by_reference": {
+          "eroded": {
+            "alternative_dominates": 1,
+            "original_dominates": 17,
+            "tradeoff": 82,
+            "unavailable": 1
+          },
+          "full": {
+            "alternative_dominates": 3,
+            "original_dominates": 19,
+            "tradeoff": 78,
+            "unavailable": 1
+          }
+        },
+        "dominates_in_both": 1
+      },
+      "depth": {
+        "by_reference": {
+          "eroded": {
+            "alternative_dominates": 1,
+            "original_dominates": 17,
+            "tradeoff": 82,
+            "unavailable": 1
+          },
+          "full": {
+            "alternative_dominates": 3,
+            "original_dominates": 19,
+            "tradeoff": 78,
+            "unavailable": 1
+          }
+        },
+        "dominates_in_both": 1
+      },
+      "two_way": {
+        "by_reference": {
+          "eroded": {
+            "alternative_dominates": 89,
+            "original_dominates": 0,
+            "tradeoff": 11,
+            "unavailable": 1
+          },
+          "full": {
+            "alternative_dominates": 97,
+            "original_dominates": 0,
+            "tradeoff": 3,
+            "unavailable": 1
+          }
+        },
+        "dominates_in_both": 89
+      }
+    }
+  },
+  "ring": {
+    "after_release": {
+      "confirmed": {
+        "by_reference": {
+          "eroded": {
+            "alternative_dominates": 10,
+            "original_dominates": 8,
+            "tradeoff": 19,
+            "unavailable": 0
+          },
+          "full": {
+            "alternative_dominates": 10,
+            "original_dominates": 11,
+            "tradeoff": 16,
+            "unavailable": 0
+          }
+        },
+        "dominates_in_both": 8
+      },
+      "depth": {
+        "by_reference": {
+          "eroded": {
+            "alternative_dominates": 10,
+            "original_dominates": 8,
+            "tradeoff": 19,
+            "unavailable": 0
+          },
+          "full": {
+            "alternative_dominates": 10,
+            "original_dominates": 9,
+            "tradeoff": 18,
+            "unavailable": 0
+          }
+        },
+        "dominates_in_both": 8
+      },
+      "two_way": {
+        "by_reference": {
+          "eroded": {
+            "alternative_dominates": 10,
+            "original_dominates": 8,
+            "tradeoff": 19,
+            "unavailable": 0
+          },
+          "full": {
+            "alternative_dominates": 10,
+            "original_dominates": 9,
+            "tradeoff": 18,
+            "unavailable": 0
+          }
+        },
+        "dominates_in_both": 8
+      }
+    },
+    "frame_540": {
+      "eroded": {
+        "confirmed": {
+          "observed_surface_p90_mm": 3.019484661569984,
+          "projected_mask_fraction": 0.7401484865790977,
+          "ray_contradiction_fraction": 0.036471321695760596,
+          "ray_support_fraction": 0.662718204488778
+        },
+        "depth": {
+          "observed_surface_p90_mm": 3.0196572885654667,
+          "projected_mask_fraction": 0.740434037692747,
+          "ray_contradiction_fraction": 0.036471321695760596,
+          "ray_support_fraction": 0.662718204488778
+        },
+        "original": {
+          "observed_surface_p90_mm": 3.0362661998845284,
+          "projected_mask_fraction": 0.739577384351799,
+          "ray_contradiction_fraction": 0.04277743335399876,
+          "ray_support_fraction": 0.6562306261624302
+        },
+        "two_way": {
+          "observed_surface_p90_mm": 3.0196572885654667,
+          "projected_mask_fraction": 0.740434037692747,
+          "ray_contradiction_fraction": 0.036471321695760596,
+          "ray_support_fraction": 0.662718204488778
+        }
+      },
+      "full": {
+        "confirmed": {
+          "observed_surface_p90_mm": 2.9280812677207924,
+          "projected_mask_fraction": 0.7191566892243623,
+          "ray_contradiction_fraction": 0.0406062339147841,
+          "ray_support_fraction": 0.643980554761224
+        },
+        "depth": {
+          "observed_surface_p90_mm": 2.9276622623670723,
+          "projected_mask_fraction": 0.7194169703279542,
+          "ray_contradiction_fraction": 0.0406062339147841,
+          "ray_support_fraction": 0.643980554761224
+        },
+        "original": {
+          "observed_surface_p90_mm": 2.9554937102582506,
+          "projected_mask_fraction": 0.7183758459135867,
+          "ray_contradiction_fraction": 0.04657767679636467,
+          "ray_support_fraction": 0.6384549843794377
+        },
+        "two_way": {
+          "observed_surface_p90_mm": 2.9276622623670723,
+          "projected_mask_fraction": 0.7194169703279542,
+          "ray_contradiction_fraction": 0.0406062339147841,
+          "ray_support_fraction": 0.643980554761224
+        }
+      }
+    },
+    "insertion": {
+      "confirmed": {
+        "by_reference": {
+          "eroded": {
+            "alternative_dominates": 25,
+            "original_dominates": 27,
+            "tradeoff": 49,
+            "unavailable": 0
+          },
+          "full": {
+            "alternative_dominates": 21,
+            "original_dominates": 23,
+            "tradeoff": 57,
+            "unavailable": 0
+          }
+        },
+        "dominates_in_both": 17
+      },
+      "depth": {
+        "by_reference": {
+          "eroded": {
+            "alternative_dominates": 23,
+            "original_dominates": 28,
+            "tradeoff": 50,
+            "unavailable": 0
+          },
+          "full": {
+            "alternative_dominates": 20,
+            "original_dominates": 26,
+            "tradeoff": 55,
+            "unavailable": 0
+          }
+        },
+        "dominates_in_both": 16
+      },
+      "two_way": {
+        "by_reference": {
+          "eroded": {
+            "alternative_dominates": 23,
+            "original_dominates": 28,
+            "tradeoff": 50,
+            "unavailable": 0
+          },
+          "full": {
+            "alternative_dominates": 20,
+            "original_dominates": 26,
+            "tradeoff": 55,
+            "unavailable": 0
+          }
+        },
+        "dominates_in_both": 16
+      }
+    }
+  }
+}

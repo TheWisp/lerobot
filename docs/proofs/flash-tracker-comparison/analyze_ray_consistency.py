@@ -19,13 +19,22 @@ import numpy as np
 ROLES = ("dowel", "ring")
 
 
-def reference_points(dataset: Path, masks: Path, role: str, intrinsics: np.ndarray) -> np.ndarray:
+def reference_points(
+    dataset: Path,
+    masks: Path,
+    role: str,
+    intrinsics: np.ndarray,
+    *,
+    mask_erosion_px: int = 1,
+) -> np.ndarray:
+    if mask_erosion_px < 0:
+        raise ValueError("mask erosion must be nonnegative")
     depth = cv2.imread(str(dataset / "depth" / "000100.png"), cv2.IMREAD_UNCHANGED)
     mask = cv2.imread(str(masks / role / "000100.png"), cv2.IMREAD_GRAYSCALE)
     if depth is None or mask is None or depth.shape != mask.shape:
         raise ValueError(f"missing first-view RGB-D/mask for {role}")
     depth_m = depth.astype(np.float32) * 0.001
-    eroded = cv2.erode(mask, np.ones((3, 3), dtype=np.uint8)) > 0
+    eroded = cv2.erode(mask, np.ones((2 * mask_erosion_px + 1, 2 * mask_erosion_px + 1), dtype=np.uint8)) > 0
     y, x = np.nonzero(eroded & (depth_m > 0))
     if len(x) > 4000:
         selected = np.linspace(0, len(x) - 1, 4000, dtype=int)

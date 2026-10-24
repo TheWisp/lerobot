@@ -99,6 +99,7 @@ def main() -> None:
     parser.add_argument("--candidate", required=True, action="append")
     parser.add_argument("--first-frame", required=True, type=int)
     parser.add_argument("--last-frame", required=True, type=int)
+    parser.add_argument("--reference-mask-erosion-px", type=int, default=1)
     parser.add_argument(
         "--config",
         type=Path,
@@ -111,12 +112,16 @@ def main() -> None:
         parser.error("supply at least two candidates with distinct names")
     if args.last_frame < args.first_frame:
         parser.error("last frame must follow first frame")
+    if args.reference_mask_erosion_px < 0:
+        parser.error("reference mask erosion must be nonnegative")
     config = json.loads(args.config.read_text())["causal_tracking"]
     fit_threshold_m = float(config["fit_threshold_m"])
     disagreement_m = float(config["max_pose_disagreement_translation_m"])
     min_points = int(config["min_inliers"])
     intrinsics = np.load(Path(__file__).with_name("pose_traces.npz"))["intrinsics"]
-    reference = reference_points(args.dataset, args.masks, args.role, intrinsics)
+    reference = reference_points(
+        args.dataset, args.masks, args.role, intrinsics, mask_erosion_px=args.reference_mask_erosion_px
+    )
     rows = []
     summaries: Counter[str] = Counter()
     for frame_id in range(args.first_frame, args.last_frame + 1):
