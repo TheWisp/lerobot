@@ -1,0 +1,26 @@
+{
+  "config": {
+    "depth_tolerance_m": 0.005,
+    "surface_spacing_m": 0.003,
+    "mask_boundary_tolerance_px": 2.0,
+    "max_surface_distance_m": 0.03,
+    "max_evaluations": 50,
+    "solver_tolerance": 1e-05
+  },
+  "reference_frame": 100,
+  "method": "roma-fast",
+  "median_axis_error_vs_gripper_deg": 28.294516274140413,
+  "last_axis_error_vs_gripper_deg": 31.173310435833574,
+  "median_landmark_error_vs_gripper_mm": 22.696906085102693,
+  "last_landmark_error_vs_gripper_mm": 26.051626618353275,
+  "median_axis_vs_visible_surface_deg": 5.495409940795812,
+  "last_axis_vs_visible_surface_deg": 1.8139457379651056,
+  "median_baseline_same_axis_vs_visible_surface_deg": 30.013952312482036,
+  "last_baseline_same_axis_vs_visible_surface_deg": 29.321949609855768,
+  "median_reference_axis_vs_gripper_deg": 13.80028906691023,
+  "last_reference_axis_vs_gripper_deg": 13.852984406994295,
+  "median_correction_ms": 29.107437003403902,
+  "last_correction_ms": 33.597262983676046,
+  "median_clear_axis_vs_visible_surface_deg": 2.275573254836964,
+  "median_clear_baseline_same_axis_vs_visible_surface_deg": 29.821813236600576
+}

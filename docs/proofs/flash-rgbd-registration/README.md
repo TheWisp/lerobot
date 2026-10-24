@@ -1,11 +1,20 @@
 # RGB-D registration of the held dowel
 
-**Result: none of the tested pairwise methods kept a sufficiently stable object
-frame.** RoMa v2 `fast` was the best of this controlled comparison, but the
+**Updated result: adding a fixed earlier surface and whole-mask/depth correction
+removes the obvious tilt once the dowel is clearly visible.** The corrected
+reference axis agrees with the measured visible surface direction to 2.3°
+median over frames 360–399, versus 15.5° for UFM transporting the same initialized
+reference without correction. This is same-sensor geometric consistency, not
+independent pose ground truth or verified hidden-point accuracy.
+[Watch the full 120-frame before/after](shape_correction.mp4); see the
+[whole-shape experiment](#whole-shape-correction) for its limits.
+
+**Earlier result: none of the tested pairwise methods kept a sufficiently stable object
+frame.** RoMa v2 `fast` was the best of that controlled comparison, but the
 three landmarks chosen on the dowel at frame 280 differed from a rigid-grasp
 reference by 19.3 mm median and its long-axis direction differed by 17.6°
 median over frames 281–399. The latter is visible in the camera image. A
-10-frame clear-view re-anchor improved the numbers slightly; a single distant
+10-frame recent-view re-anchor improved the numbers slightly; a single distant
 anchor stopped matching. This is evidence for maintaining several object views,
 not a validated live tracker or a robot test.
 
@@ -162,6 +171,81 @@ checks against the current mask and depth; this experiment does not rule out
 that design. See `multi_history_ablation.py` and
 [`results/keyframe/multi_history_20.json`](results/keyframe/multi_history_20.json)
 for the exact study settings and per-frame traces.
+
+## Whole-shape correction
+
+`shape_grounding.py` adds a correction after each matched frame-to-frame delta.
+The next proposal starts from the previously **corrected** pose. The reference
+is the fixed measured surface from an earlier clear frame (100 in the main
+test, 0 in the repeat), not a cylinder, CAD mesh, gripper pose or future image.
+This matters: the earlier frame-280 reference contained only about 58 mm of
+visible shaft, whereas frame 100 contained about 106 mm. A surface that lacks
+an end cannot enforce that end's position.
+
+The correction minimizes distances between the whole reference and current
+cleaned surface in both directions. Reference points hidden behind nearer
+measured foreground are not pulled onto that foreground. Missing depth provides
+no surface evidence. Visibility is interpolated between rays without blending
+their depth values across holes or object boundaries. The mask additionally
+penalizes exposed reference points outside the object and observed outer mask
+extent outside the projected reference's convex envelope. That envelope is a
+conservative containment constraint, not a reconstructed mesh or an exact model
+of concavities.
+
+For the current frame, this uses **all** cleaned surface components, with bounded
+influence from distant 3D samples. Keeping only the largest component had thrown
+away the lower end when the gripper separated the visible dowel into two pieces.
+The earlier reference still uses its largest connected clean surface. A generic
+PCA initialization can escape an incorrect local fit; it is refined only if its
+whole-shape score already beats the local result, and the orientation branch
+closest to the proposed motion is chosen. PCA itself is not the published pose.
+
+| Matcher / reference   | Before: median axis difference from current depth, frames 360–399 | After | Median correction optimization time |
+| --------------------- | ----------------------------------------------------------------: | ----: | ----------------------------------: |
+| UFM / frame 100       |                                                             15.5° |  2.3° |                               29 ms |
+| UFM / frame 0         |                                                             15.0° |  2.4° |                               31 ms |
+| RoMa fast / frame 100 |                                                             29.8° |  2.3° |                               29 ms |
+
+Each before/after pair transports the **same** reference principal axis and uses
+the same initial surface alignment, so these values differ from the earlier
+A–B/gripper metrics. The correction's whole-interval median current-surface
+axis difference is 5.1° for UFM/frame 100; at the partly occluded frame 320 it
+is still 20.6°. Current visible-patch PCA also becomes a poor axis reference
+during occlusion. The gripper-based checks remain discrepant; they cannot
+establish ground truth here. The data establishes better clear-view alignment,
+not fully solved six-dimensional pose or material-point transport through
+occlusion. Axial rotation and end identity are not independently validated.
+
+![Before and after at frame 399](shape_frame_399.jpg)
+
+The new video shows the same fixed reference surface in yellow and the same
+three reference landmarks in white in both panels. Cyan is the current SAM3
+mask. Points hidden by foreground are not drawn, while landmarks remain visible
+through occlusion. These landmarks are selected from the new complete-length
+reference; they are not the earlier frame-280 A/B/C. Every frame from 280 to
+399 is included at recorded speed, including partial-view failures.
+
+All knobs are in `ShapeConfig`: 5 mm depth tolerance and 2 px mask margin reuse
+the earlier observation settings; 30 mm caps distant-sample influence, inherited
+from the earlier coarse association radius. The 3 mm sample spacing controls
+compute; 50 evaluations and 1e−5 convergence tolerance bound the optimizer.
+They are study settings, not calibrated robot safety limits. The reported time
+measures `correct()` only; it excludes fitter setup, the cached matcher, SAM3,
+input loading and depth preprocessing.
+
+**This correction is implemented in the offline experimental path only.** It
+does not change FLASH's live tracker, dataset poses or robot commands. A single
+earlier view still lacks unseen geometry; an incomplete or contaminated
+reference can bias a valid new view. Automatic reference selection, a complete
+multi-view surface, and calibrated acceptance/uncertainty remain unimplemented.
+
+`run_shape_grounding.py` reproduces the causal sequence from cached deltas;
+`render_shape_grounding.py` renders the comparison. Exact configurations, pose
+traces and per-frame measurements are under `results/shape/`. Six focused tests
+pass, including recovery from a known 23° synthetic tilt, missing depth,
+foreground occlusion and a pose that tries to hide behind observed depth.
+Disabling `WholeSurfaceFit.correct` makes the known-tilt test fail. The exported
+H.264/yuv420p video decodes all 120 frames successfully.
 
 ## Reproduce
 
