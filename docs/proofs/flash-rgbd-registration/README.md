@@ -75,6 +75,29 @@ for every adjacent pair, but that acceptance does **not** mean the object frame
 stayed correct. In particular, a small one-step error can accumulate or rotate
 the same chosen landmarks away from the dowel.
 
+### Failure pattern and likely mechanism
+
+The axis difference grows gradually while the gripper occludes the rotating
+dowel. For UFM it first exceeds 10° at frame 309 and 20° at frame 331. The
+clean, connected visible surface shrinks from 224 sampled points at frame 290
+to 96 at frame 310. Yet UFM accepts 192/197 candidate pairs at frame 310 with
+a 0.8 mm median fit residual; RoMa `fast` accepts 780/780 with the same 0.8 mm
+residual. These local fit scores do not test whether the matches preserved the
+_same material points_ or the global object direction. On a smooth, partially
+hidden dowel, different local correspondences can fit the same visible patch.
+Each estimated frame-to-frame transform is then multiplied into the previous
+pose, so a directional bias accumulates.
+
+The surface becomes much more visible again (270 clean samples at frame 399),
+but UFM still differs by 22.9° from the rigid-grasp axis. This pipeline only
+matches adjacent frames; it has no persistent object map or old-view
+relocalization to correct a drifted pose. At frame 399, the measured surface's
+principal 3D axis differs from UFM's transported axis by about 29° and from
+the gripper prediction by about 16°. That independent surface check supports
+rejecting the UFM pose, but the visible patch is incomplete and is not exact
+pose ground truth. The data does not isolate how much of the gripper-reference
+difference came from correspondence bias, true grasp slip, or timing/calibration.
+
 The time column covers crop, matching, outlier rejection and rigid fitting. It
 excludes loading the model and the input preparation, which separately took
 about 36–40 ms median per frame for disk reads and full-image depth cleanup.
