@@ -1,0 +1,18 @@
+{
+  "method": "roma-fast",
+  "start": 280,
+  "stop": 399,
+  "model_load_s": 3.7091605570167303,
+  "valid": 119,
+  "pairs": 119,
+  "median_pair_error_vs_gripper_mm": 1.6848363168179028,
+  "median_drift_vs_gripper_mm": 19.3355526293411,
+  "last_drift_vs_gripper_mm": 22.416952924448296,
+  "median_axis_error_vs_gripper_deg": 17.555361696599288,
+  "last_axis_error_vs_gripper_deg": 19.221053095370998,
+  "median_center_error_vs_gripper_mm": 18.02092860136664,
+  "median_runtime_ms": 51.93401500582695,
+  "p95_runtime_ms": 53.406205790815875,
+  "median_input_ms": 35.8390340115875,
+  "p95_input_ms": 37.64556730748154
+}

@@ -1,0 +1,18 @@
+{
+  "method": "ufm",
+  "start": 280,
+  "stop": 399,
+  "model_load_s": 4.93546949402662,
+  "valid": 119,
+  "pairs": 119,
+  "median_pair_error_vs_gripper_mm": 1.7446023270802582,
+  "median_drift_vs_gripper_mm": 20.577551320361234,
+  "last_drift_vs_gripper_mm": 22.017706135453853,
+  "median_axis_error_vs_gripper_deg": 21.387781370706026,
+  "last_axis_error_vs_gripper_deg": 22.87448873512391,
+  "median_center_error_vs_gripper_mm": 18.37899640422372,
+  "median_runtime_ms": 32.13795501505956,
+  "p95_runtime_ms": 32.53741561784409,
+  "median_input_ms": 36.059666017536074,
+  "p95_input_ms": 37.74887272156775
+}

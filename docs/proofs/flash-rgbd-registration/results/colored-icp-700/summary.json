@@ -1,0 +1,13 @@
+{
+  "method": "colored-icp-700",
+  "start": 280,
+  "stop": 399,
+  "model_load_s": 9.609502740204334e-07,
+  "valid": 53,
+  "pairs": 119,
+  "median_pair_error_vs_gripper_mm": 4.216043765480796,
+  "median_drift_vs_gripper_mm": 41.25003419955316,
+  "last_drift_vs_gripper_mm": 73.14950934293962,
+  "median_runtime_ms": 0.8436979842372239,
+  "p95_runtime_ms": 1.6675413004122672
+}

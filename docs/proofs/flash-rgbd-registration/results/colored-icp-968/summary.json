@@ -1,0 +1,18 @@
+{
+  "method": "colored-icp-968",
+  "start": 280,
+  "stop": 399,
+  "model_load_s": 1.2229429557919502e-06,
+  "valid": 109,
+  "pairs": 119,
+  "median_pair_error_vs_gripper_mm": 3.19927545456278,
+  "median_drift_vs_gripper_mm": 48.33180578549127,
+  "last_drift_vs_gripper_mm": 55.83720830536413,
+  "median_axis_error_vs_gripper_deg": 46.0030982353946,
+  "last_axis_error_vs_gripper_deg": 62.27163181465326,
+  "median_center_error_vs_gripper_mm": 44.29765637417534,
+  "median_runtime_ms": 1.0349149815738201,
+  "p95_runtime_ms": 1.622766815125942,
+  "median_input_ms": 39.78024300886318,
+  "p95_input_ms": 43.10965849435888
+}
