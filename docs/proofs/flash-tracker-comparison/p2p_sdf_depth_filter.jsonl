@@ -1,0 +1,11 @@
+{"frame_id": 0, "object_id": 0, "filter_mode": "depth_component", "candidate_pixels": 4411, "supported_pixels": 4411, "integrated": true}
+{"frame_id": 149, "object_id": 0, "filter_mode": "depth_component", "candidate_pixels": 1429, "supported_pixels": 1164, "integrated": true}
+{"frame_id": 176, "object_id": 0, "filter_mode": "depth_component", "candidate_pixels": 2158, "supported_pixels": 1732, "integrated": true}
+{"frame_id": 192, "object_id": 0, "filter_mode": "depth_component", "candidate_pixels": 3907, "supported_pixels": 3543, "integrated": true}
+{"frame_id": 202, "object_id": 0, "filter_mode": "depth_component", "candidate_pixels": 2722, "supported_pixels": 2454, "integrated": true}
+{"frame_id": 210, "object_id": 0, "filter_mode": "depth_component", "candidate_pixels": 2339, "supported_pixels": 1786, "integrated": true}
+{"frame_id": 214, "object_id": 0, "filter_mode": "depth_component", "candidate_pixels": 2180, "supported_pixels": 1652, "integrated": true}
+{"frame_id": 261, "object_id": 0, "filter_mode": "depth_component", "candidate_pixels": 3297, "supported_pixels": 2653, "integrated": true}
+{"frame_id": 290, "object_id": 0, "filter_mode": "depth_component", "candidate_pixels": 3129, "supported_pixels": 2708, "integrated": true}
+{"frame_id": 397, "object_id": 0, "filter_mode": "depth_component", "candidate_pixels": 2889, "supported_pixels": 2561, "integrated": true}
+{"frame_id": 417, "object_id": 0, "filter_mode": "depth_component", "candidate_pixels": 3201, "supported_pixels": 2944, "integrated": true}
