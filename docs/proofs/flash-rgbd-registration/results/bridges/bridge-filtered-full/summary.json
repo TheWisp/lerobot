@@ -1,0 +1,102 @@
+{
+  "method": "whole_surface_fit_with_recorded_motion_bridges",
+  "config": {
+    "depth_tolerance_m": 0.005,
+    "surface_spacing_m": 0.003,
+    "mask_boundary_tolerance_px": 2.0,
+    "max_surface_distance_m": 0.03,
+    "max_evaluations": 50,
+    "solver_tolerance": 1e-05
+  },
+  "reference_frame": 0,
+  "frames": 713,
+  "duration_seconds": 23.746175050735474,
+  "statuses": {
+    "observed": 686,
+    "insufficient_depth": 2,
+    "no_mask": 25
+  },
+  "missing_observation_frames": [
+    172,
+    173,
+    174,
+    175,
+    176,
+    177,
+    178,
+    179,
+    180,
+    181,
+    182,
+    183,
+    184,
+    185,
+    186,
+    187,
+    188,
+    189,
+    190,
+    191,
+    192,
+    193,
+    194,
+    195,
+    196,
+    197,
+    198
+  ],
+  "optimizer_converged": 647,
+  "coarse_reinitializations": 0,
+  "median_correction_ms": 26.6474430100061,
+  "p95_correction_ms": 51.8795418087393,
+  "warning": "Motion prediction assumes no slip over its interval. Fixed mode retains initial pose error; filtered mode may accumulate drift. This is an offline experiment, not a calibrated fused belief or a live integration.",
+  "motion_tolerance_m": 0.005,
+  "propagate_filtered_held": true,
+  "causal_config": {
+    "history_frames": 120,
+    "queue_frames": 60,
+    "min_inliers": 12,
+    "max_frame_gap_s": 0.1,
+    "fit_threshold_m": 0.005,
+    "image_scale": 1.0,
+    "depth_support_radius_px": 1,
+    "scene_max_points": 800,
+    "environment_context_radius_m": 0.25,
+    "environment_min_motion_m": 0.008,
+    "environment_prediction_max_s": 1.0,
+    "environment_min_inliers": 12,
+    "static_prediction_max_s": null,
+    "max_pose_disagreement_translation_m": 0.01,
+    "max_pose_disagreement_rotation_rad": 0.15
+  },
+  "prior_sources": {
+    "none": 65,
+    "environment_group_motion": 363,
+    "gripper_attachment_prediction": 1,
+    "gripper_delta_from_filtered_state": 284
+  },
+  "runtime_sources": {
+    "cached_visual_only_shape_fit": 590,
+    "environment_support_hypothesis": 27,
+    "environment_group_motion": 3,
+    "object_point_motion": 93
+  },
+  "anchor_outcomes": {
+    "dowel": {
+      "received": 686,
+      "direct_accepted": 590,
+      "direct_published": 590,
+      "point_seeded": 17,
+      "standby_point_seeded": 355,
+      "pending_point_track": 5,
+      "point_replay_caught_up": 5,
+      "point_seed_failed": 10,
+      "standby_point_seed_failed": 8,
+      "direct_group_unresolved": 3,
+      "direct_point_unresolved": 93,
+      "reused_point_track": 195
+    }
+  },
+  "median_service_ms": 7.944128999952227,
+  "optimizer_attempted": 648
+}

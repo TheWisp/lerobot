@@ -17,7 +17,7 @@
     "observed": 433
   },
   "missing_observation_frames": [],
-  "optimizer_converged": 433,
+  "optimizer_converged": 429,
   "coarse_reinitializations": 0,
   "median_correction_ms": 38.68996200617403,
   "p95_correction_ms": 62.521993415430174,
@@ -65,5 +65,6 @@
     }
   },
   "median_service_ms": 13.658222975209355,
-  "propagate_filtered_held": false
+  "propagate_filtered_held": false,
+  "optimizer_attempted": 429
 }

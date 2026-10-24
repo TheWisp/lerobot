@@ -182,6 +182,7 @@ def main():
             )
             pose, detail = constrained.correct(prior) if constrained is not None else (prior.copy(), detail)
         correction_ms = (time.perf_counter() - started) * 1000
+        fit_attempted = prior is not None and fitter is not None
         poses.append(pose)
         priors.append(prior if prior is not None else np.full((4, 4), np.nan))
         row = {
@@ -196,7 +197,8 @@ def main():
             "refit_shape_cost": fitter.score(pose) if fitter else np.nan,
             "service_ms": service_ms,
             "correction_ms": correction_ms,
-            "converged": int(detail["converged"]),
+            "fit_attempted": int(fit_attempted),
+            "converged": int(fit_attempted and detail["converged"]),
             "used_coarse": int(detail["used_coarse"]),
             **(diagnostics(source, pose, observed, k) if fitter else {}),
         }
@@ -228,6 +230,7 @@ def main():
             "propagate_filtered_held": args.propagate_filtered_held,
             "statuses": dict(Counter(r["status"] for r in rows)),
             "optimizer_converged": sum(r["converged"] for r in rows),
+            "optimizer_attempted": sum(r["fit_attempted"] for r in rows),
             "coarse_reinitializations": sum(r["used_coarse"] for r in rows),
             "causal_config": asdict(causal_config),
             "prior_sources": dict(Counter(r["prior_source"] for r in rows)),

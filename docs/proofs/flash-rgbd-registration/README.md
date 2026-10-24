@@ -1,5 +1,16 @@
 # RGB-D registration of the held dowel
 
+**Full-scene view:** [watch all 713 frames from pickup through retreat](full_scene_bridges.mp4),
+with the gripper, ring, current dowel landmarks and separate motion predictions
+visible together. This reruns the current 5 mm filtered-state experiment from
+frame zero, preserving its frame-zero reference throughout. It is a different
+initialization from the frame-280 ablations below. The ring's Point2Pose/group
+overlays are explicitly labelled **previous tracking**; the new method has only
+been evaluated on the dowel. No missing estimates or transition frames are cut.
+The renderer follows the earlier `full_demo_fusion_evidence.mp4` scene/evidence
+layout. [Full-run evidence](results/bridges/bridge-filtered-full/) and
+[video provenance](full_scene_bridges.json) retain that distinction.
+
 **Latest bridge experiment: steadier held motion, still not stable full-pose
 tracking.** The same visible interval now uses recorded gripper motion and the
 production environment-group service. Predicting the last corrected pose with
