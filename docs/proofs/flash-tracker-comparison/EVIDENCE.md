@@ -551,6 +551,10 @@ The temporal branch retained a later keyframe pixel when its 10 mm object-frame 
 
 At frame 540, the depth-filtered SDF has **199** observed near-zero voxels, **none** more than 40 mm from the original shaft axis; the unfiltered SDF has **319**, including **85** off-axis voxels ([filtered snapshot](p2p_dowel_sdf_depth_component_540.npz), [original snapshot](p2p_dowel_sdf_release_snapshots.npz)). The fixed-pose temporal-map ablation also eliminates off-axis voxels, but removes some legitimate new-view surface. The decisive test is the _emitted pose_, not just the map:
 
+Here is the **stored SDF surface itself**, shown as a 3D view and a side projection at the same frame. Each dot is an observed 5 mm volume cell close to the SDF zero level, not a separately fitted mesh. Blue cells stay within 40 mm of the first-view dowel shaft; red cells lie farther away. That distance colors the plot only—the filter did not use the known shaft to select pixels. The original map contains a rod plus distant false patches; the depth-separated map retains the rod without those patches. [Plot source](plot_p2p_sdf_before_after.py).
+
+![Observed SDF surface cells before and after separating depth surfaces](p2p_sdf_before_after.png)
+
 | Dowel, frames 514–550 after release; median per-frame metric | Original P2P | Three-keyframe window | Depth component |
 | ------------------------------------------------------------ | -----------: | --------------------: | --------------: |
 | Angle to current depth-derived visible shaft                 |       14.26° |                17.73° |           6.19° |
