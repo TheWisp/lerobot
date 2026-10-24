@@ -1,0 +1,15 @@
+setting,depth_edge_mm,boundary_margin_px,overlap_radius_px,depth_gap_mm,replace_old_front,sdf_keyframes_logged,sdf_surface_cells_at_540,sdf_cells_beyond_20mm,sdf_cells_beyond_40mm,axis_error_400_470_median_deg,axis_error_514_550_median_deg,circle_p90_514_550_median_mm,lost_frames_514_550,new_nearer_pixels_rejected,old_nearest_surface_cells_cleared
+baseline,0,0,0,0,0,11,319,132,85,3.198,14.256,3.91,0,0,0
+depth,5,0,0,0,0,11,199,12,0,2.988,6.191,2.109,0,0,0
+border1,0,1,0,0,0,10,258,93,59,10.978,7.351,2.558,0,0,0
+border2,0,2,0,0,0,10,206,62,44,8.083,11.135,4.512,0,0,0
+border4,0,4,0,0,0,10,215,64,14,17.993,22.034,5.314,0,0,0
+occ1gap20,0,0,1,20,0,9,276,106,81,3.241,8.988,3.172,0,770,0
+occ3gap10,0,0,3,10,0,9,268,96,77,3.505,4.863,1.868,0,2862,0
+occ3gap20,0,0,3,20,0,10,362,132,78,3.216,24.386,6.551,1,1277,0
+depthborder2,5,2,0,0,0,10,137,13,0,7.004,9.83,3.839,0,0,0
+depthocc3gap20,5,0,3,20,0,11,190,12,0,2.988,6.611,2.194,0,802,0
+depthboth,5,2,3,20,0,10,137,13,0,7.025,9.925,3.841,0,252,0
+strict_depth3gap20,5,0,3,20,1,10,222,23,0,2.157,5.106,2.005,0,1044,2
+strict_only3gap10,0,0,3,10,1,10,265,117,104,3.957,4.326,2.01,0,3966,41
+strict_depthboth3gap10,5,2,3,10,1,10,105,0,0,7.033,5.396,2.667,0,1570,4

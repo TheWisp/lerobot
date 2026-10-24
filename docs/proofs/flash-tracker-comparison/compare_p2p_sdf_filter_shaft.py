@@ -33,6 +33,9 @@ def main() -> None:
     parser.add_argument("--dataset", type=Path, required=True)
     parser.add_argument("--masks", type=Path, required=True)
     parser.add_argument("--output", type=Path, default=HERE / "p2p_sdf_filter_shaft_evidence.csv")
+    parser.add_argument(
+        "--candidate", action="append", default=[], help="NAME=trace.npz; overrides the built-in three"
+    )
     args = parser.parse_args()
     reference = np.load(HERE / "pose_traces.npz")
     k = reference["intrinsics"]
@@ -40,7 +43,13 @@ def main() -> None:
     initial_points, initial_pixels, _ = cloud_and_pixels(args.dataset, args.masks, 100, k)
     initial_middle, _, initial_axis, _ = shaft_middle(initial_points, initial_pixels)
     radius, _ = fit_circle(initial_middle, initial_axis, None)
-    traces = {name: np.load(HERE / path)["poses"] for name, path in TRACES.items()}
+    if args.candidate:
+        specifications = [entry.split("=", 1) for entry in args.candidate]
+        if any(len(entry) != 2 for entry in specifications):
+            parser.error("candidates must be NAME=trace.npz")
+        traces = {name: np.load(path)["poses"] for name, path in specifications}
+    else:
+        traces = {name: np.load(HERE / path)["poses"] for name, path in TRACES.items()}
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open("w", newline="") as stream:

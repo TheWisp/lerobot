@@ -1,0 +1,10 @@
+{
+  "mode": "ablation",
+  "depth_edge_m": 0.005,
+  "boundary_margin_px": 0.0,
+  "occlusion_radius_px": 3,
+  "occlusion_gap_m": 0.02,
+  "surface_tsdf_max": 0.15,
+  "replace_nearer_old": true,
+  "first_keyframe_unfiltered": true
+}
