@@ -186,3 +186,108 @@ def test_release_removes_gripper_relationship_at_the_recorded_event():
     assert attachment_at(skill, "tool", 3.49)
     assert not attachment_at(skill, "tool", 3.5)
     assert not attachment_at(skill, "another_object", 2.0)
+
+
+def test_runner_hands_partial_view_from_gripper_to_points_at_release(tmp_path, monkeypatch):
+    """Exercise the actual experiment composition, including its event switch."""
+    import json
+    import sys
+
+    import bridge_shape
+    import cv2
+
+    recording = tmp_path / "recording"
+    recording.mkdir()
+    k = np.array([[100.0, 0, 48], [0, 100.0, 48], [0, 0, 1]])
+    times = np.array([0.0, 0.033, 0.066])
+    np.savetxt(recording / "cam_K.txt", k)
+    np.savetxt(recording / "times.txt", times)
+    calibration = np.load(Path(__file__).parent.parent / "flash-tracker-comparison/pose_traces.npz")
+    ee = np.tile(np.eye(4), (3, 1, 1))
+    ee[:, 0, 3] = [0.0, 0.01, 0.3]  # gripper departs; object moves only another centimetre
+    np.savez(tmp_path / "showservo_demo.npz", t=times, t0=0.0, tips=calibration["base_from_camera"] @ ee)
+    texture = np.random.default_rng(10).integers(0, 255, (96, 96), dtype=np.uint8)
+    gray = np.zeros_like(texture)
+    gray[20:76, 20:40] = texture[20:76, 20:40]
+    new_view = np.zeros_like(texture)
+    new_view[20:76, 50:74] = texture[20:76, 50:74]
+    images = []
+    for i in range(3):
+        rgb = cv2.warpAffine(
+            np.repeat((gray if i == 0 else new_view)[:, :, None], 3, axis=2),
+            np.float32([[1, 0, i], [0, 1, 0]]),
+            (96, 96),
+        )
+        mask = np.zeros(gray.shape, bool)
+        mask[20:76, 20 + i : 76 + i] = True
+        if i >= 1:
+            # The old surface disappears during the grasp. The new partial
+            # surface supplies motion but cannot independently refit the pose.
+            mask[:, :48] = False
+        y, x = np.nonzero(mask)
+        points = np.column_stack(((x - 48) / 100, (y - 48) / 100, np.ones(len(x))))
+        depth = np.full(gray.shape, 1.5, np.float32)
+        depth[mask] = 1.0
+        images.append(
+            {
+                "rgb": rgb,
+                "mask": mask,
+                "depth": depth,
+                "usable": mask,
+                "obs": {"points": points[::4], "valid_image": mask},
+            }
+        )
+    source = images[0]["obs"]["points"]
+    baseline = tmp_path / "baseline"
+    baseline.mkdir()
+    np.savez(
+        baseline / "trace.npz",
+        frames=np.arange(3),
+        poses=np.tile(np.eye(4), (3, 1, 1)),
+        reference_points=source,
+        landmarks_reference=source[[0, -1, len(source) // 2]],
+    )
+    from dataclasses import asdict
+
+    (baseline / "summary.json").write_text(
+        json.dumps({"config": asdict(ShapeConfig()), "reference_frame": 0})
+    )
+    skill = {
+        "attachment_transitions": [
+            {"event_id": "grasp", "action": "attach", "role": "object"},
+            {"event_id": "release", "action": "detach", "role": "object"},
+        ],
+        "intervals": [
+            {"samples": [{"event_id": "grasp", "time_s": 0.0}, {"event_id": "release", "time_s": 0.066}]}
+        ],
+    }
+    (tmp_path / "skill.json").write_text(json.dumps(skill))
+    monkeypatch.setattr(bridge_shape, "RECORDING", recording)
+    monkeypatch.setattr(bridge_shape, "frame_data", lambda index, intrinsics: images[index])
+    output = tmp_path / "result"
+    trial = Path(__file__).resolve().parents[3] / "src/lerobot/policies/flash/docs/trial_config.example.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "bridge_shape",
+            "--baseline",
+            str(baseline),
+            "--output",
+            str(output),
+            "--skill",
+            str(tmp_path / "skill.json"),
+            "--trial-config",
+            str(trial),
+            "--role",
+            "object",
+            "--guarded",
+        ],
+    )
+    bridge_shape.main()
+    trace = np.load(output / "trace.npz")
+    rows = list(csv.DictReader((output / "trace.csv").open()))
+    assert rows[2]["direct_qualified"] == "0"
+    assert rows[2]["prior_source"] == "object_point_motion"
+    np.testing.assert_allclose(trace["poses"][2, :3, 3], [0.02, 0, 0], atol=0.005)
+    assert rows[2]["last_visual_update_s"] == rows[1]["last_visual_update_s"]

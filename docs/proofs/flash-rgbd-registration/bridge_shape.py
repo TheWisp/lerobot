@@ -32,6 +32,7 @@ from lerobot.policies.flash.perception import (
     TimedEndEffectorHistory,
 )
 from lerobot.policies.flash.surface_motion import (
+    AcceptedPosePointBridge,
     PendingMotionCorrection,
     RigidMotionState,
     SurfaceMotionConfig,
@@ -238,6 +239,7 @@ def main():
         object_points_by_role={args.role: source},
         on_layer=layers.append,
     )
+    handoff = AcceptedPosePointBridge(**service.tracker_kwargs)
     attachment = AttachmentEstimate()
     poses, priors, runtime_poses, rows, motor_poses = [], [], [], [], []
     previous_held = False
@@ -249,6 +251,8 @@ def main():
         status = available_geometry(observed)
         now = float(times[frame_id] - times[0])
         held = attachment_at(skill, args.role, float(times[frame_id] - recording["t0"]))
+        if held != previous_held:
+            pending_correction.pending = None
         ee = history.at(now) if held else None
         motor_poses.append(ee if ee is not None else np.full((4, 4), np.nan))
         frame = RGBDFrame(
@@ -262,6 +266,9 @@ def main():
             now,
             "archived-fixed-camera",
         )
+        handoff_started = time.perf_counter()
+        handoff_motion = handoff.advance(frame, observed["usable"]) if args.guarded else None
+        handoff_ms = (time.perf_counter() - handoff_started) * 1000
         direct = PoseEstimate(
             args.role,
             baseline["poses"][index],
@@ -309,6 +316,10 @@ def main():
             if held:
                 bridge_id, carrier = "grasp", ee
                 prior_kind = "gripper_attachment_prediction" if ee is not None else "none"
+            elif handoff_motion is not None and handoff_motion.base_motion_from_seed is not None:
+                bridge_id = "accepted-object-points"
+                carrier, group_state = handoff_motion.base_motion_from_seed, handoff.anchor_pose
+                prior_kind = "object_point_motion"
             elif group_anchor is not None and (
                 groups := [p for p in layers if p.estimator == "environment_group_motion"]
             ):
@@ -426,6 +437,22 @@ def main():
         if args.guarded:
             fit_attempted = detail["evaluations"] > 0
         poses.append(pose)
+        # Keep a same-frame point anchor ready while the gripper owns the pose.
+        # Release can then use *measured object motion* immediately, without
+        # requiring a complete view or reusing a pre-grasp tracker on the tray.
+        handoff_seeded = False
+        handoff_started = time.perf_counter()
+        if (
+            args.guarded
+            and np.isfinite(pose).all()
+            and (
+                held
+                or prior_kind == "object_point_motion"
+                or (handoff.tracker is not None and detail.get("visual_changed", False))
+            )
+        ):
+            handoff_seeded = handoff.seed(frame, observed["usable"], pose)
+        handoff_ms += (time.perf_counter() - handoff_started) * 1000
         if args.guarded and np.isfinite(pose).all():
             state_history[now] = pose.copy()
             active_anchor = service.active.get(args.role, (None, None))[1]
@@ -443,6 +470,9 @@ def main():
             "status": status,
             "direct_qualified": int(direct_qualified),
             "point_motion_supported": int(point_motion_supported),
+            "handoff_seeded": int(handoff_seeded),
+            "handoff_inliers": handoff_motion.inliers if handoff_motion is not None else 0,
+            "handoff_ms": handoff_ms,
             "prior_source": prior_kind,
             "runtime_source": runtime.estimator if runtime is not None else "missing",
             "visual_shape_cost": fitter.score(direct.pose) if fitter else np.nan,
@@ -511,6 +541,7 @@ def main():
             "runtime_sources": dict(Counter(r["runtime_source"] for r in rows)),
             "anchor_outcomes": service.anchor_outcomes_by_role,
             "median_service_ms": float(np.median([r["service_ms"] for r in rows])),
+            "median_handoff_ms": float(np.median([r["handoff_ms"] for r in rows])),
             "median_correction_ms": float(np.median([r["correction_ms"] for r in rows])),
             "p95_correction_ms": float(np.percentile([r["correction_ms"] for r in rows], 95)),
             "warning": "Motion prediction assumes no slip. Extent coverage and a second observation do not prove landmark identity or full pose observability. This offline experiment does not change the live backend. Failed observable-subspace and legacy ablations are retained for comparison.",

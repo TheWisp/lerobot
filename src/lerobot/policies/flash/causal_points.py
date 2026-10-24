@@ -109,7 +109,9 @@ class CausalRigidPointTracker:
         self._last_source_time_s = frame.source_time_s
         return len(full_uv)
 
-    def update(self, frame: RGBDFrame) -> RigidPointMotion:
+    def update(self, frame: RGBDFrame, mask: np.ndarray | None = None) -> RigidPointMotion:
+        if mask is not None and (mask.shape != frame.depth.shape or mask.dtype != bool):
+            raise ValueError("current mask must align with RGB-D pixels")
         if self._gray is None or self._last_source_time_s is None:
             raise RuntimeError("seed point tracks before updating")
         dt = frame.source_time_s - self._last_source_time_s
@@ -146,6 +148,10 @@ class CausalRigidPointTracker:
             px = self._full_pixels(self._uv[live], frame.depth.shape)
             depth_supported = depth_support_mask(frame.depth, radius_px=self.depth_support_radius_px)
             depth_ok = depth_supported[px[:, 1], px[:, 0]]
+            if mask is not None:
+                # Validate ownership before fitting, not by counting unrelated
+                # in-mask tracks after an out-of-mask majority wins the fit.
+                depth_ok &= mask[px[:, 1], px[:, 0]]
             live = live[depth_ok]
         if len(live) < self.min_inliers:
             return RigidPointMotion(

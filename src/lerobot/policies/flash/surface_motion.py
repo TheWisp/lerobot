@@ -14,7 +14,9 @@ import numpy as np
 from scipy.spatial import cKDTree
 from scipy.spatial.transform import Rotation
 
+from .causal_points import CausalRigidPointTracker, RigidPointMotion
 from .geometry import transform
+from .perception import RGBDFrame
 from .registration import transform_points
 
 
@@ -180,6 +182,42 @@ class RigidMotionState:
         self.carrier = carrier.copy() if carrier is not None else None
         if measured:
             self.last_measurement_s = self.time_s
+
+
+class AcceptedPosePointBridge:
+    """Carry an accepted pose using visible points, including across release.
+
+    A partial view can measure relative motion without independently solving
+    the object's complete pose. Seeding from a prediction preserves that
+    uncertainty; it is never a new absolute observation. The caller must feed
+    consecutive images even while another motion source owns the output.
+    """
+
+    def __init__(self, **tracker_kwargs):
+        self.tracker_kwargs = tracker_kwargs
+        self.tracker: CausalRigidPointTracker | None = None
+        self.anchor_pose: np.ndarray | None = None
+        self.anchor_time_s: float | None = None
+
+    def seed(self, frame: RGBDFrame, mask: np.ndarray, pose: np.ndarray) -> bool:
+        pose = transform(pose)
+        tracker = CausalRigidPointTracker(**self.tracker_kwargs)
+        if tracker.seed(frame, mask) < tracker.min_inliers:
+            return False
+        self.tracker, self.anchor_pose = tracker, pose.copy()
+        self.anchor_time_s = frame.source_time_s
+        return True
+
+    def advance(self, frame: RGBDFrame, mask: np.ndarray) -> RigidPointMotion | None:
+        if self.tracker is None:
+            return None
+        try:
+            return self.tracker.update(frame, mask=mask)
+        except ValueError as exc:
+            if "lost a camera-frame interval" not in str(exc):
+                raise
+            self.tracker, self.anchor_pose, self.anchor_time_s = None, None, None
+            return None
 
 
 class PendingMotionCorrection:

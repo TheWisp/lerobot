@@ -1,5 +1,65 @@
 # RGB-D registration of the held dowel
 
+**Pickup/release audit, 2026-10-24:** release no longer drops the estimate,
+but the held pose is still inaccurate. [Full-scene replay, all 713 frames](full_scene_release_handoff.mp4)
+shows both. This is an offline experiment, not a live-backend change.
+
+- **Pickup, 7.5–8.5 s:** no visual correction or reseeding changes the accepted
+  pose in this interval. The group-to-gripper switch at frame 230 introduces
+  zero pose jump. Subsequent motion follows the recorded gripper exactly, but
+  those recorded transforms do not align with the camera image. Tracking 49
+  features on the gripper housing itself gives a 14.5-pixel median projection
+  discrepancy at frame 250. Their adjacent-frame forward/backward flow check
+  is 0.004 pixels median; this does not establish physical ground truth but
+  checks the image correspondences independently of the dowel tracker.
+  [Image comparison](results/gripper-image-audit/gripper_disagreement.jpg),
+  [per-frame measurements and timing sweep](results/gripper-image-audit/audit.json).
+- **Timing is a contributor hypothesis, not a complete diagnosis:** looking up
+  motor samples 100 ms earlier reduces the median image discrepancy over frames
+  230–280 from 13.5 to 6.5 pixels. No offset is applied. The sealed recorder
+  (`80d90b783`, `src/lerobot/gui/api/manipulation/recording.py`, `_record_stream`)
+  timestamps `read_color_and_aligned_depth()` completion with `time.time()`;
+  that camera API returns the latest processed cached image, without exposure
+  time. The archive has no sensor timestamps with which to prove synchronization.
+  Calibration/kinematic error remains possible. Exact gripper algebra does not
+  prove an accurate pose in the image.
+- **Release, 17.175 s:** the old fusion stopped the gripper relationship without
+  a usable current object-point anchor. Its only alternative demanded enough
+  visible extent to solve a fresh full pose; the partly inserted object could
+  not pass. The fix keeps current masked RGB-D point tracks anchored to the
+  accepted pose during the grasp, then uses their measured motion after release.
+  It does not require an independent full-pose solution merely to continue a
+  partial-view motion track. Current-mask/depth checks happen before the rigid
+  fit. New visible points refresh the anchor after accepted motion, retaining
+  the original pose's uncertainty rather than counting it as a new observation.
+
+The fixed run has **zero missing output frames**; all 198 post-release frames
+have a pose, with 38 minimum / 51 median rigid-fit inliers. Everything before
+release is numerically unchanged. Post-release first-to-last motion is 3.0 mm
+and 1.25°, which is a motion measurement, **not an accuracy bound**. In frame
+540 the estimated axis is still 19.6° from the visible depth axis: the handoff
+preserves the inherited held-pose error. Do not use this result as a claim that
+the tracking is solved. [Continuity audit](results/bridges/release_handoff_audit.json).
+The initial handoff without point refresh is also retained: it lost tracking
+after 38 post-release frames, rather than improving the absolute pose.
+
+Regression coverage executes the actual runner with a new partial surface
+appearing during the grasp and an independently moving object at release.
+Removing the handoff makes that test fail; removing current-mask rejection
+makes its separate test fail. Both include positive measured motion, so a
+stationary held-last-pose implementation cannot pass.
+The added point update/refresh costs 11.6 ms median during grasp and afterward
+on this replay; it is logged separately from the existing service and shape-fit
+timers. This excludes segmentation and is not a claim about live frame rate.
+
+Reproduce the gripper diagnostic with:
+
+```bash
+uv run --no-sync python docs/proofs/flash-rgbd-registration/audit_gripper_image_motion.py \
+  --config docs/proofs/flash-rgbd-registration/gripper_image_audit_config.json \
+  --output /tmp/flash-gripper-image-audit
+```
+
 **Full-scene view:** [watch all 713 frames from pickup through retreat](full_scene_bridges.mp4),
 with the gripper, ring, current dowel landmarks and separate motion predictions
 visible together. This reruns the current 5 mm filtered-state experiment from

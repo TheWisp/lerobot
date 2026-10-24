@@ -224,7 +224,11 @@ def main():
                 status = (
                     "Visual correction"
                     if int(rows[frame]["visual_changed"])
-                    else ("Motion prediction" if gripper[frame] or group[frame] else "Visual reacquisition")
+                    else (
+                        "Motion prediction"
+                        if gripper[frame] or group[frame] or point_motion[frame]
+                        else "Visual reacquisition"
+                    )
                 )
                 label(panel, status, (22, 454), 0.59, FIT)
             cv2.line(screen, (0, 480), (1279, 480), (100, 100, 100), 2)

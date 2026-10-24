@@ -1,0 +1,9 @@
+{
+  "frames": 713,
+  "fps": 29.983776270441826,
+  "source": "results/bridges/bridge-release-refreshed",
+  "new_tracking_role": "dowel",
+  "previous_ring_candidates": "/home/feit/.cache/huggingface/lerobot/demos/insertion/flash/v1/tracker-candidates/point2pose-ring-ui-e2e-20261021/poses.npz",
+  "previous_group_recording": "/home/feit/.cache/huggingface/lerobot/demos/insertion/flash/v1/preparation-cache/insertion-causal-parity-20261023-6024d11a02a2.npz",
+  "note": "Every original frame, full camera field of view; no tracking result is extended beyond its recorded availability."
+}

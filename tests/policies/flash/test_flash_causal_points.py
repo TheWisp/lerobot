@@ -91,3 +91,46 @@ def test_half_scale_tracking_keeps_features_on_small_object():
     assert motion.base_motion_from_seed is not None
     assert motion.inliers >= 12
     np.testing.assert_allclose(motion.base_motion_from_seed[:3, 3], [0.02, 0, 0], atol=0.005)
+
+
+def test_current_mask_rejects_wrong_object_before_fitting_and_allows_real_motion():
+    gray = np.random.default_rng(8).integers(0, 255, (96, 96), dtype=np.uint8)
+    rgb = np.repeat(gray[:, :, None], 3, axis=2)
+    mask = np.zeros(gray.shape, bool)
+    mask[20:76, 20:76] = True
+    tracker = CausalRigidPointTracker()
+    tracker.seed(frame(rgb, 0), mask)
+    shifted = cv2.warpAffine(rgb, np.float32([[1, 0, 2], [0, 1, 0]]), (96, 96))
+    excluded = tracker.update(frame(shifted, 0.033), mask=np.zeros_like(mask))
+    assert excluded.base_motion_from_seed is None
+    assert excluded.depth_points == 0
+    # RGB identities survive a mask gap, but no depth/mask observation is invented.
+    recovered = tracker.update(frame(shifted, 0.066), mask=mask)
+    assert recovered.base_motion_from_seed is not None
+    np.testing.assert_allclose(recovered.base_motion_from_seed[:3, 3], [0.02, 0, 0], atol=0.005)
+
+
+def test_release_handoff_tracks_object_motion_without_following_departing_gripper():
+    from lerobot.policies.flash.surface_motion import AcceptedPosePointBridge, RigidMotionState
+
+    gray = np.random.default_rng(9).integers(0, 255, (96, 96), dtype=np.uint8)
+    rgb = np.repeat(gray[:, :, None], 3, axis=2)
+    mask = np.zeros(gray.shape, bool)
+    mask[20:76, 20:76] = True
+    state = RigidMotionState()
+    pose = np.eye(4)
+    pose[:3, 3] = [0.1, 0.2, 1.0]
+    state.predict(0, "grasp", np.eye(4))
+    state.accept(pose, measured=True, carrier=np.eye(4))
+    bridge = AcceptedPosePointBridge()
+    assert bridge.seed(frame(rgb, 0), mask, state.pose)
+    shifted = cv2.warpAffine(rgb, np.float32([[1, 0, 2], [0, 1, 0]]), (96, 96))
+    motion = bridge.advance(frame(shifted, 0.033), mask)
+    result = state.predict(
+        0.033, "object-points", motion.base_motion_from_seed, anchor_pose=bridge.anchor_pose
+    )
+    np.testing.assert_allclose(result[:3, 3], [0.12, 0.2, 1.0], atol=0.005)
+    assert state.last_measurement_s == 0  # no new absolute-pose evidence
+    missing = bridge.advance(frame(shifted, 0.066, np.zeros(gray.shape, np.uint16)), mask)
+    assert missing.base_motion_from_seed is None
+    assert state.predict(0.066, "object-points", None, anchor_pose=bridge.anchor_pose) is None

@@ -1,0 +1,330 @@
+{
+  "config": {
+    "frames": [
+      230,
+      280
+    ],
+    "report_frame": 250,
+    "gripper_polygon_px": [
+      [
+        201,
+        214
+      ],
+      [
+        256,
+        230
+      ],
+      [
+        242,
+        274
+      ],
+      [
+        190,
+        259
+      ]
+    ],
+    "max_points": 80,
+    "fb_threshold_px": 1.0,
+    "max_motor_gap_s": 0.12,
+    "diagnostic_motor_offsets_s": [
+      -0.2,
+      -0.15,
+      -0.1,
+      -0.05,
+      0.0,
+      0.05,
+      0.1
+    ],
+    "annotation": "Manually selected textured gripper housing in frame 230; independent of the dowel pose and SAM mask. Offsets are a diagnostic sweep, not corrections."
+  },
+  "verified_features": 49,
+  "median_flow_roundtrip_px": 0.004129285924136639,
+  "frames": [
+    {
+      "frame": 230,
+      "seconds": 7.668777942657471,
+      "median_gripper_projection_gap_px": 8.526512829121202e-14
+    },
+    {
+      "frame": 231,
+      "seconds": 7.701267957687378,
+      "median_gripper_projection_gap_px": 1.8914287832252754
+    },
+    {
+      "frame": 232,
+      "seconds": 7.734678030014038,
+      "median_gripper_projection_gap_px": 1.654014162446452
+    },
+    {
+      "frame": 233,
+      "seconds": 7.768103837966919,
+      "median_gripper_projection_gap_px": 1.288071395522248
+    },
+    {
+      "frame": 234,
+      "seconds": 7.80225396156311,
+      "median_gripper_projection_gap_px": 1.3589072854167545
+    },
+    {
+      "frame": 235,
+      "seconds": 7.835049867630005,
+      "median_gripper_projection_gap_px": 1.3145541531757852
+    },
+    {
+      "frame": 236,
+      "seconds": 7.868304014205933,
+      "median_gripper_projection_gap_px": 1.632909989372479
+    },
+    {
+      "frame": 237,
+      "seconds": 7.901715040206909,
+      "median_gripper_projection_gap_px": 1.5704003525022463
+    },
+    {
+      "frame": 238,
+      "seconds": 7.9350669384002686,
+      "median_gripper_projection_gap_px": 1.7265637555606204
+    },
+    {
+      "frame": 239,
+      "seconds": 7.968353986740112,
+      "median_gripper_projection_gap_px": 1.9087710391502202
+    },
+    {
+      "frame": 240,
+      "seconds": 8.001729011535645,
+      "median_gripper_projection_gap_px": 2.839037563447942
+    },
+    {
+      "frame": 241,
+      "seconds": 8.0349600315094,
+      "median_gripper_projection_gap_px": 4.423717465891337
+    },
+    {
+      "frame": 242,
+      "seconds": 8.068937063217163,
+      "median_gripper_projection_gap_px": 5.697651770230578
+    },
+    {
+      "frame": 243,
+      "seconds": 8.10183596611023,
+      "median_gripper_projection_gap_px": 8.133272027032978
+    },
+    {
+      "frame": 244,
+      "seconds": 8.135467052459717,
+      "median_gripper_projection_gap_px": 14.163047697676216
+    },
+    {
+      "frame": 245,
+      "seconds": 8.168689012527466,
+      "median_gripper_projection_gap_px": 14.030845260056527
+    },
+    {
+      "frame": 246,
+      "seconds": 8.201864004135132,
+      "median_gripper_projection_gap_px": 14.742225073658245
+    },
+    {
+      "frame": 247,
+      "seconds": 8.236137866973877,
+      "median_gripper_projection_gap_px": 15.510923295487896
+    },
+    {
+      "frame": 248,
+      "seconds": 8.268533945083618,
+      "median_gripper_projection_gap_px": 15.343062406544703
+    },
+    {
+      "frame": 249,
+      "seconds": 8.302525997161865,
+      "median_gripper_projection_gap_px": 15.177947612965221
+    },
+    {
+      "frame": 250,
+      "seconds": 8.336025953292847,
+      "median_gripper_projection_gap_px": 14.49722189052068
+    },
+    {
+      "frame": 251,
+      "seconds": 8.369093894958496,
+      "median_gripper_projection_gap_px": 13.355094090951843
+    },
+    {
+      "frame": 252,
+      "seconds": 8.40270185470581,
+      "median_gripper_projection_gap_px": 12.325924516855347
+    },
+    {
+      "frame": 253,
+      "seconds": 8.435354948043823,
+      "median_gripper_projection_gap_px": 11.822762608060355
+    },
+    {
+      "frame": 254,
+      "seconds": 8.469383001327515,
+      "median_gripper_projection_gap_px": 10.853588126146885
+    },
+    {
+      "frame": 255,
+      "seconds": 8.501867055892944,
+      "median_gripper_projection_gap_px": 11.067163411448007
+    },
+    {
+      "frame": 256,
+      "seconds": 8.535600900650024,
+      "median_gripper_projection_gap_px": 10.83399279988665
+    },
+    {
+      "frame": 257,
+      "seconds": 8.569253921508789,
+      "median_gripper_projection_gap_px": 11.538373807436734
+    },
+    {
+      "frame": 258,
+      "seconds": 8.602432012557983,
+      "median_gripper_projection_gap_px": 16.721750143083845
+    },
+    {
+      "frame": 259,
+      "seconds": 8.63628888130188,
+      "median_gripper_projection_gap_px": 21.163580459946576
+    },
+    {
+      "frame": 260,
+      "seconds": 8.668992042541504,
+      "median_gripper_projection_gap_px": 18.95546040785477
+    },
+    {
+      "frame": 261,
+      "seconds": 8.702146053314209,
+      "median_gripper_projection_gap_px": 14.648442935202988
+    },
+    {
+      "frame": 262,
+      "seconds": 8.736482858657837,
+      "median_gripper_projection_gap_px": 14.080075123200022
+    },
+    {
+      "frame": 263,
+      "seconds": 8.769032955169678,
+      "median_gripper_projection_gap_px": 13.933610947822606
+    },
+    {
+      "frame": 264,
+      "seconds": 8.802211046218872,
+      "median_gripper_projection_gap_px": 14.3995131349815
+    },
+    {
+      "frame": 265,
+      "seconds": 8.836076021194458,
+      "median_gripper_projection_gap_px": 14.084466255815522
+    },
+    {
+      "frame": 266,
+      "seconds": 8.869258880615234,
+      "median_gripper_projection_gap_px": 12.759610184835665
+    },
+    {
+      "frame": 267,
+      "seconds": 8.90255093574524,
+      "median_gripper_projection_gap_px": 12.919977959132668
+    },
+    {
+      "frame": 268,
+      "seconds": 8.936913967132568,
+      "median_gripper_projection_gap_px": 12.86255783149837
+    },
+    {
+      "frame": 269,
+      "seconds": 8.968960046768188,
+      "median_gripper_projection_gap_px": 14.349443952226824
+    },
+    {
+      "frame": 270,
+      "seconds": 9.002402067184448,
+      "median_gripper_projection_gap_px": 16.151106347999598
+    },
+    {
+      "frame": 271,
+      "seconds": 9.035582065582275,
+      "median_gripper_projection_gap_px": 16.91153779112971
+    },
+    {
+      "frame": 272,
+      "seconds": 9.068902969360352,
+      "median_gripper_projection_gap_px": 16.477932260411656
+    },
+    {
+      "frame": 273,
+      "seconds": 9.102519035339355,
+      "median_gripper_projection_gap_px": 18.14991905323234
+    },
+    {
+      "frame": 274,
+      "seconds": 9.135711908340454,
+      "median_gripper_projection_gap_px": 22.934917390594823
+    },
+    {
+      "frame": 275,
+      "seconds": 9.169431924819946,
+      "median_gripper_projection_gap_px": 28.15634789356641
+    },
+    {
+      "frame": 276,
+      "seconds": 9.202977895736694,
+      "median_gripper_projection_gap_px": 28.782243085570396
+    },
+    {
+      "frame": 277,
+      "seconds": 9.235826969146729,
+      "median_gripper_projection_gap_px": 28.009340009301976
+    },
+    {
+      "frame": 278,
+      "seconds": 9.26927399635315,
+      "median_gripper_projection_gap_px": 26.500694946535575
+    },
+    {
+      "frame": 279,
+      "seconds": 9.302657842636108,
+      "median_gripper_projection_gap_px": 23.316207436239363
+    },
+    {
+      "frame": 280,
+      "seconds": 9.335898876190186,
+      "median_gripper_projection_gap_px": 22.052476505350857
+    }
+  ],
+  "diagnostic_timing_sweep": [
+    {
+      "offset_s": -0.2,
+      "median_px": 7.8959828194070925
+    },
+    {
+      "offset_s": -0.15,
+      "median_px": 7.054722852746826
+    },
+    {
+      "offset_s": -0.1,
+      "median_px": 6.495502717250552
+    },
+    {
+      "offset_s": -0.05,
+      "median_px": 10.395461764567468
+    },
+    {
+      "offset_s": 0.0,
+      "median_px": 13.472700125411157
+    },
+    {
+      "offset_s": 0.05,
+      "median_px": 17.246719551670054
+    },
+    {
+      "offset_s": 0.1,
+      "median_px": 20.41918044078275
+    }
+  ],
+  "conclusion": "Recorded FK does not align with visible gripper motion. Timing alone does not fully explain it; calibration/kinematic error remains possible. No offset was applied."
+}

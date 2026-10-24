@@ -1,0 +1,10 @@
+{
+  "frames": [230, 280],
+  "report_frame": 250,
+  "gripper_polygon_px": [[201, 214], [256, 230], [242, 274], [190, 259]],
+  "max_points": 80,
+  "fb_threshold_px": 1.0,
+  "max_motor_gap_s": 0.12,
+  "diagnostic_motor_offsets_s": [-0.2, -0.15, -0.1, -0.05, 0.0, 0.05, 0.1],
+  "annotation": "Manually selected textured gripper housing in frame 230; independent of the dowel pose and SAM mask. Offsets are a diagnostic sweep, not corrections."
+}

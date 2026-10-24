@@ -1,0 +1,11 @@
+{
+  "pre_release_max_matrix_difference": 0.0,
+  "missing_output_frames": 0,
+  "release_frame": 515,
+  "post_release_frames": 198,
+  "post_release_inliers_min": 38,
+  "post_release_inliers_median": 51.0,
+  "post_release_first_to_last_center_motion_mm": 3.0074048300821428,
+  "post_release_first_to_last_rotation_deg": 1.2469577419367461,
+  "warning": "Output continuity is fixed, not absolute pose accuracy. At frame 540 the reference axis still differs from the visible connected depth axis by 19.64 degrees, inherited from the held prediction."
+}
