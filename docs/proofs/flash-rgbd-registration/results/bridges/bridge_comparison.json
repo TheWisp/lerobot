@@ -1,0 +1,123 @@
+{
+  "warning": "Continuity is not accuracy. Depth agreement uses the same sensor as fitting. No independent pose ground truth.",
+  "intervals": {
+    "held_review": [
+      350,
+      514
+    ],
+    "clear_held": [
+      360,
+      399
+    ],
+    "stationary": [
+      560,
+      712
+    ]
+  },
+  "methods": {
+    "shape-visible-280": {
+      "held_twist_step_p95_deg": 11.008779326878742,
+      "held_twist_step_max_deg": 17.775192604392885,
+      "held_axis_step_p95_deg": 1.6686758910386876,
+      "held_axis_step_max_deg": 3.378664360733084,
+      "net_twist_change_relative_to_rigid_grasp_deg": 47.85515383481474,
+      "net_nonaxial_change_relative_to_rigid_grasp_deg": 21.399429938079088,
+      "clear_held_axis_vs_depth_median_deg": 2.323099266990389,
+      "clear_held_axis_vs_depth_max_deg": 4.039245930370314,
+      "clear_held_observed_to_reference_median_mm": 1.7732014098313722,
+      "stationary_center_max_displacement_mm": 0.49572900093853894,
+      "stationary_axis_max_change_deg": 0.8136564045733079
+    },
+    "bridge-visible-280": {
+      "held_twist_step_p95_deg": 83.6527184863528,
+      "held_twist_step_max_deg": 167.40614731197283,
+      "held_axis_step_p95_deg": 4.113297588865163,
+      "held_axis_step_max_deg": 5.487474290370167,
+      "net_twist_change_relative_to_rigid_grasp_deg": -45.17985416600911,
+      "net_nonaxial_change_relative_to_rigid_grasp_deg": 22.236216152629364,
+      "clear_held_axis_vs_depth_median_deg": 2.300512696026809,
+      "clear_held_axis_vs_depth_max_deg": 3.9168524038473893,
+      "clear_held_observed_to_reference_median_mm": 1.8132038327106383,
+      "stationary_center_max_displacement_mm": 0.6905503298859333,
+      "stationary_axis_max_change_deg": 1.0601312728367438
+    },
+    "bridge-prior-2p5mm": {
+      "held_twist_step_p95_deg": 2.405795484870202,
+      "held_twist_step_max_deg": 4.343558854954772,
+      "held_axis_step_p95_deg": 0.8537289936785606,
+      "held_axis_step_max_deg": 1.4953910047883023,
+      "net_twist_change_relative_to_rigid_grasp_deg": 17.258831151162486,
+      "net_nonaxial_change_relative_to_rigid_grasp_deg": 6.186284924764448,
+      "clear_held_axis_vs_depth_median_deg": 10.206823751931815,
+      "clear_held_axis_vs_depth_max_deg": 12.408404318452375,
+      "clear_held_observed_to_reference_median_mm": 7.368986414047587,
+      "stationary_center_max_displacement_mm": 1.4163266426637091,
+      "stationary_axis_max_change_deg": 2.6006985176180475
+    },
+    "bridge-prior-5mm": {
+      "held_twist_step_p95_deg": 3.3911997026087333,
+      "held_twist_step_max_deg": 15.86474903929426,
+      "held_axis_step_p95_deg": 1.5236427671579584,
+      "held_axis_step_max_deg": 2.1301715243100108,
+      "net_twist_change_relative_to_rigid_grasp_deg": 37.34687730715413,
+      "net_nonaxial_change_relative_to_rigid_grasp_deg": 9.388431242647098,
+      "clear_held_axis_vs_depth_median_deg": 7.09145343352462,
+      "clear_held_axis_vs_depth_max_deg": 10.850393757930796,
+      "clear_held_observed_to_reference_median_mm": 5.587210849508379,
+      "stationary_center_max_displacement_mm": 1.2838235060739291,
+      "stationary_axis_max_change_deg": 2.128850853986377
+    },
+    "bridge-prior-10mm": {
+      "held_twist_step_p95_deg": 25.726536103936528,
+      "held_twist_step_max_deg": 31.07148853197832,
+      "held_axis_step_p95_deg": 2.6173535713327527,
+      "held_axis_step_max_deg": 3.761602766697682,
+      "net_twist_change_relative_to_rigid_grasp_deg": 47.96436775734421,
+      "net_nonaxial_change_relative_to_rigid_grasp_deg": 12.649238113839447,
+      "clear_held_axis_vs_depth_median_deg": 4.023939041776941,
+      "clear_held_axis_vs_depth_max_deg": 5.863492392174091,
+      "clear_held_observed_to_reference_median_mm": 4.159560528835048,
+      "stationary_center_max_displacement_mm": 1.139209320935084,
+      "stationary_axis_max_change_deg": 1.594083533397479
+    },
+    "bridge-filtered-5mm": {
+      "held_twist_step_p95_deg": 2.7763476950861317,
+      "held_twist_step_max_deg": 4.950275010121383,
+      "held_axis_step_p95_deg": 1.071477941651634,
+      "held_axis_step_max_deg": 2.30262159174311,
+      "net_twist_change_relative_to_rigid_grasp_deg": 43.97018879310312,
+      "net_nonaxial_change_relative_to_rigid_grasp_deg": 20.39392209560156,
+      "clear_held_axis_vs_depth_median_deg": 2.380998118938783,
+      "clear_held_axis_vs_depth_max_deg": 4.185103051702126,
+      "clear_held_observed_to_reference_median_mm": 1.833029041649769,
+      "stationary_center_max_displacement_mm": 1.2838235060739291,
+      "stationary_axis_max_change_deg": 2.128850853986377
+    },
+    "production_arbitration": {
+      "held_twist_step_p95_deg": 6.862618406699598,
+      "held_twist_step_max_deg": 26.84284589691515,
+      "held_axis_step_p95_deg": 1.6914917241040124,
+      "held_axis_step_max_deg": 3.378664360733084,
+      "net_twist_change_relative_to_rigid_grasp_deg": 33.248492901424605,
+      "net_nonaxial_change_relative_to_rigid_grasp_deg": 20.264977556366308,
+      "clear_held_axis_vs_depth_median_deg": 2.323099266990389,
+      "clear_held_axis_vs_depth_max_deg": 4.039245930370314,
+      "clear_held_observed_to_reference_median_mm": 1.7732014098313722,
+      "stationary_center_max_displacement_mm": 1.4610355857907389,
+      "stationary_axis_max_change_deg": 2.8762035652082827
+    },
+    "motion_prediction_only": {
+      "held_twist_step_p95_deg": 0.39118171482366837,
+      "held_twist_step_max_deg": 0.7125573286111491,
+      "held_axis_step_p95_deg": 0.6955063844980734,
+      "held_axis_step_max_deg": 0.9346249272800022,
+      "net_twist_change_relative_to_rigid_grasp_deg": -4.8029247150746066e-30,
+      "net_nonaxial_change_relative_to_rigid_grasp_deg": 1.5596950003360486e-30,
+      "clear_held_axis_vs_depth_median_deg": 13.241594398944546,
+      "clear_held_axis_vs_depth_max_deg": 15.061444413691088,
+      "clear_held_observed_to_reference_median_mm": 9.856967637976862,
+      "stationary_center_max_displacement_mm": 1.4610355857907389,
+      "stationary_axis_max_change_deg": 2.8762035652082827
+    }
+  }
+}

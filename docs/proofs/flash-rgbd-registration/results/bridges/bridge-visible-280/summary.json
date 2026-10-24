@@ -1,0 +1,69 @@
+{
+  "method": "whole_surface_fit_with_recorded_motion_bridges",
+  "config": {
+    "depth_tolerance_m": 0.005,
+    "surface_spacing_m": 0.003,
+    "mask_boundary_tolerance_px": 2.0,
+    "max_surface_distance_m": 0.03,
+    "max_evaluations": 50,
+    "solver_tolerance": 1e-05
+  },
+  "reference_frame": 100,
+  "start": 280,
+  "stop": 712,
+  "frames": 433,
+  "duration_seconds": 14.410276174545288,
+  "statuses": {
+    "observed": 433
+  },
+  "missing_observation_frames": [],
+  "optimizer_converged": 428,
+  "coarse_reinitializations": 0,
+  "median_correction_ms": 48.64359204657376,
+  "p95_correction_ms": 95.57498418726027,
+  "warning": "Motion prediction assumes no slip over its interval. Fixed mode retains initial pose error; filtered mode may accumulate drift. This is an offline experiment, not a calibrated fused belief or a live integration.",
+  "causal_config": {
+    "history_frames": 120,
+    "queue_frames": 60,
+    "min_inliers": 12,
+    "max_frame_gap_s": 0.1,
+    "fit_threshold_m": 0.005,
+    "image_scale": 1.0,
+    "depth_support_radius_px": 1,
+    "scene_max_points": 800,
+    "environment_context_radius_m": 0.25,
+    "environment_min_motion_m": 0.008,
+    "environment_prediction_max_s": 1.0,
+    "environment_min_inliers": 12,
+    "static_prediction_max_s": null,
+    "max_pose_disagreement_translation_m": 0.01,
+    "max_pose_disagreement_rotation_rad": 0.15
+  },
+  "prior_sources": {
+    "gripper_attachment_prediction": 235,
+    "none": 4,
+    "environment_group_motion": 194
+  },
+  "runtime_sources": {
+    "cached_visual_only_shape_fit": 333,
+    "object_point_motion": 52,
+    "environment_group_motion": 48
+  },
+  "anchor_outcomes": {
+    "dowel": {
+      "received": 433,
+      "direct_accepted": 333,
+      "direct_published": 333,
+      "point_seeded": 7,
+      "reused_point_track": 178,
+      "direct_point_unresolved": 52,
+      "standby_point_seeded": 147,
+      "direct_group_unresolved": 48,
+      "pending_point_track": 1,
+      "point_replay_caught_up": 1
+    }
+  },
+  "median_service_ms": 12.892231054138392,
+  "motion_tolerance_m": null,
+  "propagate_filtered_held": false
+}

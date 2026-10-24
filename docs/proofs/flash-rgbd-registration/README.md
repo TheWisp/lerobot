@@ -1,5 +1,15 @@
 # RGB-D registration of the held dowel
 
+**Latest bridge experiment: steadier held motion, still not stable full-pose
+tracking.** The same visible interval now uses recorded gripper motion and the
+production environment-group service. Predicting the last corrected pose with
+the gripper, then fitting current mask/depth with an explicit motion constraint,
+reduces the largest held-phase twist step from 17.8° to 5.0°. Clear-view shaft
+agreement stays at about 2.4°. Slow twist drift and a post-release fallback jump
+remain. [Watch the uninterrupted comparison candidate](shape_motion.mp4);
+see [bridge ablations](#bridge-ablations). This is offline research, not a change
+to the live estimator or proof of accurate hidden landmarks.
+
 **Visible-phase result: the shaft is better aligned, but estimated twist around
 it still jumps.** [Watch the fresh start at frame 280](visible_phase_shape.mp4),
 continued through insertion and release with no further restarts. The long axis
@@ -413,3 +423,100 @@ transitions were scored, and the encoded
 H.264/yuv420p video has 120 frames at recorded speed with fast-start metadata.
 Frames 340 and 399 were inspected at full resolution. No FLASH runtime,
 dataset, tracker default, GUI, or robot setting was changed.
+
+## Bridge ablations
+
+All five new variants process the same frames 280–712, at recorded times, with
+the fixed frame-100 surface and the same A/B/C. The evaluated interval begins
+after pickup; it does not prove grasp initialization or recovery across the
+earlier missing observations. No symmetry or cylinder rule enters the fit.
+
+The actual `CausalPoseService.process_offline` receives independent, cached
+visual-only shape proposals and RGB-D frames. It publishes verified group
+predictions on 194 frames after release; the gripper supplies 235 held-frame
+predictions. Four frames have neither selected bridge (515–517 and 577).
+The existing service itself accepts 333 direct proposals, retains object-point
+motion on 52 and environment-group motion on 48. This ablation records that
+arbitrated output separately; the experimental shape refit does not pretend to
+be the shipped arbitration rule.
+
+`AttachmentEstimate` seeds the gripper relationship once at frame 280. The
+recorded skill supplies attachment/release events. The 711 measured EE poses
+are interpolated to the 713 camera timestamps with `TimedEndEffectorHistory`,
+using their original clocks; equal array indices would misalign them. The
+camera frame is the fixed world frame for this offline comparison. The group
+service receives object-centered reference geometry and uses the same config
+as `trial_config.example.json`.
+
+The variants distinguish three different uses of a bridge:
+
+1. **Initialization only:** start each visual optimization from the predicted
+   pose. It can still rotate freely during fitting; this makes twist much worse.
+2. **Fixed attachment constraint:** add mean squared displacement of the saved
+   surface from its predicted location to the mask/depth objective. This steadies
+   motion but preserves the initial pose error.
+3. **Filtered-state constraint:** propagate the previous corrected pose by the
+   recorded gripper delta, then use that as the motion constraint. This lets
+   repeated image evidence repair the initial error, but can accumulate drift.
+   Predictions are never fed back as independent attachment observations.
+
+The configurable `--motion-tolerance-m` scales the displacement term. We test
+2.5, 5 and 10 mm for fixed attachment: half, equal to and twice the inherited
+5 mm depth-fit scale. These are **sensitivity settings**, not calibrated sensor
+uncertainties or acceptance thresholds. A smaller value trusts the motion more.
+The filtered-state trial uses the same 5 mm setting. The term is defined on the
+whole saved surface and is invariant to the arbitrary object-frame origin.
+
+| Variant                                  | Largest held twist step | Clear-view shaft/depth angle, median | Observed depth to saved surface, median |
+| ---------------------------------------- | ----------------------: | -----------------------------------: | --------------------------------------: |
+| Visual-only baseline                     |                   17.8° |                                 2.3° |                                 1.77 mm |
+| Existing production arbitration          |                   26.8° |                                 2.3° |                                 1.77 mm |
+| Motion prediction alone                  |                    0.7° |                                13.2° |                                 9.86 mm |
+| Prediction initializes unconstrained fit |                  167.4° |                                 2.3° |                                 1.81 mm |
+| Fixed attachment, 2.5 mm                 |                    4.3° |                                10.2° |                                 7.37 mm |
+| Fixed attachment, 5 mm                   |                   15.9° |                                 7.1° |                                 5.59 mm |
+| Fixed attachment, 10 mm                  |                   31.1° |                                 4.0° |                                 4.16 mm |
+| Filtered state, 5 mm                     |                    5.0° |                                 2.4° |                                 1.83 mm |
+
+Held steps cover frames 350–514; clear alignment uses frames 360–399 as in the
+earlier study. The filtered variant's 95th-percentile twist step is 2.8° versus
+11.0° baseline. These describe smoothness and **same-sensor consistency**, not
+independent pose accuracy. Axial twist is distinct from shaft tilt. The current
+fit remains biased by partial reference geometry, depth noise and segmentation.
+
+Remaining failures are saved, not cut out of the video:
+
+- Over frames 350–514, the filtered pose's net twist relative to a rigid-grasp
+  prediction changes by about 44° (baseline 48°). Near the partly hidden end of
+  insertion, the nonaxial difference also changes by about 20°. Kinematics are
+  an assumption-dependent proxy, not independent ground truth; smoothness alone
+  has not repaired the full attachment estimate.
+- At frame 577 the verified group prediction is absent for one frame. Returning
+  directly to the cached visual pose produces a 10.3° rotation step. The motion
+  prior must not simply vanish without carrying its uncertainty/state forward.
+- After release, frames 560–712 have up to 1.28 mm center displacement and 2.13°
+  shaft variation, worse than visual-only 0.50 mm and 0.81°. This recording does
+  not establish that adding the group path improves an already clear stationary
+  object. It also does not test a moving support hidden by an occluder.
+
+The measured medians were 13 ms for the existing causal service and 21 ms for
+the filtered shape correction. Cached SAM masks and visual proposals are
+excluded, so these are not end-to-end FPS measurements. Some ablations shared
+CPU resources; timing is descriptive, not a fair speed ranking.
+
+Reproduce with `bridge_shape.py --baseline <shape-visible-280> --output <dir>
+--skill <prepared-skill.json> --trial-config
+src/lerobot/policies/flash/docs/trial_config.example.json --role dowel`.
+Add `--motion-tolerance-m .005` for the fixed constraint, and
+`--propagate-filtered-held` for the sequential variant. Compare the saved traces
+using `analyze_bridges.py`; `--motion-reference` takes the initialization-only
+result containing the fixed gripper/group predictions. The saved comparison is
+[bridge_comparison.json](results/bridges/bridge_comparison.json), with every
+variant's poses, per-frame decisions, settings and timing under
+[results/bridges](results/bridges/).
+
+Verification: 13 proof tests pass. New tests exercise correction of an inaccurate
+motion prior, a visually ambiguous rotation without a symmetry rule, invariance
+to object-frame coordinates, and release-event withdrawal. Removing the motion
+term makes the ambiguity test fail. No production estimator, robot control or
+server was modified.
