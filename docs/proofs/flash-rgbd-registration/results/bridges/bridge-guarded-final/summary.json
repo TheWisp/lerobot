@@ -1,0 +1,104 @@
+{
+  "method": "whole_surface_fit_with_recorded_motion_bridges",
+  "config": {
+    "depth_tolerance_m": 0.005,
+    "surface_spacing_m": 0.003,
+    "mask_boundary_tolerance_px": 2.0,
+    "max_surface_distance_m": 0.03,
+    "max_evaluations": 50,
+    "solver_tolerance": 1e-05
+  },
+  "reference_frame": 0,
+  "frames": 713,
+  "duration_seconds": 23.746175050735474,
+  "statuses": {
+    "observed": 686,
+    "insufficient_depth": 2,
+    "no_mask": 25
+  },
+  "missing_observation_frames": [
+    172,
+    173,
+    174,
+    175,
+    176,
+    177,
+    178,
+    179,
+    180,
+    181,
+    182,
+    183,
+    184,
+    185,
+    186,
+    187,
+    188,
+    189,
+    190,
+    191,
+    192,
+    193,
+    194,
+    195,
+    196,
+    197,
+    198
+  ],
+  "optimizer_converged": 455,
+  "coarse_reinitializations": 23,
+  "median_correction_ms": 30.946072016377002,
+  "p95_correction_ms": 115.97600821405648,
+  "warning": "Motion prediction assumes no slip. Extent coverage and a second observation do not prove landmark identity or full pose observability. This offline experiment does not change the live backend. Failed observable-subspace and legacy ablations are retained for comparison.",
+  "motion_tolerance_m": null,
+  "propagate_filtered_held": false,
+  "guarded": true,
+  "fusion_config": {
+    "depth_error_m": 0.005,
+    "correction_uncertainty_m": 0.01,
+    "normal_radius_m": 0.012,
+    "correspondence_distance_m": 0.03
+  },
+  "correction_mode": "complete",
+  "optimizer_attempted": 486,
+  "causal_config": {
+    "history_frames": 120,
+    "queue_frames": 60,
+    "min_inliers": 12,
+    "max_frame_gap_s": 0.1,
+    "fit_threshold_m": 0.005,
+    "image_scale": 1.0,
+    "depth_support_radius_px": 1,
+    "scene_max_points": 800,
+    "environment_context_radius_m": 0.25,
+    "environment_min_motion_m": 0.008,
+    "environment_prediction_max_s": 1.0,
+    "environment_min_inliers": 12,
+    "static_prediction_max_s": null,
+    "max_pose_disagreement_translation_m": 0.01,
+    "max_pose_disagreement_rotation_rad": 0.15
+  },
+  "prior_sources": {
+    "none": 200,
+    "environment_group_motion": 228,
+    "gripper_attachment_prediction": 285
+  },
+  "runtime_sources": {
+    "cached_visual_only_shape_fit": 199,
+    "environment_group_motion": 211,
+    "object_point_motion": 303
+  },
+  "anchor_outcomes": {
+    "dowel": {
+      "received": 208,
+      "direct_accepted": 199,
+      "direct_published": 199,
+      "point_seeded": 2,
+      "standby_point_seeded": 135,
+      "point_replay_caught_up": 1,
+      "reused_point_track": 62,
+      "direct_point_unresolved": 9
+    }
+  },
+  "median_service_ms": 5.431050027254969
+}

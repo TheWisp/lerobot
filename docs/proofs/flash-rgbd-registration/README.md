@@ -531,3 +531,110 @@ motion prior, a visually ambiguous rotation without a symmetry rule, invariance
 to object-frame coordinates, and release-event withdrawal. Removing the motion
 term makes the ambiguity test fail. No production estimator, robot control or
 server was modified.
+
+## Guarded motion state: implemented, tracking still incomplete
+
+The previous refit could overwrite the gripper/group prediction with a weak
+six-axis visual solution. It also admitted partial visual fits _before grasp_,
+allowing a bad view to become the initial attachment and to seed group tracking.
+`bridge_shape.py --guarded` now has one authoritative pose owner, implemented in
+`lerobot.policies.flash.surface_motion`. It is wired into this offline experiment;
+**it is not the default live estimator and has not changed the robot server**.
+
+The final path does the following:
+
+- Transports the accepted pose with timestamp-aligned gripper motion while held.
+  A verified environmental group transports the accepted pose at its anchor
+  time, rather than substituting the group's independent visual pose. Unverified
+  support hypotheses are excluded.
+- Applies visual admission before initialization, before the causal service can
+  seed a group, and before a later attachment correction. The visible connected
+  surface must span the reference surface's extent in its three principal
+  directions, allowing the existing depth-error budget at both ends. No named
+  object axis or cylinder/symmetry rule is used. Disconnected depth patches cannot
+  manufacture this coverage. This is a conservative completeness check, **not**
+  proof of correspondence or six-axis observability.
+- Keeps a held-object repair separate from the accepted pose until the next
+  camera frame. Recorded gripper motion transports the candidate to that frame;
+  it must still cover the saved extent and improve the depth/mask objective by
+  more than the configured observation-error budget. Prediction continues while
+  this check is pending. Small residuals inside the depth-error band do not
+  repeatedly change the attachment.
+- Withdraws gripper motion on release. Existing object-point motion is eligible
+  only if enough surviving points remain in the current cleaned object mask and
+  depth, using the causal tracker's existing minimum-inlier configuration. The
+  state for an active point anchor remains retained beyond the short replay
+  buffer. This recording supplies no qualifying point bridge after release.
+- Records predictions, admitted corrections, pending proposals, missing output,
+  and last visual-update time separately. Missing output is represented by NaNs
+  and is not rendered as a current estimate. A seed from an older pregrasp view
+  remains a prediction; carrying it does not turn it into an observation.
+
+The alternative `--correction-mode observable` uses local point-to-plane
+sensitivity to restrict correction directions. It passed the synthetic geometry
+checks but was too conservative on this recording, retaining a bad seed. Its
+failed full trace is retained as `bridge-guarded-confirmed-full`; it is not the
+selected correction mode. `bridge-extent-final` preserves the intermediate
+experiment which checked later repairs but still admitted bad views before grasp.
+The old ablations remain runnable without `--guarded`.
+
+All 713 frames were processed from the fixed frame-zero reference. The held
+interval is frames 230–514, from the recorded skill; no event time was manually
+changed. The comparison uses the earlier benchmark's clear interval 360–399.
+
+| Measurement                                                        | Previous filtered refit | Failed local-direction correction | Final guarded state |
+| ------------------------------------------------------------------ | ----------------------: | --------------------------------: | ------------------: |
+| Median shaft angle versus connected measured depth, clear interval |                   1.98° |                            14.02° |               2.15° |
+| Median observed-surface distance to reference, clear interval      |                 2.52 mm |                           4.89 mm |             2.13 mm |
+| Visual rotation added beyond gripper motion at frame 300           |                  20.13° |                                0° |                  0° |
+| Largest held visual correction                                     |                  23.23° |                            40.71° |             104.67° |
+
+The final column **does not establish accurate tracking throughout the demo**:
+
+- There is exactly one held visual repair, at frame 366 (12.2 s). It changes shaft
+  direction by 14.61°, surface centre by 30.52 mm, and full orientation by 104.67°.
+  Much of that rotation is axial ambiguity, but the shaft/centre correction is
+  substantial. The earlier grasp seed was inaccurate and is visibly offset
+  during rotation. This is a repair of an estimate, not measured physical motion.
+- At the other 284 held frames, output equals the gripper prediction. The audit
+  independently reconstructs all 284 successive held motion steps from the
+  recorded end-effector transforms and the preceding accepted output. Smoothness
+  here demonstrates correct transport under the no-slip assumption, not correct
+  initial attachment or detection of slip.
+- After release, frames 515–712 have no accepted pose: the visible part does not
+  pass the whole-extent reacquisition test and neither a verified group nor a
+  supported object-point bridge is available. This is a **coverage regression**
+  relative to the permissive old refit, and the reason not to promote this path
+  to the live backend. Partial-view reacquisition remains unresolved.
+- The agreement numbers reuse the fitting sensor; there is no independent pose
+  ground truth. The ring overlays are the archived earlier tracking, not a new
+  evaluation of this method on a second object.
+
+Final measured medians: causal service 5.43 ms, correction 30.95 ms; correction
+p95 115.98 ms. Masks and baseline visual proposals are cached and excluded. These
+are offline component timings, **not live FPS**. The video plays all original
+frames at their recorded rate (29.98 fps), including the offset and lost interval.
+
+Settings are serialized in each `summary.json`. `--fusion-config` overrides
+`SurfaceMotionConfig`: depth error 5 mm; correction uncertainty 10 mm; normal
+radius 12 mm (four 3 mm surface voxels); correspondence distance 30 mm. The latter
+three concern the alternative local-direction experiment. The selected method
+uses the existing `ShapeConfig` depth and mask scales for extent and image checks,
+and the configured depth error for the independent-frame improvement test.
+These scales are explicit experimental assumptions, not calibrated covariances.
+
+Reproduce the final path with the earlier `bridge_shape.py` command, using
+`shape-full-demo` as baseline and adding `--guarded`. Run `audit_motion_fusion.py
+--results <old-result> <new-result> --output <json>` to check the recorded consumer
+and compare like intervals. The complete inputs/outputs are under
+[results/bridges/bridge-guarded-final](results/bridges/bridge-guarded-final), with
+[the comparison](results/bridges/fusion_audit.json) and
+[the full-scene video](full_scene_guarded.mp4).
+
+Verification includes synthetic correction/rejection pairs, missing motor
+samples, release, group re-anchoring, recorded partial-view admission fixtures,
+and an audit of the saved replay consumer. Restoring unconditional visual
+admission, allowing unsupported directions, bypassing the second-frame check,
+or freezing gripper propagation each causes a regression test to fail. The
+recorded-output test also restores the original bypass by replacing frame 300
+with its raw visual candidate and confirms the consumer audit rejects it.

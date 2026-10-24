@@ -65,6 +65,7 @@ def main():
     visual = np.array([r["status"] == "observed" for r in rows])
     gripper = np.array([r["prior_source"].startswith("gripper_") for r in rows])
     group = np.array([r["prior_source"] == "environment_group_motion" for r in rows])
+    point_motion = np.array([r["prior_source"] == "object_point_motion" for r in rows])
     ring_p2p = np.zeros(total, bool)
     ring_group = np.zeros(total, bool)
     for frame, index in ring_index.items():
@@ -72,14 +73,18 @@ def main():
             ring_p2p[frame] = not bool(ring["lost"][index])
     count = min(total, len(causal["ring_estimator"]))
     ring_group[:count] = causal["ring_estimator"][:count] == "environment_group_motion"
-    available = visual | gripper | group
+    available = (
+        np.array([bool(int(r["output_available"])) for r in rows])
+        if "output_available" in rows[0]
+        else visual | gripper | group
+    )
     held_flags = np.array([bool(int(r["held"])) for r in rows])
     previously_held_flags = np.r_[False, np.maximum.accumulate(held_flags[:-1])]
     timeline = [
         ("MASK + DEPTH", visual, MASK),
         ("CURRENT DOWEL", available, FIT),
         ("GRIPPER PRED.", gripper, GRIPPER),
-        ("SCENE GROUP", group, GROUP),
+        ("GROUP / POINT MOTION", group | point_motion, GROUP),
         ("RING P2P (PREVIOUS)", ring_p2p, OLD_RING),
         ("RING GROUP (PREVIOUS)", ring_group, GROUP),
     ]
@@ -149,8 +154,13 @@ def main():
                 )
             if ring_group[frame]:
                 draw_ring(image, models["points_1"], causal["ring_poses"][frame], camera_from_base, k, GROUP)
-            if group[frame] or gripper[frame]:
-                draw_anchors(image, trace["prior_poses"][frame], GROUP if group[frame] else GRIPPER, 5)
+            if group[frame] or point_motion[frame] or gripper[frame]:
+                draw_anchors(
+                    image,
+                    trace["prior_poses"][frame],
+                    GROUP if group[frame] or point_motion[frame] else GRIPPER,
+                    5,
+                )
             if available[frame]:
                 pose = trace["poses"][frame]
                 # Show only model samples that are not behind measured foreground.
@@ -182,7 +192,7 @@ def main():
             label(panel, "SAM outline", (22, 83), 0.66, MASK)
             label(panel, "Estimated A / B / C", (22, 121), 0.66, FIT)
             label(panel, "Gripper prediction", (22, 159), 0.66, GRIPPER)
-            label(panel, "Scene-group prediction", (22, 197), 0.65, GROUP)
+            label(panel, "Group / point prediction", (22, 197), 0.65, GROUP)
             cv2.line(panel, (20, 218), (412, 218), (80, 80, 80), 1)
             label(panel, "RING: PREVIOUS TRACKING", (22, 254), 0.65, OLD_RING)
             label(panel, "Point2Pose + scene group", (22, 285), 0.58, (200, 200, 200), 1)
@@ -198,10 +208,25 @@ def main():
             label(
                 panel, "Mask + depth: " + ("available" if visual[frame] else "unavailable"), (22, 382), 0.59
             )
-            motion = "gripper" if gripper[frame] else ("scene group" if group[frame] else "unavailable")
+            motion = (
+                "gripper"
+                if gripper[frame]
+                else (
+                    "scene group"
+                    if group[frame]
+                    else ("object points" if point_motion[frame] else "unavailable")
+                )
+            )
             label(panel, "Motion bridge: " + motion, (22, 414), 0.59)
             if not available[frame]:
                 label(panel, "No current dowel estimate", (22, 454), 0.59, (70, 150, 255))
+            elif summary.get("guarded"):
+                status = (
+                    "Visual correction"
+                    if int(rows[frame]["visual_changed"])
+                    else ("Motion prediction" if gripper[frame] or group[frame] else "Visual reacquisition")
+                )
+                label(panel, status, (22, 454), 0.59, FIT)
             cv2.line(screen, (0, 480), (1279, 480), (100, 100, 100), 2)
             label(screen, "SOURCE AVAILABILITY / COMPLETE RECORDING", (24, 512), 0.73)
             bars(screen, 538, timeline, frame, total)
