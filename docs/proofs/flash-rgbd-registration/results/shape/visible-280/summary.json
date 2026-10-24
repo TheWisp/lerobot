@@ -1,0 +1,26 @@
+{
+  "method": "ufm",
+  "config": {
+    "depth_tolerance_m": 0.005,
+    "surface_spacing_m": 0.003,
+    "mask_boundary_tolerance_px": 2.0,
+    "max_surface_distance_m": 0.03,
+    "max_evaluations": 50,
+    "solver_tolerance": 1e-05
+  },
+  "reference_frame": 100,
+  "start": 280,
+  "stop": 712,
+  "frames": 433,
+  "duration_seconds": 14.410276174545288,
+  "statuses": {
+    "reference": 1,
+    "observed": 432
+  },
+  "missing_observation_frames": [],
+  "optimizer_converged": 432,
+  "coarse_reinitializations": 0,
+  "median_correction_ms": 26.92406697315164,
+  "p95_correction_ms": 52.81178328150416,
+  "warning": "Shape consistency and solver convergence do not establish physical landmark identity or pose accuracy."
+}

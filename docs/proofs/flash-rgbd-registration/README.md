@@ -1,7 +1,20 @@
 # RGB-D registration of the held dowel
 
-**Updated result: adding a fixed earlier surface and whole-mask/depth correction
-removes the obvious tilt once the dowel is clearly visible.** The corrected
+**Visible-phase result: the shaft is better aligned, but estimated twist around
+it still jumps.** [Watch the fresh start at frame 280](visible_phase_shape.mp4),
+continued through insertion and release with no further restarts. The long axis
+agrees with clear measured depth to about 2–3°, but some estimated twist changes
+are 15–18° in a frame while the gripper barely rotates. See
+[visible-phase stability](#visible-phase-stability).
+
+[The full 713-frame recording at 1×](full_demo_shape.mp4) also includes the pickup
+observation gap. That uninterrupted run keeps the first-frame reference and
+landmarks throughout; it does not restart at the clear held-object view. The
+user's present criterion is stability while mostly visible; discontinuities
+across occlusion are not counted against that criterion.
+
+**Earlier short-interval result: adding a fixed earlier surface and whole-mask/depth correction
+removes the obvious tilt in that initialized clear-view interval.** The corrected
 reference axis agrees with the measured visible surface direction to 2.3°
 median over frames 360–399, versus 15.5° for UFM transporting the same initialized
 reference without correction. This is same-sensor geometric consistency, not
@@ -246,6 +259,135 @@ pass, including recovery from a known 23° synthetic tilt, missing depth,
 foreground occlusion and a pose that tries to hide behind observed depth.
 Disabling `WholeSurfaceFit.correct` makes the known-tilt test fail. The exported
 H.264/yuv420p video decodes all 120 frames successfully.
+
+## Full-demo evaluation
+
+The full 23.75-second recording uses the same correction, default settings and
+causal UFM deltas. Reference geometry and A/B/C are selected in frame 0 and never
+replaced. The former 280–399 experiment initialized its alignment at frame 280;
+this full run must survive the earlier pickup. These are different tests, and
+the successful short interval did not establish full-demo tracking.
+
+The video has one panel: cyan is the current SAM3 outline, yellow is the moved
+reference surface, and white A/B/C are fixed reference landmarks. The same crop
+and recorded speed are used for every frame. During absent observations the
+overlay is hidden and a large warning replaces it; internally the last estimate
+is held, with its missing-observation status recorded. Model samples hidden by
+closer foreground are omitted from the drawing, while A/B/C remain visible
+when an estimate is shown. The crop is chosen from all masks for presentation
+only; no future observations enter the tracker.
+
+What the full run shows:
+
+- Before pickup, the estimate remains stable: maximum estimated reference-center
+  movement over frames 0–130 is 0.34 mm while the object lies still.
+- Frames 172–198 (5.7–6.6 s) provide no usable observation: 25 empty masks and
+  two frames without enough depth geometry. This is explicitly a gap, not
+  successful occluded tracking.
+- During approximately 6.6–9.3 s, the recovered landmarks jump. The coarse
+  correction branch is used at frames 200, 260, 270 and 279. At frame 200 the
+  estimate turns 163.7° in one frame while the recorded gripper turns 0.09°.
+  Shape agreement therefore does not establish preserved material-point identity.
+- The later shape looks closer to the visible dowel, but this uninterrupted run
+  does not reproduce the earlier short-interval alignment. There is no verified
+  recovery of the original landmark mapping. A landmark outside the mask is
+  not, by itself, proof of error: it may be hidden by the gripper or ring.
+
+![Landmark drift during partial visibility](full_frame_210.jpg)
+![Uninterrupted estimate after release](full_frame_712.jpg)
+
+685 frames had sufficient observed geometry to attempt correction. Of those,
+678 optimizations converged; **convergence is not tracking correctness**. Median
+optimization time is 29.0 ms and p95 is 64.1 ms, excluding fitter setup and input
+preparation. UFM matching separately takes 32.3 ms median. Masks were already
+computed; this is an offline experiment, not an end-to-end real-time result.
+
+The current correction still forces one incomplete reference surface onto each
+new view, with no established uncertainty or landmark-identity recovery after
+occlusion. The evidence supports better alignment under suitable initialization,
+not a reliable full-demo tracker. No FLASH live policy or dataset poses were
+changed by this evaluation.
+
+The full run exposed two evaluation-harness failures: empty masks crashed the
+crop builder, and the held-only gripper evaluator indexed beyond its 711-sample
+pose array at camera frame 711. Empty observations now yield no measured delta,
+and `--pose-only` omits the gripper evaluation entirely. This also avoids treating
+the freely moving gripper as object ground truth before grasp or after release.
+Nine focused tests pass; restoring each defect makes its respective test fail.
+The old short-benchmark gripper metrics also match every saved value after the
+evaluation refactor.
+
+Reproduce using the existing local model environment:
+
+```bash
+~/.cache/flash-rgbd-registration/.venv/bin/python docs/proofs/flash-rgbd-registration/compare.py \
+  --method ufm --start 0 --stop 712 --pose-only \
+  --output ~/.cache/flash-rgbd-registration/results/ufm-full-demo
+python docs/proofs/flash-rgbd-registration/full_demo_shape.py \
+  --baseline ~/.cache/flash-rgbd-registration/results/ufm-full-demo \
+  --output ~/.cache/flash-rgbd-registration/results/shape-full-demo
+python docs/proofs/flash-rgbd-registration/render_full_shape.py \
+  --result ~/.cache/flash-rgbd-registration/results/shape-full-demo \
+  --output ~/.cache/flash-rgbd-registration/results/shape-full-demo/full_demo_shape.mp4 --crf 29
+```
+
+Matcher evidence is saved under `results/ufm-full-demo/`; corrected poses,
+observation statuses and measurements are under `results/shape/full-demo/`.
+
+## Visible-phase stability
+
+To exclude inheritance of the pickup failure, a separate pass initializes at
+frame 280 (9.3 s), using the same measured reference from earlier frame 100 as
+the successful short experiment. It then runs to frame 712 without another
+reset, reference replacement, gripper input or changed correction setting.
+The video contains all 433 frames of that interval. These A/B/C belong to the
+frame-100 reference; they are not the frame-0 landmarks in the uninterrupted
+full video.
+
+The mostly visible insertion and released-object views look substantially
+better aligned. For frames 360–399, median axis difference from the largest
+clean connected depth patch is 2.32°. For frames 530–712 it is 2.98°. The
+stationary released object over frames 560–712 has at most 0.50 mm estimated
+reference-center movement and 0.81° long-axis change relative to frame 560.
+Those last two are stability measurements, not absolute accuracy.
+
+Twist about the shaft is still unstable. At frame 387, the estimate changes
+17.8° around the shaft while its long axis changes only 1.2° and the gripper
+rotates 0.53°. Similar steps occur at frames 401, 416, 419 and 511. This is a
+remaining concern for material-point tracking during visible phases. The
+gripper is a proxy rather than ground truth; the weakly textured, near-round
+surface does not independently establish the correct axial angle. Pose
+alignment, twist stability and physical landmark identity must remain distinct
+claims.
+
+The rotating interval 280–349 is only partially visible and has a much weaker
+axis diagnostic (11.8° median difference from the visible patch). Its A/C
+landmarks are often hidden behind the gripper. It is included in the video,
+not classified as a fully verified interval. Even the mostly visible intervals
+are evidence of improvement, not a general accuracy guarantee.
+
+`analyze_visible_shape.py` writes `visible_review.json` with these separate
+checks. It uses the largest connected depth patch for comparison with the
+earlier short benchmark. The raw full-run trace's `axis_vs_current_patch_deg`
+uses all cleaned surface components instead; distant detached samples can
+strongly change that PCA direction. Neither PCA direction is independent
+ground truth.
+
+```bash
+python docs/proofs/flash-rgbd-registration/full_demo_shape.py \
+  --baseline ~/.cache/flash-rgbd-registration/results/ufm-full-demo \
+  --reference-frame 100 --start 280 \
+  --output ~/.cache/flash-rgbd-registration/results/shape-visible-280
+python docs/proofs/flash-rgbd-registration/render_full_shape.py \
+  --result ~/.cache/flash-rgbd-registration/results/shape-visible-280 \
+  --output ~/.cache/flash-rgbd-registration/results/shape-visible-280/visible_phase_shape.mp4 \
+  --title 'Visible phase - fresh start at 9.3 s' --crf 29
+python docs/proofs/flash-rgbd-registration/analyze_visible_shape.py \
+  --result ~/.cache/flash-rgbd-registration/results/shape-visible-280 \
+  --output ~/.cache/flash-rgbd-registration/results/shape-visible-280/visible_review.json
+```
+
+Results are saved under `results/shape/visible-280/`.
 
 ## Reproduce
 

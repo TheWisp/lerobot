@@ -1,0 +1,12 @@
+{
+  "method": "ufm",
+  "start": 0,
+  "stop": 712,
+  "model_load_s": 4.669455953000579,
+  "valid": 671,
+  "pairs": 712,
+  "median_runtime_ms": 32.30499447090551,
+  "p95_runtime_ms": 34.36002810485661,
+  "median_input_ms": 36.3470884913113,
+  "p95_input_ms": 37.404728212277405
+}

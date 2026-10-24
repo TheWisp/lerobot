@@ -1,0 +1,74 @@
+{
+  "angle_reference": "PCA of largest connected cleaned depth patch, same as short experiment",
+  "intervals": [
+    {
+      "start": 280,
+      "stop": 349,
+      "median_axis_vs_depth_deg": 11.799352881781303,
+      "max_axis_vs_depth_deg": 24.06339571211672
+    },
+    {
+      "start": 350,
+      "stop": 529,
+      "median_axis_vs_depth_deg": 3.839379713399512,
+      "max_axis_vs_depth_deg": 20.610742719126545
+    },
+    {
+      "start": 360,
+      "stop": 399,
+      "median_axis_vs_depth_deg": 2.323099266990467,
+      "max_axis_vs_depth_deg": 4.039245930370314
+    },
+    {
+      "start": 530,
+      "stop": 712,
+      "median_axis_vs_depth_deg": 2.9756592356773766,
+      "max_axis_vs_depth_deg": 3.8533493517985997
+    },
+    {
+      "start": 560,
+      "stop": 712,
+      "median_axis_vs_depth_deg": 2.9560444110052218,
+      "max_axis_vs_depth_deg": 3.46894892891193
+    }
+  ],
+  "stationary_after_release": {
+    "start": 560,
+    "stop": 712,
+    "max_center_displacement_mm": 0.49572900093853894,
+    "max_axis_change_deg": 0.8136564045733079
+  },
+  "largest_held_twist_steps": [
+    {
+      "frame": 387,
+      "twist_component_deg": 17.77519260439288,
+      "axis_change_deg": 1.1894064741173647,
+      "gripper_rotation_deg": 0.5274725065584812
+    },
+    {
+      "frame": 401,
+      "twist_component_deg": 17.282366604249894,
+      "axis_change_deg": 0.41347419871754726,
+      "gripper_rotation_deg": 0.08791224571041228
+    },
+    {
+      "frame": 419,
+      "twist_component_deg": 15.788961856066283,
+      "axis_change_deg": 1.7150742528115932,
+      "gripper_rotation_deg": 0.9660231387325666
+    },
+    {
+      "frame": 511,
+      "twist_component_deg": 14.645193492685568,
+      "axis_change_deg": 1.0804852280345292,
+      "gripper_rotation_deg": 6.49422354794464e-15
+    },
+    {
+      "frame": 416,
+      "twist_component_deg": 13.34125496322593,
+      "axis_change_deg": 0.4482352968303368,
+      "gripper_rotation_deg": 0.5566226150416156
+    }
+  ],
+  "warning": "Neither depth consistency nor the rigid-grasp proxy is independent ground-truth pose accuracy."
+}

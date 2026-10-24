@@ -207,6 +207,42 @@ def reference() -> tuple[np.ndarray, np.ndarray]:
     return ee, landmarks
 
 
+def estimate_pair(model, method: str, previous: dict, current: dict, intrinsics: np.ndarray):
+    """No observation means no measured delta, rather than an identity estimate."""
+    if not previous["usable"].any() or not current["usable"].any():
+        return None, 0, float("nan"), 0
+    if method.startswith("colored-icp"):
+        weight = {"colored-icp-968": 0.968, "colored-icp-700": 0.7, "colored-icp-300": 0.3}[method]
+        transform, inliers, residual = colored_icp(previous, current, weight)
+        return transform, inliers, residual, 0
+    image_a, image_b, crop = crop_pair(previous, current)
+    matcher = ufm_pairs if method == "ufm" else roma_pairs
+    source, target = matcher(model, image_a, image_b, crop, previous, current, intrinsics)
+    transform, inliers, residual = robust_fit(source, target)
+    return transform, inliers, residual, len(source)
+
+
+def gripper_metrics(ee, landmarks, accumulated, transform, first, frame):
+    shaft = landmarks[1] - landmarks[0]
+    shaft /= np.linalg.norm(shaft)
+    expected_pair = ee[frame] @ np.linalg.inv(ee[frame - 1])
+    expected = ee[frame] @ np.linalg.inv(ee[first])
+    pair_error = (
+        float(np.mean(np.linalg.norm(move(landmarks, transform) - move(landmarks, expected_pair), axis=1)))
+        if transform is not None
+        else float("nan")
+    )
+    drift = float(np.mean(np.linalg.norm(move(landmarks, accumulated) - move(landmarks, expected), axis=1)))
+    cosine = float(np.clip((accumulated[:3, :3] @ shaft) @ (expected[:3, :3] @ shaft), -1, 1))
+    center_error = np.linalg.norm(move(landmarks, accumulated).mean(0) - move(landmarks, expected).mean(0))
+    return {
+        "pair_error_vs_gripper_mm": pair_error * 1000,
+        "drift_vs_gripper_mm": drift * 1000,
+        "axis_error_vs_gripper_deg": float(np.degrees(np.arccos(cosine))),
+        "center_error_vs_gripper_mm": float(center_error * 1000),
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -217,12 +253,11 @@ def main() -> None:
     parser.add_argument("--start", type=int, default=280)
     parser.add_argument("--stop", type=int, default=399)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--pose-only", action="store_true", help="Omit the held-only gripper evaluation")
     args = parser.parse_args()
     cv2.setNumThreads(1)
     intrinsics = np.loadtxt(RECORDING / "cam_K.txt").reshape(3, 3)
-    ee, landmarks = reference()
-    shaft = landmarks[1] - landmarks[0]
-    shaft /= np.linalg.norm(shaft)
+    ee, landmarks = (None, None) if args.pose_only else reference()
     model = None
     loading_start = time.perf_counter()
     if args.method == "ufm":
@@ -261,38 +296,14 @@ def main() -> None:
         cur = frame_data(frame, intrinsics)
         input_ms = (time.perf_counter() - input_start) * 1000
         start = time.perf_counter()
-        pair_count = 0
-        if args.method.startswith("colored-icp"):
-            weight = {"colored-icp-968": 0.968, "colored-icp-700": 0.7, "colored-icp-300": 0.3}[args.method]
-            transform, inliers, residual = colored_icp(prev, cur, weight)
-        else:
-            image_a, image_b, crop = crop_pair(prev, cur)
-            if args.method == "ufm":
-                source, target = ufm_pairs(model, image_a, image_b, crop, prev, cur, intrinsics)
-            else:
-                source, target = roma_pairs(model, image_a, image_b, crop, prev, cur, intrinsics)
-            pair_count = len(source)
-            transform, inliers, residual = robust_fit(source, target)
+        transform, inliers, residual, pair_count = estimate_pair(model, args.method, prev, cur, intrinsics)
         elapsed_ms = (time.perf_counter() - start) * 1000
         if transform is None:
             poses.append(poses[-1].copy())
         else:
             poses.append(transform @ poses[-1])
-        expected_pair = ee[frame] @ np.linalg.inv(ee[frame - 1])
-        pair_error = (
-            float(
-                np.mean(np.linalg.norm(move(landmarks, transform) - move(landmarks, expected_pair), axis=1))
-            )
-            if transform is not None
-            else float("nan")
-        )
-        expected = ee[frame] @ np.linalg.inv(ee[args.start])
-        drift = float(np.mean(np.linalg.norm(move(landmarks, poses[-1]) - move(landmarks, expected), axis=1)))
-        axis_cosine = float(np.clip((poses[-1][:3, :3] @ shaft) @ (expected[:3, :3] @ shaft), -1, 1))
-        axis_error_deg = float(np.degrees(np.arccos(axis_cosine)))
-        center_error_mm = float(
-            np.linalg.norm(move(landmarks, poses[-1]).mean(axis=0) - move(landmarks, expected).mean(axis=0))
-            * 1000
+        evaluation = (
+            {} if args.pose_only else gripper_metrics(ee, landmarks, poses[-1], transform, args.start, frame)
         )
         rows.append(
             {
@@ -301,10 +312,7 @@ def main() -> None:
                 "candidate_pairs": pair_count,
                 "inliers": inliers,
                 "fit_residual_mm": residual * 1000,
-                "pair_error_vs_gripper_mm": pair_error * 1000,
-                "drift_vs_gripper_mm": drift * 1000,
-                "axis_error_vs_gripper_deg": axis_error_deg,
-                "center_error_vs_gripper_mm": center_error_mm,
+                **evaluation,
                 "input_ms": input_ms,
                 "elapsed_ms": elapsed_ms,
             }
@@ -312,7 +320,7 @@ def main() -> None:
         if (frame - args.start) % 20 == 0:
             print(
                 f"{args.method} frame {frame}: valid {sum(r['valid'] for r in rows)}/{len(rows)}, "
-                f"drift {drift * 1000:.1f} mm, time {elapsed_ms:.1f} ms",
+                f"time {elapsed_ms:.1f} ms",
                 flush=True,
             )
         prev = cur
@@ -325,7 +333,7 @@ def main() -> None:
         args.output / "trace.npz",
         frames=np.arange(args.start, args.stop + 1),
         poses=np.array(poses),
-        landmarks_camera_at_start=landmarks,
+        **({} if args.pose_only else {"landmarks_camera_at_start": landmarks}),
     )
     summary = {
         "method": args.method,
@@ -334,19 +342,21 @@ def main() -> None:
         "model_load_s": load_s,
         "valid": sum(r["valid"] for r in rows),
         "pairs": len(rows),
-        "median_pair_error_vs_gripper_mm": float(np.nanmedian([r["pair_error_vs_gripper_mm"] for r in rows])),
-        "median_drift_vs_gripper_mm": float(np.median([r["drift_vs_gripper_mm"] for r in rows])),
-        "last_drift_vs_gripper_mm": rows[-1]["drift_vs_gripper_mm"],
-        "median_axis_error_vs_gripper_deg": float(np.median([r["axis_error_vs_gripper_deg"] for r in rows])),
-        "last_axis_error_vs_gripper_deg": rows[-1]["axis_error_vs_gripper_deg"],
-        "median_center_error_vs_gripper_mm": float(
-            np.median([r["center_error_vs_gripper_mm"] for r in rows])
-        ),
         "median_runtime_ms": float(np.median([r["elapsed_ms"] for r in rows])),
         "p95_runtime_ms": float(np.percentile([r["elapsed_ms"] for r in rows], 95)),
         "median_input_ms": float(np.median([r["input_ms"] for r in rows])),
         "p95_input_ms": float(np.percentile([r["input_ms"] for r in rows], 95)),
     }
+    if not args.pose_only:
+        for name in (
+            "pair_error_vs_gripper_mm",
+            "drift_vs_gripper_mm",
+            "axis_error_vs_gripper_deg",
+            "center_error_vs_gripper_mm",
+        ):
+            summary["median_" + name] = float(np.nanmedian([r[name] for r in rows]))
+        for name in ("drift_vs_gripper_mm", "axis_error_vs_gripper_deg"):
+            summary["last_" + name] = rows[-1][name]
     (args.output / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     print(json.dumps(summary, indent=2), flush=True)
 
