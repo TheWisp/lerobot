@@ -1,0 +1,12 @@
+{
+  "frames": 433,
+  "seed_frame": 280,
+  "states": {
+    "initialized": 1,
+    "pose_rejected": 2,
+    "surface_supported": 430
+  },
+  "compute_ms_median": 36.60326701356098,
+  "compute_ms_p95": 38.98202240234241,
+  "final_map_points": 480
+}

@@ -1,0 +1,23 @@
+{
+  "depth_scale_m": 0.001,
+  "mask_margin_px": 2,
+  "depth_span_m": 0.01,
+  "surface_spacing_m": 0.003,
+  "depth_agreement_m": 0.005,
+  "correspondence_distances_m": [
+    0.03,
+    0.015,
+    0.0075
+  ],
+  "iterations_per_level": 10,
+  "huber_m": 0.005,
+  "point_regularizer": 0.05,
+  "solver_damping": 0.0001,
+  "step_convergence_m": 1e-05,
+  "max_rotation_step_rad": 0.26,
+  "max_translation_step_m": 0.02,
+  "promotion_observations": 3,
+  "pending_lifetime_frames": 15,
+  "maximum_map_points": 5000,
+  "display_point_limit": 1000
+}

@@ -1,0 +1,8 @@
+{
+  "recording": "/home/feit/.cache/huggingface/lerobot/demos/insertion/recording",
+  "masks": "/home/feit/.cache/flash-mask-depth-experiment/sam3-full",
+  "mode": "growing",
+  "start": 0,
+  "stop": null,
+  "pose_inputs": "only mask and depth; no P2P, gripper, or future frame"
+}
