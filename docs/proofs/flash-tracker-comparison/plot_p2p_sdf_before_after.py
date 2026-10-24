@@ -48,14 +48,21 @@ def main() -> None:
         ),
     )
     fig = plt.figure(figsize=(12.5, 9.0), layout="constrained")
-    fig.suptitle("The dowel surface stored by Point2Pose · same demo frame 540", fontsize=19)
+    fig.suptitle(
+        "The dowel surface stored by Point2Pose · same demo frame 540\n"
+        "Blue: within 20 mm of first shaft · orange: 20–40 mm · red: farther than 40 mm",
+        fontsize=16,
+    )
     for column, (title, points) in enumerate(views):
         coords = (points - center) @ basis * 1000
         along_mm, side_mm, up_mm = coords.T
         radius_mm = np.hypot(side_mm, up_mm)
+        near = radius_mm <= 20
+        moderate = (radius_mm > 20) & (radius_mm <= 40)
         far = radius_mm > 40
         panel_3d = fig.add_subplot(2, 2, column + 1, projection="3d")
-        panel_3d.scatter(along_mm[~far], side_mm[~far], up_mm[~far], s=17, c="#087da5", alpha=0.85)
+        panel_3d.scatter(along_mm[near], side_mm[near], up_mm[near], s=17, c="#087da5", alpha=0.85)
+        panel_3d.scatter(along_mm[moderate], side_mm[moderate], up_mm[moderate], s=22, c="#eda33f", alpha=0.9)
         panel_3d.scatter(along_mm[far], side_mm[far], up_mm[far], s=22, c="#d94831", alpha=0.9)
         panel_3d.plot([-60, 60], [0, 0], [0, 0], color="#333333", linewidth=2, alpha=0.6)
         panel_3d.set(
@@ -65,16 +72,18 @@ def main() -> None:
             xlabel="Along dowel (mm)",
             ylabel="Across (mm)",
             zlabel="Across (mm)",
-            title=f"{title}\n{len(points)} stored surface cells · {far.sum()} far from first shaft",
+            title=f"{title}\n{len(points)} surface cells · {moderate.sum()} orange · {far.sum()} red",
         )
         panel_3d.set_box_aspect((270, 230, 230))
         panel_3d.view_init(elev=26, azim=-69)
         panel_3d.set_proj_type("ortho")
 
         side_view = fig.add_subplot(2, 2, column + 3)
-        side_view.scatter(along_mm[~far], radius_mm[~far], s=21, c="#087da5", alpha=0.8)
+        side_view.scatter(along_mm[near], radius_mm[near], s=21, c="#087da5", alpha=0.8)
+        side_view.scatter(along_mm[moderate], radius_mm[moderate], s=25, c="#eda33f", alpha=0.9)
         side_view.scatter(along_mm[far], radius_mm[far], s=25, c="#d94831", alpha=0.9)
         side_view.axhspan(0, 20, color="#dcf3e7", zorder=-1)
+        side_view.axhline(20, color="#eda33f", linewidth=1, linestyle="--", alpha=0.6)
         side_view.axhline(40, color="#d94831", linewidth=1, linestyle="--", alpha=0.6)
         side_view.set(
             xlim=(-110, 160),

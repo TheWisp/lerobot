@@ -46,6 +46,10 @@ def main() -> None:
     ordinary_init = bridge.Session.init
     snapshot_name = os.environ.get("FLASH_P2P_SDF_SNAPSHOT")
     snapshot_frame = int(os.environ["FLASH_P2P_SDF_SNAPSHOT_FRAME"]) if snapshot_name else None
+    snapshot_dir_name = os.environ.get("FLASH_P2P_SDF_KEYFRAME_SNAPSHOT_DIR")
+    snapshot_dir = Path(snapshot_dir_name) if snapshot_dir_name else None
+    if snapshot_dir is not None:
+        snapshot_dir.mkdir(parents=True, exist_ok=True)
     ordinary_answer = bridge.Session._answer
 
     def capture_snapshot(session, frame, milliseconds):
@@ -119,6 +123,21 @@ def main() -> None:
                 seen_keyframes.add(obj_id)
                 if filter_mode == "temporal":
                     previous.append(candidate)
+                if snapshot_dir is not None:
+                    volume = obj.sdf_volume
+                    if volume.gpu_mode:
+                        raise RuntimeError("diagnostic snapshot requires the CPU TSDF backend")
+                    np.savez_compressed(
+                        snapshot_dir / f"object_{obj_id}_frame_{int(frame.id):04d}.npz",
+                        tsdf=volume._tsdf_vol_cpu,
+                        weight=volume._weight_vol_cpu,
+                        origin=volume._vol_origin,
+                        voxel_size=volume._voxel_size,
+                        selected_depth=selected_depth,
+                        mask=mask_array,
+                        pose=keyframe.pose,
+                        intrinsics=frame.intrinsics,
+                    )
             with log_path.open("a") as stream:
                 stream.write(
                     json.dumps(
