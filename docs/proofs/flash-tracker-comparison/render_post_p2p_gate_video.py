@@ -1,9 +1,9 @@
-"""Show the recorded post-release dowel and two replay-only pose proposals.
+"""Show what happens when the unchanged P2P output fails a final pose check.
 
-Both panels use the same recorded RGB-D frame. Cyan is the visible shaft axis
-fitted from current masked depth; orange transports the same first-view shaft
-by the respective causal Point2Pose trace. The cyan line does not measure the
-hidden insertion end or certify a full 6D pose.
+Both panels use the same recorded RGB-D frame and the exact same P2P pose.
+The lower panel withholds the pose only when the post-output gate rejects it.
+Cyan is the visible shaft axis fitted from current masked depth; orange is the
+P2P proposal. Cyan does not measure the hidden insertion end.
 """
 
 from __future__ import annotations
@@ -26,6 +26,7 @@ PANEL_YS = (180, 805)
 CYAN = (245, 220, 35)
 ORANGE = (45, 160, 255)
 GREEN = (100, 240, 145)
+RED = (75, 75, 250)
 WHITE = (245, 245, 245)
 FONT = cv2.FONT_HERSHEY_SIMPLEX
 
@@ -59,7 +60,7 @@ def frame_panel(
     masks: Path,
     intrinsics: np.ndarray,
     shaft_points: np.ndarray,
-    pose: np.ndarray,
+    pose: np.ndarray | None,
     visible_line: np.ndarray,
 ) -> np.ndarray:
     rgb = cv2.imread(str(dataset / "rgb" / f"{frame:06d}.jpg"))
@@ -72,18 +73,15 @@ def frame_panel(
     contours, _ = cv2.findContours(cropped_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     cv2.drawContours(panel, contours, -1, GREEN, 2, cv2.LINE_AA)
     crop_projected_line(panel, visible_line, CYAN)
-    camera_shaft = shaft_points @ pose[:3, :3].T + pose[:3, 3]
-    crop_projected_line(panel, project(camera_shaft, intrinsics), ORANGE)
+    if pose is not None:
+        camera_shaft = shaft_points @ pose[:3, :3].T + pose[:3, 3]
+        crop_projected_line(panel, project(camera_shaft, intrinsics), ORANGE)
     return panel
 
 
-def contradiction_at_540(path: Path) -> dict[str, int]:
-    rows = [row for row in csv.DictReader(path.open(newline="")) if row["frame"] == "540"]
-    return {
-        row["candidate"]: round(100 * float(row["ray_contradiction_fraction"]))
-        for row in rows
-        if row["candidate"] in ("original", "depth")
-    }
+def load_decisions(path: Path) -> dict[int, dict[str, str]]:
+    with path.open(newline="") as stream:
+        return {int(row["frame"]): row for row in csv.DictReader(stream)}
 
 
 def render(
@@ -92,45 +90,58 @@ def render(
     masks: Path,
     intrinsics: np.ndarray,
     shaft_points: np.ndarray,
-    poses: dict[str, np.ndarray],
-    percentages: dict[str, int],
+    poses: np.ndarray,
+    decisions: dict[int, dict[str, str]],
     *,
     freeze: bool,
 ) -> np.ndarray:
     canvas = np.full((SIZE[1], SIZE[0], 3), (18, 23, 29), dtype=np.uint8)
-    write_text(canvas, "SAME RECORDED FRAME", 40, 53, 1.02)
-    write_text(canvas, "CYAN = visible shaft from depth", 40, 86, 0.62, CYAN)
-    write_text(canvas, "ORANGE = predicted shaft", 40, 115, 0.62, ORANGE)
+    write_text(canvas, "CHECK AFTER POINT2POSE", 40, 53, 0.92)
+    write_text(canvas, "Same P2P pose; SDF unchanged", 40, 86, 0.64)
+    write_text(canvas, "CYAN: visible shaft  ORANGE: P2P pose", 40, 115, 0.55, CYAN)
     points, pixels, _ = cloud_and_pixels(dataset, masks, frame, intrinsics)
     middle, _, visible_axis, _ = shaft_middle(points, pixels)
     visible_center = middle.mean(axis=0)
     visible_line = project(visible_center + np.array((-0.05, 0.05))[:, None] * visible_axis, intrinsics)
+    decision = decisions[frame]
+    rejected = decision["verdict"] == "rejected"
     for name, y, label in (
-        ("original", PANEL_YS[0], "Original tracker pose"),
-        ("depth", PANEL_YS[1], "Depth-filtered candidate"),
+        ("proposal", PANEL_YS[0], "Point2Pose emitted pose"),
+        ("checked", PANEL_YS[1], "After the final pose check"),
     ):
         write_text(canvas, label, 40, y - 16, 0.88)
-        panel = frame_panel(
-            frame, dataset, masks, intrinsics, shaft_points, poses[name][frame - 100], visible_line
-        )
+        pose = poses[frame - 100] if name == "proposal" or not rejected else None
+        panel = frame_panel(frame, dataset, masks, intrinsics, shaft_points, pose, visible_line)
         canvas[y : y + PANEL_SIZE[1], PANEL_X : PANEL_X + PANEL_SIZE[0]] = panel
-        if freeze:
+        if name == "checked":
             cv2.rectangle(
                 canvas,
                 (PANEL_X + 10, y + PANEL_SIZE[1] - 53),
-                (PANEL_X + 360, y + PANEL_SIZE[1] - 8),
+                (PANEL_X + 580, y + PANEL_SIZE[1] - 8),
                 (8, 12, 17),
                 -1,
             )
+            verdict_label = (
+                "REJECTED: pose withheld"
+                if rejected
+                else "Unresolved: pose not rejected"
+                if decision["verdict"] == "unresolved"
+                else "Supported: pose retained"
+            )
             write_text(
-                canvas, f"{percentages[name]}% depth conflict", PANEL_X + 22, y + PANEL_SIZE[1] - 19, 0.77
+                canvas,
+                verdict_label,
+                PANEL_X + 22,
+                y + PANEL_SIZE[1] - 19,
+                0.72,
+                RED if rejected else WHITE,
             )
     if freeze:
-        write_text(canvas, "Frame 540: original pose disagrees", 40, 1404, 0.78)
-        write_text(canvas, "with the visible depth.", 40, 1445, 0.78)
+        write_text(canvas, f"Frame 540: {decision['contradicted_rays']} rays contradict", 40, 1404, 0.76)
+        write_text(canvas, f"the pose; {decision['supported_rays']} support it.", 40, 1445, 0.76)
     else:
-        write_text(canvas, "Recorded insertion and release", 40, 1404, 0.72)
-        write_text(canvas, f"Frame {frame}", 40, 1445, 0.72, (185, 195, 205))
+        write_text(canvas, "No new pose is invented here.", 40, 1404, 0.72)
+        write_text(canvas, f"Recorded frame {frame}", 40, 1445, 0.72, (185, 195, 205))
     return canvas
 
 
@@ -148,14 +159,19 @@ def main() -> None:
         offsets = features["dowel_reference_end_offsets_m"].copy()
     shaft_points = center + offsets[:, None] * axis
     with np.load(HERE / "p2p_dowel_internal_control_100_550.npz") as original:
-        original_poses = original["poses"].copy()
-    with np.load(HERE / "p2p_dowel_sdf_depth_component_100_550.npz") as depth:
-        depth_poses = depth["poses"].copy()
-    poses = {"original": original_poses, "depth": depth_poses}
-    percentages = contradiction_at_540(HERE / "final_pose_bank_dowel_eroded.csv")
+        poses = original["poses"].copy()
+        source_lost = original["lost"].copy()
+    with np.load(HERE / "post_p2p_dowel_gated_100_550.npz") as checked:
+        if not np.array_equal(poses, checked["poses"]):
+            raise ValueError("the post-output gate changed Point2Pose poses")
+        if np.any(source_lost[400:441]):
+            raise ValueError("source tracker lost one of the rendered frames")
+    decisions = load_decisions(HERE / "post_p2p_dowel_gate.csv")
+    if decisions[540]["verdict"] != "rejected":
+        raise ValueError("frame 540 was not rejected by the post-output gate")
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.poster.parent.mkdir(parents=True, exist_ok=True)
-    poster = render(540, args.dataset, args.masks, intrinsics, shaft_points, poses, percentages, freeze=True)
+    poster = render(540, args.dataset, args.masks, intrinsics, shaft_points, poses, decisions, freeze=True)
     if not cv2.imwrite(str(args.poster), poster):
         raise OSError(f"could not write poster {args.poster}")
     command = [
@@ -196,7 +212,7 @@ def main() -> None:
                 intrinsics,
                 shaft_points,
                 poses,
-                percentages,
+                decisions,
                 freeze=frame == 540,
             )
             encoder.stdin.write(image.tobytes())
