@@ -21,7 +21,6 @@ from lerobot.policies.flash.appearance import (
     ReferenceAppearanceFrame,
     Sam3MaskSource,
     build_appearance_model,
-    build_appearance_pose_backend,
 )
 from lerobot.policies.flash.causal_service import CausalTrackingConfig
 from lerobot.policies.flash.dino_features import DinoPatchExtractor
@@ -41,6 +40,7 @@ from lerobot.policies.flash.skill import (
 )
 from lerobot.policies.flash.symmetry import AxialSymmetry
 from lerobot.policies.flash.trajectory import Evidence, PoseEstimate
+from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig, build_vision_backend
 from lerobot.robots.so107_description.calibrated_kinematics import make_calibrated_so107_kinematics
 
 
@@ -268,8 +268,9 @@ def prepare(
     ).hexdigest()[:12]
     reference_index = int(annotation["reference_frame"])
     reference_frame = _frame(root, reference_index, intrinsics, base_from_camera, version)
+    vision_config = VisionPipelineConfig.from_settings(annotation, backend="appearance")
     mask_source = Sam3MaskSource(
-        prompts, camera_id="flash-demo-preparation", resolution=annotation["sam_resolution"]
+        prompts, camera_id="flash-demo-preparation", resolution=vision_config.sam_resolution
     )
     reference_masks = _apply_reference_polygons(
         mask_source.masks(reference_frame),
@@ -332,6 +333,7 @@ def prepare(
         else None
     )
     cache_identity["causal_tracking"] = annotation.get("causal_tracking")
+    cache_identity["vision_pipeline"] = vision_config.to_dict()
     cache_key = hashlib.sha256(
         json.dumps(cache_identity, sort_keys=True).encode()
         + intrinsics.tobytes()
@@ -392,16 +394,12 @@ def prepare(
                     observed_counts[role] += evidence == Evidence.OBSERVED
                 estimates.append(row)
     else:
-        backend = build_appearance_pose_backend(
-            tuple(models),
-            extractor,
+        backend = build_vision_backend(
+            vision_config,
             mask_source,
-            min_similarity=float(annotation["min_similarity"]),
-            threshold_m=float(annotation["registration_threshold_m"]),
-            min_inliers=int(annotation["registration_min_inliers"]),
-            trials=int(annotation["registration_trials"]),
+            models=tuple(models),
+            extractor=extractor,
             axial_symmetries=tuple(axial_symmetries),
-            visible_shape_fallback=False,
             clock=lambda: 0.0,
         )
         grasp_camera = _nearest_index(camera_times, times[grasp])
@@ -548,6 +546,7 @@ def prepare(
         prompts,
         annotation["descriptor_model_id"],
         tuple(axial_symmetries),
+        vision_config,
     )
     for role, rel in mask_paths.items():
         path = root / rel
@@ -569,6 +568,7 @@ def prepare(
             }
             for role in prompts
         },
+        "vision_pipeline": vision_config.to_dict(),
         "pose_pipeline": "direct_plus_causal_scene" if causal_config is not None else "direct_only",
         "pose_estimator_frames": {
             role: {

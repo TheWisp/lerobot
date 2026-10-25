@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
-from typing import cast
 
 import numpy as np
 
 from .causal_service import CausalTrackingConfig, build_causal_pose_service
-from .perception import InstanceMaskPoseBackend, LatestPoseStore, ObjectReference, PoseBackend, RGBDFrame
+from .perception import LatestPoseStore, ObjectReference, PoseBackend, RGBDFrame
+from .perception_step import PerceptionPipeline, PerceptionResult
 from .symmetry import AxialSymmetry
 from .trajectory import PoseEstimate
 
@@ -22,6 +22,7 @@ def extract_pose_trace(
     object_points_by_role: dict[str, np.ndarray] | None = None,
     axial_symmetries: tuple[AxialSymmetry, ...] = (),
     attached_role_at_frame: Callable[[int], str | None] | None = None,
+    on_vision_result: Callable[[PerceptionResult], None] | None = None,
 ) -> list[dict[str, PoseEstimate]]:
     """Extract one causal pose row per recorded frame, without a robot clock.
 
@@ -30,11 +31,9 @@ def extract_pose_trace(
     finish its direct proposal before advancing to the next frame. It does not
     claim to reproduce live scheduling or the gripper attachment updater.
     """
-    backend.initialize(references)
+    pipeline = PerceptionPipeline(backend, references, require_masks=causal_tracking is not None)
     service = None
     if causal_tracking is not None:
-        if not hasattr(backend, "last_masks"):
-            raise TypeError("causal demo extraction requires aligned instance masks")
         store = LatestPoseStore()
         service = build_causal_pose_service(
             store,
@@ -46,18 +45,15 @@ def extract_pose_trace(
             object_points_by_role=object_points_by_role,
             axial_symmetries=axial_symmetries,
         )
-    roles = {reference.role for reference in references}
     trace = []
     for frame in frames:
-        proposals = backend.update(frame)
+        result = pipeline.process(frame)
+        if on_vision_result is not None:
+            on_vision_result(result)
+        proposals = result.estimates
         by_role = {estimate.role: estimate for estimate in proposals}
-        if set(by_role) != roles:
-            raise ValueError(f"direct demo proposals differ from reference roles: {set(by_role) ^ roles}")
         if service is not None:
-            masks = cast(InstanceMaskPoseBackend, backend).last_masks
-            for role, mask in masks.items():
-                if role not in roles or np.asarray(mask).shape != frame.depth.shape or mask.dtype != bool:
-                    raise ValueError(f"{role}: causal mask does not align with RGB-D")
+            masks = result.masks
             fused = service.process_offline(
                 frame,
                 proposals,

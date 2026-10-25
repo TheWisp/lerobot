@@ -120,6 +120,7 @@ def test_demo_preparation_versions_edited_inputs_and_launches_existing_importer(
 
     monkeypatch.setattr(run_api, "_ensure_no_active_process", lambda: None)
     monkeypatch.setattr(run_api, "_launch_subprocess", launch)
+    monkeypatch.setenv("LEROBOT_FLASH_TRACKING_PYTHON", "/test/shared-vision/python")
     edited = {**annotation, "grasp_reference_frame": 17}
     request = FlashDemoPrepareRequest(
         dataset_root=str(tmp_path),
@@ -138,6 +139,7 @@ def test_demo_preparation_versions_edited_inputs_and_launches_existing_importer(
         json.loads((tmp_path / "flash/v1/preparation-inputs/revised/keypoints.json").read_text()) == keypoints
     )
     args, command = launched[0]
+    assert args[0] == "/test/shared-vision/python"
     assert command == "flash_prepare"
     assert args[2].endswith("/benchmarks/flash_prepare_legacy.py")
     assert args[-4:] == [
@@ -325,10 +327,12 @@ def test_flash_launch_uses_shared_process_owner_and_prepared_episode(tmp_path, m
     monkeypatch.setattr(run_api, "_release_preview_cameras", release)
     monkeypatch.setattr(run_api, "_launch_subprocess", launch)
     monkeypatch.setattr(run_api, "_active_process", None)
+    monkeypatch.setenv("LEROBOT_FLASH_TRACKING_PYTHON", "/test/shared-vision/python")
     request = FlashRunRequest(
         dataset_root=str(tmp_path), episode=0, bundle_path=str(bundle), config_path=str(config)
     )
     assert asyncio.run(start_flash(request))["pid"] == 123
+    assert launched[0][0][0] == "/test/shared-vision/python"
     assert launched[0][1] == "flash"
     assert launched[0][0][-7:-2] == [
         str(bundle),
@@ -1069,6 +1073,7 @@ def test_raw_demo_editor_collects_object_names_and_action_from_visible_controls(
     page.get_by_role("button", name="Use current for release time").click()
     section("Advanced")
     page.get_by_role("button", name="Apply SO-107 starter parameters").click()
+    set_field("Vision pipeline (demo and run)", "surface")
     section("Key frames")
     seek(1)
     page.get_by_role("button", name="Add key frame at current time").click()
@@ -1077,6 +1082,7 @@ def test_raw_demo_editor_collects_object_names_and_action_from_visible_controls(
     page.wait_for_function(
         "() => document.querySelector('#flash-demo-editor-status').textContent.includes('captured test request')"
     )
+    assert submitted[0]["annotation"]["vision_pipeline"]["backend"] == "surface"
     assert submitted[0].get("bundle_path") is None
     assert submitted[0]["annotation"]["prompts_by_role"] == {
         "workpiece": "wooden cylinder",

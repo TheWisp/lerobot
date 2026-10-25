@@ -16,12 +16,9 @@ from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass, field, replace
 from queue import Empty, Full
-from typing import cast
 
-import numpy as np
-
-from .perception import InstanceMaskPoseBackend, LatestPoseStore, ObjectReference, PoseBackend, RGBDFrame
-from .trajectory import PoseEstimate
+from .perception import LatestPoseStore, ObjectReference, PoseBackend, RGBDFrame
+from .perception_step import PerceptionPipeline, PerceptionResult
 
 
 @dataclass(frozen=True)
@@ -29,14 +26,7 @@ class _Ready:
     pass
 
 
-@dataclass(frozen=True)
-class _Result:
-    estimates: tuple[PoseEstimate, ...]
-    failures: dict[str, str]
-    frame_id: int
-    source_time_s: float
-    calibration_version: str
-    masks: dict[str, np.ndarray]
+_Result = PerceptionResult
 
 
 @dataclass(frozen=True)
@@ -64,33 +54,10 @@ def _run_backend(
     require_masks: bool,
 ):
     try:
-        backend = factory()
-        if require_masks and not hasattr(backend, "last_masks"):
-            raise TypeError("causal tracking requires a pose backend that exposes aligned instance masks")
-        backend.initialize(references)
-        known_roles = {reference.role for reference in references}
+        pipeline = PerceptionPipeline(factory(), references, require_masks=require_masks)
         results.put(_Ready())
         while (frame := frames.get()) is not None:
-            estimates = backend.update(frame)
-            masks = cast(InstanceMaskPoseBackend, backend).last_masks if require_masks else {}
-            for role, mask in masks.items():
-                if (
-                    role not in known_roles
-                    or np.asarray(mask).shape != frame.depth.shape
-                    or np.asarray(mask).dtype != bool
-                ):
-                    raise ValueError(f"{role}: causal mask does not align with RGB-D")
-            _publish_latest(
-                results,
-                _Result(
-                    estimates,
-                    dict(getattr(backend, "last_failure", {})),
-                    frame.frame_id,
-                    frame.source_time_s,
-                    frame.calibration_version,
-                    {role: np.asarray(mask, dtype=bool).copy() for role, mask in masks.items()},
-                ),
-            )
+            _publish_latest(results, pipeline.process(frame))
     except Exception:
         _publish_latest(results, _Failure(traceback.format_exc()))
 

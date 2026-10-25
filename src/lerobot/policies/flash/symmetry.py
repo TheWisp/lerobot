@@ -125,6 +125,10 @@ class SymmetryCanonicalizingBackend:
         return {**getattr(self.inner, "last_failure", {}), **self._last_failure}
 
     @property
+    def last_details(self):
+        return getattr(self.inner, "last_details", {})
+
+    @property
     def last_masks(self) -> dict[str, np.ndarray]:
         return cast(InstanceMaskPoseBackend, self.inner).last_masks
 

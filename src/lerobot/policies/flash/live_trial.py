@@ -24,7 +24,6 @@ import numpy as np
 
 from lerobot.cameras.realsense import RealSenseCamera, RealSenseCameraConfig
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
-from lerobot.policies.flash.appearance import AppearanceBackendFactory
 from lerobot.policies.flash.causal_service import CausalTrackingConfig
 from lerobot.policies.flash.kinematics import SelectedJointKinematics
 from lerobot.policies.flash.live_telemetry import FlashLiveTelemetry
@@ -34,6 +33,7 @@ from lerobot.policies.flash.prepared import PreparedFlashSkill
 from lerobot.policies.flash.recording import FlashEpisodeWriter, RecorderWorker
 from lerobot.policies.flash.rgbd_source import LeRobotRGBDSource
 from lerobot.policies.flash.runtime import AttachmentRuntimeLimits, FlashRuntime
+from lerobot.policies.flash.vision_pipeline import VisionBackendFactory, VisionPipelineConfig
 from lerobot.robots.obs_stream import publish_external_observation
 from lerobot.robots.so107_description.calibrated_kinematics import make_calibrated_so107_kinematics
 from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
@@ -114,6 +114,16 @@ def trial(
         != source_dataset_root.expanduser().resolve()
     ):
         raise ValueError("trial config source dataset differs from the selected FLASH demo dataset")
+    vision_config = bundle.vision_pipeline or VisionPipelineConfig.from_settings(
+        {"vision_pipeline": {"visible_shape_fallback": True}, **settings}, backend="appearance"
+    )
+    if (
+        bundle.vision_pipeline is not None
+        and settings.get("vision_pipeline") is not None
+        and VisionPipelineConfig.from_dict(settings["vision_pipeline"]) != bundle.vision_pipeline
+    ):
+        raise ValueError("live vision config differs from the prepared demo; reprepare it first")
+    settings = {**settings, "vision_pipeline": vision_config.to_dict()}
     if auto_output and not preflight:
         settings = _new_attempt_settings(settings, datetime.now(UTC).strftime("%Y%m%d-%H%M%S-%f"))
     profile = json.loads(Path(settings["robot_profile"]).expanduser().read_text())
@@ -183,15 +193,11 @@ def trial(
                 },
             ),
         )
-        backend = AppearanceBackendFactory(
+        backend = VisionBackendFactory(
             bundle.appearance_models,
             bundle.prompts_by_role,
             settings["camera_serial"],
-            settings["min_similarity"],
-            settings["registration_threshold_m"],
-            settings["registration_min_inliers"],
-            settings["registration_trials"],
-            sam_resolution=settings["sam_resolution"],
+            vision_config,
             dino_model_id=bundle.descriptor_model_id,
             axial_symmetries=bundle.axial_symmetries,
             seed_points_by_role=settings.get("seed_points_by_role"),

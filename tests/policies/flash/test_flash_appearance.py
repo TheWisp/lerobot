@@ -91,7 +91,7 @@ def test_demo_and_live_backend_construction_register_the_same_view(monkeypatch):
     assert estimate.evidence == Evidence.OBSERVED
     np.testing.assert_allclose(estimate.pose[:3, 3], [0.02, 0, 1], atol=1e-8)
 
-    import lerobot.policies.flash.appearance as appearance_module
+    import lerobot.policies.flash.vision_pipeline as appearance_module
 
     monkeypatch.setattr(appearance_module, "Sam3MaskSource", lambda *args, **kwargs: Masks(mask))
     monkeypatch.setattr(

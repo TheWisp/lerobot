@@ -22,11 +22,10 @@ import cv2
 import numpy as np
 
 from .appearance import Sam3MaskSource
-from .perception import LatestRGBDFrameStore, RGBDFrame
-from .surface_correspondence import SurfaceMotionConfig
-from .surface_grounding import ShapeConfig
-from .surface_observation import SurfaceObservationConfig
-from .surface_tracking import SurfaceTrackingSession, load_ufm
+from .perception import LatestRGBDFrameStore, ObjectReference, ReferenceSnippet, RGBDFrame
+from .perception_step import PerceptionPipeline
+from .surface_tracking import load_ufm
+from .vision_pipeline import VisionPipelineConfig, build_vision_backend
 
 
 def write_snapshot(path: Path, value: dict) -> None:
@@ -83,6 +82,26 @@ def new_selection(adapter, label: str, point, sequence: int):
         adapter_factory=lambda **_: adapter,
     )
     return source, sequence
+
+
+def make_debug_pipeline(config: VisionPipelineConfig, source, matcher, frame: RGBDFrame):
+    backend = build_vision_backend(config, source, matcher=matcher, local_reference=True)
+    reference = ObjectReference(
+        "object",
+        f"preview:{frame.frame_id}",
+        (
+            ReferenceSnippet(
+                "live-preview",
+                0,
+                frame.frame_id,
+                "object",
+                np.eye(4),
+                "unrecorded",
+                frame.calibration_version,
+            ),
+        ),
+    )
+    return PerceptionPipeline(backend, (reference,), require_masks=True)
 
 
 def run(directory: Path, config: dict) -> None:
@@ -224,18 +243,14 @@ def run(directory: Path, config: dict) -> None:
                             matcher = load_ufm()
                         if adapter is None:
                             adapter = Sam3TrackByDetectionAdapter(
-                                device="cuda", resolution=config["sam_resolution"]
+                                device="cuda", resolution=config["vision_pipeline"]["sam_resolution"]
                             )
                         label = command.get("prompt", "").strip() or "selected object"
                         point = command.get("point")
                         source, click_sequence = new_selection(adapter, label, point, click_sequence)
                         object_name = label
-                        session = SurfaceTrackingSession(
-                            matcher,
-                            observation_config=SurfaceObservationConfig(**config["observation"]),
-                            shape_config=ShapeConfig(**config["shape"]),
-                            motion_config=SurfaceMotionConfig(**config["motion"]),
-                        )
+                        vision_config = VisionPipelineConfig.from_dict(config["vision_pipeline"])
+                        session = make_debug_pipeline(vision_config, source, matcher, selected)
                         frozen = None
                         last_frame_id = -1
                         tracking = True
@@ -253,9 +268,10 @@ def run(directory: Path, config: dict) -> None:
             skipped = max(0, frame.frame_id - last_frame_id - 1) if last_frame_id >= 0 else 0
             last_frame_id = frame.frame_id
             try:
-                mask = source.masks(frame).get("object", np.zeros(frame.depth.shape, bool))
-                mask_ms = (time.perf_counter() - begin) * 1000
-                result = session.update(frame.rgb, frame.metric_depth(), mask, k, frame.frame_id)
+                output = session.process(frame)
+                mask = output.masks.get("object", np.zeros(frame.depth.shape, bool))
+                mask_ms = session.backend.mask_source.elapsed_ms
+                result = dict(output.details["object"])
                 contours, _ = cv2.findContours(
                     mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
                 )

@@ -25,10 +25,10 @@ def test_invalid_configuration_fails_before_camera_launch():
         flash_tracking.TrackingStart(shape={"depth_tolerance_m": float("nan")})
     with pytest.raises(ValidationError):
         flash_tracking.TrackingStart(fps=0)
-    with pytest.raises(HTTPException):
-        asyncio.run(flash_tracking.start(flash_tracking.TrackingStart(observation={"mask_margin_px": -1})))
-    with pytest.raises(HTTPException):
-        asyncio.run(flash_tracking.start(flash_tracking.TrackingStart(motion={"grid_step_px": 0})))
+    with pytest.raises(ValidationError):
+        flash_tracking.TrackingStart(observation={"mask_margin_px": -1})
+    with pytest.raises(ValidationError):
+        flash_tracking.TrackingStart(motion={"grid_step_px": 0})
 
 
 def test_snapshot_keeps_camera_and_estimate_frame_identity_separate(tmp_path, monkeypatch):
@@ -114,3 +114,18 @@ def test_live_debug_click_uses_painted_frozen_frame_not_latest_preview(gui_page)
     assert controls[0]["frame_id"] == 42
     assert controls[0]["point"] == pytest.approx([50, 25], abs=1)
     assert controls[0]["action"] == "select"
+
+
+def test_debugger_exports_the_common_configuration_and_migrates_old_payloads():
+    request = flash_tracking.TrackingStart(sam_resolution=448, observation={"mask_margin_px": 3})
+    saved = request.model_dump()
+    assert "observation" not in saved and "sam_resolution" not in saved
+    assert saved["vision_pipeline"]["sam_resolution"] == 448
+    assert saved["vision_pipeline"]["observation"]["mask_margin_px"] == 3
+    from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig
+
+    assert VisionPipelineConfig.from_dict(saved["vision_pipeline"]) == request.vision_pipeline
+    with pytest.raises(ValidationError):
+        flash_tracking.TrackingStart(vision_pipeline={"unknown_setting": 1})
+    with pytest.raises(ValidationError, match="only once"):
+        flash_tracking.TrackingStart(observation={}, vision_pipeline={"observation": {}})

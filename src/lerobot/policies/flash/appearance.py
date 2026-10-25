@@ -300,23 +300,25 @@ class AppearanceBackendFactory:
             raise ValueError("one text prompt is needed for each appearance model role")
 
     def __call__(self) -> PoseBackend:
-        from .dino_features import DinoPatchExtractor
+        # Compatibility for callers holding the original factory. All new
+        # consumers choose their estimator through the common composition point.
+        from .vision_pipeline import VisionBackendFactory, VisionPipelineConfig
 
-        source = Sam3MaskSource(
-            self.prompts_by_role,
-            camera_id=self.camera_id,
-            device=self.device,
-            resolution=self.sam_resolution,
-            seed_points_by_role=self.seed_points_by_role,
-        )
-        return build_appearance_pose_backend(
+        return VisionBackendFactory(
             self.models,
-            DinoPatchExtractor(model_id=self.dino_model_id, device=self.device),
-            source,
-            min_similarity=self.min_similarity,
-            threshold_m=self.threshold_m,
-            min_inliers=self.min_inliers,
-            trials=self.trials,
+            self.prompts_by_role,
+            self.camera_id,
+            VisionPipelineConfig(
+                backend="appearance",
+                sam_resolution=self.sam_resolution,
+                min_similarity=self.min_similarity,
+                registration_threshold_m=self.threshold_m,
+                registration_min_inliers=self.min_inliers,
+                registration_trials=self.trials,
+                visible_shape_fallback=True,
+            ),
+            dino_model_id=self.dino_model_id,
             axial_symmetries=self.axial_symmetries,
-            visible_shape_fallback=True,
-        )
+            seed_points_by_role=self.seed_points_by_role,
+            device=self.device,
+        )()

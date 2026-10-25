@@ -13,6 +13,7 @@ from .matched_rgbd import ObjectPointModel
 from .perception import ObjectReference, ReferenceSnippet
 from .skill import FlashSkill
 from .symmetry import AxialSymmetry
+from .vision_pipeline import VisionPipelineConfig
 
 
 @dataclass(frozen=True)
@@ -30,6 +31,7 @@ class PreparedFlashSkill:
     prompts_by_role: dict[str, str]
     descriptor_model_id: str
     axial_symmetries: tuple[AxialSymmetry, ...] = ()
+    vision_pipeline: VisionPipelineConfig | None = None
 
     def __post_init__(self) -> None:
         refs = {reference.role: reference for reference in self.references}
@@ -104,6 +106,7 @@ class PreparedFlashSkill:
         np.savez_compressed(root / "models.npz", **arrays)
         manifest = {
             "schema_version": 1,
+            "vision_pipeline": self.vision_pipeline.to_dict() if self.vision_pipeline else None,
             "skill": "skill.json",
             "models": "models.npz",
             "references": references,
@@ -165,4 +168,7 @@ class PreparedFlashSkill:
             manifest["prompts_by_role"],
             manifest["descriptor_model_id"],
             tuple(AxialSymmetry(**item) for item in manifest.get("axial_symmetries", [])),
+            VisionPipelineConfig.from_dict(manifest["vision_pipeline"])
+            if manifest.get("vision_pipeline") is not None
+            else None,
         )

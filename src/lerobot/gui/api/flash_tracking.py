@@ -11,16 +11,13 @@ import sys
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict
 from pathlib import Path
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from lerobot.policies.flash.surface_correspondence import SurfaceMotionConfig
-from lerobot.policies.flash.surface_grounding import ShapeConfig
-from lerobot.policies.flash.surface_observation import SurfaceObservationConfig
+from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig
 
 router = APIRouter(prefix="/api/run/flash/tracking", tags=["flash-tracking"])
 _io = ThreadPoolExecutor(max_workers=1, thread_name_prefix="flash-debug-state")
@@ -34,10 +31,30 @@ class TrackingStart(BaseModel):
     height: int = Field(default=720, gt=0)
     fps: int = Field(default=30, gt=0)
     preview_fps: int = Field(default=10, gt=0)
-    sam_resolution: int = Field(default=504, ge=224, multiple_of=14)
-    observation: SurfaceObservationConfig = Field(default_factory=SurfaceObservationConfig)
-    shape: ShapeConfig = Field(default_factory=ShapeConfig)
-    motion: SurfaceMotionConfig = Field(default_factory=SurfaceMotionConfig)
+    vision_pipeline: VisionPipelineConfig = Field(default_factory=VisionPipelineConfig)
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_filter_settings(cls, values):
+        # Accept the original debugger payload, but publish only one canonical
+        # configuration so snapshots can be used for preparation and live runs.
+        values = dict(values)
+        legacy = {
+            key: values.pop(key)
+            for key in ("observation", "shape", "motion", "sam_resolution")
+            if key in values
+        }
+        if legacy:
+            pipeline = dict(values.get("vision_pipeline") or {})
+            if set(legacy) & set(pipeline):
+                raise ValueError("provide each tracking setting only once")
+            values["vision_pipeline"] = {**pipeline, **legacy}
+        if isinstance(values.get("vision_pipeline"), dict):
+            try:
+                values["vision_pipeline"] = VisionPipelineConfig.from_dict(values["vision_pipeline"])
+            except TypeError as exc:
+                raise ValueError(str(exc)) from exc
+        return values
 
 
 class TrackingControl(BaseModel):
@@ -83,26 +100,10 @@ async def cameras() -> dict:
 async def start(req: TrackingStart) -> dict:
     from . import run
 
-    # Negative filter sizes and non-finite solver settings must fail before a
-    # camera or model is opened. Zero mask erosion is a valid experiment.
-    for key, value in asdict(req.observation).items():
-        if value is not None and (value < 0 or (value == 0 and key != "mask_margin_px")):
-            raise HTTPException(400, f"Invalid observation setting: {key}")
-    if any(
-        value < 0 or (value == 0 and key != "mask_boundary_tolerance_px")
-        for key, value in asdict(req.shape).items()
-    ):
-        raise HTTPException(400, "Shape settings must be positive")
-    motion = req.motion
-    if (
-        any(value <= 0 for key, value in asdict(motion).items() if key != "covisibility_min")
-        or not 0 <= motion.covisibility_min <= 1
-        or not 0 < motion.ransac_confidence < 1
-        or motion.min_ransac_pairs < 4
-        or motion.crop_min_px > motion.crop_max_px
-        or 2 * motion.grid_step_px >= motion.input_size_px
-    ):
-        raise HTTPException(400, "Invalid RGB motion settings")
+    if req.vision_pipeline.backend != "surface":
+        raise HTTPException(
+            400, "Camera-only inspection uses a local surface reference; appearance needs a prepared demo"
+        )
     async with run._launch_lock:
         run._ensure_no_active_process()
         global _directory

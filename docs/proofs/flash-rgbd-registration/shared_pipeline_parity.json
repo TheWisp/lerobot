@@ -1,0 +1,122 @@
+[
+  {
+    "frame": 234,
+    "status": "reference",
+    "accepted": true,
+    "original_ms": 32.02647500438616,
+    "pipeline_ms": 31.444246997125447,
+    "surface_p90_mm": 0.0
+  },
+  {
+    "frame": 235,
+    "status": "fitted",
+    "accepted": true,
+    "original_ms": 240.84181600483134,
+    "pipeline_ms": 133.89470998663455,
+    "surface_p90_mm": 1.7538076430755374
+  },
+  {
+    "frame": 236,
+    "status": "fitted",
+    "accepted": true,
+    "original_ms": 82.8091650037095,
+    "pipeline_ms": 84.06047301832587,
+    "surface_p90_mm": 1.8817919293249612
+  },
+  {
+    "frame": 237,
+    "status": "fitted",
+    "accepted": true,
+    "original_ms": 80.73301403783262,
+    "pipeline_ms": 81.78976899944246,
+    "surface_p90_mm": 2.1667826801841765
+  },
+  {
+    "frame": 238,
+    "status": "fitted",
+    "accepted": true,
+    "original_ms": 79.57115303725004,
+    "pipeline_ms": 80.72806504787877,
+    "surface_p90_mm": 2.270451628113867
+  },
+  {
+    "frame": 270,
+    "status": "reference",
+    "accepted": true,
+    "original_ms": 31.401187006849796,
+    "pipeline_ms": 32.41435997188091,
+    "surface_p90_mm": 69.79560650166488
+  },
+  {
+    "frame": 271,
+    "status": "fitted",
+    "accepted": false,
+    "original_ms": 114.06453902600333,
+    "pipeline_ms": 116.45798198878765,
+    "surface_p90_mm": 10.8112364997231
+  },
+  {
+    "frame": 272,
+    "status": "fitted",
+    "accepted": false,
+    "original_ms": 102.81798895448446,
+    "pipeline_ms": 104.63465499924496,
+    "surface_p90_mm": 42.77261972995501
+  },
+  {
+    "frame": 273,
+    "status": "fitted",
+    "accepted": false,
+    "original_ms": 83.66618596483022,
+    "pipeline_ms": 84.79827200062573,
+    "surface_p90_mm": 87.86263995052947
+  },
+  {
+    "frame": 274,
+    "status": "fitted",
+    "accepted": false,
+    "original_ms": 83.57234002323821,
+    "pipeline_ms": 85.55557701038197,
+    "surface_p90_mm": 85.06959659043089
+  },
+  {
+    "frame": 435,
+    "status": "reference",
+    "accepted": true,
+    "original_ms": 34.439835988450795,
+    "pipeline_ms": 35.778918012510985,
+    "surface_p90_mm": 0.0
+  },
+  {
+    "frame": 436,
+    "status": "fitted",
+    "accepted": true,
+    "original_ms": 87.58875704370439,
+    "pipeline_ms": 88.18710496416315,
+    "surface_p90_mm": 2.9588853517771962
+  },
+  {
+    "frame": 437,
+    "status": "fitted",
+    "accepted": true,
+    "original_ms": 88.39000499574468,
+    "pipeline_ms": 88.76317198155448,
+    "surface_p90_mm": 2.938080806140693
+  },
+  {
+    "frame": 438,
+    "status": "fitted",
+    "accepted": true,
+    "original_ms": 87.26429101079702,
+    "pipeline_ms": 88.37166003650054,
+    "surface_p90_mm": 2.9909737122466744
+  },
+  {
+    "frame": 439,
+    "status": "fitted",
+    "accepted": true,
+    "original_ms": 86.76183101488277,
+    "pipeline_ms": 88.25260697631165,
+    "surface_p90_mm": 2.407314862895329
+  }
+]

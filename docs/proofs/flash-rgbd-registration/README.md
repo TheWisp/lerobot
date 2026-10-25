@@ -800,3 +800,40 @@ admission, allowing unsupported directions, bypassing the second-frame check,
 or freezing gripper propagation each causes a regression test to fail. The
 recorded-output test also restores the original bypass by replacing frame 300
 with its raw visual candidate and confirms the consumer audit rejects it.
+
+### Shared perception pipeline verification — 2026-10-25
+
+`PerceptionPipeline` now serves recorded extraction, the spawned live pose
+worker, and the camera debugger. The unchanged `SurfaceTrackingSession` fitter
+is a backend component rather than a second debugger implementation. Prepared
+bundles carry their `VisionPipelineConfig`, including SAM resolution, for the
+live factory to reuse. Existing appearance bundles retain a compatibility path.
+
+Using the local insertion recording, cached SAM masks and the actual published
+UFM weights, compared the raw session with the shared pipeline on frames
+234–238, 270–274 and 435–439, explicitly seeding each five-frame segment.
+All 15 camera transforms, landmarks, measured points and fitted surface points
+matched exactly. This is refactor parity, **not** a ground-truth accuracy test.
+The shared acceptance policy rejected four continued fits in the 270 segment;
+they remain visible as candidates, not accepted robot evidence. The initial
+reference is a coordinate choice, not independent evidence of pose accuracy.
+
+[Per-frame timings and decisions](shared_pipeline_parity.json) record the check.
+Median fitting time over the continued frames was 87.0 ms for the raw session
+and 88.2 ms through the shared pipeline. SAM is excluded because both sides used
+recorded masks; the first neural call includes warm-up, so these are diagnostic
+timings rather than a controlled throughput benchmark.
+
+Also drove the real Run → FLASH camera debugger through object-name selection:
+no browser errors, aligned overlay and 3D geometry present, camera about 30 fps,
+steady processing about 4–5 fps. This was a stationary camera-only check, with
+no robot connection or motion. It does not validate a physical manipulation run.
+
+Automated checks cover identical results through all three consumer entry
+points, registered object-frame transport (without recentering), missing initial
+registration, loss and reacquisition, single segmentation per image, candidate
+rejection, saved configuration round trips, GUI selection and subprocess
+configuration. Existing group-fallback and motor-loop tests remain in the FLASH
+suite. The whole FLASH suite passed (229 tests, one skipped); the GUI checks
+passed 22 tests, including the real-browser editor/debugger interactions.
+Affected configuration and static-asset checks were rerun after final edits.

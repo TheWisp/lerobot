@@ -562,6 +562,9 @@ function _flashEditorRender() {
             _flashEditorRender();
         });
     }
+    _flashEditorField(advanced, 'Vision pipeline (demo and run)', a.vision_pipeline?.backend || 'appearance', value => {
+        a.vision_pipeline = {...(a.vision_pipeline || {}), backend: value};
+    }, ['appearance', 'surface']);
     for (const [key, label] of [
         ['max_demo_pose_gap_frames', 'Maximum demo pose gap (frames)'],
         ['connection_speed_m_s', 'Connection speed (m/s)'],
@@ -570,7 +573,10 @@ function _flashEditorRender() {
         ['registration_min_inliers', 'Minimum registration inliers'],
         ['registration_trials', 'Registration trials'],
         ['sam_resolution', 'SAM resolution'],
-    ]) _flashEditorField(advanced, label, a[key], value => { a[key] = value; }, null, 'number');
+    ]) _flashEditorField(advanced, label, a.vision_pipeline?.[key] ?? a[key], value => {
+        a[key] = value;
+        if (a.vision_pipeline && ['min_similarity', 'registration_threshold_m', 'registration_min_inliers', 'registration_trials', 'sam_resolution'].includes(key)) a.vision_pipeline[key] = value;
+    }, null, 'number');
     _flashEditorField(advanced, 'Descriptor model', a.descriptor_model_id, value => {
         a.descriptor_model_id = value;
     });

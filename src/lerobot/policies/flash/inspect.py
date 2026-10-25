@@ -45,6 +45,9 @@ def inspect_skill(path: str) -> dict:
             warnings.append(f"{interval.name}: no independently observed held-object demo pose")
     return {
         "schema_version": skill.schema_version,
+        "vision_pipeline": prepared.vision_pipeline.to_dict()
+        if prepared and prepared.vision_pipeline
+        else None,
         "source_repo_id": skill.source_repo_id,
         "source_episode": skill.source_episode,
         "milestones": [

@@ -1043,7 +1043,7 @@ async def start_flash(req: FlashRunRequest) -> dict:
         global _flash_live_path
         _flash_live_path = Path(tempfile.gettempdir()) / f"lerobot-flash-{secrets.token_hex(16)}.json"
         args = [
-            sys.executable,
+            os.environ.get("LEROBOT_FLASH_TRACKING_PYTHON", sys.executable),
             "-u",
             "-m",
             "lerobot.policies.flash.live_trial",
@@ -1454,7 +1454,7 @@ async def prepare_flash_demo(req: FlashDemoPrepareRequest) -> dict:
             raise HTTPException(400, f"Cannot prepare FLASH demo: {exc}") from exc
         importer = Path(__file__).resolve().parents[4] / "benchmarks" / "flash_prepare_legacy.py"
         args = [
-            sys.executable,
+            os.environ.get("LEROBOT_FLASH_TRACKING_PYTHON", sys.executable),
             "-u",
             str(importer),
             str(root),
