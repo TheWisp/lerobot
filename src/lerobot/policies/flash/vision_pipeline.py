@@ -38,6 +38,8 @@ class VisionPipelineConfig:
     parallel_surface_objects: bool = True
     pipeline_surface_frames: bool = True
     surface_object_workers: int = 2
+    compiled_surface_fit: bool = True
+    reuse_surface_search: bool = True
     observation: SurfaceObservationConfig = field(default_factory=SurfaceObservationConfig)
     shape: ShapeConfig = field(default_factory=ShapeConfig)
     motion: SurfaceMotionConfig = field(default_factory=SurfaceMotionConfig)
@@ -61,6 +63,8 @@ class VisionPipelineConfig:
             for value in (
                 self.parallel_surface_objects,
                 self.pipeline_surface_frames,
+                self.compiled_surface_fit,
+                self.reuse_surface_search,
                 self.shape.batch_jacobian,
             )
         ):
@@ -186,6 +190,14 @@ class SurfacePoseBackend:
         self._prepared_count = 0
         self._finished_count = 0
         self._matcher_lock = Lock()
+        from .surface_acceleration import SearchPool, compiled_kernels
+
+        self._fit_kernels = compiled_kernels() if config.compiled_surface_fit else None
+        self._search_pool = (
+            SearchPool(min(cpu_count() or 1, config.shape.batch_query_workers))
+            if config.reuse_surface_search
+            else None
+        )
 
     def _require_drained(self):
         if self._prepared_count != self._finished_count:
@@ -224,6 +236,9 @@ class SurfacePoseBackend:
             if pool is not None:
                 pool.shutdown(wait=True)
         self._prepare_pool = self._surface_pool = None
+        if self._search_pool is not None:
+            self._search_pool.close()
+            self._search_pool = None
 
     def update(self, frame):
         return self.finish(self.prepare(frame))
@@ -271,6 +286,8 @@ class SurfacePoseBackend:
                     shape_config=self.config.shape,
                     motion_config=self.config.motion,
                     matcher_lock=self._matcher_lock,
+                    fit_kernels=self._fit_kernels,
+                    search_pool=self._search_pool,
                 )
                 self.sessions[role] = session
             jobs.append((role, session, masks.get(role)))

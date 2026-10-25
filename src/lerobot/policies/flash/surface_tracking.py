@@ -60,9 +60,13 @@ class SurfaceTrackingSession:
         shape_config=None,
         motion_config=None,
         matcher_lock=None,
+        fit_kernels=None,
+        search_pool=None,
     ):
         self.matcher = matcher
         self.matcher_lock = matcher_lock
+        self.fit_kernels = fit_kernels
+        self.search_pool = search_pool
         self.motion_config = motion_config or SurfaceMotionConfig()
         self.observation_config = observation_config or SurfaceObservationConfig()
         self.shape_config = shape_config or ShapeConfig()
@@ -127,6 +131,8 @@ class SurfaceTrackingSession:
         detail.update(
             surface_points=len(all_points),
             sample_spacing_mm=spacing * 1000,
+            compiled_surface_fit=self.fit_kernels is not None,
+            reused_search_workers=self.search_pool.workers if self.search_pool is not None else 0,
         )
         prepared = {
             "current": current,
@@ -193,6 +199,8 @@ class SurfaceTrackingSession:
                 intrinsics,
                 self.shape_config,
                 prepared_reference=self.prepared_reference,
+                fit_kernels=self.fit_kernels,
+                search_pool=self.search_pool,
             ).correct(proposal)
             detail.update(fit, fit_ms=(time.perf_counter() - start) * 1000)
 

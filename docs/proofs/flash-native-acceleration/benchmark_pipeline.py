@@ -4,6 +4,7 @@ import argparse
 import json
 import time
 from contextlib import ExitStack
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -67,7 +68,8 @@ def inputs(args):
                 )
             )
             masks[n] = {"object": cv2.imread(str(mask_root / f"{n:06d}.png"), 0) > 0}
-    return sequence, masks, config
+    # Preserve the original independent oracle after deployment adds new defaults.
+    return sequence, masks, replace(config, compiled_surface_fit=False, reuse_surface_search=False)
 
 
 def run(args):
@@ -97,13 +99,19 @@ def run(args):
         pool = stack.enter_context(SearchPool(8))
         factories = {
             "baseline": None,
+            "deployed": None,
             "pool": fitter_type(search_pool=pool),
             "compiled": fitter_type(kernels=kernels),
             "compiled_pool": fitter_type(kernels=kernels, search_pool=pool),
         }
         for repeat in range(args.repeats):
             for mode in args.modes:
-                backend = build_vision_backend(config, Masks(), matcher=model, local_reference=True)
+                selected_config = (
+                    replace(config, compiled_surface_fit=True, reuse_surface_search=True)
+                    if mode == "deployed"
+                    else config
+                )
+                backend = build_vision_backend(selected_config, Masks(), matcher=model, local_reference=True)
                 pipeline = PerceptionPipeline(backend, references)
                 source = iter(sequence)
                 results, times = [], []

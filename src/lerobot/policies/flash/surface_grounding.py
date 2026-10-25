@@ -100,6 +100,8 @@ class WholeSurfaceFit:
         config: ShapeConfig,
         *,
         prepared_reference: PreparedReferenceSurface | None = None,
+        fit_kernels=None,
+        search_pool=None,
     ):
         prepared_reference = prepared_reference or PreparedReferenceSurface.build(reference, config)
         if prepared_reference.points is not reference or prepared_reference.config != config:
@@ -108,9 +110,15 @@ class WholeSurfaceFit:
         self.observation = observation
         self.k = k
         self.config = config
+        self.fit_kernels = fit_kernels
         self.target = observation.get("all_surface_points", observation["obs"]["points"])
         self.reference_tree = prepared_reference.tree
         self.target_tree = cKDTree(self.target)
+        if search_pool is not None:
+            from .surface_acceleration import PooledTree
+
+            self.reference_tree = PooledTree(self.reference_tree, search_pool)
+            self.target_tree = PooledTree(self.target_tree, search_pool)
         self.reference_queries = prepared_reference.queries
         self.target_queries = self.target[spatial_sample(self.target, config.max_fit_points)]
         cores = cpu_count() or 1
@@ -185,9 +193,31 @@ class WholeSurfaceFit:
     def _residual_with_distances(self, pose, predicted, model_distance, target_distance):
         uv = project(predicted, self.k)
         height, width = self.observation["depth"].shape
-        inside = (uv[:, 0] >= 0) & (uv[:, 0] <= width - 1) & (uv[:, 1] >= 0) & (uv[:, 1] <= height - 1)
         coordinates = (np.clip(uv[:, 1], 0, height - 1), np.clip(uv[:, 0], 0, width - 1))
         mask_distance = map_coordinates(self.outside_mask, coordinates, order=1, mode="nearest")
+        if self.fit_kernels is not None:
+            measured = self.fit_kernels[0](
+                predicted,
+                model_distance,
+                target_distance,
+                mask_distance,
+                self.observation["depth"],
+                uv,
+                self.config.depth_tolerance_m,
+                self.config.max_surface_distance_m,
+                self.config.mask_boundary_tolerance_px,
+                self.k[0, 0],
+            )
+            envelope = project(move(self.envelope, pose), self.k)
+            polygon = envelope[ConvexHull(envelope).vertices]
+            outline = self.fit_kernels[1](self.mask_outline, polygon, self.config.mask_boundary_tolerance_px)
+            outline = (
+                outline
+                * np.median(predicted[:, 2])
+                / (self.k[0, 0] * self.config.depth_tolerance_m * np.sqrt(len(self.mask_outline)))
+            )
+            return np.concatenate((measured, outline))
+        inside = (uv[:, 0] >= 0) & (uv[:, 0] <= width - 1) & (uv[:, 1] >= 0) & (uv[:, 1] <= height - 1)
         tolerance = self.config.depth_tolerance_m
         # A nearer measured surface may hide a model point. Smoothly suppress
         # its one-sided residual; do not suppress current observed object data.

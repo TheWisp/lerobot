@@ -1,6 +1,14 @@
 # CPU fitting and UFM batching experiments — 2026-10-25
 
-**Research only; not enabled in the live tracker.** These candidates preserve the current surface-fitting objective instead of replacing it with another registration algorithm. The independent baseline is production code at `3aa668b99`.
+**CPU paths deployed after these experiments; UFM batching remains research only.** These candidates preserve the current surface-fitting objective instead of replacing it with another registration algorithm. The independent benchmark baseline is production code at `3aa668b99`.
+
+## Deployment
+
+The shared demo/run/debug backend now enables `compiled_surface_fit` and `reuse_surface_search` by default. Both are explicit boolean fields in `VisionPipelineConfig`, also visible in the debugger's Camera & tracking parameters JSON. Setting either to `false` restores that part of the prior implementation. UFM still processes each object separately.
+
+The backend owns one bounded search pool, shared by its object sessions and closed after pending fitting workers finish. The compiler warms the float32/float64 kernels before processing frames and caches generated machine code. Numba is optional: without it, a logged fallback retains the original NumPy calculation. This rig's existing worker environment has Numba 0.68.0 installed with its existing NumPy 2.2.6; other environments can install those versions to reproduce this configuration. Per-frame diagnostics report whether compiled fitting is active and the reused worker count.
+
+Deployment verification passed 68 tests, including the real production fitter, shared pipeline, configuration round-trip, missing-compiler fallback and search-pool teardown. Reversing the production depth visibility direction makes the recorded-fit equivalence test fail. A fresh paired 30-frame/three-object run through the production backend reproduced every pose and decision exactly and measured 5.17 → 7.10 updates/s with saved masks; see [deployment measurements](deployed_pipeline.json). These are not SAM-inclusive live FPS.
 
 The compiled CPU calculations are the strongest result: they reduced fitting time on all four recorded fit cases and reproduced the baseline poses and acceptance decisions across three sequential recordings. Reusing search threads improved total throughput in those recordings, but slowed the isolated moving-ring fit. UFM batching reduced neural inference time, but changed some poses; it is not an exact replacement.
 
@@ -13,7 +21,7 @@ The compiled CPU calculations are the strongest result: they reduced fitting tim
 - **Concurrent candidates:** a separate experiment evaluates independent numerical-derivative candidates on four threads, with internal search threading disabled to avoid nesting.
 - **UFM batch:** independent object crops share one neural call instead of one call per object. The same checkpoint, resolution, precision and thresholds are retained.
 
-The CPU candidates retain the production SciPy solver, samples, reference cache, weights, pose parameterization, convergence criteria, coarse alternatives, mask/depth checks, UFM model and causal pipeline. No tolerance was relaxed and no object-specific rule was added. Numba is installed only in an isolated experiment environment; it is not a new runtime requirement.
+The CPU candidates retain the production SciPy solver, samples, reference cache, weights, pose parameterization, convergence criteria, coarse alternatives, mask/depth checks, UFM model and causal pipeline. No tolerance was relaxed and no object-specific rule was added. The original experiments installed Numba in an isolated environment; deployment retains it as an optional dependency.
 
 ## Whole-pipeline measurements
 

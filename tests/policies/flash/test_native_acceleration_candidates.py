@@ -137,7 +137,10 @@ def test_compiled_shared_pipeline_preserves_motion_loss_and_recovery(kernels):
     outputs = []
     for factory in (WholeSurfaceFit, candidate.fitter_type(kernels=kernels)):
         backend = build_vision_backend(
-            VisionPipelineConfig(), Masks(), matcher=object(), local_reference=True
+            VisionPipelineConfig(compiled_surface_fit=False, reuse_surface_search=False),
+            Masks(),
+            matcher=object(),
+            local_reference=True,
         )
         pipeline = PerceptionPipeline(backend, (reference(),))
         source = iter(frames())

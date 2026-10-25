@@ -1,0 +1,1395 @@
+{
+  "trace": "/home/feit/.cache/huggingface/lerobot/flash_debug_traces/trace-20261025-192743-253063024",
+  "frames": [
+    1244,
+    1248,
+    1256,
+    1266,
+    1276,
+    1285,
+    1295,
+    1304,
+    1316,
+    1327,
+    1336,
+    1345,
+    1354,
+    1362,
+    1369,
+    1377,
+    1386,
+    1395,
+    1404,
+    1413,
+    1422,
+    1431,
+    1439,
+    1449,
+    1458,
+    1467,
+    1475,
+    1482,
+    1490,
+    1500
+  ],
+  "roles": [
+    "object",
+    "object_2",
+    "object_3"
+  ],
+  "sam": "recorded masks",
+  "config": {
+    "backend": "surface",
+    "sam_resolution": 504,
+    "min_similarity": 0.75,
+    "registration_threshold_m": 0.005,
+    "registration_min_inliers": 12,
+    "registration_trials": 100,
+    "visible_shape_fallback": false,
+    "parallel_surface_objects": true,
+    "pipeline_surface_frames": true,
+    "surface_object_workers": 2,
+    "compiled_surface_fit": false,
+    "reuse_surface_search": false,
+    "observation": {
+      "mask_margin_px": 2,
+      "depth_span_m": 0.01,
+      "depth_neighborhood_px": 3,
+      "normal_bilateral_diameter_px": 5,
+      "normal_bilateral_sigma_px": 2.0,
+      "huber_m": 0.005,
+      "surface_spacing_m": 0.003,
+      "samples_across_object": 64,
+      "min_surface_spacing_m": 0.001,
+      "component_gap_m": 0.01,
+      "validation_tile_px": 4
+    },
+    "shape": {
+      "depth_tolerance_m": 0.005,
+      "surface_spacing_m": 0.003,
+      "mask_boundary_tolerance_px": 2.0,
+      "max_surface_distance_m": 0.03,
+      "max_evaluations": 50,
+      "solver_tolerance": 1e-05,
+      "max_fit_points": 2048,
+      "nn_queries_per_worker": 512,
+      "batch_jacobian": true,
+      "batch_query_workers": 8
+    },
+    "motion": {
+      "crop_min_px": 160,
+      "crop_max_px": 480,
+      "crop_extent_multiplier": 2.5,
+      "input_size_px": 320,
+      "grid_step_px": 4,
+      "covisibility_min": 0.5,
+      "min_ransac_pairs": 6,
+      "ransac_distance_m": 0.006,
+      "ransac_confidence": 0.99,
+      "refinement_steps": 2,
+      "connected_dilation_px": 7
+    }
+  },
+  "runs": [
+    {
+      "mode": "baseline",
+      "repeat": 0,
+      "elapsed_s": 5.908495090028737,
+      "steady_fps": 5.174875107416844,
+      "busy_cpu_equivalents": 2.755071512621132,
+      "accepted": {
+        "object": 30,
+        "object_2": 30,
+        "object_3": 30
+      },
+      "decision_mismatches": [],
+      "max_pose_difference": {
+        "translation_mm": 0.0,
+        "rotation_deg": 0.0,
+        "matrix_max_abs": 0.0
+      },
+      "pose_differences": [
+        {
+          "frame": 1244,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1244,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1244,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1248,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1248,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1248,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1256,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1256,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1256,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1266,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1266,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1266,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1276,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1276,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1276,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1285,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1285,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1285,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1295,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1295,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1295,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1304,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1304,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1304,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1316,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1316,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1316,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1327,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1327,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1327,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1336,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1336,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1336,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1345,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1345,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1345,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1354,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1354,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1354,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1362,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1362,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1362,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1369,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1369,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1369,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1377,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1377,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1377,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1386,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1386,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1386,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1395,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1395,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1395,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1404,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1404,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1404,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1413,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1413,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1413,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1422,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1422,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1422,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1431,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1431,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1431,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1439,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1439,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1439,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1449,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1449,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1449,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1458,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1458,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1458,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1467,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1467,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1467,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1475,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1475,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1475,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1482,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1482,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1482,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1490,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1490,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1490,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1500,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1500,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1500,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        }
+      ]
+    },
+    {
+      "mode": "deployed",
+      "repeat": 0,
+      "elapsed_s": 4.216415675997268,
+      "steady_fps": 7.098042252285865,
+      "busy_cpu_equivalents": 3.4627040431792246,
+      "accepted": {
+        "object": 30,
+        "object_2": 30,
+        "object_3": 30
+      },
+      "decision_mismatches": [],
+      "max_pose_difference": {
+        "translation_mm": 0.0,
+        "rotation_deg": 0.0,
+        "matrix_max_abs": 0.0
+      },
+      "pose_differences": [
+        {
+          "frame": 1244,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1244,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1244,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1248,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1248,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1248,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1256,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1256,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1256,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1266,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1266,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1266,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1276,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1276,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1276,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1285,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1285,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1285,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1295,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1295,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1295,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1304,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1304,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1304,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1316,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1316,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1316,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1327,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1327,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1327,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1336,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1336,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1336,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1345,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1345,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1345,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1354,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1354,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1354,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1362,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1362,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1362,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1369,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1369,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1369,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1377,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1377,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1377,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1386,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1386,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1386,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1395,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1395,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1395,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1404,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1404,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1404,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1413,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1413,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1413,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1422,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1422,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1422,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1431,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1431,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1431,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1439,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1439,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1439,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1449,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1449,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1449,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1458,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1458,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1458,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1467,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1467,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1467,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1475,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1475,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1475,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1482,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1482,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1482,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1490,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1490,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1490,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1500,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1500,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 1500,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        }
+      ]
+    }
+  ]
+}
