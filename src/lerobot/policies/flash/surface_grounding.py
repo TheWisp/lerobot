@@ -9,6 +9,7 @@ occluder. Unseen reference geometry remains a limitation, not invented geometry.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from os import cpu_count
 
 import cv2
 import numpy as np
@@ -31,6 +32,35 @@ class ShapeConfig:
     solver_tolerance: float = 1e-5
     # Per residual direction. Dense clouds remain the distance/outline ground truth.
     max_fit_points: int = 2048
+    # Amortize cKDTree's per-query thread startup over this many residual points.
+    nn_queries_per_worker: int = 512
+
+
+@dataclass(frozen=True)
+class PreparedReferenceSurface:
+    """Fixed search geometry; build it once when a surface reference is chosen."""
+
+    points: np.ndarray
+    config: ShapeConfig
+    tree: cKDTree
+    queries: np.ndarray
+    envelope: np.ndarray
+
+    @classmethod
+    def build(cls, reference: np.ndarray, config: ShapeConfig):
+        from scipy.spatial import QhullError
+
+        try:
+            envelope = reference[ConvexHull(reference).vertices]
+        except QhullError:  # Exactly planar references are valid observations.
+            envelope = reference
+        return cls(
+            reference,
+            config,
+            cKDTree(reference),
+            reference[spatial_sample(reference, config.max_fit_points)],
+            envelope,
+        )
 
 
 def project(points: np.ndarray, k: np.ndarray) -> np.ndarray:
@@ -55,25 +85,47 @@ def pca_candidates(source: np.ndarray, target: np.ndarray) -> list[np.ndarray]:
 
 
 class WholeSurfaceFit:
-    def __init__(self, reference: np.ndarray, observation: dict, k: np.ndarray, config: ShapeConfig):
+    def __init__(
+        self,
+        reference: np.ndarray,
+        observation: dict,
+        k: np.ndarray,
+        config: ShapeConfig,
+        *,
+        prepared_reference: PreparedReferenceSurface | None = None,
+    ):
+        prepared_reference = prepared_reference or PreparedReferenceSurface.build(reference, config)
+        if prepared_reference.points is not reference or prepared_reference.config != config:
+            raise ValueError("prepared reference belongs to another surface or fit configuration")
         self.reference = reference
         self.observation = observation
         self.k = k
         self.config = config
         self.target = observation.get("all_surface_points", observation["obs"]["points"])
-        self.reference_tree = cKDTree(reference)
+        self.reference_tree = prepared_reference.tree
         self.target_tree = cKDTree(self.target)
-        self.reference_queries = reference[spatial_sample(reference, config.max_fit_points)]
+        self.reference_queries = prepared_reference.queries
         self.target_queries = self.target[spatial_sample(self.target, config.max_fit_points)]
+        cores = cpu_count() or 1
+        self.reference_query_workers = min(
+            cores,
+            max(
+                1,
+                (len(self.reference_queries) + config.nn_queries_per_worker - 1)
+                // config.nn_queries_per_worker,
+            ),
+        )
+        self.target_query_workers = min(
+            cores,
+            max(
+                1,
+                (len(self.target_queries) + config.nn_queries_per_worker - 1) // config.nn_queries_per_worker,
+            ),
+        )
         # Linear projection preserves the convex envelope of the 3D hull for
         # points in front of the camera. Retain its vertices independently of
         # residual sampling, including small but distinctive extremities.
-        from scipy.spatial import QhullError
-
-        try:
-            self.envelope = reference[ConvexHull(reference).vertices]
-        except QhullError:  # Exactly planar references are valid observations.
-            self.envelope = reference
+        self.envelope = prepared_reference.envelope
         self.outside_mask = cv2.distanceTransform((~observation["mask"]).astype(np.uint8), cv2.DIST_L2, 5)
         contours, _ = cv2.findContours(
             observation["mask"].astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
@@ -119,11 +171,11 @@ class WholeSurfaceFit:
         ray_visibility = np.clip((rays - predicted[:, 2, None] + tolerance) / tolerance, 0, 1)
         depth_visibility = np.sum(weights * known * ray_visibility, axis=1)
         visibility = depth_visibility + np.sum(weights * ~known, axis=1)
-        model_distance = np.minimum(self.target_tree.query(predicted)[0], self.config.max_surface_distance_m)
         target_local = (self.target_queries - pose[:3, 3]) @ pose[:3, :3]
-        target_distance = np.minimum(
-            self.reference_tree.query(target_local)[0], self.config.max_surface_distance_m
-        )
+        model_distance = self.target_tree.query(predicted, workers=self.reference_query_workers)[0]
+        target_distance = self.reference_tree.query(target_local, workers=self.target_query_workers)[0]
+        model_distance = np.minimum(model_distance, self.config.max_surface_distance_m)
+        target_distance = np.minimum(target_distance, self.config.max_surface_distance_m)
         silhouette_m = (
             np.maximum(mask_distance - self.config.mask_boundary_tolerance_px, 0)
             * predicted[:, 2]

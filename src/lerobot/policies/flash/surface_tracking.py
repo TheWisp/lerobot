@@ -16,8 +16,9 @@ from scipy.spatial import cKDTree
 from scipy.spatial.transform import Rotation
 
 from .surface_correspondence import SurfaceMotionConfig, crop_pair, robust_fit, ufm_pairs
-from .surface_grounding import ShapeConfig, WholeSurfaceFit, project
+from .surface_grounding import PreparedReferenceSurface, ShapeConfig, WholeSurfaceFit, project
 from .surface_observation import (
+    SurfaceFrameFilters,
     SurfaceObservationConfig,
     initial_landmarks,
     move,
@@ -51,8 +52,17 @@ def load_ufm():
 
 
 class SurfaceTrackingSession:
-    def __init__(self, matcher, *, observation_config=None, shape_config=None, motion_config=None):
+    def __init__(
+        self,
+        matcher,
+        *,
+        observation_config=None,
+        shape_config=None,
+        motion_config=None,
+        matcher_lock=None,
+    ):
         self.matcher = matcher
+        self.matcher_lock = matcher_lock
         self.motion_config = motion_config or SurfaceMotionConfig()
         self.observation_config = observation_config or SurfaceObservationConfig()
         self.shape_config = shape_config or ShapeConfig()
@@ -62,10 +72,22 @@ class SurfaceTrackingSession:
         self.anchors = None
         self.basis = None
         self.reference_frame_id = None
+        self.prepared_reference = None
 
-    def update(self, rgb, depth_m, mask, intrinsics, frame_id):
+    def update(
+        self,
+        rgb,
+        depth_m,
+        mask,
+        intrinsics,
+        frame_id,
+        *,
+        frame_filters: SurfaceFrameFilters | None = None,
+    ):
         start = time.perf_counter()
-        obs = observation(depth_m, mask, intrinsics, asdict(self.observation_config))
+        obs = observation(
+            depth_m, mask, intrinsics, asdict(self.observation_config), frame_filters=frame_filters
+        )
         # Lift only usable pixels; observation computed normals inside the mask bounds.
         y, x = np.nonzero(obs["valid_image"])
         z = depth_m[y, x]
@@ -112,9 +134,14 @@ class SurfaceTrackingSession:
         else:
             start = time.perf_counter()
             a, b, crop = crop_pair(self.previous, current, self.motion_config)
-            source, target = ufm_pairs(
-                self.matcher, a, b, crop, self.previous, current, intrinsics, self.motion_config
-            )
+            match_args = (self.matcher, a, b, crop, self.previous, current, intrinsics, self.motion_config)
+            if self.matcher_lock is None:
+                source, target = ufm_pairs(*match_args)
+            else:
+                wait_start = time.perf_counter()
+                with self.matcher_lock:
+                    detail["matcher_wait_ms"] = (time.perf_counter() - wait_start) * 1000
+                    source, target = ufm_pairs(*match_args)
             step, inliers, residual = robust_fit(source, target, self.motion_config)
             detail.update(
                 matches=len(source),
@@ -126,9 +153,15 @@ class SurfaceTrackingSession:
             proposal = self.pose if step is None else step @ self.pose
             prior = self.pose.copy()
             start = time.perf_counter()
-            self.pose, fit = WholeSurfaceFit(self.reference, current, intrinsics, self.shape_config).correct(
-                proposal
-            )
+            if self.prepared_reference is None:
+                self.prepared_reference = PreparedReferenceSurface.build(self.reference, self.shape_config)
+            self.pose, fit = WholeSurfaceFit(
+                self.reference,
+                current,
+                intrinsics,
+                self.shape_config,
+                prepared_reference=self.prepared_reference,
+            ).correct(proposal)
             detail.update(fit, fit_ms=(time.perf_counter() - start) * 1000)
 
             def angle(a, b):

@@ -147,6 +147,50 @@ def test_adding_local_object_preserves_first_reference_frame():
     assert output.details["object_2"]["diagnostics"]["reference_frame_id"] == 1
 
 
+def test_parallel_surface_updates_match_serial_results_for_two_objects():
+    class TwoMasks:
+        def masks(self, frame):
+            masks = {}
+            for role, left in (("object", 8), ("object_2", 47)):
+                mask = np.zeros(frame.depth.shape, bool)
+                mask[20:44, left + frame.frame_id : left + frame.frame_id + 22] = True
+                masks[role] = mask
+            return masks
+
+    outputs = []
+    with patch("lerobot.policies.flash.surface_tracking.ufm_pairs", synthetic_pairs):
+        for parallel in (False, True):
+            backend = build_vision_backend(
+                VisionPipelineConfig(parallel_surface_objects=parallel),
+                TwoMasks(),
+                matcher=object(),
+                local_reference=True,
+                clock=lambda: 0.0,
+            )
+            pipeline = PerceptionPipeline(
+                backend,
+                (reference(), debug_reference("object_2", frames()[0])),
+                require_masks=True,
+            )
+            cv2.setRNGSeed(17)
+            outputs.append([pipeline.process(frame) for frame in frames()[:2]])
+    serial, parallel = outputs
+    for old, new in zip(serial, parallel, strict=True):
+        assert old.failures == new.failures
+        assert old.masks.keys() == new.masks.keys()
+        for a, b in zip(old.estimates, new.estimates, strict=True):
+            assert (a.role, a.evidence) == (b.role, b.evidence)
+            if a.pose is not None:
+                np.testing.assert_allclose(a.pose, b.pose, atol=1e-10)
+        for role in old.details:
+            assert old.details[role]["status"] == new.details[role]["status"]
+            np.testing.assert_allclose(
+                old.details[role]["camera_from_reference"],
+                new.details[role]["camera_from_reference"],
+                atol=1e-10,
+            )
+
+
 class RegisteredInitializer:
     def __init__(self, masks, pose, *, observed=True):
         self.masks, self.pose, self.observed = masks, pose, observed
@@ -257,6 +301,7 @@ def test_config_round_trip_and_invalid_values_are_common_to_all_consumers():
         {"shape": {"depth_tolerance_m": float("nan")}},
         {"observation": {"mask_margin_px": -1}},
         {"motion": {"grid_step_px": 0}},
+        {"parallel_surface_objects": 1},
     ):
         with pytest.raises(ValueError):
             VisionPipelineConfig.from_dict(change)

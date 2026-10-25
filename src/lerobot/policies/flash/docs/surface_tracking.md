@@ -258,6 +258,15 @@ Camera FPS, inference FPS, source-image age and motor command rate are different
 quantities. The live debugger's processing timer excludes JSON publication;
 model loading and all vision computation remain outside robot control.
 
+For multiple surface objects, the backend requests SAM masks once and converts
+and filters the aligned depth frame once. Each object keeps its own fixed
+reference and fit. Those object updates run in a bounded CPU pool; a lock gives
+the shared UFM model one GPU inference at a time, while a completed object's
+CPU fit can overlap the next object's UFM inference. Fixed reference search
+geometry is built once per object. Large nearest-neighbour queries use more
+than one CPU worker; small queries stay single-threaded. The acceptance rule,
+surface residual and solver tolerances do not change with object count.
+
 ## Configuration and inspection
 
 The authoritative defaults and validation are in
@@ -273,6 +282,8 @@ The authoritative defaults and validation are in
 | `shape.max_fit_points`                                   | 2048 per side      | Bound residual queries; dense lookup and full envelope remain.                                                                                |
 | `shape.depth_tolerance_m`, `mask_boundary_tolerance_px`  | 0.005 m, 2 px      | Scale geometric penalties; these are not sensor calibration.                                                                                  |
 | `shape.max_evaluations`, `solver_tolerance`              | 50, 1e-5           | Solver effort and convergence; finite-difference Jacobians require additional residual calls.                                                 |
+| `shape.nn_queries_per_worker`                            | 512 queries        | Start another CPU worker only for a sufficiently large exact nearest-neighbour query; worker startup can outweigh a small query.              |
+| `parallel_surface_objects`                               | true               | Overlap independent object updates; UFM inference remains serialized on the shared model.                                                     |
 | `motion.input_size_px`, `grid_step_px`                   | 320, 4             | RGB matching resolution and query spacing, separate from metric cloud spacing.                                                                |
 | `motion.covisibility_min`, `ransac_distance_m`           | 0.5, 0.006 m       | Match filtering; passing does not prove physical point identity.                                                                              |
 | `registration_min_inliers`, `registration_threshold_m`   | 12, 0.005 m        | Shared registration/publication checks described above.                                                                                       |
@@ -346,15 +357,32 @@ peaks could have been missed, and this scene does not prove an arbitrary-length
 or arbitrary-mask memory bound. The pose candidates in this memory test were
 not necessarily accepted for action.
 
-[A same-scene multi-object timing check](../../../../../docs/proofs/flash-rgbd-registration/multi_object_debug_timing.json)
+[The original multi-object timing check](../../../../../docs/proofs/flash-rgbd-registration/multi_object_debug_timing.json)
 added a green ring, mini gamepad and yellow block in sequence. The median
 compute time rose from 231 ms with one object to 407 ms with two and 557 ms
 with three, or about 4.3, 2.5 and 1.8 processed updates/s. SAM mask time grew
-only from 24 to 34 ms; each object's RGB matching and surface fit ran in
-sequence and dominated the extra time. These windows were 10–12 seconds in a
-stationary scene. They do not prove motion quality, long-run memory stability or
-performance for larger objects. The three-object worker snapshot was about
-5.2 GiB RAM and 6.1 GiB VRAM, without a measured peak.
+only from 24 to 34 ms; at that time each object's RGB matching and surface fit
+ran in sequence. [After sharing depth work, caching reference geometry and
+overlapping independent fits](../../../../../docs/proofs/flash-rgbd-registration/multi_object_optimized_timing.json),
+24 distinct processed frames in the same stationary tray scene took a median
+277 ms, or 3.6 processed updates/s. The old and new samples were taken in
+different sessions, so this is an observed throughput change, not a paired
+per-frame speedup. The yellow block's pose failed RGB-D acceptance in the new
+sample, so these numbers do not establish three-object tracking quality.
+
+The remaining serial cost was about 34 ms for SAM masks and roughly 36 ms per
+object for UFM inference, plus the slowest overlapping surface fit. Lowering
+the UFM input from 320 to 280 or 224 pixels did not improve measured
+three-object throughput and reduced usable matches in the tested selection.
+Reducing the fit-point budget to 512 made one reference fail acceptance;
+loosening solver convergence changed a recorded ring pose by about 18 mm and
+9°. CUDA brute-force nearest distances were slower in the full multi-object
+pipeline despite faster isolated distance queries. Reusing or batching the
+solver's finite-difference nearest neighbours changed recorded fits, so the
+exact original derivative computation remains. These are scene-specific
+ablation results, not general accuracy rankings. The original three-object
+worker snapshot was about 5.2 GiB RAM and 6.1 GiB VRAM, without a measured
+peak; the new worker's peak memory was not measured.
 
 [The measurement archive](../../../../../docs/proofs/flash-rgbd-registration/README.md)
 preserves earlier alternatives and the dated experiments. The

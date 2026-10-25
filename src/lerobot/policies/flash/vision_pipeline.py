@@ -8,8 +8,11 @@ a robot, or a debugger. GPU models load only when a factory is called.
 from __future__ import annotations
 
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field, fields
 from numbers import Integral
+from os import cpu_count
+from threading import Lock
 
 import numpy as np
 
@@ -17,7 +20,7 @@ from .appearance import AppearanceModel, MaskSource, Sam3MaskSource, build_appea
 from .perception import PoseBackend, RGBDFrame
 from .surface_correspondence import SurfaceMotionConfig
 from .surface_grounding import ShapeConfig
-from .surface_observation import SurfaceObservationConfig
+from .surface_observation import SurfaceObservationConfig, prepare_surface_frame
 from .surface_tracking import SurfaceTrackingSession, load_ufm
 from .symmetry import AxialSymmetry
 from .trajectory import Evidence, PoseEstimate
@@ -32,6 +35,7 @@ class VisionPipelineConfig:
     registration_min_inliers: int = 12
     registration_trials: int = 100
     visible_shape_fallback: bool = False
+    parallel_surface_objects: bool = True
     observation: SurfaceObservationConfig = field(default_factory=SurfaceObservationConfig)
     shape: ShapeConfig = field(default_factory=ShapeConfig)
     motion: SurfaceMotionConfig = field(default_factory=SurfaceMotionConfig)
@@ -50,6 +54,8 @@ class VisionPipelineConfig:
             raise ValueError("SAM resolution must be at least 224 and divisible by 14")
         if self.backend not in {"surface", "appearance"}:
             raise ValueError("unknown FLASH vision backend")
+        if not isinstance(self.parallel_surface_objects, bool):
+            raise ValueError("surface acceleration settings must be booleans")
         if not np.isfinite(self.min_similarity) or not -1 <= self.min_similarity <= 1:
             raise ValueError("invalid appearance similarity")
         if not np.isfinite(self.registration_threshold_m) or self.registration_threshold_m <= 0:
@@ -162,6 +168,8 @@ class SurfacePoseBackend:
         self.sessions = {}
         self.reference_camera_from_object = {}
         self.previous_frame = None
+        self._surface_pool = None
+        self._matcher_lock = Lock()
 
     def initialize(self, references):
         self.references = {r.role: r for r in references}
@@ -203,8 +211,9 @@ class SurfacePoseBackend:
             seeds = {e.role: e for e in self.initializer.update(frame)}
         self.last_failure = {}
         self.last_details = {}
-        out = []
-        for role, reference in self.references.items():
+        jobs = []
+        unregistered = set()
+        for role in self.references:
             seed = seeds.get(role)
             session = self.sessions.get(role)
             registered = (
@@ -212,21 +221,60 @@ class SurfacePoseBackend:
                 or session is not None
                 or (seed is not None and seed.evidence == Evidence.OBSERVED and seed.pose is not None)
             )
-            pose = None
             if not registered:
+                unregistered.add(role)
+                continue
+            if session is None:
+                session = SurfaceTrackingSession(
+                    self.matcher,
+                    observation_config=self.config.observation,
+                    shape_config=self.config.shape,
+                    motion_config=self.config.motion,
+                    matcher_lock=self._matcher_lock,
+                )
+            jobs.append((role, session, self.last_masks.get(role)))
+
+        measured = {}
+        if jobs:
+            depth_m = frame.metric_depth()
+            frame_filters = prepare_surface_frame(depth_m, asdict(self.config.observation))
+
+            def measure(job):
+                role, session, mask = job
+                if mask is None:
+                    mask = np.zeros(frame.depth.shape, bool)
+                return (
+                    role,
+                    session,
+                    session.update(
+                        frame.rgb,
+                        depth_m,
+                        mask,
+                        frame.intrinsics,
+                        frame.frame_id,
+                        frame_filters=frame_filters,
+                    ),
+                )
+
+            if self.config.parallel_surface_objects and len(jobs) > 1:
+                if self._surface_pool is None:
+                    self._surface_pool = ThreadPoolExecutor(
+                        max_workers=cpu_count() or 1, thread_name_prefix="flash-surface"
+                    )
+                measured = {
+                    role: (session, detail) for role, session, detail in self._surface_pool.map(measure, jobs)
+                }
+            else:
+                measured = {role: (session, detail) for role, session, detail in map(measure, jobs)}
+
+        out = []
+        for role, reference in self.references.items():
+            seed = seeds.get(role)
+            pose = None
+            if role in unregistered:
                 detail = {"status": "awaiting_reference_registration", "diagnostics": {}}
             else:
-                if session is None:
-                    session = SurfaceTrackingSession(
-                        self.matcher,
-                        observation_config=self.config.observation,
-                        shape_config=self.config.shape,
-                        motion_config=self.config.motion,
-                    )
-                mask = self.last_masks.get(role, np.zeros(frame.depth.shape, bool))
-                detail = session.update(
-                    frame.rgb, frame.metric_depth(), mask, frame.intrinsics, frame.frame_id
-                )
+                session, detail = measured[role]
                 if "camera_from_reference" in detail:
                     if role not in self.sessions:
                         self.sessions[role] = session

@@ -32,6 +32,27 @@ class SurfaceObservationConfig:
     validation_tile_px: int = 4
 
 
+@dataclass(frozen=True)
+class SurfaceFrameFilters:
+    """Mask-independent depth work shared by every object in one RGB-D frame."""
+
+    depth: np.ndarray
+    reliable: np.ndarray
+    smoothed: np.ndarray
+
+
+def prepare_surface_frame(depth: np.ndarray, config: dict) -> SurfaceFrameFilters:
+    neighborhood = np.ones((config["depth_neighborhood_px"],) * 2, np.uint8)
+    lower = cv2.erode(depth, neighborhood)
+    upper = cv2.dilate(depth, neighborhood)
+    reliable = (lower > 0) & (upper - lower <= config["depth_span_m"])
+    # OpenCV's float bilateral lookup table depends on the full image range.
+    smoothed = cv2.bilateralFilter(
+        depth, config["normal_bilateral_diameter_px"], config["huber_m"], config["normal_bilateral_sigma_px"]
+    )
+    return SurfaceFrameFilters(depth, reliable, smoothed)
+
+
 def move(points: np.ndarray, pose: np.ndarray) -> np.ndarray:
     return points @ pose[:3, :3].T + pose[:3, 3]
 
@@ -127,18 +148,23 @@ def _surface_region(mask: np.ndarray) -> tuple[slice, slice]:
     )
 
 
-def observation(depth: np.ndarray, mask: np.ndarray, intrinsics: np.ndarray, config: dict) -> dict:
+def observation(
+    depth: np.ndarray,
+    mask: np.ndarray,
+    intrinsics: np.ndarray,
+    config: dict,
+    *,
+    frame_filters: SurfaceFrameFilters | None = None,
+) -> dict:
     raw = mask & (depth > 0) & np.isfinite(depth)
     margin = int(config["mask_margin_px"])
     interior = cv2.erode(mask.astype(np.uint8), np.ones((2 * margin + 1, 2 * margin + 1), np.uint8)) > 0
-    neighborhood = np.ones((config["depth_neighborhood_px"],) * 2, np.uint8)
-    lower = cv2.erode(depth, neighborhood)
-    upper = cv2.dilate(depth, neighborhood)
-    reliable = (lower > 0) & (upper - lower <= config["depth_span_m"])
+    if frame_filters is None:
+        frame_filters = prepare_surface_frame(depth, config)
+    elif frame_filters.depth is not depth:
+        raise ValueError("surface filters belong to another depth frame")
+    reliable, smoothed = frame_filters.reliable, frame_filters.smoothed
     # Smoothed local gradients define tangent planes only; fitted XYZ remains measured depth.
-    smoothed = cv2.bilateralFilter(
-        depth, config["normal_bilateral_diameter_px"], config["huber_m"], config["normal_bilateral_sigma_px"]
-    )
     # Keep the inexpensive image filters above in full-frame coordinates:
     # depth_reliable is also consumed outside the mask by the research tools,
     # and OpenCV's float bilateral lookup table depends on the image depth range.

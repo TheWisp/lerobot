@@ -1,0 +1,38 @@
+{
+  "scene": "Stationary camera-only debug: green ring, mini gamepad, yellow block in one tray; 24 distinct processed frames, 2026-10-25",
+  "prior_three_object_snapshot": {
+    "median_compute_ms": 557,
+    "processed_fps": 1.8,
+    "source": "multi_object_debug_timing.json; prior session and reference selection, not paired frames"
+  },
+  "optimized_three_object_snapshot": {
+    "processed_frames": 24,
+    "median_compute_ms": 277.1,
+    "processed_fps": 3.61,
+    "median_mask_ms": 33.8,
+    "objects": {
+      "green ring": {
+        "median_preprocess_ms": 4.1,
+        "median_match_including_wait_ms": 36.5,
+        "median_matcher_wait_ms": 0.0,
+        "median_fit_ms": 31.8,
+        "accepted_frames": 24
+      },
+      "mini gamepad": {
+        "median_preprocess_ms": 24.0,
+        "median_match_including_wait_ms": 85.6,
+        "median_matcher_wait_ms": 47.5,
+        "median_fit_ms": 115.3,
+        "accepted_frames": 24
+      },
+      "yellow block": {
+        "median_preprocess_ms": 9.8,
+        "median_match_including_wait_ms": 65.1,
+        "median_matcher_wait_ms": 27.9,
+        "median_fit_ms": 146.0,
+        "accepted_frames": 0
+      }
+    }
+  },
+  "caveat": "Selection/reference initialization differed between sessions. One optimized-session object (yellow block) failed RGB-D acceptance on all sampled frames, so throughput does not establish three-object tracking quality."
+}
