@@ -10,6 +10,7 @@ benchmarks establish both pose quality and wall-clock improvement.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 import numpy as np
 from scipy.spatial import ConvexHull
@@ -26,6 +27,7 @@ class GpuSolverConfig:
     pair_budget_mib: int = 64
     max_step_rotation_rad: float = 0.3
     max_step_translation_m: float = 0.03
+    nearest_method: Literal["brute_force", "tree"] = "brute_force"
 
 
 class GpuWholeSurfaceFit:
@@ -57,9 +59,22 @@ class GpuWholeSurfaceFit:
         self.outside_mask = tensor(cpu.outside_mask)
         self.height, self.width = cpu.observation["depth"].shape
         self.identity = torch.eye(6, dtype=self.dtype, device=self.device)
+        if config.nearest_method == "tree":
+            from lerobot.policies.flash.experimental_gpu_kdtree import ExactGpuKdTree
+
+            self.target_gpu_tree = ExactGpuKdTree(cpu.target_tree)
+            self.reference_gpu_tree = ExactGpuKdTree(cpu.reference_tree)
 
     def _nearest(self, queries, points):
-        """Batched exact nearest distance with a bounded pairwise workspace."""
+        """Exact nearest distance using the selected research backend."""
+        if self.config.nearest_method == "tree":
+            if points is self.target:
+                tree = self.target_gpu_tree
+            elif points is self.reference:
+                tree = self.reference_gpu_tree
+            else:
+                raise ValueError("the CUDA tree must correspond to the prepared point cloud")
+            return tree.query(queries)
         torch = self.torch
         batch, count, _ = queries.shape
         total = len(points)
@@ -252,9 +267,9 @@ class GpuResidualScipyFit(WholeSurfaceFit):
     It is intentionally synchronous and remains outside the live backend.
     """
 
-    def __init__(self, cpu: WholeSurfaceFit):
+    def __init__(self, cpu: WholeSurfaceFit, config: GpuSolverConfig = GpuSolverConfig()):
         self.__dict__.update(cpu.__dict__)
-        self.gpu_residual = GpuWholeSurfaceFit(cpu)
+        self.gpu_residual = GpuWholeSurfaceFit(cpu, config)
 
     def residual(self, pose: np.ndarray) -> np.ndarray:
         gpu = self.gpu_residual

@@ -11,7 +11,7 @@ import numpy as np
 import torch
 from compare import cases, fit_input
 
-from lerobot.policies.flash.experimental_gpu_fit import GpuWholeSurfaceFit
+from lerobot.policies.flash.experimental_gpu_fit import GpuSolverConfig, GpuWholeSurfaceFit
 
 
 def candidate_poses(cpu, proposal, limit):
@@ -35,13 +35,14 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--poses", type=int, default=80)
     parser.add_argument("--repeats", type=int, default=3)
+    parser.add_argument("--nearest-method", choices=("brute_force", "tree"), default="brute_force")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     report = {}
     for name, reference, depth, mask, intrinsics, proposal in cases():
         cpu = fit_input(reference, depth, mask, intrinsics)
         poses = candidate_poses(cpu, proposal, args.poses)
-        gpu = GpuWholeSurfaceFit(cpu)
+        gpu = GpuWholeSurfaceFit(cpu, GpuSolverConfig(nearest_method=args.nearest_method))
         gpu.residuals(gpu.tensor(poses[0])[None], gpu._hull_indices(poses[0]))
         torch.cuda.synchronize()
         cpu_ms, gpu_ms = [], []
@@ -65,6 +66,7 @@ def main():
                 ),
             )
         report[name] = {
+            "nearest_method": args.nearest_method,
             "candidate_poses": len(poses),
             "cpu_ms": cpu_ms,
             "gpu_ms": gpu_ms,

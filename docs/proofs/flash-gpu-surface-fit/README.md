@@ -1,4 +1,4 @@
-# FLASH CUDA surface-fit sidecar
+# FLASH CUDA surface-fit experiments
 
 The live tracker still uses the CPU `WholeSurfaceFit`. The opt-in
 [`experimental_gpu_fit.py`](../../../src/lerobot/policies/flash/experimental_gpu_fit.py)
@@ -8,6 +8,15 @@ six-variable pose solver there. SAM3 and UFM already use the GPU. Frame
 preparation (depth-to-points, distance image and convex hull) and coarse pose
 initialization remain on the CPU. The sidecar is not imported by the live
 tracking path.
+
+**Correction:** the first CUDA nearest-point implementation checks all point
+pairs, while production searches a spatial index. Both return the same nearest
+distance, but this was not an algorithm-identical GPU port; its speed does not
+establish that GPU spatial search is inherently slower. The separate
+[`experimental_gpu_kdtree.py`](../../../src/lerobot/policies/flash/experimental_gpu_kdtree.py)
+now transfers the production `cKDTree` splits, leaves, point order and
+coordinates to CUDA for exact tree traversal. Both GPU implementations remain
+experimental and outside the live tracker.
 
 Run the matched-input comparison from the repository root:
 
@@ -62,6 +71,14 @@ together. The raw three-repeat data is in
 algorithms are mathematically equivalent here; the **different optimizer is a
 comparability flaw** in the earlier full-fit benchmark.
 
+The same-pose test was repeated with the CUDA tree traversal. All 80 residual
+arrays per case still agree with the CPU within `3e-8`. Median CPU/GPU times
+were **105/176 ms** for the ring, **40/118 ms** for the held dowel,
+**45/95 ms** for stationary frame 0 and **42/84 ms** for frame 13. The
+[raw tree comparison](same_pose_tree_residuals.json) measures this specific
+kernel, not a theoretical GPU limit. It avoids exhaustive pairs but still
+traverses divergent branches and transfers each result back to the CPU solver.
+
 [`compare_same_solver.py`](compare_same_solver.py) goes further: it runs the
 production `WholeSurfaceFit` SciPy optimizer and branch selection unchanged,
 replacing only `residual()` with CUDA evaluation. Three-repeat median fit times
@@ -83,9 +100,12 @@ one derivative on the two stationary frames; at `1e-5` metre it is below
 sensitive to tiny residual changes. The controlled same-pose residual test
 above remains the clean speed comparison for the objective alone. Changing
 the production derivative rule requires its own accuracy and regression study.
+The [same-solver tree comparison](same_solver_tree_comparison.json) is also
+slower and still produces numerically divergent final poses; exact nearest
+distances alone do not repair derivative sensitivity.
 
-**Decision:** keep the CPU fitter as the default. The same-pose residual path
-and the same-solver full fit are both slower on CUDA in these cases, and
+**Decision:** keep the CPU fitter as the default. Both experimental CUDA
+nearest-search paths and their same-solver fits are slower in these cases, and
 solver-level pose equivalence is not yet established. Moving the remaining
 7–17 ms of frame preparation to CUDA cannot
 recover the observed fit-time gap by itself. Before considering a switch,

@@ -12,7 +12,7 @@ import torch
 from compare import cases, fit_input
 from scipy.spatial.transform import Rotation
 
-from lerobot.policies.flash.experimental_gpu_fit import GpuResidualScipyFit
+from lerobot.policies.flash.experimental_gpu_fit import GpuResidualScipyFit, GpuSolverConfig
 
 
 def timed_fit(fitter, proposal, repeats):
@@ -30,13 +30,14 @@ def timed_fit(fitter, proposal, repeats):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--repeats", type=int, default=3)
+    parser.add_argument("--nearest-method", choices=("brute_force", "tree"), default="brute_force")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     report = {}
     for name, reference, depth, mask, intrinsics, proposal in cases():
         cpu = fit_input(reference, depth, mask, intrinsics)
         start = time.perf_counter()
-        gpu = GpuResidualScipyFit(cpu)
+        gpu = GpuResidualScipyFit(cpu, GpuSolverConfig(nearest_method=args.nearest_method))
         gpu.residual(proposal)
         torch.cuda.synchronize()
         upload_and_warmup_ms = (time.perf_counter() - start) * 1000
@@ -45,6 +46,7 @@ def main():
         position_delta = np.linalg.norm(cpu_pose[:3, 3] - gpu_pose[:3, 3]) * 1000
         rotation_delta = np.degrees(Rotation.from_matrix(gpu_pose[:3, :3] @ cpu_pose[:3, :3].T).magnitude())
         report[name] = {
+            "nearest_method": args.nearest_method,
             "cpu_ms": cpu_times,
             "gpu_same_solver_ms": gpu_times,
             "gpu_upload_and_warmup_ms": upload_and_warmup_ms,
