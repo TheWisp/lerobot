@@ -83,10 +83,10 @@ async function showFlashTracking() {
         view.innerHTML = `<header><strong>Live surface tracking</strong><span id="flash-tracking-status">Open a camera to begin</span></header>
             <div class="flash-surface-grid">
                 <figure><figcaption>Live camera</figcaption><canvas id="flash-surface-preview"></canvas></figure>
-                <figure><figcaption id="flash-surface-caption">Fitted pose · source image</figcaption><canvas id="flash-surface-estimate" aria-label="Frozen image for object selection"></canvas></figure>
+                <figure><figcaption id="flash-surface-caption">Fitted poses · source image</figcaption><canvas id="flash-surface-estimate" aria-label="Fitted poses and frozen image for object selection"></canvas></figure>
                 <figure><figcaption id="flash-surface-local-caption">Object close-up · select an object to zoom</figcaption><canvas id="flash-surface-local"></canvas></figure>
                 <figure><figcaption id="flash-surface-cloud-caption">3D object view · drag to orbit, scroll to zoom</figcaption><canvas id="flash-surface-cloud"></canvas></figure>
-                <figure class="flash-surface-diagnostics"><figcaption>Fit diagnostics</figcaption><p id="flash-surface-metrics"></p><p>Surface agreement is not calibrated confidence. This view uses vision only.</p></figure>
+                <figure class="flash-surface-diagnostics"><figcaption id="flash-surface-diagnostics-caption">Fit diagnostics</figcaption><p id="flash-surface-metrics"></p><p>Surface agreement is not calibrated confidence. This view uses vision only.</p></figure>
             </div>
             <div class="flash-surface-legend"><label><input type="checkbox" id="flash-surface-mask" checked onchange="flashTrackingRender()">Cyan: observed mask / depth</label><label><input type="checkbox" id="flash-surface-reference" checked onchange="flashTrackingRender()">White: fitted reference</label><label><input type="checkbox" id="flash-surface-axes" checked onchange="flashTrackingRender()">A / B / C and axes</label><label><input type="checkbox" id="flash-surface-follow" onchange="flashTrackingDrawCloud()">Follow scene pose</label><button type="button" onclick="flashTrackingYaw=flashTrackingPitch=0;flashTrackingZoom=1;flashTrackingRender()">Reset 3D view</button></div>
             <p class="form-hint">A / B / C and the axes stay attached to the initial partial surface. They do not mark the object's center of mass.</p>`;
@@ -283,21 +283,25 @@ function flashTrackingRenderObjectList(tracks) {
     }
 }
 
-function flashTrackingDrawOtherObjects(ctx, objects, focusedRole) {
-    if (!document.getElementById('flash-surface-mask').checked) return;
-    ctx.lineWidth = 2;
-    for (const [role, object] of Object.entries(objects)) {
-        if (role === focusedRole) continue;
-        ctx.strokeStyle = '#a7b5c8';
-        for (const points of object.contours || []) {
-            ctx.beginPath(); points.forEach(([x,y],i) => i ? ctx.lineTo(x,y) : ctx.moveTo(x,y));
-            ctx.closePath(); ctx.stroke();
+function flashTrackingDrawSceneEstimates(ctx, packet) {
+    const objects = Object.values(packet.objects || {});
+    if (!objects.length) {
+        flashTrackingDrawEstimate(ctx, packet);
+        return;
+    }
+    for (const object of objects) {
+        flashTrackingDrawEstimate(ctx, object);
+        const scale = ctx.getTransform().a;
+        let x = Infinity, y = Infinity;
+        for (const contour of object.contours || []) {
+            for (const point of contour) { x = Math.min(x, point[0]); y = Math.min(y, point[1]); }
         }
-        const first = object.contours?.[0]?.[0];
-        if (first) {
-            ctx.font = 'bold 16px sans-serif'; ctx.fillStyle = '#e6edf3';
-            ctx.fillText(object.name, first[0], Math.max(16, first[1] - 8));
-        }
+        if (!Number.isFinite(x)) continue;
+        ctx.font = `bold ${18/scale}px sans-serif`;
+        ctx.lineWidth = 3/scale;
+        ctx.strokeStyle = '#111'; ctx.fillStyle = '#fff';
+        ctx.strokeText(object.name, x, Math.max(20/scale, y - 8/scale));
+        ctx.fillText(object.name, x, Math.max(20/scale, y - 8/scale));
     }
 }
 
@@ -317,7 +321,7 @@ function flashTrackingRender() {
     if (flashTrackingRenderedRole !== flashTrackingFocusRole) {
         // Image decoding is asynchronous. Never show the previous object's crop
         // under the newly selected object's caption or 3D geometry.
-        for (const id of ['flash-surface-estimate', 'flash-surface-local']) {
+        for (const id of ['flash-surface-local']) {
             const canvas = document.getElementById(id);
             canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
             delete canvas.dataset.frameId;
@@ -335,28 +339,25 @@ function flashTrackingRender() {
         if (serial) camera.value = serial;
     }
     const states = {opening_camera: 'Opening camera', preview: 'Choose an object', frozen: 'Click the object in the frozen image', loading_models: 'Loading tracking models', reference: 'Reference initialized', fitted: 'Experimental pose fit', fitted_without_rgb_motion: 'Surface fit; RGB motion unavailable', no_mask: 'Mask missing — no pose', insufficient_depth: 'Insufficient depth — no pose', error: 'Tracking error'};
-    document.getElementById('flash-tracking-status').textContent = data.running ? (states[estimate.status] || 'Starting…') : 'Camera closed';
+    const objects = Object.values(packet.objects || {});
+    document.getElementById('flash-tracking-status').textContent = !data.running ? 'Camera closed' :
+        packet.status === 'frozen' ? states.frozen :
+        objects.length ? `${objects.length} objects · ${objects.filter(object => object.accepted).length} fit passes` :
+        (states[estimate.status] || 'Starting…');
     document.getElementById('flash-tracking-message').textContent = estimate.message || states[estimate.status] || '';
     document.getElementById('flash-tracking-open').disabled = data.running || !flashTrackingDefaults;
     flashTrackingPaint('flash-surface-preview', data.preview);
     const crop = flashTrackingObjectCrop(estimate);
-    flashTrackingPaint('flash-surface-estimate', estimate.frame, ctx => {
-        flashTrackingDrawOtherObjects(ctx, packet.objects || {}, flashTrackingFocusRole);
-        flashTrackingDrawEstimate(ctx, estimate);
-        if (crop) {
-            ctx.strokeStyle = 'rgba(255,255,255,0.8)';
-            ctx.setLineDash([8,6]);
-            ctx.strokeRect(crop.x, crop.y, crop.width, crop.height);
-        }
-    });
+    flashTrackingPaint('flash-surface-estimate', packet.frame, ctx => flashTrackingDrawSceneEstimates(ctx, packet));
     flashTrackingPaint('flash-surface-local', crop ? estimate.frame : null,
         ctx => flashTrackingDrawEstimate(ctx, estimate), crop);
     document.getElementById('flash-surface-local-caption').textContent = crop
-        ? `Object close-up · frame ${estimate.frame.frame_id}${crop.source === 'reference' ? ' · no current mask' : ''}`
+        ? `Object close-up · ${estimate.object_name || 'object'} · frame ${estimate.frame.frame_id}${crop.source === 'reference' ? ' · no current mask' : ''}`
         : 'Object close-up · select an object to zoom';
-    document.getElementById('flash-surface-estimate').style.cursor = estimate.status === 'frozen' ? 'crosshair' : 'default';
-    const age = estimate.frame ? Math.max(0, (data.server_time_s - estimate.frame.captured_s) * 1000) : null;
-    document.getElementById('flash-surface-caption').textContent = estimate.status === 'frozen' ? `Frozen frame ${estimate.frame.frame_id} · click the object` : `Fitted pose · frame ${estimate.frame?.frame_id ?? '—'} · ${age === null ? '—' : Math.round(age) + ' ms old'}`;
+    document.getElementById('flash-surface-estimate').style.cursor = packet.status === 'frozen' ? 'crosshair' : 'default';
+    const age = packet.frame ? Math.max(0, (data.server_time_s - packet.frame.captured_s) * 1000) : null;
+    document.getElementById('flash-surface-caption').textContent = packet.status === 'frozen' ? `Frozen frame ${packet.frame.frame_id} · click the object` : `Fitted poses · frame ${packet.frame?.frame_id ?? '—'} · ${age === null ? '—' : Math.round(age) + ' ms old'}`;
+    document.getElementById('flash-surface-diagnostics-caption').textContent = objects.length ? `Fit diagnostics · ${estimate.object_name}` : 'Fit diagnostics';
     const d = estimate.diagnostics || {}, t = estimate.timings || {};
     const fmt = value => Number.isFinite(value) ? value.toFixed(1) : '—';
     document.getElementById('flash-surface-metrics').textContent = `Pose proposal: ${estimate.accepted === true ? 'accepted' : 'unverified candidate'} · Camera ${fmt(data.preview?.capture_fps)} fps · Processing ${fmt(t.processed_fps)} fps · SAM ${fmt(t.mask_ms)} ms · RGB match ${fmt(d.match_ms)} ms · Surface fit ${fmt(d.fit_ms)} ms · Prepare ${fmt(d.preprocess_ms)} ms\nSurface gap median / p90: ${fmt(d.surface_median_mm)} / ${fmt(d.surface_p90_mm)} mm · ${d.surface_points ?? '—'} measured samples at ${fmt(d.sample_spacing_mm)} mm · Fit samples ${d.fit_reference_points ?? '—'} / ${d.fit_target_points ?? '—'} · ${d.inliers ?? '—'} RGB-D matches\nRotation this update: RGB ${fmt(d.rgb_rotation_deg)}° · surface correction ${fmt(d.surface_correction_deg)}° · final ${fmt(d.final_rotation_deg)}°\nDepth pixels withheld: boundary ${d.boundary_count ?? '—'}, discontinuity ${d.edge_count ?? '—'} · Fixed reference frame ${d.reference_frame_id ?? '—'}`;
@@ -385,8 +386,8 @@ function flashTrackingDrawCloud() {
     if (!e.reference_m?.length || !e.camera_from_reference) return;
     const follow = document.getElementById('flash-surface-follow').checked;
     document.getElementById('flash-surface-cloud-caption').textContent = follow
-        ? '3D scene pose · drag to orbit, scroll to zoom'
-        : '3D object view · pose removed · drag to orbit, scroll to zoom';
+        ? `3D scene pose · ${e.object_name || 'object'} · drag to orbit, scroll to zoom`
+        : `3D object view · ${e.object_name || 'object'} · pose removed · drag to orbit, scroll to zoom`;
     const pose = e.camera_from_reference;
     const local = p => [0,1,2].map(i => [0,1,2].reduce((sum,j) => sum + pose[j][i] * (p[j] - pose[j][3]), 0));
     const identity = `${flashTrackingSnapshot.session_id}:${e.role}:${e.diagnostics?.reference_frame_id}`;

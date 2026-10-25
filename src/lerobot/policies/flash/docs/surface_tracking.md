@@ -287,16 +287,17 @@ camera** can already be newer. Cyan shows the current mask/measured cloud;
 white shows the fixed reference at the proposed pose. A/B/C and axes belong to
 that reference. A rejected candidate remains visible with an unverified label.
 The **Object close-up** enlarges the observed mask region from that same source
-image; a dashed box marks its crop in the full image. If the current mask is
-missing, it frames the projected reference and labels that fallback. The crop
-changes only the display, not the pose computation.
+image. If the current mask is missing, it frames the projected reference and
+labels that fallback. The crop changes only the display, not the pose
+computation.
 
 The debugger can keep several clicked objects in one camera session. **Freeze
 image & add by click** pauses updates, conditions the new SAM mask on that
 source frame, and adds a separate fixed surface reference without resetting the
 existing ones. **Start new set by name** deliberately replaces the set. The
 vertical object list chooses which close-up, 3D cloud and detailed diagnostics
-to inspect; the full fitted-source image shows all current outlines. Focus
+to inspect; the full fitted-source image shows every object's mask, fitted
+reference and pose axes at once, independently of the focus choice. Focus
 changes only the display. The selection is tied to a frozen frame; live camera
 frames may already be newer. This local inspection uses no robot or group-motion
 fallback.

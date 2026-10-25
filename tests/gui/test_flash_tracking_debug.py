@@ -197,6 +197,9 @@ def test_multi_object_list_changes_closeup_and_3d_without_changing_source_frame(
             "status": "reference",
             "accepted": True,
             "contours": [[[x0, y0], [x1, y0], [x1, y1], [x0, y1]]],
+            "reference_px": [[(x0 + x1) // 2, (y0 + y1) // 2]],
+            "anchors_px": [[x0 + 10, y0 + 10], [x0 + 15, y0 + 10], [x0 + 10, y0 + 15]],
+            "axes_px": [[x0 + 20, y0 + 10], [x0 + 10, y0 + 20], [x0 + 20, y0 + 5]],
             "camera_from_reference": identity,
             "reference_m": shape,
             "observed_m": shape,
@@ -224,27 +227,36 @@ def test_multi_object_list_changes_closeup_and_3d_without_changing_source_frame(
     page.evaluate("switchTab('run'); selectWorkflow('flash')")
     page.get_by_role("button", name="Live tracking · camera only →").click()
     page.wait_for_function("document.getElementById('flash-surface-local')?.dataset.frameId === '52'")
+    page.wait_for_function("""() => {
+        const canvas = document.getElementById('flash-surface-estimate');
+        const ctx = canvas.getContext('2d');
+        return [40,160].every(x =>
+            Array.from(ctx.getImageData(x,40,1,1).data).slice(0,3).every(channel => channel === 255));
+    }""")
     before = page.evaluate("""() => ({
-        color:Array.from(document.getElementById('flash-surface-local').getContext('2d').getImageData(67,50,1,1).data).slice(0,3),
+        color:Array.from(document.getElementById('flash-surface-local').getContext('2d').getImageData(60,70,1,1).data).slice(0,3),
         cloud:document.getElementById('flash-surface-cloud').toDataURL(),
         full:document.getElementById('flash-surface-estimate').dataset.frameId,
+        fullImage:document.getElementById('flash-surface-estimate').toDataURL(),
     })""")
     stale_alpha = page.evaluate("""() => {
         document.querySelector('#flash-tracked-objects button[data-role="object_2"]').click();
-        return document.getElementById('flash-surface-local').getContext('2d').getImageData(67,50,1,1).data[3];
+        return document.getElementById('flash-surface-local').getContext('2d').getImageData(130,70,1,1).data[3];
     }""")
     assert stale_alpha == 0  # never label the previous object's crop as the new one
     page.wait_for_function("""() => flashTrackingFocusRole === 'object_2' &&
-        document.getElementById('flash-surface-local').getContext('2d').getImageData(133,50,1,1).data[1] === 255""")
+            document.getElementById('flash-surface-local').getContext('2d').getImageData(130,70,1,1).data[3] === 255""")
     after = page.evaluate("""() => ({
-        color:Array.from(document.getElementById('flash-surface-local').getContext('2d').getImageData(133,50,1,1).data).slice(0,3),
+        color:Array.from(document.getElementById('flash-surface-local').getContext('2d').getImageData(130,70,1,1).data).slice(0,3),
         cloud:document.getElementById('flash-surface-cloud').toDataURL(),
         full:document.getElementById('flash-surface-estimate').dataset.frameId,
+        fullImage:document.getElementById('flash-surface-estimate').toDataURL(),
         selected:document.querySelector('#flash-tracked-objects button[data-role="object_2"]').getAttribute('aria-pressed'),
     })""")
-    assert before["color"] == [255, 0, 0]
-    assert after["color"] == [0, 255, 0]
+    assert before["color"][0] > before["color"][1] and before["color"][0] > before["color"][2]
+    assert after["color"][1] > after["color"][0] and after["color"][1] > after["color"][2]
     assert before["full"] == after["full"] == "52"
+    assert before["fullImage"] == after["fullImage"]
     assert before["cloud"] != after["cloud"]
     assert after["selected"] == "true"
 
