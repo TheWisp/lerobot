@@ -1275,6 +1275,13 @@ class Sam3TrackByDetectionAdapter(ConceptMaskAdapter):
                     track["since_recover"] = 0
                     if seeds:
                         self._seed(track, seeds, pv, h, w)
+                    elif is_flush:
+                        # All objects are lost, so there is nothing to re-seed. Do not
+                        # keep appending frames to the old session past the memory limit.
+                        # The next frame uses the normal (throttled) detection path.
+                        track["session"] = None
+                        track["objs"], track["masks"], track["scores"] = {}, {}, {}
+                        track["since_flush"] = 0
 
         return self._live_masks(track), h, w
 

@@ -1,0 +1,659 @@
+{
+  "date": "2026-10-25",
+  "system": "RTX 5090 32607 MiB VRAM, 60 GiB host RAM",
+  "camera": "D435 1280x720; 30 fps capture",
+  "tracker": "FLASH camera-only worker, SAM3 resolution 504, UFM, one green ring text prompt",
+  "measurement": "Read worker VmRSS and nvidia-smi per-process used GPU memory about once per second while polling completed estimate frame IDs. Each window saw at least 190 distinct processed frames. GPU measurements include PyTorch reserved memory. Sampling can miss transient peaks.",
+  "sam3_flush_every_processed_frames": 150,
+  "windows": {
+    "first": {
+      "duration_s": 52.0,
+      "memory_samples": 50,
+      "last_seen_frame_id": 2390,
+      "rss_mib_last": 5251.5,
+      "rss_mib_max_sampled": 5251.5,
+      "gpu_mib_last": 6194,
+      "gpu_mib_max_sampled": 6194,
+      "rss_mib_first_sample_with_gpu": 1820.9,
+      "gpu_mib_first_sample": 1818,
+      "at_least_processed_frames_observed": 190
+    },
+    "second": {
+      "duration_s": 55.1,
+      "memory_samples": 53,
+      "last_seen_frame_id": 5003,
+      "rss_mib_last": 5253.8,
+      "rss_mib_max_sampled": 5253.8,
+      "gpu_mib_last": 6194,
+      "gpu_mib_max_sampled": 6194,
+      "rss_mib_first_sample_with_gpu": 5252.4,
+      "gpu_mib_first_sample": 6194,
+      "at_least_processed_frames_observed": 190
+    }
+  },
+  "limitations": "One static scene and one object. The fitted candidate was not necessarily accepted for action. This is memory evidence, not pose-quality evidence or an OOM guarantee for arbitrary masks, model counts, or runtime length.",
+  "samples": {
+    "first": [
+      {
+        "s": 0.05,
+        "frames_seen": 0,
+        "rss_mib": 958.9,
+        "gpu_mib": null
+      },
+      {
+        "s": 1.08,
+        "frames_seen": 0,
+        "rss_mib": 995.1,
+        "gpu_mib": null
+      },
+      {
+        "s": 2.12,
+        "frames_seen": 0,
+        "rss_mib": 2161.8,
+        "gpu_mib": null
+      },
+      {
+        "s": 3.16,
+        "frames_seen": 0,
+        "rss_mib": 2162.3,
+        "gpu_mib": null
+      },
+      {
+        "s": 4.21,
+        "frames_seen": 0,
+        "rss_mib": 1820.9,
+        "gpu_mib": 1818
+      },
+      {
+        "s": 5.26,
+        "frames_seen": 0,
+        "rss_mib": 4795.0,
+        "gpu_mib": 3484
+      },
+      {
+        "s": 6.27,
+        "frames_seen": 2,
+        "rss_mib": 5245.6,
+        "gpu_mib": 6080
+      },
+      {
+        "s": 7.32,
+        "frames_seen": 7,
+        "rss_mib": 5246.5,
+        "gpu_mib": 6084
+      },
+      {
+        "s": 8.39,
+        "frames_seen": 11,
+        "rss_mib": 5248.3,
+        "gpu_mib": 6086
+      },
+      {
+        "s": 9.46,
+        "frames_seen": 16,
+        "rss_mib": 5248.4,
+        "gpu_mib": 6088
+      },
+      {
+        "s": 10.52,
+        "frames_seen": 20,
+        "rss_mib": 5248.8,
+        "gpu_mib": 6092
+      },
+      {
+        "s": 11.58,
+        "frames_seen": 24,
+        "rss_mib": 5249.0,
+        "gpu_mib": 6096
+      },
+      {
+        "s": 12.64,
+        "frames_seen": 28,
+        "rss_mib": 5249.0,
+        "gpu_mib": 6100
+      },
+      {
+        "s": 13.71,
+        "frames_seen": 33,
+        "rss_mib": 5249.0,
+        "gpu_mib": 6104
+      },
+      {
+        "s": 14.78,
+        "frames_seen": 37,
+        "rss_mib": 5249.0,
+        "gpu_mib": 6106
+      },
+      {
+        "s": 15.85,
+        "frames_seen": 41,
+        "rss_mib": 5249.0,
+        "gpu_mib": 6108
+      },
+      {
+        "s": 16.91,
+        "frames_seen": 46,
+        "rss_mib": 5249.0,
+        "gpu_mib": 6112
+      },
+      {
+        "s": 17.98,
+        "frames_seen": 50,
+        "rss_mib": 5249.0,
+        "gpu_mib": 6116
+      },
+      {
+        "s": 19.05,
+        "frames_seen": 54,
+        "rss_mib": 5249.0,
+        "gpu_mib": 6118
+      },
+      {
+        "s": 20.12,
+        "frames_seen": 58,
+        "rss_mib": 5250.3,
+        "gpu_mib": 6122
+      },
+      {
+        "s": 21.19,
+        "frames_seen": 62,
+        "rss_mib": 5250.3,
+        "gpu_mib": 6124
+      },
+      {
+        "s": 22.27,
+        "frames_seen": 66,
+        "rss_mib": 5250.3,
+        "gpu_mib": 6128
+      },
+      {
+        "s": 23.34,
+        "frames_seen": 71,
+        "rss_mib": 5250.3,
+        "gpu_mib": 6132
+      },
+      {
+        "s": 24.49,
+        "frames_seen": 74,
+        "rss_mib": 5250.3,
+        "gpu_mib": 6134
+      },
+      {
+        "s": 25.56,
+        "frames_seen": 79,
+        "rss_mib": 5250.3,
+        "gpu_mib": 6138
+      },
+      {
+        "s": 26.63,
+        "frames_seen": 83,
+        "rss_mib": 5250.3,
+        "gpu_mib": 6142
+      },
+      {
+        "s": 27.7,
+        "frames_seen": 87,
+        "rss_mib": 5250.3,
+        "gpu_mib": 6144
+      },
+      {
+        "s": 28.78,
+        "frames_seen": 92,
+        "rss_mib": 5250.3,
+        "gpu_mib": 6146
+      },
+      {
+        "s": 29.85,
+        "frames_seen": 95,
+        "rss_mib": 5250.3,
+        "gpu_mib": 6150
+      },
+      {
+        "s": 30.93,
+        "frames_seen": 100,
+        "rss_mib": 5250.5,
+        "gpu_mib": 6154
+      },
+      {
+        "s": 32.01,
+        "frames_seen": 105,
+        "rss_mib": 5250.5,
+        "gpu_mib": 6158
+      },
+      {
+        "s": 33.08,
+        "frames_seen": 110,
+        "rss_mib": 5250.5,
+        "gpu_mib": 6160
+      },
+      {
+        "s": 34.1,
+        "frames_seen": 114,
+        "rss_mib": 5250.5,
+        "gpu_mib": 6164
+      },
+      {
+        "s": 35.17,
+        "frames_seen": 118,
+        "rss_mib": 5250.5,
+        "gpu_mib": 6168
+      },
+      {
+        "s": 36.26,
+        "frames_seen": 123,
+        "rss_mib": 5250.5,
+        "gpu_mib": 6170
+      },
+      {
+        "s": 37.34,
+        "frames_seen": 127,
+        "rss_mib": 5250.5,
+        "gpu_mib": 6174
+      },
+      {
+        "s": 38.41,
+        "frames_seen": 132,
+        "rss_mib": 5250.5,
+        "gpu_mib": 6178
+      },
+      {
+        "s": 39.41,
+        "frames_seen": 136,
+        "rss_mib": 5250.7,
+        "gpu_mib": 6180
+      },
+      {
+        "s": 40.49,
+        "frames_seen": 141,
+        "rss_mib": 5250.7,
+        "gpu_mib": 6184
+      },
+      {
+        "s": 41.57,
+        "frames_seen": 145,
+        "rss_mib": 5250.7,
+        "gpu_mib": 6188
+      },
+      {
+        "s": 42.65,
+        "frames_seen": 148,
+        "rss_mib": 5250.7,
+        "gpu_mib": 6194
+      },
+      {
+        "s": 43.65,
+        "frames_seen": 152,
+        "rss_mib": 5250.9,
+        "gpu_mib": 6194
+      },
+      {
+        "s": 44.66,
+        "frames_seen": 156,
+        "rss_mib": 5251.3,
+        "gpu_mib": 6194
+      },
+      {
+        "s": 45.73,
+        "frames_seen": 160,
+        "rss_mib": 5251.3,
+        "gpu_mib": 6194
+      },
+      {
+        "s": 46.73,
+        "frames_seen": 164,
+        "rss_mib": 5251.4,
+        "gpu_mib": 6194
+      },
+      {
+        "s": 47.82,
+        "frames_seen": 169,
+        "rss_mib": 5251.4,
+        "gpu_mib": 6194
+      },
+      {
+        "s": 48.82,
+        "frames_seen": 174,
+        "rss_mib": 5251.4,
+        "gpu_mib": 6194
+      },
+      {
+        "s": 49.9,
+        "frames_seen": 179,
+        "rss_mib": 5251.4,
+        "gpu_mib": 6194
+      },
+      {
+        "s": 50.9,
+        "frames_seen": 183,
+        "rss_mib": 5251.4,
+        "gpu_mib": 6194
+      },
+      {
+        "s": 51.97,
+        "frames_seen": 188,
+        "rss_mib": 5251.5,
+        "gpu_mib": 6194
+      }
+    ],
+    "second": [
+      {
+        "s": 0.04,
+        "frames_seen": 1,
+        "rss_mib": 5252.4,
+        "gpu_mib": 6194
+      },
+      {
+        "s": 1.1,
+        "frames_seen": 5,
+        "rss_mib": 5252.4,
+        "gpu_mib": 6194
+      },
+      {
+        "s": 2.16,
+        "frames_seen": 10,
+        "rss_mib": 5252.4,
+        "gpu_mib": 6194
+      },
+      {
+        "s": 3.23,
+        "frames_seen": 14,
+        "rss_mib": 5252.4,
+        "gpu_mib": 6194
+      },
+      {
+        "s": 4.3,
+        "frames_seen": 19,
+        "rss_mib": 5252.4,
+        "gpu_mib": 6194
+      },
+      {
+        "s": 5.36,
+        "frames_seen": 22,
+        "rss_mib": 5252.4,
+        "gpu_mib": 6194
+      },
+      {
+        "s": 6.43,
+        "frames_seen": 26,
+        "rss_mib": 5252.4,
+        "gpu_mib": 6194
+      },
+      {
+        "s": 7.5,
+        "frames_seen": 30,
+        "rss_mib": 5252.4,
+        "gpu_mib": 6194
+      },
+      {
+        "s": 8.57,
+        "frames_seen": 35,
+        "rss_mib": 5252.4,
+        "gpu_mib": 6194
+      },
+      {
+        "s": 9.62,
+        "frames_seen": 39,
+        "rss_mib": 5252.4,
+        "gpu_mib": 6194
+      },
+      {
+        "s": 10.68,
+        "frames_seen": 43,
+        "rss_mib": 5252.4,
+        "gpu_mib": 6194
+      },
+      {
+        "s": 11.74,
+        "frames_seen": 47,
+        "rss_mib": 5252.4,
+        "gpu_mib": 6194
+      },
+      {
+        "s": 12.8,
+        "frames_seen": 50,
+        "rss_mib": 5252.4,
+        "gpu_mib": 6194
+      },
+      {
+        "s": 13.87,
+        "frames_seen": 55,
+        "rss_mib": 5252.4,
+        "gpu_mib": 6194
+      },
+      {
+        "s": 14.95,
+        "frames_seen": 59,
+        "rss_mib": 5252.4,
+        "gpu_mib": 6194
+      },
+      {
+        "s": 16.02,
+        "frames_seen": 64,
+        "rss_mib": 5252.4,
+        "gpu_mib": 6194
+      },
+      {
+        "s": 17.18,
+        "frames_seen": 68,
+        "rss_mib": 5252.4,
+        "gpu_mib": 6194
+      },
+      {
+        "s": 18.18,
+        "frames_seen": 73,
+        "rss_mib": 5252.4,
+        "gpu_mib": 6194
+      },
+      {
+        "s": 19.26,
+        "frames_seen": 79,
+        "rss_mib": 5252.4,
+        "gpu_mib": 6194
+      },
+      {
+        "s": 20.27,
+        "frames_seen": 82,
+        "rss_mib": 5252.4,
+        "gpu_mib": 6194
+      },
+      {
+        "s": 21.28,
+        "frames_seen": 87,
+        "rss_mib": 5252.4,
+        "gpu_mib": 6194
+      },
+      {
+        "s": 22.35,
+        "frames_seen": 91,
+        "rss_mib": 5252.4,
+        "gpu_mib": 6194
+      },
+      {
+        "s": 23.35,
+        "frames_seen": 95,
+        "rss_mib": 5252.4,
+        "gpu_mib": 6194
+      },
+      {
+        "s": 24.43,
+        "frames_seen": 100,
+        "rss_mib": 5252.7,
+        "gpu_mib": 6194
+      },
+      {
+        "s": 25.51,
+        "frames_seen": 105,
+        "rss_mib": 5252.7,
+        "gpu_mib": 6194
+      },
+      {
+        "s": 26.6,
+        "frames_seen": 110,
+        "rss_mib": 5252.7,
+        "gpu_mib": 6194
+      },
+      {
+        "s": 27.6,
+        "frames_seen": 115,
+        "rss_mib": 5253.1,
+        "gpu_mib": 6194
+      },
+      {
+        "s": 28.69,
+        "frames_seen": 120,
+        "rss_mib": 5253.2,
+        "gpu_mib": 6194
+      },
+      {
+        "s": 29.69,
+        "frames_seen": 124,
+        "rss_mib": 5253.7,
+        "gpu_mib": 6194
+      },
+      {
+        "s": 30.77,
+        "frames_seen": 128,
+        "rss_mib": 5253.7,
+        "gpu_mib": 6194
+      },
+      {
+        "s": 31.77,
+        "frames_seen": 132,
+        "rss_mib": 5253.7,
+        "gpu_mib": 6194
+      },
+      {
+        "s": 32.85,
+        "frames_seen": 136,
+        "rss_mib": 5253.7,
+        "gpu_mib": 6194
+      },
+      {
+        "s": 33.86,
+        "frames_seen": 140,
+        "rss_mib": 5253.7,
+        "gpu_mib": 6194
+      },
+      {
+        "s": 34.86,
+        "frames_seen": 145,
+        "rss_mib": 5253.7,
+        "gpu_mib": 6194
+      },
+      {
+        "s": 35.86,
+        "frames_seen": 147,
+        "rss_mib": 5253.8,
+        "gpu_mib": 6194
+      },
+      {
+        "s": 36.93,
+        "frames_seen": 149,
+        "rss_mib": 5253.8,
+        "gpu_mib": 6194
+      },
+      {
+        "s": 38.0,
+        "frames_seen": 151,
+        "rss_mib": 5253.8,
+        "gpu_mib": 6194
+      },
+      {
+        "s": 39.05,
+        "frames_seen": 154,
+        "rss_mib": 5253.8,
+        "gpu_mib": 6194
+      },
+      {
+        "s": 40.12,
+        "frames_seen": 158,
+        "rss_mib": 5253.8,
+        "gpu_mib": 6194
+      },
+      {
+        "s": 41.18,
+        "frames_seen": 158,
+        "rss_mib": 5253.8,
+        "gpu_mib": 6194
+      },
+      {
+        "s": 42.24,
+        "frames_seen": 161,
+        "rss_mib": 5253.8,
+        "gpu_mib": 6194
+      },
+      {
+        "s": 43.3,
+        "frames_seen": 164,
+        "rss_mib": 5253.8,
+        "gpu_mib": 6194
+      },
+      {
+        "s": 44.36,
+        "frames_seen": 166,
+        "rss_mib": 5253.8,
+        "gpu_mib": 6194
+      },
+      {
+        "s": 45.43,
+        "frames_seen": 169,
+        "rss_mib": 5253.8,
+        "gpu_mib": 6194
+      },
+      {
+        "s": 46.51,
+        "frames_seen": 171,
+        "rss_mib": 5253.8,
+        "gpu_mib": 6194
+      },
+      {
+        "s": 47.56,
+        "frames_seen": 172,
+        "rss_mib": 5253.8,
+        "gpu_mib": 6194
+      },
+      {
+        "s": 48.62,
+        "frames_seen": 173,
+        "rss_mib": 5253.8,
+        "gpu_mib": 6194
+      },
+      {
+        "s": 49.68,
+        "frames_seen": 175,
+        "rss_mib": 5253.8,
+        "gpu_mib": 6194
+      },
+      {
+        "s": 50.75,
+        "frames_seen": 177,
+        "rss_mib": 5253.8,
+        "gpu_mib": 6194
+      },
+      {
+        "s": 51.82,
+        "frames_seen": 180,
+        "rss_mib": 5253.8,
+        "gpu_mib": 6194
+      },
+      {
+        "s": 52.9,
+        "frames_seen": 182,
+        "rss_mib": 5253.8,
+        "gpu_mib": 6194
+      },
+      {
+        "s": 53.98,
+        "frames_seen": 184,
+        "rss_mib": 5253.8,
+        "gpu_mib": 6194
+      },
+      {
+        "s": 55.06,
+        "frames_seen": 188,
+        "rss_mib": 5253.8,
+        "gpu_mib": 6194
+      }
+    ]
+  }
+}

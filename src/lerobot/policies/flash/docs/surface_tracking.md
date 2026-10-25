@@ -301,6 +301,36 @@ and source image; it is not a recording of the preceding motion sequence.
 
 ## Evidence and limits
 
+### Memory use
+
+The camera-only worker retains one fixed reference cloud, the previous processed
+observation, the latest captured RGB-D frame, and the current result. It does not
+append every processed surface to the reference. The SAM3 adapter retains a
+short video memory and replaces its tracking session every 150 processed frames
+when a mask can be re-seeded. A lost object with no valid seed now drops the old
+session at that limit too; otherwise its video memory could keep growing. The
+regression check in
+[`test_overlays.py`](../../../../../tests/gui/test_overlays.py) covers that
+missing-seed path.
+
+The fit limits residual _queries_ to 2048 samples per direction, but keeps full
+observed and reference clouds for distance checks. These clouds and their
+connected-neighbor graph scale with the selected image area and sampling
+density, so this is not a hard RAM cap for very large masks. GPU model memory
+depends mainly on the fixed inference resolutions and number of tracked
+objects; it is not proportional to the object's mask area. A measured steady
+state does not establish a worst-case peak or prove that arbitrary selections
+cannot exhaust memory.
+
+[A camera-only sample with at least 380 processed frames](../../../../../docs/proofs/flash-rgbd-registration/surface_memory_soak.json)
+spanned more than two configured SAM3 history intervals on the selected green ring. After
+model loading, the worker used about 5.1 GiB resident RAM and 6.0 GiB reported
+GPU memory. GPU memory was 6194 MiB throughout the second 190-frame window;
+resident RAM rose by about 1.4 MiB. These are one-second samples, so shorter
+peaks could have been missed, and this scene does not prove an arbitrary-length
+or arbitrary-mask memory bound. The pose candidates in this memory test were
+not necessarily accepted for action.
+
 [The measurement archive](../../../../../docs/proofs/flash-rgbd-registration/README.md)
 preserves earlier alternatives and the dated experiments. The
 [scale comparison](../../../../../docs/proofs/flash-rgbd-registration/surface_sampling_scaling.json)

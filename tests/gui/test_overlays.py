@@ -1510,6 +1510,44 @@ def test_a_discontinuity_still_drops_a_clicked_object_with_no_mask_left():
     assert a._click_names.get("top") is None
 
 
+def test_sam3_flush_releases_memory_when_every_object_is_lost():
+    """A lost clicked object has no text seed; its old video bank must expire."""
+    a = object.__new__(adapters.Sam3TrackByDetectionAdapter)
+    a._init_click_state()
+    a.prompt = ""
+    a._cam = "top"
+    a._text_detection = False
+    a._click_names = {"top": ["clicked"]}
+    a._torch = torch
+    old_session = object()
+    track = {
+        "session": old_session,
+        "objs": {"clicked": 1},
+        "masks": {"clicked": np.ones((8, 8), bool)},
+        "scores": {"clicked": 0.0},
+        "since_flush": a.FLUSH_EVERY - 1,
+        "since_recover": 0,
+        "shape": (8, 8),
+    }
+    a._tracks = {"top": track}
+    a._pv = lambda _: None
+    a._apply_clicks = lambda *_: False
+    a._detect_many = lambda *_: {}
+    a._read_output = lambda *_: None
+    calls = []
+    a.trk = lambda **kwargs: calls.append(kwargs) or object()
+
+    masks, _, _ = a._infer_masks(np.zeros((8, 8, 3), np.uint8))
+
+    assert len(calls) == 1
+    assert masks == {"clicked": []}
+    assert track["session"] is None, "the video memory must not grow past the flush interval"
+    assert track["since_flush"] == 0
+    assert track["objs"] == track["masks"] == track["scores"] == {}
+    a._infer_masks(np.zeros((8, 8, 3), np.uint8))
+    assert len(calls) == 1, "no stale tracker inference after the memory bank is dropped"
+
+
 def test_worker_reuse_decision_is_unchanged_by_the_consolidation(monkeypatch):
     """Equivalence proof for folding the worker identity into one predicate.
 
