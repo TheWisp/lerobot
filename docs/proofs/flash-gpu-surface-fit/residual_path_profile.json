@@ -1,0 +1,44 @@
+{
+  "device": "NVIDIA GeForce RTX 5090",
+  "torch": "2.11.0+cu128",
+  "cases": {
+    "ring_visible_motion": {
+      "pose_count": 80,
+      "reference_queries": 1909,
+      "target_queries": 1976,
+      "timings": {
+        "cpu_full_residual_ms": 94.9065390159376,
+        "gpu_resident_residual_ms": 92.03236200846732,
+        "gpu_residual_with_download_ms": 94.21701898099855,
+        "gpu_residual_with_upload_hull_download_ms": 106.90337000414729,
+        "cpu_nearest_only_ms": 78.53851100662723,
+        "gpu_nearest_only_ms": 65.80312899313867
+      },
+      "profile": {
+        "pose_count": 10,
+        "cuda_kernel_launches": 1130,
+        "cuda_stream_synchronizations": 20,
+        "gpu_tree_queries": 20
+      }
+    },
+    "dowel_held_315": {
+      "pose_count": 80,
+      "reference_queries": 780,
+      "target_queries": 100,
+      "timings": {
+        "cpu_full_residual_ms": 33.88027002802119,
+        "gpu_resident_residual_ms": 63.56747500831261,
+        "gpu_residual_with_download_ms": 65.30491600278765,
+        "gpu_residual_with_upload_hull_download_ms": 77.09501899080351,
+        "cpu_nearest_only_ms": 12.55770999705419,
+        "gpu_nearest_only_ms": 13.97401001304388
+      },
+      "profile": {
+        "pose_count": 10,
+        "cuda_kernel_launches": 1130,
+        "cuda_stream_synchronizations": 20,
+        "gpu_tree_queries": 20
+      }
+    }
+  }
+}

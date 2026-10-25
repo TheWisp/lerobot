@@ -104,9 +104,51 @@ The [same-solver tree comparison](same_solver_tree_comparison.json) is also
 slower and still produces numerically divergent final poses; exact nearest
 distances alone do not repair derivative sensitivity.
 
-**Decision:** keep the CPU fitter as the default. Both experimental CUDA
-nearest-search paths and their same-solver fits are slower in these cases, and
-solver-level pose equivalence is not yet established. Moving the remaining
+### Where the CUDA time goes
+
+The earlier conclusion that "the GPU is slower" needs the workload attached.
+[`profile_residual_path.py`](profile_residual_path.py) times 80 _identical CPU
+solver candidate poses_ with the same exact `cKDTree` traversal on CPU and
+CUDA. The [saved profile](residual_path_profile.json) was taken on an RTX 5090
+with PyTorch 2.11, after warmup, without the live camera worker. The
+"resident" column has pre-uploaded poses and precomputed hulls; it therefore
+isolates residual execution from those per-pose CPU costs.
+
+| 80 candidate poses | CPU full residual | CUDA resident residual | CUDA with pose upload, CPU hull and result download | CPU nearest only | CUDA nearest only |
+| ------------------ | ----------------: | ---------------------: | --------------------------------------------------: | ---------------: | ----------------: |
+| Moving ring        |           94.9 ms |                92.0 ms |                                            106.9 ms |          78.5 ms |           65.8 ms |
+| Held dowel         |           33.9 ms |                63.6 ms |                                             77.1 ms |          12.6 ms |           14.0 ms |
+
+The profiler counted **113 CUDA kernel launches and two stream
+synchronizations per candidate pose** in the result-downloading path. Each
+candidate fits at most 2048 query points per direction; the held-dowel case has
+only 780 reference and 100 target queries. The CPU's compiled `cKDTree` handles
+these small searches cheaply, while the CUDA residual invokes many separate
+tensor kernels. On the larger ring, CUDA nearest search wins in isolation, but
+the other residual work plus per-pose upload, CPU hull construction and result
+download consume that gain. On the small dowel, the CUDA path is slower even
+when poses and hulls are already resident. In the same-solver experiment,
+SciPy needs each result before it can select its next pose, so those transfers
+and synchronizations cannot be amortized by queuing many candidates.
+
+The older full-fit comparison ran while SAM3/UFM work was active on the same
+GPU, whereas this breakdown did not. GPU contention is a plausible additional
+factor, but these measurements do not isolate its contribution. A native GPU
+solver could batch its finite-difference poses; the current native prototype
+does that but changes convergence and hull handling, so it has not established
+an equivalent faster replacement. This profile identifies the costs in the
+**current implementation**, not a hardware limit on GPU surface fitting.
+
+Reproduce the breakdown from the repository root:
+
+```bash
+PYTHONPATH=src .venv/bin/python docs/proofs/flash-gpu-surface-fit/profile_residual_path.py \
+  --output /tmp/flash-residual-profile.json
+```
+
+**Decision:** keep the CPU fitter as the default. The measured CUDA full-fit
+paths have not been both faster and pose-equivalent; solver-level pose
+equivalence is not yet established. Moving the remaining
 7–17 ms of frame preparation to CUDA cannot
 recover the observed fit-time gap by itself. Before considering a switch,
 benchmark a GPU implementation with equivalent convergence and hull updates
