@@ -1,0 +1,398 @@
+{
+  "date": "2026-10-25",
+  "baseline_commit": "846ed5b9a",
+  "change": "Crop XYZ and normal calculations to the current SAM mask bounds plus one gradient pixel; keep image filters unchanged.",
+  "configuration": {
+    "mask_margin_px": 2,
+    "depth_span_m": 0.01,
+    "depth_neighborhood_px": 3,
+    "normal_bilateral_diameter_px": 5,
+    "normal_bilateral_sigma_px": 2.0,
+    "huber_m": 0.005,
+    "surface_spacing_m": 0.003,
+    "samples_across_object": 64,
+    "min_surface_spacing_m": 0.001,
+    "component_gap_m": 0.01,
+    "validation_tile_px": 4
+  },
+  "recorded": {
+    "source": "demos/insertion/recording, cached SAM3 masks from flash-mask-depth-experiment/sam3-full",
+    "opencv_version": "4.13.0",
+    "opencv_threads": 1,
+    "timing_repeats_per_frame": 12,
+    "execution_order": "alternate before/after; warm both once first",
+    "comparison": "All returned values compared with numpy.testing.assert_array_equal against the actual baseline module loaded from git.",
+    "summary_median_ms": {
+      "before": 36.73304802214261,
+      "after": 3.6668799875769764
+    },
+    "frames": [
+      {
+        "frame": 234,
+        "image_shape": [
+          480,
+          848
+        ],
+        "geometry_shape": [
+          47,
+          72
+        ],
+        "points": 460,
+        "all_outputs_bit_identical": true,
+        "median_ms": {
+          "before": 38.2987979974132,
+          "after": 4.12295397836715
+        }
+      },
+      {
+        "frame": 235,
+        "image_shape": [
+          480,
+          848
+        ],
+        "geometry_shape": [
+          46,
+          72
+        ],
+        "points": 470,
+        "all_outputs_bit_identical": true,
+        "median_ms": {
+          "before": 36.4107069617603,
+          "after": 4.308403003960848
+        }
+      },
+      {
+        "frame": 236,
+        "image_shape": [
+          480,
+          848
+        ],
+        "geometry_shape": [
+          47,
+          71
+        ],
+        "points": 456,
+        "all_outputs_bit_identical": true,
+        "median_ms": {
+          "before": 38.81313049350865,
+          "after": 4.786028002854437
+        }
+      },
+      {
+        "frame": 237,
+        "image_shape": [
+          480,
+          848
+        ],
+        "geometry_shape": [
+          46,
+          72
+        ],
+        "points": 475,
+        "all_outputs_bit_identical": true,
+        "median_ms": {
+          "before": 37.76324799400754,
+          "after": 4.5186494826339185
+        }
+      },
+      {
+        "frame": 238,
+        "image_shape": [
+          480,
+          848
+        ],
+        "geometry_shape": [
+          47,
+          71
+        ],
+        "points": 478,
+        "all_outputs_bit_identical": true,
+        "median_ms": {
+          "before": 38.65891398163512,
+          "after": 4.507758480031043
+        }
+      },
+      {
+        "frame": 270,
+        "image_shape": [
+          480,
+          848
+        ],
+        "geometry_shape": [
+          34,
+          99
+        ],
+        "points": 41,
+        "all_outputs_bit_identical": true,
+        "median_ms": {
+          "before": 36.08728150720708,
+          "after": 3.0602729821112007
+        }
+      },
+      {
+        "frame": 271,
+        "image_shape": [
+          480,
+          848
+        ],
+        "geometry_shape": [
+          36,
+          101
+        ],
+        "points": 179,
+        "all_outputs_bit_identical": true,
+        "median_ms": {
+          "before": 38.27746503520757,
+          "after": 3.4480729955248535
+        }
+      },
+      {
+        "frame": 272,
+        "image_shape": [
+          480,
+          848
+        ],
+        "geometry_shape": [
+          36,
+          103
+        ],
+        "points": 211,
+        "all_outputs_bit_identical": true,
+        "median_ms": {
+          "before": 37.21965348813683,
+          "after": 3.4626704873517156
+        }
+      },
+      {
+        "frame": 273,
+        "image_shape": [
+          480,
+          848
+        ],
+        "geometry_shape": [
+          38,
+          106
+        ],
+        "points": 52,
+        "all_outputs_bit_identical": true,
+        "median_ms": {
+          "before": 35.28715297579765,
+          "after": 3.0587994842790067
+        }
+      },
+      {
+        "frame": 274,
+        "image_shape": [
+          480,
+          848
+        ],
+        "geometry_shape": [
+          38,
+          102
+        ],
+        "points": 225,
+        "all_outputs_bit_identical": true,
+        "median_ms": {
+          "before": 35.40916249039583,
+          "after": 3.5092680191155523
+        }
+      },
+      {
+        "frame": 315,
+        "image_shape": [
+          480,
+          848
+        ],
+        "geometry_shape": [
+          91,
+          57
+        ],
+        "points": 97,
+        "all_outputs_bit_identical": true,
+        "median_ms": {
+          "before": 36.768557532923296,
+          "after": 3.3604729687795043
+        }
+      },
+      {
+        "frame": 435,
+        "image_shape": [
+          480,
+          848
+        ],
+        "geometry_shape": [
+          108,
+          61
+        ],
+        "points": 364,
+        "all_outputs_bit_identical": true,
+        "median_ms": {
+          "before": 35.446723020868376,
+          "after": 3.5238554992247373
+        }
+      },
+      {
+        "frame": 436,
+        "image_shape": [
+          480,
+          848
+        ],
+        "geometry_shape": [
+          109,
+          61
+        ],
+        "points": 387,
+        "all_outputs_bit_identical": true,
+        "median_ms": {
+          "before": 36.69753851136193,
+          "after": 3.681813017465174
+        }
+      },
+      {
+        "frame": 437,
+        "image_shape": [
+          480,
+          848
+        ],
+        "geometry_shape": [
+          108,
+          60
+        ],
+        "points": 366,
+        "all_outputs_bit_identical": true,
+        "median_ms": {
+          "before": 35.15220701228827,
+          "after": 3.6731720028910786
+        }
+      },
+      {
+        "frame": 438,
+        "image_shape": [
+          480,
+          848
+        ],
+        "geometry_shape": [
+          110,
+          60
+        ],
+        "points": 355,
+        "all_outputs_bit_identical": true,
+        "median_ms": {
+          "before": 36.91570850787684,
+          "after": 3.754424484213814
+        }
+      },
+      {
+        "frame": 439,
+        "image_shape": [
+          480,
+          848
+        ],
+        "geometry_shape": [
+          110,
+          60
+        ],
+        "points": 355,
+        "all_outputs_bit_identical": true,
+        "median_ms": {
+          "before": 36.10273648519069,
+          "after": 3.6605879722628742
+        }
+      }
+    ]
+  },
+  "live": {
+    "resolution": [
+      1280,
+      720
+    ],
+    "object": "mini gamepad",
+    "before": {
+      "samples": 38,
+      "publication_median_fps": 3.131352103921594,
+      "total_ms": {
+        "median": 309.21934050275013,
+        "p10": 274.18012130074203,
+        "p90": 362.6178082020488
+      },
+      "mask_ms": {
+        "median": 25.725373503519222,
+        "p10": 23.87851748499088,
+        "p90": 28.436126373708248
+      },
+      "preprocess_ms": {
+        "median": 105.1460960006807,
+        "p10": 100.88998969877139,
+        "p90": 111.9536126148887
+      },
+      "match_ms": {
+        "median": 35.17061550519429,
+        "p10": 34.25639942870475,
+        "p90": 38.72830051113852
+      },
+      "fit_ms": {
+        "median": 134.9337765132077,
+        "p10": 103.31984058720991,
+        "p90": 174.08464714535515
+      },
+      "surface_points": {
+        "median": 3060.0,
+        "p10": 2919.3,
+        "p90": 3258.5
+      },
+      "surface_p90_mm": {
+        "median": 7.251703774006643,
+        "p10": 6.952322515819998,
+        "p90": 7.703095249748031
+      }
+    },
+    "after": {
+      "samples": 61,
+      "publication_median_fps": 5.269085615928724,
+      "total_ms": {
+        "median": 182.3756179655902,
+        "p10": 158.1132430001162,
+        "p90": 228.844704979565
+      },
+      "mask_ms": {
+        "median": 24.940615985542536,
+        "p10": 23.21801899233833,
+        "p90": 33.19669398479164
+      },
+      "preprocess_ms": {
+        "median": 21.84937399579212,
+        "p10": 19.414457958191633,
+        "p90": 24.320528958924115
+      },
+      "match_ms": {
+        "median": 35.87393095949665,
+        "p10": 34.27521500270814,
+        "p90": 41.06792598031461
+      },
+      "fit_ms": {
+        "median": 94.67514901189134,
+        "p10": 70.8291280316189,
+        "p90": 139.8504109820351
+      },
+      "surface_points": {
+        "median": 2419.0,
+        "p10": 2327.0,
+        "p90": 2460.0
+      },
+      "surface_p90_mm": {
+        "median": 2.0127199275769634,
+        "p10": 1.6851745275971541,
+        "p90": 2.532981894498551
+      }
+    },
+    "limitations": "Different live frames and a new reference after worker restart; sunlight, segmentation and point count changed. Overall FPS and fit-quality differences are not a controlled accuracy or speedup attribution. Recorded paired inputs above isolate the implementation change."
+  },
+  "verification": {
+    "tests_passed": 45,
+    "mutation_checks": [
+      "Restoring full-image geometry fails the bounded-allocation test.",
+      "Removing the gradient halo fails the full-frame equivalence test."
+    ],
+    "browser": "Live tracking UI rendered accepted gamepad poses without JavaScript errors; camera remained about 30 fps."
+  }
+}

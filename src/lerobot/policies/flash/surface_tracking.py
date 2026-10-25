@@ -66,7 +66,7 @@ class SurfaceTrackingSession:
     def update(self, rgb, depth_m, mask, intrinsics, frame_id):
         start = time.perf_counter()
         obs = observation(depth_m, mask, intrinsics, asdict(self.observation_config))
-        # Lift only usable pixels; observation already computed full-image normals.
+        # Lift only usable pixels; observation computed normals inside the mask bounds.
         y, x = np.nonzero(obs["valid_image"])
         z = depth_m[y, x]
         all_points = np.column_stack(

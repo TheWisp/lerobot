@@ -36,8 +36,12 @@ def move(points: np.ndarray, pose: np.ndarray) -> np.ndarray:
     return points @ pose[:3, :3].T + pose[:3, 3]
 
 
-def unproject(depth: np.ndarray, intrinsics: np.ndarray) -> np.ndarray:
+def unproject(
+    depth: np.ndarray, intrinsics: np.ndarray, *, pixel_origin: tuple[int, int] = (0, 0)
+) -> np.ndarray:
     y, x = np.indices(depth.shape)
+    x += pixel_origin[0]
+    y += pixel_origin[1]
     return np.stack(
         (
             (x - intrinsics[0, 2]) * depth / intrinsics[0, 0],
@@ -112,8 +116,18 @@ def largest_connected_surface(points: np.ndarray, gap_m: float) -> np.ndarray:
     return labels == np.argmax(np.bincount(labels))
 
 
+def _surface_region(mask: np.ndarray) -> tuple[slice, slice]:
+    """Mask bounds plus the one-pixel halo used by central-difference normals."""
+    x, y, width, height = cv2.boundingRect(mask.astype(np.uint8))
+    if not width:
+        return slice(0, 0), slice(0, 0)
+    return (
+        slice(max(0, y - 1), min(mask.shape[0], y + height + 1)),
+        slice(max(0, x - 1), min(mask.shape[1], x + width + 1)),
+    )
+
+
 def observation(depth: np.ndarray, mask: np.ndarray, intrinsics: np.ndarray, config: dict) -> dict:
-    xyz = unproject(depth, intrinsics)
     raw = mask & (depth > 0) & np.isfinite(depth)
     margin = int(config["mask_margin_px"])
     interior = cv2.erode(mask.astype(np.uint8), np.ones((2 * margin + 1, 2 * margin + 1), np.uint8)) > 0
@@ -125,17 +139,26 @@ def observation(depth: np.ndarray, mask: np.ndarray, intrinsics: np.ndarray, con
     smoothed = cv2.bilateralFilter(
         depth, config["normal_bilateral_diameter_px"], config["huber_m"], config["normal_bilateral_sigma_px"]
     )
-    normal_xyz = unproject(smoothed, intrinsics)
+    # Keep the inexpensive image filters above in full-frame coordinates:
+    # depth_reliable is also consumed outside the mask by the research tools,
+    # and OpenCV's float bilateral lookup table depends on the image depth range.
+    # Only the expensive XYZ/normal arrays need the object's bounding region.
+    region = _surface_region(mask)
+    origin = (region[1].start, region[0].start)
+    xyz = unproject(depth[region], intrinsics, pixel_origin=origin)
+    normal_xyz = unproject(smoothed[region], intrinsics, pixel_origin=origin)
     horizontal = np.zeros_like(xyz)
     vertical = np.zeros_like(xyz)
     horizontal[:, 1:-1] = normal_xyz[:, 2:] - normal_xyz[:, :-2]
     vertical[1:-1] = normal_xyz[2:] - normal_xyz[:-2]
     normals = np.cross(horizontal, vertical)
     norm = np.linalg.norm(normals, axis=-1)
-    valid = raw & interior & reliable & (norm > np.finfo(float).eps)
+    local_valid = raw[region] & interior[region] & reliable[region] & (norm > np.finfo(float).eps)
+    valid = np.zeros(mask.shape, dtype=bool)
+    valid[region] = local_valid
     normals /= np.maximum(norm[..., None], np.finfo(float).eps)
     normals[np.sum(normals * xyz, axis=-1) > 0] *= -1
-    y, x = np.nonzero(valid)
+    y, x = np.nonzero(local_valid)
     spacing = surface_spacing(xyz[y, x], config)
     selected = voxel_sample(xyz[y, x], spacing)
     y, x = y[selected], x[selected]
@@ -146,11 +169,12 @@ def observation(depth: np.ndarray, mask: np.ndarray, intrinsics: np.ndarray, con
         y, x = y[keep], x[keep]
     # Spatially interleaved held-out pixels, not independent ground-truth labels.
     tile = config["validation_tile_px"]
-    fit = ((x // tile + y // tile) % 2) == 0
+    pixels = np.column_stack((x + origin[0], y + origin[1]))
+    fit = ((pixels[:, 0] // tile + pixels[:, 1] // tile) % 2) == 0
     return {
         "points": xyz[y, x],
         "normals": normals[y, x],
-        "pixels": np.column_stack((x, y)),
+        "pixels": pixels,
         "fit": fit,
         "valid_image": valid,
         "depth_reliable": reliable,

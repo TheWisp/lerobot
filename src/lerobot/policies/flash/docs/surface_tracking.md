@@ -64,6 +64,14 @@ local surface normals and rejects degenerate neighborhoods. **Fitted XYZ stays
 at the measured depth.** The fitter does not use those smoothed depths as new
 geometry, and its objective is not point-to-plane normal alignment.
 
+XYZ and normal arrays are computed only within the current SAM mask's bounding
+rectangle, with one extra pixel for central-difference gradients. Unprojection
+retains original image coordinates; returned pixel indices, validation tiles
+and validity images still use the full image grid. Cheap image filters remain
+full-frame: the floating-point bilateral filter depends on the image-wide depth
+range, and research consumers use depth reliability outside the object mask.
+This optimization changes the amount of work, not sampling or rejection rules.
+
 One measured point is retained per occupied voxel. Spacing adapts to the visible
 extent, so small objects keep more detail. Sampling never creates extra depth
 measurements. The largest spatially connected patch supplies the initial
@@ -319,6 +327,7 @@ The main remaining limits follow from the mechanism:
 
 Regression coverage is linked to the actual consumers:
 
+- [`test_surface_observation_roi.py`](../../../../../tests/policies/flash/test_surface_observation_roi.py): exact cropped/full-frame equivalence on recorded depth, image boundaries, holes and disconnected masks; geometry allocations scale with the object region.
 - [`test_surface_sampling.py`](../../../../../tests/policies/flash/test_surface_sampling.py): measured-point preservation, density, bounded fitting with dense grounding, known motion and complete crop coverage.
 - [`test_vision_pipeline.py`](../../../../../tests/policies/flash/test_vision_pipeline.py): shared extraction/worker/debug results, registered coordinates, failed registration and explicit loss.
 - [`test_surface_debug.py`](../../../../../tests/policies/flash/test_surface_debug.py): missing observations and frame-bound selection.

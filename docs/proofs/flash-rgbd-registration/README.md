@@ -54,6 +54,34 @@ motions or occlusions. No robot motion was used.
 
 ![Live camera, aligned pose overlay, 3D surface and diagnostics](live_debug_ui.png)
 
+### Mask-bounded geometry preprocessing (2026-10-25)
+
+The expensive XYZ and normal arrays now cover the current SAM mask bounds plus
+one pixel for normal gradients. Full-image depth filtering is retained: the
+floating-point bilateral filter uses the global depth range, and the earlier
+surface experiments consume the full depth-reliability image. No density,
+rejection threshold, correspondence model or fitting setting changed.
+
+[Recorded measurements](surface_roi_benchmark.json) compare against commit
+`846ed5b9a` on the same 16 insertion frames. All returned arrays and counts were
+**exactly identical**. Median observation time fell from 36.7 to 3.7 ms on those
+848×480 frames. Each frame used 12 alternating before/after measurements after
+warming both implementations, with OpenCV limited to one thread as in the worker.
+
+On the live 1280×720 gamepad, median preprocessing went from 105.2 to 21.9 ms;
+observed publication cadence went from 3.1 to 5.3 fps. These live windows use
+different frames and a fresh reference after restarting the camera worker;
+sunlight, segmentation and point count also changed. Therefore the live fit/FPS
+differences cannot all be attributed to cropping, and the smaller live surface
+gap is **not** evidence of improved tracking accuracy. The paired recorded-frame
+comparison is the equivalence check. Capture remained about 30 fps.
+
+45 relevant tests passed, including recorded-depth equivalence, image borders,
+empty/tiny/disconnected masks, the shared perception pipeline and the previous
+surface experiment consumers. Restoring full-frame geometry makes the allocation
+test fail; removing the gradient halo makes the equivalence test fail. The live
+GUI rendered accepted gamepad poses without JavaScript errors.
+
 ## Earlier offline audit
 
 **Vision-only held-interval audit, 2026-10-24:** the cached UFM + mask/depth
