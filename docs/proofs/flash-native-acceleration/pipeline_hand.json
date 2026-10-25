@@ -1,0 +1,4512 @@
+{
+  "trace": "/home/feit/.cache/huggingface/lerobot/flash_debug_traces/trace-20261025-181728-660815692",
+  "frames": [
+    18090,
+    18097,
+    18104,
+    18111,
+    18118,
+    18125,
+    18131,
+    18138,
+    18144,
+    18153,
+    18160,
+    18166,
+    18174,
+    18181,
+    18187,
+    18194,
+    18200,
+    18206,
+    18213,
+    18219,
+    18225,
+    18231,
+    18237,
+    18243,
+    18249,
+    18256,
+    18262,
+    18268,
+    18276,
+    18283,
+    18290,
+    18297,
+    18304,
+    18311,
+    18319,
+    18326,
+    18333,
+    18339,
+    18345,
+    18353,
+    18359,
+    18366,
+    18372,
+    18379,
+    18385,
+    18393,
+    18399,
+    18405,
+    18413,
+    18420,
+    18426,
+    18433,
+    18439,
+    18445,
+    18452,
+    18459,
+    18465,
+    18472,
+    18479,
+    18487,
+    18493,
+    18500,
+    18507,
+    18513,
+    18521,
+    18528,
+    18534,
+    18541,
+    18548,
+    18554,
+    18561,
+    18567,
+    18573,
+    18580,
+    18587,
+    18594,
+    18600,
+    18607,
+    18615,
+    18622,
+    18628,
+    18636,
+    18642,
+    18649,
+    18657,
+    18663,
+    18672,
+    18678,
+    18686,
+    18693,
+    18700,
+    18705,
+    18712,
+    18718,
+    18725,
+    18732,
+    18739,
+    18745,
+    18752,
+    18761,
+    18767,
+    18774,
+    18781,
+    18788,
+    18794,
+    18800,
+    18808,
+    18814,
+    18820,
+    18826,
+    18833,
+    18840,
+    18848,
+    18854,
+    18860,
+    18868,
+    18874,
+    18881,
+    18887,
+    18895,
+    18903,
+    18910,
+    18917,
+    18925,
+    18932,
+    18939,
+    18945,
+    18953,
+    18960,
+    18966,
+    18973,
+    18979,
+    18986,
+    18993,
+    18999,
+    19006,
+    19012,
+    19018,
+    19024,
+    19030,
+    19037,
+    19043,
+    19050,
+    19057,
+    19064,
+    19071,
+    19079,
+    19086,
+    19092,
+    19098,
+    19105,
+    19112,
+    19118,
+    19125,
+    19132,
+    19140,
+    19147,
+    19154,
+    19160,
+    19167,
+    19174,
+    19180,
+    19186,
+    19193,
+    19200,
+    19207,
+    19214,
+    19220,
+    19226,
+    19233,
+    19240,
+    19247,
+    19252,
+    19259,
+    19265,
+    19272,
+    19279,
+    19286,
+    19292,
+    19300,
+    19306,
+    19314,
+    19320,
+    19328,
+    19336,
+    19342,
+    19350,
+    19358,
+    19364,
+    19371,
+    19378,
+    19385,
+    19392,
+    19399,
+    19406,
+    19413,
+    19420,
+    19426,
+    19432,
+    19439
+  ],
+  "roles": [
+    "object"
+  ],
+  "sam": "recorded masks",
+  "runs": [
+    {
+      "mode": "baseline",
+      "repeat": 0,
+      "elapsed_s": 12.575320728006773,
+      "steady_fps": 16.11971540045344,
+      "busy_cpu_equivalents": 2.3457348963119116,
+      "accepted": {
+        "object": 200
+      },
+      "decision_mismatches": [],
+      "max_pose_difference": {
+        "translation_mm": 0.0,
+        "rotation_deg": 0.0,
+        "matrix_max_abs": 0.0
+      },
+      "pose_differences": [
+        {
+          "frame": 18090,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18097,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18104,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18111,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18118,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18125,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18131,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18138,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18144,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18153,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18160,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18166,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18174,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18181,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18187,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18194,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18200,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18206,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18213,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18219,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18225,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18231,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18237,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18243,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18249,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18256,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18262,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18268,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18276,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18283,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18290,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18297,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18304,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18311,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18319,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18326,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18333,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18339,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18345,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18353,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18359,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18366,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18372,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18379,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18385,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18393,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18399,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18405,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18413,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18420,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18426,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18433,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18439,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18445,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18452,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18459,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18465,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18472,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18479,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18487,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18493,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18500,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18507,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18513,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18521,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18528,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18534,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18541,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18548,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18554,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18561,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18567,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18573,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18580,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18587,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18594,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18600,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18607,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18615,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18622,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18628,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18636,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18642,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18649,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18657,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18663,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18672,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18678,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18686,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18693,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18700,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18705,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18712,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18718,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18725,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18732,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18739,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18745,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18752,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18761,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18767,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18774,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18781,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18788,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18794,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18800,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18808,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18814,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18820,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18826,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18833,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18840,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18848,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18854,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18860,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18868,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18874,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18881,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18887,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18895,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18903,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18910,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18917,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18925,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18932,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18939,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18945,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18953,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18960,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18966,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18973,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18979,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18986,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18993,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18999,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19006,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19012,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19018,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19024,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19030,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19037,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19043,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19050,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19057,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19064,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19071,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19079,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19086,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19092,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19098,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19105,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19112,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19118,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19125,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19132,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19140,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19147,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19154,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19160,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19167,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19174,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19180,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19186,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19193,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19200,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19207,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19214,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19220,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19226,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19233,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19240,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19247,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19252,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19259,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19265,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19272,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19279,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19286,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19292,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19300,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19306,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19314,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19320,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19328,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19336,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19342,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19350,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19358,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19364,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19371,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19378,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19385,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19392,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19399,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19406,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19413,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19420,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19426,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19432,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19439,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        }
+      ]
+    },
+    {
+      "mode": "compiled",
+      "repeat": 0,
+      "elapsed_s": 12.129172749002464,
+      "steady_fps": 16.940199991413063,
+      "busy_cpu_equivalents": 2.2852146521105148,
+      "accepted": {
+        "object": 200
+      },
+      "decision_mismatches": [],
+      "max_pose_difference": {
+        "translation_mm": 0.0,
+        "rotation_deg": 0.0,
+        "matrix_max_abs": 0.0
+      },
+      "pose_differences": [
+        {
+          "frame": 18090,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18097,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18104,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18111,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18118,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18125,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18131,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18138,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18144,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18153,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18160,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18166,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18174,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18181,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18187,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18194,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18200,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18206,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18213,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18219,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18225,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18231,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18237,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18243,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18249,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18256,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18262,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18268,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18276,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18283,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18290,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18297,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18304,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18311,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18319,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18326,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18333,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18339,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18345,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18353,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18359,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18366,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18372,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18379,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18385,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18393,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18399,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18405,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18413,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18420,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18426,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18433,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18439,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18445,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18452,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18459,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18465,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18472,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18479,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18487,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18493,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18500,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18507,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18513,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18521,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18528,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18534,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18541,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18548,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18554,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18561,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18567,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18573,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18580,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18587,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18594,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18600,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18607,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18615,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18622,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18628,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18636,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18642,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18649,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18657,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18663,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18672,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18678,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18686,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18693,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18700,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18705,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18712,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18718,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18725,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18732,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18739,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18745,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18752,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18761,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18767,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18774,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18781,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18788,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18794,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18800,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18808,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18814,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18820,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18826,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18833,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18840,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18848,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18854,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18860,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18868,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18874,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18881,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18887,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18895,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18903,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18910,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18917,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18925,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18932,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18939,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18945,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18953,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18960,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18966,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18973,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18979,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18986,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18993,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18999,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19006,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19012,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19018,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19024,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19030,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19037,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19043,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19050,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19057,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19064,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19071,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19079,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19086,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19092,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19098,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19105,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19112,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19118,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19125,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19132,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19140,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19147,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19154,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19160,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19167,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19174,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19180,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19186,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19193,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19200,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19207,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19214,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19220,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19226,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19233,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19240,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19247,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19252,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19259,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19265,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19272,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19279,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19286,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19292,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19300,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19306,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19314,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19320,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19328,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19336,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19342,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19350,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19358,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19364,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19371,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19378,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19385,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19392,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19399,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19406,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19413,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19420,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19426,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19432,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19439,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        }
+      ]
+    },
+    {
+      "mode": "compiled_pool",
+      "repeat": 0,
+      "elapsed_s": 11.111261351965368,
+      "steady_fps": 18.000687012152643,
+      "busy_cpu_equivalents": 2.4829951303521454,
+      "accepted": {
+        "object": 200
+      },
+      "decision_mismatches": [],
+      "max_pose_difference": {
+        "translation_mm": 0.0,
+        "rotation_deg": 0.0,
+        "matrix_max_abs": 0.0
+      },
+      "pose_differences": [
+        {
+          "frame": 18090,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18097,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18104,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18111,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18118,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18125,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18131,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18138,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18144,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18153,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18160,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18166,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18174,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18181,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18187,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18194,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18200,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18206,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18213,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18219,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18225,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18231,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18237,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18243,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18249,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18256,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18262,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18268,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18276,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18283,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18290,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18297,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18304,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18311,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18319,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18326,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18333,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18339,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18345,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18353,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18359,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18366,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18372,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18379,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18385,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18393,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18399,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18405,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18413,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18420,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18426,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18433,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18439,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18445,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18452,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18459,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18465,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18472,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18479,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18487,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18493,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18500,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18507,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18513,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18521,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18528,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18534,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18541,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18548,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18554,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18561,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18567,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18573,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18580,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18587,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18594,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18600,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18607,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18615,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18622,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18628,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18636,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18642,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18649,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18657,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18663,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18672,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18678,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18686,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18693,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18700,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18705,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18712,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18718,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18725,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18732,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18739,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18745,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18752,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18761,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18767,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18774,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18781,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18788,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18794,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18800,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18808,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18814,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18820,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18826,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18833,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18840,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18848,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18854,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18860,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18868,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18874,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18881,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18887,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18895,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18903,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18910,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18917,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18925,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18932,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18939,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18945,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18953,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18960,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18966,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18973,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18979,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18986,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18993,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 18999,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19006,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19012,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19018,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19024,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19030,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19037,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19043,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19050,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19057,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19064,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19071,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19079,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19086,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19092,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19098,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19105,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19112,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19118,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19125,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19132,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19140,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19147,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19154,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19160,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19167,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19174,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19180,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19186,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19193,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19200,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19207,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19214,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19220,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19226,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19233,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19240,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19247,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19252,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19259,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19265,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19272,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19279,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19286,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19292,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19300,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19306,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19314,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19320,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19328,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19336,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19342,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19350,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19358,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19364,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19371,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19378,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19385,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19392,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19399,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19406,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19413,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19420,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19426,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19432,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        },
+        {
+          "frame": 19439,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0
+        }
+      ]
+    }
+  ],
+  "config": {
+    "backend": "surface",
+    "sam_resolution": 504,
+    "min_similarity": 0.75,
+    "registration_threshold_m": 0.005,
+    "registration_min_inliers": 12,
+    "registration_trials": 100,
+    "visible_shape_fallback": false,
+    "parallel_surface_objects": true,
+    "observation": {
+      "mask_margin_px": 2,
+      "depth_span_m": 0.01,
+      "depth_neighborhood_px": 3,
+      "normal_bilateral_diameter_px": 5,
+      "normal_bilateral_sigma_px": 2.0,
+      "huber_m": 0.005,
+      "surface_spacing_m": 0.003,
+      "samples_across_object": 64,
+      "min_surface_spacing_m": 0.001,
+      "component_gap_m": 0.01,
+      "validation_tile_px": 4
+    },
+    "shape": {
+      "depth_tolerance_m": 0.005,
+      "surface_spacing_m": 0.003,
+      "mask_boundary_tolerance_px": 2.0,
+      "max_surface_distance_m": 0.03,
+      "max_evaluations": 50,
+      "solver_tolerance": 1e-05,
+      "max_fit_points": 2048,
+      "nn_queries_per_worker": 512
+    },
+    "motion": {
+      "crop_min_px": 160,
+      "crop_max_px": 480,
+      "crop_extent_multiplier": 2.5,
+      "input_size_px": 320,
+      "grid_step_px": 4,
+      "covisibility_min": 0.5,
+      "min_ransac_pairs": 6,
+      "ransac_distance_m": 0.006,
+      "ransac_confidence": 0.99,
+      "refinement_steps": 2,
+      "connected_dilation_px": 7
+    }
+  },
+  "config_provenance": "Saved trace configuration read by this benchmark"
+}

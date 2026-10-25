@@ -1,0 +1,738 @@
+{
+  "ring_visible_motion": {
+    "baseline": {
+      "fit_ms": [
+        314.08434396144,
+        304.76907099364325,
+        300.4683430190198
+      ],
+      "cpu_seconds": [
+        0.9108154119999998,
+        0.8974040300000006,
+        0.8920143549999997
+      ],
+      "residual_max_abs": 0.0,
+      "pose_difference": {
+        "translation_mm": 0.0,
+        "rotation_deg": 0.0,
+        "matrix_max_abs": 0.0
+      },
+      "cost": 0.12351136479499322,
+      "baseline_cost": 0.12351136479499322,
+      "evaluations": 50,
+      "baseline_evaluations": 50,
+      "converged": false,
+      "baseline_converged": false,
+      "used_coarse": false,
+      "baseline_used_coarse": false
+    },
+    "pool_2": {
+      "fit_ms": [
+        537.3656890005805,
+        520.4590110224672,
+        538.6437390116043
+      ],
+      "cpu_seconds": [
+        0.8704551669999994,
+        0.8487655109999999,
+        0.8661670679999993
+      ],
+      "residual_max_abs": 0.0,
+      "pose_difference": {
+        "translation_mm": 0.0,
+        "rotation_deg": 0.0,
+        "matrix_max_abs": 0.0
+      },
+      "cost": 0.12351136479499322,
+      "baseline_cost": 0.12351136479499322,
+      "evaluations": 50,
+      "baseline_evaluations": 50,
+      "converged": false,
+      "baseline_converged": false,
+      "used_coarse": false,
+      "baseline_used_coarse": false
+    },
+    "pool_4": {
+      "fit_ms": [
+        372.08775704493746,
+        376.1546189780347,
+        377.9138459940441
+      ],
+      "cpu_seconds": [
+        0.8828527669999993,
+        0.894530936999999,
+        0.8944721969999989
+      ],
+      "residual_max_abs": 0.0,
+      "pose_difference": {
+        "translation_mm": 0.0,
+        "rotation_deg": 0.0,
+        "matrix_max_abs": 0.0
+      },
+      "cost": 0.12351136479499322,
+      "baseline_cost": 0.12351136479499322,
+      "evaluations": 50,
+      "baseline_evaluations": 50,
+      "converged": false,
+      "baseline_converged": false,
+      "used_coarse": false,
+      "baseline_used_coarse": false
+    },
+    "pool_8": {
+      "fit_ms": [
+        346.19212499819696,
+        345.7961880485527,
+        341.82741795666516
+      ],
+      "cpu_seconds": [
+        0.9982846199999997,
+        1.0219225630000004,
+        1.001316425999999
+      ],
+      "residual_max_abs": 0.0,
+      "pose_difference": {
+        "translation_mm": 0.0,
+        "rotation_deg": 0.0,
+        "matrix_max_abs": 0.0
+      },
+      "cost": 0.12351136479499322,
+      "baseline_cost": 0.12351136479499322,
+      "evaluations": 50,
+      "baseline_evaluations": 50,
+      "converged": false,
+      "baseline_converged": false,
+      "used_coarse": false,
+      "baseline_used_coarse": false
+    },
+    "compiled": {
+      "fit_ms": [
+        232.71040298277512,
+        238.9452849747613,
+        239.52873499365523
+      ],
+      "cpu_seconds": [
+        0.8244423689999998,
+        0.8314486490000021,
+        0.8334760539999984
+      ],
+      "residual_max_abs": 0.0,
+      "pose_difference": {
+        "translation_mm": 0.0,
+        "rotation_deg": 0.0,
+        "matrix_max_abs": 0.0
+      },
+      "cost": 0.12351136479499322,
+      "baseline_cost": 0.12351136479499322,
+      "evaluations": 50,
+      "baseline_evaluations": 50,
+      "converged": false,
+      "baseline_converged": false,
+      "used_coarse": false,
+      "baseline_used_coarse": false
+    },
+    "compiled_pool_8": {
+      "fit_ms": [
+        252.55678198300302,
+        260.5426740483381,
+        254.68317396007478
+      ],
+      "cpu_seconds": [
+        0.8773911400000003,
+        0.8863311640000013,
+        0.8851599430000014
+      ],
+      "residual_max_abs": 0.0,
+      "pose_difference": {
+        "translation_mm": 0.0,
+        "rotation_deg": 0.0,
+        "matrix_max_abs": 0.0
+      },
+      "cost": 0.12351136479499322,
+      "baseline_cost": 0.12351136479499322,
+      "evaluations": 50,
+      "baseline_evaluations": 50,
+      "converged": false,
+      "baseline_converged": false,
+      "used_coarse": false,
+      "baseline_used_coarse": false
+    },
+    "compiled_candidates_4": {
+      "fit_ms": [
+        386.5701890317723,
+        401.94827498635277,
+        378.9665930089541
+      ],
+      "cpu_seconds": [
+        0.8765497710000005,
+        0.8980845200000012,
+        0.8626529349999998
+      ],
+      "residual_max_abs": 0.0,
+      "pose_difference": {
+        "translation_mm": 0.0,
+        "rotation_deg": 0.0,
+        "matrix_max_abs": 0.0
+      },
+      "cost": 0.12351136479499322,
+      "baseline_cost": 0.12351136479499322,
+      "evaluations": 50,
+      "baseline_evaluations": 50,
+      "converged": false,
+      "baseline_converged": false,
+      "used_coarse": false,
+      "baseline_used_coarse": false
+    }
+  },
+  "dowel_held_315": {
+    "baseline": {
+      "fit_ms": [
+        202.98521500080824,
+        202.9187399893999,
+        200.22053201682866
+      ],
+      "cpu_seconds": [
+        0.27882059399999903,
+        0.2791980269999996,
+        0.27582645400000416
+      ],
+      "residual_max_abs": 0.0,
+      "pose_difference": {
+        "translation_mm": 0.0,
+        "rotation_deg": 0.0,
+        "matrix_max_abs": 0.0
+      },
+      "cost": 8.78061760643067,
+      "baseline_cost": 8.78061760643067,
+      "evaluations": 87,
+      "baseline_evaluations": 87,
+      "converged": true,
+      "baseline_converged": true,
+      "used_coarse": true,
+      "baseline_used_coarse": true
+    },
+    "pool_2": {
+      "fit_ms": [
+        193.04856099188328,
+        191.72036100644618,
+        196.28980301786214
+      ],
+      "cpu_seconds": [
+        0.22834427400000123,
+        0.2270579039999987,
+        0.2322298110000034
+      ],
+      "residual_max_abs": 0.0,
+      "pose_difference": {
+        "translation_mm": 0.0,
+        "rotation_deg": 0.0,
+        "matrix_max_abs": 0.0
+      },
+      "cost": 8.78061760643067,
+      "baseline_cost": 8.78061760643067,
+      "evaluations": 87,
+      "baseline_evaluations": 87,
+      "converged": true,
+      "baseline_converged": true,
+      "used_coarse": true,
+      "baseline_used_coarse": true
+    },
+    "pool_4": {
+      "fit_ms": [
+        193.94743000157177,
+        196.24555099289864,
+        188.3966859895736
+      ],
+      "cpu_seconds": [
+        0.2608540660000003,
+        0.26105333299999955,
+        0.24962595799999576
+      ],
+      "residual_max_abs": 0.0,
+      "pose_difference": {
+        "translation_mm": 0.0,
+        "rotation_deg": 0.0,
+        "matrix_max_abs": 0.0
+      },
+      "cost": 8.78061760643067,
+      "baseline_cost": 8.78061760643067,
+      "evaluations": 87,
+      "baseline_evaluations": 87,
+      "converged": true,
+      "baseline_converged": true,
+      "used_coarse": true,
+      "baseline_used_coarse": true
+    },
+    "pool_8": {
+      "fit_ms": [
+        200.1673149643466,
+        189.04000701149926,
+        191.90042896661907
+      ],
+      "cpu_seconds": [
+        0.2900729329999976,
+        0.2721340279999964,
+        0.2768595340000033
+      ],
+      "residual_max_abs": 0.0,
+      "pose_difference": {
+        "translation_mm": 0.0,
+        "rotation_deg": 0.0,
+        "matrix_max_abs": 0.0
+      },
+      "cost": 8.78061760643067,
+      "baseline_cost": 8.78061760643067,
+      "evaluations": 87,
+      "baseline_evaluations": 87,
+      "converged": true,
+      "baseline_converged": true,
+      "used_coarse": true,
+      "baseline_used_coarse": true
+    },
+    "compiled": {
+      "fit_ms": [
+        140.5538310064003,
+        142.2585539985448,
+        143.10147904325277
+      ],
+      "cpu_seconds": [
+        0.21637423600000005,
+        0.21837424600000332,
+        0.21876842199999658
+      ],
+      "residual_max_abs": 0.0,
+      "pose_difference": {
+        "translation_mm": 0.0,
+        "rotation_deg": 0.0,
+        "matrix_max_abs": 0.0
+      },
+      "cost": 8.78061760643067,
+      "baseline_cost": 8.78061760643067,
+      "evaluations": 87,
+      "baseline_evaluations": 87,
+      "converged": true,
+      "baseline_converged": true,
+      "used_coarse": true,
+      "baseline_used_coarse": true
+    },
+    "compiled_pool_8": {
+      "fit_ms": [
+        137.56540202302858,
+        137.02493300661445,
+        139.71210998715833
+      ],
+      "cpu_seconds": [
+        0.21501883900000252,
+        0.2142859509999937,
+        0.21740793300000405
+      ],
+      "residual_max_abs": 0.0,
+      "pose_difference": {
+        "translation_mm": 0.0,
+        "rotation_deg": 0.0,
+        "matrix_max_abs": 0.0
+      },
+      "cost": 8.78061760643067,
+      "baseline_cost": 8.78061760643067,
+      "evaluations": 87,
+      "baseline_evaluations": 87,
+      "converged": true,
+      "baseline_converged": true,
+      "used_coarse": true,
+      "baseline_used_coarse": true
+    },
+    "compiled_candidates_4": {
+      "fit_ms": [
+        113.33445698255673,
+        122.42965900804847,
+        111.96030996507034
+      ],
+      "cpu_seconds": [
+        0.191003632999994,
+        0.20888656200000355,
+        0.1929296039999997
+      ],
+      "residual_max_abs": 0.0,
+      "pose_difference": {
+        "translation_mm": 0.0,
+        "rotation_deg": 0.0,
+        "matrix_max_abs": 0.0
+      },
+      "cost": 8.78061760643067,
+      "baseline_cost": 8.78061760643067,
+      "evaluations": 87,
+      "baseline_evaluations": 87,
+      "converged": true,
+      "baseline_converged": true,
+      "used_coarse": true,
+      "baseline_used_coarse": true
+    }
+  },
+  "dowel_static_0": {
+    "baseline": {
+      "fit_ms": [
+        62.30739603051916,
+        61.74917297903448,
+        62.05848098034039
+      ],
+      "cpu_seconds": [
+        0.10462951499999917,
+        0.10317268499999699,
+        0.10363797400000152
+      ],
+      "residual_max_abs": 0.0,
+      "pose_difference": {
+        "translation_mm": 0.0,
+        "rotation_deg": 0.0,
+        "matrix_max_abs": 0.0
+      },
+      "cost": 0.2238398964797887,
+      "baseline_cost": 0.2238398964797887,
+      "evaluations": 23,
+      "baseline_evaluations": 23,
+      "converged": true,
+      "baseline_converged": true,
+      "used_coarse": false,
+      "baseline_used_coarse": false
+    },
+    "pool_2": {
+      "fit_ms": [
+        64.2948960303329,
+        65.03422698006034,
+        65.00057398807257
+      ],
+      "cpu_seconds": [
+        0.08344918399999557,
+        0.0844630120000005,
+        0.08422490899999957
+      ],
+      "residual_max_abs": 0.0,
+      "pose_difference": {
+        "translation_mm": 0.0,
+        "rotation_deg": 0.0,
+        "matrix_max_abs": 0.0
+      },
+      "cost": 0.2238398964797887,
+      "baseline_cost": 0.2238398964797887,
+      "evaluations": 23,
+      "baseline_evaluations": 23,
+      "converged": true,
+      "baseline_converged": true,
+      "used_coarse": false,
+      "baseline_used_coarse": false
+    },
+    "pool_4": {
+      "fit_ms": [
+        60.823854990303516,
+        64.14964504074305,
+        62.16422701254487
+      ],
+      "cpu_seconds": [
+        0.09285312699999793,
+        0.0988643840000023,
+        0.09406613600000213
+      ],
+      "residual_max_abs": 0.0,
+      "pose_difference": {
+        "translation_mm": 0.0,
+        "rotation_deg": 0.0,
+        "matrix_max_abs": 0.0
+      },
+      "cost": 0.2238398964797887,
+      "baseline_cost": 0.2238398964797887,
+      "evaluations": 23,
+      "baseline_evaluations": 23,
+      "converged": true,
+      "baseline_converged": true,
+      "used_coarse": false,
+      "baseline_used_coarse": false
+    },
+    "pool_8": {
+      "fit_ms": [
+        64.47758799185976,
+        63.326247967779636,
+        65.56171202100813
+      ],
+      "cpu_seconds": [
+        0.11578080299999982,
+        0.1085729569999998,
+        0.11334240499999737
+      ],
+      "residual_max_abs": 0.0,
+      "pose_difference": {
+        "translation_mm": 0.0,
+        "rotation_deg": 0.0,
+        "matrix_max_abs": 0.0
+      },
+      "cost": 0.2238398964797887,
+      "baseline_cost": 0.2238398964797887,
+      "evaluations": 23,
+      "baseline_evaluations": 23,
+      "converged": true,
+      "baseline_converged": true,
+      "used_coarse": false,
+      "baseline_used_coarse": false
+    },
+    "compiled": {
+      "fit_ms": [
+        46.93519102875143,
+        46.219675976317376,
+        46.59928398905322
+      ],
+      "cpu_seconds": [
+        0.08871389600000157,
+        0.08789225800000366,
+        0.08817923800000216
+      ],
+      "residual_max_abs": 0.0,
+      "pose_difference": {
+        "translation_mm": 0.0,
+        "rotation_deg": 0.0,
+        "matrix_max_abs": 0.0
+      },
+      "cost": 0.2238398964797887,
+      "baseline_cost": 0.2238398964797887,
+      "evaluations": 23,
+      "baseline_evaluations": 23,
+      "converged": true,
+      "baseline_converged": true,
+      "used_coarse": false,
+      "baseline_used_coarse": false
+    },
+    "compiled_pool_8": {
+      "fit_ms": [
+        43.55442896485329,
+        45.07783299777657,
+        42.60750999674201
+      ],
+      "cpu_seconds": [
+        0.08615839799999492,
+        0.08841359200000198,
+        0.08340940400000108
+      ],
+      "residual_max_abs": 0.0,
+      "pose_difference": {
+        "translation_mm": 0.0,
+        "rotation_deg": 0.0,
+        "matrix_max_abs": 0.0
+      },
+      "cost": 0.2238398964797887,
+      "baseline_cost": 0.2238398964797887,
+      "evaluations": 23,
+      "baseline_evaluations": 23,
+      "converged": true,
+      "baseline_converged": true,
+      "used_coarse": false,
+      "baseline_used_coarse": false
+    },
+    "compiled_candidates_4": {
+      "fit_ms": [
+        43.434203951619565,
+        43.58109901659191,
+        44.181269011460245
+      ],
+      "cpu_seconds": [
+        0.07940711199999839,
+        0.08176979599999612,
+        0.0796339739999965
+      ],
+      "residual_max_abs": 0.0,
+      "pose_difference": {
+        "translation_mm": 0.0,
+        "rotation_deg": 0.0,
+        "matrix_max_abs": 0.0
+      },
+      "cost": 0.2238398964797887,
+      "baseline_cost": 0.2238398964797887,
+      "evaluations": 23,
+      "baseline_evaluations": 23,
+      "converged": true,
+      "baseline_converged": true,
+      "used_coarse": false,
+      "baseline_used_coarse": false
+    }
+  },
+  "dowel_static_13": {
+    "baseline": {
+      "fit_ms": [
+        40.87056702701375,
+        41.00726201431826,
+        40.45307700289413
+      ],
+      "cpu_seconds": [
+        0.06928096500000436,
+        0.06945783800000527,
+        0.06908560899999827
+      ],
+      "residual_max_abs": 0.0,
+      "pose_difference": {
+        "translation_mm": 0.0,
+        "rotation_deg": 0.0,
+        "matrix_max_abs": 0.0
+      },
+      "cost": 0.22859578519055235,
+      "baseline_cost": 0.22859578519055235,
+      "evaluations": 19,
+      "baseline_evaluations": 19,
+      "converged": true,
+      "baseline_converged": true,
+      "used_coarse": false,
+      "baseline_used_coarse": false
+    },
+    "pool_2": {
+      "fit_ms": [
+        44.31188298622146,
+        42.80386702157557,
+        45.375749992672354
+      ],
+      "cpu_seconds": [
+        0.05717257099999529,
+        0.05567196699999499,
+        0.05818209200000268
+      ],
+      "residual_max_abs": 0.0,
+      "pose_difference": {
+        "translation_mm": 0.0,
+        "rotation_deg": 0.0,
+        "matrix_max_abs": 0.0
+      },
+      "cost": 0.22859578519055235,
+      "baseline_cost": 0.22859578519055235,
+      "evaluations": 19,
+      "baseline_evaluations": 19,
+      "converged": true,
+      "baseline_converged": true,
+      "used_coarse": false,
+      "baseline_used_coarse": false
+    },
+    "pool_4": {
+      "fit_ms": [
+        41.34918097406626,
+        40.57295201346278,
+        40.598278981633484
+      ],
+      "cpu_seconds": [
+        0.06293075999999331,
+        0.06309800899999374,
+        0.06263835100000392
+      ],
+      "residual_max_abs": 0.0,
+      "pose_difference": {
+        "translation_mm": 0.0,
+        "rotation_deg": 0.0,
+        "matrix_max_abs": 0.0
+      },
+      "cost": 0.22859578519055235,
+      "baseline_cost": 0.22859578519055235,
+      "evaluations": 19,
+      "baseline_evaluations": 19,
+      "converged": true,
+      "baseline_converged": true,
+      "used_coarse": false,
+      "baseline_used_coarse": false
+    },
+    "pool_8": {
+      "fit_ms": [
+        40.32290499890223,
+        40.36346997600049,
+        40.29509297106415
+      ],
+      "cpu_seconds": [
+        0.07252498100000082,
+        0.07313541299999571,
+        0.07592134499999759
+      ],
+      "residual_max_abs": 0.0,
+      "pose_difference": {
+        "translation_mm": 0.0,
+        "rotation_deg": 0.0,
+        "matrix_max_abs": 0.0
+      },
+      "cost": 0.22859578519055235,
+      "baseline_cost": 0.22859578519055235,
+      "evaluations": 19,
+      "baseline_evaluations": 19,
+      "converged": true,
+      "baseline_converged": true,
+      "used_coarse": false,
+      "baseline_used_coarse": false
+    },
+    "compiled": {
+      "fit_ms": [
+        31.335471954662353,
+        31.30596794653684,
+        31.865322031080723
+      ],
+      "cpu_seconds": [
+        0.05948898300000138,
+        0.05911540400000348,
+        0.06007006699999806
+      ],
+      "residual_max_abs": 0.0,
+      "pose_difference": {
+        "translation_mm": 0.0,
+        "rotation_deg": 0.0,
+        "matrix_max_abs": 0.0
+      },
+      "cost": 0.22859578519055235,
+      "baseline_cost": 0.22859578519055235,
+      "evaluations": 19,
+      "baseline_evaluations": 19,
+      "converged": true,
+      "baseline_converged": true,
+      "used_coarse": false,
+      "baseline_used_coarse": false
+    },
+    "compiled_pool_8": {
+      "fit_ms": [
+        28.396042995154858,
+        29.36884999508038,
+        31.033147999551147
+      ],
+      "cpu_seconds": [
+        0.05786339699999843,
+        0.06012444699999975,
+        0.06127723600000223
+      ],
+      "residual_max_abs": 0.0,
+      "pose_difference": {
+        "translation_mm": 0.0,
+        "rotation_deg": 0.0,
+        "matrix_max_abs": 0.0
+      },
+      "cost": 0.22859578519055235,
+      "baseline_cost": 0.22859578519055235,
+      "evaluations": 19,
+      "baseline_evaluations": 19,
+      "converged": true,
+      "baseline_converged": true,
+      "used_coarse": false,
+      "baseline_used_coarse": false
+    },
+    "compiled_candidates_4": {
+      "fit_ms": [
+        30.00563901150599,
+        30.9914099634625,
+        29.17071001138538
+      ],
+      "cpu_seconds": [
+        0.05351601399999595,
+        0.0538059610000019,
+        0.05441099899999813
+      ],
+      "residual_max_abs": 0.0,
+      "pose_difference": {
+        "translation_mm": 0.0,
+        "rotation_deg": 0.0,
+        "matrix_max_abs": 0.0
+      },
+      "cost": 0.22859578519055235,
+      "baseline_cost": 0.22859578519055235,
+      "evaluations": 19,
+      "baseline_evaluations": 19,
+      "converged": true,
+      "baseline_converged": true,
+      "used_coarse": false,
+      "baseline_used_coarse": false
+    }
+  }
+}

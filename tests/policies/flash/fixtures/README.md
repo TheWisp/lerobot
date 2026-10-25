@@ -75,3 +75,16 @@ they are not independent ground truth. The fixture checks whether the new
 environment relationship finds measured co-motion and predicts the later
 centre within the sensor-scale tolerance. It stores no RGB, depth images or
 motor actions.
+
+`ufm_batch_depth_rounding_20261025.npz` contains the insertion demo's frame-500
+and frame-501 filtered depth surfaces, source/target usable masks, intrinsics,
+and UFM source/query coordinates from separate scalar and three-pair inference.
+The checkpoint is `infinity1096/UFM-Base-DINOv2L-init`, with its default BF16
+inference. Both calls used identical crops. Very small flow changes crossed a
+depth-sampling boundary: scalar inference retained 130 metric correspondences,
+batched inference 129. The actual rigid initialization and surface fitter then
+returned different poses. This is evidence against assuming batching is an
+exact acceleration, not a ground-truth claim that either result is better.
+The fixture includes the resulting metric correspondences to check the real
+pixel-to-depth consumer, and stores no RGB, motor actions or full episode.
+See `docs/proofs/flash-native-acceleration/README.md` for the experiment.

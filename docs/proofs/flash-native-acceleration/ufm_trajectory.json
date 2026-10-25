@@ -1,0 +1,1560 @@
+{
+  "trace": "/home/feit/.cache/huggingface/lerobot/flash_debug_traces/trace-20261025-192743-253063024",
+  "frames": [
+    1244,
+    1248,
+    1256,
+    1266,
+    1276,
+    1285,
+    1295,
+    1304,
+    1316,
+    1327,
+    1336,
+    1345,
+    1354,
+    1362,
+    1369,
+    1377,
+    1386,
+    1395,
+    1404,
+    1413,
+    1422,
+    1431,
+    1439,
+    1449,
+    1458,
+    1467,
+    1475,
+    1482,
+    1490,
+    1500
+  ],
+  "config": {
+    "backend": "surface",
+    "sam_resolution": 504,
+    "min_similarity": 0.75,
+    "registration_threshold_m": 0.005,
+    "registration_min_inliers": 12,
+    "registration_trials": 100,
+    "visible_shape_fallback": false,
+    "parallel_surface_objects": true,
+    "pipeline_surface_frames": true,
+    "surface_object_workers": 2,
+    "observation": {
+      "mask_margin_px": 2,
+      "depth_span_m": 0.01,
+      "depth_neighborhood_px": 3,
+      "normal_bilateral_diameter_px": 5,
+      "normal_bilateral_sigma_px": 2.0,
+      "huber_m": 0.005,
+      "surface_spacing_m": 0.003,
+      "samples_across_object": 64,
+      "min_surface_spacing_m": 0.001,
+      "component_gap_m": 0.01,
+      "validation_tile_px": 4
+    },
+    "shape": {
+      "depth_tolerance_m": 0.005,
+      "surface_spacing_m": 0.003,
+      "mask_boundary_tolerance_px": 2.0,
+      "max_surface_distance_m": 0.03,
+      "max_evaluations": 50,
+      "solver_tolerance": 1e-05,
+      "max_fit_points": 2048,
+      "nn_queries_per_worker": 512,
+      "batch_jacobian": true,
+      "batch_query_workers": 8
+    },
+    "motion": {
+      "crop_min_px": 160,
+      "crop_max_px": 480,
+      "crop_extent_multiplier": 2.5,
+      "input_size_px": 320,
+      "grid_step_px": 4,
+      "covisibility_min": 0.5,
+      "min_ransac_pairs": 6,
+      "ransac_distance_m": 0.006,
+      "ransac_confidence": 0.99,
+      "refinement_steps": 2,
+      "connected_dilation_px": 7
+    }
+  },
+  "model_pairs": 87,
+  "comparisons": {
+    "single": {
+      "accepted": {
+        "object": 30,
+        "object_2": 30,
+        "object_3": 30
+      },
+      "decision_changes": [],
+      "max_difference": {
+        "rotation_deg": 0.0,
+        "translation_mm": 0.0,
+        "matrix_max_abs": 0.0,
+        "surface_max_mm": 0.0
+      },
+      "differences": [
+        {
+          "frame": 1244,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1244,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1244,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1248,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1248,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1248,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1256,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1256,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1256,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1266,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1266,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1266,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1276,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1276,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1276,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1285,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1285,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1285,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1295,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1295,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1295,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1304,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1304,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1304,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1316,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1316,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1316,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1327,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1327,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1327,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1336,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1336,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1336,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1345,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1345,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1345,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1354,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1354,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1354,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1362,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1362,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1362,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1369,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1369,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1369,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1377,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1377,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1377,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1386,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1386,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1386,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1395,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1395,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1395,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1404,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1404,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1404,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1413,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1413,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1413,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1422,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1422,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1422,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1431,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1431,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1431,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1439,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1439,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1439,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1449,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1449,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1449,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1458,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1458,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1458,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1467,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1467,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1467,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1475,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1475,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1475,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1482,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1482,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1482,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1490,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1490,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1490,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1500,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1500,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1500,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        }
+      ]
+    },
+    "batched": {
+      "accepted": {
+        "object": 30,
+        "object_2": 30,
+        "object_3": 30
+      },
+      "decision_changes": [],
+      "max_difference": {
+        "rotation_deg": 0.2650479531761925,
+        "translation_mm": 2.0467348331192086,
+        "matrix_max_abs": 0.004414750061304988,
+        "surface_max_mm": 0.19886089578727734
+      },
+      "differences": [
+        {
+          "frame": 1244,
+          "role": "object",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1244,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1244,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1248,
+          "role": "object",
+          "translation_mm": 0.2194089888329593,
+          "rotation_deg": 0.030433475399109167,
+          "matrix_max_abs": 0.00047998422418192663,
+          "surface_max_mm": 0.010736723605447836
+        },
+        {
+          "frame": 1248,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1248,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1256,
+          "role": "object",
+          "translation_mm": 0.0525130948540366,
+          "rotation_deg": 0.010002656749551093,
+          "matrix_max_abs": 0.0001167352200842674,
+          "surface_max_mm": 0.006587681401635823
+        },
+        {
+          "frame": 1256,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1256,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1266,
+          "role": "object",
+          "translation_mm": 0.06348543827299818,
+          "rotation_deg": 0.011599007782424665,
+          "matrix_max_abs": 0.00015637370330688974,
+          "surface_max_mm": 0.00372008142130387
+        },
+        {
+          "frame": 1266,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1266,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1276,
+          "role": "object",
+          "translation_mm": 0.06650237140458908,
+          "rotation_deg": 0.008612292146448338,
+          "matrix_max_abs": 0.00014835202904040466,
+          "surface_max_mm": 0.005066102219838966
+        },
+        {
+          "frame": 1276,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1276,
+          "role": "object_3",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1285,
+          "role": "object",
+          "translation_mm": 0.01747572794430158,
+          "rotation_deg": 0.005705996189261444,
+          "matrix_max_abs": 9.38454900613981e-05,
+          "surface_max_mm": 0.004221317536796111
+        },
+        {
+          "frame": 1285,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1285,
+          "role": "object_3",
+          "translation_mm": 0.02795614573470099,
+          "rotation_deg": 0.0028158470303079027,
+          "matrix_max_abs": 3.78331672053929e-05,
+          "surface_max_mm": 0.001377604941058566
+        },
+        {
+          "frame": 1295,
+          "role": "object",
+          "translation_mm": 0.1478627396870685,
+          "rotation_deg": 0.01932988868836546,
+          "matrix_max_abs": 0.0003083627980325441,
+          "surface_max_mm": 0.009200280500148574
+        },
+        {
+          "frame": 1295,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1295,
+          "role": "object_3",
+          "translation_mm": 0.019807266389585555,
+          "rotation_deg": 0.0056575426671201185,
+          "matrix_max_abs": 8.906390055108673e-05,
+          "surface_max_mm": 0.0029645380292708675
+        },
+        {
+          "frame": 1304,
+          "role": "object",
+          "translation_mm": 0.20156520118497,
+          "rotation_deg": 0.027113095074729934,
+          "matrix_max_abs": 0.00044527806265164116,
+          "surface_max_mm": 0.010547231017789665
+        },
+        {
+          "frame": 1304,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1304,
+          "role": "object_3",
+          "translation_mm": 0.015787578731688873,
+          "rotation_deg": 0.002250324265357459,
+          "matrix_max_abs": 2.8055965405487243e-05,
+          "surface_max_mm": 0.0009450713747068822
+        },
+        {
+          "frame": 1316,
+          "role": "object",
+          "translation_mm": 0.36373333223329046,
+          "rotation_deg": 0.05272075716142177,
+          "matrix_max_abs": 0.000821266755692556,
+          "surface_max_mm": 0.01530053424984653
+        },
+        {
+          "frame": 1316,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1316,
+          "role": "object_3",
+          "translation_mm": 0.06267979741145976,
+          "rotation_deg": 0.0088314747198779,
+          "matrix_max_abs": 0.00013958917129288165,
+          "surface_max_mm": 0.004466121053010817
+        },
+        {
+          "frame": 1327,
+          "role": "object",
+          "translation_mm": 0.0817184396311634,
+          "rotation_deg": 0.011749392023933604,
+          "matrix_max_abs": 0.00018478960490463797,
+          "surface_max_mm": 0.004788758552716563
+        },
+        {
+          "frame": 1327,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1327,
+          "role": "object_3",
+          "translation_mm": 0.17055611502671228,
+          "rotation_deg": 0.019545446955145113,
+          "matrix_max_abs": 0.00033064513709248067,
+          "surface_max_mm": 0.014491031959413186
+        },
+        {
+          "frame": 1336,
+          "role": "object",
+          "translation_mm": 0.08190194450595861,
+          "rotation_deg": 0.011520135238748893,
+          "matrix_max_abs": 0.00015043983279556562,
+          "surface_max_mm": 0.003965208042342488
+        },
+        {
+          "frame": 1336,
+          "role": "object_2",
+          "translation_mm": 0.0,
+          "rotation_deg": 0.0,
+          "matrix_max_abs": 0.0,
+          "surface_max_mm": 0.0
+        },
+        {
+          "frame": 1336,
+          "role": "object_3",
+          "translation_mm": 0.07064607734296785,
+          "rotation_deg": 0.009627828456695627,
+          "matrix_max_abs": 0.00012346464971452892,
+          "surface_max_mm": 0.00502712053936962
+        },
+        {
+          "frame": 1345,
+          "role": "object",
+          "translation_mm": 0.9301432807026111,
+          "rotation_deg": 0.12171949281272475,
+          "matrix_max_abs": 0.00197184713729777,
+          "surface_max_mm": 0.05686510125359496
+        },
+        {
+          "frame": 1345,
+          "role": "object_2",
+          "translation_mm": 0.03613132940583164,
+          "rotation_deg": 0.005918396453443849,
+          "matrix_max_abs": 7.699886073461726e-05,
+          "surface_max_mm": 0.004441862314305369
+        },
+        {
+          "frame": 1345,
+          "role": "object_3",
+          "translation_mm": 0.02102929371991218,
+          "rotation_deg": 0.014637691219595768,
+          "matrix_max_abs": 0.00024200267083685032,
+          "surface_max_mm": 0.009006062263155732
+        },
+        {
+          "frame": 1354,
+          "role": "object",
+          "translation_mm": 0.440648319098629,
+          "rotation_deg": 0.062126117237736506,
+          "matrix_max_abs": 0.0010114181880112338,
+          "surface_max_mm": 0.019597166275248327
+        },
+        {
+          "frame": 1354,
+          "role": "object_2",
+          "translation_mm": 0.01587328533192962,
+          "rotation_deg": 0.004380930299576388,
+          "matrix_max_abs": 6.755915135972079e-05,
+          "surface_max_mm": 0.003235774874200435
+        },
+        {
+          "frame": 1354,
+          "role": "object_3",
+          "translation_mm": 0.36750553971055855,
+          "rotation_deg": 0.14056019106828263,
+          "matrix_max_abs": 0.0018357576162258806,
+          "surface_max_mm": 0.07172514701994517
+        },
+        {
+          "frame": 1362,
+          "role": "object",
+          "translation_mm": 0.20176940250439315,
+          "rotation_deg": 0.031318664812341496,
+          "matrix_max_abs": 0.00043702792864102995,
+          "surface_max_mm": 0.009121242963211424
+        },
+        {
+          "frame": 1362,
+          "role": "object_2",
+          "translation_mm": 0.04375279908724562,
+          "rotation_deg": 0.0070987847282590185,
+          "matrix_max_abs": 0.0001091140824825438,
+          "surface_max_mm": 0.0037857354528363996
+        },
+        {
+          "frame": 1362,
+          "role": "object_3",
+          "translation_mm": 0.6033115166228049,
+          "rotation_deg": 0.062468591279926405,
+          "matrix_max_abs": 0.0009776934624132587,
+          "surface_max_mm": 0.02724512158210701
+        },
+        {
+          "frame": 1369,
+          "role": "object",
+          "translation_mm": 0.11879146725856467,
+          "rotation_deg": 0.015534957188742921,
+          "matrix_max_abs": 0.0002485037445854408,
+          "surface_max_mm": 0.00956165959696363
+        },
+        {
+          "frame": 1369,
+          "role": "object_2",
+          "translation_mm": 0.01189994391212677,
+          "rotation_deg": 0.0018141242550510017,
+          "matrix_max_abs": 2.5682489891687074e-05,
+          "surface_max_mm": 0.0017112743089890273
+        },
+        {
+          "frame": 1369,
+          "role": "object_3",
+          "translation_mm": 0.0354456957993956,
+          "rotation_deg": 0.007154200375473563,
+          "matrix_max_abs": 9.807945857805232e-05,
+          "surface_max_mm": 0.004991700809785899
+        },
+        {
+          "frame": 1377,
+          "role": "object",
+          "translation_mm": 0.051005032571515174,
+          "rotation_deg": 0.007874084684120852,
+          "matrix_max_abs": 8.45817999381819e-05,
+          "surface_max_mm": 0.005489041423120158
+        },
+        {
+          "frame": 1377,
+          "role": "object_2",
+          "translation_mm": 0.014214384258748596,
+          "rotation_deg": 0.002082585486583451,
+          "matrix_max_abs": 2.9026977591802353e-05,
+          "surface_max_mm": 0.0029172746265565164
+        },
+        {
+          "frame": 1377,
+          "role": "object_3",
+          "translation_mm": 0.024586748392250654,
+          "rotation_deg": 0.006313641801497108,
+          "matrix_max_abs": 8.355572885111913e-05,
+          "surface_max_mm": 0.004205570557535263
+        },
+        {
+          "frame": 1386,
+          "role": "object",
+          "translation_mm": 0.05737316522241999,
+          "rotation_deg": 0.00885303923652433,
+          "matrix_max_abs": 0.0001028245918687394,
+          "surface_max_mm": 0.002888089493705365
+        },
+        {
+          "frame": 1386,
+          "role": "object_2",
+          "translation_mm": 0.015593515186277523,
+          "rotation_deg": 0.0018989040341697268,
+          "matrix_max_abs": 2.832234927152219e-05,
+          "surface_max_mm": 0.003117394033689008
+        },
+        {
+          "frame": 1386,
+          "role": "object_3",
+          "translation_mm": 0.019867049660129782,
+          "rotation_deg": 0.01268100892883334,
+          "matrix_max_abs": 0.00020990465356803082,
+          "surface_max_mm": 0.007997063774929827
+        },
+        {
+          "frame": 1395,
+          "role": "object",
+          "translation_mm": 0.024436797593844584,
+          "rotation_deg": 0.0036924532892410847,
+          "matrix_max_abs": 5.4584266801721223e-05,
+          "surface_max_mm": 0.001865731440246486
+        },
+        {
+          "frame": 1395,
+          "role": "object_2",
+          "translation_mm": 0.028760622481081282,
+          "rotation_deg": 0.004387720219807964,
+          "matrix_max_abs": 5.385170031133556e-05,
+          "surface_max_mm": 0.0031805057875572687
+        },
+        {
+          "frame": 1395,
+          "role": "object_3",
+          "translation_mm": 0.0472954241570874,
+          "rotation_deg": 0.008594970912846578,
+          "matrix_max_abs": 0.00011420440250721649,
+          "surface_max_mm": 0.0052826180579793975
+        },
+        {
+          "frame": 1404,
+          "role": "object",
+          "translation_mm": 0.04038438087986316,
+          "rotation_deg": 0.005329448928017758,
+          "matrix_max_abs": 8.422866116209685e-05,
+          "surface_max_mm": 0.0017303668583425926
+        },
+        {
+          "frame": 1404,
+          "role": "object_2",
+          "translation_mm": 0.022944963845072705,
+          "rotation_deg": 0.0044617633520904415,
+          "matrix_max_abs": 5.945232611268697e-05,
+          "surface_max_mm": 0.0024149859646934338
+        },
+        {
+          "frame": 1404,
+          "role": "object_3",
+          "translation_mm": 0.05420392122301446,
+          "rotation_deg": 0.011643816600451079,
+          "matrix_max_abs": 0.00014870448100241275,
+          "surface_max_mm": 0.00898308220167574
+        },
+        {
+          "frame": 1413,
+          "role": "object",
+          "translation_mm": 0.03722885204993765,
+          "rotation_deg": 0.004909933651857753,
+          "matrix_max_abs": 8.25593692378012e-05,
+          "surface_max_mm": 0.0037614159693191555
+        },
+        {
+          "frame": 1413,
+          "role": "object_2",
+          "translation_mm": 0.01033422289022365,
+          "rotation_deg": 0.002027243136660998,
+          "matrix_max_abs": 2.7464291080216835e-05,
+          "surface_max_mm": 0.0013725561542021144
+        },
+        {
+          "frame": 1413,
+          "role": "object_3",
+          "translation_mm": 0.03432282110626117,
+          "rotation_deg": 0.005106230027821015,
+          "matrix_max_abs": 8.473973551782223e-05,
+          "surface_max_mm": 0.003864056339261243
+        },
+        {
+          "frame": 1422,
+          "role": "object",
+          "translation_mm": 2.0467348331192086,
+          "rotation_deg": 0.2650479531761925,
+          "matrix_max_abs": 0.004414750061304988,
+          "surface_max_mm": 0.19886089578727734
+        },
+        {
+          "frame": 1422,
+          "role": "object_2",
+          "translation_mm": 0.011038716951385063,
+          "rotation_deg": 0.0019151992402736055,
+          "matrix_max_abs": 2.861850099042211e-05,
+          "surface_max_mm": 0.0012380591648416396
+        },
+        {
+          "frame": 1422,
+          "role": "object_3",
+          "translation_mm": 0.05511885880206432,
+          "rotation_deg": 0.009252178012506726,
+          "matrix_max_abs": 0.00013574422480450328,
+          "surface_max_mm": 0.007447433008951211
+        },
+        {
+          "frame": 1431,
+          "role": "object",
+          "translation_mm": 0.1361570793392306,
+          "rotation_deg": 0.03968860214052395,
+          "matrix_max_abs": 0.0006063961920325946,
+          "surface_max_mm": 0.01759197864861521
+        },
+        {
+          "frame": 1431,
+          "role": "object_2",
+          "translation_mm": 0.03449345967983111,
+          "rotation_deg": 0.00544666888789156,
+          "matrix_max_abs": 8.216916191884031e-05,
+          "surface_max_mm": 0.002838446472057458
+        },
+        {
+          "frame": 1431,
+          "role": "object_3",
+          "translation_mm": 0.0451445509098113,
+          "rotation_deg": 0.005444238184751397,
+          "matrix_max_abs": 8.136259975277411e-05,
+          "surface_max_mm": 0.004023811982493314
+        },
+        {
+          "frame": 1439,
+          "role": "object",
+          "translation_mm": 0.1430834429559382,
+          "rotation_deg": 0.01832294243018897,
+          "matrix_max_abs": 0.0002640531002528722,
+          "surface_max_mm": 0.010880755762996512
+        },
+        {
+          "frame": 1439,
+          "role": "object_2",
+          "translation_mm": 0.0021606158899950046,
+          "rotation_deg": 0.0002709239629802418,
+          "matrix_max_abs": 3.833313870568386e-06,
+          "surface_max_mm": 0.00020923539820944981
+        },
+        {
+          "frame": 1439,
+          "role": "object_3",
+          "translation_mm": 0.05648818512118395,
+          "rotation_deg": 0.006618340752556049,
+          "matrix_max_abs": 8.976871751820853e-05,
+          "surface_max_mm": 0.0033777579738863304
+        },
+        {
+          "frame": 1449,
+          "role": "object",
+          "translation_mm": 0.2738188820292864,
+          "rotation_deg": 0.0600919349800686,
+          "matrix_max_abs": 0.000752449909382238,
+          "surface_max_mm": 0.0306784899939131
+        },
+        {
+          "frame": 1449,
+          "role": "object_2",
+          "translation_mm": 0.0012481600156456036,
+          "rotation_deg": 0.00021669063898088525,
+          "matrix_max_abs": 3.005921340150917e-06,
+          "surface_max_mm": 0.00010532474827535128
+        },
+        {
+          "frame": 1449,
+          "role": "object_3",
+          "translation_mm": 0.12304583079251401,
+          "rotation_deg": 0.012951336691850807,
+          "matrix_max_abs": 0.00017129779986651324,
+          "surface_max_mm": 0.007341750432376337
+        },
+        {
+          "frame": 1458,
+          "role": "object",
+          "translation_mm": 0.15742090893715754,
+          "rotation_deg": 0.021894915532618766,
+          "matrix_max_abs": 0.00036755582767351944,
+          "surface_max_mm": 0.011639203464747137
+        },
+        {
+          "frame": 1458,
+          "role": "object_2",
+          "translation_mm": 0.00041045254868997687,
+          "rotation_deg": 5.789158109664715e-05,
+          "matrix_max_abs": 7.639260484176152e-07,
+          "surface_max_mm": 4.0727537355459715e-05
+        },
+        {
+          "frame": 1458,
+          "role": "object_3",
+          "translation_mm": 0.05924019845932434,
+          "rotation_deg": 0.009152380441053237,
+          "matrix_max_abs": 0.00013120586411627388,
+          "surface_max_mm": 0.003831555257798704
+        },
+        {
+          "frame": 1467,
+          "role": "object",
+          "translation_mm": 0.11229219987397752,
+          "rotation_deg": 0.014799589997382285,
+          "matrix_max_abs": 0.00021480711145498849,
+          "surface_max_mm": 0.011143511542896573
+        },
+        {
+          "frame": 1467,
+          "role": "object_2",
+          "translation_mm": 8.276028660895722e-05,
+          "rotation_deg": 1.2535569482695612e-05,
+          "matrix_max_abs": 1.9402126353196963e-07,
+          "surface_max_mm": 5.534721341392273e-06
+        },
+        {
+          "frame": 1467,
+          "role": "object_3",
+          "translation_mm": 0.10243096727936278,
+          "rotation_deg": 0.015804061623366315,
+          "matrix_max_abs": 0.00023357469248036934,
+          "surface_max_mm": 0.007599064321806883
+        },
+        {
+          "frame": 1475,
+          "role": "object",
+          "translation_mm": 0.054042010297186,
+          "rotation_deg": 0.008799751635607814,
+          "matrix_max_abs": 0.00011138358421077833,
+          "surface_max_mm": 0.0035260159687392567
+        },
+        {
+          "frame": 1475,
+          "role": "object_2",
+          "translation_mm": 0.03345758889759798,
+          "rotation_deg": 0.004241825170472087,
+          "matrix_max_abs": 6.591735387951811e-05,
+          "surface_max_mm": 0.003313099440041692
+        },
+        {
+          "frame": 1475,
+          "role": "object_3",
+          "translation_mm": 0.021052463961320093,
+          "rotation_deg": 0.0024011649418488237,
+          "matrix_max_abs": 3.8732345667480406e-05,
+          "surface_max_mm": 0.0010997359740568878
+        },
+        {
+          "frame": 1482,
+          "role": "object",
+          "translation_mm": 0.008990699084338333,
+          "rotation_deg": 0.0014740980264557845,
+          "matrix_max_abs": 1.644394525555492e-05,
+          "surface_max_mm": 0.0018749034192967055
+        },
+        {
+          "frame": 1482,
+          "role": "object_2",
+          "translation_mm": 0.005082736952723226,
+          "rotation_deg": 0.0008840401530849492,
+          "matrix_max_abs": 1.2562256627446974e-05,
+          "surface_max_mm": 0.0007854109946804763
+        },
+        {
+          "frame": 1482,
+          "role": "object_3",
+          "translation_mm": 0.1544232708133117,
+          "rotation_deg": 0.020863736942797927,
+          "matrix_max_abs": 0.00028543022569171937,
+          "surface_max_mm": 0.012800934590884359
+        },
+        {
+          "frame": 1490,
+          "role": "object",
+          "translation_mm": 0.17618477228092363,
+          "rotation_deg": 0.022914919488597002,
+          "matrix_max_abs": 0.00038936727396234744,
+          "surface_max_mm": 0.013937900801344917
+        },
+        {
+          "frame": 1490,
+          "role": "object_2",
+          "translation_mm": 0.005603473797863375,
+          "rotation_deg": 0.001349888019439603,
+          "matrix_max_abs": 1.980461865071269e-05,
+          "surface_max_mm": 0.0013156044181970958
+        },
+        {
+          "frame": 1490,
+          "role": "object_3",
+          "translation_mm": 0.3046013569115686,
+          "rotation_deg": 0.03180369696208717,
+          "matrix_max_abs": 0.0005298656015386913,
+          "surface_max_mm": 0.01430996489904342
+        },
+        {
+          "frame": 1500,
+          "role": "object",
+          "translation_mm": 0.08186652696277016,
+          "rotation_deg": 0.010680886270681764,
+          "matrix_max_abs": 0.00017749250527075017,
+          "surface_max_mm": 0.0051877787725202636
+        },
+        {
+          "frame": 1500,
+          "role": "object_2",
+          "translation_mm": 0.07368582716253189,
+          "rotation_deg": 0.011606336160554486,
+          "matrix_max_abs": 0.0001805434717473877,
+          "surface_max_mm": 0.007936540869390349
+        },
+        {
+          "frame": 1500,
+          "role": "object_3",
+          "translation_mm": 0.20753647572389838,
+          "rotation_deg": 0.029697569304953587,
+          "matrix_max_abs": 0.0004725773213922566,
+          "surface_max_mm": 0.01706050436223274
+        }
+      ]
+    }
+  }
+}

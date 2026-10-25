@@ -1,0 +1,27 @@
+{
+  "suite": "62 passed, 2 warnings in 32.29s; no skips",
+  "mutations": [
+    {
+      "mutation": "search_result_order",
+      "test": "test_reused_search_matches_exact_queries_and_preserves_batch_order",
+      "exit_code": 1,
+      "caught_by": "AssertionError"
+    },
+    {
+      "mutation": "depth_visibility_direction",
+      "test": "test_compiled_objective_preserves_depth_mask_and_outline_checks",
+      "exit_code": 1,
+      "caught_by": "AssertionError"
+    },
+    {
+      "mutation": "neural_batch_ownership",
+      "test": "test_batch_adapter_keeps_distinct_objects_and_empty_batches",
+      "exit_code": 1,
+      "caught_by": "AssertionError"
+    }
+  ],
+  "production_ufm_pairs_crosscheck": "all 27 scalar image pairs exactly matched the actual production consumer",
+  "source_restored": true,
+  "pre_commit": "passed on all changed files",
+  "full_demo_pose_presence_check": "second full 713-frame pass: 686 pose matrices exactly equal, 27 absent in both; 533 accepted and 180 rejected unchanged"
+}
