@@ -12,7 +12,7 @@ from lerobot.policies.flash.offline_perception import extract_pose_trace
 from lerobot.policies.flash.perception import ObjectReference, ReferenceSnippet, RGBDFrame
 from lerobot.policies.flash.perception_step import PerceptionPipeline, PerceptionResult
 from lerobot.policies.flash.perception_worker import _run_backend
-from lerobot.policies.flash.tracking_debug_worker import make_debug_pipeline
+from lerobot.policies.flash.tracking_debug_worker import debug_reference, make_debug_pipeline
 from lerobot.policies.flash.trajectory import Evidence, PoseEstimate
 from lerobot.policies.flash.vision_pipeline import (
     FrameMaskCache,
@@ -119,6 +119,32 @@ def test_offline_spawned_worker_and_debug_consume_the_same_surface_results():
     assert offline[3].estimates[0].evidence == Evidence.OBSERVED
     shift = offline[3].estimates[0].pose[:3, 3] - offline[0].estimates[0].pose[:3, 3]
     np.testing.assert_allclose(shift, [0.012, 0, 0], atol=VisionPipelineConfig().shape.surface_spacing_m / 2)
+
+
+def test_adding_local_object_preserves_first_reference_frame():
+    class TwoMasks:
+        def masks(self, frame):
+            first = np.zeros(frame.depth.shape, bool)
+            first[20:44, 15:45] = True
+            masks = {"object": first}
+            if frame.frame_id:
+                second = np.zeros(frame.depth.shape, bool)
+                second[20:44, 48:72] = True
+                masks["object_2"] = second
+            return masks
+
+    sequence = frames()
+    backend = build_vision_backend(
+        VisionPipelineConfig(), TwoMasks(), matcher=object(), local_reference=True, clock=lambda: 0.0
+    )
+    pipeline = PerceptionPipeline(backend, (reference(),), require_masks=True)
+    with patch("lerobot.policies.flash.surface_tracking.ufm_pairs", synthetic_pairs):
+        pipeline.process(sequence[0])
+        pipeline.add_reference(debug_reference("object_2", sequence[1]))
+        output = pipeline.process(sequence[1])
+    assert set(output.details) == {"object", "object_2"}
+    assert output.details["object"]["diagnostics"]["reference_frame_id"] == 0
+    assert output.details["object_2"]["diagnostics"]["reference_frame_id"] == 1
 
 
 class RegisteredInitializer:

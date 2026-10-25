@@ -173,6 +173,14 @@ class SurfacePoseBackend:
         if self.initializer is not None:
             self.initializer.initialize(references)
 
+    def add_reference(self, reference):
+        """Add a local inspection role while preserving every existing surface frame."""
+        if self.initializer is not None:
+            raise ValueError("prepared object registration cannot change during tracking")
+        if reference.role in self.references:
+            raise ValueError(f"{reference.role}: object role already exists")
+        self.references[reference.role] = reference
+
     def update(self, frame):
         if not self.references:
             raise RuntimeError("initialize references before tracking")

@@ -167,6 +167,88 @@ def test_object_closeup_uses_estimate_frame_and_observed_mask(gui_page):
     assert result["crop"]["source"] == "observed"
 
 
+@pytest.mark.requires_playwright
+@pytest.mark.skipif(importlib.util.find_spec("playwright") is None, reason="Playwright not installed")
+def test_multi_object_list_changes_closeup_and_3d_without_changing_source_frame(gui_page):
+    import base64
+
+    import cv2
+    import numpy as np
+
+    page = gui_page
+    rgb = np.zeros((100, 200, 3), np.uint8)
+    rgb[:] = (0, 0, 255)
+    rgb[20:61, 20:61] = (255, 0, 0)
+    rgb[20:61, 140:181] = (0, 255, 0)
+    _, png = cv2.imencode(".png", cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
+    frame = {
+        "frame_id": 52,
+        "captured_s": 1.0,
+        "width": 200,
+        "height": 100,
+        "image": "data:image/png;base64," + base64.b64encode(png).decode(),
+    }
+    identity = np.eye(4).tolist()
+
+    def obj(name, box, shape):
+        x0, y0, x1, y1 = box
+        return {
+            "name": name,
+            "status": "reference",
+            "accepted": True,
+            "contours": [[[x0, y0], [x1, y0], [x1, y1], [x0, y1]]],
+            "camera_from_reference": identity,
+            "reference_m": shape,
+            "observed_m": shape,
+        }
+
+    packet = {
+        "running": True,
+        "session_id": "multi-test",
+        "server_time_s": 1.1,
+        "preview": frame,
+        "estimate": {
+            "status": "tracking",
+            "frame": frame,
+            "tracks": [
+                {"role": "object", "name": "red", "status": "reference"},
+                {"role": "object_2", "name": "green", "status": "reference"},
+            ],
+            "objects": {
+                "object": obj("red", (20, 20, 60, 60), [[0, 0, 1], [0.1, 0, 1], [0, 0.1, 1]]),
+                "object_2": obj("green", (140, 20, 180, 60), [[0, 0, 1], [0.2, 0, 1], [0, 0.03, 1]]),
+            },
+        },
+    }
+    page.route("**/api/run/flash/tracking/state", lambda route: route.fulfill(json=packet))
+    page.evaluate("switchTab('run'); selectWorkflow('flash')")
+    page.get_by_role("button", name="Live tracking · camera only →").click()
+    page.wait_for_function("document.getElementById('flash-surface-local')?.dataset.frameId === '52'")
+    before = page.evaluate("""() => ({
+        color:Array.from(document.getElementById('flash-surface-local').getContext('2d').getImageData(67,50,1,1).data).slice(0,3),
+        cloud:document.getElementById('flash-surface-cloud').toDataURL(),
+        full:document.getElementById('flash-surface-estimate').dataset.frameId,
+    })""")
+    stale_alpha = page.evaluate("""() => {
+        document.querySelector('#flash-tracked-objects button[data-role="object_2"]').click();
+        return document.getElementById('flash-surface-local').getContext('2d').getImageData(67,50,1,1).data[3];
+    }""")
+    assert stale_alpha == 0  # never label the previous object's crop as the new one
+    page.wait_for_function("""() => flashTrackingFocusRole === 'object_2' &&
+        document.getElementById('flash-surface-local').getContext('2d').getImageData(133,50,1,1).data[1] === 255""")
+    after = page.evaluate("""() => ({
+        color:Array.from(document.getElementById('flash-surface-local').getContext('2d').getImageData(133,50,1,1).data).slice(0,3),
+        cloud:document.getElementById('flash-surface-cloud').toDataURL(),
+        full:document.getElementById('flash-surface-estimate').dataset.frameId,
+        selected:document.querySelector('#flash-tracked-objects button[data-role="object_2"]').getAttribute('aria-pressed'),
+    })""")
+    assert before["color"] == [255, 0, 0]
+    assert after["color"] == [0, 255, 0]
+    assert before["full"] == after["full"] == "52"
+    assert before["cloud"] != after["cloud"]
+    assert after["selected"] == "true"
+
+
 def test_debugger_exports_the_common_configuration_and_migrates_old_payloads():
     request = flash_tracking.TrackingStart(sam_resolution=448, observation={"mask_margin_px": 3})
     saved = request.model_dump()

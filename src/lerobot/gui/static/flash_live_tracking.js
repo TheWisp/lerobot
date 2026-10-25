@@ -5,6 +5,9 @@ let flashTrackingDefaults = null;
 let flashTrackingBusy = false;
 let flashTrackingFraming = null;
 let flashTrackingYaw = 0, flashTrackingPitch = 0, flashTrackingZoom = 1;
+let flashTrackingFocusRole = null;
+let flashTrackingSessionId = null;
+let flashTrackingRenderedRole = null;
 
 function flashTrackingForm() {
     return `<section id="flash-tracking-setup">
@@ -13,11 +16,12 @@ function flashTrackingForm() {
         <select id="flash-tracking-camera"><option value="">Auto (one RealSense connected)</option></select>
         <button type="button" class="btn-small secondary" onclick="flashTrackingFindCameras()">Find cameras</button>
         <button type="button" class="flash-live-entry" id="flash-tracking-open" onclick="flashTrackingStart()" disabled>Open camera</button>
-        <label for="flash-tracking-name">Object name</label>
-        <input id="flash-tracking-name" placeholder="Describe one object" autocomplete="off">
-        <button type="button" class="flash-live-entry" onclick="flashTrackingControl('select')">Track by name</button>
-        <button type="button" class="flash-live-entry" onclick="flashTrackingControl('freeze')">Freeze image & select by click</button>
-        <p class="form-hint">Each selection starts a new fixed surface reference. Keep the object visible while it initializes.</p>
+        <label for="flash-tracking-name">Next object name</label>
+        <input id="flash-tracking-name" placeholder="Describe it, or click without a name" autocomplete="off">
+        <button type="button" class="flash-live-entry" onclick="flashTrackingControl('select')">Start new set by name</button>
+        <button type="button" class="flash-live-entry" onclick="flashTrackingControl('freeze')">Freeze image & add by click</button>
+        <p class="form-hint">Clicking a new object adds it to the current set without changing existing surface references. Name selection starts a new set. Tracking pauses while the image is frozen.</p>
+        <div class="flash-tracked-list"><strong>Tracked objects</strong><div id="flash-tracked-objects" aria-label="Tracked objects"></div></div>
         <button type="button" class="btn-small secondary" onclick="flashTrackingControl('clear')">Clear tracking</button>
         <button type="button" class="btn-small secondary" onclick="flashTrackingStop()">Close camera</button>
         <details open id="flash-sampling-controls"><summary>Surface sampling</summary>
@@ -141,6 +145,7 @@ async function flashTrackingStart() {
         config.serial = document.getElementById('flash-tracking-camera').value;
         await flashTrackingApi('start', config);
         flashTrackingSnapshot = null;
+        flashTrackingFocusRole = null;
         document.getElementById('flash-tracking-message').textContent = 'Opening RGB-D camera…';
         await pollRunStatus();
     } catch (error) { flashTrackingError(error); }
@@ -149,8 +154,10 @@ async function flashTrackingStart() {
 
 async function flashTrackingControl(action, extra = {}) {
     try {
+        const name = document.getElementById('flash-tracking-name');
         await flashTrackingApi('control', {action, id: crypto.randomUUID(),
-            prompt: document.getElementById('flash-tracking-name').value.trim(), ...extra});
+            prompt: name.value.trim(), ...extra});
+        if (action === 'select') name.value = '';
         document.getElementById('flash-tracking-message').textContent = action === 'freeze' ? 'Freezing an image for selection…' : 'Processing selection…';
     } catch (error) { flashTrackingError(error); }
 }
@@ -237,10 +244,86 @@ function flashTrackingDrawEstimate(ctx, estimate) {
     if (visible('flash-surface-axes') && estimate.anchors_px) flashTrackingDrawAxes(ctx, estimate.anchors_px, estimate.axes_px);
 }
 
+function flashTrackingFocusedEstimate() {
+    const packet = flashTrackingSnapshot?.estimate || {};
+    const objects = packet.objects;
+    if (!objects || !Object.keys(objects).length) return packet;
+    if (!objects[flashTrackingFocusRole]) flashTrackingFocusRole = Object.keys(objects)[0];
+    return {...packet, ...objects[flashTrackingFocusRole], frame: packet.frame,
+        object_name: objects[flashTrackingFocusRole].name, role: flashTrackingFocusRole};
+}
+
+function flashTrackingRenderObjectList(tracks) {
+    const list = document.getElementById('flash-tracked-objects');
+    const signature = JSON.stringify(tracks.map(({role,name,status,accepted}) => [role,name,status,accepted]));
+    if (list.dataset.signature !== signature) {
+        list.replaceChildren();
+        for (const track of tracks) {
+            const button = document.createElement('button');
+            button.type = 'button'; button.dataset.role = track.role;
+            const label = document.createElement('span'), status = document.createElement('small');
+            label.textContent = track.name;
+            status.textContent = track.status === 'reference' ? 'reference' :
+                track.accepted === true ? 'fit passes' :
+                track.status === 'fitted' ? 'candidate' : (track.status || 'initializing');
+            button.append(label,status);
+            button.onclick = () => {
+                flashTrackingFocusRole = track.role;
+                flashTrackingYaw = flashTrackingPitch = 0; flashTrackingZoom = 1;
+                flashTrackingRender();
+            };
+            list.append(button);
+        }
+        list.dataset.signature = signature;
+    }
+    for (const button of list.querySelectorAll('button')) {
+        const selected = button.dataset.role === flashTrackingFocusRole;
+        button.classList.toggle('active', selected);
+        button.setAttribute('aria-pressed', String(selected));
+    }
+}
+
+function flashTrackingDrawOtherObjects(ctx, objects, focusedRole) {
+    if (!document.getElementById('flash-surface-mask').checked) return;
+    ctx.lineWidth = 2;
+    for (const [role, object] of Object.entries(objects)) {
+        if (role === focusedRole) continue;
+        ctx.strokeStyle = '#a7b5c8';
+        for (const points of object.contours || []) {
+            ctx.beginPath(); points.forEach(([x,y],i) => i ? ctx.lineTo(x,y) : ctx.moveTo(x,y));
+            ctx.closePath(); ctx.stroke();
+        }
+        const first = object.contours?.[0]?.[0];
+        if (first) {
+            ctx.font = 'bold 16px sans-serif'; ctx.fillStyle = '#e6edf3';
+            ctx.fillText(object.name, first[0], Math.max(16, first[1] - 8));
+        }
+    }
+}
+
 function flashTrackingRender() {
     const data = flashTrackingSnapshot;
     if (!data || !document.getElementById('flash-surface-view')) return;
-    const estimate = data.estimate || {};
+    if (data.session_id !== flashTrackingSessionId) {
+        flashTrackingFocusRole = null;
+        flashTrackingSessionId = data.session_id;
+        flashTrackingRenderedRole = null;
+    }
+    const packet = data.estimate || {};
+    const tracks = packet.tracks || (packet.object_name ? [{role:'object',name:packet.object_name,status:packet.status}] : []);
+    if (tracks.length && !tracks.some(track => track.role === flashTrackingFocusRole)) flashTrackingFocusRole = tracks[0].role;
+    flashTrackingRenderObjectList(tracks);
+    const estimate = flashTrackingFocusedEstimate();
+    if (flashTrackingRenderedRole !== flashTrackingFocusRole) {
+        // Image decoding is asynchronous. Never show the previous object's crop
+        // under the newly selected object's caption or 3D geometry.
+        for (const id of ['flash-surface-estimate', 'flash-surface-local']) {
+            const canvas = document.getElementById(id);
+            canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
+            delete canvas.dataset.frameId;
+        }
+        flashTrackingRenderedRole = flashTrackingFocusRole;
+    }
     const config = document.getElementById('flash-tracking-config');
     if (data.config && config.dataset.session !== data.session_id) {
         config.value = JSON.stringify(data.config, null, 2);
@@ -251,8 +334,6 @@ function flashTrackingRender() {
         if (serial && !Array.from(camera.options).some(option => option.value === serial)) camera.add(new Option(serial, serial));
         if (serial) camera.value = serial;
     }
-    const name = document.getElementById('flash-tracking-name');
-    if (estimate.object_name && !name.value && document.activeElement !== name) name.value = estimate.object_name;
     const states = {opening_camera: 'Opening camera', preview: 'Choose an object', frozen: 'Click the object in the frozen image', loading_models: 'Loading tracking models', reference: 'Reference initialized', fitted: 'Experimental pose fit', fitted_without_rgb_motion: 'Surface fit; RGB motion unavailable', no_mask: 'Mask missing — no pose', insufficient_depth: 'Insufficient depth — no pose', error: 'Tracking error'};
     document.getElementById('flash-tracking-status').textContent = data.running ? (states[estimate.status] || 'Starting…') : 'Camera closed';
     document.getElementById('flash-tracking-message').textContent = estimate.message || states[estimate.status] || '';
@@ -260,6 +341,7 @@ function flashTrackingRender() {
     flashTrackingPaint('flash-surface-preview', data.preview);
     const crop = flashTrackingObjectCrop(estimate);
     flashTrackingPaint('flash-surface-estimate', estimate.frame, ctx => {
+        flashTrackingDrawOtherObjects(ctx, packet.objects || {}, flashTrackingFocusRole);
         flashTrackingDrawEstimate(ctx, estimate);
         if (crop) {
             ctx.strokeStyle = 'rgba(255,255,255,0.8)';
@@ -299,7 +381,7 @@ function flashTrackingDrawCloud() {
     if (!canvas) return;
     canvas.width = Math.max(400, canvas.clientWidth); canvas.height = Math.max(300, canvas.clientHeight);
     const ctx = canvas.getContext('2d'); ctx.fillStyle = '#0a1320'; ctx.fillRect(0,0,canvas.width,canvas.height);
-    const e = flashTrackingSnapshot?.estimate || {};
+    const e = flashTrackingFocusedEstimate();
     if (!e.reference_m?.length || !e.camera_from_reference) return;
     const follow = document.getElementById('flash-surface-follow').checked;
     document.getElementById('flash-surface-cloud-caption').textContent = follow
@@ -307,7 +389,7 @@ function flashTrackingDrawCloud() {
         : '3D object view · pose removed · drag to orbit, scroll to zoom';
     const pose = e.camera_from_reference;
     const local = p => [0,1,2].map(i => [0,1,2].reduce((sum,j) => sum + pose[j][i] * (p[j] - pose[j][3]), 0));
-    const identity = `${flashTrackingSnapshot.session_id}:${e.command_id}:${e.diagnostics?.reference_frame_id}`;
+    const identity = `${flashTrackingSnapshot.session_id}:${e.role}:${e.diagnostics?.reference_frame_id}`;
     if (flashTrackingFraming?.identity !== identity) {
         const points = e.reference_m.map(local);
         const center = [0,1,2].map(i => points.reduce((sum,p) => sum+p[i],0)/points.length);

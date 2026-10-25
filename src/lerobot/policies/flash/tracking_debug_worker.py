@@ -27,6 +27,8 @@ from .perception_step import PerceptionPipeline
 from .surface_tracking import load_ufm
 from .vision_pipeline import VisionPipelineConfig, build_vision_backend
 
+CAMERA_READ_TIMEOUT_MS = 1000
+
 
 def write_snapshot(path: Path, value: dict) -> None:
     temporary = path.with_suffix(".tmp")
@@ -84,24 +86,27 @@ def new_selection(adapter, label: str, point, sequence: int):
     return source, sequence
 
 
-def make_debug_pipeline(config: VisionPipelineConfig, source, matcher, frame: RGBDFrame):
-    backend = build_vision_backend(config, source, matcher=matcher, local_reference=True)
-    reference = ObjectReference(
-        "object",
+def debug_reference(role: str, frame: RGBDFrame) -> ObjectReference:
+    return ObjectReference(
+        role,
         f"preview:{frame.frame_id}",
         (
             ReferenceSnippet(
                 "live-preview",
                 0,
                 frame.frame_id,
-                "object",
+                role,
                 np.eye(4),
                 "unrecorded",
                 frame.calibration_version,
             ),
         ),
     )
-    return PerceptionPipeline(backend, (reference,), require_masks=True)
+
+
+def make_debug_pipeline(config: VisionPipelineConfig, source, matcher, frame: RGBDFrame):
+    backend = build_vision_backend(config, source, matcher=matcher, local_reference=True)
+    return PerceptionPipeline(backend, (debug_reference("object", frame),), require_masks=True)
 
 
 def run(directory: Path, config: dict) -> None:
@@ -127,6 +132,9 @@ def run(directory: Path, config: dict) -> None:
     click_sequence = 0
     object_name = None
     tracking = False
+    tracked_names: dict[str, str] = {}
+    last_objects: dict[str, dict] = {}
+    prepared_mask_ms: float | None = None
 
     def state(status, **kwargs):
         write_snapshot(
@@ -136,6 +144,15 @@ def run(directory: Path, config: dict) -> None:
                 "command_id": command_id,
                 "updated_s": time.perf_counter(),
                 "object_name": object_name,
+                "tracks": [
+                    {
+                        "role": role,
+                        "name": name,
+                        "status": last_objects.get(role, {}).get("status"),
+                        "accepted": last_objects.get(role, {}).get("accepted"),
+                    }
+                    for role, name in tracked_names.items()
+                ],
                 **kwargs,
             },
         )
@@ -178,7 +195,7 @@ def run(directory: Path, config: dict) -> None:
             try:
                 while not stop.is_set():
                     rgb, depth, captured_s = camera.read_color_and_aligned_depth_with_timestamp(
-                        timeout_ms=1000
+                        timeout_ms=CAMERA_READ_TIMEOUT_MS
                     )
                     if captured_s == last_capture_s:
                         stop.wait(1 / config["fps"])
@@ -230,10 +247,23 @@ def run(directory: Path, config: dict) -> None:
                     if command["action"] == "freeze":
                         frozen = seed_frame({}, None, latest.snapshot())
                         tracking = False
+                        # A newly selected role must join on a frame later than the
+                        # last update of every existing rigid reference.
+                        previous = max(last_frame_id, source.last_frame_id or -1) if source else last_frame_id
+                        deadline = time.monotonic() + 2 * CAMERA_READ_TIMEOUT_MS / 1000
+                        while tracked_names and frozen.frame_id <= previous and not stop.is_set():
+                            if time.monotonic() >= deadline:
+                                raise TimeoutError("Camera produced no newer frame for object selection")
+                            stop.wait(0.01)
+                            frozen = seed_frame({}, None, latest.snapshot())
                         state("frozen", frame=image_snapshot(frozen))
                     elif command["action"] == "clear":
                         tracking = False
+                        if source is not None:
+                            click_sequence = max(click_sequence, source.next_click_sequence)
                         frozen = source = session = None
+                        tracked_names.clear()
+                        last_objects.clear()
                         state("preview")
                     elif command["action"] == "select":
                         selected = seed_frame(command, frozen, latest.snapshot())
@@ -247,12 +277,37 @@ def run(directory: Path, config: dict) -> None:
                             )
                         label = command.get("prompt", "").strip() or "selected object"
                         point = command.get("point")
-                        source, click_sequence = new_selection(adapter, label, point, click_sequence)
-                        object_name = label
-                        vision_config = VisionPipelineConfig.from_dict(config["vision_pipeline"])
-                        session = make_debug_pipeline(vision_config, source, matcher, selected)
+                        prepared_mask_ms = None
+                        if point is not None and source is not None and tracked_names:
+                            role = f"object_{len(tracked_names) + 1}"
+                            used_labels = set(tracked_names.values())
+                            if label in used_labels:
+                                base = label
+                                suffix = 2
+                                while label in used_labels:
+                                    label = f"{base} ({suffix})"
+                                    suffix += 1
+                            if len(tracked_names) >= adapter.MAX_OBJECTS:
+                                raise ValueError(f"At most {adapter.MAX_OBJECTS} objects can be tracked")
+                            added, prepared_mask_ms = source.add_clicked_role(role, label, point, selected)
+                            if not added:
+                                raise ValueError(
+                                    "Click did not create a new mask; choose an untracked object"
+                                )
+                            session.add_reference(debug_reference(role, selected))
+                            tracked_names[role] = label
+                        else:
+                            if source is not None:
+                                click_sequence = max(click_sequence, source.next_click_sequence)
+                            source, click_sequence = new_selection(adapter, label, point, click_sequence)
+                            object_name = label
+                            vision_config = VisionPipelineConfig.from_dict(config["vision_pipeline"])
+                            session = make_debug_pipeline(vision_config, source, matcher, selected)
+                            tracked_names.clear()
+                            tracked_names["object"] = label
+                            last_objects.clear()
+                            last_frame_id = -1
                         frozen = None
-                        last_frame_id = -1
                         tracking = True
                 except Exception as exc:
                     state("error", message=str(exc))
@@ -269,18 +324,30 @@ def run(directory: Path, config: dict) -> None:
             last_frame_id = frame.frame_id
             try:
                 output = session.process(frame)
-                mask = output.masks.get("object", np.zeros(frame.depth.shape, bool))
-                mask_ms = session.backend.mask_source.elapsed_ms
-                result = dict(output.details["object"])
-                contours, _ = cv2.findContours(
-                    mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+                mask_ms = (
+                    prepared_mask_ms
+                    if prepared_mask_ms is not None
+                    else session.backend.mask_source.elapsed_ms
                 )
+                prepared_mask_ms = None
+                objects = {}
+                for role, name in tracked_names.items():
+                    mask = output.masks.get(role, np.zeros(frame.depth.shape, bool))
+                    result = dict(output.details[role])
+                    contours, _ = cv2.findContours(
+                        mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+                    )
+                    objects[role] = {
+                        **result,
+                        "name": name,
+                        "contours": [c[:, 0].tolist() for c in contours],
+                    }
+                last_objects = objects
                 elapsed = time.perf_counter() - begin
                 state(
-                    result.pop("status"),
-                    **result,
+                    "tracking",
+                    objects=objects,
                     frame=image_snapshot(frame),
-                    contours=[c[:, 0].tolist() for c in contours],
                     timings={
                         "mask_ms": mask_ms,
                         "total_ms": elapsed * 1000,

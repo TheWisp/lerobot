@@ -1,0 +1,41 @@
+{
+  "date": "2026-10-25",
+  "setup": "One stationary 1280x720 RGB-D camera, RTX 5090, SAM3 resolution 504, UFM, FLASH camera-only worker. Objects were added in place: green ring, mini gamepad, yellow block. No robot motion.",
+  "measurement": "Polling distinct completed frame IDs for 10-12 seconds per stage. Medians are per processed frame. Worker total_ms stops before JPEG/JSON snapshot publication; processed_fps is 1000/total_ms, not an end-to-end UI frame rate.",
+  "stages": [
+    {
+      "objects": 1,
+      "distinct_frames": 40,
+      "median_total_ms": 231.4,
+      "median_mask_ms": 24.4,
+      "median_processed_fps": 4.3,
+      "median_preprocess_ms_by_object": {"green ring": 20.6},
+      "median_rgb_match_ms_by_object": {"green ring": 37.0},
+      "median_fit_ms_by_object": {"green ring": 136.6}
+    },
+    {
+      "objects": 2,
+      "distinct_frames": 27,
+      "median_total_ms": 407.1,
+      "median_mask_ms": 28.0,
+      "median_processed_fps": 2.5,
+      "median_preprocess_ms_by_object": {"green ring": 22.8, "mini gamepad": 23.6},
+      "median_rgb_match_ms_by_object": {"green ring": 36.2, "mini gamepad": 35.2},
+      "median_fit_ms_by_object": {"green ring": 138.7, "mini gamepad": 115.8}
+    },
+    {
+      "objects": 3,
+      "distinct_frames": 22,
+      "median_total_ms": 556.5,
+      "median_mask_ms": 34.3,
+      "median_processed_fps": 1.8,
+      "median_preprocess_ms_by_object": {"green ring": 20.8, "mini gamepad": 22.4, "yellow block": 13.8},
+      "median_rgb_match_ms_by_object": {"green ring": 35.2, "mini gamepad": 35.3, "yellow block": 35.5},
+      "median_fit_ms_by_object": {"green ring": 127.5, "mini gamepad": 106.4, "yellow block": 89.3},
+      "accepted_candidates": {"green ring": 22, "mini gamepad": 22, "yellow block": 22},
+      "worker_rss_mib_snapshot": 5281.2,
+      "worker_gpu_mib_snapshot": 6198
+    }
+  ],
+  "limits": "One scene and short windows. Accepted candidates passed engineering gates, not independent pose ground truth. The memory values are one snapshot, not peaks or a multi-object OOM bound. Object size, texture, motion, occlusion, reseeding, and model load can change costs."
+}

@@ -61,13 +61,71 @@ class Sam3MaskSource:
         if click_sequence_start < 1:
             raise ValueError("click sequence must be positive")
         self.click_sequence_start = click_sequence_start
+        self._next_click_seq = click_sequence_start
         if set(self.seed_points_by_role) - set(self.prompts):
             raise ValueError("point-seeded role lacks an object prompt")
         self._adapter = None
         self._last_frame_id: int | None = None
         self._calibration_version: str | None = None
+        self._cached_frame: RGBDFrame | None = None
+        self._cached_masks: dict[str, np.ndarray] = {}
+
+    @property
+    def next_click_sequence(self) -> int:
+        return self._next_click_seq
+
+    @property
+    def last_frame_id(self) -> int | None:
+        return self._last_frame_id
+
+    def add_clicked_role(
+        self, role: str, prompt: str, point: tuple[float, float], frame: RGBDFrame
+    ) -> tuple[bool, float]:
+        """Condition one more object on a newer frame without dropping existing masks.
+
+        The returned masks are cached for the pipeline's update of this same frame:
+        SAM must not advance twice for one RGB-D observation.
+        """
+        if self._adapter is None or self._last_frame_id is None:
+            raise RuntimeError("track an initial object before adding another")
+        if (
+            not role
+            or not prompt.strip()
+            or "." in prompt
+            or role in self.prompts
+            or prompt in self.prompts.values()
+        ):
+            raise ValueError("the new object needs a unique role and label without periods")
+        x, y = point
+        if not 0 <= x < frame.depth.shape[1] or not 0 <= y < frame.depth.shape[0]:
+            raise ValueError("object click lies outside the aligned frame")
+        if frame.frame_id <= self._last_frame_id:
+            raise ValueError("freeze a newer frame before adding an object")
+        self._adapter.set_control(
+            {
+                "click_seq": self._next_click_seq,
+                "click_name": {self.camera_id: prompt},
+                "clicks": {self.camera_id: [[x, y, 1]]},
+            }
+        )
+        self._next_click_seq += 1
+        self.prompts[role] = prompt
+        self._cached_frame = None
+        begin = time.perf_counter()
+        try:
+            masks = self.masks(frame)
+        except Exception:
+            self.prompts.pop(role)
+            raise
+        elapsed_ms = (time.perf_counter() - begin) * 1000
+        if role not in masks:
+            self.prompts.pop(role)
+            return False, elapsed_ms
+        return True, elapsed_ms
 
     def masks(self, frame: RGBDFrame) -> dict[str, np.ndarray]:
+        if frame is self._cached_frame:
+            return self._cached_masks
         if self._adapter is None:
             if self.adapter_factory is None:
                 from lerobot.overlays.adapters import Sam3TrackByDetectionAdapter
@@ -98,6 +156,7 @@ class Sam3MaskSource:
                 # Each point has its own name. Apply it to this frame before
                 # queuing the next seed, as the adapter stores one pending name.
                 self._adapter.segment(np.ascontiguousarray(frame.rgb))
+                self._next_click_seq = sequence + 1
         if self._last_frame_id is not None and (
             frame.frame_id <= self._last_frame_id or frame.calibration_version != self._calibration_version
         ):
@@ -105,11 +164,13 @@ class Sam3MaskSource:
         self._last_frame_id = frame.frame_id
         self._calibration_version = frame.calibration_version
         segmented = self._adapter.segment(np.ascontiguousarray(frame.rgb))
-        return {
+        masks = {
             role: np.asarray(segmented[prompt], dtype=bool)
             for role, prompt in self.prompts.items()
             if prompt in segmented
         }
+        self._cached_frame, self._cached_masks = frame, masks
+        return masks
 
 
 @dataclass(frozen=True)

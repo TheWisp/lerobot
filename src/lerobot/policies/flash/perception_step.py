@@ -32,6 +32,16 @@ class PerceptionPipeline:
         self.require_masks = require_masks
         backend.initialize(references)
 
+    def add_reference(self, reference: ObjectReference) -> None:
+        """Add a role only when the backend supports in-place registration."""
+        if reference.role in self.versions:
+            raise ValueError(f"{reference.role}: object role already exists")
+        add = getattr(self.backend, "add_reference", None)
+        if add is None:
+            raise TypeError("this pose backend cannot add an object while tracking")
+        add(reference)
+        self.versions[reference.role] = reference.version
+
     def process(self, frame: RGBDFrame) -> PerceptionResult:
         estimates = self.backend.update(frame)
         roles = {estimate.role for estimate in estimates}

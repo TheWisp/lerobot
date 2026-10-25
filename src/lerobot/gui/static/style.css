@@ -725,6 +725,11 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 #flash-sampling-controls input { width: 100%; box-sizing: border-box; }
 #flash-tracking-config { width: 100%; box-sizing: border-box; font-family: monospace; font-size: 12px; }
 #flash-tracking-message { white-space: pre-wrap; overflow-wrap: anywhere; color: #8bd5ff; }
+.flash-tracked-list { display: flex; flex-direction: column; gap: 6px; }
+#flash-tracked-objects { display: flex; flex-direction: column; gap: 4px; }
+#flash-tracked-objects button { display: flex; justify-content: space-between; gap: 8px; width: 100%; padding: 8px; text-align: left; color: #b8cce1; background: #101b2a; border: 1px solid #31516c; border-radius: 4px; cursor: pointer; }
+#flash-tracked-objects button.active { color: #fff; border-color: #42e4ec; background: #17334a; }
+#flash-tracked-objects small { color: #8bd5ff; }
 #tab-run.flash-tracking #flash-surface-view { display: flex; flex: 1; min-height: 0; flex-direction: column; padding: 16px; gap: 12px; overflow: auto; }
 #tab-run.flash-tracking #run-main > :not(#flash-surface-view),
 #tab-run.flash-tracking .run-actions { display: none !important; }

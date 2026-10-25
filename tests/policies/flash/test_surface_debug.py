@@ -103,3 +103,41 @@ def test_reselecting_reuses_weights_but_not_old_clicked_object(monkeypatch):
     assert not adapter._tracks.get("debug")
     assert second.masks(frame(2))["object"][5, 6]
     assert seen == [[(2.0, 3.0, 1)], [(6.0, 5.0, 1)]]
+
+
+def test_adding_clicked_object_keeps_existing_mask_and_advances_sam_once(monkeypatch):
+    from lerobot.overlays.adapters import ConceptMaskAdapter, Sam3TrackByDetectionAdapter
+    from lerobot.policies.flash.tracking_debug_worker import new_selection
+
+    adapter = object.__new__(Sam3TrackByDetectionAdapter)
+    ConceptMaskAdapter.__init__(adapter, device="cpu", resolution=504)
+    adapter._tracks = {}
+    calls = []
+
+    def segment(rgb):
+        calls.append(1)
+        track = adapter._tracks.setdefault("debug", {"masks": {}, "scores": {}})
+        pending = adapter._pending_clicks.pop("debug", None)
+        if pending:
+            label = adapter._pending_click_name["debug"]
+            x, y, _ = pending[0]
+            mask = np.zeros(rgb.shape[:2], bool)
+            mask[int(y), int(x)] = True
+            track["masks"][label] = mask
+            track["scores"][label] = 1.0
+        return track["masks"]
+
+    monkeypatch.setattr(adapter, "segment", segment)
+    source, sequence = new_selection(adapter, "ring", (2, 3), 0)
+    source.masks(frame(1))
+    before = len(calls)
+    second = frame(2)
+    added, _ = source.add_clicked_role("object_2", "dowel", (6, 5), second)
+    masks = source.masks(second)
+    assert added
+    assert len(calls) == before + 1  # the pipeline reuses the selected frame's masks
+    assert masks["object"][3, 2] and masks["object_2"][5, 6]
+    with pytest.raises(ValueError, match="newer frame"):
+        source.add_clicked_role("object_3", "block", (4, 4), second)
+    replacement, _ = new_selection(adapter, "fresh", (1, 1), max(sequence, source.next_click_sequence))
+    assert set(replacement.masks(frame(3))) == {"object"}

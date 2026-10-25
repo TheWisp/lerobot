@@ -291,6 +291,16 @@ image; a dashed box marks its crop in the full image. If the current mask is
 missing, it frames the projected reference and labels that fallback. The crop
 changes only the display, not the pose computation.
 
+The debugger can keep several clicked objects in one camera session. **Freeze
+image & add by click** pauses updates, conditions the new SAM mask on that
+source frame, and adds a separate fixed surface reference without resetting the
+existing ones. **Start new set by name** deliberately replaces the set. The
+vertical object list chooses which close-up, 3D cloud and detailed diagnostics
+to inspect; the full fitted-source image shows all current outlines. Focus
+changes only the display. The selection is tied to a frozen frame; live camera
+frames may already be newer. This local inspection uses no robot or group-motion
+fallback.
+
 **3D object view** removes estimated scene motion from both clouds and preserves
 initial framing. White geometry therefore stays still by construction; inspect
 cyan-to-white disagreement and the source image to assess the fit. **Follow
@@ -334,6 +344,16 @@ resident RAM rose by about 1.4 MiB. These are one-second samples, so shorter
 peaks could have been missed, and this scene does not prove an arbitrary-length
 or arbitrary-mask memory bound. The pose candidates in this memory test were
 not necessarily accepted for action.
+
+[A same-scene multi-object timing check](../../../../../docs/proofs/flash-rgbd-registration/multi_object_debug_timing.json)
+added a green ring, mini gamepad and yellow block in sequence. The median
+compute time rose from 231 ms with one object to 407 ms with two and 557 ms
+with three, or about 4.3, 2.5 and 1.8 processed updates/s. SAM mask time grew
+only from 24 to 34 ms; each object's RGB matching and surface fit ran in
+sequence and dominated the extra time. These windows were 10–12 seconds in a
+stationary scene. They do not prove motion quality, long-run memory stability or
+performance for larger objects. The three-object worker snapshot was about
+5.2 GiB RAM and 6.1 GiB VRAM, without a measured peak.
 
 [The measurement archive](../../../../../docs/proofs/flash-rgbd-registration/README.md)
 preserves earlier alternatives and the dated experiments. The
