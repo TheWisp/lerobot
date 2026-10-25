@@ -9,6 +9,7 @@ occluder. Unseen reference geometry remains a limitation, not invented geometry.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from inspect import signature
 from os import cpu_count
 
 import cv2
@@ -19,6 +20,9 @@ from scipy.spatial import ConvexHull, cKDTree
 from scipy.spatial.transform import Rotation
 
 from .surface_observation import move, spatial_sample
+
+# SciPy < 1.16 remains supported: use its original scalar derivative path.
+_HAS_SOLVER_WORKERS = "workers" in signature(least_squares).parameters
 
 
 @dataclass(frozen=True)
@@ -34,6 +38,9 @@ class ShapeConfig:
     max_fit_points: int = 2048
     # Amortize cKDTree's per-query thread startup over this many residual points.
     nn_queries_per_worker: int = 512
+    # Exact finite-difference candidates share nearest-neighbour tree queries.
+    batch_jacobian: bool = True
+    batch_query_workers: int = 8
 
 
 @dataclass(frozen=True)
@@ -150,6 +157,32 @@ class WholeSurfaceFit:
 
     def residual(self, pose: np.ndarray) -> np.ndarray:
         predicted = move(self.reference_queries, pose)
+        target_local = (self.target_queries - pose[:3, 3]) @ pose[:3, :3]
+        model_distance = self.target_tree.query(predicted, workers=self.reference_query_workers)[0]
+        target_distance = self.reference_tree.query(target_local, workers=self.target_query_workers)[0]
+        return self._residual_with_distances(pose, predicted, model_distance, target_distance)
+
+    def batch_residuals(self, poses: list[np.ndarray]) -> list[np.ndarray]:
+        """Same residuals, with two exact tree searches for all candidate poses."""
+        if not poses:
+            return []
+        predicted = [move(self.reference_queries, pose) for pose in poses]
+        local = [(self.target_queries - pose[:3, 3]) @ pose[:3, :3] for pose in poses]
+        workers = min(cpu_count() or 1, self.config.batch_query_workers)
+        model_distance = self.target_tree.query(np.concatenate(predicted), workers=workers)[0]
+        target_distance = self.reference_tree.query(np.concatenate(local), workers=workers)[0]
+        return [
+            self._residual_with_distances(pose, points, model, target)
+            for pose, points, model, target in zip(
+                poses,
+                predicted,
+                model_distance.reshape(len(poses), -1),
+                target_distance.reshape(len(poses), -1),
+                strict=True,
+            )
+        ]
+
+    def _residual_with_distances(self, pose, predicted, model_distance, target_distance):
         uv = project(predicted, self.k)
         height, width = self.observation["depth"].shape
         inside = (uv[:, 0] >= 0) & (uv[:, 0] <= width - 1) & (uv[:, 1] >= 0) & (uv[:, 1] <= height - 1)
@@ -171,9 +204,6 @@ class WholeSurfaceFit:
         ray_visibility = np.clip((rays - predicted[:, 2, None] + tolerance) / tolerance, 0, 1)
         depth_visibility = np.sum(weights * known * ray_visibility, axis=1)
         visibility = depth_visibility + np.sum(weights * ~known, axis=1)
-        target_local = (self.target_queries - pose[:3, 3]) @ pose[:3, :3]
-        model_distance = self.target_tree.query(predicted, workers=self.reference_query_workers)[0]
-        target_distance = self.reference_tree.query(target_local, workers=self.target_query_workers)[0]
         model_distance = np.minimum(model_distance, self.config.max_surface_distance_m)
         target_distance = np.minimum(target_distance, self.config.max_surface_distance_m)
         silhouette_m = (
@@ -208,6 +238,10 @@ class WholeSurfaceFit:
             pose[:3, 3] = rotation @ (initial[:3, 3] - center) + center + delta[3:]
             return pose
 
+        def batch_map(_fun, deltas):
+            return self.batch_residuals([pose_from_delta(delta) for delta in deltas])
+
+        batched = self.config.batch_jacobian and _HAS_SOLVER_WORKERS
         solution = least_squares(
             lambda delta: self.residual(pose_from_delta(delta)),
             np.zeros(6),
@@ -216,6 +250,7 @@ class WholeSurfaceFit:
             ftol=self.config.solver_tolerance,
             xtol=self.config.solver_tolerance,
             gtol=self.config.solver_tolerance,
+            **({"workers": batch_map} if batched else {}),
         )
         pose = pose_from_delta(solution.x)
         return pose, {
@@ -223,6 +258,7 @@ class WholeSurfaceFit:
             "cost": self.score(pose),
             "evaluations": solution.nfev,
             "converged": bool(solution.success),
+            "batched_jacobian": batched,
             "fit_reference_points": len(self.reference_queries),
             "fit_target_points": len(self.target_queries),
         }

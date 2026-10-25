@@ -1,6 +1,6 @@
 """Perception-only subprocess for the FLASH live surface debugger.
 
-Camera capture has one latest-frame slot; inference never queues old images.
+Camera capture has one latest-frame slot; perception prepares at most one frame ahead.
 Click selection freezes a specific frame before accepting pixel coordinates.
 No robot or motor API is imported. State files are atomic, bounded snapshots.
 """
@@ -23,7 +23,7 @@ import numpy as np
 
 from .appearance import Sam3MaskSource
 from .perception import LatestRGBDFrameStore, ObjectReference, ReferenceSnippet, RGBDFrame
-from .perception_step import PerceptionPipeline
+from .perception_step import PerceptionPipeline, PerceptionRunner
 from .surface_tracking import load_ufm
 from .vision_pipeline import VisionPipelineConfig, build_vision_backend
 
@@ -166,6 +166,14 @@ def make_debug_pipeline(config: VisionPipelineConfig, source, matcher, frame: RG
     return PerceptionPipeline(backend, (debug_reference("object", frame),), require_masks=True)
 
 
+def replace_debug_pipeline(previous, config, source, matcher, frame):
+    """Both the first selection and a replacement get a fresh reference owner."""
+    if previous is not None:
+        previous.close()
+    pipeline = make_debug_pipeline(config, source, matcher, frame)
+    return pipeline, PerceptionRunner(pipeline)
+
+
 def run(directory: Path, config: dict) -> None:
     import pyrealsense2 as rs
 
@@ -184,6 +192,9 @@ def run(directory: Path, config: dict) -> None:
     state_path = directory / "state.json"
     frozen = None
     source = session = adapter = matcher = None
+    runner = None
+    last_acquired_frame_id = -1
+    last_publication_s = None
     last_frame_id = -1
     command_id = None
     click_sequence = 0
@@ -301,6 +312,10 @@ def run(directory: Path, config: dict) -> None:
                 command = None
             selected = None
             if command:
+                if runner is not None:
+                    drained = runner.drain()
+                    if drained is not None:
+                        last_frame_id = drained[0].frame_id
                 command_id = command.get("id")
                 try:
                     if command["action"] in {"freeze", "clear", "select"} and trace is not None:
@@ -308,6 +323,7 @@ def run(directory: Path, config: dict) -> None:
                     if command["action"] == "freeze":
                         frozen = seed_frame({}, None, latest.snapshot())
                         tracking = False
+                        last_publication_s = None
                         # A newly selected role must join on a frame later than the
                         # last update of every existing rigid reference.
                         previous = max(last_frame_id, source.last_frame_id or -1) if source else last_frame_id
@@ -322,6 +338,9 @@ def run(directory: Path, config: dict) -> None:
                         tracking = False
                         if source is not None:
                             click_sequence = max(click_sequence, source.next_click_sequence)
+                        if runner is not None:
+                            runner.close()
+                        runner = None
                         frozen = source = session = None
                         tracked_names.clear()
                         last_objects.clear()
@@ -370,7 +389,11 @@ def run(directory: Path, config: dict) -> None:
                             source, click_sequence = new_selection(adapter, label, point, click_sequence)
                             object_name = label
                             vision_config = VisionPipelineConfig.from_dict(config["vision_pipeline"])
-                            session = make_debug_pipeline(vision_config, source, matcher, selected)
+                            session, runner = replace_debug_pipeline(
+                                runner, vision_config, source, matcher, selected
+                            )
+                            last_acquired_frame_id = -1
+                            last_publication_s = None
                             tracked_names.clear()
                             tracked_names["object"] = label
                             last_objects.clear()
@@ -383,20 +406,29 @@ def run(directory: Path, config: dict) -> None:
             if not tracking:
                 stop.wait(0.02)
                 continue
-            frame = selected if selected is not None else latest.snapshot()
-            if frame is None or frame.frame_id == last_frame_id:
-                stop.wait(0.002)
-                continue
+            selected_frames = [selected] if selected is not None else []
+
+            def take_frame(selected_frames=selected_frames):
+                nonlocal last_acquired_frame_id
+                if stop.is_set() or (not selected_frames and not commands.empty()):
+                    return None
+                frame = selected_frames.pop() if selected_frames else latest.snapshot()
+                if frame is None or frame.frame_id <= last_acquired_frame_id:
+                    return None
+                last_acquired_frame_id = frame.frame_id
+                return frame
+
             begin = time.perf_counter()
-            skipped = max(0, frame.frame_id - last_frame_id - 1) if last_frame_id >= 0 else 0
-            last_frame_id = frame.frame_id
+            frame = None
             try:
-                output = session.process(frame)
-                mask_ms = (
-                    prepared_mask_ms
-                    if prepared_mask_ms is not None
-                    else session.backend.mask_source.elapsed_ms
-                )
+                item = runner.process_next(take_frame)
+                if item is None:
+                    stop.wait(0.002)
+                    continue
+                frame, output = item
+                skipped = max(0, frame.frame_id - last_frame_id - 1) if last_frame_id >= 0 else 0
+                last_frame_id = frame.frame_id
+                mask_ms = prepared_mask_ms if prepared_mask_ms is not None else session.backend.last_mask_ms
                 prepared_mask_ms = None
                 objects = {}
                 for role, name in tracked_names.items():
@@ -417,7 +449,10 @@ def run(directory: Path, config: dict) -> None:
                         trace_ms = trace.save(frame, output.masks, output.details)
                     else:
                         trace.finish()
-                elapsed = time.perf_counter() - begin
+                publication_s = time.perf_counter()
+                elapsed = publication_s - begin
+                interval = elapsed if last_publication_s is None else publication_s - last_publication_s
+                last_publication_s = publication_s
                 state(
                     "tracking",
                     objects=objects,
@@ -425,7 +460,8 @@ def run(directory: Path, config: dict) -> None:
                     timings={
                         "mask_ms": mask_ms,
                         "total_ms": elapsed * 1000,
-                        "processed_fps": 1 / elapsed,
+                        "processed_fps": 1 / interval,
+                        "publication_interval_ms": interval * 1000,
                         "skipped_camera_frames": skipped,
                         "age_at_publication_ms": (time.perf_counter() - frame.source_time_s) * 1000,
                         "trace_write_ms": trace_ms,
@@ -433,7 +469,10 @@ def run(directory: Path, config: dict) -> None:
                 )
             except Exception as exc:
                 tracking = False
-                state("error", message=str(exc), frame=image_snapshot(frame))
+                runner.close(commit_pending=False)
+                runner = source = session = None
+                tracked_names.clear()
+                state("error", message=str(exc), **({"frame": image_snapshot(frame)} if frame else {}))
                 traceback.print_exc()
         if capture_error:
             raise RuntimeError(capture_error[0])
@@ -444,6 +483,8 @@ def run(directory: Path, config: dict) -> None:
         stop.set()
         if trace is not None:
             trace.finish()
+        if runner is not None:
+            runner.close(commit_pending=False)
         if capture:
             capture.join(timeout=2)
         if camera and camera.is_connected:

@@ -36,6 +36,8 @@ class VisionPipelineConfig:
     registration_trials: int = 100
     visible_shape_fallback: bool = False
     parallel_surface_objects: bool = True
+    pipeline_surface_frames: bool = True
+    surface_object_workers: int = 2
     observation: SurfaceObservationConfig = field(default_factory=SurfaceObservationConfig)
     shape: ShapeConfig = field(default_factory=ShapeConfig)
     motion: SurfaceMotionConfig = field(default_factory=SurfaceMotionConfig)
@@ -54,8 +56,17 @@ class VisionPipelineConfig:
             raise ValueError("SAM resolution must be at least 224 and divisible by 14")
         if self.backend not in {"surface", "appearance"}:
             raise ValueError("unknown FLASH vision backend")
-        if not isinstance(self.parallel_surface_objects, bool):
+        if any(
+            not isinstance(value, bool)
+            for value in (
+                self.parallel_surface_objects,
+                self.pipeline_surface_frames,
+                self.shape.batch_jacobian,
+            )
+        ):
             raise ValueError("surface acceleration settings must be booleans")
+        if self.surface_object_workers < 1:
+            raise ValueError("surface_object_workers must be positive")
         if not np.isfinite(self.min_similarity) or not -1 <= self.min_similarity <= 1:
             raise ValueError("invalid appearance similarity")
         if not np.isfinite(self.registration_threshold_m) or self.registration_threshold_m <= 0:
@@ -69,6 +80,8 @@ class VisionPipelineConfig:
             ):
                 raise ValueError(f"invalid observation setting: {key}")
         for key, value in asdict(self.shape).items():
+            if key == "batch_jacobian":
+                continue
             if not np.isfinite(value) or value < 0 or (value == 0 and key != "mask_boundary_tolerance_px"):
                 raise ValueError(f"invalid shape setting: {key}")
         if self.observation.min_surface_spacing_m > self.observation.surface_spacing_m:
@@ -169,9 +182,17 @@ class SurfacePoseBackend:
         self.reference_camera_from_object = {}
         self.previous_frame = None
         self._surface_pool = None
+        self._prepare_pool = None
+        self._prepared_count = 0
+        self._finished_count = 0
         self._matcher_lock = Lock()
 
+    def _require_drained(self):
+        if self._prepared_count != self._finished_count:
+            raise RuntimeError("finish pending surface frames before changing references")
+
     def initialize(self, references):
+        self._require_drained()
         self.references = {r.role: r for r in references}
         if len(self.references) != len(references) or not references:
             raise ValueError("surface tracker needs unique references")
@@ -183,13 +204,33 @@ class SurfacePoseBackend:
 
     def add_reference(self, reference):
         """Add a local inspection role while preserving every existing surface frame."""
+        self._require_drained()
         if self.initializer is not None:
             raise ValueError("prepared object registration cannot change during tracking")
         if reference.role in self.references:
             raise ValueError(f"{reference.role}: object role already exists")
         self.references[reference.role] = reference
 
+    @property
+    def can_pipeline(self):
+        # Registration reads pose state, unlike frame-pair matching. Finish it
+        # before allowing another frame to prepare concurrently.
+        return self.config.pipeline_surface_frames and (
+            self.initializer is None or len(self.reference_camera_from_object) == len(self.references)
+        )
+
+    def close(self):
+        for pool in (self._prepare_pool, self._surface_pool):
+            if pool is not None:
+                pool.shutdown(wait=True)
+        self._prepare_pool = self._surface_pool = None
+
     def update(self, frame):
+        return self.finish(self.prepare(frame))
+
+    def prepare(self, frame):
+        if self._prepared_count - self._finished_count >= 2:
+            raise RuntimeError("surface preparation is limited to one frame ahead")
         if not self.references:
             raise RuntimeError("initialize references before tracking")
         if self.previous_frame is not None:
@@ -203,14 +244,13 @@ class SurfacePoseBackend:
             ):
                 raise ValueError("camera geometry changed; reset the surface pipeline")
         self.previous_frame = frame
-        self.last_masks = self.mask_source.masks(frame)
-        if not set(self.last_masks) <= set(self.references):
+        masks = {role: mask.copy() for role, mask in self.mask_source.masks(frame).items()}
+        mask_ms = self.mask_source.elapsed_ms if isinstance(self.mask_source, FrameMaskCache) else None
+        if not set(masks) <= set(self.references):
             raise ValueError("mask source returned an unknown object role")
         seeds = {}
-        if self.initializer is not None and set(self.sessions) != set(self.references):
+        if self.initializer is not None and set(self.reference_camera_from_object) != set(self.references):
             seeds = {e.role: e for e in self.initializer.update(frame)}
-        self.last_failure = {}
-        self.last_details = {}
         jobs = []
         unregistered = set()
         for role in self.references:
@@ -218,7 +258,7 @@ class SurfacePoseBackend:
             session = self.sessions.get(role)
             registered = (
                 self.initializer is None
-                or session is not None
+                or role in self.reference_camera_from_object
                 or (seed is not None and seed.evidence == Evidence.OBSERVED and seed.pose is not None)
             )
             if not registered:
@@ -232,7 +272,8 @@ class SurfacePoseBackend:
                     motion_config=self.config.motion,
                     matcher_lock=self._matcher_lock,
                 )
-            jobs.append((role, session, self.last_masks.get(role)))
+                self.sessions[role] = session
+            jobs.append((role, session, masks.get(role)))
 
         measured = {}
         if jobs:
@@ -246,7 +287,7 @@ class SurfacePoseBackend:
                 return (
                     role,
                     session,
-                    session.update(
+                    session.prepare(
                         frame.rgb,
                         depth_m,
                         mask,
@@ -257,16 +298,52 @@ class SurfacePoseBackend:
                 )
 
             if self.config.parallel_surface_objects and len(jobs) > 1:
-                if self._surface_pool is None:
-                    self._surface_pool = ThreadPoolExecutor(
-                        max_workers=cpu_count() or 1, thread_name_prefix="flash-surface"
+                if self._prepare_pool is None:
+                    self._prepare_pool = ThreadPoolExecutor(
+                        max_workers=min(cpu_count() or 1, self.config.surface_object_workers),
+                        thread_name_prefix="flash-surface-prepare",
                     )
                 measured = {
-                    role: (session, detail) for role, session, detail in self._surface_pool.map(measure, jobs)
+                    role: (session, detail) for role, session, detail in self._prepare_pool.map(measure, jobs)
                 }
             else:
                 measured = {role: (session, detail) for role, session, detail in map(measure, jobs)}
 
+        prepared = {
+            "frame": frame,
+            "masks": masks,
+            "seeds": seeds,
+            "jobs": measured,
+            "unregistered": unregistered,
+            "sequence": self._prepared_count,
+            "mask_ms": mask_ms,
+        }
+        self._prepared_count += 1
+        return prepared
+
+    def finish(self, prepared):
+        if prepared["sequence"] != self._finished_count:
+            raise ValueError("surface frames must finish once and in preparation order")
+        frame, seeds = prepared["frame"], prepared["seeds"]
+        self.last_masks = prepared["masks"]
+        self.last_mask_ms = prepared["mask_ms"]
+        self.last_failure, self.last_details = {}, {}
+        unregistered = prepared["unregistered"]
+
+        def finish_job(job):
+            role, (session, item) = job
+            return role, (session, session.finish(item))
+
+        jobs = prepared["jobs"].items()
+        if self.config.parallel_surface_objects and len(prepared["jobs"]) > 1:
+            if self._surface_pool is None:
+                self._surface_pool = ThreadPoolExecutor(
+                    max_workers=min(cpu_count() or 1, self.config.surface_object_workers),
+                    thread_name_prefix="flash-surface-fit",
+                )
+            measured = dict(self._surface_pool.map(finish_job, jobs))
+        else:
+            measured = dict(map(finish_job, jobs))
         out = []
         for role, reference in self.references.items():
             seed = seeds.get(role)
@@ -276,8 +353,7 @@ class SurfacePoseBackend:
             else:
                 session, detail = measured[role]
                 if "camera_from_reference" in detail:
-                    if role not in self.sessions:
-                        self.sessions[role] = session
+                    if role not in self.reference_camera_from_object:
                         self.reference_camera_from_object[role] = (
                             np.asarray(detail["camera_from_object"])
                             if self.initializer is None
@@ -323,6 +399,7 @@ class SurfacePoseBackend:
                     last_direct_observation_s=frame.source_time_s if accepted else None,
                 )
             )
+        self._finished_count += 1
         return tuple(out)
 
 

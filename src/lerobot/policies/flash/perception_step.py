@@ -44,6 +44,9 @@ class PerceptionPipeline:
 
     def process(self, frame: RGBDFrame) -> PerceptionResult:
         estimates = self.backend.update(frame)
+        return self.result(frame, estimates)
+
+    def result(self, frame, estimates) -> PerceptionResult:
         roles = {estimate.role for estimate in estimates}
         if roles != set(self.versions) or len(estimates) != len(roles):
             raise ValueError("pose results differ from reference roles")
@@ -69,3 +72,82 @@ class PerceptionPipeline:
             {role: mask.copy() for role, mask in masks.items()},
             dict(getattr(self.backend, "last_details", {})),
         )
+
+
+class PerceptionRunner:
+    """One prepared frame ahead of CPU fitting, with no unbounded work queue.
+
+    next_frame runs on the preparation thread when overlap is enabled. It must
+    return an owned RGB-D snapshot (or None), in increasing source order. Camera
+    callers choose the latest snapshot there; offline callers supply every frame.
+    Drain before changing selections/configuration; never discard a prepared
+    delta and then apply its successor to an older pose.
+    """
+
+    def __init__(self, pipeline: PerceptionPipeline):
+        from concurrent.futures import ThreadPoolExecutor
+
+        self.pipeline = pipeline
+        self.pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="flash-frame-prepare")
+        self.pending = None
+        self.closed = False
+
+    def _prepare_next(self, next_frame):
+        frame = next_frame()
+        if frame is None:
+            return None
+        return frame, self.pipeline.backend.prepare(frame)
+
+    def _finish(self, item):
+        if item is None:
+            return None
+        frame, prepared = item
+        estimates = self.pipeline.backend.finish(prepared)
+        return frame, self.pipeline.result(frame, estimates)
+
+    def process_next(self, next_frame):
+        if self.closed:
+            raise RuntimeError("perception runner is closed")
+        if self.pending is not None:
+            pending, self.pending = self.pending, None
+            item = pending.result()
+            if item is None:
+                return None
+        elif getattr(self.pipeline.backend, "can_pipeline", False):
+            item = self._prepare_next(next_frame)
+            if item is None:
+                return None
+        else:
+            frame = next_frame()
+            return None if frame is None else (frame, self.pipeline.process(frame))
+        # Only matching/segmentation can run ahead. Pose composition, reference
+        # registration, symmetry and result validation remain ordered here.
+        self.pending = self.pool.submit(self._prepare_next, next_frame)
+        return self._finish(item)
+
+    def drain(self):
+        """Finish the single pending frame before a control changes track state."""
+        if self.pending is None:
+            return None
+        pending, self.pending = self.pending, None
+        return self._finish(pending.result())
+
+    def close(self, *, commit_pending=True):
+        if self.closed:
+            return
+        try:
+            if commit_pending:
+                self.drain()
+        finally:
+            self.pool.shutdown(wait=True)
+            close = getattr(self.pipeline.backend, "close", None)
+            if close is not None:
+                close()
+            self.pending = None
+            self.closed = True
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, *_):
+        self.close(commit_pending=exc_type is None)

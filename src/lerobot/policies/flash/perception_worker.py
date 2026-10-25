@@ -16,9 +16,10 @@ from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass, field, replace
 from queue import Empty, Full
+from threading import Event
 
 from .perception import LatestPoseStore, ObjectReference, PoseBackend, RGBDFrame
-from .perception_step import PerceptionPipeline, PerceptionResult
+from .perception_step import PerceptionPipeline, PerceptionResult, PerceptionRunner
 
 
 @dataclass(frozen=True)
@@ -53,13 +54,29 @@ def _run_backend(
     results,
     require_masks: bool,
 ):
+    stopping = Event()
+    pipeline = runner = None
+
+    def next_frame():
+        while not stopping.is_set():
+            try:
+                return frames.get(timeout=0.1)
+            except Empty:
+                pass
+        return None
+
     try:
         pipeline = PerceptionPipeline(factory(), references, require_masks=require_masks)
         results.put(_Ready())
-        while (frame := frames.get()) is not None:
-            _publish_latest(results, pipeline.process(frame))
+        runner = PerceptionRunner(pipeline)
+        while (item := runner.process_next(next_frame)) is not None:
+            _publish_latest(results, item[1])
     except Exception:
         _publish_latest(results, _Failure(traceback.format_exc()))
+    finally:
+        stopping.set()
+        if runner is not None:
+            runner.close(commit_pending=False)
 
 
 @dataclass

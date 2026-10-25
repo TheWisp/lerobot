@@ -1,0 +1,151 @@
+{
+  "trace": "/home/feit/.cache/huggingface/lerobot/flash_debug_traces/trace-20261025-192743-253063024",
+  "frames": [
+    1244,
+    1248,
+    1256,
+    1266,
+    1276,
+    1285,
+    1295,
+    1304,
+    1316,
+    1327,
+    1336,
+    1345,
+    1354,
+    1362,
+    1369,
+    1377,
+    1386,
+    1395,
+    1404,
+    1413,
+    1422,
+    1431,
+    1439,
+    1449,
+    1458,
+    1467,
+    1475,
+    1482,
+    1490,
+    1500
+  ],
+  "roles": [
+    "object",
+    "object_2",
+    "object_3"
+  ],
+  "sam": "recorded masks; excluded from timing",
+  "modes": {
+    "scalar": [
+      {
+        "elapsed_s": 9.699189352977555,
+        "steady_fps": 3.0524574951182393,
+        "interval_median_ms": 301.7578349681571,
+        "interval_p95_ms": 470.3227129764855,
+        "max_pose_matrix_difference": 0.0,
+        "accepted": {
+          "object": 30,
+          "object_2": 30,
+          "object_3": 30
+        },
+        "timings": {
+          "preprocess_ms": 12.642081012018025,
+          "match_ms": 48.48387400852516,
+          "fit_ms": 106.53985996032134
+        }
+      },
+      {
+        "elapsed_s": 9.335769367986359,
+        "steady_fps": 3.1130662582956066,
+        "interval_median_ms": 301.36592098278925,
+        "interval_p95_ms": 452.59150890633464,
+        "max_pose_matrix_difference": 0.0,
+        "accepted": {
+          "object": 30,
+          "object_2": 30,
+          "object_3": 30
+        },
+        "timings": {
+          "preprocess_ms": 12.716769997496158,
+          "match_ms": 48.51297999266535,
+          "fit_ms": 107.62653400888667
+        }
+      }
+    ],
+    "batch": [
+      {
+        "elapsed_s": 8.152388276997954,
+        "steady_fps": 3.56437380578803,
+        "interval_median_ms": 260.60683699324727,
+        "interval_p95_ms": 420.9305109921842,
+        "max_pose_matrix_difference": 0.0,
+        "accepted": {
+          "object": 30,
+          "object_2": 30,
+          "object_3": 30
+        },
+        "timings": {
+          "preprocess_ms": 12.828278995584697,
+          "match_ms": 48.47446898929775,
+          "fit_ms": 83.80281599238515
+        }
+      },
+      {
+        "elapsed_s": 7.923509054002352,
+        "steady_fps": 3.672101988420555,
+        "interval_median_ms": 256.86170399421826,
+        "interval_p95_ms": 362.8673628263641,
+        "max_pose_matrix_difference": 0.0,
+        "accepted": {
+          "object": 30,
+          "object_2": 30,
+          "object_3": 30
+        },
+        "timings": {
+          "preprocess_ms": 12.906655028928071,
+          "match_ms": 48.462047008797526,
+          "fit_ms": 84.58914695074782
+        }
+      }
+    ],
+    "batch_pipeline": [
+      {
+        "elapsed_s": 5.834880498005077,
+        "steady_fps": 5.285813603861056,
+        "interval_median_ms": 171.36677604867145,
+        "interval_p95_ms": 282.830827991711,
+        "max_pose_matrix_difference": 0.0,
+        "accepted": {
+          "object": 30,
+          "object_2": 30,
+          "object_3": 30
+        },
+        "timings": {
+          "preprocess_ms": 17.05047197174281,
+          "match_ms": 50.757377000991255,
+          "fit_ms": 100.42497800895944
+        }
+      },
+      {
+        "elapsed_s": 5.603611162980087,
+        "steady_fps": 5.302837100045493,
+        "interval_median_ms": 171.57766199670732,
+        "interval_p95_ms": 277.8167256677989,
+        "max_pose_matrix_difference": 0.0,
+        "accepted": {
+          "object": 30,
+          "object_2": 30,
+          "object_3": 30
+        },
+        "timings": {
+          "preprocess_ms": 17.162962001748383,
+          "match_ms": 51.003678992856294,
+          "fit_ms": 100.01514299074188
+        }
+      }
+    ]
+  }
+}

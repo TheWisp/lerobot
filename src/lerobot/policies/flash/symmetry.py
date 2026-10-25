@@ -138,10 +138,28 @@ class SymmetryCanonicalizingBackend:
         self._last_pose.clear()
         self.inner.initialize(references)
 
+    @property
+    def can_pipeline(self):
+        return getattr(self.inner, "can_pipeline", False)
+
+    def prepare(self, frame):
+        return self.inner.prepare(frame)
+
+    def finish(self, prepared):
+        return self._canonicalize(self.inner.finish(prepared))
+
+    def close(self):
+        close = getattr(self.inner, "close", None)
+        if close is not None:
+            close()
+
     def update(self, frame: RGBDFrame) -> tuple[PoseEstimate, ...]:
+        return self._canonicalize(self.inner.update(frame))
+
+    def _canonicalize(self, estimates):
         out = []
         self._last_failure.clear()
-        for estimate in self.inner.update(frame):
+        for estimate in estimates:
             symmetry = self.symmetries.get(estimate.role)
             if symmetry is None or estimate.evidence == Evidence.LOST:
                 out.append(estimate)

@@ -1,0 +1,115 @@
+{
+  "trace": "/home/feit/.cache/huggingface/lerobot/flash_debug_traces/trace-20261025-192743-253063024",
+  "frames": [
+    1244,
+    1248,
+    1256,
+    1266,
+    1276,
+    1285,
+    1295,
+    1304,
+    1316,
+    1327,
+    1336,
+    1345,
+    1354,
+    1362,
+    1369,
+    1377,
+    1386,
+    1395,
+    1404,
+    1413,
+    1422,
+    1431,
+    1439,
+    1449,
+    1458,
+    1467,
+    1475,
+    1482,
+    1490,
+    1500
+  ],
+  "roles": [
+    "object",
+    "object_2",
+    "object_3"
+  ],
+  "sam": "recorded masks; excluded from timing",
+  "modes": {
+    "batch_pipeline": [
+      {
+        "elapsed_s": 5.935163646994624,
+        "steady_fps": 5.170322708578678,
+        "interval_median_ms": 168.68301399517804,
+        "interval_p95_ms": 328.63120087422425,
+        "max_pose_matrix_difference": 0.0,
+        "accepted": {
+          "object": 30,
+          "object_2": 30,
+          "object_3": 30
+        },
+        "timings": {
+          "preprocess_ms": 17.092463036533445,
+          "match_ms": 49.980542971752584,
+          "fit_ms": 99.52718496788293
+        }
+      },
+      {
+        "elapsed_s": 5.591878877952695,
+        "steady_fps": 5.302340344938368,
+        "interval_median_ms": 172.37580998335034,
+        "interval_p95_ms": 281.07951502897777,
+        "max_pose_matrix_difference": 0.0,
+        "accepted": {
+          "object": 30,
+          "object_2": 30,
+          "object_3": 30
+        },
+        "timings": {
+          "preprocess_ms": 17.28819898562506,
+          "match_ms": 50.410827971063554,
+          "fit_ms": 100.61255597975105
+        }
+      }
+    ],
+    "batch_pipeline_3workers": [
+      {
+        "elapsed_s": 5.955713559989817,
+        "steady_fps": 4.993902724103269,
+        "interval_median_ms": 179.602961987257,
+        "interval_p95_ms": 348.59605948440725,
+        "max_pose_matrix_difference": 0.0,
+        "accepted": {
+          "object": 30,
+          "object_2": 30,
+          "object_3": 30
+        },
+        "timings": {
+          "preprocess_ms": 22.199439990799874,
+          "match_ms": 75.57884801644832,
+          "fit_ms": 159.40829005558044
+        }
+      },
+      {
+        "elapsed_s": 5.7664303469937295,
+        "steady_fps": 5.157544452154772,
+        "interval_median_ms": 178.41285897884518,
+        "interval_p95_ms": 293.2605459878687,
+        "max_pose_matrix_difference": 0.0,
+        "accepted": {
+          "object": 30,
+          "object_2": 30,
+          "object_3": 30
+        },
+        "timings": {
+          "preprocess_ms": 20.88301902404055,
+          "match_ms": 75.4921060288325,
+          "fit_ms": 157.4676230084151
+        }
+      }
+    ]
+  }
+}

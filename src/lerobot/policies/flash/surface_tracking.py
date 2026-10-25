@@ -84,6 +84,16 @@ class SurfaceTrackingSession:
         *,
         frame_filters: SurfaceFrameFilters | None = None,
     ):
+        return self.finish(
+            self.prepare(rgb, depth_m, mask, intrinsics, frame_id, frame_filters=frame_filters)
+        )
+
+    def prepare(self, rgb, depth_m, mask, intrinsics, frame_id, *, frame_filters=None):
+        """Measure image motion without reading or changing the fitted pose.
+
+        Called in source order by one producer. Its previous observation belongs
+        exclusively to this stage; finish may concurrently fit the prior frame.
+        """
         start = time.perf_counter()
         obs = observation(
             depth_m, mask, intrinsics, asdict(self.observation_config), frame_filters=frame_filters
@@ -116,22 +126,25 @@ class SurfaceTrackingSession:
         }
         detail.update(
             surface_points=len(all_points),
-            reference_frame_id=self.reference_frame_id,
             sample_spacing_mm=spacing * 1000,
         )
+        prepared = {
+            "current": current,
+            "intrinsics": intrinsics,
+            "frame_id": frame_id,
+            "diagnostics": detail,
+            "step": None,
+            "status": None,
+        }
         if not mask.any():
-            return {"status": "no_mask", "diagnostics": detail}
+            prepared["status"] = "no_mask"
+            return prepared
         points = obs["points"]
         if len(points) < 3 or np.linalg.matrix_rank(points - points.mean(0)) < 2:
-            return {"status": "insufficient_depth", "diagnostics": detail}
+            prepared["status"] = "insufficient_depth"
+            return prepared
         detail["preprocess_ms"] = (time.perf_counter() - start) * 1000
-        if self.reference is None:
-            self.reference = points.copy()
-            self.anchors, self.basis = initial_landmarks(self.reference)
-            self.reference_frame_id = frame_id
-            detail["reference_frame_id"] = frame_id
-            status = "reference"
-        else:
+        if self.previous is not None:
             start = time.perf_counter()
             a, b, crop = crop_pair(self.previous, current, self.motion_config)
             match_args = (self.matcher, a, b, crop, self.previous, current, intrinsics, self.motion_config)
@@ -150,6 +163,25 @@ class SurfaceTrackingSession:
                 match_ms=(time.perf_counter() - start) * 1000,
                 matcher_available=step is not None,
             )
+            prepared["step"] = step
+        self.previous = current
+        return prepared
+
+    def finish(self, prepared):
+        """Apply prepared motion to the last completed pose, strictly in order."""
+        current, intrinsics = prepared["current"], prepared["intrinsics"]
+        detail = dict(prepared["diagnostics"])
+        detail["reference_frame_id"] = self.reference_frame_id
+        if prepared["status"] is not None:
+            return {"status": prepared["status"], "diagnostics": detail}
+        if self.reference is None:
+            self.reference = current["obs"]["points"].copy()
+            self.anchors, self.basis = initial_landmarks(self.reference)
+            self.reference_frame_id = prepared["frame_id"]
+            detail["reference_frame_id"] = self.reference_frame_id
+            status = "reference"
+        else:
+            step = prepared["step"]
             proposal = self.pose if step is None else step @ self.pose
             prior = self.pose.copy()
             start = time.perf_counter()
@@ -173,7 +205,7 @@ class SurfaceTrackingSession:
                 final_rotation_deg=angle(self.pose, prior),
             )
             status = "fitted" if step is not None else "fitted_without_rgb_motion"
-        self.previous = current
+        all_points = current["all_surface_points"]
         predicted = move(self.reference, self.pose)
         distances = cKDTree(predicted).query(all_points)[0] * 1000
         detail.update(

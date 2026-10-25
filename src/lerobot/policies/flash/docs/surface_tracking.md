@@ -259,17 +259,35 @@ in this surface tracker.
 
 The live motor loop consumes available estimates on its own fixed schedule.
 Camera FPS, inference FPS, source-image age and motor command rate are different
-quantities. The live debugger's processing timer excludes JSON publication;
+quantities. The live debugger reports processing time, publication interval and source-image age separately;
 model loading and all vision computation remain outside robot control.
 
 For multiple surface objects, the backend requests SAM masks once and converts
 and filters the aligned depth frame once. Each object keeps its own fixed
-reference and fit. Those object updates run in a bounded CPU pool; a lock gives
-the shared UFM model one GPU inference at a time, while a completed object's
-CPU fit can overlap the next object's UFM inference. Fixed reference search
-geometry is built once per object. Large nearest-neighbour queries use more
-than one CPU worker; small queries stay single-threaded. The acceptance rule,
-surface residual and solver tolerances do not change with object count.
+reference and fit. Preparation and fitting use separate bounded CPU pools;
+UFM calls on the shared GPU model remain serialized. Fixed reference search
+geometry is built once per object.
+
+The shared `PerceptionRunner` prepares at most one subsequent frame while the
+current frame is fitted. Preparation computes masks, usable depth and a rigid
+motion between images; it never reads the mutable fitted pose. Completion
+composes that motion with the preceding completed pose and then fits it.
+Masks, source timestamps and registration versions travel with the prepared
+frame. Completions remain ordered, including lost observations. Reference
+registration finishes before overlap begins. Freeze, add-object and clear
+commands drain the pending frame before changing segmentation or references.
+Offline extraction supplies every frame; live callers supply the latest
+available frame when preparation starts. This bounds memory and waiting work,
+but a prepared frame can still wait behind a slower fit. Throughput and result
+age must be measured separately.
+
+The CPU fitter batches the six exact finite-difference candidate queries into
+two larger nearest-neighbour calls. The scalar and batched paths share all
+mask/depth/outline residual arithmetic; SciPy still chooses the steps, stopping
+criteria and coarse branch. SciPy versions without the public solver `workers`
+callback retain scalar derivatives. The acceptance rule and geometric sampling
+do not change. Scheduling is shared by extraction, the inference subprocess and
+the camera debugger; the robot's fixed-rate motor loop is independent.
 
 ## Configuration and inspection
 
@@ -287,6 +305,10 @@ The authoritative defaults and validation are in
 | `shape.depth_tolerance_m`, `mask_boundary_tolerance_px`  | 0.005 m, 2 px      | Scale geometric penalties; these are not sensor calibration.                                                                                  |
 | `shape.max_evaluations`, `solver_tolerance`              | 50, 1e-5           | Solver effort and convergence; finite-difference Jacobians require additional residual calls.                                                 |
 | `shape.nn_queries_per_worker`                            | 512 queries        | Start another CPU worker only for a sufficiently large exact nearest-neighbour query; worker startup can outweigh a small query.              |
+| `shape.batch_jacobian`                                   | true               | Batch exact derivative queries; false retains scalar evaluation for comparison.                                                               |
+| `shape.batch_query_workers`                              | 8                  | CPU search-worker cap for a batch; measured on the local 16-core CPU, capped by available CPUs.                                               |
+| `surface_object_workers`                                 | 2                  | Bound simultaneous per-object preparation/fitting jobs; measured CPU scaling rather than one worker per logical core.                         |
+| `pipeline_surface_frames`                                | true               | Prepare at most one next frame during fitting; false keeps serial frame scheduling.                                                           |
 | `parallel_surface_objects`                               | true               | Overlap independent object updates; UFM inference remains serialized on the shared model.                                                     |
 | `motion.input_size_px`, `grid_step_px`                   | 320, 4             | RGB matching resolution and query spacing, separate from metric cloud spacing.                                                                |
 | `motion.covisibility_min`, `ransac_distance_m`           | 0.5, 0.006 m       | Match filtering; passing does not prove physical point identity.                                                                              |
@@ -333,8 +355,9 @@ and source image; it is not a recording of the preceding motion sequence.
 
 ### Memory use
 
-The camera-only worker retains one fixed reference cloud, the previous processed
-observation, the latest captured RGB-D frame, and the current result. It does not
+The camera-only worker retains one fixed reference cloud per object, the previous
+matching observation, the latest captured RGB-D frame, the current fit and at
+most one prepared subsequent frame. Completed work is not accumulated. It does not
 append every processed surface to the reference. The SAM3 adapter retains a
 short video memory and replaces its tracking session every 150 processed frames
 when a mask can be re-seeded. A lost object with no valid seed now drops the old
@@ -381,9 +404,11 @@ three-object throughput and reduced usable matches in the tested selection.
 Reducing the fit-point budget to 512 made one reference fail acceptance;
 loosening solver convergence changed a recorded ring pose by about 18 mm and
 9°. CUDA brute-force nearest distances were slower in the full multi-object
-pipeline despite faster isolated distance queries. Reusing or batching the
-solver's finite-difference nearest neighbours changed recorded fits, so the
-exact original derivative computation remains. These are scene-specific
+pipeline despite faster isolated distance queries. An earlier experiment that reused finite-difference neighbours changed
+recorded fits and was rejected. This is superseded by exact candidate-query
+batching, which recomputes each candidate's neighbours and preserves the
+original derivative arithmetic. The paired measurements and their scope are
+in [CPU batching and pipelining](../../../../../docs/proofs/flash-cpu-pipeline/README.md). These are scene-specific
 ablation results, not general accuracy rankings. The original three-object
 worker snapshot was about 5.2 GiB RAM and 6.1 GiB VRAM, without a measured
 peak; the new worker's peak memory was not measured.

@@ -8,7 +8,7 @@ import numpy as np
 
 from .causal_service import CausalTrackingConfig, build_causal_pose_service
 from .perception import LatestPoseStore, ObjectReference, PoseBackend, RGBDFrame
-from .perception_step import PerceptionPipeline, PerceptionResult
+from .perception_step import PerceptionPipeline, PerceptionResult, PerceptionRunner
 from .symmetry import AxialSymmetry
 from .trajectory import PoseEstimate
 
@@ -46,25 +46,29 @@ def extract_pose_trace(
             axial_symmetries=axial_symmetries,
         )
     trace = []
-    for frame in frames:
-        result = pipeline.process(frame)
-        if on_vision_result is not None:
-            on_vision_result(result)
-        proposals = result.estimates
-        by_role = {estimate.role: estimate for estimate in proposals}
-        if service is not None:
-            masks = result.masks
-            fused = service.process_offline(
-                frame,
-                proposals,
-                {role: mask.copy() for role, mask in masks.items()},
-                attached_role=(attached_role_at_frame(frame.frame_id) if attached_role_at_frame else None),
-            )
-            by_role = {
-                role: fused[role]
-                if role in fused and fused[role].source_time_s == frame.source_time_s
-                else proposal
-                for role, proposal in by_role.items()
-            }
-        trace.append(by_role)
+    source = iter(frames)
+    with PerceptionRunner(pipeline) as runner:
+        while (item := runner.process_next(lambda: next(source, None))) is not None:
+            frame, result = item
+            if on_vision_result is not None:
+                on_vision_result(result)
+            proposals = result.estimates
+            by_role = {estimate.role: estimate for estimate in proposals}
+            if service is not None:
+                masks = result.masks
+                fused = service.process_offline(
+                    frame,
+                    proposals,
+                    {role: mask.copy() for role, mask in masks.items()},
+                    attached_role=(
+                        attached_role_at_frame(frame.frame_id) if attached_role_at_frame else None
+                    ),
+                )
+                by_role = {
+                    role: fused[role]
+                    if role in fused and fused[role].source_time_s == frame.source_time_s
+                    else proposal
+                    for role, proposal in by_role.items()
+                }
+            trace.append(by_role)
     return trace
