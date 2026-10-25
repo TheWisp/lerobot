@@ -34,14 +34,36 @@ matrices and raw times, is in
 At the initial pose, CPU and CUDA residuals agree to within `3e-8` on every
 case. CUDA pose search is a separate damped solver and currently freezes the
 projected hull topology within each refinement; the CPU solver recomputes it.
-Consequently the final poses can differ even when both are scored by the same
-CPU objective. CUDA reached a lower CPU-measured objective for the ring, a
-higher one for the held dowel, and similar values for the two stationary
-frames. These frames have no independent ground-truth pose, so a lower score
-does not establish a more accurate physical pose.
+Consequently the full-fit timing and final-pose differences above are **not a
+controlled CPU-versus-GPU implementation comparison**. They compare two
+optimizers, as well as two devices. CUDA reached a lower CPU-measured objective
+for the ring, a higher one for the held dowel, and similar values for the two
+stationary frames. These frames have no independent ground-truth pose, so a
+lower score does not establish a more accurate physical pose.
 
-**Decision:** keep the CPU fitter as the default. The current GPU sidecar is
-slower on all four fits once upload is included, and pose equivalence is not
+For a controlled measurement of the _same calculation_,
+[`compare_same_poses.py`](compare_same_poses.py) records candidate poses from
+the CPU solver, then evaluates each identical pose through both residual
+implementations. Both compute exact nearest-point distances: the CPU uses a
+`cKDTree` index; CUDA computes all point pairs in bounded tiles. Across 80
+poses per case, the residual arrays agree within `3e-8`:
+
+| Recorded case       | CPU residuals | GPU residuals |
+| ------------------- | ------------: | ------------: |
+| Ring moving         |        106 ms |        146 ms |
+| Held dowel          |         39 ms |        176 ms |
+| Stationary dowel 0  |         45 ms |        170 ms |
+| Stationary dowel 13 |         45 ms |        111 ms |
+
+These are sequential, synchronous evaluations of the same candidate poses;
+GPU batching could change throughput for a solver that can issue candidates
+together. The raw three-repeat data is in
+[`same_pose_residuals.json`](same_pose_residuals.json). The different search
+algorithms are mathematically equivalent here; the **different optimizer is a
+comparability flaw** in the earlier full-fit benchmark.
+
+**Decision:** keep the CPU fitter as the default. The same-pose residual path
+is slower on CUDA in these cases, and solver-level pose equivalence is not yet
 established. Moving the remaining 7–17 ms of frame preparation to CUDA cannot
 recover the observed fit-time gap by itself. Before considering a switch,
 benchmark a GPU implementation with equivalent convergence and hull updates
