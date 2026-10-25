@@ -85,6 +85,10 @@ legitimate motion support without erasing those observations from the fit check.
 The first usable surface needs at least three non-collinear measured points.
 The session saves this partial cloud once. It does **not** append newly visible
 surfaces to the reference, construct an SDF, or build a complete mesh.
+When an asymmetric object turns over, fitting this old partial cloud to its
+newly visible side can yield a plausible-looking but incorrect orientation.
+The [multiview investigation](../../../../../docs/proofs/flash-surface-multiview/README.md)
+records this failure and the limits of a provisional growing-map alternative.
 
 The debugger chooses three display landmarks from the initial cloud:
 

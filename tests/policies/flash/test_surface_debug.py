@@ -1,15 +1,17 @@
 """Consumer invariants for the perception-only surface debugger."""
 
+import json
 from dataclasses import asdict
 from pathlib import Path
 
+import cv2
 import numpy as np
 import pytest
 
 from lerobot.policies.flash.perception import RGBDFrame
 from lerobot.policies.flash.surface_observation import SurfaceObservationConfig, observation
 from lerobot.policies.flash.surface_tracking import SurfaceTrackingSession
-from lerobot.policies.flash.tracking_debug_worker import seed_frame
+from lerobot.policies.flash.tracking_debug_worker import RGBDTrace, seed_frame
 
 
 def frame(number):
@@ -36,6 +38,33 @@ def test_click_is_bound_to_frozen_image_not_newest_camera_frame():
         seed_frame({"point": [4, 5], "frame_id": 8}, None, latest)
     with pytest.raises(ValueError, match="outside"):
         seed_frame({"point": [11, 5], "frame_id": 8}, old, latest)
+
+
+def test_diagnostic_trace_preserves_aligned_depth_mask_and_pose(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    selected = frame(8)
+    selected.rgb[2, 3] = [201, 18, 71]
+    selected.depth[2, 3] = 413
+    mask = np.zeros(selected.depth.shape, bool)
+    mask[2, 3] = True
+    pose = np.eye(4).tolist()
+    trace = RGBDTrace(1, {"vision_pipeline": {"backend": "surface"}})
+    trace.save(
+        selected,
+        {"object": mask},
+        {"object": {"status": "fitted", "accepted": False, "camera_from_reference": pose, "diagnostics": {}}},
+    )
+    trace.finish()
+    stem = "000008.png"
+    rgb = cv2.cvtColor(cv2.imread(str(trace.path / "rgb" / stem)), cv2.COLOR_BGR2RGB)
+    depth = cv2.imread(str(trace.path / "depth" / stem), -1)
+    saved_mask = cv2.imread(str(trace.path / "masks" / "object" / stem), 0)
+    np.testing.assert_array_equal(rgb, selected.rgb)
+    np.testing.assert_array_equal(depth, selected.depth)
+    np.testing.assert_array_equal(saved_mask > 0, mask)
+    metadata = json.loads((trace.path / "frames.jsonl").read_text())
+    assert metadata["objects"]["object"]["camera_from_reference"] == pose
+    assert trace.status()["complete"] and trace.status()["frames"] == 1
 
 
 def test_missing_observation_never_exposes_old_pose_as_current():

@@ -67,6 +67,31 @@ def test_click_command_preserves_frozen_frame_identity(monkeypatch):
     assert sent["point"] == [12, 15] and sent["frame_id"] == 31
 
 
+def test_record_command_preserves_duration_across_gui_process_boundary(monkeypatch):
+    class Pipe:
+        data = b""
+
+        def write(self, value):
+            self.data += value
+
+        async def drain(self):
+            pass
+
+    pipe = Pipe()
+    monkeypatch.setattr(run, "_active_command", "flash_tracking")
+    monkeypatch.setattr(run, "_active_process", SimpleNamespace(returncode=None, stdin=pipe))
+    asyncio.run(
+        flash_tracking.control(flash_tracking.TrackingControl(action="record", id="trace", duration_s=7.5))
+    )
+    sent = json.loads(pipe.data)
+    assert sent["action"] == "record" and sent["duration_s"] == 7.5
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(flash_tracking.control(flash_tracking.TrackingControl(action="record", id="missing")))
+    assert error.value.status_code == 400
+    with pytest.raises(ValidationError):
+        flash_tracking.TrackingControl(action="record", id="too-long", duration_s=121)
+
+
 @pytest.mark.requires_playwright
 @pytest.mark.skipif(
     importlib.util.find_spec("playwright") is None or importlib.util.find_spec("uvicorn") is None,
@@ -114,6 +139,33 @@ def test_live_debug_click_uses_painted_frozen_frame_not_latest_preview(gui_page)
     assert controls[0]["frame_id"] == 42
     assert controls[0]["point"] == pytest.approx([50, 25], abs=1)
     assert controls[0]["action"] == "select"
+
+
+@pytest.mark.requires_playwright
+@pytest.mark.skipif(importlib.util.find_spec("playwright") is None, reason="Playwright not installed")
+def test_live_debug_record_button_sends_bounded_duration(gui_page):
+    page = gui_page
+    packet = {
+        "running": True,
+        "server_time_s": 1.1,
+        "estimate": {"status": "tracking", "tracks": [{"role": "object", "name": "red hand"}]},
+    }
+    controls = []
+    page.route("**/api/run/flash/tracking/state", lambda route: route.fulfill(json=packet))
+
+    def control(route):
+        controls.append(route.request.post_data_json)
+        route.fulfill(json={"id": "ack"})
+
+    page.route("**/api/run/flash/tracking/control", control)
+    page.evaluate("switchTab('run'); selectWorkflow('flash')")
+    page.get_by_role("button", name="Live tracking · camera only →").click()
+    page.locator("#flash-trace-seconds").fill("7")
+    page.get_by_role("button", name="Record diagnostic trace").click()
+    page.wait_for_function(
+        "document.getElementById('flash-tracking-message').textContent.includes('Starting RGB-D')"
+    )
+    assert controls[-1]["action"] == "record" and controls[-1]["duration_s"] == 7
 
 
 @pytest.mark.requires_playwright

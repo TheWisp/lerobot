@@ -30,6 +30,63 @@ from .vision_pipeline import VisionPipelineConfig, build_vision_backend
 CAMERA_READ_TIMEOUT_MS = 1000
 
 
+class RGBDTrace:
+    """Bounded-duration evidence for replaying one live tracking failure offline."""
+
+    def __init__(self, duration_s: float, config: dict):
+        root = Path.home() / ".cache" / "huggingface" / "lerobot" / "flash_debug_traces"
+        root.mkdir(parents=True, exist_ok=True)
+        self.path = root / f"trace-{time.strftime('%Y%m%d-%H%M%S')}-{time.time_ns() % 1_000_000_000:09d}"
+        self.path.mkdir()
+        for name in ("rgb", "depth", "masks"):
+            (self.path / name).mkdir()
+        (self.path / "config.json").write_text(json.dumps(config, indent=2) + "\n")
+        self.end_s = time.monotonic() + duration_s
+        self.frames = 0
+        self.complete = False
+
+    def save(self, frame: RGBDFrame, masks: dict[str, np.ndarray], details: dict[str, dict]) -> float:
+        start = time.perf_counter()
+        stem = f"{frame.frame_id:06d}"
+        compression = [cv2.IMWRITE_PNG_COMPRESSION, 1]
+        if not cv2.imwrite(
+            str(self.path / "rgb" / f"{stem}.png"), cv2.cvtColor(frame.rgb, cv2.COLOR_RGB2BGR), compression
+        ) or not cv2.imwrite(str(self.path / "depth" / f"{stem}.png"), frame.depth, compression):
+            raise RuntimeError("could not save aligned RGB-D diagnostic frame")
+        for role, mask in masks.items():
+            role_dir = self.path / "masks" / role
+            role_dir.mkdir(exist_ok=True)
+            if not cv2.imwrite(str(role_dir / f"{stem}.png"), mask.astype(np.uint8) * 255, compression):
+                raise RuntimeError(f"could not save {role} diagnostic mask")
+        row = {
+            "frame_id": frame.frame_id,
+            "source_time_s": frame.source_time_s,
+            "intrinsics": frame.intrinsics.tolist(),
+            "depth_m_per_unit": frame.depth_m_per_unit,
+            "calibration_version": frame.calibration_version,
+            "objects": {
+                role: {
+                    key: value
+                    for key, value in detail.items()
+                    if key in ("status", "accepted", "camera_from_reference", "diagnostics")
+                }
+                for role, detail in details.items()
+            },
+        }
+        with (self.path / "frames.jsonl").open("a") as stream:
+            stream.write(json.dumps(row, allow_nan=False) + "\n")
+        self.frames += 1
+        return (time.perf_counter() - start) * 1000
+
+    def finish(self) -> None:
+        if not self.complete:
+            (self.path / "complete.json").write_text(json.dumps({"frames": self.frames}) + "\n")
+            self.complete = True
+
+    def status(self) -> dict:
+        return {"path": str(self.path), "frames": self.frames, "complete": self.complete}
+
+
 def write_snapshot(path: Path, value: dict) -> None:
     temporary = path.with_suffix(".tmp")
     temporary.write_text(json.dumps(value, allow_nan=False))
@@ -135,6 +192,7 @@ def run(directory: Path, config: dict) -> None:
     tracked_names: dict[str, str] = {}
     last_objects: dict[str, dict] = {}
     prepared_mask_ms: float | None = None
+    trace: RGBDTrace | None = None
 
     def state(status, **kwargs):
         write_snapshot(
@@ -153,6 +211,7 @@ def run(directory: Path, config: dict) -> None:
                     }
                     for role, name in tracked_names.items()
                 ],
+                "trace": trace.status() if trace is not None else None,
                 **kwargs,
             },
         )
@@ -244,6 +303,8 @@ def run(directory: Path, config: dict) -> None:
             if command:
                 command_id = command.get("id")
                 try:
+                    if command["action"] in {"freeze", "clear", "select"} and trace is not None:
+                        trace.finish()
                     if command["action"] == "freeze":
                         frozen = seed_frame({}, None, latest.snapshot())
                         tracking = False
@@ -265,6 +326,13 @@ def run(directory: Path, config: dict) -> None:
                         tracked_names.clear()
                         last_objects.clear()
                         state("preview")
+                    elif command["action"] == "record":
+                        if not tracking:
+                            raise ValueError("Select an object before recording a diagnostic trace")
+                        if trace is not None and not trace.complete:
+                            raise ValueError("A diagnostic trace is already recording")
+                        trace = RGBDTrace(command["duration_s"], config)
+                        state("tracking", message=f"Recording aligned RGB-D and masks to {trace.path}")
                     elif command["action"] == "select":
                         selected = seed_frame(command, frozen, latest.snapshot())
                         tracking = False
@@ -343,6 +411,12 @@ def run(directory: Path, config: dict) -> None:
                         "contours": [c[:, 0].tolist() for c in contours],
                     }
                 last_objects = objects
+                trace_ms = None
+                if trace is not None and not trace.complete:
+                    if time.monotonic() < trace.end_s:
+                        trace_ms = trace.save(frame, output.masks, output.details)
+                    else:
+                        trace.finish()
                 elapsed = time.perf_counter() - begin
                 state(
                     "tracking",
@@ -354,6 +428,7 @@ def run(directory: Path, config: dict) -> None:
                         "processed_fps": 1 / elapsed,
                         "skipped_camera_frames": skipped,
                         "age_at_publication_ms": (time.perf_counter() - frame.source_time_s) * 1000,
+                        "trace_write_ms": trace_ms,
                     },
                 )
             except Exception as exc:
@@ -367,6 +442,8 @@ def run(directory: Path, config: dict) -> None:
         raise
     finally:
         stop.set()
+        if trace is not None:
+            trace.finish()
         if capture:
             capture.join(timeout=2)
         if camera and camera.is_connected:

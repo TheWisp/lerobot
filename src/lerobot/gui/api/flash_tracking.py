@@ -59,11 +59,12 @@ class TrackingStart(BaseModel):
 
 class TrackingControl(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
-    action: Literal["freeze", "clear", "select"]
+    action: Literal["freeze", "clear", "select", "record"]
     id: str
     prompt: str = ""
     point: tuple[float, float] | None = None
     frame_id: int | None = None
+    duration_s: float | None = Field(default=None, gt=0, le=120)
 
 
 def _python() -> str:
@@ -139,6 +140,8 @@ async def control(req: TrackingControl) -> dict:
         raise HTTPException(409, "Open the tracking camera first")
     if req.action == "select" and req.point is None and not req.prompt.strip():
         raise HTTPException(400, "Enter an object name or select a point")
+    if req.action == "record" and req.duration_s is None:
+        raise HTTPException(400, "Set a diagnostic recording duration")
     if "." in req.prompt:
         raise HTTPException(400, "Select one object; the name must not contain a period")
     try:

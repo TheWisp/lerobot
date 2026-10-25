@@ -33,6 +33,9 @@ function flashTrackingForm() {
         </details>
         <details><summary>Camera & tracking parameters</summary><p class="form-hint">Applied when opening the camera. Shared with demo extraction and live inference.</p><textarea id="flash-tracking-config" rows="15" spellcheck="false" onchange="flashTrackingSamplingSync()"></textarea></details>
         <button type="button" class="btn-small secondary" onclick="flashTrackingSave()">Save diagnostic snapshot</button>
+        <label for="flash-trace-seconds">RGB-D trace length (seconds)</label>
+        <input type="number" id="flash-trace-seconds" min="1" max="120" value="15">
+        <button type="button" class="btn-small secondary" onclick="flashTrackingControl('record', {duration_s:Number(document.getElementById('flash-trace-seconds').value)})">Record diagnostic trace</button>
         <div id="flash-tracking-message" role="status"></div>
     </section>`;
 }
@@ -150,7 +153,8 @@ async function flashTrackingControl(action, extra = {}) {
         await flashTrackingApi('control', {action, id: crypto.randomUUID(),
             prompt: name.value.trim(), ...extra});
         if (action === 'select') name.value = '';
-        document.getElementById('flash-tracking-message').textContent = action === 'freeze' ? 'Freezing an image for selection…' : 'Processing selection…';
+        document.getElementById('flash-tracking-message').textContent = action === 'freeze' ? 'Freezing an image for selection…' :
+            action === 'record' ? 'Starting RGB-D diagnostic recording…' : 'Processing selection…';
     } catch (error) { flashTrackingError(error); }
 }
 
@@ -335,7 +339,10 @@ function flashTrackingRender() {
         packet.status === 'frozen' ? states.frozen :
         objects.length ? `${objects.length} objects · ${objects.filter(object => object.accepted).length} fit passes` :
         (states[estimate.status] || 'Starting…');
-    document.getElementById('flash-tracking-message').textContent = estimate.message || states[estimate.status] || '';
+    const trace = packet.trace;
+    document.getElementById('flash-tracking-message').textContent = trace
+        ? `${trace.complete ? 'Saved' : 'Recording'} ${trace.frames} RGB-D frames · ${trace.path}`
+        : estimate.message || states[estimate.status] || '';
     document.getElementById('flash-tracking-open').disabled = data.running || !flashTrackingDefaults;
     flashTrackingPaint('flash-surface-preview', data.preview);
     const crop = flashTrackingObjectCrop(estimate);
