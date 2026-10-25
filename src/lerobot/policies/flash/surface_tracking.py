@@ -13,6 +13,7 @@ from dataclasses import asdict
 import cv2
 import numpy as np
 from scipy.spatial import cKDTree
+from scipy.spatial.transform import Rotation
 
 from .surface_correspondence import SurfaceMotionConfig, crop_pair, robust_fit, ufm_pairs
 from .surface_grounding import ShapeConfig, WholeSurfaceFit, project
@@ -21,7 +22,6 @@ from .surface_observation import (
     initial_landmarks,
     move,
     observation,
-    unproject,
     voxel_sample,
 )
 
@@ -66,8 +66,14 @@ class SurfaceTrackingSession:
     def update(self, rgb, depth_m, mask, intrinsics, frame_id):
         start = time.perf_counter()
         obs = observation(depth_m, mask, intrinsics, asdict(self.observation_config))
-        all_points = unproject(depth_m, intrinsics)[obs["valid_image"]]
-        all_points = all_points[voxel_sample(all_points, self.shape_config.surface_spacing_m)]
+        # Lift only usable pixels; observation already computed full-image normals.
+        y, x = np.nonzero(obs["valid_image"])
+        z = depth_m[y, x]
+        all_points = np.column_stack(
+            ((x - intrinsics[0, 2]) * z / intrinsics[0, 0], (y - intrinsics[1, 2]) * z / intrinsics[1, 1], z)
+        )
+        spacing = min(obs["spacing_m"], self.shape_config.surface_spacing_m)
+        all_points = all_points[voxel_sample(all_points, spacing)]
         connected = np.zeros(mask.shape, np.uint8)
         px = obs["pixels"]
         connected[px[:, 1], px[:, 0]] = 1
@@ -86,7 +92,11 @@ class SurfaceTrackingSession:
             key: obs[key]
             for key in ("raw_count", "boundary_count", "edge_count", "clean_count", "detached_count")
         }
-        detail.update(surface_points=len(all_points), reference_frame_id=self.reference_frame_id)
+        detail.update(
+            surface_points=len(all_points),
+            reference_frame_id=self.reference_frame_id,
+            sample_spacing_mm=spacing * 1000,
+        )
         if not mask.any():
             return {"status": "no_mask", "diagnostics": detail}
         points = obs["points"]
@@ -114,11 +124,21 @@ class SurfaceTrackingSession:
                 matcher_available=step is not None,
             )
             proposal = self.pose if step is None else step @ self.pose
+            prior = self.pose.copy()
             start = time.perf_counter()
             self.pose, fit = WholeSurfaceFit(self.reference, current, intrinsics, self.shape_config).correct(
                 proposal
             )
             detail.update(fit, fit_ms=(time.perf_counter() - start) * 1000)
+
+            def angle(a, b):
+                return float(np.degrees(Rotation.from_matrix(a[:3, :3] @ b[:3, :3].T).magnitude()))
+
+            detail.update(
+                rgb_rotation_deg=angle(proposal, prior) if step is not None else None,
+                surface_correction_deg=angle(self.pose, proposal),
+                final_rotation_deg=angle(self.pose, prior),
+            )
             status = "fitted" if step is not None else "fitted_without_rgb_motion"
         self.previous = current
         predicted = move(self.reference, self.pose)

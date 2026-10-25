@@ -64,8 +64,8 @@
     "v": "9"
   },
   "flash_live_tracking.js": {
-    "sha256_16": "8fe6919b4bfb6fad",
-    "v": "3"
+    "v": "4",
+    "sha256_16": "4df577fafb1738ca"
   },
   "live_video.js": {
     "sha256_16": "6c7352e2876a04e6",
@@ -120,8 +120,8 @@
     "v": "114"
   },
   "style.css": {
-    "sha256_16": "5cd08db3af848a63",
-    "v": "138"
+    "v": "139",
+    "sha256_16": "3da45b5acea3b294"
   },
   "timeline_lanes.js": {
     "sha256_16": "e77d56c09759662d",

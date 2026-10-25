@@ -129,3 +129,67 @@ def test_debugger_exports_the_common_configuration_and_migrates_old_payloads():
         flash_tracking.TrackingStart(vision_pipeline={"unknown_setting": 1})
     with pytest.raises(ValidationError, match="only once"):
         flash_tracking.TrackingStart(observation={}, vision_pipeline={"observation": {}})
+
+
+@pytest.mark.requires_playwright
+@pytest.mark.skipif(importlib.util.find_spec("playwright") is None, reason="Playwright not installed")
+def test_object_inspection_removes_pose_but_scene_toggle_restores_it(gui_page):
+    page = gui_page
+    page.route("**/api/run/flash/tracking/state", lambda route: route.fulfill(json={"running": False}))
+    page.evaluate("switchTab('run'); selectWorkflow('flash')")
+    page.get_by_role("button", name="Live tracking · camera only →").click()
+    page.wait_for_selector("#flash-surface-cloud")
+    result = page.evaluate("""() => {
+        clearTimeout(flashTrackingTimer);
+        const reference = [[0,0,1],[.1,0,1],[0,.1,1],[.07,.02,1.05]];
+        const axes = [[.05,0,1],[0,.05,1],[0,0,1.05]];
+        const frame = (points, axes, pose) => ({session_id:'test',estimate:{command_id:'selection',
+            diagnostics:{reference_frame_id:1}, camera_from_reference:pose, reference_m:points,
+            observed_m:points, anchors_m:points.slice(0,3), axes_m:axes}});
+        const image = () => document.getElementById('flash-surface-cloud').toDataURL();
+        const paint = packet => { flashTrackingSnapshot=packet; flashTrackingDrawCloud(); return image(); };
+        const identity = [[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]];
+        const before = paint(frame(reference,axes,identity));
+        const move = p => [-p[1]+.05, p[0]+.03,p[2]];
+        const moved = frame(reference.map(move),axes.map(move),[[0,-1,0,.05],[1,0,0,.03],[0,0,1,0],[0,0,0,1]]);
+        const after = paint(moved);
+        const framingBefore = JSON.stringify(flashTrackingFraming);
+        moved.estimate.observed_m = moved.estimate.observed_m.slice(0,1);
+        paint(moved);
+        const unchangedFraming = framingBefore === JSON.stringify(flashTrackingFraming);
+        moved.estimate.observed_m = moved.estimate.reference_m;
+        document.getElementById('flash-surface-follow').click();
+        const scene = image();
+        document.getElementById('flash-surface-follow').click();
+        flashTrackingYaw=.5; flashTrackingDrawCloud();
+        const orbited = image();
+        return {same:before===after, unchangedFraming, sceneChanged:scene!==after, orbitWorks:orbited!==after};
+    }""")
+    assert result == {"same": True, "unchangedFraming": True, "sceneChanged": True, "orbitWorks": True}
+
+
+@pytest.mark.requires_playwright
+@pytest.mark.skipif(importlib.util.find_spec("playwright") is None, reason="Playwright not installed")
+def test_sampling_controls_reach_shared_configuration(gui_page):
+    page = gui_page
+    page.route("**/api/run/flash/tracking/state", lambda route: route.fulfill(json={"running": False}))
+    sent = []
+
+    def launch(route):
+        sent.append(route.request.post_data_json)
+        route.fulfill(json={"status": "started"})
+
+    page.route("**/api/run/flash/tracking/start", launch)
+    page.evaluate("switchTab('run'); selectWorkflow('flash')")
+    page.get_by_role("button", name="Live tracking · camera only →").click()
+    page.wait_for_function("document.getElementById('flash-sampling-budget')?.value !== ''")
+    page.locator("#flash-sampling-budget").fill("512")
+    page.locator("#flash-sampling-min").fill("0.8")
+    page.locator("#flash-sampling-across").fill("80")
+    page.get_by_role("button", name="Open camera", exact=True).click()
+    page.wait_for_timeout(100)
+    assert len(sent) == 1
+    config = flash_tracking.TrackingStart(**sent[0]).vision_pipeline
+    assert config.shape.max_fit_points == 512
+    assert config.observation.min_surface_spacing_m == pytest.approx(0.0008)
+    assert config.observation.samples_across_object == 80

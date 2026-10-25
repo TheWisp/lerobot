@@ -40,7 +40,9 @@ def crop_pair(
     y0, x0 = coords.min(axis=0)
     y1, x1 = coords.max(axis=0)
     size = max(config.crop_min_px, int(max(y1 - y0, x1 - x0) * config.crop_extent_multiplier))
-    size = min(size, config.crop_max_px)
+    # The context limit must never crop away part of a large selected object.
+    # Network input size stays fixed, so this does not increase GPU work.
+    size = max(int(max(y1 - y0, x1 - x0)) + 1, min(size, config.crop_max_px))
     x = (x0 + x1) / 2 - size / 2
     y = (y0 + y1) / 2 - size / 2
     resolution = config.input_size_px

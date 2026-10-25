@@ -837,3 +837,57 @@ configuration. Existing group-fallback and motor-loop tests remain in the FLASH
 suite. The whole FLASH suite passed (229 tests, one skipped); the GUI checks
 passed 22 tests, including the real-browser editor/debugger interactions.
 Affected configuration and static-asset checks were rerun after final edits.
+
+### Object scale and inspection — 2026-10-25
+
+The camera-only tray test exposed an unbounded surface-fit workload. At
+baseline `8a394de5a`, about 16,000 voxel samples participated in every solver
+evaluation. Six stationary live updates had median preprocessing 329 ms,
+surface fitting 1,264 ms, and total processing 1,681 ms. SAM and RGB matching
+were about 25 and 40 ms. CPU profiling located the dominant cost in repeated
+nearest-neighbour residuals and finite-difference solver evaluations; sorting
+XYZ voxel records was another avoidable preprocessing cost.
+
+The revised shared pipeline bounds residual queries to 2,048 per surface,
+spatially sampled, while retaining dense voxel clouds for distance lookup and
+the complete convex envelope for outline coverage. Integer voxel IDs preserve
+the previous selected measurements while avoiding structured-record sorting.
+Small objects use extent / 64 spacing, clamped to 1–3 mm; these choices are
+exposed configurations, not estimates of sensor precision. Large RGB crops now
+include the whole selected mask rather than clipping it to 480 pixels.
+
+Five stationary tray updates after restarting the camera had median
+preprocessing 158 ms, fitting 78 ms, and total processing 317 ms (about 3.2
+updates/s). Capture stayed about 30 fps. Median depth-gap p90 was 3.27 mm before
+and 4.21 mm after. These are separate live samples with different segmentation
+and depth noise, not an identical-input accuracy comparison. Processing time
+excludes JSON publication; model warm-up and camera startup are excluded.
+[Measurements and configuration-sensitive recorded comparisons](surface_sampling_scaling.json)
+preserve the individual diagnostics.
+
+Also compared the actual UFM on insertion frames 234–238, 270–274 and 435–439,
+seeding each segment independently. Finer sampling changes fitted orientations;
+it is not a pose-identical optimization. Most of those depth gaps improved,
+but frame 439 worsened slightly and the difficult 270 segment remained
+unreliable. There is no pose ground truth here. The user's small figurine
+head/feet swap was not reproduced: density alone is not established as its
+cause or cure. New RGB-proposal / surface-correction / final rotation readouts
+allow those stages to be distinguished in a diagnostic snapshot.
+
+Real-browser checks exercised the density controls, camera launch, scene-pose
+toggle and orbit on the live tray. The object inspection view removes current
+pose and retains initial framing; the source-image overlay is unchanged.
+Automated tests check that a transformed scene renders identically in object
+view, visibly moves in scene view, and remains user-orbitable. They also check
+minimum-budget termination, voxel selection equivalence, tiny-object sampling,
+dense grounding under a bounded query budget, known translation correction,
+and complete large-object crop coverage. Restoring the old viewer, crop,
+unbounded fit queries or fixed small-object density separately makes the
+corresponding regression test fail.
+
+A later live tray snapshot was rejected by the shared acceptance check as its
+depth gap grew; the later diagnostics are also preserved in the JSON. The cause
+of that longer-term mismatch was not established here. Bounded computation is
+not a claim that the fixed partial reference remains valid through arbitrary
+segmentation changes or newly visible surfaces. The debugger was left in camera
+preview after profiling, ready for a new user selection.

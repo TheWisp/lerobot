@@ -721,6 +721,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 #flash-tracking-setup, #flash-surface-view { display: none; }
 #run-section-flash[data-mode="tracking"] > :not(#flash-tracking-setup):not(.flash-review-return) { display: none; }
 #run-section-flash[data-mode="tracking"] #flash-tracking-setup { display: flex; flex-direction: column; gap: 10px; }
+#flash-sampling-controls label { display: flex; flex-direction: column; gap: 4px; margin-top: 10px; }
+#flash-sampling-controls input { width: 100%; box-sizing: border-box; }
 #flash-tracking-config { width: 100%; box-sizing: border-box; font-family: monospace; font-size: 12px; }
 #flash-tracking-message { white-space: pre-wrap; overflow-wrap: anywhere; color: #8bd5ff; }
 #tab-run.flash-tracking #flash-surface-view { display: flex; flex: 1; min-height: 0; flex-direction: column; padding: 16px; gap: 12px; overflow: auto; }

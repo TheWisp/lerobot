@@ -17,7 +17,7 @@ from scipy.optimize import least_squares
 from scipy.spatial import ConvexHull, cKDTree
 from scipy.spatial.transform import Rotation
 
-from .surface_observation import move
+from .surface_observation import move, spatial_sample
 
 
 @dataclass(frozen=True)
@@ -29,6 +29,8 @@ class ShapeConfig:
     max_surface_distance_m: float = 0.03
     max_evaluations: int = 50
     solver_tolerance: float = 1e-5
+    # Per residual direction. Dense clouds remain the distance/outline ground truth.
+    max_fit_points: int = 2048
 
 
 def project(points: np.ndarray, k: np.ndarray) -> np.ndarray:
@@ -61,9 +63,22 @@ class WholeSurfaceFit:
         self.target = observation.get("all_surface_points", observation["obs"]["points"])
         self.reference_tree = cKDTree(reference)
         self.target_tree = cKDTree(self.target)
+        self.reference_queries = reference[spatial_sample(reference, config.max_fit_points)]
+        self.target_queries = self.target[spatial_sample(self.target, config.max_fit_points)]
+        # Linear projection preserves the convex envelope of the 3D hull for
+        # points in front of the camera. Retain its vertices independently of
+        # residual sampling, including small but distinctive extremities.
+        from scipy.spatial import QhullError
+
+        try:
+            self.envelope = reference[ConvexHull(reference).vertices]
+        except QhullError:  # Exactly planar references are valid observations.
+            self.envelope = reference
         self.outside_mask = cv2.distanceTransform((~observation["mask"]).astype(np.uint8), cv2.DIST_L2, 5)
-        y, x = np.nonzero(observation["mask"])
-        mask_pixels = np.column_stack((x, y)).astype(float)
+        contours, _ = cv2.findContours(
+            observation["mask"].astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+        )
+        mask_pixels = np.concatenate(contours)[:, 0].astype(float)
         self.mask_outline = mask_pixels[ConvexHull(mask_pixels).vertices]
 
     def uncovered_mask(self, uv: np.ndarray) -> np.ndarray:
@@ -82,7 +97,7 @@ class WholeSurfaceFit:
         return np.maximum(distance - self.config.mask_boundary_tolerance_px, 0)
 
     def residual(self, pose: np.ndarray) -> np.ndarray:
-        predicted = move(self.reference, pose)
+        predicted = move(self.reference_queries, pose)
         uv = project(predicted, self.k)
         height, width = self.observation["depth"].shape
         inside = (uv[:, 0] >= 0) & (uv[:, 0] <= width - 1) & (uv[:, 1] >= 0) & (uv[:, 1] <= height - 1)
@@ -105,7 +120,7 @@ class WholeSurfaceFit:
         depth_visibility = np.sum(weights * known * ray_visibility, axis=1)
         visibility = depth_visibility + np.sum(weights * ~known, axis=1)
         model_distance = np.minimum(self.target_tree.query(predicted)[0], self.config.max_surface_distance_m)
-        target_local = (self.target - pose[:3, 3]) @ pose[:3, :3]
+        target_local = (self.target_queries - pose[:3, 3]) @ pose[:3, :3]
         target_distance = np.minimum(
             self.reference_tree.query(target_local)[0], self.config.max_surface_distance_m
         )
@@ -119,9 +134,9 @@ class WholeSurfaceFit:
         return np.concatenate(
             (
                 np.sqrt(depth_visibility / len(predicted)) * model_distance / tolerance,
-                target_distance / (tolerance * np.sqrt(len(self.target))),
+                target_distance / (tolerance * np.sqrt(len(self.target_queries))),
                 np.sqrt(visibility / len(predicted)) * silhouette_m / tolerance,
-                self.uncovered_mask(uv)
+                self.uncovered_mask(project(move(self.envelope, pose), self.k))
                 * np.median(predicted[:, 2])
                 / (self.k[0, 0] * tolerance * np.sqrt(len(self.mask_outline))),
             )
@@ -156,6 +171,8 @@ class WholeSurfaceFit:
             "cost": self.score(pose),
             "evaluations": solution.nfev,
             "converged": bool(solution.success),
+            "fit_reference_points": len(self.reference_queries),
+            "fit_target_points": len(self.target_queries),
         }
 
     def correct(self, proposal: np.ndarray) -> tuple[np.ndarray, dict]:

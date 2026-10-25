@@ -113,6 +113,30 @@ or resolve symmetry. They do not establish that a locally plausible fit is the
 correct cross-episode correspondence. Both the accepted result and the raw
 candidate retain the source frame identity.
 
+In the camera debugger, **3D object view** removes the estimated scene motion
+from both clouds and keeps the initial reference's framing. **Follow scene
+pose** restores that motion; orbit and zoom remain independent. A stationary
+white reference in object view is a display choice, not evidence of correct
+tracking. The cyan measured cloud and the source-image overlay reveal disagreement.
+
+**Surface sampling** exposes the shared configuration before camera launch:
+
+| Parameter                           | Default | Meaning                                                                               |
+| ----------------------------------- | ------- | ------------------------------------------------------------------------------------- |
+| `observation.min_surface_spacing_m` | 0.001   | Finest voxel spacing; never creates missing depth samples.                            |
+| `observation.surface_spacing_m`     | 0.003   | Coarsest measurement spacing.                                                         |
+| `observation.samples_across_object` | 64      | Visible longest extent divided by this count sets spacing, clamped to the two limits. |
+| `shape.max_fit_points`              | 2048    | Maximum residual queries per surface, chosen spatially.                               |
+
+These are configurable compute/detail tradeoffs, not sensor accuracy claims.
+The full voxel clouds remain nearest-neighbour lookup geometry; their complete
+convex envelope still grounds outline coverage. Only the residual queries are
+reduced for large objects. The RGB matcher always processes a fixed-size image,
+but its crop includes the entire object even when it exceeds the context limit.
+Finer geometry cannot by itself distinguish visually/geometrically ambiguous
+ends. Per-update RGB rotation, surface correction and final rotation diagnostics
+separate those stages when investigating a flip.
+
 The debugger exports the same `vision_pipeline` configuration used by preparation
 and execution. `LEROBOT_FLASH_TRACKING_PYTHON` selects their common inference
 Python environment; without it they use the GUI's environment. This environment

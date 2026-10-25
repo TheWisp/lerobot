@@ -1,0 +1,2111 @@
+{
+  "date": "2026-10-25",
+  "baseline_commit": "8a394de5a",
+  "scope": "stationary live D435 tray; no robot movement; processing timings exclude JSON publication",
+  "live": {
+    "before": [
+      {
+        "diagnostics": {
+          "raw_count": 394110,
+          "boundary_count": 14966,
+          "edge_count": 1818,
+          "clean_count": 377048,
+          "detached_count": 1101,
+          "surface_points": 16067,
+          "reference_frame_id": 10745,
+          "preprocess_ms": 333.22925498941913,
+          "matches": 3823,
+          "inliers": 3823,
+          "match_residual_mm": 0.9154751809855213,
+          "match_ms": 37.534600996878,
+          "matcher_available": true,
+          "initial_cost": 2.9833923488865555,
+          "cost": 2.9187581779361285,
+          "evaluations": 9,
+          "converged": true,
+          "used_coarse": false,
+          "fit_ms": 1377.8771250508726,
+          "surface_median_mm": 1.349282347728158,
+          "surface_p90_mm": 3.2389362297473063
+        },
+        "timings": {
+          "mask_ms": 25.610396987758577,
+          "total_ms": 1799.9889459460974,
+          "processed_fps": 0.5555589673215394,
+          "skipped_camera_frames": 9,
+          "age_at_publication_ms": 1807.26406496251
+        },
+        "frame_id": 10755
+      },
+      {
+        "diagnostics": {
+          "raw_count": 393011,
+          "boundary_count": 15061,
+          "edge_count": 1742,
+          "clean_count": 375930,
+          "detached_count": 1018,
+          "surface_points": 16070,
+          "reference_frame_id": 10745,
+          "preprocess_ms": 322.6665200199932,
+          "matches": 3854,
+          "inliers": 3854,
+          "match_residual_mm": 0.9454917996792739,
+          "match_ms": 40.81168700940907,
+          "matcher_available": true,
+          "initial_cost": 2.7921974506454093,
+          "cost": 2.7793036507676314,
+          "evaluations": 6,
+          "converged": true,
+          "used_coarse": false,
+          "fit_ms": 958.3830959745683,
+          "surface_median_mm": 1.3391518868755394,
+          "surface_p90_mm": 3.332616989303378
+        },
+        "timings": {
+          "mask_ms": 24.25267599755898,
+          "total_ms": 1384.2032079701312,
+          "processed_fps": 0.722437279614785,
+          "skipped_camera_frames": 51,
+          "age_at_publication_ms": 1398.3243550173938
+        },
+        "frame_id": 10807
+      },
+      {
+        "diagnostics": {
+          "raw_count": 392572,
+          "boundary_count": 15088,
+          "edge_count": 1675,
+          "clean_count": 375574,
+          "detached_count": 1022,
+          "surface_points": 15886,
+          "reference_frame_id": 10745,
+          "preprocess_ms": 319.41835896577686,
+          "matches": 3862,
+          "inliers": 3862,
+          "match_residual_mm": 0.9630279733647195,
+          "match_ms": 37.33962698606774,
+          "matcher_available": true,
+          "initial_cost": 2.784583218789962,
+          "cost": 2.7788282143970586,
+          "evaluations": 11,
+          "converged": true,
+          "used_coarse": false,
+          "fit_ms": 1161.7500730208121,
+          "surface_median_mm": 1.3925599202189916,
+          "surface_p90_mm": 3.18097271915832
+        },
+        "timings": {
+          "mask_ms": 26.49295999435708,
+          "total_ms": 1562.8458369756117,
+          "processed_fps": 0.6398583765211162,
+          "skipped_camera_frames": 39,
+          "age_at_publication_ms": 1570.2321649878286
+        },
+        "frame_id": 10847
+      },
+      {
+        "diagnostics": {
+          "raw_count": 392537,
+          "boundary_count": 15025,
+          "edge_count": 1752,
+          "clean_count": 375513,
+          "detached_count": 1002,
+          "surface_points": 16012,
+          "reference_frame_id": 10745,
+          "preprocess_ms": 330.8723120135255,
+          "matches": 3871,
+          "inliers": 3871,
+          "match_residual_mm": 0.9307643797299451,
+          "match_ms": 39.81534199556336,
+          "matcher_available": true,
+          "initial_cost": 2.7235213571131975,
+          "cost": 2.7213155850179405,
+          "evaluations": 8,
+          "converged": true,
+          "used_coarse": false,
+          "fit_ms": 1070.0594820082188,
+          "surface_median_mm": 1.4387106494873931,
+          "surface_p90_mm": 3.238210486785787
+        },
+        "timings": {
+          "mask_ms": 28.97357300389558,
+          "total_ms": 1487.2340359725058,
+          "processed_fps": 0.6723891302999246,
+          "skipped_camera_frames": 45,
+          "age_at_publication_ms": 1502.0618370035663
+        },
+        "frame_id": 10893
+      },
+      {
+        "diagnostics": {
+          "raw_count": 391143,
+          "boundary_count": 14917,
+          "edge_count": 1869,
+          "clean_count": 374083,
+          "detached_count": 1110,
+          "surface_points": 15883,
+          "reference_frame_id": 10745,
+          "preprocess_ms": 340.99172696005553,
+          "matches": 3864,
+          "inliers": 3859,
+          "match_residual_mm": 0.9182676126543713,
+          "match_ms": 41.3900600397028,
+          "matcher_available": true,
+          "initial_cost": 2.9690850043518777,
+          "cost": 2.9528352742830384,
+          "evaluations": 11,
+          "converged": true,
+          "used_coarse": false,
+          "fit_ms": 1367.0952629763633,
+          "surface_median_mm": 1.4001910714592416,
+          "surface_p90_mm": 3.2967598615413247
+        },
+        "timings": {
+          "mask_ms": 23.91134697245434,
+          "total_ms": 1799.4521529763006,
+          "processed_fps": 0.5557246956224962,
+          "skipped_camera_frames": 41,
+          "age_at_publication_ms": 1806.3333950121887
+        },
+        "frame_id": 10935
+      },
+      {
+        "diagnostics": {
+          "raw_count": 391304,
+          "boundary_count": 14858,
+          "edge_count": 1937,
+          "clean_count": 374248,
+          "detached_count": 1088,
+          "surface_points": 15910,
+          "reference_frame_id": 10745,
+          "preprocess_ms": 327.0489430287853,
+          "matches": 3861,
+          "inliers": 3855,
+          "match_residual_mm": 0.9845925728611813,
+          "match_ms": 40.223755000624806,
+          "matcher_available": true,
+          "initial_cost": 2.9265622880751225,
+          "cost": 2.922343810657902,
+          "evaluations": 9,
+          "converged": true,
+          "used_coarse": false,
+          "fit_ms": 1429.1863680118695,
+          "surface_median_mm": 1.4509560900401017,
+          "surface_p90_mm": 3.4452407586703524
+        },
+        "timings": {
+          "mask_ms": 23.55455799261108,
+          "total_ms": 1842.6240860135294,
+          "processed_fps": 0.5427042919879956,
+          "skipped_camera_frames": 50,
+          "age_at_publication_ms": 1852.5925479480065
+        },
+        "frame_id": 10986
+      }
+    ],
+    "after": [
+      {
+        "diagnostics": {
+          "raw_count": 393482,
+          "boundary_count": 15891,
+          "edge_count": 1183,
+          "clean_count": 376352,
+          "detached_count": 843,
+          "surface_points": 15933,
+          "reference_frame_id": 443,
+          "sample_spacing_mm": 3.0,
+          "preprocess_ms": 157.94282604474574,
+          "matches": 2059,
+          "inliers": 2036,
+          "match_residual_mm": 1.0640227219430964,
+          "match_ms": 120.94659102149308,
+          "matcher_available": true,
+          "initial_cost": 3.880134712955182,
+          "cost": 3.6815745639088093,
+          "evaluations": 12,
+          "converged": true,
+          "fit_reference_points": 1203,
+          "fit_target_points": 859,
+          "used_coarse": false,
+          "fit_ms": 142.7529170177877,
+          "rgb_rotation_deg": 0.0792150161541019,
+          "surface_correction_deg": 0.6978407936151332,
+          "final_rotation_deg": 0.621235589818054,
+          "surface_median_mm": 1.7208111653999403,
+          "surface_p90_mm": 4.572316378251954
+        },
+        "timings": {
+          "mask_ms": 24.120860965922475,
+          "total_ms": 459.54003103543073,
+          "processed_fps": 2.176088985646823,
+          "skipped_camera_frames": 168,
+          "age_at_publication_ms": 470.83033999660984
+        },
+        "frame_id": 612
+      },
+      {
+        "diagnostics": {
+          "raw_count": 391365,
+          "boundary_count": 15763,
+          "edge_count": 1126,
+          "clean_count": 374390,
+          "detached_count": 857,
+          "surface_points": 15888,
+          "reference_frame_id": 443,
+          "sample_spacing_mm": 3.0,
+          "preprocess_ms": 164.1530659981072,
+          "matches": 2077,
+          "inliers": 2074,
+          "match_residual_mm": 1.0095545158372636,
+          "match_ms": 39.53290497884154,
+          "matcher_available": true,
+          "initial_cost": 3.5731214657955634,
+          "cost": 3.568647430242339,
+          "evaluations": 5,
+          "converged": true,
+          "fit_reference_points": 1203,
+          "fit_target_points": 837,
+          "used_coarse": false,
+          "fit_ms": 61.08998600393534,
+          "rgb_rotation_deg": 0.04717684413280415,
+          "surface_correction_deg": 0.03130308382345063,
+          "final_rotation_deg": 0.04777994588177317,
+          "surface_median_mm": 1.6538965933761693,
+          "surface_p90_mm": 4.341029153540004
+        },
+        "timings": {
+          "mask_ms": 27.00968598946929,
+          "total_ms": 312.5589940464124,
+          "processed_fps": 3.199396014985601,
+          "skipped_camera_frames": 11,
+          "age_at_publication_ms": 319.2227679537609
+        },
+        "frame_id": 638
+      },
+      {
+        "diagnostics": {
+          "raw_count": 390628,
+          "boundary_count": 15831,
+          "edge_count": 1026,
+          "clean_count": 373681,
+          "detached_count": 818,
+          "surface_points": 15857,
+          "reference_frame_id": 443,
+          "sample_spacing_mm": 3.0,
+          "preprocess_ms": 157.47186995577067,
+          "matches": 2088,
+          "inliers": 2088,
+          "match_residual_mm": 1.023950304650293,
+          "match_ms": 51.61354900337756,
+          "matcher_available": true,
+          "initial_cost": 3.325095117932438,
+          "cost": 3.320330343334026,
+          "evaluations": 5,
+          "converged": true,
+          "fit_reference_points": 1203,
+          "fit_target_points": 827,
+          "used_coarse": false,
+          "fit_ms": 67.00099696172401,
+          "rgb_rotation_deg": 0.03167713655329089,
+          "surface_correction_deg": 0.12219016082512575,
+          "final_rotation_deg": 0.09807717006643195,
+          "surface_median_mm": 1.6054371306684867,
+          "surface_p90_mm": 4.0349492483998874
+        },
+        "timings": {
+          "mask_ms": 27.16896403580904,
+          "total_ms": 316.40920299105346,
+          "processed_fps": 3.1604643308313483,
+          "skipped_camera_frames": 10,
+          "age_at_publication_ms": 323.10931402025744
+        },
+        "frame_id": 649
+      },
+      {
+        "diagnostics": {
+          "raw_count": 392223,
+          "boundary_count": 15628,
+          "edge_count": 1185,
+          "clean_count": 375332,
+          "detached_count": 840,
+          "surface_points": 15904,
+          "reference_frame_id": 443,
+          "sample_spacing_mm": 3.0,
+          "preprocess_ms": 159.41596601624042,
+          "matches": 2093,
+          "inliers": 2089,
+          "match_residual_mm": 1.0043349594007147,
+          "match_ms": 37.950486002955586,
+          "matcher_available": true,
+          "initial_cost": 3.5245747590194516,
+          "cost": 3.518255086579574,
+          "evaluations": 6,
+          "converged": true,
+          "fit_reference_points": 1203,
+          "fit_target_points": 832,
+          "used_coarse": false,
+          "fit_ms": 78.089470975101,
+          "rgb_rotation_deg": 0.04393902298842224,
+          "surface_correction_deg": 0.1438118225233339,
+          "final_rotation_deg": 0.10626484851511343,
+          "surface_median_mm": 1.6365213037926125,
+          "surface_p90_mm": 4.208827541562257
+        },
+        "timings": {
+          "mask_ms": 52.85649700090289,
+          "total_ms": 343.062098021619,
+          "processed_fps": 2.9149241661111227,
+          "skipped_camera_frames": 10,
+          "age_at_publication_ms": 351.1511189863086
+        },
+        "frame_id": 670
+      },
+      {
+        "diagnostics": {
+          "raw_count": 391575,
+          "boundary_count": 15825,
+          "edge_count": 1129,
+          "clean_count": 374517,
+          "detached_count": 827,
+          "surface_points": 15818,
+          "reference_frame_id": 443,
+          "sample_spacing_mm": 3.0,
+          "preprocess_ms": 152.14968100190163,
+          "matches": 2087,
+          "inliers": 2087,
+          "match_residual_mm": 1.0191253013017847,
+          "match_ms": 37.605852994602174,
+          "matcher_available": true,
+          "initial_cost": 3.5663314071441268,
+          "cost": 3.5613005286042854,
+          "evaluations": 6,
+          "converged": true,
+          "fit_reference_points": 1203,
+          "fit_target_points": 851,
+          "used_coarse": false,
+          "fit_ms": 81.89802197739482,
+          "rgb_rotation_deg": 0.04704006329252614,
+          "surface_correction_deg": 0.13551127829019466,
+          "final_rotation_deg": 0.15859172983563025,
+          "surface_median_mm": 1.6281174620765002,
+          "surface_p90_mm": 4.154447616871643
+        },
+        "timings": {
+          "mask_ms": 32.21481095533818,
+          "total_ms": 317.2990489983931,
+          "processed_fps": 3.151600999614292,
+          "skipped_camera_frames": 10,
+          "age_at_publication_ms": 324.8608970316127
+        },
+        "frame_id": 692
+      }
+    ]
+  },
+  "recorded_dowel": [
+    {
+      "before": {
+        "ms": 32.07176900468767,
+        "status": "reference",
+        "diagnostics": {
+          "raw_count": 1151,
+          "boundary_count": 280,
+          "edge_count": 127,
+          "clean_count": 744,
+          "detached_count": 0,
+          "surface_points": 97,
+          "reference_frame_id": 234,
+          "preprocess_ms": 31.628524011466652,
+          "surface_median_mm": 0.0,
+          "surface_p90_mm": 0.0
+        },
+        "pose": [
+          [
+            1.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            1.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            1.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ]
+      },
+      "after": {
+        "ms": 31.32151300087571,
+        "status": "reference",
+        "diagnostics": {
+          "raw_count": 1151,
+          "boundary_count": 280,
+          "edge_count": 127,
+          "clean_count": 744,
+          "detached_count": 0,
+          "surface_points": 460,
+          "reference_frame_id": 234,
+          "sample_spacing_mm": 1.0,
+          "preprocess_ms": 30.45161400223151,
+          "surface_median_mm": 0.0,
+          "surface_p90_mm": 0.0
+        },
+        "pose": [
+          [
+            1.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            1.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            1.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ]
+      },
+      "rotation_difference_deg": 0.0,
+      "frame": 234
+    },
+    {
+      "before": {
+        "ms": 251.5023720334284,
+        "status": "fitted",
+        "diagnostics": {
+          "raw_count": 1163,
+          "boundary_count": 268,
+          "edge_count": 125,
+          "clean_count": 770,
+          "detached_count": 0,
+          "surface_points": 102,
+          "reference_frame_id": 234,
+          "preprocess_ms": 31.410267984028906,
+          "matches": 147,
+          "inliers": 147,
+          "match_residual_mm": 0.4773245707230767,
+          "match_ms": 149.03246302856132,
+          "matcher_available": true,
+          "initial_cost": 0.449344677323539,
+          "cost": 0.36023317546856726,
+          "evaluations": 44,
+          "converged": true,
+          "used_coarse": false,
+          "fit_ms": 70.83182799397036,
+          "surface_median_mm": 0.9661792171893564,
+          "surface_p90_mm": 1.7538076430755374
+        },
+        "pose": [
+          [
+            0.9995000620525061,
+            -0.004345293555178627,
+            0.03131683861687865,
+            -0.012744229768133539
+          ],
+          [
+            0.005777389944790281,
+            0.9989346160925107,
+            -0.04578487236558528,
+            0.019142612994781743
+          ],
+          [
+            -0.031084525450168113,
+            0.04594291235899662,
+            0.9984603152261536,
+            -0.005591115694249759
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ]
+      },
+      "after": {
+        "ms": 122.41269397782162,
+        "status": "fitted",
+        "diagnostics": {
+          "raw_count": 1163,
+          "boundary_count": 268,
+          "edge_count": 125,
+          "clean_count": 770,
+          "detached_count": 0,
+          "surface_points": 470,
+          "reference_frame_id": 234,
+          "sample_spacing_mm": 1.0,
+          "preprocess_ms": 34.50464701745659,
+          "matches": 147,
+          "inliers": 147,
+          "match_residual_mm": 0.4773245707230767,
+          "match_ms": 33.40015304274857,
+          "matcher_available": true,
+          "initial_cost": 0.4129359961309588,
+          "cost": 0.27212732958878944,
+          "evaluations": 16,
+          "converged": true,
+          "fit_reference_points": 460,
+          "fit_target_points": 470,
+          "used_coarse": false,
+          "fit_ms": 53.95838100230321,
+          "rgb_rotation_deg": 2.7647464269646784,
+          "surface_correction_deg": 1.9089010391633086,
+          "final_rotation_deg": 4.30371088134432,
+          "surface_median_mm": 0.7966021941200003,
+          "surface_p90_mm": 1.5975630992942973
+        },
+        "pose": [
+          [
+            0.9987653868327769,
+            0.02495800451668118,
+            0.042951135902543694,
+            -0.018427667612915588
+          ],
+          [
+            -0.027336558515089125,
+            0.9980725656529812,
+            0.0557123528441015,
+            -0.028958978829673403
+          ],
+          [
+            -0.041477881254043864,
+            -0.05681770587959235,
+            0.997522598072472,
+            -0.004566345209510989
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ]
+      },
+      "rotation_difference_deg": 6.155548855236023,
+      "frame": 235
+    },
+    {
+      "before": {
+        "ms": 88.56707200175151,
+        "status": "fitted",
+        "diagnostics": {
+          "raw_count": 1154,
+          "boundary_count": 276,
+          "edge_count": 122,
+          "clean_count": 756,
+          "detached_count": 1,
+          "surface_points": 100,
+          "reference_frame_id": 234,
+          "preprocess_ms": 34.236148989293724,
+          "matches": 154,
+          "inliers": 154,
+          "match_residual_mm": 0.31377745190586126,
+          "match_ms": 33.40495104203001,
+          "matcher_available": true,
+          "initial_cost": 0.3310630914978578,
+          "cost": 0.326364978929243,
+          "evaluations": 14,
+          "converged": true,
+          "used_coarse": false,
+          "fit_ms": 20.695212995633483,
+          "surface_median_mm": 0.781577808067681,
+          "surface_p90_mm": 1.8817919293249612
+        },
+        "pose": [
+          [
+            0.9993981767445727,
+            -0.01475929156967353,
+            0.03139184021341594,
+            -0.012546948220039007
+          ],
+          [
+            0.015538354123640763,
+            0.999573651641413,
+            -0.024719921022902182,
+            0.012188808318983528
+          ],
+          [
+            -0.031013607831911642,
+            0.02519282152938712,
+            0.999201420071367,
+            -0.005427705233311061
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ]
+      },
+      "after": {
+        "ms": 101.88170697074383,
+        "status": "fitted",
+        "diagnostics": {
+          "raw_count": 1154,
+          "boundary_count": 276,
+          "edge_count": 122,
+          "clean_count": 756,
+          "detached_count": 3,
+          "surface_points": 459,
+          "reference_frame_id": 234,
+          "sample_spacing_mm": 1.0,
+          "preprocess_ms": 32.3906330158934,
+          "matches": 154,
+          "inliers": 154,
+          "match_residual_mm": 0.31377745190586126,
+          "match_ms": 34.54158699605614,
+          "matcher_available": true,
+          "initial_cost": 0.2620712181344001,
+          "cost": 0.25359205217492575,
+          "evaluations": 11,
+          "converged": true,
+          "fit_reference_points": 460,
+          "fit_target_points": 459,
+          "used_coarse": false,
+          "fit_ms": 34.40846997546032,
+          "rgb_rotation_deg": 1.4498756480294124,
+          "surface_correction_deg": 1.6649354819869386,
+          "final_rotation_deg": 2.0551683552733233,
+          "surface_median_mm": 0.7716652275899029,
+          "surface_p90_mm": 1.4458264700922607
+        },
+        "pose": [
+          [
+            0.9993513965030978,
+            -0.00018734694376361212,
+            0.03601043193896001,
+            -0.014810612416195973
+          ],
+          [
+            -0.0027411567873436584,
+            0.9966893996358324,
+            0.08125716407204078,
+            -0.03543652341333563
+          ],
+          [
+            -0.03590643907121694,
+            -0.08130317063119998,
+            0.9960424298585573,
+            -0.0024810734362104704
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ]
+      },
+      "rotation_difference_deg": 6.171611931848037,
+      "frame": 236
+    },
+    {
+      "before": {
+        "ms": 84.05573503114283,
+        "status": "fitted",
+        "diagnostics": {
+          "raw_count": 1189,
+          "boundary_count": 262,
+          "edge_count": 128,
+          "clean_count": 799,
+          "detached_count": 2,
+          "surface_points": 94,
+          "reference_frame_id": 234,
+          "preprocess_ms": 32.57014701375738,
+          "matches": 156,
+          "inliers": 156,
+          "match_residual_mm": 0.37799476657218517,
+          "match_ms": 33.39783800765872,
+          "matcher_available": true,
+          "initial_cost": 0.39292297029010487,
+          "cost": 0.3806995844040067,
+          "evaluations": 10,
+          "converged": true,
+          "used_coarse": false,
+          "fit_ms": 17.867759976070374,
+          "surface_median_mm": 0.8563987095687025,
+          "surface_p90_mm": 2.1667826801841765
+        },
+        "pose": [
+          [
+            0.9991914902599753,
+            0.01310315188582394,
+            0.038008856898179656,
+            -0.01610964496009273
+          ],
+          [
+            -0.011970705604170098,
+            0.9994820975371588,
+            -0.029870368428563773,
+            0.009994527627894515
+          ],
+          [
+            -0.038380567991987476,
+            0.029391225108472318,
+            0.9988308605000321,
+            -0.006459064065447242
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ]
+      },
+      "after": {
+        "ms": 100.65611498430371,
+        "status": "fitted",
+        "diagnostics": {
+          "raw_count": 1189,
+          "boundary_count": 262,
+          "edge_count": 128,
+          "clean_count": 799,
+          "detached_count": 8,
+          "surface_points": 483,
+          "reference_frame_id": 234,
+          "sample_spacing_mm": 1.0,
+          "preprocess_ms": 32.26507903309539,
+          "matches": 156,
+          "inliers": 156,
+          "match_residual_mm": 0.37799476657218517,
+          "match_ms": 34.045682987198234,
+          "matcher_available": true,
+          "initial_cost": 0.306357003458548,
+          "cost": 0.2941790561389751,
+          "evaluations": 9,
+          "converged": true,
+          "fit_reference_points": 460,
+          "fit_target_points": 483,
+          "used_coarse": false,
+          "fit_ms": 33.80317299161106,
+          "rgb_rotation_deg": 1.1429592930276868,
+          "surface_correction_deg": 2.3464392224446473,
+          "final_rotation_deg": 2.2695572058742832,
+          "surface_median_mm": 0.8097033755786196,
+          "surface_p90_mm": 1.576675843264837
+        },
+        "pose": [
+          [
+            0.998505039391261,
+            0.038583605354100464,
+            0.03871681428184335,
+            -0.01713258907640026
+          ],
+          [
+            -0.04130843720056595,
+            0.9965314771324221,
+            0.07224007267658612,
+            -0.037463539854006155
+          ],
+          [
+            -0.035795241671242296,
+            -0.07373140770492945,
+            0.9966355302674824,
+            -0.0027488865143941803
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ]
+      },
+      "rotation_difference_deg": 6.092410890819857,
+      "frame": 237
+    },
+    {
+      "before": {
+        "ms": 82.40856800694019,
+        "status": "fitted",
+        "diagnostics": {
+          "raw_count": 1172,
+          "boundary_count": 257,
+          "edge_count": 117,
+          "clean_count": 798,
+          "detached_count": 1,
+          "surface_points": 97,
+          "reference_frame_id": 234,
+          "preprocess_ms": 32.54884702619165,
+          "matches": 168,
+          "inliers": 168,
+          "match_residual_mm": 0.24140431470822343,
+          "match_ms": 33.06357498513535,
+          "matcher_available": true,
+          "initial_cost": 0.3702321235847959,
+          "cost": 0.36097409390945956,
+          "evaluations": 11,
+          "converged": true,
+          "used_coarse": false,
+          "fit_ms": 16.58020296599716,
+          "surface_median_mm": 0.8055709850304348,
+          "surface_p90_mm": 2.270451628113867
+        },
+        "pose": [
+          [
+            0.9989382437704876,
+            -0.005201966399016804,
+            0.04577471658368965,
+            -0.018831411485918416
+          ],
+          [
+            0.006150698687553647,
+            0.9997686769732915,
+            -0.02060974159777518,
+            0.009210070150670864
+          ],
+          [
+            -0.04565691665441896,
+            0.020869405565459773,
+            0.9987391620803471,
+            -0.007286052831202148
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ]
+      },
+      "after": {
+        "ms": 109.77648198604584,
+        "status": "fitted",
+        "diagnostics": {
+          "raw_count": 1172,
+          "boundary_count": 257,
+          "edge_count": 117,
+          "clean_count": 798,
+          "detached_count": 3,
+          "surface_points": 481,
+          "reference_frame_id": 234,
+          "sample_spacing_mm": 1.0,
+          "preprocess_ms": 33.60260900808498,
+          "matches": 168,
+          "inliers": 168,
+          "match_residual_mm": 0.24140431470822343,
+          "match_ms": 33.07905502151698,
+          "matcher_available": true,
+          "initial_cost": 0.2775024497072698,
+          "cost": 0.2731354376205662,
+          "evaluations": 13,
+          "converged": true,
+          "fit_reference_points": 460,
+          "fit_target_points": 481,
+          "used_coarse": false,
+          "fit_ms": 42.521220981143415,
+          "rgb_rotation_deg": 0.707244661629144,
+          "surface_correction_deg": 1.5596339137177129,
+          "final_rotation_deg": 1.0844171094697495,
+          "surface_median_mm": 0.7706455621753227,
+          "surface_p90_mm": 1.5031318011336272
+        },
+        "pose": [
+          [
+            0.9988310592474308,
+            0.024781763800442367,
+            0.0415015573875751,
+            -0.01799923588368685
+          ],
+          [
+            -0.02825767255557639,
+            0.9959478908149384,
+            0.0853774134242507,
+            -0.04066879733425911
+          ],
+          [
+            -0.039217585652318296,
+            -0.08645034970555449,
+            0.995483961704752,
+            -0.002402236879124831
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ]
+      },
+      "rotation_difference_deg": 6.398763017593892,
+      "frame": 238
+    },
+    {
+      "before": {
+        "ms": 36.97806200943887,
+        "status": "reference",
+        "diagnostics": {
+          "raw_count": 865,
+          "boundary_count": 280,
+          "edge_count": 102,
+          "clean_count": 483,
+          "detached_count": 17,
+          "surface_points": 55,
+          "reference_frame_id": 270,
+          "preprocess_ms": 36.61160002229735,
+          "surface_median_mm": 0.0,
+          "surface_p90_mm": 69.79560650166488
+        },
+        "pose": [
+          [
+            1.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            1.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            1.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ]
+      },
+      "after": {
+        "ms": 31.37355000944808,
+        "status": "reference",
+        "diagnostics": {
+          "raw_count": 865,
+          "boundary_count": 280,
+          "edge_count": 102,
+          "clean_count": 483,
+          "detached_count": 18,
+          "surface_points": 59,
+          "reference_frame_id": 270,
+          "sample_spacing_mm": 2.875000238418579,
+          "preprocess_ms": 31.0570010333322,
+          "surface_median_mm": 0.0,
+          "surface_p90_mm": 70.44485715736342
+        },
+        "pose": [
+          [
+            1.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            1.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            1.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ]
+      },
+      "rotation_difference_deg": 0.0,
+      "frame": 270
+    },
+    {
+      "before": {
+        "ms": 123.25151497498155,
+        "status": "fitted",
+        "diagnostics": {
+          "raw_count": 987,
+          "boundary_count": 325,
+          "edge_count": 106,
+          "clean_count": 556,
+          "detached_count": 4,
+          "surface_points": 51,
+          "reference_frame_id": 270,
+          "preprocess_ms": 34.94336496805772,
+          "matches": 45,
+          "inliers": 42,
+          "match_residual_mm": 0.8693081462867793,
+          "match_ms": 32.98714302945882,
+          "matcher_available": true,
+          "initial_cost": 20.33578610805431,
+          "cost": 14.630691185499327,
+          "evaluations": 37,
+          "converged": true,
+          "used_coarse": false,
+          "fit_ms": 55.13743503252044,
+          "surface_median_mm": 4.759850610961869,
+          "surface_p90_mm": 10.8112364997231
+        },
+        "pose": [
+          [
+            0.9437317600041816,
+            -0.1977556191259282,
+            0.2650718398161725,
+            -0.10784013176166615
+          ],
+          [
+            0.14945872546045075,
+            0.9700320859557692,
+            0.19157202718569402,
+            -0.057258800659666605
+          ],
+          [
+            -0.2950126345483314,
+            -0.14117530704914116,
+            0.9450063905267689,
+            -0.019672237297162352
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ]
+      },
+      "after": {
+        "ms": 149.42986494861543,
+        "status": "fitted",
+        "diagnostics": {
+          "raw_count": 987,
+          "boundary_count": 325,
+          "edge_count": 106,
+          "clean_count": 556,
+          "detached_count": 4,
+          "surface_points": 183,
+          "reference_frame_id": 270,
+          "sample_spacing_mm": 1.3125003315508366,
+          "preprocess_ms": 31.86686901608482,
+          "matches": 44,
+          "inliers": 42,
+          "match_residual_mm": 0.8693081462867793,
+          "match_ms": 33.384604030288756,
+          "matcher_available": true,
+          "initial_cost": 17.495297075805524,
+          "cost": 12.468337808914402,
+          "evaluations": 50,
+          "converged": false,
+          "fit_reference_points": 41,
+          "fit_target_points": 183,
+          "used_coarse": false,
+          "fit_ms": 83.86779500870034,
+          "rgb_rotation_deg": 3.246582913538294,
+          "surface_correction_deg": 21.505758757943074,
+          "final_rotation_deg": 19.12185202026951,
+          "surface_median_mm": 4.029284898218842,
+          "surface_p90_mm": 9.560818618663918
+        },
+        "pose": [
+          [
+            0.947308377436412,
+            -0.14796290425377392,
+            0.2841017722640618,
+            -0.11430001345237549
+          ],
+          [
+            0.16786752588119175,
+            0.9846933181817812,
+            -0.046899497680466765,
+            0.03186811512735976
+          ],
+          [
+            -0.27281373094717865,
+            0.09211974865869647,
+            0.9576463961785364,
+            -0.021454257689513874
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ]
+      },
+      "rotation_difference_deg": 13.793573930529307,
+      "frame": 271
+    },
+    {
+      "before": {
+        "ms": 112.56349203176796,
+        "status": "fitted",
+        "diagnostics": {
+          "raw_count": 1115,
+          "boundary_count": 336,
+          "edge_count": 79,
+          "clean_count": 700,
+          "detached_count": 7,
+          "surface_points": 66,
+          "reference_frame_id": 270,
+          "preprocess_ms": 34.605245979037136,
+          "matches": 54,
+          "inliers": 54,
+          "match_residual_mm": 0.8792693823372192,
+          "match_ms": 33.92078197794035,
+          "matcher_available": true,
+          "initial_cost": 16.01567523099923,
+          "cost": 15.763000546955643,
+          "evaluations": 30,
+          "converged": true,
+          "used_coarse": false,
+          "fit_ms": 43.85530500439927,
+          "surface_median_mm": 4.643359105899439,
+          "surface_p90_mm": 42.77261972995501
+        },
+        "pose": [
+          [
+            0.9306553268182681,
+            -0.17879710619994865,
+            0.31923699265484046,
+            -0.12874616995790608
+          ],
+          [
+            0.12868444171716026,
+            0.9766789766244005,
+            0.1718676557117611,
+            -0.05183094678549662
+          ],
+          [
+            -0.34252149877741334,
+            -0.11886871512066459,
+            0.9319598979788969,
+            -0.02214333075162345
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ]
+      },
+      "after": {
+        "ms": 93.21540599921718,
+        "status": "fitted",
+        "diagnostics": {
+          "raw_count": 1115,
+          "boundary_count": 336,
+          "edge_count": 79,
+          "clean_count": 700,
+          "detached_count": 11,
+          "surface_points": 222,
+          "reference_frame_id": 270,
+          "sample_spacing_mm": 1.3281246647238731,
+          "preprocess_ms": 31.77803399739787,
+          "matches": 54,
+          "inliers": 54,
+          "match_residual_mm": 0.8792693823372192,
+          "match_ms": 32.982114993501455,
+          "matcher_available": true,
+          "initial_cost": 13.952044638628905,
+          "cost": 13.77604221430006,
+          "evaluations": 18,
+          "converged": true,
+          "fit_reference_points": 41,
+          "fit_target_points": 222,
+          "used_coarse": false,
+          "fit_ms": 28.120865987148136,
+          "rgb_rotation_deg": 9.434080904379153,
+          "surface_correction_deg": 8.286220404944828,
+          "final_rotation_deg": 2.090132273853168,
+          "surface_median_mm": 4.349904619853996,
+          "surface_p90_mm": 11.439494738657796
+        },
+        "pose": [
+          [
+            0.944810717126355,
+            -0.12240617951583309,
+            0.30389050004815915,
+            -0.12095609481689755
+          ],
+          [
+            0.15021838895852033,
+            0.9861855050431846,
+            -0.06980390577485916,
+            0.03914604082436978
+          ],
+          [
+            -0.2911479768466364,
+            0.11160141961039949,
+            0.9501462933249034,
+            -0.022449285492085268
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ]
+      },
+      "rotation_difference_deg": 13.990785709624982,
+      "frame": 272
+    },
+    {
+      "before": {
+        "ms": 89.97375203762203,
+        "status": "fitted",
+        "diagnostics": {
+          "raw_count": 1357,
+          "boundary_count": 404,
+          "edge_count": 135,
+          "clean_count": 818,
+          "detached_count": 18,
+          "surface_points": 70,
+          "reference_frame_id": 270,
+          "preprocess_ms": 34.07965798396617,
+          "matches": 60,
+          "inliers": 60,
+          "match_residual_mm": 0.6443605836899099,
+          "match_ms": 33.63116196123883,
+          "matcher_available": true,
+          "initial_cost": 22.62787299724292,
+          "cost": 22.43864100587187,
+          "evaluations": 18,
+          "converged": true,
+          "used_coarse": false,
+          "fit_ms": 22.091092017944902,
+          "surface_median_mm": 6.184235094414693,
+          "surface_p90_mm": 87.86263995052947
+        },
+        "pose": [
+          [
+            0.9291179501321828,
+            -0.2069081570739751,
+            0.30647813833685145,
+            -0.12290778933556326
+          ],
+          [
+            0.15978827396564158,
+            0.9720776079800213,
+            0.17185119018185835,
+            -0.050057166768992176
+          ],
+          [
+            -0.3334779486641549,
+            -0.1106984128164953,
+            0.9362362517840545,
+            -0.026956332648783603
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ]
+      },
+      "after": {
+        "ms": 96.4498869725503,
+        "status": "fitted",
+        "diagnostics": {
+          "raw_count": 1357,
+          "boundary_count": 404,
+          "edge_count": 135,
+          "clean_count": 818,
+          "detached_count": 18,
+          "surface_points": 70,
+          "reference_frame_id": 270,
+          "sample_spacing_mm": 3.0,
+          "preprocess_ms": 32.28880401002243,
+          "matches": 60,
+          "inliers": 60,
+          "match_residual_mm": 0.6443605836899099,
+          "match_ms": 33.655037987045944,
+          "matcher_available": true,
+          "initial_cost": 22.638085031260793,
+          "cost": 22.38504376916322,
+          "evaluations": 19,
+          "converged": true,
+          "fit_reference_points": 41,
+          "fit_target_points": 70,
+          "used_coarse": false,
+          "fit_ms": 30.201218964066356,
+          "rgb_rotation_deg": 4.112301627801622,
+          "surface_correction_deg": 3.277405405803164,
+          "final_rotation_deg": 1.66361865509597,
+          "surface_median_mm": 6.483265651318639,
+          "surface_p90_mm": 88.14315057855009
+        },
+        "pose": [
+          [
+            0.9421197845973983,
+            -0.1275895355432427,
+            0.31005035379759105,
+            -0.1223697135191546
+          ],
+          [
+            0.16401024346474366,
+            0.981942898026419,
+            -0.09428035348954121,
+            0.047970298484931145
+          ],
+          [
+            -0.29242255642954046,
+            0.1396748203340061,
+            0.9460338223635956,
+            -0.025700699744655987
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ]
+      },
+      "rotation_difference_deg": 15.306098483559042,
+      "frame": 273
+    },
+    {
+      "before": {
+        "ms": 91.61223203409463,
+        "status": "fitted",
+        "diagnostics": {
+          "raw_count": 1468,
+          "boundary_count": 386,
+          "edge_count": 106,
+          "clean_count": 976,
+          "detached_count": 8,
+          "surface_points": 69,
+          "reference_frame_id": 270,
+          "preprocess_ms": 34.21230404637754,
+          "matches": 63,
+          "inliers": 60,
+          "match_residual_mm": 0.8379112374491838,
+          "match_ms": 34.69782799948007,
+          "matcher_available": true,
+          "initial_cost": 14.412744184047865,
+          "cost": 14.030855065284063,
+          "evaluations": 18,
+          "converged": true,
+          "used_coarse": false,
+          "fit_ms": 22.524447995238006,
+          "surface_median_mm": 3.56919455763244,
+          "surface_p90_mm": 85.06959659043089
+        },
+        "pose": [
+          [
+            0.8870940019207548,
+            -0.030856208084109073,
+            0.46055632248281064,
+            -0.17864067827516303
+          ],
+          [
+            -0.029244010979047923,
+            0.9920017456378292,
+            0.1227897572004984,
+            -0.05356292644194361
+          ],
+          [
+            -0.4606615021662639,
+            -0.12239457126102535,
+            0.879096439162252,
+            -0.018913494511038405
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ]
+      },
+      "after": {
+        "ms": 153.4432170446962,
+        "status": "fitted",
+        "diagnostics": {
+          "raw_count": 1468,
+          "boundary_count": 386,
+          "edge_count": 106,
+          "clean_count": 976,
+          "detached_count": 12,
+          "surface_points": 237,
+          "reference_frame_id": 270,
+          "sample_spacing_mm": 1.5468751080334187,
+          "preprocess_ms": 32.90357900550589,
+          "matches": 65,
+          "inliers": 62,
+          "match_residual_mm": 0.8297002783170413,
+          "match_ms": 33.30322302645072,
+          "matcher_available": true,
+          "initial_cost": 12.22660491024387,
+          "cost": 11.609228783350957,
+          "evaluations": 50,
+          "converged": false,
+          "fit_reference_points": 41,
+          "fit_target_points": 237,
+          "used_coarse": false,
+          "fit_ms": 86.86373301316053,
+          "rgb_rotation_deg": 9.00038828277253,
+          "surface_correction_deg": 7.371016013374104,
+          "final_rotation_deg": 8.412461922785132,
+          "surface_median_mm": 3.3439575081047486,
+          "surface_p90_mm": 8.94568251064847
+        },
+        "pose": [
+          [
+            0.9217837978367596,
+            -0.04837041096603295,
+            0.3846751010770221,
+            -0.1470203240730756
+          ],
+          [
+            0.0644824476464165,
+            0.9974947969822701,
+            -0.029088553398653967,
+            0.012218181357186206
+          ],
+          [
+            -0.3823043865706587,
+            0.051618149291467935,
+            0.922593584777477,
+            -0.026023898008452152
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ]
+      },
+      "rotation_difference_deg": 11.294211332375566,
+      "frame": 274
+    },
+    {
+      "before": {
+        "ms": 35.596250963862985,
+        "status": "reference",
+        "diagnostics": {
+          "raw_count": 2791,
+          "boundary_count": 641,
+          "edge_count": 266,
+          "clean_count": 1884,
+          "detached_count": 13,
+          "surface_points": 261,
+          "reference_frame_id": 435,
+          "preprocess_ms": 35.09973600739613,
+          "surface_median_mm": 0.0,
+          "surface_p90_mm": 0.0
+        },
+        "pose": [
+          [
+            1.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            1.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            1.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ]
+      },
+      "after": {
+        "ms": 33.18488295190036,
+        "status": "reference",
+        "diagnostics": {
+          "raw_count": 2791,
+          "boundary_count": 641,
+          "edge_count": 266,
+          "clean_count": 1884,
+          "detached_count": 17,
+          "surface_points": 381,
+          "reference_frame_id": 435,
+          "sample_spacing_mm": 2.3281252942979336,
+          "preprocess_ms": 32.619569974485785,
+          "surface_median_mm": 0.0,
+          "surface_p90_mm": 0.0
+        },
+        "pose": [
+          [
+            1.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            1.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            1.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ]
+      },
+      "rotation_difference_deg": 0.0,
+      "frame": 435
+    },
+    {
+      "before": {
+        "ms": 96.90278000198305,
+        "status": "fitted",
+        "diagnostics": {
+          "raw_count": 2856,
+          "boundary_count": 618,
+          "edge_count": 321,
+          "clean_count": 1917,
+          "detached_count": 14,
+          "surface_points": 266,
+          "reference_frame_id": 435,
+          "preprocess_ms": 36.79654496954754,
+          "matches": 152,
+          "inliers": 151,
+          "match_residual_mm": 1.3244126771259286,
+          "match_ms": 35.0140769733116,
+          "matcher_available": true,
+          "initial_cost": 2.1972457949674618,
+          "cost": 2.1490460766429265,
+          "evaluations": 9,
+          "converged": true,
+          "used_coarse": false,
+          "fit_ms": 24.732749036047608,
+          "surface_median_mm": 1.5539750613513932,
+          "surface_p90_mm": 2.9588853517771962
+        },
+        "pose": [
+          [
+            0.9990840665355412,
+            -0.03782161437294083,
+            0.020013832242488983,
+            -0.009624424743910225
+          ],
+          [
+            0.037028010571103935,
+            0.9985669425356423,
+            0.03863919911391063,
+            -0.009593907442545502
+          ],
+          [
+            -0.02144654815936913,
+            -0.03786273578655903,
+            0.9990527807932895,
+            -0.0012075967474536767
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ]
+      },
+      "after": {
+        "ms": 105.92378198634833,
+        "status": "fitted",
+        "diagnostics": {
+          "raw_count": 2856,
+          "boundary_count": 618,
+          "edge_count": 321,
+          "clean_count": 1917,
+          "detached_count": 23,
+          "surface_points": 410,
+          "reference_frame_id": 435,
+          "sample_spacing_mm": 2.2656251676380634,
+          "preprocess_ms": 33.15433603711426,
+          "matches": 153,
+          "inliers": 152,
+          "match_residual_mm": 1.3658397432948488,
+          "match_ms": 35.55563499685377,
+          "matcher_available": true,
+          "initial_cost": 2.2726841344359108,
+          "cost": 2.227727976533647,
+          "evaluations": 11,
+          "converged": true,
+          "fit_reference_points": 364,
+          "fit_target_points": 410,
+          "used_coarse": false,
+          "fit_ms": 36.67589003453031,
+          "rgb_rotation_deg": 1.1830505063161854,
+          "surface_correction_deg": 4.058377210420553,
+          "final_rotation_deg": 4.747589919219384,
+          "surface_median_mm": 1.3443618103092683,
+          "surface_p90_mm": 2.5866396945573116
+        },
+        "pose": [
+          [
+            0.9975224920484362,
+            -0.06341686602249298,
+            0.0304496134846725,
+            -0.015001206394508587
+          ],
+          [
+            0.06202610020485849,
+            0.997076120388487,
+            0.04463152523072657,
+            -0.009350605460614999
+          ],
+          [
+            -0.03319097393656235,
+            -0.042632279494877676,
+            0.9985393572584979,
+            -0.003534075454692146
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ]
+      },
+      "rotation_difference_deg": 1.615774026055278,
+      "frame": 436
+    },
+    {
+      "before": {
+        "ms": 93.07899296982214,
+        "status": "fitted",
+        "diagnostics": {
+          "raw_count": 2699,
+          "boundary_count": 601,
+          "edge_count": 276,
+          "clean_count": 1822,
+          "detached_count": 15,
+          "surface_points": 248,
+          "reference_frame_id": 435,
+          "preprocess_ms": 34.589346032589674,
+          "matches": 153,
+          "inliers": 153,
+          "match_residual_mm": 0.5353375692930427,
+          "match_ms": 33.23743096552789,
+          "matcher_available": true,
+          "initial_cost": 2.4449631136925416,
+          "cost": 2.4211064449507553,
+          "evaluations": 11,
+          "converged": true,
+          "used_coarse": false,
+          "fit_ms": 24.91689199814573,
+          "surface_median_mm": 1.5162940015335078,
+          "surface_p90_mm": 2.938080806140693
+        },
+        "pose": [
+          [
+            0.9999944020855805,
+            -0.0018814498875481525,
+            0.002766937625375986,
+            -0.000629026128845035
+          ],
+          [
+            0.0017935993314422615,
+            0.9995047556080773,
+            0.031416978184961225,
+            -0.010525208898643144
+          ],
+          [
+            -0.0028246767851074213,
+            -0.03141183953793081,
+            0.9995025350332545,
+            0.0011914339124812433
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ]
+      },
+      "after": {
+        "ms": 103.51924801943824,
+        "status": "fitted",
+        "diagnostics": {
+          "raw_count": 2699,
+          "boundary_count": 601,
+          "edge_count": 276,
+          "clean_count": 1822,
+          "detached_count": 23,
+          "surface_points": 389,
+          "reference_frame_id": 435,
+          "sample_spacing_mm": 2.2656251676380634,
+          "preprocess_ms": 34.216381958685815,
+          "matches": 154,
+          "inliers": 154,
+          "match_residual_mm": 0.5357756785284985,
+          "match_ms": 33.52631797315553,
+          "matcher_available": true,
+          "initial_cost": 2.352718857293231,
+          "cost": 2.3213658969822575,
+          "evaluations": 11,
+          "converged": true,
+          "fit_reference_points": 364,
+          "fit_target_points": 389,
+          "used_coarse": false,
+          "fit_ms": 35.25705001084134,
+          "rgb_rotation_deg": 0.2756285058099689,
+          "surface_correction_deg": 4.591562353607269,
+          "final_rotation_deg": 4.82437589058536,
+          "surface_median_mm": 1.3780341251544432,
+          "surface_p90_mm": 2.5930322605767557
+        },
+        "pose": [
+          [
+            0.9999065352281261,
+            0.013435817445742421,
+            -0.002529746558337712,
+            0.0023063693154052618
+          ],
+          [
+            -0.01334118122393045,
+            0.999322411361922,
+            0.034303513425649516,
+            -0.01362096066589991
+          ],
+          [
+            0.0029889281749471653,
+            -0.03426655744830713,
+            0.9994082595961512,
+            0.0009980077405205628
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ]
+      },
+      "rotation_difference_deg": 0.9432743307929401,
+      "frame": 437
+    },
+    {
+      "before": {
+        "ms": 92.68105297815055,
+        "status": "fitted",
+        "diagnostics": {
+          "raw_count": 2782,
+          "boundary_count": 654,
+          "edge_count": 268,
+          "clean_count": 1860,
+          "detached_count": 16,
+          "surface_points": 234,
+          "reference_frame_id": 435,
+          "preprocess_ms": 35.22808599518612,
+          "matches": 143,
+          "inliers": 142,
+          "match_residual_mm": 0.7630420564600422,
+          "match_ms": 32.912847003899515,
+          "matcher_available": true,
+          "initial_cost": 2.7072006798895307,
+          "cost": 2.6674936902396507,
+          "evaluations": 10,
+          "converged": true,
+          "used_coarse": false,
+          "fit_ms": 24.213924014475197,
+          "surface_median_mm": 1.3974695664140873,
+          "surface_p90_mm": 2.9909737122466744
+        },
+        "pose": [
+          [
+            0.9997319402389298,
+            0.022373867138118207,
+            -0.005954639820270607,
+            0.004256191968766835
+          ],
+          [
+            -0.02214309961793169,
+            0.9990938978311454,
+            0.03634647790191583,
+            -0.016277197062042795
+          ],
+          [
+            0.006762455575730881,
+            -0.03620488069100341,
+            0.9993215077284862,
+            -0.0007108388347040891
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ]
+      },
+      "after": {
+        "ms": 96.06165596051142,
+        "status": "fitted",
+        "diagnostics": {
+          "raw_count": 2782,
+          "boundary_count": 654,
+          "edge_count": 268,
+          "clean_count": 1860,
+          "detached_count": 27,
+          "surface_points": 382,
+          "reference_frame_id": 435,
+          "sample_spacing_mm": 2.2812504321336746,
+          "preprocess_ms": 33.97825901629403,
+          "matches": 144,
+          "inliers": 143,
+          "match_residual_mm": 0.7699812383922114,
+          "match_ms": 33.92243600683287,
+          "matcher_available": true,
+          "initial_cost": 2.728856638136588,
+          "cost": 2.720858382185237,
+          "evaluations": 9,
+          "converged": true,
+          "fit_reference_points": 364,
+          "fit_target_points": 382,
+          "used_coarse": false,
+          "fit_ms": 27.609163022134453,
+          "rgb_rotation_deg": 0.6163954748014726,
+          "surface_correction_deg": 0.4773889688588753,
+          "final_rotation_deg": 0.15454956756825244,
+          "surface_median_mm": 1.3244759510198452,
+          "surface_p90_mm": 2.731688036669226
+        },
+        "pose": [
+          [
+            0.9998662479825887,
+            0.016050992585767514,
+            -0.003138754885659866,
+            0.0028797743908922173
+          ],
+          [
+            -0.015934875268909392,
+            0.999292835355616,
+            0.034057436149806705,
+            -0.014822370373651762
+          ],
+          [
+            0.0036831909243079204,
+            -0.03400286523141143,
+            0.9994149484876986,
+            -0.0012895334154170558
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ]
+      },
+      "rotation_difference_deg": 0.4172912433443332,
+      "frame": 438
+    },
+    {
+      "before": {
+        "ms": 92.72918303031474,
+        "status": "fitted",
+        "diagnostics": {
+          "raw_count": 2752,
+          "boundary_count": 639,
+          "edge_count": 247,
+          "clean_count": 1866,
+          "detached_count": 15,
+          "surface_points": 245,
+          "reference_frame_id": 435,
+          "preprocess_ms": 35.1216479903087,
+          "matches": 157,
+          "inliers": 156,
+          "match_residual_mm": 0.901563164921835,
+          "match_ms": 33.12779701082036,
+          "matcher_available": true,
+          "initial_cost": 2.3975468432490854,
+          "cost": 2.3926517980352986,
+          "evaluations": 9,
+          "converged": true,
+          "used_coarse": false,
+          "fit_ms": 24.138844048138708,
+          "surface_median_mm": 1.3697519986523112,
+          "surface_p90_mm": 2.407314862895329
+        },
+        "pose": [
+          [
+            0.9960417223775689,
+            0.08250615441799611,
+            -0.03306995261981404,
+            0.017513423992792328
+          ],
+          [
+            -0.0816626484289943,
+            0.99631833142944,
+            0.026095867665472786,
+            -0.019619060618678512
+          ],
+          [
+            0.035101269701902985,
+            -0.02329199306209758,
+            0.9991122979547933,
+            0.003111559515328576
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ]
+      },
+      "after": {
+        "ms": 94.42577097797766,
+        "status": "fitted",
+        "diagnostics": {
+          "raw_count": 2752,
+          "boundary_count": 639,
+          "edge_count": 247,
+          "clean_count": 1866,
+          "detached_count": 25,
+          "surface_points": 380,
+          "reference_frame_id": 435,
+          "sample_spacing_mm": 2.2812504321336746,
+          "preprocess_ms": 31.732138013467193,
+          "matches": 157,
+          "inliers": 156,
+          "match_residual_mm": 0.901563164921835,
+          "match_ms": 34.67422496760264,
+          "matcher_available": true,
+          "initial_cost": 2.5314638618630267,
+          "cost": 2.529808124901366,
+          "evaluations": 9,
+          "converged": true,
+          "fit_reference_points": 364,
+          "fit_target_points": 380,
+          "used_coarse": false,
+          "fit_ms": 27.50381699297577,
+          "rgb_rotation_deg": 0.483447151146007,
+          "surface_correction_deg": 0.42091934382526963,
+          "final_rotation_deg": 0.14018574165888995,
+          "surface_median_mm": 1.271247010388719,
+          "surface_p90_mm": 2.556156249097907
+        },
+        "pose": [
+          [
+            0.9998906748854398,
+            0.014065929978994439,
+            -0.004559373966417249,
+            0.0032433128459047516
+          ],
+          [
+            -0.01390351759687623,
+            0.9993290236900036,
+            0.03388502042521194,
+            -0.014704653703735672
+          ],
+          [
+            0.005032939059134905,
+            -0.033817924605298935,
+            0.9994153378349849,
+            -0.0013664851903740956
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ]
+      },
+      "rotation_difference_deg": 4.286279142209776,
+      "frame": 439
+    }
+  ],
+  "limitations": [
+    "No pose ground truth for real frames. Depth agreement is not identity/pose proof.",
+    "Stationary tray cannot validate handling of large motion.",
+    "The reported Spider-Man head/feet flip has not been reproduced or attributed.",
+    "Changing density changes the fitted pose; this is not a parity-only refactor."
+  ],
+  "later_live_snapshot": {
+    "status": "fitted",
+    "accepted": false,
+    "diagnostics": {
+      "raw_count": 394178,
+      "boundary_count": 12074,
+      "edge_count": 1651,
+      "clean_count": 380210,
+      "detached_count": 277,
+      "surface_points": 16136,
+      "reference_frame_id": 443,
+      "sample_spacing_mm": 3.0,
+      "preprocess_ms": 163.1951280287467,
+      "matches": 2229,
+      "inliers": 2228,
+      "match_residual_mm": 1.0120827693914396,
+      "match_ms": 38.39661699021235,
+      "matcher_available": true,
+      "initial_cost": 6.30645634557074,
+      "cost": 6.289715646991919,
+      "evaluations": 12,
+      "converged": true,
+      "fit_reference_points": 1203,
+      "fit_target_points": 1410,
+      "used_coarse": false,
+      "fit_ms": 118.46406501717865,
+      "rgb_rotation_deg": 0.06179392750777372,
+      "surface_correction_deg": 0.13330248082445526,
+      "final_rotation_deg": 0.1003346303603581,
+      "surface_median_mm": 2.672888834123866,
+      "surface_p90_mm": 14.460375399690589
+    },
+    "timings": {
+      "mask_ms": 28.370287967845798,
+      "total_ms": 368.7490010051988,
+      "processed_fps": 2.7118717536156836,
+      "skipped_camera_frames": 12,
+      "age_at_publication_ms": 379.7583049745299
+    }
+  }
+}

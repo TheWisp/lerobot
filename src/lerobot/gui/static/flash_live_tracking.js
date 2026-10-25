@@ -3,6 +3,7 @@ let flashTrackingTimer = null;
 let flashTrackingSnapshot = null;
 let flashTrackingDefaults = null;
 let flashTrackingBusy = false;
+let flashTrackingFraming = null;
 let flashTrackingYaw = 0, flashTrackingPitch = 0, flashTrackingZoom = 1;
 
 function flashTrackingForm() {
@@ -19,10 +20,39 @@ function flashTrackingForm() {
         <p class="form-hint">Each selection starts a new fixed surface reference. Keep the object visible while it initializes.</p>
         <button type="button" class="btn-small secondary" onclick="flashTrackingControl('clear')">Clear tracking</button>
         <button type="button" class="btn-small secondary" onclick="flashTrackingStop()">Close camera</button>
-        <details><summary>Camera & tracking parameters</summary><p class="form-hint">Applied when opening the camera. Defaults reproduce the surface experiment.</p><textarea id="flash-tracking-config" rows="15" spellcheck="false"></textarea></details>
+        <details open id="flash-sampling-controls"><summary>Surface sampling</summary>
+            <label>Minimum point spacing (mm)<input type="number" id="flash-sampling-min" step="0.1" onchange="flashTrackingSamplingChanged()"></label>
+            <label>Maximum point spacing (mm)<input type="number" id="flash-sampling-max" step="0.1" onchange="flashTrackingSamplingChanged()"></label>
+            <label>Samples across object<input type="number" id="flash-sampling-across" step="1" onchange="flashTrackingSamplingChanged()"></label>
+            <label>Fit sample budget per surface<input type="number" id="flash-sampling-budget" step="1" onchange="flashTrackingSamplingChanged()"></label>
+            <p class="form-hint">Smaller objects get finer spacing, limited by available depth pixels. The fit budget limits computation; the full measured cloud still checks distances and the outline. Apply changes by closing and reopening the camera.</p>
+        </details>
+        <details><summary>Camera & tracking parameters</summary><p class="form-hint">Applied when opening the camera. Shared with demo extraction and live inference.</p><textarea id="flash-tracking-config" rows="15" spellcheck="false" onchange="flashTrackingSamplingSync()"></textarea></details>
         <button type="button" class="btn-small secondary" onclick="flashTrackingSave()">Save diagnostic snapshot</button>
         <div id="flash-tracking-message" role="status"></div>
     </section>`;
+}
+
+function flashTrackingSamplingSync() {
+    try {
+        const p = JSON.parse(document.getElementById('flash-tracking-config').value).vision_pipeline;
+        const values = {min:p.observation.min_surface_spacing_m * 1000,
+            max:p.observation.surface_spacing_m * 1000, across:p.observation.samples_across_object,
+            budget:p.shape.max_fit_points};
+        for (const [key,value] of Object.entries(values)) document.getElementById('flash-sampling-' + key).value = value ?? '';
+    } catch (error) { flashTrackingError(error); }
+}
+
+function flashTrackingSamplingChanged() {
+    try {
+        const field = document.getElementById('flash-tracking-config'), config = JSON.parse(field.value);
+        const value = key => Number(document.getElementById('flash-sampling-' + key).value);
+        config.vision_pipeline.observation.min_surface_spacing_m = value('min') / 1000;
+        config.vision_pipeline.observation.surface_spacing_m = value('max') / 1000;
+        config.vision_pipeline.observation.samples_across_object = value('across');
+        config.vision_pipeline.shape.max_fit_points = value('budget');
+        field.value = JSON.stringify(config, null, 2);
+    } catch (error) { flashTrackingError(error); }
 }
 
 async function flashTrackingApi(path, body) {
@@ -50,10 +80,10 @@ async function showFlashTracking() {
             <div class="flash-surface-grid">
                 <figure><figcaption>Live camera</figcaption><canvas id="flash-surface-preview"></canvas></figure>
                 <figure><figcaption id="flash-surface-caption">Fitted pose · source image</figcaption><canvas id="flash-surface-estimate" aria-label="Frozen image for object selection"></canvas></figure>
-                <figure><figcaption>3D surface · drag to orbit, scroll to zoom</figcaption><canvas id="flash-surface-cloud"></canvas></figure>
+                <figure><figcaption id="flash-surface-cloud-caption">3D object view · drag to orbit, scroll to zoom</figcaption><canvas id="flash-surface-cloud"></canvas></figure>
                 <figure class="flash-surface-diagnostics"><figcaption>Fit diagnostics</figcaption><p id="flash-surface-metrics"></p><p>Surface agreement is not calibrated confidence. This view uses vision only.</p></figure>
             </div>
-            <div class="flash-surface-legend"><label><input type="checkbox" id="flash-surface-mask" checked onchange="flashTrackingRender()">Cyan: observed mask / depth</label><label><input type="checkbox" id="flash-surface-reference" checked onchange="flashTrackingRender()">White: fitted reference</label><label><input type="checkbox" id="flash-surface-axes" checked onchange="flashTrackingRender()">A / B / C and axes</label><button type="button" onclick="flashTrackingYaw=flashTrackingPitch=0;flashTrackingZoom=1;flashTrackingRender()">Reset 3D view</button></div>
+            <div class="flash-surface-legend"><label><input type="checkbox" id="flash-surface-mask" checked onchange="flashTrackingRender()">Cyan: observed mask / depth</label><label><input type="checkbox" id="flash-surface-reference" checked onchange="flashTrackingRender()">White: fitted reference</label><label><input type="checkbox" id="flash-surface-axes" checked onchange="flashTrackingRender()">A / B / C and axes</label><label><input type="checkbox" id="flash-surface-follow" onchange="flashTrackingDrawCloud()">Follow scene pose</label><button type="button" onclick="flashTrackingYaw=flashTrackingPitch=0;flashTrackingZoom=1;flashTrackingRender()">Reset 3D view</button></div>
             <p class="form-hint">A / B / C and the axes stay attached to the initial partial surface. They do not mark the object's center of mass.</p>`;
         document.getElementById('run-main').prepend(view);
         document.getElementById('flash-surface-estimate').onclick = event => {
@@ -85,6 +115,7 @@ async function showFlashTracking() {
         flashTrackingDefaults ??= await flashTrackingApi('defaults');
         const config = document.getElementById('flash-tracking-config');
         if (!config.value) config.value = JSON.stringify(flashTrackingDefaults, null, 2);
+        flashTrackingSamplingSync();
         document.getElementById('flash-tracking-open').disabled = _isRunning;
     } catch (error) { flashTrackingError(error); }
     if (!flashTrackingTimer) flashTrackingPoll();
@@ -168,6 +199,7 @@ function flashTrackingRender() {
     if (data.config && config.dataset.session !== data.session_id) {
         config.value = JSON.stringify(data.config, null, 2);
         config.dataset.session = data.session_id;
+        flashTrackingSamplingSync();
         const camera = document.getElementById('flash-tracking-camera');
         const serial = data.config.serial || data.preview?.camera_serial;
         if (serial && !Array.from(camera.options).some(option => option.value === serial)) camera.add(new Option(serial, serial));
@@ -200,7 +232,7 @@ function flashTrackingRender() {
     document.getElementById('flash-surface-caption').textContent = estimate.status === 'frozen' ? `Frozen frame ${estimate.frame.frame_id} · click the object` : `Fitted pose · frame ${estimate.frame?.frame_id ?? '—'} · ${age === null ? '—' : Math.round(age) + ' ms old'}`;
     const d = estimate.diagnostics || {}, t = estimate.timings || {};
     const fmt = value => Number.isFinite(value) ? value.toFixed(1) : '—';
-    document.getElementById('flash-surface-metrics').textContent = `Pose proposal: ${estimate.accepted === true ? 'accepted' : 'unverified candidate'} · Camera ${fmt(data.preview?.capture_fps)} fps · Processing ${fmt(t.processed_fps)} fps · SAM ${fmt(t.mask_ms)} ms · RGB match ${fmt(d.match_ms)} ms · Surface fit ${fmt(d.fit_ms)} ms\nSurface gap median / p90: ${fmt(d.surface_median_mm)} / ${fmt(d.surface_p90_mm)} mm · ${d.surface_points ?? '—'} measured samples · ${d.inliers ?? '—'} RGB-D matches\nDepth pixels withheld: boundary ${d.boundary_count ?? '—'}, discontinuity ${d.edge_count ?? '—'} · Fixed reference frame ${d.reference_frame_id ?? '—'}`;
+    document.getElementById('flash-surface-metrics').textContent = `Pose proposal: ${estimate.accepted === true ? 'accepted' : 'unverified candidate'} · Camera ${fmt(data.preview?.capture_fps)} fps · Processing ${fmt(t.processed_fps)} fps · SAM ${fmt(t.mask_ms)} ms · RGB match ${fmt(d.match_ms)} ms · Surface fit ${fmt(d.fit_ms)} ms · Prepare ${fmt(d.preprocess_ms)} ms\nSurface gap median / p90: ${fmt(d.surface_median_mm)} / ${fmt(d.surface_p90_mm)} mm · ${d.surface_points ?? '—'} measured samples at ${fmt(d.sample_spacing_mm)} mm · Fit samples ${d.fit_reference_points ?? '—'} / ${d.fit_target_points ?? '—'} · ${d.inliers ?? '—'} RGB-D matches\nRotation this update: RGB ${fmt(d.rgb_rotation_deg)}° · surface correction ${fmt(d.surface_correction_deg)}° · final ${fmt(d.final_rotation_deg)}°\nDepth pixels withheld: boundary ${d.boundary_count ?? '—'}, discontinuity ${d.edge_count ?? '—'} · Fixed reference frame ${d.reference_frame_id ?? '—'}`;
     flashTrackingDrawCloud();
 }
 
@@ -222,13 +254,26 @@ function flashTrackingDrawCloud() {
     canvas.width = Math.max(400, canvas.clientWidth); canvas.height = Math.max(300, canvas.clientHeight);
     const ctx = canvas.getContext('2d'); ctx.fillStyle = '#0a1320'; ctx.fillRect(0,0,canvas.width,canvas.height);
     const e = flashTrackingSnapshot?.estimate || {};
-    const all = [...(e.observed_m || []), ...(e.reference_m || [])];
-    if (!all.length) return;
-    const center = [0,1,2].map(i => all.reduce((sum,p) => sum+p[i],0)/all.length);
-    const radius = Math.max(...all.map(p=> Math.hypot(...p.map((v,i)=>v-center[i]))), 0.001);
+    if (!e.reference_m?.length || !e.camera_from_reference) return;
+    const follow = document.getElementById('flash-surface-follow').checked;
+    document.getElementById('flash-surface-cloud-caption').textContent = follow
+        ? '3D scene pose · drag to orbit, scroll to zoom'
+        : '3D object view · pose removed · drag to orbit, scroll to zoom';
+    const pose = e.camera_from_reference;
+    const local = p => [0,1,2].map(i => [0,1,2].reduce((sum,j) => sum + pose[j][i] * (p[j] - pose[j][3]), 0));
+    const identity = `${flashTrackingSnapshot.session_id}:${e.command_id}:${e.diagnostics?.reference_frame_id}`;
+    if (flashTrackingFraming?.identity !== identity) {
+        const points = e.reference_m.map(local);
+        const center = [0,1,2].map(i => points.reduce((sum,p) => sum+p[i],0)/points.length);
+        let radius = 0.001;
+        for (const p of points) radius = Math.max(radius, Math.hypot(p[0]-center[0],p[1]-center[1],p[2]-center[2]));
+        flashTrackingFraming = {identity, center, radius};
+    }
+    // Framing belongs to the initial reference, never the changing visible patch.
+    const {center,radius} = flashTrackingFraming;
     const scale = Math.min(canvas.width,canvas.height) * 0.4 / radius * flashTrackingZoom;
     const project = p => {
-        const [x,y,z] = p.map((v,i)=>v-center[i]);
+        const [x,y,z] = (follow ? p : local(p)).map((v,i)=>v-center[i]);
         const X = Math.cos(flashTrackingYaw)*x + Math.sin(flashTrackingYaw)*z;
         const Z = -Math.sin(flashTrackingYaw)*x + Math.cos(flashTrackingYaw)*z;
         const Y = Math.cos(flashTrackingPitch)*y - Math.sin(flashTrackingPitch)*Z;

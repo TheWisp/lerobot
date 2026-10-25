@@ -65,6 +65,10 @@ class VisionPipelineConfig:
         for key, value in asdict(self.shape).items():
             if not np.isfinite(value) or value < 0 or (value == 0 and key != "mask_boundary_tolerance_px"):
                 raise ValueError(f"invalid shape setting: {key}")
+        if self.observation.min_surface_spacing_m > self.observation.surface_spacing_m:
+            raise ValueError("minimum surface spacing exceeds maximum spacing")
+        if self.shape.max_fit_points < 3:
+            raise ValueError("surface fitting needs at least three samples")
         motion = self.motion
         if (
             any(

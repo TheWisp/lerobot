@@ -24,6 +24,10 @@ class SurfaceObservationConfig:
     normal_bilateral_sigma_px: float = 2.0
     huber_m: float = 0.005
     surface_spacing_m: float = 0.003
+    # Keep small-object detail without making large surfaces equally expensive.
+    # Older experiment dictionaries without these fields keep fixed spacing.
+    samples_across_object: int = 64
+    min_surface_spacing_m: float = 0.001
     component_gap_m: float | None = 0.01
     validation_tile_px: int = 4
 
@@ -47,8 +51,51 @@ def unproject(depth: np.ndarray, intrinsics: np.ndarray) -> np.ndarray:
 def voxel_sample(points: np.ndarray, spacing: float) -> np.ndarray:
     if not len(points):
         return np.zeros(0, dtype=int)
-    _, selected = np.unique(np.floor(points / spacing).astype(np.int32), axis=0, return_index=True)
+    cells = np.floor(points / spacing).astype(np.int64)
+    cells -= cells.min(axis=0)
+    dimensions = cells.max(axis=0) + 1
+    # Scalar cell IDs avoid sorting structured XYZ records. Same voxels, same
+    # first measured pixel in each voxel; no averaging or invented depth.
+    if np.prod(dimensions.astype(object)) <= np.iinfo(np.int64).max:
+        keys = np.ravel_multi_index(cells.T, tuple(dimensions))
+        _, selected = np.unique(keys, return_index=True)
+    else:
+        _, selected = np.unique(cells, axis=0, return_index=True)
     return np.sort(selected)
+
+
+def surface_spacing(points: np.ndarray, config: dict) -> float:
+    """Adapt resolution to visible extent, with explicit sensor/work limits."""
+    coarse = config["surface_spacing_m"]
+    across = config.get("samples_across_object")
+    if not len(points) or not across:
+        return coarse
+    return float(
+        np.clip(np.max(np.ptp(points, axis=0)) / across, config.get("min_surface_spacing_m", coarse), coarse)
+    )
+
+
+def spatial_sample(points: np.ndarray, budget: int) -> np.ndarray:
+    """Bound residual queries, retaining spatial coverage instead of a prefix.
+
+    The full cloud still grounds nearest-neighbour distances. This only picks
+    which measured points contribute residuals; it does not simplify geometry.
+    """
+    if len(points) <= budget:
+        return np.arange(len(points))
+    extent = np.ptp(points, axis=0)
+    if not np.any(extent):
+        return np.array([0])
+    spacing = float(np.max(extent) / np.sqrt(budget))
+    local = points - points.min(axis=0)
+    selected = np.arange(len(points))
+    # Increase cells until the occupied-cell count fits the computational budget.
+    while len(selected) > budget:
+        # Anchor the grid at the cloud bounds: a grid straddling world zero
+        # cannot merge its octants even when spacing grows without bound.
+        selected = voxel_sample(local, spacing)
+        spacing *= max(1.1, np.sqrt(len(selected) / budget))
+    return selected
 
 
 def largest_connected_surface(points: np.ndarray, gap_m: float) -> np.ndarray:
@@ -89,7 +136,8 @@ def observation(depth: np.ndarray, mask: np.ndarray, intrinsics: np.ndarray, con
     normals /= np.maximum(norm[..., None], np.finfo(float).eps)
     normals[np.sum(normals * xyz, axis=-1) > 0] *= -1
     y, x = np.nonzero(valid)
-    selected = voxel_sample(xyz[y, x], config["surface_spacing_m"])
+    spacing = surface_spacing(xyz[y, x], config)
+    selected = voxel_sample(xyz[y, x], spacing)
     y, x = y[selected], x[selected]
     detached = 0
     if config.get("component_gap_m") is not None:
@@ -111,6 +159,7 @@ def observation(depth: np.ndarray, mask: np.ndarray, intrinsics: np.ndarray, con
         "edge_count": int((raw & interior & ~reliable).sum()),
         "clean_count": int(valid.sum()),
         "detached_count": detached,
+        "spacing_m": spacing,
     }
 
 
