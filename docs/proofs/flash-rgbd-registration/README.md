@@ -891,3 +891,17 @@ of that longer-term mismatch was not established here. Bounded computation is
 not a claim that the fixed partial reference remains valid through arbitrary
 segmentation changes or newly visible surfaces. The debugger was left in camera
 preview after profiling, ready for a new user selection.
+
+### Operator feedback and mechanism reference — 2026-10-25
+
+After trying the camera debugger on the tray and a small figurine, the operator
+reported this was the best tracker they had used. This is qualitative live-use
+feedback, alongside the slowdown and head/feet-swap observations above; it is
+not a controlled ranking or a pose-accuracy measurement.
+
+The [implementation reference](../../../src/lerobot/policies/flash/docs/surface_tracking.md)
+records the mechanism behind this result: one fixed partial reference,
+frame-to-frame RGB-D motion proposals, whole-surface depth/outline correction,
+shared publication checks, and independent inspection coordinates. It also
+separates the vision backend from group/gripper prediction and from the broader
+architecture's proposed capabilities.

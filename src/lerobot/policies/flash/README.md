@@ -1,5 +1,9 @@
 # FLASH implementation status
 
+For the live camera tracker, read [RGB-D surface tracking](docs/surface_tracking.md):
+its frame-by-frame mechanism, fixed reference, acceptance rules, shared consumers,
+configuration and debugging views.
+
 FLASH lives at **Run → FLASH**. The Run panel inspects a regular local LeRobot
 dataset episode and discovers spatial skill annotations and prepared references
 under that dataset's `flash/v1` extension. A source episode can have multiple

@@ -3,7 +3,9 @@
 Status: proposed
 
 The [implementation reference](../README.md) describes what currently runs;
-this document defines the intended contracts. The first recorded RGB-D matcher
+this document defines the intended contracts. The
+[RGB-D surface tracker reference](surface_tracking.md) describes the implemented
+SAM3/UFM/depth mechanism and its limits. The first recorded RGB-D matcher
 result and its limits are in [the replay note](rgbd_replay.md).
 
 FLASH is imitation learning with an explicit 3D representation of objects, relationships and actions. Its initial form performs direct imitation: retain how a demonstration accomplishes an interaction, and adapt the motion to the live scene. Teaching, testing and collecting robot data should be one workflow: record an interaction, try it in a changed scene, intervene when needed, and retain the whole experience. The sealed prototype demonstrated useful spatial adaptation, but its uncertain object estimates, execution rules and recording paths became entangled. More demonstrations need to improve what the robot can do, while producing ordinary LeRobot data augmented with 3D information for future learned models.
