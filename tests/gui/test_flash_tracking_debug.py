@@ -116,6 +116,57 @@ def test_live_debug_click_uses_painted_frozen_frame_not_latest_preview(gui_page)
     assert controls[0]["action"] == "select"
 
 
+@pytest.mark.requires_playwright
+@pytest.mark.skipif(importlib.util.find_spec("playwright") is None, reason="Playwright not installed")
+def test_object_closeup_uses_estimate_frame_and_observed_mask(gui_page):
+    import base64
+
+    import cv2
+    import numpy as np
+
+    page = gui_page
+    rgb = np.zeros((100, 200, 3), np.uint8)
+    rgb[:] = (0, 0, 255)
+    rgb[30:51, 110:131] = (255, 0, 0)
+    _, png = cv2.imencode(".png", cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
+    frame = {
+        "frame_id": 42,
+        "captured_s": 1.0,
+        "width": 200,
+        "height": 100,
+        "image": "data:image/png;base64," + base64.b64encode(png).decode(),
+    }
+    packet = {
+        "running": True,
+        "server_time_s": 1.1,
+        "preview": {**frame, "frame_id": 43},
+        "estimate": {
+            "status": "fitted",
+            "frame": frame,
+            "contours": [[[110, 30], [130, 30], [130, 50], [110, 50]]],
+        },
+    }
+    page.route("**/api/run/flash/tracking/state", lambda route: route.fulfill(json=packet))
+    page.evaluate("switchTab('run'); selectWorkflow('flash')")
+    page.get_by_role("button", name="Live tracking · camera only →").click()
+    page.wait_for_function("document.getElementById('flash-surface-local')?.dataset.frameId === '42'")
+    result = page.evaluate("""() => {
+        const full = document.getElementById('flash-surface-estimate');
+        const local = document.getElementById('flash-surface-local');
+        const rgb = (canvas,x,y) => Array.from(canvas.getContext('2d').getImageData(x,y,1,1).data).slice(0,3);
+        return {fullFrame:full.dataset.frameId, localFrame:local.dataset.frameId,
+            fullCenter:rgb(full,100,50), localCenter:rgb(local,100,50),
+            localBackground:rgb(local,10,10), caption:document.getElementById('flash-surface-local-caption').textContent,
+            crop:flashTrackingObjectCrop(flashTrackingSnapshot.estimate)};
+    }""")
+    assert result["fullFrame"] == result["localFrame"] == "42"
+    assert result["fullCenter"] == [0, 0, 255]
+    assert result["localCenter"] == [255, 0, 0]
+    assert result["localBackground"] == [0, 0, 255]
+    assert "frame 42" in result["caption"]
+    assert result["crop"]["source"] == "observed"
+
+
 def test_debugger_exports_the_common_configuration_and_migrates_old_payloads():
     request = flash_tracking.TrackingStart(sam_resolution=448, observation={"mask_margin_px": 3})
     saved = request.model_dump()

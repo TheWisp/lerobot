@@ -80,6 +80,7 @@ async function showFlashTracking() {
             <div class="flash-surface-grid">
                 <figure><figcaption>Live camera</figcaption><canvas id="flash-surface-preview"></canvas></figure>
                 <figure><figcaption id="flash-surface-caption">Fitted pose · source image</figcaption><canvas id="flash-surface-estimate" aria-label="Frozen image for object selection"></canvas></figure>
+                <figure><figcaption id="flash-surface-local-caption">Object close-up · select an object to zoom</figcaption><canvas id="flash-surface-local"></canvas></figure>
                 <figure><figcaption id="flash-surface-cloud-caption">3D object view · drag to orbit, scroll to zoom</figcaption><canvas id="flash-surface-cloud"></canvas></figure>
                 <figure class="flash-surface-diagnostics"><figcaption>Fit diagnostics</figcaption><p id="flash-surface-metrics"></p><p>Surface agreement is not calibrated confidence. This view uses vision only.</p></figure>
             </div>
@@ -169,7 +170,7 @@ async function flashTrackingPoll() {
     flashTrackingTimer = setTimeout(flashTrackingPoll, 200);
 }
 
-function flashTrackingPaint(id, frame, draw) {
+function flashTrackingPaint(id, frame, draw, crop = null) {
     const canvas = document.getElementById(id);
     const generation = (canvas._generation || 0) + 1;
     canvas._generation = generation;
@@ -181,14 +182,59 @@ function flashTrackingPaint(id, frame, draw) {
     const image = new Image();
     image.onload = () => {
         if (canvas._generation !== generation) return;
-        canvas.width = frame.width; canvas.height = frame.height;
+        canvas.width = crop ? Math.min(frame.width, 640) : frame.width;
+        canvas.height = crop ? Math.round(canvas.width * frame.height / frame.width) : frame.height;
         canvas.style.aspectRatio = `${frame.width} / ${frame.height}`;
         const ctx = canvas.getContext('2d');
-        ctx.drawImage(image, 0, 0);
+        if (crop) {
+            ctx.drawImage(image, crop.x, crop.y, crop.width, crop.height, 0, 0, canvas.width, canvas.height);
+            ctx.scale(canvas.width / crop.width, canvas.height / crop.height);
+            ctx.translate(-crop.x, -crop.y);
+        } else ctx.drawImage(image, 0, 0);
         canvas.dataset.frameId = String(frame.frame_id);
         if (draw) draw(ctx);
     };
     image.src = frame.image;
+}
+
+function flashTrackingObjectCrop(estimate) {
+    const frame = estimate.frame;
+    if (!frame) return null;
+    const observed = (estimate.contours || []).flat();
+    const points = observed.length ? observed : (estimate.reference_px || []);
+    let left = Infinity, right = -Infinity, top = Infinity, bottom = -Infinity;
+    for (const [x,y] of points) {
+        if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+        left = Math.min(left,x); right = Math.max(right,x);
+        top = Math.min(top,y); bottom = Math.max(bottom,y);
+    }
+    if (!Number.isFinite(left)) return null;
+    const aspect = frame.width / frame.height;
+    // Leave context around the observed object; limit magnification of tiny masks.
+    const width = Math.min(frame.width, Math.max(96, (right-left) * 1.5, (bottom-top) * 1.5 * aspect));
+    const height = width / aspect;
+    return {
+        x: Math.max(0, Math.min(frame.width-width, (left+right-width)/2)),
+        y: Math.max(0, Math.min(frame.height-height, (top+bottom-height)/2)),
+        width, height, source: observed.length ? 'observed' : 'reference',
+    };
+}
+
+function flashTrackingDrawEstimate(ctx, estimate) {
+    const visible = id => document.getElementById(id).checked;
+    const scale = ctx.getTransform().a;
+    ctx.lineWidth = 2 / scale;
+    if (visible('flash-surface-mask')) {
+        ctx.strokeStyle = '#42e4ec';
+        for (const points of estimate.contours || []) {
+            ctx.beginPath(); points.forEach(([x,y],i) => i ? ctx.lineTo(x,y) : ctx.moveTo(x,y)); ctx.closePath(); ctx.stroke();
+        }
+    }
+    if (visible('flash-surface-reference')) {
+        ctx.fillStyle = 'white';
+        for (const [x,y] of estimate.reference_px || []) ctx.fillRect(x-1/scale,y-1/scale,2/scale,2/scale);
+    }
+    if (visible('flash-surface-axes') && estimate.anchors_px) flashTrackingDrawAxes(ctx, estimate.anchors_px, estimate.axes_px);
 }
 
 function flashTrackingRender() {
@@ -212,21 +258,20 @@ function flashTrackingRender() {
     document.getElementById('flash-tracking-message').textContent = estimate.message || states[estimate.status] || '';
     document.getElementById('flash-tracking-open').disabled = data.running || !flashTrackingDefaults;
     flashTrackingPaint('flash-surface-preview', data.preview);
-    const visible = id => document.getElementById(id).checked;
+    const crop = flashTrackingObjectCrop(estimate);
     flashTrackingPaint('flash-surface-estimate', estimate.frame, ctx => {
-        ctx.lineWidth = 2;
-        if (visible('flash-surface-mask')) {
-            ctx.strokeStyle = '#42e4ec';
-            for (const points of estimate.contours || []) {
-                ctx.beginPath(); points.forEach(([x,y],i) => i ? ctx.lineTo(x,y) : ctx.moveTo(x,y)); ctx.closePath(); ctx.stroke();
-            }
+        flashTrackingDrawEstimate(ctx, estimate);
+        if (crop) {
+            ctx.strokeStyle = 'rgba(255,255,255,0.8)';
+            ctx.setLineDash([8,6]);
+            ctx.strokeRect(crop.x, crop.y, crop.width, crop.height);
         }
-        if (visible('flash-surface-reference')) {
-            ctx.fillStyle = 'white';
-            for (const [x,y] of estimate.reference_px || []) ctx.fillRect(x-1,y-1,2,2);
-        }
-        if (visible('flash-surface-axes') && estimate.anchors_px) flashTrackingDrawAxes(ctx, estimate.anchors_px, estimate.axes_px);
     });
+    flashTrackingPaint('flash-surface-local', crop ? estimate.frame : null,
+        ctx => flashTrackingDrawEstimate(ctx, estimate), crop);
+    document.getElementById('flash-surface-local-caption').textContent = crop
+        ? `Object close-up · frame ${estimate.frame.frame_id}${crop.source === 'reference' ? ' · no current mask' : ''}`
+        : 'Object close-up · select an object to zoom';
     document.getElementById('flash-surface-estimate').style.cursor = estimate.status === 'frozen' ? 'crosshair' : 'default';
     const age = estimate.frame ? Math.max(0, (data.server_time_s - estimate.frame.captured_s) * 1000) : null;
     document.getElementById('flash-surface-caption').textContent = estimate.status === 'frozen' ? `Frozen frame ${estimate.frame.frame_id} · click the object` : `Fitted pose · frame ${estimate.frame?.frame_id ?? '—'} · ${age === null ? '—' : Math.round(age) + ' ms old'}`;
@@ -237,10 +282,11 @@ function flashTrackingRender() {
 }
 
 function flashTrackingDrawAxes(ctx, anchors, axes) {
-    ctx.font = 'bold 18px sans-serif'; ctx.lineWidth = 3;
+    const scale = ctx.getTransform().a;
+    ctx.font = `bold ${18/scale}px sans-serif`; ctx.lineWidth = 3/scale;
     anchors.forEach(([x,y], i) => {
-        ctx.fillStyle = 'white'; ctx.strokeStyle = '#111'; ctx.beginPath(); ctx.arc(x,y,5,0,Math.PI*2); ctx.fill(); ctx.stroke();
-        ctx.strokeText('ABC'[i],x+8,y-8); ctx.fillText('ABC'[i],x+8,y-8);
+        ctx.fillStyle = 'white'; ctx.strokeStyle = '#111'; ctx.beginPath(); ctx.arc(x,y,5/scale,0,Math.PI*2); ctx.fill(); ctx.stroke();
+        ctx.strokeText('ABC'[i],x+8/scale,y-8/scale); ctx.fillText('ABC'[i],x+8/scale,y-8/scale);
     });
     axes.forEach(([x,y], i) => {
         ctx.strokeStyle = ['#ff5555','#58e280','#699bff'][i];

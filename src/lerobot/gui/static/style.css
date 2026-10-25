@@ -734,7 +734,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 #flash-tracking-status { color: #8bd5ff; }
 .flash-surface-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .flash-surface-grid figure { margin: 0; min-width: 0; background: #0a1320; }
-.flash-surface-grid figure:nth-child(3) { grid-column: 1; }
+.flash-surface-grid .flash-surface-diagnostics { grid-column: 1 / -1; }
 .flash-surface-grid figcaption { padding: 8px; color: #b8cce1; }
 .flash-surface-grid canvas { display: block; width: 100%; aspect-ratio: 16/9; height: auto; touch-action: none; }
 #flash-surface-cloud { cursor: grab; }
@@ -743,7 +743,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .flash-surface-diagnostics p { padding: 12px; color: #b8cce1; }
 @media (max-width: 950px) {
     .flash-surface-grid { grid-template-columns: minmax(0, 1fr); }
-    .flash-surface-grid figure:nth-child(3) { grid-column: 1; }
+    .flash-surface-grid .flash-surface-diagnostics { grid-column: 1; }
 }
 .flash-review-return { margin-bottom: 12px; }
 #run-section-flash[data-mode="review"] .flash-manual-setup,

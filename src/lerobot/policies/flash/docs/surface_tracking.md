@@ -286,6 +286,10 @@ The source-image panel shows the image used for that estimate, while **Live
 camera** can already be newer. Cyan shows the current mask/measured cloud;
 white shows the fixed reference at the proposed pose. A/B/C and axes belong to
 that reference. A rejected candidate remains visible with an unverified label.
+The **Object close-up** enlarges the observed mask region from that same source
+image; a dashed box marks its crop in the full image. If the current mask is
+missing, it frames the projected reference and labels that fallback. The crop
+changes only the display, not the pose computation.
 
 **3D object view** removes estimated scene motion from both clouds and preserves
 initial framing. White geometry therefore stays still by construction; inspect
