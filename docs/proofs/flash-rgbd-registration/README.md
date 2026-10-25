@@ -1,5 +1,61 @@
 # RGB-D registration of the held dowel
 
+## Live surface debugger (2026-10-25)
+
+Run → FLASH → **Live tracking · camera only** uses the same UFM proposal,
+filtered measured surface and whole-surface correction as this experiment.
+The common implementation is in
+`src/lerobot/policies/flash/surface_{observation,correspondence,grounding,tracking}.py`;
+the original experiment scripts import it.
+
+Open the RGB-D camera, then enter an object name or freeze an image and click
+the object. Each selection creates a new fixed partial reference. Inspect the
+SAM outline first: one click may select only part of an object. Reselect or
+use a description if that is not the intended region.
+
+The live camera and processed source image are separate, with frame IDs and
+estimate age. Geometry is drawn only on its own source image. A/B/C and the
+axes retain their initial coordinates; the rotatable 3D panel compares measured
+surface and fitted reference. This does **not** reconstruct the whole object.
+The origin is not its center of mass or a newly computed visible centroid.
+Missing mask/depth produces no current displayed pose. Fit agreement is not
+calibrated confidence or proof of accuracy.
+
+Capture has one latest-frame slot, independent of inference. SAM, UFM and
+fitting run sequentially in a separate process managed by the existing Run
+owner. This view tracks one selected object. No robot is connected or commanded;
+group/gripper fallback and the robot execution pipeline are unchanged.
+
+The parameter editor exposes camera, SAM resolution, depth filtering, RGB
+matching and fitting settings, applied on opening the camera. Snapshot downloads
+contain the applied configuration, source RGB, frame identities/times, clouds
+and transforms. These are diagnostic snapshots, not new episode recordings.
+
+The worker requires the SAM3 adapter dependencies plus UFM and UniCeption.
+Set `LEROBOT_FLASH_TRACKING_PYTHON` before starting the GUI to choose its Python;
+otherwise it uses the server interpreter. The rig has an isolated environment
+at `~/.cache/flash-live-tracking/.venv`, based on its existing LeRobot/SAM
+environment with the previously checked-out UFM and UniCeption sources.
+Start the GUI with this checkout's `src` on `PYTHONPATH` to avoid selecting
+another editable LeRobot installation.
+
+Validation: extracting the shared observation/fitter produced identical arrays,
+poses and costs on demo frames 0, 234, 279, 360, 435 and 514. Browser-driven live
+checks covered text selection, click selection, switching objects, orbiting,
+snapshot download and stopping the camera. Switching objects exposed a SAM
+reset/event-sequence bug: a new selection must clear the old clicked instance
+and advance its event IDs, while retaining model weights. Its regression test
+fails when that clearing is removed.
+
+The stationary live scene captured around 30 fps and processed around 4–5 fps
+(23 ms SAM, 34–40 ms UFM, 25–42 ms fitting, 90–104 ms surface preparation at
+1280×720). This verifies the debugging flow, **not** accuracy under new object
+motions or occlusions. No robot motion was used.
+
+![Live camera, aligned pose overlay, 3D surface and diagnostics](live_debug_ui.png)
+
+## Earlier offline audit
+
 **Vision-only held-interval audit, 2026-10-24:** the cached UFM + mask/depth
 trajectory is not uniformly stable while the fingers are closed. This audit
 reads the existing vision-only result; it does not feed gripper poses into it,

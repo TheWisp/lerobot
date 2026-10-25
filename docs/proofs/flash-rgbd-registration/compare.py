@@ -16,6 +16,15 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from lerobot.policies.flash.surface_correspondence import (
+    crop_pair,
+    full_pixels,
+    measured_pairs,
+    rigid_fit as rigid_fit,
+    robust_fit,
+    ufm_pairs,
+)
+
 HERE = Path(__file__).resolve().parent
 SURFACE = HERE.parent / "flash-mask-depth-tracker"
 sys.path.insert(0, str(SURFACE))
@@ -38,94 +47,6 @@ def frame_data(index: int, intrinsics: np.ndarray) -> dict:
     connected[px[:, 1], px[:, 0]] = 1
     connected = cv2.dilate(connected, np.ones((7, 7), np.uint8)) > 0
     return {"rgb": rgb, "depth": depth, "mask": mask, "obs": obs, "usable": obs["valid_image"] & connected}
-
-
-def crop_pair(a: dict, b: dict) -> tuple[np.ndarray, np.ndarray, tuple[float, float, float]]:
-    coords = np.concatenate((np.argwhere(a["mask"]), np.argwhere(b["mask"])))
-    y0, x0 = coords.min(axis=0)
-    y1, x1 = coords.max(axis=0)
-    size = max(160, int(max(y1 - y0, x1 - x0) * 2.5))
-    size = min(size, 480)
-    x = (x0 + x1) / 2 - size / 2
-    y = (y0 + y1) / 2 - size / 2
-    matrix = np.array([[320 / size, 0, -x * 320 / size], [0, 320 / size, -y * 320 / size]], np.float32)
-    images = [
-        cv2.warpAffine(
-            item["rgb"], matrix, (320, 320), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT
-        )
-        for item in (a, b)
-    ]
-    return images[0], images[1], (x, y, size)
-
-
-def full_pixels(crop_pixels: np.ndarray, crop: tuple[float, float, float]) -> np.ndarray:
-    x, y, size = crop
-    return (crop_pixels + 0.5) * size / 320 + np.array([x, y]) - 0.5
-
-
-def measured_pairs(
-    a: dict, b: dict, uv_a: np.ndarray, uv_b: np.ndarray, intrinsics: np.ndarray
-) -> tuple[np.ndarray, np.ndarray]:
-    ua = np.rint(uv_a).astype(np.int32)
-    ub = np.rint(uv_b).astype(np.int32)
-    height, width = a["depth"].shape
-    bounds = (
-        (ua[:, 0] >= 0)
-        & (ua[:, 0] < width)
-        & (ua[:, 1] >= 0)
-        & (ua[:, 1] < height)
-        & (ub[:, 0] >= 0)
-        & (ub[:, 0] < width)
-        & (ub[:, 1] >= 0)
-        & (ub[:, 1] < height)
-    )
-    ua, ub = ua[bounds], ub[bounds]
-    good = a["usable"][ua[:, 1], ua[:, 0]] & b["usable"][ub[:, 1], ub[:, 0]]
-    ua, ub = ua[good], ub[good]
-    z_a, z_b = a["depth"][ua[:, 1], ua[:, 0]], b["depth"][ub[:, 1], ub[:, 0]]
-
-    def lift(uv: np.ndarray, z: np.ndarray) -> np.ndarray:
-        return np.column_stack(
-            (
-                (uv[:, 0] - intrinsics[0, 2]) * z / intrinsics[0, 0],
-                (uv[:, 1] - intrinsics[1, 2]) * z / intrinsics[1, 1],
-                z,
-            )
-        )
-
-    return lift(ua, z_a), lift(ub, z_b)
-
-
-def rigid_fit(source: np.ndarray, target: np.ndarray) -> np.ndarray:
-    x, y = source.mean(axis=0), target.mean(axis=0)
-    u, _, vh = np.linalg.svd((source - x).T @ (target - y))
-    fix = np.diag([1, 1, np.linalg.det(u @ vh)])
-    rotation = (u @ fix @ vh).T
-    transform = np.eye(4)
-    transform[:3, :3] = rotation
-    transform[:3, 3] = y - rotation @ x
-    return transform
-
-
-def robust_fit(source: np.ndarray, target: np.ndarray) -> tuple[np.ndarray | None, int, float]:
-    if len(source) < 6:
-        return None, 0, float("nan")
-    ok, _, inliers = cv2.estimateAffine3D(source, target, ransacThreshold=0.006, confidence=0.99)
-    if not ok or inliers is None or int(inliers.sum()) < 6:
-        return None, 0, float("nan")
-    active = inliers.ravel() > 0
-    pose = rigid_fit(source[active], target[active])
-    for _ in range(2):
-        residuals = np.linalg.norm(move(source, pose) - target, axis=1)
-        active = residuals < 0.006
-        if active.sum() < 6:
-            return None, int(active.sum()), float("nan")
-        pose = rigid_fit(source[active], target[active])
-    return (
-        pose,
-        int(active.sum()),
-        float(np.median(np.linalg.norm(move(source[active], pose) - target[active], axis=1))),
-    )
 
 
 def colored_icp(a: dict, b: dict, weight: float) -> tuple[np.ndarray | None, int, float]:
@@ -160,25 +81,6 @@ def colored_icp(a: dict, b: dict, weight: float) -> tuple[np.ndarray | None, int
         int(round(result.fitness * len(a["obs"]["points"]))),
         float(result.inlier_rmse),
     )
-
-
-def ufm_pairs(
-    model, image_a: np.ndarray, image_b: np.ndarray, crop, a: dict, b: dict, intrinsics: np.ndarray
-):
-    import torch
-
-    with torch.inference_mode():
-        output = model.predict_correspondences_batched(
-            torch.from_numpy(image_a.copy()).cuda(), torch.from_numpy(image_b.copy()).cuda()
-        )
-    flow = output.flow.flow_output[0].detach().float().cpu().numpy()
-    visible = output.covisibility.mask[0].detach().float().cpu().numpy()
-    ys, xs = np.mgrid[4:316:4, 4:316:4]
-    ys, xs = ys.ravel(), xs.ravel()
-    keep = visible[ys, xs] >= 0.5
-    uv_a = np.column_stack((xs[keep], ys[keep])).astype(float)
-    uv_b = uv_a + flow[:, ys[keep], xs[keep]].T
-    return measured_pairs(a, b, full_pixels(uv_a, crop), full_pixels(uv_b, crop), intrinsics)
 
 
 def roma_pairs(

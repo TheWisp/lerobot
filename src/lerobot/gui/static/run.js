@@ -19,6 +19,7 @@ function _flashUpdateWorkspace() {
     const reviewing = selectedWorkflow === 'flash' && flashUiMode === 'review' &&
         !(_isRunning && _runCommand === 'flash');
     document.getElementById('tab-run').classList.toggle('flash-reviewing', reviewing);
+    document.getElementById('tab-run').classList.toggle('flash-tracking', selectedWorkflow === 'flash' && flashUiMode === 'tracking');
     const section = document.getElementById('run-section-flash');
     if (section) {
         section.dataset.mode = flashUiMode;
@@ -43,8 +44,9 @@ function showFlashLiveSetup() {
     document.getElementById('run-flash-manual-setup').open = true;
 }
 
-function showFlashReview() {
+async function showFlashReview() {
     if (_isRunning && _runCommand === 'flash') return;
+    if (_isRunning && _runCommand === 'flash_tracking') await flashTrackingStop();
     flashUiMode = 'review';
     _flashUpdateWorkspace();
 }
@@ -2478,7 +2480,9 @@ function renderRunForm() {
     html += '<div id="run-flash-demos" class="flash-recordings">Loading demos…</div>';
     html += '<div id="run-flash-recordings" class="flash-recordings">Loading rollouts…</div>';
     html += '<button type="button" class="flash-live-entry" onclick="showFlashLiveSetup()">Set up live trial →</button></div>';
+    html += '<button type="button" class="flash-live-entry flash-tracking-entry" onclick="showFlashTracking()">Live tracking · camera only →</button>';
     html += '<button type="button" class="flash-review-return" onclick="showFlashReview()">← Back to recordings</button>';
+    html += flashTrackingForm();
     html += '<details class="flash-manual-setup" id="run-flash-manual-setup"><summary>Open another dataset or run a live trial</summary>';
     html += '<div class="form-grid">';
     html += '<label>Dataset</label>';
@@ -3359,6 +3363,7 @@ async function pollRunStatus() {
         const status = await res.json();
         _reportRunFailure(status.last_error);
         updateRunUI(status.running, status.command);
+        if (status.running && status.command === 'flash_tracking' && selectedWorkflow === 'flash' && flashUiMode !== 'tracking') await showFlashTracking();
         if (status.running && status.command === 'flash' && selectedWorkflow === 'flash') startFlashTelemetry();
         else if (!status.running) stopFlashTelemetry();
 
@@ -3439,7 +3444,7 @@ function updateRunUI(isRunning, command = null) {
         if (btn) btn.disabled = !controlsLive;
     }
 
-    formInputs.forEach(el => el.disabled = isRunning);
+    formInputs.forEach(el => el.disabled = isRunning && !(command === 'flash_tracking' && el.closest('#flash-tracking-setup')));
     workflowBtns.forEach(el => el.disabled = isRunning);
 
     const indicator = document.getElementById('run-status-indicator');

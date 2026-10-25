@@ -38,6 +38,7 @@ class Sam3MaskSource:
         device: str = "cuda",
         resolution: int | None = None,
         seed_points_by_role: dict[str, tuple[float, float]] | None = None,
+        click_sequence_start: int = 1,
         adapter_factory: Callable[..., object] | None = None,
     ) -> None:
         if (
@@ -55,6 +56,11 @@ class Sam3MaskSource:
         self.resolution = resolution
         self.adapter_factory = adapter_factory
         self.seed_points_by_role = dict(seed_points_by_role or {})
+        # reset() preserves clicked instances across scrubs. Reusing an adapter
+        # for a new selection must continue its monotonically increasing events.
+        if click_sequence_start < 1:
+            raise ValueError("click sequence must be positive")
+        self.click_sequence_start = click_sequence_start
         if set(self.seed_points_by_role) - set(self.prompts):
             raise ValueError("point-seeded role lacks an object prompt")
         self._adapter = None
@@ -77,7 +83,9 @@ class Sam3MaskSource:
             self._adapter.set_control(
                 {"prompt": " . ".join(text_prompts), "text_detection": bool(text_prompts)}
             )
-            for sequence, (role, (x, y)) in enumerate(self.seed_points_by_role.items(), start=1):
+            for sequence, (role, (x, y)) in enumerate(
+                self.seed_points_by_role.items(), start=self.click_sequence_start
+            ):
                 if not 0 <= x < frame.depth.shape[1] or not 0 <= y < frame.depth.shape[0]:
                     raise ValueError(f"{role}: point seed lies outside the aligned frame")
                 self._adapter.set_control(

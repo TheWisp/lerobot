@@ -718,6 +718,31 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 #run-section-flash[data-library-tab="rollouts"] #run-flash-demos { display: none; }
 .flash-live-entry, .flash-review-return { padding: 8px 10px; background: transparent; color: #8bd5ff; border: 1px solid #31516c; border-radius: 4px; cursor: pointer; text-align: left; }
 .flash-live-entry { margin-top: 8px; }
+#flash-tracking-setup, #flash-surface-view { display: none; }
+#run-section-flash[data-mode="tracking"] > :not(#flash-tracking-setup):not(.flash-review-return) { display: none; }
+#run-section-flash[data-mode="tracking"] #flash-tracking-setup { display: flex; flex-direction: column; gap: 10px; }
+#flash-tracking-config { width: 100%; box-sizing: border-box; font-family: monospace; font-size: 12px; }
+#flash-tracking-message { white-space: pre-wrap; overflow-wrap: anywhere; color: #8bd5ff; }
+#tab-run.flash-tracking #flash-surface-view { display: flex; flex: 1; min-height: 0; flex-direction: column; padding: 16px; gap: 12px; overflow: auto; }
+#tab-run.flash-tracking #run-main > :not(#flash-surface-view),
+#tab-run.flash-tracking .run-actions { display: none !important; }
+#tab-run.flash-tracking #overlays-panel-run,
+#tab-run.flash-tracking #run-overlays-resize { display: none !important; }
+#flash-surface-view header { display: flex; flex-wrap: wrap; gap: 20px; }
+#flash-tracking-status { color: #8bd5ff; }
+.flash-surface-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.flash-surface-grid figure { margin: 0; min-width: 0; background: #0a1320; }
+.flash-surface-grid figure:nth-child(3) { grid-column: 1; }
+.flash-surface-grid figcaption { padding: 8px; color: #b8cce1; }
+.flash-surface-grid canvas { display: block; width: 100%; aspect-ratio: 16/9; height: auto; touch-action: none; }
+#flash-surface-cloud { cursor: grab; }
+.flash-surface-legend { display: flex; gap: 14px; flex-wrap: wrap; align-items: center; }
+#flash-surface-metrics { white-space: pre-line; line-height: 1.7; margin: 0; }
+.flash-surface-diagnostics p { padding: 12px; color: #b8cce1; }
+@media (max-width: 950px) {
+    .flash-surface-grid { grid-template-columns: minmax(0, 1fr); }
+    .flash-surface-grid figure:nth-child(3) { grid-column: 1; }
+}
 .flash-review-return { margin-bottom: 12px; }
 #run-section-flash[data-mode="review"] .flash-manual-setup,
 #run-section-flash[data-mode="review"] .flash-review-return,
