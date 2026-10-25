@@ -284,6 +284,7 @@ def test_object_inspection_removes_pose_but_scene_toggle_restores_it(gui_page):
     page.evaluate("switchTab('run'); selectWorkflow('flash')")
     page.get_by_role("button", name="Live tracking · camera only →").click()
     page.wait_for_selector("#flash-surface-cloud")
+    page.wait_for_function("flashTrackingCloudViewer !== null")
     result = page.evaluate("""() => {
         clearTimeout(flashTrackingTimer);
         const reference = [[0,0,1],[.1,0,1],[0,.1,1],[.07,.02,1.05]];
@@ -306,11 +307,40 @@ def test_object_inspection_removes_pose_but_scene_toggle_restores_it(gui_page):
         document.getElementById('flash-surface-follow').click();
         const scene = image();
         document.getElementById('flash-surface-follow').click();
-        flashTrackingYaw=.5; flashTrackingDrawCloud();
-        const orbited = image();
-        return {same:before===after, unchangedFraming, sceneChanged:scene!==after, orbitWorks:orbited!==after};
+        return {same:before===after, unchangedFraming, sceneChanged:scene!==after};
     }""")
-    assert result == {"same": True, "unchangedFraming": True, "sceneChanged": True, "orbitWorks": True}
+    assert result == {"same": True, "unchangedFraming": True, "sceneChanged": True}
+    before = page.evaluate("() => flashTrackingCloudViewer.camera.position.toArray()")
+    canvas = page.locator("#flash-surface-cloud")
+    box = canvas.bounding_box()
+    page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+    page.mouse.down()
+    page.mouse.move(box["x"] + box["width"] / 2 + 80, box["y"] + box["height"] / 2 + 40)
+    page.mouse.up()
+    after = page.evaluate("() => flashTrackingCloudViewer.camera.position.toArray()")
+    assert before != after
+    assert page.evaluate(
+        "() => sessionStorage.getItem(`flashSurfaceView:${flashTrackingCloudViewer.identity}`) !== null"
+    )
+    target_before = page.evaluate("() => flashTrackingCloudViewer.controls.target.toArray()")
+    page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+    page.mouse.down(button="right")
+    page.mouse.move(box["x"] + box["width"] / 2 + 50, box["y"] + box["height"] / 2 + 20)
+    page.mouse.up(button="right")
+    target_after = page.evaluate("() => flashTrackingCloudViewer.controls.target.toArray()")
+    assert target_before != target_after
+    distance_before = page.evaluate("""() => flashTrackingCloudViewer.camera.position.distanceTo(
+        flashTrackingCloudViewer.controls.target)""")
+    page.mouse.wheel(0, -300)
+    distance_after = page.evaluate("""() => flashTrackingCloudViewer.camera.position.distanceTo(
+        flashTrackingCloudViewer.controls.target)""")
+    assert distance_after < distance_before
+    page.get_by_role("button", name="Reset 3D view").click()
+    reset_target = page.evaluate("() => flashTrackingCloudViewer.controls.target.toArray()")
+    assert reset_target != target_after
+    assert page.evaluate(
+        "() => sessionStorage.getItem(`flashSurfaceView:${flashTrackingCloudViewer.identity}`) === null"
+    )
 
 
 @pytest.mark.requires_playwright

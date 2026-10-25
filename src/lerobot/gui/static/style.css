@@ -743,6 +743,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .flash-surface-grid figcaption { padding: 8px; color: #b8cce1; }
 .flash-surface-grid canvas { display: block; width: 100%; aspect-ratio: 16/9; height: auto; touch-action: none; }
 #flash-surface-cloud { cursor: grab; }
+#flash-surface-cloud:active { cursor: grabbing; }
 .flash-surface-legend { display: flex; gap: 14px; flex-wrap: wrap; align-items: center; }
 #flash-surface-metrics { white-space: pre-line; line-height: 1.7; margin: 0; }
 .flash-surface-diagnostics p { padding: 12px; color: #b8cce1; }

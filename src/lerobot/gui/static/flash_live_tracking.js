@@ -4,7 +4,7 @@ let flashTrackingSnapshot = null;
 let flashTrackingDefaults = null;
 let flashTrackingBusy = false;
 let flashTrackingFraming = null;
-let flashTrackingYaw = 0, flashTrackingPitch = 0, flashTrackingZoom = 1;
+let flashTrackingCloudViewer = null;
 let flashTrackingFocusRole = null;
 let flashTrackingSessionId = null;
 let flashTrackingRenderedRole = null;
@@ -85,10 +85,10 @@ async function showFlashTracking() {
                 <figure><figcaption>Live camera</figcaption><canvas id="flash-surface-preview"></canvas></figure>
                 <figure><figcaption id="flash-surface-caption">Fitted poses · source image</figcaption><canvas id="flash-surface-estimate" aria-label="Fitted poses and frozen image for object selection"></canvas></figure>
                 <figure><figcaption id="flash-surface-local-caption">Object close-up · select an object to zoom</figcaption><canvas id="flash-surface-local"></canvas></figure>
-                <figure><figcaption id="flash-surface-cloud-caption">3D object view · drag to orbit, scroll to zoom</figcaption><canvas id="flash-surface-cloud"></canvas></figure>
+                <figure><figcaption id="flash-surface-cloud-caption">3D object view · left drag orbit · right drag pan · scroll zoom</figcaption><canvas id="flash-surface-cloud"></canvas></figure>
                 <figure class="flash-surface-diagnostics"><figcaption id="flash-surface-diagnostics-caption">Fit diagnostics</figcaption><p id="flash-surface-metrics"></p><p>Surface agreement is not calibrated confidence. This view uses vision only.</p></figure>
             </div>
-            <div class="flash-surface-legend"><label><input type="checkbox" id="flash-surface-mask" checked onchange="flashTrackingRender()">Cyan: observed mask / depth</label><label><input type="checkbox" id="flash-surface-reference" checked onchange="flashTrackingRender()">White: fitted reference</label><label><input type="checkbox" id="flash-surface-axes" checked onchange="flashTrackingRender()">A / B / C and axes</label><label><input type="checkbox" id="flash-surface-follow" onchange="flashTrackingDrawCloud()">Follow scene pose</label><button type="button" onclick="flashTrackingYaw=flashTrackingPitch=0;flashTrackingZoom=1;flashTrackingRender()">Reset 3D view</button></div>
+            <div class="flash-surface-legend"><label><input type="checkbox" id="flash-surface-mask" checked onchange="flashTrackingRender()">Cyan: observed mask / depth</label><label><input type="checkbox" id="flash-surface-reference" checked onchange="flashTrackingRender()">White: fitted reference</label><label><input type="checkbox" id="flash-surface-axes" checked onchange="flashTrackingRender()">A / B / C and axes</label><label><input type="checkbox" id="flash-surface-follow" onchange="flashTrackingDrawCloud()">Follow scene pose</label><button type="button" onclick="flashTrackingCloudViewer?.reset()">Reset 3D view</button></div>
             <p class="form-hint">A / B / C and the axes stay attached to the initial partial surface. They do not mark the object's center of mass.</p>`;
         document.getElementById('run-main').prepend(view);
         document.getElementById('flash-surface-estimate').onclick = event => {
@@ -102,21 +102,13 @@ async function showFlashTracking() {
                 frame_id: estimate.frame.frame_id,
             });
         };
-        const cloud = document.getElementById('flash-surface-cloud');
-        cloud.onpointerdown = event => cloud.setPointerCapture(event.pointerId);
-        cloud.onpointermove = event => {
-            if (!cloud.hasPointerCapture(event.pointerId)) return;
-            flashTrackingYaw += event.movementX * 0.01;
-            flashTrackingPitch += event.movementY * 0.01;
-            flashTrackingDrawCloud();
-        };
-        cloud.onwheel = event => {
-            event.preventDefault();
-            flashTrackingZoom = Math.max(0.1, Math.min(10, flashTrackingZoom * Math.exp(-event.deltaY * 0.001)));
-            flashTrackingDrawCloud();
-        };
     }
     try {
+        if (!flashTrackingCloudViewer) {
+            const {createFlashSurfaceCloud} = await import('/static/flash_surface_cloud.js?v=1');
+            flashTrackingCloudViewer = createFlashSurfaceCloud(document.getElementById('flash-surface-cloud'));
+            flashTrackingDrawCloud();
+        }
         flashTrackingDefaults ??= await flashTrackingApi('defaults');
         const config = document.getElementById('flash-tracking-config');
         if (!config.value) config.value = JSON.stringify(flashTrackingDefaults, null, 2);
@@ -269,7 +261,6 @@ function flashTrackingRenderObjectList(tracks) {
             button.append(label,status);
             button.onclick = () => {
                 flashTrackingFocusRole = track.role;
-                flashTrackingYaw = flashTrackingPitch = 0; flashTrackingZoom = 1;
                 flashTrackingRender();
             };
             list.append(button);
@@ -378,16 +369,16 @@ function flashTrackingDrawAxes(ctx, anchors, axes) {
 }
 
 function flashTrackingDrawCloud() {
-    const canvas = document.getElementById('flash-surface-cloud');
-    if (!canvas) return;
-    canvas.width = Math.max(400, canvas.clientWidth); canvas.height = Math.max(300, canvas.clientHeight);
-    const ctx = canvas.getContext('2d'); ctx.fillStyle = '#0a1320'; ctx.fillRect(0,0,canvas.width,canvas.height);
+    if (!flashTrackingCloudViewer) return;
     const e = flashTrackingFocusedEstimate();
-    if (!e.reference_m?.length || !e.camera_from_reference) return;
+    if (!e.reference_m?.length || !e.camera_from_reference) {
+        flashTrackingCloudViewer.update(null);
+        return;
+    }
     const follow = document.getElementById('flash-surface-follow').checked;
     document.getElementById('flash-surface-cloud-caption').textContent = follow
-        ? `3D scene pose · ${e.object_name || 'object'} · drag to orbit, scroll to zoom`
-        : `3D object view · ${e.object_name || 'object'} · pose removed · drag to orbit, scroll to zoom`;
+        ? `3D scene pose · ${e.object_name || 'object'} · left drag orbit · right drag pan · scroll zoom`
+        : `3D object view · ${e.object_name || 'object'} · pose removed · left drag orbit · right drag pan · scroll zoom`;
     const pose = e.camera_from_reference;
     const local = p => [0,1,2].map(i => [0,1,2].reduce((sum,j) => sum + pose[j][i] * (p[j] - pose[j][3]), 0));
     const identity = `${flashTrackingSnapshot.session_id}:${e.role}:${e.diagnostics?.reference_frame_id}`;
@@ -399,21 +390,12 @@ function flashTrackingDrawCloud() {
         flashTrackingFraming = {identity, center, radius};
     }
     // Framing belongs to the initial reference, never the changing visible patch.
-    const {center,radius} = flashTrackingFraming;
-    const scale = Math.min(canvas.width,canvas.height) * 0.4 / radius * flashTrackingZoom;
-    const project = p => {
-        const [x,y,z] = (follow ? p : local(p)).map((v,i)=>v-center[i]);
-        const X = Math.cos(flashTrackingYaw)*x + Math.sin(flashTrackingYaw)*z;
-        const Z = -Math.sin(flashTrackingYaw)*x + Math.cos(flashTrackingYaw)*z;
-        const Y = Math.cos(flashTrackingPitch)*y - Math.sin(flashTrackingPitch)*Z;
-        return [canvas.width/2+X*scale, canvas.height/2+Y*scale];
-    };
-    for (const [key,color,toggle] of [['observed_m','#42e4ec','flash-surface-mask'],['reference_m','#ffffff','flash-surface-reference']]) {
-        if (!document.getElementById(toggle).checked) continue;
-        ctx.fillStyle = color;
-        for (const point of e[key] || []) { const [x,y]=project(point); ctx.fillRect(x-1,y-1,2,2); }
-    }
-    if (e.anchors_m && document.getElementById('flash-surface-axes').checked) flashTrackingDrawAxes(ctx,e.anchors_m.map(project),e.axes_m.map(project));
+    flashTrackingCloudViewer.update(e, {
+        identity, centerLocal: flashTrackingFraming.center, radius: flashTrackingFraming.radius, follow,
+        showObserved: document.getElementById('flash-surface-mask').checked,
+        showReference: document.getElementById('flash-surface-reference').checked,
+        showAxes: document.getElementById('flash-surface-axes').checked,
+    });
 }
 
 function flashTrackingSave() {
