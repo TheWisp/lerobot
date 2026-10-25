@@ -1,0 +1,86 @@
+{
+  "ring_visible_motion": {
+    "cpu_ms": [
+      494.85969700617716,
+      495.5798870068975,
+      491.890336968936
+    ],
+    "gpu_same_solver_ms": [
+      752.0348829566501,
+      848.7305360031314,
+      747.8669040137902
+    ],
+    "gpu_upload_and_warmup_ms": 315.7416179892607,
+    "cpu_cost": 0.12351136479499322,
+    "gpu_pose_cpu_cost": 0.11798764570698977,
+    "cpu_evaluations": 50,
+    "gpu_evaluations": 50,
+    "cpu_used_coarse": false,
+    "gpu_used_coarse": false,
+    "position_delta_mm": 3.3672186625557985,
+    "rotation_delta_deg": 1.7709805050576983
+  },
+  "dowel_held_315": {
+    "cpu_ms": [
+      277.00981096131727,
+      278.85774796595797,
+      258.4955329657532
+    ],
+    "gpu_same_solver_ms": [
+      919.0062429988757,
+      1041.489944967907,
+      924.8958209645934
+    ],
+    "gpu_upload_and_warmup_ms": 23.99020199663937,
+    "cpu_cost": 8.78061760643067,
+    "gpu_pose_cpu_cost": 9.088906847640903,
+    "cpu_evaluations": 87,
+    "gpu_evaluations": 91,
+    "cpu_used_coarse": true,
+    "gpu_used_coarse": true,
+    "position_delta_mm": 1.570281832732903,
+    "rotation_delta_deg": 3.625724617014054
+  },
+  "dowel_static_0": {
+    "cpu_ms": [
+      101.21989500476047,
+      96.77792701404542,
+      99.78196601150557
+    ],
+    "gpu_same_solver_ms": [
+      299.6442139847204,
+      304.92446094285697,
+      277.3420619778335
+    ],
+    "gpu_upload_and_warmup_ms": 2.9563800198957324,
+    "cpu_cost": 0.2238398964797887,
+    "gpu_pose_cpu_cost": 0.2253786885101668,
+    "cpu_evaluations": 23,
+    "gpu_evaluations": 30,
+    "cpu_used_coarse": false,
+    "gpu_used_coarse": false,
+    "position_delta_mm": 16.036621888303607,
+    "rotation_delta_deg": 2.4282730246693665
+  },
+  "dowel_static_13": {
+    "cpu_ms": [
+      67.42464401759207,
+      67.39572901278734,
+      63.519688963424414
+    ],
+    "gpu_same_solver_ms": [
+      428.907074034214,
+      341.24156401958317,
+      344.1825750051066
+    ],
+    "gpu_upload_and_warmup_ms": 14.51869698939845,
+    "cpu_cost": 0.22859578519055235,
+    "gpu_pose_cpu_cost": 0.22524513097291607,
+    "cpu_evaluations": 19,
+    "gpu_evaluations": 35,
+    "cpu_used_coarse": false,
+    "gpu_used_coarse": false,
+    "position_delta_mm": 5.43870697361656,
+    "rotation_delta_deg": 0.6432447114704379
+  }
+}

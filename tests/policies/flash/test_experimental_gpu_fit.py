@@ -17,7 +17,7 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 @pytest.mark.parametrize("name", ["ring", "dowel"])
 def test_cuda_residual_matches_cpu_for_multiple_poses(name):
-    from lerobot.policies.flash.experimental_gpu_fit import GpuWholeSurfaceFit
+    from lerobot.policies.flash.experimental_gpu_fit import GpuResidualScipyFit, GpuWholeSurfaceFit
 
     if name == "ring":
         recorded = np.load(FIXTURES / "ring_visible_motion_20261016.npz")
@@ -39,6 +39,7 @@ def test_cuda_residual_matches_cpu_for_multiple_poses(name):
         ShapeConfig(),
     )
     gpu = GpuWholeSurfaceFit(cpu)
+    same_solver_gpu = GpuResidualScipyFit(cpu)
     initial = recorded["candidate"] if name == "dowel" else np.eye(4)
     for rotvec, offset in [([0.0, 0.0, 0.0], [0.0, 0.0, 0.0]), ([0.03, -0.02, 0.01], [0.002, 0.0, 0.0])]:
         pose = initial.copy()
@@ -46,3 +47,4 @@ def test_cuda_residual_matches_cpu_for_multiple_poses(name):
         pose[:3, 3] += offset
         actual = gpu.residuals(gpu.tensor(pose)[None], gpu._hull_indices(pose))[0].cpu().numpy()
         np.testing.assert_allclose(actual, cpu.residual(pose), rtol=1e-5, atol=1e-6)
+        np.testing.assert_allclose(same_solver_gpu.residual(pose), cpu.residual(pose), rtol=1e-5, atol=1e-6)

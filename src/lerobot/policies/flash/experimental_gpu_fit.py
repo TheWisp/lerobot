@@ -242,3 +242,21 @@ class GpuWholeSurfaceFit:
             "used_coarse": False,
             "iterations": local_iterations + alternative_iterations,
         }
+
+
+class GpuResidualScipyFit(WholeSurfaceFit):
+    """Use the production SciPy solver with only its residual evaluated on CUDA.
+
+    This is a controlled device comparison. Each candidate pose keeps the
+    production solver, dynamic outline, convergence rule and branch choice.
+    It is intentionally synchronous and remains outside the live backend.
+    """
+
+    def __init__(self, cpu: WholeSurfaceFit):
+        self.__dict__.update(cpu.__dict__)
+        self.gpu_residual = GpuWholeSurfaceFit(cpu)
+
+    def residual(self, pose: np.ndarray) -> np.ndarray:
+        gpu = self.gpu_residual
+        hull = gpu._hull_indices(pose)
+        return gpu.residuals(gpu.tensor(pose)[None], hull)[0].cpu().numpy()

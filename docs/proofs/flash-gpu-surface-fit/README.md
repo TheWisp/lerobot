@@ -62,9 +62,32 @@ together. The raw three-repeat data is in
 algorithms are mathematically equivalent here; the **different optimizer is a
 comparability flaw** in the earlier full-fit benchmark.
 
+[`compare_same_solver.py`](compare_same_solver.py) goes further: it runs the
+production `WholeSurfaceFit` SciPy optimizer and branch selection unchanged,
+replacing only `residual()` with CUDA evaluation. Three-repeat median fit times
+under the active camera worker were:
+
+| Recorded case       | CPU solver + CPU residual | Same solver + GPU residual | Final pose difference |
+| ------------------- | ------------------------: | -------------------------: | --------------------: |
+| Ring moving         |                    495 ms |                     752 ms |          3.4 mm, 1.8° |
+| Held dowel          |                    277 ms |                     925 ms |          1.6 mm, 3.6° |
+| Stationary dowel 0  |                    100 ms |                     300 ms |         16.0 mm, 2.4° |
+| Stationary dowel 13 |                     67 ms |                     344 ms |          5.4 mm, 0.6° |
+
+The [raw same-solver result](same_solver_comparison.json) still has different
+final poses. The production solver estimates derivatives by perturbing its six
+pose variables at very small steps. At a `1e-8` metre translation step, the
+CPU and CUDA residual difference is amplified into a roughly 5% difference in
+one derivative on the two stationary frames; at `1e-5` metre it is below
+0.005%. Thus _the optimizer code is now identical_, but its numerical path is
+sensitive to tiny residual changes. The controlled same-pose residual test
+above remains the clean speed comparison for the objective alone. Changing
+the production derivative rule requires its own accuracy and regression study.
+
 **Decision:** keep the CPU fitter as the default. The same-pose residual path
-is slower on CUDA in these cases, and solver-level pose equivalence is not yet
-established. Moving the remaining 7–17 ms of frame preparation to CUDA cannot
+and the same-solver full fit are both slower on CUDA in these cases, and
+solver-level pose equivalence is not yet established. Moving the remaining
+7–17 ms of frame preparation to CUDA cannot
 recover the observed fit-time gap by itself. Before considering a switch,
 benchmark a GPU implementation with equivalent convergence and hull updates
 on multi-object live frames, then compare both measured pose quality and total
