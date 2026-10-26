@@ -13,7 +13,7 @@ follow. Its insertion interval alone contains 137 demonstrated samples (frames
 377–513). A reset-to-insertion registration skips the action and cannot
 validate execution.
 
-## Does a cross-run surface match choose the least movement?
+## Does a cross-run surface match choose a feasible gripper path?
 
 I checked this directly on four saved trial starts. For each trial, the existing
 RGB-D benchmark supplied several alignments of the clear demo dowel (frame 100)
@@ -60,34 +60,56 @@ visibility-aware check, not just this plotted fraction.
 
 ![Three alignments of measured demo surface points projected into one live frame. Green points agree with live depth, red are nearer, gray are behind it, orange are outside the logged outline, and purple have no live depth. White marks the current gripper; yellow marks the candidate approach goal and tool axis.](goal-choice-203310.jpg)
 
-The demo gripper covers the dowel end farther from the ring at frame 204,
-leaving the other end exposed for insertion. The two registration candidates
-below map that demo grasped end to **opposite** ends of the live dowel. The
-shortest-position candidate maps it to the end nearer the live ring. These are
-candidate cross-run correspondences, not verified identities of material
-points. End interchangeability may make either useful, but the later grasp and
-insertion motion must use the same correspondence throughout.
+The demo gripper covers end A of the dowel at frame 204, leaving end B exposed.
+The candidate registrations below map A to **opposite** ends of the live dowel.
+The ring is visible only as scene context; its position does **not** choose
+the grasp. What matters for this choice is whether the left gripper can follow
+the transformed demo approach and grasp without excessive joint travel. These
+are candidate cross-run correspondences, not verified identities of material
+points. If either physical end can be used, the later insertion motion must
+remain consistent with whichever correspondence is chosen.
 
 ![Demo before and during grasp, followed by two candidate mappings of its grasped and free dowel ends into the same live image. The shortest-position candidate swaps the ends relative to the best-cloud-overlap candidate.](demo-grasp-end-comparison.jpg)
 
-The proposed surface-first strategy remains viable: check the candidate against
-the observed geometry, then compare the resulting full gripper goals for the
-next keyframe and choose a feasible low-motion one. For example, in the 20:33
-trial a second strong candidate covered 98.2% versus the best candidate's
-98.3%, while reducing the straight-line position change from 118.9 to 116.3 mm
-and the turn from 50.3° to 46.5°. Its exact-pixel mask-and-depth support is
-also higher, 87.5% versus 84.5%; that fraction is a diagnostic, not a calibrated
-fit-validity score. This does not need a named dowel symmetry rule; it does
-need an explicit motion choice among supported matches. The four clear starts
-yielded **no demonstrated counterexample** to choosing the least motion among
-fully checked geometric matches; that hypothesis remains to be tested through
-the ordered live stages.
+I then tested the transformed gripper path for the 20:33 trial from the
+recorded **left-arm joint state**. This check interpolated 16 gripper poses for
+each of the two approach connections and then followed the 25 demonstrated
+grasp samples, seeding each IK solve from the preceding joint solution. It used
+the trial's 3 mm and 3° goal tolerances and 10 IK refinements. The 57 poses
+were geometric checks only; they were not executed on the robot.
+The [gripper-path audit](../../../benchmarks/flash_cross_run_gripper_path.py)
+and its [results for all 28 saved matches](gripper-path-all-203310.json)
+preserve the inputs, settings and per-candidate failures. Fifteen matches
+solved all 57 sampled goals; that says nothing yet about collision safety or
+whether each underlying surface fit is valid.
 
-These numbers are **Cartesian goal differences**, not collision-free path
-lengths or completed actions. The saved registration ranking uses nearest-cloud
-coverage, not a final strict mask/depth acceptance test, and this audit does
-not run IK or evaluate obstacles. It establishes the selection problem on
-real cross-run observations, not that the resulting action will succeed.
+| Candidate                    | Two-way cloud coverage | First goal: position / rotation change | Approach and grasp IK                                      | Largest cumulative motion of one joint |
+| ---------------------------- | ---------------------: | -------------------------------------: | ---------------------------------------------------------- | -------------------------------------: |
+| Best cloud overlap (`orb`)   |                  98.3% |                           119 mm / 50° | All 57 poses solved                                        |                                   172° |
+| `fpfh_ransac`                |                  98.2% |                           116 mm / 47° | All 57 poses solved                                        |                                   127° |
+| `fpfh_fgr`                   |                  96.9% |                           114 mm / 48° | All 57 poses solved                                        |                                   115° |
+| Shortest position (`pca_23`) |                  74.7% |                           54 mm / 171° | Failed at approach sample 11 of 16; 24.7 mm position error |                         Not applicable |
+
+The three higher-coverage examples put B on the camera-right end of the live
+dowel. The maximum-coverage match is **not** the least costly gripper path:
+`fpfh_ransac` fits almost as well and cuts the largest joint's cumulative
+motion from 172° to 127°. `fpfh_fgr` cuts it to 115° with lower measured cloud
+coverage; no calibrated validity rule yet says whether that trade is acceptable.
+The 54 mm option puts B on the left and is shorter only in Cartesian position
+for the first goal. It asks for about 171° of gripper reorientation, and this
+sampled approach could not be solved. A different path or IK seed might change
+that result, so this is not a proof of global unreachability. None of these
+checks includes collisions, motor tracking or the later insertion.
+
+The general selection rule is therefore: retain plausible geometry matches,
+transform the **ordered demo gripper trajectory** under each match, reject
+paths that fail IK or clearance, then rank the surviving gripper paths by
+execution cost such as travel and duration. The ring's pose becomes relevant
+when planning the later insertion, not when deciding which end the left hand
+can grasp. The earlier four-start table measures only first-goal Cartesian
+differences; it is not a ranking of executable gripper trajectories. Exact-
+pixel mask-and-depth support was 87.5% for `fpfh_ransac` and 84.5% for `orb`,
+but that fraction is diagnostic, not a calibrated fit-validity score.
 
 ![Ordered demo keyframes. Orange marks the saved dowel mask and cyan marks the ring mask.](keyframes.jpg)
 

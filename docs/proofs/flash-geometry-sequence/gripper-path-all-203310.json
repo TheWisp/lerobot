@@ -1,0 +1,597 @@
+{
+  "basis": "recorded motor state and saved cross-run registration candidates",
+  "skill": "/home/feit/.cache/huggingface/lerobot/demos/insertion/flash/v1/prepared/insertion-migrated-v10-preferred-hover/skill.json",
+  "trial": "/home/feit/.cache/huggingface/lerobot/demos/flash_insertion_trial_20261020_020-20261020-203310-655401",
+  "registration_report": "docs/proofs/flash-cross-episode/rgbd-registration/trial-203310/report.json",
+  "arm": "left",
+  "interval_count": 3,
+  "connection_samples": 16,
+  "ik_refinement_attempts": 10,
+  "position_tolerance_m": 0.003,
+  "rotation_tolerance_deg": 3,
+  "limits": "No collision, motor-tracking, or alternative-path search; IK failure is not a proof of global unreachability.",
+  "candidates": [
+    {
+      "method": "orb",
+      "two_way_cloud_coverage": 0.9826156726397433,
+      "first_goal_translation_mm": 118.9234661675577,
+      "first_goal_rotation_deg": 50.323975197692626,
+      "solved_goals": 57,
+      "failure": null,
+      "joint_travel_deg": {
+        "shoulder_pan": 61.51334148838104,
+        "shoulder_lift": 128.92370481680862,
+        "elbow_flex": 62.22516083437915,
+        "forearm_roll": 107.3708636841024,
+        "wrist_flex": 69.15235289629325,
+        "wrist_roll": 172.13360467795277
+      },
+      "max_joint_travel_deg": 172.13360467795277,
+      "max_sample_joint_step_deg": 21.708636602671277
+    },
+    {
+      "method": "fpfh_ransac",
+      "two_way_cloud_coverage": 0.9818133190692698,
+      "first_goal_translation_mm": 116.26385699698598,
+      "first_goal_rotation_deg": 46.542418808518555,
+      "solved_goals": 57,
+      "failure": null,
+      "joint_travel_deg": {
+        "shoulder_pan": 48.60037670201267,
+        "shoulder_lift": 116.32272220964789,
+        "elbow_flex": 57.49889072667567,
+        "forearm_roll": 62.576833855675225,
+        "wrist_flex": 62.07516599274328,
+        "wrist_roll": 127.24348173961671
+      },
+      "max_joint_travel_deg": 127.24348173961671,
+      "max_sample_joint_step_deg": 12.939652487187693
+    },
+    {
+      "method": "fpfh_fgr",
+      "two_way_cloud_coverage": 0.9692431131318534,
+      "first_goal_translation_mm": 114.04610228121263,
+      "first_goal_rotation_deg": 47.95701822405547,
+      "solved_goals": 57,
+      "failure": null,
+      "joint_travel_deg": {
+        "shoulder_pan": 38.83617003454862,
+        "shoulder_lift": 115.3714127184369,
+        "elbow_flex": 66.41995607917103,
+        "forearm_roll": 46.7256987172602,
+        "wrist_flex": 56.332671767507044,
+        "wrist_roll": 104.3977198563846
+      },
+      "max_joint_travel_deg": 115.3714127184369,
+      "max_sample_joint_step_deg": 12.122101256888243
+    },
+    {
+      "method": "pca_03",
+      "two_way_cloud_coverage": 0.9681733083712223,
+      "first_goal_translation_mm": 113.2356199272262,
+      "first_goal_rotation_deg": 47.526662532275274,
+      "solved_goals": 57,
+      "failure": null,
+      "joint_travel_deg": {
+        "shoulder_pan": 54.21326682949035,
+        "shoulder_lift": 117.44384665672374,
+        "elbow_flex": 52.918524572356944,
+        "forearm_roll": 83.91385470784645,
+        "wrist_flex": 64.99944395037946,
+        "wrist_roll": 148.80616984333287
+      },
+      "max_joint_travel_deg": 148.80616984333287,
+      "max_sample_joint_step_deg": 15.563264229381076
+    },
+    {
+      "method": "pca_00",
+      "two_way_cloud_coverage": 0.9515913345814389,
+      "first_goal_translation_mm": 110.84975547228284,
+      "first_goal_rotation_deg": 133.5803392962045,
+      "solved_goals": 57,
+      "failure": null,
+      "joint_travel_deg": {
+        "shoulder_pan": 31.121495545795092,
+        "shoulder_lift": 121.11190951033424,
+        "elbow_flex": 85.93166738795166,
+        "forearm_roll": 48.12155563905183,
+        "wrist_flex": 61.83865209186567,
+        "wrist_roll": 153.8266939463294
+      },
+      "max_joint_travel_deg": 153.8266939463294,
+      "max_sample_joint_step_deg": 16.017075988662228
+    },
+    {
+      "method": "pca_06",
+      "two_way_cloud_coverage": 0.9507889810109655,
+      "first_goal_translation_mm": 109.91894659910574,
+      "first_goal_rotation_deg": 49.08169082480626,
+      "solved_goals": 57,
+      "failure": null,
+      "joint_travel_deg": {
+        "shoulder_pan": 35.38115869777047,
+        "shoulder_lift": 114.7018865827196,
+        "elbow_flex": 66.53518959378889,
+        "forearm_roll": 42.2393357874907,
+        "wrist_flex": 54.7444144485254,
+        "wrist_roll": 97.62259698939114
+      },
+      "max_joint_travel_deg": 114.7018865827196,
+      "max_sample_joint_step_deg": 11.958365526774799
+    },
+    {
+      "method": "pca_14",
+      "two_way_cloud_coverage": 0.9376838726932335,
+      "first_goal_translation_mm": 107.766535538007,
+      "first_goal_rotation_deg": 49.04675075951228,
+      "solved_goals": 57,
+      "failure": null,
+      "joint_travel_deg": {
+        "shoulder_pan": 35.08933574733266,
+        "shoulder_lift": 113.79942154215198,
+        "elbow_flex": 64.76795536714057,
+        "forearm_roll": 42.03199655642809,
+        "wrist_flex": 54.133253131533074,
+        "wrist_roll": 97.84255272864202
+      },
+      "max_joint_travel_deg": 113.79942154215198,
+      "max_sample_joint_step_deg": 11.753139299786369
+    },
+    {
+      "method": "pca_10",
+      "two_way_cloud_coverage": 0.9371489703129179,
+      "first_goal_translation_mm": 107.4771442532209,
+      "first_goal_rotation_deg": 48.35426030552882,
+      "solved_goals": 57,
+      "failure": null,
+      "joint_travel_deg": {
+        "shoulder_pan": 37.07857685761437,
+        "shoulder_lift": 113.01304001630845,
+        "elbow_flex": 60.11504619630597,
+        "forearm_roll": 45.00978540524047,
+        "wrist_flex": 54.05189396517347,
+        "wrist_roll": 103.53694452805696
+      },
+      "max_joint_travel_deg": 113.01304001630845,
+      "max_sample_joint_step_deg": 11.66094958516996
+    },
+    {
+      "method": "pca_05",
+      "two_way_cloud_coverage": 0.930462690558973,
+      "first_goal_translation_mm": 105.26928931253913,
+      "first_goal_rotation_deg": 134.87679253718755,
+      "solved_goals": 57,
+      "failure": null,
+      "joint_travel_deg": {
+        "shoulder_pan": 20.038240734916005,
+        "shoulder_lift": 110.54686885253862,
+        "elbow_flex": 58.47487891251859,
+        "forearm_roll": 43.719633131526805,
+        "wrist_flex": 44.952823994512364,
+        "wrist_roll": 150.6489137142652
+      },
+      "max_joint_travel_deg": 150.6489137142652,
+      "max_sample_joint_step_deg": 13.942102825543259
+    },
+    {
+      "method": "pca_22",
+      "two_way_cloud_coverage": 0.9144156191495052,
+      "first_goal_translation_mm": 112.13787512992326,
+      "first_goal_rotation_deg": 133.9065952320371,
+      "solved_goals": 57,
+      "failure": null,
+      "joint_travel_deg": {
+        "shoulder_pan": 29.851369499504695,
+        "shoulder_lift": 121.82553567953043,
+        "elbow_flex": 86.0598245966565,
+        "forearm_roll": 46.94540371876469,
+        "wrist_flex": 61.808959976730904,
+        "wrist_roll": 151.56513112105188
+      },
+      "max_joint_travel_deg": 151.56513112105188,
+      "max_sample_joint_step_deg": 15.460316285760186
+    },
+    {
+      "method": "pca_09",
+      "two_way_cloud_coverage": 0.9071944370152447,
+      "first_goal_translation_mm": 104.75728391136532,
+      "first_goal_rotation_deg": 48.22691492513018,
+      "solved_goals": 57,
+      "failure": null,
+      "joint_travel_deg": {
+        "shoulder_pan": 38.52117627391731,
+        "shoulder_lift": 111.57733691475055,
+        "elbow_flex": 56.329581516896724,
+        "forearm_roll": 47.60670051379702,
+        "wrist_flex": 54.65206098107793,
+        "wrist_roll": 109.08349461194575
+      },
+      "max_joint_travel_deg": 111.57733691475055,
+      "max_sample_joint_step_deg": 11.234103488453968
+    },
+    {
+      "method": "pca_19",
+      "two_way_cloud_coverage": 0.9037175715431933,
+      "first_goal_translation_mm": 104.36290680459719,
+      "first_goal_rotation_deg": 49.09840882192958,
+      "solved_goals": 57,
+      "failure": null,
+      "joint_travel_deg": {
+        "shoulder_pan": 35.16538064508977,
+        "shoulder_lift": 112.22377967642446,
+        "elbow_flex": 59.62150581569317,
+        "forearm_roll": 42.65337650668717,
+        "wrist_flex": 52.99110216146817,
+        "wrist_roll": 100.13855632285502
+      },
+      "max_joint_travel_deg": 112.22377967642446,
+      "max_sample_joint_step_deg": 11.277628159256551
+    },
+    {
+      "method": "pca_12",
+      "two_way_cloud_coverage": 0.898903450120353,
+      "first_goal_translation_mm": 114.81855267405798,
+      "first_goal_rotation_deg": 133.19605950942892,
+      "solved_goals": 57,
+      "failure": null,
+      "joint_travel_deg": {
+        "shoulder_pan": 34.42526832238508,
+        "shoulder_lift": 129.53734590602426,
+        "elbow_flex": 101.72884538374173,
+        "forearm_roll": 50.88142961824136,
+        "wrist_flex": 70.93219371275309,
+        "wrist_roll": 150.2368205945663
+      },
+      "max_joint_travel_deg": 150.2368205945663,
+      "max_sample_joint_step_deg": 17.268789884434568
+    },
+    {
+      "method": "pca_21",
+      "two_way_cloud_coverage": 0.8729606846750468,
+      "first_goal_translation_mm": 101.57814742945489,
+      "first_goal_rotation_deg": 48.93922946539075,
+      "solved_goals": 57,
+      "failure": null,
+      "joint_travel_deg": {
+        "shoulder_pan": 34.96550414156826,
+        "shoulder_lift": 111.26779872225963,
+        "elbow_flex": 57.71556368862949,
+        "forearm_roll": 42.5620634878092,
+        "wrist_flex": 52.56374467683414,
+        "wrist_roll": 100.56837586268857
+      },
+      "max_joint_travel_deg": 111.26779872225963,
+      "max_sample_joint_step_deg": 11.007510071814522
+    },
+    {
+      "method": "pca_11",
+      "two_way_cloud_coverage": 0.8462155656592671,
+      "first_goal_translation_mm": 135.2929638196562,
+      "first_goal_rotation_deg": 160.24633461769074,
+      "solved_goals": 6,
+      "failure": {
+        "interval_index": 0,
+        "interval": "segment-00-line",
+        "goal_index": 7,
+        "position_error_mm": 17.611976437052608,
+        "rotation_error_deg": 0.13830132451749869
+      },
+      "joint_travel_deg": {
+        "shoulder_pan": 6.474312288689164,
+        "shoulder_lift": 128.7489491172255,
+        "elbow_flex": 95.19572875928338,
+        "forearm_roll": 9.285877224214717,
+        "wrist_flex": 56.01277359989717,
+        "wrist_roll": 8.717190086043054
+      },
+      "max_joint_travel_deg": 128.7489491172255,
+      "max_sample_joint_step_deg": 37.11364727473698
+    },
+    {
+      "method": "pca_17",
+      "two_way_cloud_coverage": 0.842471248997058,
+      "first_goal_translation_mm": 137.70433870908468,
+      "first_goal_rotation_deg": 167.21835234925751,
+      "solved_goals": 6,
+      "failure": {
+        "interval_index": 0,
+        "interval": "segment-00-line",
+        "goal_index": 7,
+        "position_error_mm": 26.88133034864441,
+        "rotation_error_deg": 0.2101775712639027
+      },
+      "joint_travel_deg": {
+        "shoulder_pan": 6.844295056711699,
+        "shoulder_lift": 133.28120392128073,
+        "elbow_flex": 100.3156318752978,
+        "forearm_roll": 9.613717143457738,
+        "wrist_flex": 59.02200208933611,
+        "wrist_roll": 9.905363653157913
+      },
+      "max_joint_travel_deg": 133.28120392128073,
+      "max_sample_joint_step_deg": 38.43633792248865
+    },
+    {
+      "method": "pca_16",
+      "two_way_cloud_coverage": 0.8376571275742177,
+      "first_goal_translation_mm": 135.38743666253959,
+      "first_goal_rotation_deg": 150.98742206391728,
+      "solved_goals": 6,
+      "failure": {
+        "interval_index": 0,
+        "interval": "segment-00-line",
+        "goal_index": 7,
+        "position_error_mm": 9.997361092218972,
+        "rotation_error_deg": 0.07891869535422949
+      },
+      "joint_travel_deg": {
+        "shoulder_pan": 2.3117089174592103,
+        "shoulder_lift": 124.37827854242633,
+        "elbow_flex": 91.23861136973412,
+        "forearm_roll": 5.811904437539467,
+        "wrist_flex": 53.551662721827284,
+        "wrist_roll": 8.358571476078446
+      },
+      "max_joint_travel_deg": 124.37827854242633,
+      "max_sample_joint_step_deg": 35.81157628535708
+    },
+    {
+      "method": "pca_20",
+      "two_way_cloud_coverage": 0.8360524204332709,
+      "first_goal_translation_mm": 134.58582221360842,
+      "first_goal_rotation_deg": 150.49166650684938,
+      "solved_goals": 6,
+      "failure": {
+        "interval_index": 0,
+        "interval": "segment-00-line",
+        "goal_index": 7,
+        "position_error_mm": 8.114172819912442,
+        "rotation_error_deg": 0.06473081602697385
+      },
+      "joint_travel_deg": {
+        "shoulder_pan": 2.7612513477060467,
+        "shoulder_lift": 123.60324259220593,
+        "elbow_flex": 90.19758582019739,
+        "forearm_roll": 6.889590192692138,
+        "wrist_flex": 52.923608133283835,
+        "wrist_roll": 7.27219616616106
+      },
+      "max_joint_travel_deg": 123.60324259220593,
+      "max_sample_joint_step_deg": 35.59422814145627
+    },
+    {
+      "method": "pca_02",
+      "two_way_cloud_coverage": 0.8290986894891682,
+      "first_goal_translation_mm": 134.5476268315415,
+      "first_goal_rotation_deg": 148.5867323844577,
+      "solved_goals": 6,
+      "failure": {
+        "interval_index": 0,
+        "interval": "segment-00-line",
+        "goal_index": 7,
+        "position_error_mm": 4.470522348822116,
+        "rotation_error_deg": 0.0369521361493561
+      },
+      "joint_travel_deg": {
+        "shoulder_pan": 3.149084843960196,
+        "shoulder_lift": 122.22204193000833,
+        "elbow_flex": 88.41491565785842,
+        "forearm_roll": 7.512913916563412,
+        "wrist_flex": 51.87184213668576,
+        "wrist_roll": 7.229046902735228
+      },
+      "max_joint_travel_deg": 122.22204193000833,
+      "max_sample_joint_step_deg": 35.16321631502309
+    },
+    {
+      "method": "pca_15",
+      "two_way_cloud_coverage": 0.8288312382990104,
+      "first_goal_translation_mm": 137.24902242333619,
+      "first_goal_rotation_deg": 171.37074353225188,
+      "solved_goals": 6,
+      "failure": {
+        "interval_index": 0,
+        "interval": "segment-00-line",
+        "goal_index": 7,
+        "position_error_mm": 31.745555084119434,
+        "rotation_error_deg": 0.24793382721186996
+      },
+      "joint_travel_deg": {
+        "shoulder_pan": 7.16847927376844,
+        "shoulder_lift": 136.54830789686258,
+        "elbow_flex": 104.43902417270753,
+        "forearm_roll": 9.611667563784238,
+        "wrist_flex": 61.600875248832025,
+        "wrist_roll": 10.673922884422545
+      },
+      "max_joint_travel_deg": 136.54830789686258,
+      "max_sample_joint_step_deg": 39.1069466944662
+    },
+    {
+      "method": "pca_04",
+      "two_way_cloud_coverage": 0.8253543728269591,
+      "first_goal_translation_mm": 69.04073936411743,
+      "first_goal_rotation_deg": 162.15640380578463,
+      "solved_goals": 8,
+      "failure": {
+        "interval_index": 0,
+        "interval": "segment-00-line",
+        "goal_index": 9,
+        "position_error_mm": 22.48536093712029,
+        "rotation_error_deg": 0.27526840231914484
+      },
+      "joint_travel_deg": {
+        "shoulder_pan": 62.00467449404132,
+        "shoulder_lift": 163.56942575116864,
+        "elbow_flex": 84.23481450875754,
+        "forearm_roll": 56.606865153347435,
+        "wrist_flex": 51.65863023470713,
+        "wrist_roll": 116.00044002818521
+      },
+      "max_joint_travel_deg": 163.56942575116864,
+      "max_sample_joint_step_deg": 37.312312871767716
+    },
+    {
+      "method": "pca_01",
+      "two_way_cloud_coverage": 0.8200053490238032,
+      "first_goal_translation_mm": 65.68401625173415,
+      "first_goal_rotation_deg": 165.17572041347657,
+      "solved_goals": 8,
+      "failure": {
+        "interval_index": 0,
+        "interval": "segment-00-line",
+        "goal_index": 9,
+        "position_error_mm": 25.157120230984116,
+        "rotation_error_deg": 0.31836018329494953
+      },
+      "joint_travel_deg": {
+        "shoulder_pan": 63.47102346333547,
+        "shoulder_lift": 165.33954557744727,
+        "elbow_flex": 83.60024708950169,
+        "forearm_roll": 56.99088452267832,
+        "wrist_flex": 51.061379326148554,
+        "wrist_roll": 116.16711661872773
+      },
+      "max_joint_travel_deg": 165.33954557744727,
+      "max_sample_joint_step_deg": 37.29109448233183
+    },
+    {
+      "method": "pca_07",
+      "two_way_cloud_coverage": 0.8130516180797005,
+      "first_goal_translation_mm": 141.81089901879582,
+      "first_goal_rotation_deg": 171.107763280758,
+      "solved_goals": 6,
+      "failure": {
+        "interval_index": 0,
+        "interval": "segment-00-line",
+        "goal_index": 7,
+        "position_error_mm": 35.43795406335341,
+        "rotation_error_deg": 0.27514862936294815
+      },
+      "joint_travel_deg": {
+        "shoulder_pan": 3.5807539132084525,
+        "shoulder_lift": 137.68117683905493,
+        "elbow_flex": 106.9393251892752,
+        "forearm_roll": 7.896529585770736,
+        "wrist_flex": 63.33697259705161,
+        "wrist_roll": 7.224856138665522
+      },
+      "max_joint_travel_deg": 137.68117683905493,
+      "max_sample_joint_step_deg": 39.49365615367408
+    },
+    {
+      "method": "pca_23",
+      "two_way_cloud_coverage": 0.7465788139888495,
+      "first_goal_translation_mm": 54.199605931471,
+      "first_goal_rotation_deg": 170.75289547355413,
+      "solved_goals": 10,
+      "failure": {
+        "interval_index": 0,
+        "interval": "segment-00-line",
+        "goal_index": 11,
+        "position_error_mm": 24.724867560076973,
+        "rotation_error_deg": 0.3563198236431839
+      },
+      "joint_travel_deg": {
+        "shoulder_pan": 60.293357652717255,
+        "shoulder_lift": 166.08122338680624,
+        "elbow_flex": 77.30325295717061,
+        "forearm_roll": 57.38318738060816,
+        "wrist_flex": 49.681230759454024,
+        "wrist_roll": 83.80367438787562
+      },
+      "max_joint_travel_deg": 166.08122338680624,
+      "max_sample_joint_step_deg": 25.85038862648512
+    },
+    {
+      "method": "pca_18",
+      "two_way_cloud_coverage": 0.718955904713634,
+      "first_goal_translation_mm": 64.61240400584906,
+      "first_goal_rotation_deg": 164.48771713825903,
+      "solved_goals": 11,
+      "failure": {
+        "interval_index": 0,
+        "interval": "segment-00-line",
+        "goal_index": 12,
+        "position_error_mm": 9.049412176741953,
+        "rotation_error_deg": 0.1556569749681426
+      },
+      "joint_travel_deg": {
+        "shoulder_pan": 58.41177896398936,
+        "shoulder_lift": 161.3476242012388,
+        "elbow_flex": 74.85240688363086,
+        "forearm_roll": 61.01780833542991,
+        "wrist_flex": 49.84730182658413,
+        "wrist_roll": 73.90002983356297
+      },
+      "max_joint_travel_deg": 161.3476242012388,
+      "max_sample_joint_step_deg": 21.787206430683653
+    },
+    {
+      "method": "pca_08",
+      "two_way_cloud_coverage": 0.7108464267612773,
+      "first_goal_translation_mm": 64.42955691821106,
+      "first_goal_rotation_deg": 164.49326156653106,
+      "solved_goals": 11,
+      "failure": {
+        "interval_index": 0,
+        "interval": "segment-00-line",
+        "goal_index": 12,
+        "position_error_mm": 4.171541679233168,
+        "rotation_error_deg": 0.07340521182996361
+      },
+      "joint_travel_deg": {
+        "shoulder_pan": 58.48691903456729,
+        "shoulder_lift": 160.30070549802588,
+        "elbow_flex": 73.16400905246695,
+        "forearm_roll": 61.1897882162814,
+        "wrist_flex": 48.86191208798269,
+        "wrist_roll": 72.9059415816858
+      },
+      "max_joint_travel_deg": 160.30070549802588,
+      "max_sample_joint_step_deg": 21.542866257794856
+    },
+    {
+      "method": "pca_13",
+      "two_way_cloud_coverage": 0.7024835276229092,
+      "first_goal_translation_mm": 61.541770379066136,
+      "first_goal_rotation_deg": 165.767168862536,
+      "solved_goals": 11,
+      "failure": {
+        "interval_index": 0,
+        "interval": "segment-00-line",
+        "goal_index": 12,
+        "position_error_mm": 7.172672724516374,
+        "rotation_error_deg": 0.1275786676718805
+      },
+      "joint_travel_deg": {
+        "shoulder_pan": 58.95027969356212,
+        "shoulder_lift": 162.29044614289077,
+        "elbow_flex": 72.2211764636269,
+        "forearm_roll": 61.64634201217095,
+        "wrist_flex": 48.33114531394307,
+        "wrist_roll": 74.41519547196265
+      },
+      "max_joint_travel_deg": 162.29044614289077,
+      "max_sample_joint_step_deg": 21.751380601768112
+    },
+    {
+      "method": "point_to_plane_icp",
+      "two_way_cloud_coverage": 0.0,
+      "first_goal_translation_mm": 109.94107565494708,
+      "first_goal_rotation_deg": 44.39297748118367,
+      "solved_goals": 57,
+      "failure": null,
+      "joint_travel_deg": {
+        "shoulder_pan": 48.877077314516,
+        "shoulder_lift": 102.96702721257117,
+        "elbow_flex": 60.263756032260076,
+        "forearm_roll": 49.10879073152297,
+        "wrist_flex": 52.42039117262043,
+        "wrist_roll": 114.75245778230246
+      },
+      "max_joint_travel_deg": 114.75245778230246,
+      "max_sample_joint_step_deg": 11.408901819013849
+    }
+  ]
+}
