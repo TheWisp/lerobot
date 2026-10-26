@@ -1,0 +1,904 @@
+{
+  "purpose": "offline cross-run match to the next ordered keyframe; no robot command",
+  "arm": "left",
+  "limits": "These are Cartesian differences, not collision-free paths or IK solutions. Saved registration quality is nearest-surface coverage, not a complete mask/depth acceptance decision.",
+  "cases": [
+    {
+      "trial": "/home/feit/.cache/huggingface/lerobot/demos/flash_insertion_trial_20261020_020-20261020-175733-620703",
+      "registration_report": "docs/proofs/flash-cross-episode/rgbd-registration/trial-175733/report.json",
+      "demo_reference_frame": 100,
+      "live_frame": 1,
+      "next_keyframe": 179,
+      "best_surface_fit": {
+        "method": "pca_03",
+        "surface_coverage": 0.9844878309708478,
+        "projection_mask_fraction": 0.9034501203530356,
+        "straight_line_position_change_mm": 105.49522794586392,
+        "orientation_change_deg": 33.40250849541763
+      },
+      "least_position_change": {
+        "method": "pca_23",
+        "surface_coverage": 0.8501600232761128,
+        "projection_mask_fraction": 0.8534367477935276,
+        "straight_line_position_change_mm": 75.28833963874602,
+        "orientation_change_deg": 168.4500103649403
+      },
+      "least_orientation_change": {
+        "method": "pca_07",
+        "surface_coverage": 0.9767238871108525,
+        "projection_mask_fraction": 0.8807167691896229,
+        "straight_line_position_change_mm": 107.86698332478127,
+        "orientation_change_deg": 32.128093006910646
+      },
+      "candidates": [
+        {
+          "method": "pca_03",
+          "surface_coverage": 0.9844878309708478,
+          "projection_mask_fraction": 0.9034501203530356,
+          "straight_line_position_change_mm": 105.49522794586392,
+          "orientation_change_deg": 33.40250849541763
+        },
+        {
+          "method": "fpfh_ransac",
+          "surface_coverage": 0.9844878309708478,
+          "projection_mask_fraction": 0.9556031024338059,
+          "straight_line_position_change_mm": 105.55125250436996,
+          "orientation_change_deg": 38.74294840465594
+        },
+        {
+          "method": "pca_15",
+          "surface_coverage": 0.9772666488365873,
+          "projection_mask_fraction": 0.8831238299010431,
+          "straight_line_position_change_mm": 105.41061801151743,
+          "orientation_change_deg": 32.15046799986411
+        },
+        {
+          "method": "pca_07",
+          "surface_coverage": 0.9767238871108525,
+          "projection_mask_fraction": 0.8807167691896229,
+          "straight_line_position_change_mm": 107.86698332478127,
+          "orientation_change_deg": 32.128093006910646
+        },
+        {
+          "method": "fpfh_fgr",
+          "surface_coverage": 0.972452527413747,
+          "projection_mask_fraction": 0.9561380048141215,
+          "straight_line_position_change_mm": 103.87642186214782,
+          "orientation_change_deg": 41.097215655714216
+        },
+        {
+          "method": "pca_21",
+          "surface_coverage": 0.9588125167156993,
+          "projection_mask_fraction": 0.914683070339663,
+          "straight_line_position_change_mm": 100.79983542168577,
+          "orientation_change_deg": 35.342343424883474
+        },
+        {
+          "method": "pca_16",
+          "surface_coverage": 0.9409368635437881,
+          "projection_mask_fraction": 0.9050548274939824,
+          "straight_line_position_change_mm": 128.96967248582607,
+          "orientation_change_deg": 147.60554429928885
+        },
+        {
+          "method": "pca_10",
+          "surface_coverage": 0.9394821064882165,
+          "projection_mask_fraction": 0.9074618882054025,
+          "straight_line_position_change_mm": 128.84760863146477,
+          "orientation_change_deg": 147.49336418656304
+        },
+        {
+          "method": "pca_20",
+          "surface_coverage": 0.9320673976999198,
+          "projection_mask_fraction": 0.8652046001604707,
+          "straight_line_position_change_mm": 128.05411866681706,
+          "orientation_change_deg": 147.56504544281017
+        },
+        {
+          "method": "pca_00",
+          "surface_coverage": 0.9269858250869216,
+          "projection_mask_fraction": 0.8555763573147901,
+          "straight_line_position_change_mm": 126.24437570855468,
+          "orientation_change_deg": 147.93432487050245
+        },
+        {
+          "method": "pca_13",
+          "surface_coverage": 0.9039850227333511,
+          "projection_mask_fraction": 0.8242845680663279,
+          "straight_line_position_change_mm": 122.92538624850941,
+          "orientation_change_deg": 148.24338121485542
+        },
+        {
+          "method": "pca_05",
+          "surface_coverage": 0.8983685477400375,
+          "projection_mask_fraction": 0.8240171168761701,
+          "straight_line_position_change_mm": 120.76051180564197,
+          "orientation_change_deg": 148.23614681146333
+        },
+        {
+          "method": "pca_09",
+          "surface_coverage": 0.8710885263439422,
+          "projection_mask_fraction": 0.8531692966033699,
+          "straight_line_position_change_mm": 95.73594941880458,
+          "orientation_change_deg": 39.51130022032345
+        },
+        {
+          "method": "pca_17",
+          "surface_coverage": 0.868681465632522,
+          "projection_mask_fraction": 0.8529018454132121,
+          "straight_line_position_change_mm": 95.58376021639474,
+          "orientation_change_deg": 39.198472716568595
+        },
+        {
+          "method": "pca_23",
+          "surface_coverage": 0.8501600232761128,
+          "projection_mask_fraction": 0.8534367477935276,
+          "straight_line_position_change_mm": 75.28833963874602,
+          "orientation_change_deg": 168.4500103649403
+        },
+        {
+          "method": "pca_06",
+          "surface_coverage": 0.8288312382990104,
+          "projection_mask_fraction": 0.7828296335918695,
+          "straight_line_position_change_mm": 139.76331584213332,
+          "orientation_change_deg": 164.17735332702006
+        },
+        {
+          "method": "pca_12",
+          "surface_coverage": 0.8237496656860123,
+          "projection_mask_fraction": 0.7868414014442364,
+          "straight_line_position_change_mm": 140.55705315201928,
+          "orientation_change_deg": 172.23689213431584
+        },
+        {
+          "method": "pca_02",
+          "surface_coverage": 0.8226798609253811,
+          "projection_mask_fraction": 0.7828296335918695,
+          "straight_line_position_change_mm": 139.88820082039658,
+          "orientation_change_deg": 164.80101391813534
+        },
+        {
+          "method": "pca_04",
+          "surface_coverage": 0.8186680930730141,
+          "projection_mask_fraction": 0.8186680930730141,
+          "straight_line_position_change_mm": 76.14716608642337,
+          "orientation_change_deg": 172.59619077072958
+        },
+        {
+          "method": "pca_14",
+          "surface_coverage": 0.8186680930730141,
+          "projection_mask_fraction": 0.8122492645092271,
+          "straight_line_position_change_mm": 76.37438116008758,
+          "orientation_change_deg": 172.10491367125778
+        },
+        {
+          "method": "pca_19",
+          "surface_coverage": 0.7494908350305499,
+          "projection_mask_fraction": 0.6985825086921637,
+          "straight_line_position_change_mm": 148.26928393801523,
+          "orientation_change_deg": 151.1858499339722
+        },
+        {
+          "method": "pca_11",
+          "surface_coverage": 0.7474541751527495,
+          "projection_mask_fraction": 0.7103503610591068,
+          "straight_line_position_change_mm": 149.4831689244257,
+          "orientation_change_deg": 148.9571041647289
+        },
+        {
+          "method": "pca_22",
+          "surface_coverage": 0.7096304917078848,
+          "projection_mask_fraction": 0.8159935811714362,
+          "straight_line_position_change_mm": 148.17952215114542,
+          "orientation_change_deg": 138.97911536557805
+        },
+        {
+          "method": "pca_01",
+          "surface_coverage": 0.6854815245853942,
+          "projection_mask_fraction": 0.792725327627708,
+          "straight_line_position_change_mm": 80.90632599602193,
+          "orientation_change_deg": 161.85496529431617
+        },
+        {
+          "method": "pca_18",
+          "surface_coverage": 0.6354378818737271,
+          "projection_mask_fraction": 0.7582241240973522,
+          "straight_line_position_change_mm": 77.84839585134246,
+          "orientation_change_deg": 164.04719985189683
+        },
+        {
+          "method": "pca_08",
+          "surface_coverage": 0.6246726796624964,
+          "projection_mask_fraction": 0.7576892217170367,
+          "straight_line_position_change_mm": 78.34900607261156,
+          "orientation_change_deg": 163.9732136873144
+        },
+        {
+          "method": "point_to_plane_icp",
+          "surface_coverage": 0.0,
+          "projection_mask_fraction": 0.5135062851029687,
+          "straight_line_position_change_mm": 97.44231394277935,
+          "orientation_change_deg": 33.32874804778517
+        }
+      ]
+    },
+    {
+      "trial": "/home/feit/.cache/huggingface/lerobot/demos/flash_insertion_trial_20261020_020-20261020-180412-003577",
+      "registration_report": "docs/proofs/flash-cross-episode/rgbd-registration/trial-180412/report.json",
+      "demo_reference_frame": 100,
+      "live_frame": 1,
+      "next_keyframe": 179,
+      "best_surface_fit": {
+        "method": "orb",
+        "surface_coverage": 0.9871623428724258,
+        "projection_mask_fraction": 0.9636266381385398,
+        "straight_line_position_change_mm": 105.7538187359767,
+        "orientation_change_deg": 39.79991195677732
+      },
+      "least_position_change": {
+        "method": "pca_23",
+        "surface_coverage": 0.8724964739069111,
+        "projection_mask_fraction": 0.874030489435678,
+        "straight_line_position_change_mm": 73.94256528020013,
+        "orientation_change_deg": 168.39287651612833
+      },
+      "least_orientation_change": {
+        "method": "pca_07",
+        "surface_coverage": 0.9785613540197461,
+        "projection_mask_fraction": 0.9085316929660336,
+        "straight_line_position_change_mm": 107.28348033624658,
+        "orientation_change_deg": 32.1266597160879
+      },
+      "candidates": [
+        {
+          "method": "orb",
+          "surface_coverage": 0.9871623428724258,
+          "projection_mask_fraction": 0.9636266381385398,
+          "straight_line_position_change_mm": 105.7538187359767,
+          "orientation_change_deg": 39.79991195677732
+        },
+        {
+          "method": "point_to_plane_icp",
+          "surface_coverage": 0.985557635731479,
+          "projection_mask_fraction": 0.9617544798074351,
+          "straight_line_position_change_mm": 104.67978263599676,
+          "orientation_change_deg": 37.57480572797187
+        },
+        {
+          "method": "fpfh_ransac",
+          "surface_coverage": 0.9804760631184809,
+          "projection_mask_fraction": 0.9663011500401176,
+          "straight_line_position_change_mm": 105.38692474773333,
+          "orientation_change_deg": 42.29788861998404
+        },
+        {
+          "method": "pca_07",
+          "surface_coverage": 0.9785613540197461,
+          "projection_mask_fraction": 0.9085316929660336,
+          "straight_line_position_change_mm": 107.28348033624658,
+          "orientation_change_deg": 32.1266597160879
+        },
+        {
+          "method": "pca_03",
+          "surface_coverage": 0.9780690024070607,
+          "projection_mask_fraction": 0.9652313452794865,
+          "straight_line_position_change_mm": 103.6008727400608,
+          "orientation_change_deg": 38.420776303967884
+        },
+        {
+          "method": "pca_15",
+          "surface_coverage": 0.9748595881251672,
+          "projection_mask_fraction": 0.935811714362129,
+          "straight_line_position_change_mm": 102.87465128886888,
+          "orientation_change_deg": 33.291873201063844
+        },
+        {
+          "method": "fpfh_fgr",
+          "surface_coverage": 0.9721850762235892,
+          "projection_mask_fraction": 0.967103503610591,
+          "straight_line_position_change_mm": 103.7575018934595,
+          "orientation_change_deg": 41.58519361160609
+        },
+        {
+          "method": "pca_21",
+          "surface_coverage": 0.9548007488633324,
+          "projection_mask_fraction": 0.9213693500936079,
+          "straight_line_position_change_mm": 100.89465567777353,
+          "orientation_change_deg": 36.30058115999601
+        },
+        {
+          "method": "pca_10",
+          "surface_coverage": 0.9515913345814389,
+          "projection_mask_fraction": 0.9221717036640813,
+          "straight_line_position_change_mm": 127.78460069942946,
+          "orientation_change_deg": 146.98461872595874
+        },
+        {
+          "method": "pca_16",
+          "surface_coverage": 0.9505215298208077,
+          "projection_mask_fraction": 0.9235089596148703,
+          "straight_line_position_change_mm": 127.90422664524436,
+          "orientation_change_deg": 147.05863049112077
+        },
+        {
+          "method": "pca_20",
+          "surface_coverage": 0.9280556298475529,
+          "projection_mask_fraction": 0.8841936346616742,
+          "straight_line_position_change_mm": 128.48280837771435,
+          "orientation_change_deg": 147.38418242772784
+        },
+        {
+          "method": "pca_00",
+          "surface_coverage": 0.9240438619951858,
+          "projection_mask_fraction": 0.8644022465899973,
+          "straight_line_position_change_mm": 126.48719542616662,
+          "orientation_change_deg": 148.31244164979452
+        },
+        {
+          "method": "pca_13",
+          "surface_coverage": 0.9074618882054025,
+          "projection_mask_fraction": 0.8373896763840599,
+          "straight_line_position_change_mm": 125.04104845440234,
+          "orientation_change_deg": 148.3105474616126
+        },
+        {
+          "method": "pca_05",
+          "surface_coverage": 0.9007756084514577,
+          "projection_mask_fraction": 0.8272265311580637,
+          "straight_line_position_change_mm": 120.35181988790586,
+          "orientation_change_deg": 147.99145808249506
+        },
+        {
+          "method": "pca_23",
+          "surface_coverage": 0.8724964739069111,
+          "projection_mask_fraction": 0.874030489435678,
+          "straight_line_position_change_mm": 73.94256528020013,
+          "orientation_change_deg": 168.39287651612833
+        },
+        {
+          "method": "pca_09",
+          "surface_coverage": 0.8510296870821075,
+          "projection_mask_fraction": 0.8574485156458946,
+          "straight_line_position_change_mm": 133.0843820332258,
+          "orientation_change_deg": 152.12441300916262
+        },
+        {
+          "method": "pca_06",
+          "surface_coverage": 0.8371222251939021,
+          "projection_mask_fraction": 0.8058304359454399,
+          "straight_line_position_change_mm": 141.2022226649787,
+          "orientation_change_deg": 168.70494496796488
+        },
+        {
+          "method": "pca_02",
+          "surface_coverage": 0.8304359454399572,
+          "projection_mask_fraction": 0.8462155656592671,
+          "straight_line_position_change_mm": 144.35124736462942,
+          "orientation_change_deg": 178.38777462349742
+        },
+        {
+          "method": "pca_04",
+          "surface_coverage": 0.814923776410805,
+          "projection_mask_fraction": 0.8475528216100562,
+          "straight_line_position_change_mm": 75.386678205264,
+          "orientation_change_deg": 172.9337223490176
+        },
+        {
+          "method": "pca_19",
+          "surface_coverage": 0.8118476727785614,
+          "projection_mask_fraction": 0.744049211018989,
+          "straight_line_position_change_mm": 145.54311578823823,
+          "orientation_change_deg": 167.5825326234831
+        },
+        {
+          "method": "pca_14",
+          "surface_coverage": 0.7286318758815232,
+          "projection_mask_fraction": 0.7544798074351431,
+          "straight_line_position_change_mm": 151.3993363076699,
+          "orientation_change_deg": 143.94705616926166
+        },
+        {
+          "method": "pca_11",
+          "surface_coverage": 0.7190409026798308,
+          "projection_mask_fraction": 0.7258625300882589,
+          "straight_line_position_change_mm": 150.01254892657929,
+          "orientation_change_deg": 145.11657906324993
+        },
+        {
+          "method": "pca_17",
+          "surface_coverage": 0.71311706629055,
+          "projection_mask_fraction": 0.7197111527146296,
+          "straight_line_position_change_mm": 149.82859944640435,
+          "orientation_change_deg": 144.90311405922776
+        },
+        {
+          "method": "pca_01",
+          "surface_coverage": 0.6998589562764457,
+          "projection_mask_fraction": 0.801818668093073,
+          "straight_line_position_change_mm": 79.25224711388182,
+          "orientation_change_deg": 162.36965482059796
+        },
+        {
+          "method": "pca_22",
+          "surface_coverage": 0.6741889985895627,
+          "projection_mask_fraction": 0.8272265311580637,
+          "straight_line_position_change_mm": 149.4673396598091,
+          "orientation_change_deg": 131.10444706241572
+        },
+        {
+          "method": "pca_12",
+          "surface_coverage": 0.6682651622002821,
+          "projection_mask_fraction": 0.8117143621289115,
+          "straight_line_position_change_mm": 149.51280012013706,
+          "orientation_change_deg": 135.6976440702952
+        },
+        {
+          "method": "pca_08",
+          "surface_coverage": 0.5861777150916784,
+          "projection_mask_fraction": 0.753142551484354,
+          "straight_line_position_change_mm": 78.2946936745016,
+          "orientation_change_deg": 164.52802946437274
+        },
+        {
+          "method": "pca_18",
+          "surface_coverage": 0.583638928067701,
+          "projection_mask_fraction": 0.7499331372024606,
+          "straight_line_position_change_mm": 78.12468030995694,
+          "orientation_change_deg": 164.70262869930215
+        }
+      ]
+    },
+    {
+      "trial": "/home/feit/.cache/huggingface/lerobot/demos/flash_insertion_trial_20261020_020-20261020-191155-370247",
+      "registration_report": "docs/proofs/flash-cross-episode/rgbd-registration/trial-191155/report.json",
+      "demo_reference_frame": 100,
+      "live_frame": 4,
+      "next_keyframe": 179,
+      "best_surface_fit": {
+        "method": "point_to_plane_icp",
+        "surface_coverage": 0.9876972452527414,
+        "projection_mask_fraction": 0.9673709548007489,
+        "straight_line_position_change_mm": 98.83964364551503,
+        "orientation_change_deg": 38.90116908266033
+      },
+      "least_position_change": {
+        "method": "pca_01",
+        "surface_coverage": 0.8389089037570767,
+        "projection_mask_fraction": 0.9403583845948115,
+        "straight_line_position_change_mm": 60.501025859915565,
+        "orientation_change_deg": 166.2802601972202
+      },
+      "least_orientation_change": {
+        "method": "pca_07",
+        "surface_coverage": 0.9354091610910963,
+        "projection_mask_fraction": 0.898903450120353,
+        "straight_line_position_change_mm": 103.15029137771762,
+        "orientation_change_deg": 36.8048168052308
+      },
+      "candidates": [
+        {
+          "method": "point_to_plane_icp",
+          "surface_coverage": 0.9876972452527414,
+          "projection_mask_fraction": 0.9673709548007489,
+          "straight_line_position_change_mm": 98.83964364551503,
+          "orientation_change_deg": 38.90116908266033
+        },
+        {
+          "method": "fpfh_ransac",
+          "surface_coverage": 0.9863599893019523,
+          "projection_mask_fraction": 0.9711152714629581,
+          "straight_line_position_change_mm": 100.45524040098827,
+          "orientation_change_deg": 41.20942430368068
+        },
+        {
+          "method": "fpfh_fgr",
+          "surface_coverage": 0.9804760631184809,
+          "projection_mask_fraction": 0.9807435143086387,
+          "straight_line_position_change_mm": 98.41920842046262,
+          "orientation_change_deg": 41.108900843274306
+        },
+        {
+          "method": "pca_03",
+          "surface_coverage": 0.9759293928857984,
+          "projection_mask_fraction": 0.9467772131585985,
+          "straight_line_position_change_mm": 95.04644882492802,
+          "orientation_change_deg": 38.373338943710884
+        },
+        {
+          "method": "pca_09",
+          "surface_coverage": 0.9438352500668628,
+          "projection_mask_fraction": 0.9494517250601765,
+          "straight_line_position_change_mm": 96.10112134253096,
+          "orientation_change_deg": 48.26083648589526
+        },
+        {
+          "method": "pca_00",
+          "surface_coverage": 0.9400909334046537,
+          "projection_mask_fraction": 0.8670767584915753,
+          "straight_line_position_change_mm": 120.33153120728755,
+          "orientation_change_deg": 146.47440252947612
+        },
+        {
+          "method": "pca_22",
+          "surface_coverage": 0.9374164215030757,
+          "projection_mask_fraction": 0.8662744049211019,
+          "straight_line_position_change_mm": 120.97269479091243,
+          "orientation_change_deg": 146.39969322119256
+        },
+        {
+          "method": "pca_07",
+          "surface_coverage": 0.9354091610910963,
+          "projection_mask_fraction": 0.898903450120353,
+          "straight_line_position_change_mm": 103.15029137771762,
+          "orientation_change_deg": 36.8048168052308
+        },
+        {
+          "method": "pca_13",
+          "surface_coverage": 0.9336721048408665,
+          "projection_mask_fraction": 0.9144156191495052,
+          "straight_line_position_change_mm": 92.07216006610889,
+          "orientation_change_deg": 40.6803926746089
+        },
+        {
+          "method": "pca_15",
+          "surface_coverage": 0.9096014977266649,
+          "projection_mask_fraction": 0.8339128109120085,
+          "straight_line_position_change_mm": 114.69144589480716,
+          "orientation_change_deg": 146.99661657910767
+        },
+        {
+          "method": "pca_05",
+          "surface_coverage": 0.9093340465365071,
+          "projection_mask_fraction": 0.8397967370954801,
+          "straight_line_position_change_mm": 112.88556176370162,
+          "orientation_change_deg": 147.23662045842792
+        },
+        {
+          "method": "pca_10",
+          "surface_coverage": 0.9024704065877509,
+          "projection_mask_fraction": 0.972452527413747,
+          "straight_line_position_change_mm": 121.71844859851116,
+          "orientation_change_deg": 142.17985085847272
+        },
+        {
+          "method": "pca_16",
+          "surface_coverage": 0.8991250643335049,
+          "projection_mask_fraction": 0.9641615405188553,
+          "straight_line_position_change_mm": 121.68702540584542,
+          "orientation_change_deg": 141.8269137156099
+        },
+        {
+          "method": "pca_21",
+          "surface_coverage": 0.8534367477935276,
+          "projection_mask_fraction": 0.8943567798876705,
+          "straight_line_position_change_mm": 63.3305266732802,
+          "orientation_change_deg": 164.89167819745262
+        },
+        {
+          "method": "pca_23",
+          "surface_coverage": 0.8494249799411607,
+          "projection_mask_fraction": 0.8178657395025408,
+          "straight_line_position_change_mm": 127.03741291005404,
+          "orientation_change_deg": 148.40798929046818
+        },
+        {
+          "method": "pca_01",
+          "surface_coverage": 0.8389089037570767,
+          "projection_mask_fraction": 0.9403583845948115,
+          "straight_line_position_change_mm": 60.501025859915565,
+          "orientation_change_deg": 166.2802601972202
+        },
+        {
+          "method": "pca_20",
+          "surface_coverage": 0.8221449585450655,
+          "projection_mask_fraction": 0.787376303824552,
+          "straight_line_position_change_mm": 132.73124545042805,
+          "orientation_change_deg": 163.65014521867596
+        },
+        {
+          "method": "pca_06",
+          "surface_coverage": 0.8188368502316006,
+          "projection_mask_fraction": 0.7734688419363466,
+          "straight_line_position_change_mm": 129.86041377024557,
+          "orientation_change_deg": 153.5483100262667
+        },
+        {
+          "method": "pca_02",
+          "surface_coverage": 0.8127841668895427,
+          "projection_mask_fraction": 0.8234822144958545,
+          "straight_line_position_change_mm": 136.57046735686032,
+          "orientation_change_deg": 174.8269829902596
+        },
+        {
+          "method": "pca_12",
+          "surface_coverage": 0.8072568193515183,
+          "projection_mask_fraction": 0.8403316394757957,
+          "straight_line_position_change_mm": 68.21900728339939,
+          "orientation_change_deg": 174.61343593360718
+        },
+        {
+          "method": "pca_04",
+          "surface_coverage": 0.8069994853319609,
+          "projection_mask_fraction": 0.8748328430061514,
+          "straight_line_position_change_mm": 74.79692215095727,
+          "orientation_change_deg": 167.93721285109797
+        },
+        {
+          "method": "pca_14",
+          "surface_coverage": 0.7900154400411734,
+          "projection_mask_fraction": 0.7360256753142551,
+          "straight_line_position_change_mm": 126.49098379887741,
+          "orientation_change_deg": 148.4259866466119
+        },
+        {
+          "method": "orb",
+          "surface_coverage": 0.7321152856407617,
+          "projection_mask_fraction": 0.8713559775341,
+          "straight_line_position_change_mm": 136.50708541060288,
+          "orientation_change_deg": 154.84985040235713
+        },
+        {
+          "method": "pca_19",
+          "surface_coverage": 0.5638188368502316,
+          "projection_mask_fraction": 0.7084782027280021,
+          "straight_line_position_change_mm": 147.63037767644647,
+          "orientation_change_deg": 135.18271072935372
+        },
+        {
+          "method": "pca_17",
+          "surface_coverage": 0.550694801852805,
+          "projection_mask_fraction": 0.6993848622626371,
+          "straight_line_position_change_mm": 148.27132534435177,
+          "orientation_change_deg": 135.04573676819825
+        },
+        {
+          "method": "pca_11",
+          "surface_coverage": 0.5496654657745754,
+          "projection_mask_fraction": 0.7028617277346885,
+          "straight_line_position_change_mm": 148.53644534160196,
+          "orientation_change_deg": 134.81438989007574
+        },
+        {
+          "method": "pca_18",
+          "surface_coverage": 0.4907359752959341,
+          "projection_mask_fraction": 0.7389676384059909,
+          "straight_line_position_change_mm": 75.25915503574025,
+          "orientation_change_deg": 167.77952846888257
+        },
+        {
+          "method": "pca_08",
+          "surface_coverage": 0.48584662892434377,
+          "projection_mask_fraction": 0.7280021396095213,
+          "straight_line_position_change_mm": 75.25500871171442,
+          "orientation_change_deg": 168.17969542693453
+        }
+      ]
+    },
+    {
+      "trial": "/home/feit/.cache/huggingface/lerobot/demos/flash_insertion_trial_20261020_020-20261020-203310-655401",
+      "registration_report": "docs/proofs/flash-cross-episode/rgbd-registration/trial-203310/report.json",
+      "demo_reference_frame": 100,
+      "live_frame": 0,
+      "next_keyframe": 179,
+      "best_surface_fit": {
+        "method": "orb",
+        "surface_coverage": 0.9826156726397433,
+        "projection_mask_fraction": 0.896228938218775,
+        "straight_line_position_change_mm": 118.9234661675577,
+        "orientation_change_deg": 50.323975197692626
+      },
+      "least_position_change": {
+        "method": "pca_23",
+        "surface_coverage": 0.7465788139888495,
+        "projection_mask_fraction": 0.9178924846215566,
+        "straight_line_position_change_mm": 54.199605931471,
+        "orientation_change_deg": 170.75289547355413
+      },
+      "least_orientation_change": {
+        "method": "point_to_plane_icp",
+        "surface_coverage": 0.0,
+        "projection_mask_fraction": 0.5145760898635999,
+        "straight_line_position_change_mm": 109.94107565494708,
+        "orientation_change_deg": 44.39297748118367
+      },
+      "candidates": [
+        {
+          "method": "orb",
+          "surface_coverage": 0.9826156726397433,
+          "projection_mask_fraction": 0.896228938218775,
+          "straight_line_position_change_mm": 118.9234661675577,
+          "orientation_change_deg": 50.323975197692626
+        },
+        {
+          "method": "fpfh_ransac",
+          "surface_coverage": 0.9818133190692698,
+          "projection_mask_fraction": 0.9063920834447713,
+          "straight_line_position_change_mm": 116.26385699698598,
+          "orientation_change_deg": 46.542418808518555
+        },
+        {
+          "method": "fpfh_fgr",
+          "surface_coverage": 0.9692431131318534,
+          "projection_mask_fraction": 0.9096014977266649,
+          "straight_line_position_change_mm": 114.04610228121263,
+          "orientation_change_deg": 47.95701822405547
+        },
+        {
+          "method": "pca_03",
+          "surface_coverage": 0.9681733083712223,
+          "projection_mask_fraction": 0.8657395025407864,
+          "straight_line_position_change_mm": 113.2356199272262,
+          "orientation_change_deg": 47.526662532275274
+        },
+        {
+          "method": "pca_00",
+          "surface_coverage": 0.9515913345814389,
+          "projection_mask_fraction": 0.8801818668093073,
+          "straight_line_position_change_mm": 110.84975547228284,
+          "orientation_change_deg": 133.5803392962045
+        },
+        {
+          "method": "pca_06",
+          "surface_coverage": 0.9507889810109655,
+          "projection_mask_fraction": 0.8849959882321476,
+          "straight_line_position_change_mm": 109.91894659910574,
+          "orientation_change_deg": 49.08169082480626
+        },
+        {
+          "method": "pca_14",
+          "surface_coverage": 0.9376838726932335,
+          "projection_mask_fraction": 0.8665418561112597,
+          "straight_line_position_change_mm": 107.766535538007,
+          "orientation_change_deg": 49.04675075951228
+        },
+        {
+          "method": "pca_10",
+          "surface_coverage": 0.9371489703129179,
+          "projection_mask_fraction": 0.8555763573147901,
+          "straight_line_position_change_mm": 107.4771442532209,
+          "orientation_change_deg": 48.35426030552882
+        },
+        {
+          "method": "pca_05",
+          "surface_coverage": 0.930462690558973,
+          "projection_mask_fraction": 0.8665418561112597,
+          "straight_line_position_change_mm": 105.26928931253913,
+          "orientation_change_deg": 134.87679253718755
+        },
+        {
+          "method": "pca_22",
+          "surface_coverage": 0.9144156191495052,
+          "projection_mask_fraction": 0.8496924311313185,
+          "straight_line_position_change_mm": 112.13787512992326,
+          "orientation_change_deg": 133.9065952320371
+        },
+        {
+          "method": "pca_09",
+          "surface_coverage": 0.9071944370152447,
+          "projection_mask_fraction": 0.8274939823482215,
+          "straight_line_position_change_mm": 104.75728391136532,
+          "orientation_change_deg": 48.22691492513018
+        },
+        {
+          "method": "pca_19",
+          "surface_coverage": 0.9037175715431933,
+          "projection_mask_fraction": 0.8368547740037443,
+          "straight_line_position_change_mm": 104.36290680459719,
+          "orientation_change_deg": 49.09840882192958
+        },
+        {
+          "method": "pca_12",
+          "surface_coverage": 0.898903450120353,
+          "projection_mask_fraction": 0.8373896763840599,
+          "straight_line_position_change_mm": 114.81855267405798,
+          "orientation_change_deg": 133.19605950942892
+        },
+        {
+          "method": "pca_21",
+          "surface_coverage": 0.8729606846750468,
+          "projection_mask_fraction": 0.8159935811714362,
+          "straight_line_position_change_mm": 101.57814742945489,
+          "orientation_change_deg": 48.93922946539075
+        },
+        {
+          "method": "pca_11",
+          "surface_coverage": 0.8462155656592671,
+          "projection_mask_fraction": 0.7707943300347686,
+          "straight_line_position_change_mm": 135.2929638196562,
+          "orientation_change_deg": 160.24633461769074
+        },
+        {
+          "method": "pca_17",
+          "surface_coverage": 0.842471248997058,
+          "projection_mask_fraction": 0.7603637336186146,
+          "straight_line_position_change_mm": 137.70433870908468,
+          "orientation_change_deg": 167.21835234925751
+        },
+        {
+          "method": "pca_16",
+          "surface_coverage": 0.8376571275742177,
+          "projection_mask_fraction": 0.7983418026210216,
+          "straight_line_position_change_mm": 135.38743666253959,
+          "orientation_change_deg": 150.98742206391728
+        },
+        {
+          "method": "pca_20",
+          "surface_coverage": 0.8360524204332709,
+          "projection_mask_fraction": 0.8047606311848088,
+          "straight_line_position_change_mm": 134.58582221360842,
+          "orientation_change_deg": 150.49166650684938
+        },
+        {
+          "method": "pca_02",
+          "surface_coverage": 0.8290986894891682,
+          "projection_mask_fraction": 0.7836319871623428,
+          "straight_line_position_change_mm": 134.5476268315415,
+          "orientation_change_deg": 148.5867323844577
+        },
+        {
+          "method": "pca_15",
+          "surface_coverage": 0.8288312382990104,
+          "projection_mask_fraction": 0.7437817598288312,
+          "straight_line_position_change_mm": 137.24902242333619,
+          "orientation_change_deg": 171.37074353225188
+        },
+        {
+          "method": "pca_04",
+          "surface_coverage": 0.8253543728269591,
+          "projection_mask_fraction": 0.8523669430328965,
+          "straight_line_position_change_mm": 69.04073936411743,
+          "orientation_change_deg": 162.15640380578463
+        },
+        {
+          "method": "pca_01",
+          "surface_coverage": 0.8200053490238032,
+          "projection_mask_fraction": 0.8689489168226798,
+          "straight_line_position_change_mm": 65.68401625173415,
+          "orientation_change_deg": 165.17572041347657
+        },
+        {
+          "method": "pca_07",
+          "surface_coverage": 0.8130516180797005,
+          "projection_mask_fraction": 0.8531692966033699,
+          "straight_line_position_change_mm": 141.81089901879582,
+          "orientation_change_deg": 171.107763280758
+        },
+        {
+          "method": "pca_23",
+          "surface_coverage": 0.7465788139888495,
+          "projection_mask_fraction": 0.9178924846215566,
+          "straight_line_position_change_mm": 54.199605931471,
+          "orientation_change_deg": 170.75289547355413
+        },
+        {
+          "method": "pca_18",
+          "surface_coverage": 0.718955904713634,
+          "projection_mask_fraction": 0.765177855041455,
+          "straight_line_position_change_mm": 64.61240400584906,
+          "orientation_change_deg": 164.48771713825903
+        },
+        {
+          "method": "pca_08",
+          "surface_coverage": 0.7108464267612773,
+          "projection_mask_fraction": 0.7673174645627173,
+          "straight_line_position_change_mm": 64.42955691821106,
+          "orientation_change_deg": 164.49326156653106
+        },
+        {
+          "method": "pca_13",
+          "surface_coverage": 0.7024835276229092,
+          "projection_mask_fraction": 0.7657127574217705,
+          "straight_line_position_change_mm": 61.541770379066136,
+          "orientation_change_deg": 165.767168862536
+        },
+        {
+          "method": "point_to_plane_icp",
+          "surface_coverage": 0.0,
+          "projection_mask_fraction": 0.5145760898635999,
+          "straight_line_position_change_mm": 109.94107565494708,
+          "orientation_change_deg": 44.39297748118367
+        }
+      ]
+    }
+  ]
+}

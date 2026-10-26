@@ -13,6 +13,54 @@ follow. Its insertion interval alone contains 137 demonstrated samples (frames
 377–513). A reset-to-insertion registration skips the action and cannot
 validate execution.
 
+## Does a cross-run surface match choose the least movement?
+
+I checked this directly on four saved trial starts. For each trial, the existing
+RGB-D benchmark supplied several alignments of the clear demo dowel (frame 100)
+to the live dowel. I applied each alignment to **the next ordered demo
+keyframe**, the approach at frame 179, then compared its gripper goal with the
+trial's observed initial motor state using calibrated forward kinematics.
+The dowel remains on the tray between demo frames 100 and 179, so this
+reference-to-approach transfer does not skip a demonstrated object motion.
+The [reproducible audit](../../../benchmarks/flash_cross_run_goal_choice.py) and
+[candidate-by-candidate data](min-motion-audit.json) retain the measurements.
+
+| Trial start | Best surface fit: coverage, position move, turn | Shortest position move: coverage, move, turn |
+| ----------- | ----------------------------------------------- | -------------------------------------------- |
+| 17:57       | 98.4%, 105.5 mm, 33.4°                          | 85.0%, 75.3 mm, 168.5°                       |
+| 18:04       | 98.7%, 105.8 mm, 39.8°                          | 87.2%, 73.9 mm, 168.4°                       |
+| 19:11       | 98.8%, 98.8 mm, 38.9°                           | 83.9%, 60.5 mm, 166.3°                       |
+| 20:33       | 98.3%, 118.9 mm, 50.3°                          | 74.7%, 54.2 mm, 170.8°                       |
+
+Thus the shortest **position-only** goal in these candidate sets is a poor
+surface match and needs almost a half-turn of the gripper. Matching provides
+alternative alignments; it does not itself choose the shortest useful action.
+In the 20:33 trial the shortest-position candidate also explains only 69.1% of
+the projected demo depth points inside the live dowel outline and depth band,
+versus 84.5% for the top nearest-cloud candidate. It would be rejected by a
+stronger observation check. **This is not a counterexample to choosing the
+least move among observation-supported fits.**
+
+![Three alignments of the same demo dowel to one recorded live frame. Green projected demo depth points agree with the live outline and depth; red points disagree. White marks the current gripper, yellow the candidate approach goal and tool-axis direction.](goal-choice-203310.jpg)
+
+The proposed surface-first strategy remains viable: check the candidate against
+the observed geometry, then compare the resulting full gripper goals for the
+next keyframe and choose a feasible low-motion one. For example, in the 20:33
+trial a second strong candidate covered 98.2% versus the best candidate's
+98.3%, while reducing the straight-line position change from 118.9 to 116.3 mm
+and the turn from 50.3° to 46.5°. Its projected mask-and-depth agreement is
+also better, 87.5% versus 84.5%. This does not need a named dowel symmetry
+rule; it does need an explicit motion choice among supported matches. The four
+clear starts yielded **no demonstrated counterexample** to choosing the least
+motion among fully checked geometric matches; that hypothesis remains to be
+tested through the ordered live stages.
+
+These numbers are **Cartesian goal differences**, not collision-free path
+lengths or completed actions. The saved registration ranking uses nearest-cloud
+coverage, not a final strict mask/depth acceptance test, and this audit does
+not run IK or evaluate obstacles. It establishes the selection problem on
+real cross-run observations, not that the resulting action will succeed.
+
 ![Ordered demo keyframes. Orange marks the saved dowel mask and cyan marks the ring mask.](keyframes.jpg)
 
 At the first approach frame the dowel mask is absent under the gripper; that
