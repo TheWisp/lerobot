@@ -101,15 +101,108 @@ sampled approach could not be solved. A different path or IK seed might change
 that result, so this is not a proof of global unreachability. None of these
 checks includes collisions, motor tracking or the later insertion.
 
-The general selection rule is therefore: retain plausible geometry matches,
-transform the **ordered demo gripper trajectory** under each match, reject
-paths that fail IK or clearance, then rank the surviving gripper paths by
-execution cost such as travel and duration. The ring's pose becomes relevant
-when planning the later insertion, not when deciding which end the left hand
-can grasp. The earlier four-start table measures only first-goal Cartesian
-differences; it is not a ranking of executable gripper trajectories. Exact-
-pixel mask-and-depth support was 87.5% for `fpfh_ransac` and 84.5% for `orb`,
-but that fraction is diagnostic, not a calibrated fit-validity score.
+This saved-candidate audit measures the cost of transferred gripper paths; it
+does not require runtime enumeration of those 28 registrations. The ring's
+pose becomes relevant when planning insertion, not when deciding which end
+the left hand can grasp. The earlier four-start table measures only first-goal
+Cartesian differences; it is not a ranking of executable gripper trajectories.
+Exact-pixel mask-and-depth support was 87.5% for `fpfh_ransac` and 84.5% for
+`orb`, but that fraction is diagnostic, not a calibrated fit-validity score.
+
+## Can the arm guide registration without a candidate list?
+
+On 2026-10-26 I tested a [single-seed offline optimizer](../../../benchmarks/flash_embodiment_registration.py)
+on the same four starts. It receives the demo's measured dowel surface at
+frame 100, the selected live RGB-D frame and mask, the demo's gripper pose at
+first grasp contact (frame 204), and the live arm's observed joints. It **does
+not receive any transform from the 28-candidate registration report**.
+
+The search variable is the arm's joint configuration at grasp. The demo's
+object-to-gripper relationship converts each configuration into a proposed
+demo-to-live surface transform. The optimizer minimizes bidirectional nearest-
+surface distance over 400 sampled points per surface and a configurable
+joint-motion cost. It starts from the observed arm orientation with the demo
+object's measured center translated to the live object's measured center.
+The search respects the calibrated arm's URDF joint limits. After each local
+solve, the same sequential IK audit tests all 57 approach and grasp goals.
+If sequential IK reaches the grasp on a different joint branch, the resulting
+joint configuration may seed another surface optimization. This is a cheap
+approximation to joint trajectory optimization, not a full motion planner.
+
+These measurements use a joint-cost weight of 0.1, a 6 mm visual scale, 400
+surface points per side, and at most two path-feedback passes. These are
+**experiment settings**, not calibrated runtime parameters. The live mask is
+reconstructed from its saved telemetry polygon. The test assumes the dowel has
+not moved appreciably between the clear demo surface at frame 100 and first
+grasp contact at frame 204; a runtime system must estimate the surface and
+gripper relation at the same stage. [Results at 17:57](embodiment-corrected-175733.json),
+[18:04](embodiment-corrected-180412.json), [19:11](embodiment-corrected-191155.json),
+and [20:33](embodiment-corrected-203310.json) retain all transforms and costs.
+
+| Trial start | Final two-way surface coverage | Final mask + depth support | First grasp branch difference | 57 sampled goals | Largest joint's cumulative travel |
+| ----------- | -----------------------------: | -------------------------: | ----------------------------: | ---------------: | --------------------------------: |
+| 17:57       |                          99.1% |                      86.5% |                         0.10° |            57/57 |                               99° |
+| 18:04       |                          99.2% |                      87.1% |                         0.14° |            57/57 |                               99° |
+| 19:11       |                          98.8% |                      93.3% |                         0.06° |            57/57 |                              110° |
+| 20:33       |                          98.1% |                      89.5% |                         0.03° |            57/57 |                              115° |
+
+The same reference surface point projects within about two pixels of the
+stronger saved visual registrations on all four starts, including the
+camera-right end assignment in the 20:33 comparison. This does not prove
+physical identity of either end. The local solves took 16–167 ms per pass
+after data and kinematics were loaded. Each complete benchmark run took
+0.9–1.7 s including saved-data loading, full-cloud scoring, and the 57-goal
+path audit; this is offline evidence, not a 30 Hz implementation. The 19:11
+start needed feedback: its
+first surface fit had 99.4% coverage but chose a grasp joint configuration
+253° away from the sequential IK result. Two feedback passes yielded a
+98.8%-coverage fit on the branch the arm actually reached, with projected
+mask-and-depth support rising from 84.1% to 93.3%. This is why single-goal IK
+feasibility or cloud overlap alone is not enough evidence for the actual
+gripper path.
+
+![Two saved start frames with the arm-conditioned fitted demo surface projected over the live dowel. Green points pass the 6 mm mask-and-depth check. Orange points do not; this includes occlusion, missing depth, and boundary disagreement, so orange alone does not prove a conflict.](embodiment-registration-preview.jpg)
+
+The [wrong-object control](embodiment-wrong-object-203310.json) fitted
+the same demo dowel to the live ring. Its best two-way coverage was 49.2%,
+although the arm could still solve all 57 transformed goals. Thus arm
+feasibility cannot substitute for an independent visual acceptance check.
+At 19:11, using only 100 optimization points per side instead of 400 or 800
+left a [longer 150° joint path](embodiment-density-191155-100.json)
+after two feedback passes despite high surface coverage; the
+[800-point result](embodiment-density-191155-800.json) was 110°.
+Point density affects which local fit the optimizer reaches.
+
+I also tested adding a direct projected-mask/front-of-depth penalty to the
+optimization. At a moderate weight, the 19:11 fit fell to 75.8% coverage and
+failed grasp sample 11. The [control data](embodiment-observation-191155.json)
+show this **naive penalty is unsuitable**; it does not show that depth or
+segmentation are unhelpful. A production observation cost needs an explicit
+visibility/noise model. The current experiment checks full recorded mask and
+depth only after optimization.
+
+This experiment covers four starts of one dowel task and the first grasp
+segment only. It has no collision check, motor timing, physical execution,
+or other-object validation. It shows that gripper-conditioned registration
+can find the useful match without enumerating saved alternatives on these
+starts. It does not establish a general guarantee: a single local seed can
+miss a disconnected match mode, and a full runtime version needs a
+trajectory-level variable rather than a grasp-only configuration followed by
+path feedback.
+
+The generic next step is to optimize **a short, ordered joint trajectory and
+its object registration together**. The measured surfaces and visibility model
+score the registration; calibrated kinematics, joint limits, collision checks,
+and motion cost score the trajectory; the demonstrated object-to-gripper
+relation couples them. Later contact stages must also constrain which part of
+the held object reaches the target, so an easy grasp cannot silently become
+the wrong insertion. Rotations to which the observed geometry is insensitive
+should remain free in the optimization rather than requiring a list of sampled
+angles. Genuinely separate modes, such as two distinguishable grasp ends, may
+still require a restart or another observation; a local continuous solver has
+no guarantee of crossing between them. None of this requires a dowel-specific
+axis rule, but the visual and contact constraints must be independently
+validated before commanding the robot.
 
 ![Ordered demo keyframes. Orange marks the saved dowel mask and cyan marks the ring mask.](keyframes.jpg)
 

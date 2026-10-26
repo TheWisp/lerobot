@@ -1,0 +1,268 @@
+{
+  "inputs": {
+    "skill": "/home/feit/.cache/huggingface/lerobot/demos/insertion/flash/v1/prepared/insertion-migrated-v10-preferred-hover/skill.json",
+    "calibration": "/home/feit/.config/lerobot/calibration/white_left.json",
+    "demo_recording": "/home/feit/.cache/huggingface/lerobot/demos/insertion/recording",
+    "demo_mask": "/home/feit/.cache/huggingface/lerobot/demos/insertion/flash/v1/masks/insertion-migrated-v7-dowel-000100.png",
+    "demo_frame": 100,
+    "trial": "/home/feit/.cache/huggingface/lerobot/demos/flash_insertion_trial_20261020_020-20261020-191155-370247",
+    "role": "dowel",
+    "arm": "left",
+    "live_frame": 4,
+    "grasp_interval": 2,
+    "path_intervals": 3,
+    "connection_samples": 16
+  },
+  "experiment_settings": {
+    "joint_weights": [
+      0.1
+    ],
+    "observation_weights": [
+      0.0,
+      0.5,
+      2.0
+    ],
+    "visual_scale_m": 0.006,
+    "depth_band_m": 0.003,
+    "max_evaluations": 80,
+    "path_corrections": 0,
+    "path_seed_convergence_deg": 0.1,
+    "proximity_m": 0.006,
+    "edge_pixels": 1
+  },
+  "source_points": 3739,
+  "target_points": 3886,
+  "optimization_points_per_surface": 400,
+  "path_check_settings": {
+    "ik_refinement_attempts": 10,
+    "position_tolerance_m": 0.003,
+    "rotation_tolerance_deg": 3.0,
+    "source": "explicit CLI defaults"
+  },
+  "seed": "observed arm configuration, then masked-surface centroid translation",
+  "seed_ik_success": true,
+  "grasp_demo_frame": 204,
+  "motor_joint_bounds_deg": {
+    "shoulder_pan": [
+      -98.00544091463136,
+      97.99425347490119
+    ],
+    "shoulder_lift": [
+      -115.27919209735938,
+      104.72113137240821
+    ],
+    "elbow_flex": [
+      -109.87332179443163,
+      96.12677795131428
+    ],
+    "forearm_roll": [
+      -100.84079364131316,
+      104.15949475192949
+    ],
+    "wrist_flex": [
+      -101.24028049475145,
+      106.75944195600106
+    ],
+    "wrist_roll": [
+      -185.0002610977607,
+      184.99984017946127
+    ]
+  },
+  "runs": [
+    {
+      "joint_weight": 0.1,
+      "observation_weight": 0.0,
+      "path_correction": 0,
+      "optimizer_success": true,
+      "optimizer_status": 3,
+      "function_evaluations": 196,
+      "optimizer_seconds": 0.05249053903389722,
+      "evaluate_and_path_seconds": 0.0405632279580459,
+      "grasp_joints_deg": [
+        23.334531699607005,
+        7.545049458140896,
+        55.61936271186413,
+        88.24732974964553,
+        23.426410671092,
+        -37.057977627517346
+      ],
+      "surface_score": {
+        "source_to_target_median_mm": 1.0499013894188343,
+        "target_to_source_median_mm": 1.0469353158567107,
+        "source_supported_fraction": 0.9938486226263706,
+        "target_supported_fraction": 0.9634585692228512,
+        "projection_mask_fraction": 0.9066595346349291,
+        "projection_mask_and_depth_fraction": 0.8405990906659535,
+        "projection_front_of_depth_fraction": 0.07889810109654988,
+        "projection_behind_depth_fraction": 0.0066862797539449055,
+        "projection_surface_median_mm": 1.288757138527552
+      },
+      "path": {
+        "solved_goals": 57,
+        "failure": null,
+        "max_joint_travel_deg": 151.78630386464457,
+        "joint_travel_deg": [
+          55.98225186952701,
+          109.55635373962967,
+          37.71536457344672,
+          94.8640990961445,
+          63.50745329140644,
+          151.78630386464457
+        ],
+        "grasp_achieved_joints_deg": [
+          28.269607957472125,
+          7.5347225502581665,
+          54.826933136946664,
+          -85.49084718473547,
+          -20.120389677884702,
+          140.97656614848202
+        ],
+        "grasp_joint_error_deg": 252.5916858322762
+      },
+      "rotation": [
+        [
+          0.7185932760122884,
+          0.5154040446597579,
+          -0.4668858258913939
+        ],
+        [
+          -0.6945490283668414,
+          0.4981019684769794,
+          -0.5191301148980231
+        ],
+        [
+          -0.03500501199262228,
+          0.6973185066723241,
+          0.715906103750818
+        ]
+      ],
+      "translation_m": [
+        0.1546015236605994,
+        0.10133650019056248,
+        0.10559108539902501
+      ]
+    },
+    {
+      "joint_weight": 0.1,
+      "observation_weight": 0.5,
+      "path_correction": 0,
+      "optimizer_success": true,
+      "optimizer_status": 3,
+      "function_evaluations": 126,
+      "optimizer_seconds": 0.039052322041243315,
+      "evaluate_and_path_seconds": 0.043668856960721314,
+      "grasp_joints_deg": [
+        8.209030147059197,
+        -0.6265335504632669,
+        60.04415651983636,
+        33.76496019947727,
+        2.298875272197704,
+        1.7978599682368528
+      ],
+      "surface_score": {
+        "source_to_target_median_mm": 2.9637223395511176,
+        "target_to_source_median_mm": 2.8503983151275833,
+        "source_supported_fraction": 0.7582241240973522,
+        "target_supported_fraction": 0.8036541430777149,
+        "projection_mask_fraction": 0.8644022465899973,
+        "projection_mask_and_depth_fraction": 0.5771596683605242,
+        "projection_front_of_depth_fraction": 0.19951858785771598,
+        "projection_behind_depth_fraction": 0.17090131051083177,
+        "projection_surface_median_mm": 3.6661018504418053
+      },
+      "path": {
+        "solved_goals": 42,
+        "failure": {
+          "interval": 2,
+          "goal": 11,
+          "position_error_mm": 3.392203559911588,
+          "rotation_error_deg": 0.03002600537977566
+        }
+      },
+      "rotation": [
+        [
+          0.7411610902543355,
+          0.6202011244249918,
+          -0.2569645959173763
+        ],
+        [
+          -0.6512373954526276,
+          0.5712864503066956,
+          -0.4995214174187666
+        ],
+        [
+          -0.16300335290135223,
+          0.537570792508253,
+          0.8273134532841624
+        ]
+      ],
+      "translation_m": [
+        0.06168090915467905,
+        0.10189962988535767,
+        0.03695867317030255
+      ]
+    },
+    {
+      "joint_weight": 0.1,
+      "observation_weight": 2.0,
+      "path_correction": 0,
+      "optimizer_success": true,
+      "optimizer_status": 3,
+      "function_evaluations": 129,
+      "optimizer_seconds": 0.04001213703304529,
+      "evaluate_and_path_seconds": 0.04358726495411247,
+      "grasp_joints_deg": [
+        7.42508211074039,
+        -0.39419936658241117,
+        59.638669109444756,
+        36.43231865373073,
+        1.2399899115964317,
+        -0.6320813633612169
+      ],
+      "surface_score": {
+        "source_to_target_median_mm": 3.0077753433867813,
+        "target_to_source_median_mm": 3.183172998403264,
+        "source_supported_fraction": 0.7635731479005081,
+        "target_supported_fraction": 0.7961914565105507,
+        "projection_mask_fraction": 0.8777748060978872,
+        "projection_mask_and_depth_fraction": 0.5838459481144691,
+        "projection_front_of_depth_fraction": 0.16474993313720246,
+        "projection_behind_depth_fraction": 0.21556565926718374,
+        "projection_surface_median_mm": 3.8915031706339143
+      },
+      "path": {
+        "solved_goals": 43,
+        "failure": {
+          "interval": 2,
+          "goal": 12,
+          "position_error_mm": 3.3704299127891915,
+          "rotation_error_deg": 0.03131884718936771
+        }
+      },
+      "rotation": [
+        [
+          0.730607849318689,
+          0.6314231066042411,
+          -0.25984039516628016
+        ],
+        [
+          -0.6641707135526141,
+          0.5689238379063508,
+          -0.48497724680743487
+        ],
+        [
+          -0.1583964449504194,
+          0.5269065639258607,
+          0.8350329569058409
+        ]
+      ],
+      "translation_m": [
+        0.05970894124231607,
+        0.09415699579819999,
+        0.035394390214857574
+      ]
+    }
+  ],
+  "seconds": 1.484428765019402,
+  "limits": "Single local seed; mask reconstructed from telemetry polygon; no collisions or motor execution."
+}

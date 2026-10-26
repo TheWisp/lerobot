@@ -1,0 +1,146 @@
+{
+  "inputs": {
+    "skill": "/home/feit/.cache/huggingface/lerobot/demos/insertion/flash/v1/prepared/insertion-migrated-v10-preferred-hover/skill.json",
+    "calibration": "/home/feit/.config/lerobot/calibration/white_left.json",
+    "demo_recording": "/home/feit/.cache/huggingface/lerobot/demos/insertion/recording",
+    "demo_mask": "/home/feit/.cache/huggingface/lerobot/demos/insertion/flash/v1/masks/insertion-migrated-v7-dowel-000100.png",
+    "demo_frame": 100,
+    "trial": "/home/feit/.cache/huggingface/lerobot/demos/flash_insertion_trial_20261020_020-20261020-203310-655401",
+    "role": "ring",
+    "arm": "left",
+    "live_frame": 0,
+    "grasp_interval": 2,
+    "path_intervals": 3,
+    "connection_samples": 16
+  },
+  "experiment_settings": {
+    "joint_weights": [
+      0.1
+    ],
+    "observation_weights": [
+      0.0
+    ],
+    "visual_scale_m": 0.006,
+    "depth_band_m": 0.003,
+    "max_evaluations": 80,
+    "path_corrections": 0,
+    "path_seed_convergence_deg": 0.1,
+    "proximity_m": 0.006,
+    "edge_pixels": 1
+  },
+  "source_points": 3739,
+  "target_points": 3917,
+  "optimization_points_per_surface": 400,
+  "path_check_settings": {
+    "ik_refinement_attempts": 10,
+    "position_tolerance_m": 0.003,
+    "rotation_tolerance_deg": 3.0,
+    "source": "/home/feit/.cache/huggingface/lerobot/demos/flash_insertion_trial_20261020_020-20261020-203310-655401/flash/v1/trial_config.json"
+  },
+  "seed": "observed arm configuration, then masked-surface centroid translation",
+  "seed_ik_success": true,
+  "grasp_demo_frame": 204,
+  "motor_joint_bounds_deg": {
+    "shoulder_pan": [
+      -98.00544091463136,
+      97.99425347490119
+    ],
+    "shoulder_lift": [
+      -115.27919209735938,
+      104.72113137240821
+    ],
+    "elbow_flex": [
+      -109.87332179443163,
+      96.12677795131428
+    ],
+    "forearm_roll": [
+      -100.84079364131316,
+      104.15949475192949
+    ],
+    "wrist_flex": [
+      -101.24028049475145,
+      106.75944195600106
+    ],
+    "wrist_roll": [
+      -185.0002610977607,
+      184.99984017946127
+    ]
+  },
+  "runs": [
+    {
+      "joint_weight": 0.1,
+      "observation_weight": 0.0,
+      "path_correction": 0,
+      "optimizer_success": true,
+      "optimizer_status": 3,
+      "function_evaluations": 205,
+      "optimizer_seconds": 0.060221501043997705,
+      "evaluate_and_path_seconds": 0.03680578898638487,
+      "grasp_joints_deg": [
+        40.73061721693383,
+        4.831232025230908,
+        43.96394439752958,
+        -28.541068425763914,
+        -20.049276701423203,
+        48.6576586679214
+      ],
+      "surface_score": {
+        "source_to_target_median_mm": 6.208449170036977,
+        "target_to_source_median_mm": 5.029941936772984,
+        "source_supported_fraction": 0.4923776410805028,
+        "target_supported_fraction": 0.5744191983660965,
+        "projection_mask_fraction": 0.4757956672907194,
+        "projection_mask_and_depth_fraction": 0.3188018186680931,
+        "projection_front_of_depth_fraction": 0.5683337790853169,
+        "projection_behind_depth_fraction": 0.05001337255950789,
+        "projection_surface_median_mm": 3.94340055159903
+      },
+      "path": {
+        "solved_goals": 57,
+        "failure": null,
+        "max_joint_travel_deg": 108.77610458049956,
+        "joint_travel_deg": [
+          64.83228866365107,
+          108.77610458049956,
+          48.24190523938083,
+          62.02006545100971,
+          51.22521395252921,
+          96.69627079924763
+        ],
+        "grasp_achieved_joints_deg": [
+          40.87336891928222,
+          4.895638880581146,
+          44.17541539006395,
+          -28.95374008371752,
+          -19.846444023730548,
+          49.221576676217005
+        ],
+        "grasp_joint_error_deg": 0.7737498204983111
+      },
+      "rotation": [
+        [
+          0.9954181511646494,
+          0.005036344141652839,
+          0.09548476092884296
+        ],
+        [
+          0.04382274901545268,
+          0.8635274897840879,
+          -0.5023941092965952
+        ],
+        [
+          -0.08498394554667435,
+          0.504276620145013,
+          0.8593502309154526
+        ]
+      ],
+      "translation_m": [
+        0.06190374431147172,
+        0.2357582988764679,
+        0.030848446680442954
+      ]
+    }
+  ],
+  "seconds": 1.6903496918966994,
+  "limits": "Single local seed; mask reconstructed from telemetry polygon; no collisions or motor execution."
+}
