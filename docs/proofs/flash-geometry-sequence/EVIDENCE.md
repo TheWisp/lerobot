@@ -60,6 +60,16 @@ visibility-aware check, not just this plotted fraction.
 
 ![Three alignments of measured demo surface points projected into one live frame. Green points agree with live depth, red are nearer, gray are behind it, orange are outside the logged outline, and purple have no live depth. White marks the current gripper; yellow marks the candidate approach goal and tool axis.](goal-choice-203310.jpg)
 
+The demo gripper covers the dowel end farther from the ring at frame 204,
+leaving the other end exposed for insertion. The two registration candidates
+below map that demo grasped end to **opposite** ends of the live dowel. The
+shortest-position candidate maps it to the end nearer the live ring. These are
+candidate cross-run correspondences, not verified identities of material
+points. End interchangeability may make either useful, but the later grasp and
+insertion motion must use the same correspondence throughout.
+
+![Demo before and during grasp, followed by two candidate mappings of its grasped and free dowel ends into the same live image. The shortest-position candidate swaps the ends relative to the best-cloud-overlap candidate.](demo-grasp-end-comparison.jpg)
+
 The proposed surface-first strategy remains viable: check the candidate against
 the observed geometry, then compare the resulting full gripper goals for the
 next keyframe and choose a feasible low-motion one. For example, in the 20:33
