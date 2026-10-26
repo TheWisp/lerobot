@@ -53,6 +53,30 @@ gripper. The measurements alone cannot distinguish slip, mask/depth bias, and
 camera/encoder timing error in those frames. A high surface-coverage score can
 therefore coexist with a harmful correction.
 
+## Saved rollout at a carry keyframe
+
+I also used the previously recorded rollout
+`flash_insertion_trial_20261020_020-20261020-203310-655401`. At the end of its
+first carry interval (camera frame 456), the demo's ring frame 100 fit the live
+ring with 96.3% balanced surface coverage. The **demo dowel at the matching
+carry keyframe 342**, however, had only 87 interior depth points. Directly
+fitting the more visible live dowel to those points gave 36.8% coverage and a
+183 mm, 178° displacement. This is not a plausible motion command.
+
+![The live held-object outline is magenta, transferred demo goal points are orange, and the proposed direct fit is green.](carry_keyframe_mismatch.png)
+
+The saved live masks here were reconstructed from recorded polygon boundaries,
+and the rollout's time within an interval need not match the demonstration's
+exact endpoint time. This result shows that **one keyframe's partial surface
+cannot safely stand in for the whole object**; it does not show that a
+multiview geometric map is impossible. Pooling six demo held views after
+moving them by the recorded gripper transforms covered only 46.6% of the
+endpoint's measured surface within 6 mm. Different visible sides and possible
+slip make naive pooling untrustworthy as a complete model. Using the demo's
+gripper-to-object attachment unchanged in the rollout also left a 25.4 mm
+median surface mismatch at this stage. The live grasp needs its own attachment
+estimate.
+
 The live scene and complete per-frame results are retained locally at:
 
 - `/home/feit/.cache/huggingface/lerobot/flash_debug_traces/trace-20261025-235050-224902635`
