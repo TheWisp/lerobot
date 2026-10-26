@@ -32,28 +32,46 @@ The [reproducible audit](../../../benchmarks/flash_cross_run_goal_choice.py) and
 | 19:11       | 98.8%, 98.8 mm, 38.9°                           | 83.9%, 60.5 mm, 166.3°                       |
 | 20:33       | 98.3%, 118.9 mm, 50.3°                          | 74.7%, 54.2 mm, 170.8°                       |
 
-Thus the shortest **position-only** goal in these candidate sets is a poor
-surface match and needs almost a half-turn of the gripper. Matching provides
-alternative alignments; it does not itself choose the shortest useful action.
-In the 20:33 trial the shortest-position candidate also explains only 69.1% of
-the projected demo depth points inside the live dowel outline and depth band,
-versus 84.5% for the top nearest-cloud candidate. It would be rejected by a
-stronger observation check. **This is not a counterexample to choosing the
-least move among observation-supported fits.**
+The shortest **position-only** goal in these candidate sets has lower two-way
+nearest-cloud coverage and needs almost a half-turn of the gripper. The
+registration supplies alternative alignments; it does not select the shortest
+useful action. The earlier version of the figure colored every unconfirmed
+projected point red and called it a mismatch. That was misleading. **Every dot
+is a measured demo/source surface point projected into the live image**, not a
+point sampled from the live/target surface. The revised figure separates the
+reasons that a projected source point fails the exact-pixel observation check:
 
-![Three alignments of the same demo dowel to one recorded live frame. Green projected demo depth points agree with the live outline and depth; red points disagree. White marks the current gripper, yellow the candidate approach goal and tool-axis direction.](goal-choice-203310.jpg)
+| 20:33 candidate          | Agrees with live depth and outline | Nearer than live depth, inside outline | Behind live depth, inside outline | Outside logged outline | No live depth, inside outline |
+| ------------------------ | ---------------------------------: | -------------------------------------: | --------------------------------: | ---------------------: | ----------------------------: |
+| Best cloud overlap       |                              3,160 |                                     65 |                                69 |                    388 |                            57 |
+| Shorter, similar overlap |                              3,270 |                                     43 |                                15 |                    350 |                            61 |
+| Shortest position        |                              2,583 |                                     46 |                               774 |                    307 |                            29 |
+
+Each candidate projects 3,739 demo points. Green points agree within the
+diagnostic 6 mm depth band. Red points project **in front of** measured live
+depth, so they are potential direct conflicts. Gray points are behind measured
+live depth and might be hidden surfaces; orange points fall outside the saved
+live outline; purple points have no live depth. The old trial stores a polygon
+for the live outline, not the original binary SAM mask, so boundary counts are
+approximate. None of the non-green categories alone proves an impossible fit.
+In particular, 69.1% green support for the shortest-position candidate does
+**not** imply 30.9% conflicting geometry. Whether it is acceptable requires a
+visibility-aware check, not just this plotted fraction.
+
+![Three alignments of measured demo surface points projected into one live frame. Green points agree with live depth, red are nearer, gray are behind it, orange are outside the logged outline, and purple have no live depth. White marks the current gripper; yellow marks the candidate approach goal and tool axis.](goal-choice-203310.jpg)
 
 The proposed surface-first strategy remains viable: check the candidate against
 the observed geometry, then compare the resulting full gripper goals for the
 next keyframe and choose a feasible low-motion one. For example, in the 20:33
 trial a second strong candidate covered 98.2% versus the best candidate's
 98.3%, while reducing the straight-line position change from 118.9 to 116.3 mm
-and the turn from 50.3° to 46.5°. Its projected mask-and-depth agreement is
-also better, 87.5% versus 84.5%. This does not need a named dowel symmetry
-rule; it does need an explicit motion choice among supported matches. The four
-clear starts yielded **no demonstrated counterexample** to choosing the least
-motion among fully checked geometric matches; that hypothesis remains to be
-tested through the ordered live stages.
+and the turn from 50.3° to 46.5°. Its exact-pixel mask-and-depth support is
+also higher, 87.5% versus 84.5%; that fraction is a diagnostic, not a calibrated
+fit-validity score. This does not need a named dowel symmetry rule; it does
+need an explicit motion choice among supported matches. The four clear starts
+yielded **no demonstrated counterexample** to choosing the least motion among
+fully checked geometric matches; that hypothesis remains to be tested through
+the ordered live stages.
 
 These numbers are **Cartesian goal differences**, not collision-free path
 lengths or completed actions. The saved registration ranking uses nearest-cloud
