@@ -274,6 +274,13 @@ The estimator retains a full pose hypothesis for prediction, surface validation 
 
 Object symmetry and task freedom are distinct inputs to the same optimization. Object symmetry describes indistinguishable or geometrically equivalent states, including an axis and optional end exchange. Task freedom states which changes preserve the interaction. A cylindrical object's two ends need not be interchangeable for every task. The policy evaluates allowed combinations for reachability, continuity, collision constraints and observation quality; a changed coordinate-frame hypothesis must transform the whole relation consistently.
 
+The [surface relationship proposal](surface_relations.md) refines this design
+around persistent object-relative regions and demonstrated relationships.
+Permitted contact sliding is established by observed local geometry and
+annotation; keyframes validate its continuing consequences. The proposal
+replaces the need for object-specific axis and end-exchange planning rules
+while retaining the distinction between visual ambiguity and task permission.
+
 #### Interval timing
 
 The execution graph has a continuous progress variable inside each motion interval, with two timing modes:
