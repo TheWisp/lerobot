@@ -15,6 +15,10 @@ object frame_ used by the demonstration before robot motion begins.
 The demo editor keeps the current key frame and grasp/release timing beside
 playback. Raw demo setup also shows object naming. Object corrections, tracker
 experiments and numeric settings are optional.
+The path shown at each key frame is the path the importer uses. Older prepared
+skills that implicitly replayed a grasp interval open with that interval
+labelled “Follow recording”; saving the edited recipe makes the choice explicit
+without changing the original skill.
 Demo, live Test and recorded rollout review use the same 3D scene renderer.
 The live view reads display-only RGB-D copies from the telemetry writer; its
 pose overlay and pixels share a camera frame ID. The rollout shows its recorded

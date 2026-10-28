@@ -873,7 +873,8 @@ async function toggleFlashDemoEditor() {
                 axial_symmetry_roles: {},
             };
             for (const key of Object.keys(replay.starter_parameters)) annotation[key] = null;
-            result = {annotation, keypoints_document: {keypoints: []}, reference_masks: {}, preparation_report: null};
+            result = {annotation, keypoints_document: {path_selection_version: 2, keypoints: []},
+                reference_masks: {}, preparation_report: null};
         } else {
             const response = await fetch(`/api/run/flash/demo/preparation?${new URLSearchParams({
                 dataset_root: replay.datasetRoot, bundle_path: replay.bundle_path, episode: String(replay.episode),
@@ -910,7 +911,9 @@ async function toggleFlashDemoEditor() {
             pickingTurn: false,
             raw, newRole: '', newPrompt: '',
             original: JSON.stringify([result.annotation, result.keypoints_document]),
-            drawing: false, vertices: [], running: false, message: '',
+            drawing: false, vertices: [], running: false,
+            message: result.path_selection_migrated
+                ? 'This older demo replayed a path at grasp despite its saved “straight” label. The editor now shows that path as “Follow recording”; preview keeps its motion.' : '',
             trackers, tracker: trackers.trackers.find(item => item.runnable)?.id || 'point2pose',
             growPoints: true,
             maxPoints: (trackers.trackers.find(item => item.id === 'trackeverything')?.initial_points_per_object || 128) * 3,

@@ -10,6 +10,7 @@ Held poses after grasp are deliberately labelled predictions.
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 from pathlib import Path
@@ -75,6 +76,8 @@ def _interval_layout(
     grasp: int,
     release: int,
     start_anchor_end: int,
+    *,
+    implicit_grasp_follow: bool = False,
 ) -> list[tuple[int, int, dict, bool, bool, bool]]:
     """Resolve annotated event times once onto the arm clock before assigning relations."""
     bounds = sorted(
@@ -93,11 +96,53 @@ def _interval_layout(
         end_key = next(
             (item for item in keypoints if _nearest_index(times, float(item["t"])) >= last), keypoints[-1]
         )
-        demonstrated = end_key["move"] == "follow" or last == grasp
+        # Version-one sealed recipes replayed the grasp boundary regardless of
+        # its label. New recipes encode that choice in the key frame itself.
+        demonstrated = end_key["move"] == "follow" or (implicit_grasp_follow and last == grasp)
         start_anchored = first >= grasp and last <= start_anchor_end
         carrying = first >= grasp and last <= release and not start_anchored
         layout.append((first, last, end_key, demonstrated, start_anchored, carrying))
     return layout
+
+
+def explicit_paths_from_prepared_skill(
+    keypoints_document: dict, skill_document: dict, arm_times: np.ndarray
+) -> tuple[dict, bool]:
+    """Show a legacy compiled path as editable key frames without changing its motion.
+
+    The prepared skill, rather than an inference from grasp timing, is the
+    authority for what the old editor actually compiled. An inserted key frame
+    is needed when grasp split a longer interval between two authored keys.
+    """
+    version = keypoints_document.get("path_selection_version", 1)
+    if version != 1:
+        if version != 2:
+            raise ValueError("unsupported keypoint path-selection version")
+        return copy.deepcopy(keypoints_document), False
+    document = copy.deepcopy(keypoints_document)
+    points = document["keypoints"]
+    changed = False
+    for interval in skill_document["intervals"]:
+        if interval["mode"] != MotionMode.DEMONSTRATED.value:
+            continue
+        last_index = interval["samples"][-1].get("source_frame_index")
+        if last_index is None or not 0 <= last_index < len(arm_times):
+            raise ValueError("prepared interval lacks a valid source arm frame")
+        endpoint = next(
+            (point for point in points if _nearest_index(arm_times, float(point["t"])) >= last_index),
+            points[-1],
+        )
+        if endpoint["move"] == "follow":
+            continue
+        if _nearest_index(arm_times, float(endpoint["t"])) == last_index:
+            endpoint["move"] = "follow"
+        else:
+            split = {**endpoint, "t": float(arm_times[last_index]), "move": "follow"}
+            points.append(split)
+            points.sort(key=lambda point: float(point["t"]))
+        changed = True
+    document["path_selection_version"] = 2
+    return document, changed
 
 
 def _interval_reference(
@@ -292,6 +337,9 @@ def prepare(
     intrinsics = np.loadtxt(root / "recording" / "cam_K.txt").reshape(3, 3)
     keypoints_document = json.loads((keypoints_path or root / "keypoints.json").read_text())
     keypoints = keypoints_document["keypoints"]
+    path_version = keypoints_document.get("path_selection_version", 1)
+    if path_version not in (1, 2):
+        raise ValueError("unsupported keypoint path-selection version")
     turn_rules = keypoints_document.get("turn_rules", [])
     if not keypoints or any(b["t"] <= a["t"] for a, b in zip(keypoints, keypoints[1:], strict=False)):
         raise ValueError("keypoints must increase in demo time")
@@ -508,7 +556,14 @@ def prepare(
     roles_version = {reference.role: reference.version for reference in references}
     intervals = []
     for number, (first, last, end_key, demonstrated, start_anchored, carrying) in enumerate(
-        _interval_layout(times, keypoints, grasp, release, start_anchor_end)
+        _interval_layout(
+            times,
+            keypoints,
+            grasp,
+            release,
+            start_anchor_end,
+            implicit_grasp_follow=path_version == 1,
+        )
     ):
         mode = MotionMode.DEMONSTRATED if demonstrated else MotionMode.CONNECTION
         endpoint_requirement = _endpoint_requirement(end_key)

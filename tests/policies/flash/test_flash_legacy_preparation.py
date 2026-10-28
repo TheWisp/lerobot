@@ -11,6 +11,7 @@ from lerobot.policies.flash.sealed_demo_import import (
     _nearest_index,
     _symmetry_from_annotation,
     _turn_for_interval,
+    explicit_paths_from_prepared_skill,
 )
 from lerobot.policies.flash.skill import EndpointRequirement, Relation
 
@@ -48,6 +49,57 @@ def test_lift_uses_grasp_anchor_until_nearest_recorded_boundary():
         (5, 6, False, True),
         (6, 7, False, False),
     ]
+
+
+def test_grasp_event_does_not_override_the_authored_path():
+    times = np.array([0.0, 1.0, 2.0, 3.0])
+    line = [{"t": 2.0, "move": "line"}, {"t": 3.0, "move": "line"}]
+    follow = [{"t": 2.0, "move": "follow"}, {"t": 3.0, "move": "line"}]
+
+    assert _interval_layout(times, line, grasp=2, release=3, start_anchor_end=2)[0][3] is False
+    assert _interval_layout(times, follow, grasp=2, release=3, start_anchor_end=2)[0][3] is True
+
+
+def test_legacy_compiled_motion_becomes_explicit_without_changing_other_intervals():
+    times = np.arange(5, dtype=float)
+    old = {
+        "keypoints": [
+            {"t": 1.0, "move": "line"},
+            {"t": 3.0, "move": "line"},
+            {"t": 4.0, "move": "line"},
+        ]
+    }
+    skill = {
+        "intervals": [
+            {"mode": mode, "samples": [{"source_frame_index": first}, {"source_frame_index": last}]}
+            for first, last, mode in [
+                (0, 1, "connection"),
+                (1, 2, "demonstrated"),
+                (2, 3, "connection"),
+                (3, 4, "connection"),
+            ]
+        ]
+    }
+    upgraded, migrated = explicit_paths_from_prepared_skill(old, skill, times)
+    assert migrated
+    assert old["keypoints"] == [
+        {"t": 1.0, "move": "line"},
+        {"t": 3.0, "move": "line"},
+        {"t": 4.0, "move": "line"},
+    ]
+    assert upgraded["path_selection_version"] == 2
+    assert [(point["t"], point["move"]) for point in upgraded["keypoints"]] == [
+        (1.0, "line"),
+        (2.0, "follow"),
+        (3.0, "line"),
+        (4.0, "line"),
+    ]
+    old_layout = _interval_layout(times, old["keypoints"], 2, 4, 2, implicit_grasp_follow=True)
+    new_layout = _interval_layout(times, upgraded["keypoints"], 2, 4, 2)
+    assert [(first, last, replay) for first, last, _, replay, _, _ in new_layout] == [
+        (first, last, replay) for first, last, _, replay, _, _ in old_layout
+    ]
+    assert explicit_paths_from_prepared_skill(upgraded, skill, times) == (upgraded, False)
 
 
 def test_world_relative_retreat_does_not_follow_target_after_release():

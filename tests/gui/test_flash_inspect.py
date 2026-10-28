@@ -97,6 +97,41 @@ def test_flash_trial_config_inspection_shows_effective_thresholds(tmp_path):
     assert CausalTrackingConfig.from_config(result["settings"]["causal_tracking"])
 
 
+def test_demo_editor_shows_the_path_that_a_legacy_skill_actually_uses(tmp_path):
+    (tmp_path / "meta").mkdir()
+    (tmp_path / "meta/info.json").write_text("{}")
+    np.savez(tmp_path / "showservo_demo.npz", t=np.arange(3, dtype=float))
+    bundle = tmp_path / "flash/v1/prepared/original/bundle.json"
+    bundle.parent.mkdir(parents=True)
+    bundle.write_text(json.dumps({"skill": "skill.json", "references": []}))
+    (bundle.parent / "skill.json").write_text(
+        json.dumps(
+            {
+                "source_episode": 0,
+                "intervals": [
+                    {
+                        "mode": "demonstrated",
+                        "samples": [
+                            {"source_frame_index": 0},
+                            {"source_frame_index": 1},
+                        ],
+                    }
+                ],
+            }
+        )
+    )
+    (bundle.parent / "annotation.json").write_text(json.dumps({"episode": 0}))
+    original = {"keypoints": [{"t": 1.0, "move": "line"}, {"t": 2.0, "move": "line"}]}
+    keypoints_path = bundle.parent / "keypoints.json"
+    keypoints_path.write_text(json.dumps(original))
+
+    result = _flash_demo_preparation(str(tmp_path), str(bundle), 0)
+    assert result["path_selection_migrated"]
+    assert result["keypoints_document"]["path_selection_version"] == 2
+    assert result["keypoints_document"]["keypoints"][0]["move"] == "follow"
+    assert json.loads(keypoints_path.read_text()) == original
+
+
 def test_demo_preparation_versions_edited_inputs_and_launches_existing_importer(tmp_path, monkeypatch):
     from lerobot.gui.api import run as run_api
 

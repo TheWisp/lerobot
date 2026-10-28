@@ -1463,11 +1463,23 @@ def _flash_demo_preparation(dataset_root: str, bundle_path: str, episode: int) -
     keypoints = json.loads(keypoints_path.read_text(encoding="utf-8"))
     if annotation["episode"] != episode or not isinstance(keypoints["keypoints"], list):
         raise ValueError("preparation inputs do not match the selected demo episode")
+    path_migrated = False
+    arm_path = root / "showservo_demo.npz"
+    if skill.get("intervals") and arm_path.is_file():
+        import numpy as np
+
+        from lerobot.policies.flash.sealed_demo_import import explicit_paths_from_prepared_skill
+
+        with np.load(arm_path, allow_pickle=False) as arm:
+            keypoints, path_migrated = explicit_paths_from_prepared_skill(
+                keypoints, skill, np.asarray(arm["t"], dtype=float)
+            )
     report_path = bundle.parent / "preparation-report.json"
     report = json.loads(report_path.read_text(encoding="utf-8")) if report_path.is_file() else None
     return {
         "annotation": annotation,
         "keypoints_document": keypoints,
+        "path_selection_migrated": path_migrated,
         "preparation_report": report,
         "annotation_source": str(annotation_path),
         "keypoints_source": str(keypoints_path),
