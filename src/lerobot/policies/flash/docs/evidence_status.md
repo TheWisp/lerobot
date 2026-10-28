@@ -115,6 +115,39 @@ appearance pass, with no lost frames. Both demos therefore need an
 observability-aware comparison of vision, group motion and attachment before
 we use a recovered pose to correct contact motion.
 
+The next candidate surface pass checks both directions of the fit: current
+object pixels against the saved reference surface, and the nearest saved
+reference point on each camera ray against _clean_ depth pixels inside the
+current mask. It uses the existing
+surface-fit threshold and minimum inlier count. A reference point hidden behind
+the currently visible surface can fail this conservative check; failure means
+the current view does not certify the pose, not that the pose is proven wrong.
+Rejected candidates remain in the scene-evidence sidecar and can be inspected
+in Run → FLASH → demo replay → 3D scene. The live action skill is unchanged.
+
+| Candidate prepared bundle (2026-10-28) | Held-object observed | Predicted | Lost |
+| -------------------------------------- | -------------------: | --------: | ---: |
+| Gamepad/cube, original surface pass    |                  247 |       128 |  128 |
+| Gamepad/cube, clean-depth check        |                  226 |       110 |  167 |
+| Dowel/ring, clean-depth surface pass   |                  272 |       128 |  191 |
+
+The gamepad keeps direct poses at carried frames 290 and 300, where the clean
+visible reference points agree with depth. At frames 400 and 410 it withholds
+the direct pose. At frame 430, the first version rejected a candidate at 75.7
+mm depth p90; the pixel-counted version accepts the _same candidate pose and
+same reference model_ at 3.4 mm p90. Several reference points projected onto
+the same depth pixel at different depths, so the first version counted hidden
+rear points as separate depth disagreements. The closest point per pixel is
+the visible predicted surface. This corrects that score, but does not prove
+the candidate pose is accurate against independent ground truth. The remaining
+coverage change is a coverage-versus-certainty trade-off, not a measured
+accuracy gain.
+The final candidates are `flash-gamepad-cube-20261028-depth-pixels` and
+`flash-dowel-ring-20261028-depth-pixels` in their respective demo datasets.
+The dowel candidate is the first surface pass for that demo, so there is no
+same-backend pre-check comparison. Its default appearance-based skill has not
+been replaced. Neither candidate has been validated in a physical rollout.
+
 ## Physical rollouts
 
 The sealed prototype has completed real insertion rollouts. For example,

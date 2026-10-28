@@ -285,7 +285,35 @@ def test_failed_rgb_motion_remains_visible_for_debugging_but_not_authoritative()
     assert proposal.visible_support.mask_pixels > 0
     assert proposal.visible_support.depth_points > 0
     assert proposal.visible_support.depth_residual_p90_m is not None
+    assert proposal.visible_support.reference_depth_pixels is not None
+    assert proposal.visible_support.reference_depth_residual_p90_m is not None
     assert proposal.failure == "surface proposal lacks accepted RGB-D support"
+
+
+def test_small_patch_fit_cannot_promote_reference_depth_disagreement():
+    from lerobot.policies.flash.surface_tracking import SurfaceTrackingSession
+
+    pipeline = PerceptionPipeline(local_backend(), (reference(),))
+    sequence = frames()
+    pipeline.process(sequence[0])
+    original = SurfaceTrackingSession.finish
+
+    def disputed_reference(self, prepared):
+        result = original(self, prepared)
+        # The current-to-reference fit remains valid; the independently
+        # transported reference disagrees with clean current-frame depth.
+        result["diagnostics"]["reference_depth_p90_mm"] = 50.0
+        return result
+
+    with (
+        patch("lerobot.policies.flash.surface_tracking.ufm_pairs", synthetic_pairs),
+        patch.object(SurfaceTrackingSession, "finish", disputed_reference),
+    ):
+        result = pipeline.process(sequence[1])
+    assert result.details["object"]["diagnostics"]["surface_p90_mm"] < 5
+    assert result.estimates[0].evidence == Evidence.LOST
+    assert result.proposals[0].raw_pose is not None
+    assert result.proposals[0].visible_support.reference_depth_residual_p90_m == 0.05
 
 
 def test_pipeline_rejects_frame_or_camera_discontinuity_instead_of_corrupting_reference():

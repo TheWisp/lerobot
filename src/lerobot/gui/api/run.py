@@ -1952,6 +1952,16 @@ def _flash_recordings(source_paths: tuple[Path, ...]) -> list[dict]:
                 chosen = demo["prepared_versions"][-1]
                 demo["bundle_path"] = chosen["bundle_path"]
                 demo["prepared_skill"] = chosen["name"]
+            if demo["bundle_path"] is not None:
+                try:
+                    annotation = json.loads(
+                        (Path(demo["bundle_path"]).parent / "annotation.json").read_text(encoding="utf-8")
+                    )
+                    held, target = annotation.get("held_role"), annotation.get("target_role")
+                    if isinstance(held, str) and isinstance(target, str):
+                        demo["interaction"] = {"held_role": held, "target_role": target}
+                except (OSError, ValueError, TypeError):
+                    pass
         found.extend(demos.values())
         manifest_path = extension / "manifest.json"
         try:

@@ -371,6 +371,14 @@ export function createFlashSceneView(canvas, surfaces) {
                 ghost.visible = ghost.userData.enabled;
                 evidence.add(ghost);
             }
+            const rejected = snapshot.raw_proposals?.[role];
+            if (rejected?.pose) {
+                const ghost = makeDashedReference(ref.geometry, 0xf472b6);
+                setPose(ghost, rejected.pose, baseFromCamera);
+                ghost.userData = {kind: 'raw_proposal', role, enabled: false};
+                ghost.visible = false;
+                evidence.add(ghost);
+            }
             if (held?.role === role && held.pose) {
                 const ghost = makeDashedReference(ref.geometry, gripperColor);
                 setPose(ghost, held.pose, baseFromCamera);
@@ -424,7 +432,7 @@ export function createFlashSceneView(canvas, surfaces) {
     }
 
     function highlight(source) {
-        const selected = ['layer', 'accepted', 'held'].includes(source?.kind) ? source : null;
+        const selected = ['layer', 'accepted', 'held', 'raw_proposal'].includes(source?.kind) ? source : null;
         for (const item of evidence.children) {
             const match = selected && item.userData.kind === selected.kind &&
                 item.userData.role === selected.role &&

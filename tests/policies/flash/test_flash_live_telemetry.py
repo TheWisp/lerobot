@@ -167,6 +167,8 @@ def test_live_tracker_layers_are_replayed_with_camera_frame(tmp_path: Path) -> N
         "motion_inliers": 16,
         "depth_residual_p90_m": 0.003,
         "surface_fit_converged": True,
+        "reference_depth_pixels": None,
+        "reference_depth_residual_p90_m": None,
     }
     (tmp_path / "meta").mkdir()
     (tmp_path / "meta" / "info.json").write_text(

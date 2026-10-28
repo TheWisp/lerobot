@@ -13,7 +13,7 @@ from .perception_step import PerceptionPipeline, PerceptionResult, PerceptionRun
 from .symmetry import AxialSymmetry
 from .trajectory import Evidence, PoseEstimate
 
-POSE_TRACE_SELECTION_VERSION = 2
+POSE_TRACE_SELECTION_VERSION = 3
 
 
 def extract_pose_trace(

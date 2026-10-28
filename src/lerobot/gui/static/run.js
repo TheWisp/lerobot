@@ -126,8 +126,24 @@ async function _flashUpdateSceneFrame() {
             : Object.keys(liveMasks).length || Object.keys(liveGroups || {}).length
                 ? {available: true, masks_rle: liveMasks, groups: liveGroups || {}} : null;
         _flashPaintObservedPhoto({...frame, evidence: frameEvidence}, camera);
-        flashSceneView.update(frame.depth, frame.rgba, {...selected.snapshot, ...(replay?.geometry || {})},
-            _flashSceneOptions(), frameEvidence);
+        let displaySnapshot = {...selected.snapshot, ...(replay?.geometry || {})};
+        if (kind === 'demo' && frameEvidence?.proposals) {
+            displaySnapshot = {
+                ...displaySnapshot,
+                scene_proposals: frameEvidence.proposals,
+                proposals: Object.fromEntries(Object.entries(frameEvidence.proposals).map(([role, proposal]) => [
+                    role, {evidence: proposal.evidence, source_time_s: selected.snapshot.recorded_at_s},
+                ])),
+                raw_proposals: Object.fromEntries(Object.entries(frameEvidence.proposals)
+                    .filter(([, proposal]) => proposal.raw_pose && proposal.failure)
+                    .map(([role, proposal]) => [role, {
+                        pose: proposal.raw_pose, frame_id: selected.frame_index,
+                        calibration_version: camera.calibration_version, failure: proposal.failure,
+                    }])),
+            };
+            renderFlashDemoSnapshot(displaySnapshot);
+        }
+        flashSceneView.update(frame.depth, frame.rgba, displaySnapshot, _flashSceneOptions(), frameEvidence);
         flashSceneView.highlight(flashHighlightedOverlay);
         if (generation === flashSceneRequest) document.querySelector('#rerun-viewer .flash-replay-grid')
             ?.classList.remove('flash-frame-loading');
@@ -990,6 +1006,12 @@ function renderFlashDemoSnapshot(snapshot) {
     for (const [role, layers] of Object.entries(snapshot.layers || {})) {
         const pose = layers.demo_extraction;
         if (!pose) continue;
+        const proposal = snapshot.scene_proposals?.[role];
+        const support = proposal?.visible_support;
+        const referenceDepth = support?.reference_depth_residual_p90_m;
+        const depthNote = support?.reference_depth_pixels == null ? ''
+            : ` · ${support.reference_depth_pixels} clean reference-depth pixels` +
+                (referenceDepth == null ? '' : `, ${(referenceDepth * 1000).toFixed(1)} mm p90`);
         const lastDirect = pose.last_direct_observation_s == null ? ''
             : ` · last direct observation ${Math.max(0, demo.time_s - pose.last_direct_observation_s).toFixed(1)} s ago`;
         const used = snapshot.held_prediction?.role === role ? snapshot.held_prediction : snapshot.accepted?.[role];
@@ -1008,7 +1030,12 @@ function renderFlashDemoSnapshot(snapshot) {
             : 'Per-frame masks and supporting group points were not stored.';
         html += `<div class="flash-tracker-role"><strong>${_esc(role)} · extraction</strong>`;
         html += _flashOverlayRow('layer', role, 'demo_extraction', 'flash-tracker-layer',
-            `<span class="flash-tracker-dot" style="background:${_flashLayerColor(pose.estimator)}"></span>${_esc(detail)}<small>${_esc(predictionNote)}${_esc(originNote)}</small>`);
+            `<span class="flash-tracker-dot" style="background:${_flashLayerColor(pose.estimator)}"></span>${_esc(detail)}<small>${_esc(predictionNote)}${_esc(originNote + depthNote)}</small>`);
+        if (proposal?.failure && proposal.raw_pose) {
+            html += _flashOverlayRow('raw_proposal', role, '', 'flash-tracker-layer',
+                `<span class="flash-tracker-dot" style="background:#f472b6"></span>Rejected vision fit` +
+                `<small>${_esc(proposal.failure)} · hover to inspect</small>`);
+        }
         html += '</div>';
     }
     if (demo.phase === 'outside_skill') {
@@ -1732,7 +1759,11 @@ async function _loadFlashRecordings() {
             button.className = 'flash-recording';
             button.title = recording.dataset_root;
             const label = document.createElement('strong');
-            label.textContent = `${recording.dataset_root.split('/').pop()} · episode ${recording.episode}`;
+            const interaction = recording.interaction;
+            const title = interaction?.held_role && interaction?.target_role
+                ? `${interaction.held_role} → ${interaction.target_role}`
+                : recording.dataset_root.split('/').pop();
+            label.textContent = `${title} · episode ${recording.episode}`;
             const meta = document.createElement('span');
             meta.className = 'flash-recording-meta';
             const skills = recording.skills || [];

@@ -11,6 +11,7 @@ import argparse
 import gzip
 import hashlib
 import json
+from dataclasses import asdict
 from pathlib import Path
 
 import numpy as np
@@ -116,6 +117,16 @@ def rebuild(root: Path, bundle: Path, *, through_frame: int | None = None, devic
                     "pose": estimate.pose.tolist() if estimate.pose is not None else None,
                 }
                 for role, estimate in estimates.items()
+            },
+            "proposals": {
+                proposal.role: {
+                    "evidence": proposal.estimate.evidence.value,
+                    "estimator": proposal.estimate.estimator,
+                    "raw_pose": proposal.raw_pose.tolist() if proposal.raw_pose is not None else None,
+                    "failure": proposal.failure,
+                    "visible_support": asdict(proposal.visible_support),
+                }
+                for proposal in result.proposals
             },
         }
         frame_path = destination / f"{frame.frame_id:06d}.json.gz"

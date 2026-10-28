@@ -336,11 +336,15 @@ def test_new_preparation_candidate_does_not_replace_default_demo(tmp_path):
         bundle.write_text(json.dumps({"skill": "skill.json"}))
         os.utime(bundle, (stamp, stamp))
     (prepared / "new/preparation-report.json").write_text(json.dumps({"review_status": "candidate"}))
+    (prepared / "accepted/annotation.json").write_text(
+        json.dumps({"held_role": "workpiece", "target_role": "receiver"})
+    )
     recordings = _flash_recordings((tmp_path,))
     demo = next(recording for recording in recordings if recording["kind"] == "demo")
     assert Path(demo["bundle_path"]).parent.name == "accepted"
     assert [version["name"] for version in demo["prepared_versions"]] == ["accepted", "new"]
     assert demo["prepared_versions"][-1]["candidate"]
+    assert demo["interaction"] == {"held_role": "workpiece", "target_role": "receiver"}
 
 
 def test_inspection_flags_held_interval_without_an_attachment_event(tmp_path):
@@ -600,6 +604,7 @@ def test_run_flash_lists_demos_and_shows_extracted_pose_overlay(gui_page):
                     "kind": "demo",
                     "dataset_root": "/tmp/one-demo",
                     "episode": 2,
+                    "interaction": {"held_role": "workpiece", "target_role": "receiver"},
                     "skills": ["spatial-skill", "new-skill"],
                     "bundle_path": "/tmp/one-demo/flash/v1/prepared/spatial-skill/bundle.json",
                     "prepared_skill": "spatial-skill",
@@ -700,6 +705,7 @@ def test_run_flash_lists_demos_and_shows_extracted_pose_overlay(gui_page):
     page.wait_for_function(
         "() => document.querySelectorAll('#run-flash-demos .flash-recording').length === 1"
     )
+    assert "workpiece → receiver" in page.locator("#run-flash-demos .flash-recording").inner_text()
     assert "spatial-skill" in page.locator("#run-flash-demos").inner_text()
     assert "review candidate" in page.locator("#run-flash-demos .flash-recording-version").inner_text()
     page.locator("#run-flash-demos .flash-recording").click()
@@ -1604,7 +1610,16 @@ def test_3d_scene_projection_and_surface_pick_edit_the_prepared_keyframe(gui_pag
             }
             for role in ("tool", "fixture")
         },
-        "layers": {},
+        "layers": {
+            "tool": {
+                "demo_extraction": {
+                    "pose": None,
+                    "evidence": "lost",
+                    "estimator": "surface_rgbd",
+                    "source_time_s": 1.0,
+                }
+            }
+        },
         "demo": {
             "phase": "demonstrated_sample",
             "time_s": 1.0,
@@ -1668,7 +1683,24 @@ def test_3d_scene_projection_and_surface_pick_edit_the_prepared_keyframe(gui_pag
     page.route(
         "**/api/run/flash/demo/scene-evidence/frame?*",
         lambda route: route.fulfill(
-            json={"available": True, "frame_index": 0, "masks_rle": mask_runs, "groups": {}}
+            json={
+                "available": True,
+                "frame_index": 0,
+                "masks_rle": mask_runs,
+                "groups": {},
+                "proposals": {
+                    "tool": {
+                        "evidence": "lost",
+                        "estimator": "surface_rgbd",
+                        "raw_pose": identity,
+                        "failure": "reference depth disagrees",
+                        "visible_support": {
+                            "reference_depth_pixels": 20,
+                            "reference_depth_residual_p90_m": 0.0025,
+                        },
+                    }
+                },
+            }
         ),
     )
     page.route(
@@ -1712,6 +1744,13 @@ def test_3d_scene_projection_and_surface_pick_edit_the_prepared_keyframe(gui_pag
     page.locator("#run-flash-demos .flash-recording").click()
     page.locator("#flash-scene-toggle").click()
     page.wait_for_function("() => flashSceneMode === '3d' && flashSceneFrameCache?.frameIndex === 0")
+    assert (
+        "20 clean reference-depth pixels, 2.5 mm p90" in page.locator("#flash-tracker-content").inner_text()
+    )
+    assert "Rejected vision fit" in page.locator("#flash-tracker-content").inner_text()
+    page.locator("#flash-tracker-collapse").click()
+    page.locator("#flash-tracker-content [data-flash-index]", has_text="Rejected vision fit").hover()
+    page.wait_for_function("flashHighlightedOverlay?.kind === 'raw_proposal'")
     # The actual WebGL projection must meet the same pixel as the CSS-contained RGB frame.
     box = page.locator(".flash-scene-canvas").bounding_box()
     scale = min(box["width"] / width, box["height"] / height)

@@ -51,6 +51,43 @@ def load_ufm():
     return model.cuda().float().eval()
 
 
+def reference_depth_support(
+    reference_camera_points: np.ndarray,
+    clean_depth_pixels: np.ndarray,
+    depth_m: np.ndarray,
+    intrinsics: np.ndarray,
+) -> tuple[int, float | None]:
+    """Compare a transported reference with reliable depth on this object.
+
+    The current-to-reference nearest-neighbour score can be low for a small
+    visible patch even when the rest of the saved reference is unsupported.
+    This reverse check uses only pixels retained by the existing mask/depth
+    observation filter; occluded or invalid pixels supply no positive evidence.
+    """
+    positive = np.isfinite(reference_camera_points).all(axis=1) & (reference_camera_points[:, 2] > 0)
+    projected = np.rint(project(reference_camera_points[positive], intrinsics)).astype(int)
+    points = reference_camera_points[positive]
+    height, width = depth_m.shape
+    inside = (
+        (projected[:, 0] >= 0)
+        & (projected[:, 0] < width)
+        & (projected[:, 1] >= 0)
+        & (projected[:, 1] < height)
+    )
+    projected = projected[inside]
+    points = points[inside]
+    # One image pixel is one depth measurement even if the reference contains
+    # several points along its ray. Compare the nearest predicted surface.
+    linear = projected[:, 1] * width + projected[:, 0]
+    pixels, inverse = np.unique(linear, return_inverse=True)
+    front_depth = np.full(len(pixels), np.inf)
+    np.minimum.at(front_depth, inverse, points[:, 2])
+    y, x = np.divmod(pixels, width)
+    clean = clean_depth_pixels[y, x]
+    residual_mm = np.abs(depth_m[y[clean], x[clean]] - front_depth[clean]) * 1000
+    return len(residual_mm), float(np.percentile(residual_mm, 90)) if len(residual_mm) else None
+
+
 class SurfaceTrackingSession:
     def __init__(
         self,
@@ -218,6 +255,13 @@ class SurfaceTrackingSession:
         distances = cKDTree(predicted).query(all_points)[0] * 1000
         detail.update(
             surface_median_mm=float(np.median(distances)), surface_p90_mm=float(np.percentile(distances, 90))
+        )
+        reference_depth_pixels, reference_depth_p90_mm = reference_depth_support(
+            predicted, current["obs"]["valid_image"], current["depth"], intrinsics
+        )
+        detail.update(
+            reference_depth_pixels=reference_depth_pixels,
+            reference_depth_p90_mm=reference_depth_p90_mm,
         )
         anchors = move(self.anchors, self.pose)
         # The display frame is fixed at A, with axes chosen once at initialization.

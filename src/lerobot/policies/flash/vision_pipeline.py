@@ -403,6 +403,12 @@ class SurfacePoseBackend:
                     else None
                 ),
                 surface_fit_converged=diagnostics.get("converged"),
+                reference_depth_pixels=diagnostics.get("reference_depth_pixels"),
+                reference_depth_residual_p90_m=(
+                    float(diagnostics["reference_depth_p90_mm"]) / 1000
+                    if diagnostics.get("reference_depth_p90_mm") is not None
+                    else None
+                ),
             )
             accepted = pose is not None and (
                 detail["status"] == "reference"
@@ -412,6 +418,9 @@ class SurfacePoseBackend:
                     and diagnostics.get("inliers", 0) >= self.config.registration_min_inliers
                     and diagnostics.get("surface_p90_mm", float("inf"))
                     <= self.config.registration_threshold_m * 1000
+                    and diagnostics.get("reference_depth_pixels", 0) >= self.config.registration_min_inliers
+                    and diagnostics.get("reference_depth_p90_mm") is not None
+                    and diagnostics["reference_depth_p90_mm"] <= self.config.registration_threshold_m * 1000
                 )
             )
             # The UI may inspect a rejected candidate; execution receives LOST.
