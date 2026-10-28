@@ -327,7 +327,8 @@ It can check a local functional point and a local direction instead of the
 moving object's frame origin and full orientation. Rotation about that
 direction is then irrelevant to the milestone, while a displaced point or
 tilted direction fails. This is a task constraint, not evidence that an
-unobserved pose component has become known. The current planner still uses
+unobserved pose component has become known. The compiler and verifier require
+only orientation axes that can change the selected feature. The current planner still uses
 the full pose to generate its motion; this check alone does not adapt a path.
 Held-to-target intervals also name the held role; skill inspection reports a
 missing role or a missing matching attach event before live integration. It

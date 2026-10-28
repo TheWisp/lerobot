@@ -10,7 +10,7 @@ import numpy as np
 from .geometry import inverse
 from .progress import MilestoneUpdate, Verdict
 from .skill import MilestoneSpec
-from .trajectory import PoseEstimate
+from .trajectory import PoseEstimate, required_rotation_axes
 
 
 class PoseMilestonePublisher:
@@ -91,27 +91,33 @@ def verify_pose_relation(
         or reference.reference_version != criterion.reference_version
     ):
         return update(Verdict.UNKNOWN, "object frame version differs from milestone annotation")
-    if not reference.usable(now_s, criterion.max_pose_age_s, False):
-        return update(Verdict.UNKNOWN, "reference pose is not freshly and fully observed")
-    local_point = np.asarray(criterion.moving_point_m if criterion.moving_point_m is not None else (0, 0, 0))
-    needs_orientation = (
-        criterion.rotation_tolerance_rad is not None
-        or criterion.moving_direction is not None
-        or bool(np.any(local_point != 0))
+    local_point = np.asarray(
+        criterion.moving_point_m if criterion.moving_point_m is not None else (0, 0, 0), dtype=float
     )
-    moving_rotation = (needs_orientation,) * 3
+    local_direction = (
+        np.asarray(criterion.moving_direction, dtype=float)
+        if criterion.moving_direction is not None
+        else None
+    )
+    expected = criterion.reference_from_moving
+    reference_point = expected[:3, :3] @ local_point + expected[:3, 3]
+    reference_direction = expected[:3, :3] @ local_direction if local_direction is not None else None
+    if criterion.rotation_tolerance_rad is not None:
+        reference_rotation = moving_rotation = (True,) * 3
+    else:
+        reference_rotation = required_rotation_axes(reference_point, reference_direction)
+        moving_rotation = required_rotation_axes(local_point, local_direction)
+    if not reference.usable(now_s, criterion.max_pose_age_s, False, rotation=reference_rotation):
+        return update(Verdict.UNKNOWN, "reference pose lacks fresh observed required axes")
     if not moving.usable(now_s, criterion.max_pose_age_s, False, rotation=moving_rotation):
         return update(Verdict.UNKNOWN, "moving pose lacks fresh observed required axes")
 
     actual = inverse(reference.pose) @ moving.pose
-    expected = criterion.reference_from_moving
     actual_point = actual[:3, :3] @ local_point + actual[:3, 3]
-    expected_point = expected[:3, :3] @ local_point + expected[:3, 3]
-    translation_error_m = float(np.linalg.norm(actual_point - expected_point))
-    if criterion.moving_direction is not None:
-        direction = np.asarray(criterion.moving_direction)
-        actual_direction = actual[:3, :3] @ direction
-        expected_direction = expected[:3, :3] @ direction
+    translation_error_m = float(np.linalg.norm(actual_point - reference_point))
+    if local_direction is not None:
+        actual_direction = actual[:3, :3] @ local_direction
+        expected_direction = reference_direction
         rotation_error_rad = float(np.arccos(np.clip(actual_direction @ expected_direction, -1.0, 1.0)))
         rotation_limit = criterion.direction_tolerance_rad
     else:

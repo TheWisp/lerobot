@@ -167,6 +167,28 @@ def test_local_contact_point_and_direction_ignore_irrelevant_roll_but_reject_bad
     poses = {"reference": reference, "moving": moving}
     assert verify_pose_relation(spec, poses, pose_version=1, now_s=1).verdict == Verdict.TRUE
 
+    poses["moving"] = PoseEstimate(
+        "moving", roll, 1, 1, Evidence.OBSERVED, "moving-v1", (True,) * 3, (False, True, True)
+    )
+    poses["reference"] = PoseEstimate(
+        "reference",
+        pose(),
+        1,
+        1,
+        Evidence.OBSERVED,
+        "reference-v1",
+        (True,) * 3,
+        (False, True, True),
+    )
+    assert verify_pose_relation(spec, poses, pose_version=2, now_s=1).verdict == Verdict.TRUE
+
+    poses["moving"] = PoseEstimate(
+        "moving", roll, 1, 1, Evidence.OBSERVED, "moving-v1", (True,) * 3, (False, False, True)
+    )
+    assert verify_pose_relation(spec, poses, pose_version=3, now_s=1).verdict == Verdict.UNKNOWN
+    poses["moving"] = moving
+    poses["reference"] = reference
+
     tilt = np.eye(4)
     tilt[:3, :3] = [[np.cos(0.2), 0, np.sin(0.2)], [0, 1, 0], [-np.sin(0.2), 0, np.cos(0.2)]]
     local_point = np.array([0.05, 0, 0])
@@ -174,19 +196,19 @@ def test_local_contact_point_and_direction_ignore_irrelevant_roll_but_reject_bad
     poses["moving"] = PoseEstimate(
         "moving", tilt, 1, 1, Evidence.OBSERVED, "moving-v1", (True,) * 3, (True,) * 3
     )
-    assert verify_pose_relation(spec, poses, pose_version=2, now_s=1).verdict == Verdict.FALSE
+    assert verify_pose_relation(spec, poses, pose_version=4, now_s=1).verdict == Verdict.FALSE
 
     displaced = roll.copy()
     displaced[0, 3] = 0.01
     poses["moving"] = PoseEstimate(
         "moving", displaced, 1, 1, Evidence.OBSERVED, "moving-v1", (True,) * 3, (True,) * 3
     )
-    assert verify_pose_relation(spec, poses, pose_version=3, now_s=1).verdict == Verdict.FALSE
+    assert verify_pose_relation(spec, poses, pose_version=5, now_s=1).verdict == Verdict.FALSE
 
     poses["moving"] = PoseEstimate(
         "moving", roll, 1, 1, Evidence.OBSERVED, "moving-v1", (True,) * 3, (False,) * 3
     )
-    assert verify_pose_relation(spec, poses, pose_version=4, now_s=1).verdict == Verdict.UNKNOWN
+    assert verify_pose_relation(spec, poses, pose_version=6, now_s=1).verdict == Verdict.UNKNOWN
 
 
 def test_feature_relation_rejects_incomplete_or_conflicting_annotations():

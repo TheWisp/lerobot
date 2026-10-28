@@ -17,13 +17,35 @@ class Evidence(str, Enum):
     LOST = "lost"
 
 
+def required_rotation_axes(
+    point: np.ndarray,
+    direction: np.ndarray | None,
+) -> tuple[bool, bool, bool]:
+    """Local rotations that can change a point or a directed feature.
+
+    Ignore only floating-point roundoff when a vector lies on an axis. A
+    nearly aligned feature still requires that axis to be observed.
+    """
+    vectors = (point,) if direction is None else (point, direction)
+    epsilon = np.finfo(float).eps
+    return tuple(
+        any(
+            np.linalg.norm(np.cross(axis, vector)) > 32 * epsilon * max(1.0, np.linalg.norm(vector))
+            for vector in vectors
+        )
+        for axis in np.eye(3)
+    )
+
+
 @dataclass(frozen=True)
 class PoseEstimate:
     """Pose in the robot-base frame, with times on the motor monotonic clock.
 
-    Supported axes are task-relevant evidence, not a claim that all six axes
-    were independently observed. A partial pose remains available to callers
-    whose keyframe requires only those axes.
+    Supported translation axes use the robot-base frame; supported rotation
+    axes describe rotations about the object's local X, Y and Z axes. They
+    mark task-relevant evidence, not a claim that all six axes were observed.
+    A partial pose remains available when the task is invariant to its
+    unsupported axes.
     """
 
     role: str

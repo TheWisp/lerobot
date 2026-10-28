@@ -228,7 +228,14 @@ def test_compiles_a_pose_milestone_from_an_observed_demo_frame(tmp_path):
 def test_compiles_and_replays_a_local_point_and_direction_milestone(tmp_path):
     poses = tracks()
     poses[2]["part"] = PoseEstimate(
-        "part", pose(0.1), 1.0, 1.0, Evidence.OBSERVED, "part-v1", (True,) * 3, (True,) * 3
+        "part",
+        pose(0.1),
+        1.0,
+        1.0,
+        Evidence.OBSERVED,
+        "part-v1",
+        (True,) * 3,
+        (False, True, True),
     )
     skill = compile_skill(
         dataset=FakeDataset(),

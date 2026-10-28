@@ -19,7 +19,7 @@ from .skill import (
     Relation,
     SpatialSample,
 )
-from .trajectory import Evidence, PoseEstimate
+from .trajectory import Evidence, PoseEstimate, required_rotation_axes
 
 
 class DatasetEpisode(Protocol):
@@ -100,10 +100,10 @@ def _measured_pose(
     frame_index: int,
     allow_prediction: bool,
     *,
-    require_rotation: bool = True,
+    rotation_axes: tuple[bool, bool, bool] = (True, True, True),
 ) -> PoseEstimate:
     estimate = estimates.get(role)
-    if estimate is None or estimate.pose is None or not estimate.supports(rotation=(require_rotation,) * 3):
+    if estimate is None or estimate.pose is None or not estimate.supports(rotation=rotation_axes):
         raise ValueError(f"frame {frame_index}: {role} has no required metric pose axes")
     if estimate.evidence == Evidence.LOST or (
         estimate.evidence == Evidence.PREDICTED and not allow_prediction
@@ -230,21 +230,33 @@ def compile_skill(
             annotation.reference_role,
             annotation.frame_index,
             annotation.allow_predicted_demo_pose,
+            rotation_axes=(False,) * 3,
         )
         moving = _measured_pose(
             frame_poses,
             annotation.moving_role,
             annotation.frame_index,
             annotation.allow_predicted_demo_pose,
-            require_rotation=(
-                annotation.rotation_tolerance_rad is not None
-                or annotation.moving_direction is not None
-                or bool(
-                    annotation.moving_point_m is not None
-                    and np.any(np.asarray(annotation.moving_point_m) != 0)
-                )
-            ),
+            rotation_axes=(False,) * 3,
         )
+        desired = inverse(reference.pose) @ moving.pose
+        point = np.asarray(annotation.moving_point_m if annotation.moving_point_m is not None else (0, 0, 0))
+        direction = (
+            np.asarray(annotation.moving_direction) if annotation.moving_direction is not None else None
+        )
+        if point.shape != (3,) or not np.isfinite(point).all():
+            raise ValueError(f"{annotation.name}: moving point needs three finite local coordinates")
+        if direction is not None and (direction.shape != (3,) or not np.isfinite(direction).all()):
+            raise ValueError(f"{annotation.name}: moving direction needs three finite local coordinates")
+        reference_point = desired[:3, :3] @ point + desired[:3, 3]
+        reference_direction = desired[:3, :3] @ direction if direction is not None else None
+        if annotation.rotation_tolerance_rad is not None:
+            reference_axes = moving_axes = (True,) * 3
+        else:
+            reference_axes = required_rotation_axes(reference_point, reference_direction)
+            moving_axes = required_rotation_axes(point, direction)
+        if not reference.supports(rotation=reference_axes) or not moving.supports(rotation=moving_axes):
+            raise ValueError(f"frame {annotation.frame_index}: milestone lacks required metric pose axes")
         compiled_milestones.append(
             MilestoneSpec(
                 annotation.name,
@@ -252,7 +264,7 @@ def compile_skill(
                 PoseRelationCriterion(
                     annotation.moving_role,
                     annotation.reference_role,
-                    inverse(reference.pose) @ moving.pose,
+                    desired,
                     moving.reference_version,
                     reference.reference_version,
                     annotation.translation_tolerance_m,
