@@ -148,3 +148,34 @@ For the recorded turn, run `benchmarks/flash_surface_motion_trace.py TRACE
 For the labeled control, run `benchmarks/flash_surface_motion_case.py CASE
 --output OUTPUT.json`. Both scripts use the UFM-capable isolated tracking
 environment. Their maps are diagnostic hypotheses, not trusted pose outputs.
+
+## Held dowel: test a later view against earlier frames
+
+The prepared insertion demo still has one saved dowel surface, measured before
+the grasp. Its held-object correction accepts small changes to the
+gripper-to-object relation immediately. In this preparation, the accepted
+relation at frame 291 and the one at frame 475 differ by 12.8 mm at the saved
+surface centre and 11.7° in rotation. The later frame shows more of the dowel.
+
+`benchmarks/flash_held_surface_holdout.py` registered the clean RGB-D surface
+from frame 475 using **the prepared pose at that frame**, then held each chosen
+gripper-to-object relation fixed while replaying the recorded arm motion. It
+scored frames 300–429, every third frame (44 frames); none supplied the new
+surface. The number below is the 90th-percentile distance from measured clean
+depth points to the projected surface, summarized across those frames.
+
+| Fixed attachment   | Surface model       |   Median | 90th percentile |
+| ------------------ | ------------------- | -------: | --------------: |
+| Saved at frame 291 | Initial view        | 13.66 mm |        14.76 mm |
+| Saved at frame 475 | Initial view        |  8.12 mm |         9.49 mm |
+| Saved at frame 475 | Initial + frame 475 |  3.87 mm |         7.57 mm |
+
+The first improvement comes from changing the attachment; the second comes
+from the newly visible surface. This is independent _frame_ evidence for those
+two effects, but not an independently measured 6D pose. The later attachment
+could include real slip, and a partial cylinder may permit more than one pose.
+The reverse depth residual remains high on some frames because projected
+points can be hidden; low forward distance alone is not enough to publish a
+pose. Neither the model nor the live control rule has been changed by this
+audit. It motivates an interval-level attachment check and an admission test
+for new views before either is used for control.
