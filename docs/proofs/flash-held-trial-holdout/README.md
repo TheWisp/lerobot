@@ -148,3 +148,44 @@ records this evidence in Demo, Test and Replay, but does not use it to change
 the controller. Selecting between vision, gripper and scene-motion proposals
 still needs a source-frame comparison of the candidates against the same
 measured image, with unresolved dimensions preserved.
+
+### A same-image mask/depth winner is still unsafe
+
+The existing held-pose comparison uses two measurements of a saved surface at
+one camera frame: the fraction of its projected points supported by the object
+mask and the 90th-percentile depth difference there. We applied that same
+two-metric dominance test to each rejected vision proposal and the gripper
+prediction, requiring the trial's configured 12 supported pixels for both.
+The [surface-choice audit](audit_surface_choice.py) reads the recorded
+same-frame measurements and joins its choices to the later visible-direction
+check; it never changes the replay or controller.
+
+| Attempt  | Depth pixels used      | Vision chosen | Chosen vision closer to later visible direction | Gripper chosen | Unresolved or insufficient |
+| -------- | ---------------------- | ------------: | ----------------------------------------------: | -------------: | -------------------------: |
+| 20:33:10 | All valid depth        |         24/99 |                                           19/24 |              0 |                      75/99 |
+| 20:18:38 | All valid depth        |        87/145 |                                           29/87 |              4 |                     54/145 |
+| 20:33:10 | Reliable mask interior |          8/99 |                                             6/8 |              1 |                      90/99 |
+| 20:18:38 | Reliable mask interior |       140/145 |                                          64/140 |              0 |                      5/145 |
+
+Even cleaner depth does not make this first-view surface comparison a reliable
+full-pose selector: in the second attempt it favors vision in nearly every
+frame while vision often predicts the later visible direction less well. The
+test compares **direction only**, uses correlated neighboring frames, and has
+no hidden-tip ground truth. It does rule out applying the current held-pose
+dominance rule directly to rejected raw proposals. The next estimator needs a
+partial measurement that retains competing hypotheses and establishes which
+dimensions the currently visible geometry actually distinguishes; more
+registered views may be necessary where the saved first view does not cover
+the observed surface.
+
+Reproduce from the saved audits with:
+
+```bash
+.venv/bin/python docs/proofs/flash-held-trial-holdout/audit_surface_choice.py \
+  --axis-audit docs/proofs/flash-held-trial-holdout/axis_audit_all_held.json.gz \
+  --future-axis docs/proofs/flash-held-trial-holdout/future_axis_comparison.json.gz \
+  --min-supported-pixels 12
+```
+
+Use the `second-trial/` paths for the other attempt. This script's count is a
+measured counterexample, not a tuned runtime threshold.

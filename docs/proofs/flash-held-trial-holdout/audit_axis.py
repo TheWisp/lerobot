@@ -173,6 +173,10 @@ def measure(result_path: Path, sample_rows: list[int]) -> list[dict]:
                 "axis_gap_mask_2d_deg": axis_gap_deg(projected_axis, observed_2d_axis),
                 "projected_endpoints_xy": projected.tolist(),
                 "mask_fraction": support.projected_point_mask_fraction,
+                "supported_pixels": support.masked_depth_points,
+                "depth_residual_p90_mm": (
+                    support.depth_residual_p90_m * 1000 if np.isfinite(support.depth_residual_p90_m) else None
+                ),
                 "clean_depth_residual_p90_mm": (
                     support.clean_depth_residual_p90_m * 1000
                     if support.clean_depth_residual_p90_m is not None
