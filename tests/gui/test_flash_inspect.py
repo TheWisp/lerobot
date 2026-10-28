@@ -979,6 +979,7 @@ def test_run_flash_tracker_panel_reuses_view_for_recorded_layers(gui_page):
     page.evaluate("datasets['/tmp/tracker-run'] = {id: '/tmp/tracker-run', root: '/tmp/tracker-run'}")
     page.wait_for_function("() => document.querySelectorAll('.flash-recording').length === 1")
     page.get_by_role("tab", name="Rollouts").click()
+    assert page.locator(".flash-recording-reason").inner_text() == "IK failed"
     page.locator(".flash-recording").click()
     page.wait_for_function("() => document.querySelector('#flash-tracker-mode').textContent === 'Recording'")
     panel = page.locator("#flash-tracker-panel")

@@ -1670,6 +1670,12 @@ async function _loadFlashRecordings() {
             meta.textContent = `${when} · episode ${recording.episode} · ${recording.outcome}` +
                 (recording.frames == null ? '' : ` · ${recording.frames} frames`);
             button.append(label, meta);
+            if (recording.reason && recording.outcome !== 'success') {
+                const reason = document.createElement('span');
+                reason.className = 'flash-recording-reason';
+                reason.textContent = recording.reason;
+                button.append(reason);
+            }
             button.onclick = () => loadFlashTrackerReplay(recording.dataset_root, recording.episode);
             list.append(button);
         }

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from math import isfinite
 from queue import Empty, Full, Queue
 from threading import Lock
 
@@ -46,6 +47,7 @@ class FlashSession:
         on_tick: Callable[[MotorTick], None] | None = None,
         fps: float = 30.0,
         max_starved_ticks: int = 2,
+        max_milestone_wait_s: float = 2.0,
         max_splice_delta: dict[str, float] | None = None,
         clock=None,
         sleep=None,
@@ -53,12 +55,17 @@ class FlashSession:
         self.progress = Progress(skill)
         if max_starved_ticks < 1:
             raise ValueError("max_starved_ticks must be positive")
+        if not isfinite(max_milestone_wait_s) or max_milestone_wait_s <= 0:
+            raise ValueError("milestone wait must be finite and positive")
         self.actions = ActionQueue(max_splice_delta=max_splice_delta)
         self._plan_gate_lock = Lock()
         self._evidence: Queue[MilestoneUpdate | PoseChange] = Queue(maxsize=128)
         self._receipt_sink = on_receipt
         self._starved_in_a_row = 0
         self.max_starved_ticks = max_starved_ticks
+        self.max_milestone_wait_s = max_milestone_wait_s
+        self._milestone_wait_key: tuple[int, Phase, str] | None = None
+        self._milestone_wait_since_s: float | None = None
         kwargs = {}
         if clock is not None:
             kwargs["clock"] = clock
@@ -132,6 +139,39 @@ class FlashSession:
                 # an interval in this very tick.
                 self.actions.cancel_unissued("interval completed")
 
+    def _milestone_timed_out(self, now_s: float) -> bool:
+        phase = self.progress.phase
+        interval = self.progress.interval
+        name = (
+            interval.entry_milestone
+            if phase == Phase.WAITING
+            else interval.completion_milestone
+            if phase == Phase.VERIFYING
+            else None
+        )
+        if name is None or self.progress.allows_milestone(name):
+            self._milestone_wait_key = None
+            self._milestone_wait_since_s = None
+            return False
+        key = (self.progress.interval_index, phase, name)
+        if key != self._milestone_wait_key:
+            self._milestone_wait_key = key
+            self._milestone_wait_since_s = now_s
+            self.progress.events.append(
+                {"type": "milestone_wait", "interval": interval.name, "milestone": name, "at": now_s}
+            )
+            return False
+        if now_s - self._milestone_wait_since_s < self.max_milestone_wait_s:
+            return False
+        evidence = self.progress.milestones.get(name)
+        verdict = evidence.verdict.value if evidence is not None else "unknown"
+        detail = f": {evidence.reason}" if evidence is not None and evidence.reason else ""
+        gate = "entry" if phase == Phase.WAITING else "completion"
+        reason = f"{gate} milestone {name!r} remained {verdict}{detail}"
+        self.actions.cancel_unissued(reason)
+        self.progress.fail(now_s, reason)
+        return True
+
     def step(self) -> ActionReceipt | None:
         self._take_evidence()
         now_s = self.motor.clock()
@@ -143,6 +183,8 @@ class FlashSession:
             self.actions.cancel_unissued(str(exc))
             self.progress.fail(now_s, str(exc))
             return self._idle_tick("missed required action")
+        if self._milestone_timed_out(now_s):
+            return self._idle_tick("milestone timeout")
         tick = self.motor.metrics.ticks
         if self.progress.phase == Phase.WAITING:
             # Publication and the idle decision must be one transaction. A

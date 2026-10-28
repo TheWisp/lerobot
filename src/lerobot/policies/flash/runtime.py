@@ -217,6 +217,7 @@ class FlashRuntime:
             # pose expires; a fixed two-tick timeout would fail before that
             # evidence boundary during a normal asynchronous update.
             max_starved_ticks=max(1, ceil(planner_limits.max_pose_age_s * fps)),
+            max_milestone_wait_s=buffer_config.max_wait_for_evidence_s,
             max_splice_delta={
                 f"{name}.pos": speed / fps
                 for name, speed in zip(arm_joint_names, planner_limits.joint_speed_deg_s, strict=True)

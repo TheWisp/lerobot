@@ -76,6 +76,74 @@ def test_session_runs_at_fixed_ticks_and_requires_explicit_outcome():
     assert session.progress.phase == Phase.SUCCEEDED
 
 
+def test_unverified_entry_milestone_fails_with_its_name_before_attempt_timeout():
+    now = [0.0]
+    robot = FakeRobot()
+    session = FlashSession(
+        skill(gate="visible"),
+        robot,
+        max_milestone_wait_s=0.1,
+        clock=lambda: now[0],
+        sleep=lambda dt: now.__setitem__(0, now[0] + dt),
+    )
+    session.publish_plan(0, [TimedAction(3, {"arm.pos": 1.0}, "contact")])
+    session.step()
+    assert session.progress.phase == Phase.WAITING
+    assert session.progress.events[-1]["type"] == "milestone_wait"
+    now[0] = 0.11
+    session.step()
+    assert session.progress.phase == Phase.FAILED
+    assert "entry milestone 'visible' remained unknown" in session.progress.events[-1]["reason"]
+    assert session.actions.snapshot().pending == ()
+    assert "send" not in robot.calls
+
+
+def test_completion_milestone_can_arrive_before_the_wait_expires():
+    now = [0.0]
+    interval = replace(skill().intervals[0], completion_milestone="placed")
+    annotated = FlashSkill("demo/source", 0, (interval,), milestones=(MilestoneSpec("placed", ("target",)),))
+    session = FlashSession(
+        annotated,
+        FakeRobot(),
+        max_milestone_wait_s=0.1,
+        clock=lambda: now[0],
+        sleep=lambda dt: now.__setitem__(0, now[0] + dt),
+    )
+    session.publish_plan(0, [TimedAction(0, {"arm.pos": 1.0}, "contact", interval_complete=True)])
+    session.step()
+    assert session.progress.phase == Phase.VERIFYING
+    session.step()
+    assert session.progress.events[-1]["type"] == "milestone_wait"
+    session.post_evidence(MilestoneUpdate("placed", Verdict.TRUE, "camera:2", 0.05))
+    now[0] = 0.12
+    session.step()
+    assert session.progress.phase == Phase.MOTION_COMPLETE
+    assert not any(event["type"] == "failure" for event in session.progress.events)
+
+
+def test_false_completion_milestone_reports_failure_instead_of_hanging():
+    now = [0.0]
+    interval = replace(skill().intervals[0], completion_milestone="placed")
+    annotated = FlashSkill("demo/source", 0, (interval,), milestones=(MilestoneSpec("placed", ("target",)),))
+    session = FlashSession(
+        annotated,
+        FakeRobot(),
+        max_milestone_wait_s=0.1,
+        clock=lambda: now[0],
+        sleep=lambda dt: now.__setitem__(0, now[0] + dt),
+    )
+    session.publish_plan(0, [TimedAction(0, {"arm.pos": 1.0}, "contact", interval_complete=True)])
+    session.step()
+    session.post_evidence(MilestoneUpdate("placed", Verdict.FALSE, "camera:1", 0.01, "object is off target"))
+    session.step()
+    now[0] = 0.15
+    session.step()
+    assert session.progress.phase == Phase.FAILED
+    assert session.progress.events[-1]["reason"] == (
+        "completion milestone 'placed' remained false: object is off target"
+    )
+
+
 def test_future_contact_chunk_waits_to_start_its_own_demo_clock():
     now = [0.0]
     robot = FakeRobot()
