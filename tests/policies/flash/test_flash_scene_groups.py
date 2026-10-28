@@ -139,6 +139,7 @@ def test_group_bridge_is_same_when_first_direct_pose_arrives_after_second():
     assert "object" in ordered.relationships
     assert "object" in reordered.relationships
     assert ordered_pose.estimator == reordered_pose.estimator == "environment_group_motion"
+    assert ordered_pose.source_frame_id == reordered_pose.source_frame_id == 2
     np.testing.assert_allclose(ordered_pose.pose, reordered_pose.pose, atol=1e-6)
     assert decisions[-1].outcome == "accepted_historical_group"
     assert reordered_pose.available_time_s >= decisions[-1].decided_at_s

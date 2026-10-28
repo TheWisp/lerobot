@@ -7,7 +7,7 @@ import math
 import os
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from queue import Full, Queue
 from threading import Thread
@@ -159,10 +159,18 @@ class FlashEpisodeWriter:
             "camera_source_time_s": record.camera_source_time_s,
             "camera_frame_id": record.camera_frame_id,
             "pose_version": record.pose_version,
+            "plan_evidence": (
+                asdict(tick.effective_plan_evidence)
+                if tick is not None and tick.effective_plan_evidence is not None
+                else asdict(receipt.requested.plan_evidence)
+                if receipt is not None and receipt.requested.plan_evidence is not None
+                else None
+            ),
             "poses": {
                 role: {
                     "pose": estimate.pose,
                     "source_time_s": estimate.source_time_s,
+                    "source_frame_id": estimate.source_frame_id,
                     "available_time_s": estimate.available_time_s,
                     "evidence": estimate.evidence.value,
                     "reference_version": estimate.reference_version,
@@ -275,6 +283,7 @@ def load_pose_estimates(
                 estimator=str(pose.get("estimator", "unspecified")),
                 last_direct_observation_s=pose.get("last_direct_observation_s"),
                 symmetry_canonicalized=bool(pose.get("symmetry_canonicalized", False)),
+                source_frame_id=pose.get("source_frame_id"),
             )
         result[frame_index] = estimates
     return result

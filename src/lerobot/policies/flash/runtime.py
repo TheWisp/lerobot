@@ -205,6 +205,7 @@ class FlashRuntime:
                     if updater is not None
                     else False,
                 )
+                self.live_telemetry.motor_tick(tick)
             self.recorder.submit(self.assembler.assemble(tick))
 
         self.session = FlashSession(

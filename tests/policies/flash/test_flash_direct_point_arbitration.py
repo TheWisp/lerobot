@@ -177,7 +177,7 @@ def test_axial_spin_is_ignored_in_published_point_pose_and_direct_comparison():
     anchor = PoseEstimate("object", identity, 0.0, 0.0, Evidence.OBSERVED, "v1", (True,) * 3, (True,) * 3)
     motion = RigidPointMotion(turn, 1 / 30, 1 / 30, 20, 20, 20, 0.0)
 
-    service._publish("object", anchor, motion)
+    service._publish("object", anchor, motion, 1)
 
     estimate = store.snapshot()[1]["object"]
     np.testing.assert_allclose(estimate.pose, identity, atol=1e-8)

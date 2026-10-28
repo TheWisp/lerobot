@@ -1227,6 +1227,33 @@ def test_live_flash_uses_the_same_frame_tagged_rgbd_scene(gui_page):
 
 @pytest.mark.requires_playwright
 @pytest.mark.skipif(importlib.util.find_spec("playwright") is None, reason="Playwright is not installed")
+def test_flash_replay_shows_which_camera_pose_planned_the_command(gui_page):
+    page = gui_page
+    page.evaluate("switchTab('run')")
+    page.evaluate("() => selectWorkflow('flash')")
+    page.evaluate(
+        """() => renderFlashSnapshot({
+            recorded_at_s: 2.0,
+            accepted: {object: {
+                pose: [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 1], [0, 0, 0, 1]],
+                source_time_s: 1.9, evidence: 'observed', estimator: 'surface_rgbd'
+            }},
+            motor_tick: {
+                action_source: 'commanded',
+                plan_evidence: {
+                    pose_revision: 3, reference_role: 'object', reference_source_frame_id: 5,
+                    reference_source_time_s: 1.0, reference_available_time_s: 1.2
+                }
+            }
+        }, 'Recording')"""
+    )
+    page.get_by_text("Command used object from camera frame 5").click()
+    assert "Pose revision 3" in page.locator("#flash-tracker-content").inner_text()
+    assert "current estimate" in page.locator("#flash-tracker-content").inner_text()
+
+
+@pytest.mark.requires_playwright
+@pytest.mark.skipif(importlib.util.find_spec("playwright") is None, reason="Playwright is not installed")
 def test_raw_demo_editor_collects_object_names_and_action_from_visible_controls(gui_page):
     page = gui_page
     submitted = []

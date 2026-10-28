@@ -761,6 +761,22 @@ function _flashPoseText(pose, snapshot) {
     return `${pose.evidence || 'unknown'}${freshness}${xyz}`;
 }
 
+function _flashCommandEvidence(snapshot) {
+    const command = snapshot.motor_tick;
+    const evidence = command?.plan_evidence;
+    if (!evidence) return '';
+    const source = evidence.reference_source_frame_id == null
+        ? `time ${Number(evidence.reference_source_time_s).toFixed(2)} s`
+        : `camera frame ${evidence.reference_source_frame_id}`;
+    const status = command.action_source === 'held_goal' ? 'Holding previous command' : 'Command';
+    const attachment = evidence.attachment_reference_version
+        ? ` · held-object estimate from ${Number(evidence.attachment_source_time_s).toFixed(2)} s`
+        : '';
+    return `<details class="flash-tracker-comparison"><summary>${status} used ${_esc(evidence.reference_role)} from ${_esc(source)}</summary>` +
+        `<small>Pose revision ${_esc(String(evidence.pose_revision))} · available at ${_esc(Number(evidence.reference_available_time_s).toFixed(2))} s${_esc(attachment)}. ` +
+        'This is the evidence used to plan the command; the outlines show the current estimate.</small></details>';
+}
+
 function renderFlashSnapshot(snapshot, mode = 'Live') {
     flashSnapshot = snapshot;
     const panel = document.getElementById('flash-tracker-panel');
@@ -778,12 +794,13 @@ function renderFlashSnapshot(snapshot, mode = 'Live') {
         ...Object.keys(snapshot.observed_masks || {}),
     ])].sort();
     if (!roles.length) {
-        content.textContent = 'Waiting for a pose proposal. The camera and motor loops can already be running.';
+        content.innerHTML = _flashCommandEvidence(snapshot) +
+            '<div>Waiting for a pose proposal. The camera and motor loops can already be running.</div>';
         _flashDrawOverlay();
         return;
     }
     flashOverlayRows = [];
-    let html = '<div class="flash-tracker-legend">Hover a row to highlight it in the camera view. Solid outline: control pose · thin outlines: other estimates · purple: visible mask when its camera frame matches.</div>';
+    let html = '<div class="flash-tracker-legend">Hover a row to highlight it in the camera view. Solid outline: control pose · thin outlines: other estimates · purple: visible mask when its camera frame matches.</div>' + _flashCommandEvidence(snapshot);
     for (const role of roles) {
         html += `<div class="flash-tracker-role"><strong>${_esc(role)}</strong>`;
         const mask = snapshot.observed_masks?.[role];
@@ -826,6 +843,7 @@ function renderFlashSnapshot(snapshot, mode = 'Live') {
                 missing_mask: 'No matching object mask',
                 lost_pose: 'No usable direct pose',
                 time_mismatch: 'Pose and camera times differ',
+                frame_mismatch: 'Pose and camera frame IDs differ',
                 source_time_mismatch: 'Result and camera times differ',
                 calibration_mismatch: 'Camera calibration differs',
                 frame_history_missing: 'Camera frame expired before the pose arrived',

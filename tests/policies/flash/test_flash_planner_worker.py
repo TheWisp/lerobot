@@ -1,6 +1,7 @@
 """IK preparation continues while the motor owner can consume old actions."""
 
 import time
+from dataclasses import replace
 from threading import Event
 
 import numpy as np
@@ -52,6 +53,34 @@ def test_plan_request_preserves_retimed_connection_in_worker_snapshot():
     assert copied.connection.goal_pose[0, 3] == 0.4
     assert copied.connection.requested_goal_pose[0, 3] == 1.0
     assert copied.connection.achieved_fraction == 0.4
+
+
+def test_worker_stamps_queued_commands_with_the_pose_snapshot_used_for_ik():
+    class OneActionPlanner:
+        def plan(self, interval, **_kwargs):
+            return [TimedAction(0, {"joint.pos": 1.0}, interval.name)]
+
+    published = []
+    worker = PlannerWorker(
+        OneActionPlanner(), lambda revision, actions: published.append((revision, actions))
+    )
+    worker.start()
+    try:
+        base = request(1)
+        reference = replace(base.reference, source_frame_id=5, source_time_s=0.1, available_time_s=0.2)
+        worker.submit(replace(base, reference=reference, pose_revision=7))
+        deadline = time.monotonic() + 5
+        while not published:
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+        evidence = published[0][1][0].plan_evidence
+        assert evidence is not None
+        assert evidence.pose_revision == 7
+        assert evidence.reference_source_frame_id == 5
+        assert evidence.reference_source_time_s == 0.1
+        assert evidence.reference_available_time_s == 0.2
+    finally:
+        worker.close()
 
 
 def test_planner_worker_supersedes_pending_request_without_blocking_motor_owner():

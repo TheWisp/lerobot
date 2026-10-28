@@ -296,6 +296,11 @@ The executable core already separates:
   based on its nominal FPS and must not be treated as exact physical timing.
   Motor observations also retain their actual read time for capture-time
   gripper interpolation.
+  Each command keeps the pose revision, source camera frame and availability
+  time used by IK, plus the held-object estimate version and time when used.
+  The tick's `pose_version` is the newer snapshot at recording time and may
+  differ from that command evidence; a held goal retains its last command's
+  provenance. Test and Replay show this distinction in the tracker panel.
   A tick assembler joins the latest available RGB-D frame and pose evidence
   before the recorder worker performs disk/video encoding.
 

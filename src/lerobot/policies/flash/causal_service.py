@@ -468,7 +468,7 @@ class CausalPoseService:
                     (frame.frame_id, motion, tracker.current_pixels(frame.depth.shape))
                 )
                 object_motion_roles.add(role)
-                self._publish(role, anchor, motion)
+                self._publish(role, anchor, motion, frame.frame_id)
         self.object_track_total_s += time.perf_counter() - object_started_s
         environment_started_s = time.perf_counter()
         for role, relationship in list(self.relationships.items()) + list(
@@ -546,6 +546,7 @@ class CausalPoseService:
             anchor.rotation_supported,
             estimator="environment_group_motion" if confirmed else "environment_support_hypothesis",
             last_direct_observation_s=anchor.source_time_s,
+            source_frame_id=frame.frame_id,
         )
         previous_version, _ = self.store.snapshot()
         if self.store.publish((estimate,)) != previous_version:
@@ -591,6 +592,7 @@ class CausalPoseService:
                     anchor.rotation_supported,
                     estimator="stationary_prior",
                     last_direct_observation_s=anchor.source_time_s,
+                    source_frame_id=frame.frame_id,
                 ),
             )
         )
@@ -640,6 +642,11 @@ class CausalPoseService:
                 self._count_anchor_outcome(estimate.role, "time_mismatch")
                 self._record_anchor_decision(result, candidate, "time_mismatch")
                 continue
+            if estimate.source_frame_id is not None and estimate.source_frame_id != source.frame_id:
+                self._count_anchor_outcome(estimate.role, "frame_mismatch")
+                self._record_anchor_decision(result, candidate, "frame_mismatch")
+                continue
+            estimate = replace(estimate, source_frame_id=source.frame_id)
             symmetry = self.axial_symmetries.get(estimate.role)
             if symmetry is not None and not estimate.symmetry_canonicalized:
                 try:
@@ -773,7 +780,7 @@ class CausalPoseService:
                         seed_pose = inverse(source_motion.base_motion_from_seed) @ estimate.pose
                         corrected = replace(estimate, pose=seed_pose)
                         self.active[estimate.role] = (active[0], corrected)
-                        self._publish(estimate.role, corrected, from_latest[0])
+                        self._publish(estimate.role, corrected, from_latest[0], self.history[-1].frame_id)
                         self._count_anchor_outcome(estimate.role, "reused_point_track")
                         continue
             pending = self.pending.get(estimate.role)
@@ -965,7 +972,7 @@ class CausalPoseService:
                     proposal,
                     pose=inverse(motion.base_motion_from_seed) @ proposal.pose,
                 )
-            self._publish(role, pending.anchor, motion)
+            self._publish(role, pending.anchor, motion, next_frame.frame_id)
         if next_frame.frame_id == self.history[-1].frame_id:
             self.active[role] = (pending.tracker, pending.anchor)
             del self.pending[role]
@@ -1234,7 +1241,7 @@ class CausalPoseService:
             > self.max_pose_disagreement_rotation_rad
         )
 
-    def _publish(self, role: str, anchor: PoseEstimate, motion) -> None:
+    def _publish(self, role: str, anchor: PoseEstimate, motion, frame_id: int) -> None:
         if motion.base_motion_from_seed is None:
             return
         assert anchor.pose is not None
@@ -1265,6 +1272,7 @@ class CausalPoseService:
             estimator="object_point_motion",
             last_direct_observation_s=anchor.source_time_s,
             symmetry_canonicalized=symmetry is not None,
+            source_frame_id=frame_id,
         )
         before, _ = self.store.snapshot()
         after = self.store.publish((current,))

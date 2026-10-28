@@ -14,6 +14,7 @@ from fastapi import HTTPException
 import lerobot.gui.api.run as run_api
 from lerobot.gui.api.run import _flash_recordings, _flash_tracker_replay
 from lerobot.policies.flash.causal_service import AnchorDecision
+from lerobot.policies.flash.execution import MotorTick, PlanEvidence
 from lerobot.policies.flash.live_telemetry import FlashLiveTelemetry, live_frame_path
 from lerobot.policies.flash.perception import RGBDFrame
 from lerobot.policies.flash.pose_disagreement import (
@@ -101,6 +102,18 @@ def test_live_tracker_layers_are_replayed_with_camera_frame(tmp_path: Path) -> N
         ),
     )
     telemetry.accepted({"object": group})
+    telemetry.motor_tick(
+        MotorTick(
+            7,
+            10.1,
+            {},
+            0.001,
+            {},
+            None,
+            action_source="held_goal",
+            effective_plan_evidence=PlanEvidence(4, "object", "reference-v1", 8, 10.0, 10.01),
+        )
+    )
     deadline = time.monotonic() + 2.0
     rgb_file = live_frame_path(live, frame.frame_id, "rgb")
     depth_file = live_frame_path(live, frame.frame_id, "depth")
@@ -125,6 +138,7 @@ def test_live_tracker_layers_are_replayed_with_camera_frame(tmp_path: Path) -> N
     assert current["direct_point_comparisons"]["object"]["verdict"] == "ambiguous"
     assert current["direct_free_space_comparisons"]["object"]["verdict"] == "contradicted"
     assert current["anchor_decisions"]["object"]["outcome"] == "direct_point_unresolved"
+    assert current["motor_tick"]["plan_evidence"]["reference_source_frame_id"] == 8
     decisions = [json.loads(line) for line in telemetry.decision_path.read_text().splitlines()]
     assert [item["outcome"] for item in decisions] == ["accepted", "direct_point_unresolved"]
     assert decisions[0]["accepted"]["estimator"] == "appearance_rgbd"
@@ -158,6 +172,7 @@ def test_live_tracker_layers_are_replayed_with_camera_frame(tmp_path: Path) -> N
     }
     assert replay["layer_history"]
     assert replay["frames"][-1]["frame_index"] == 8
+    assert replay["frames"][-1]["snapshot"]["motor_tick"]["plan_evidence"]["pose_revision"] == 4
     assert replay["frames"][-1]["snapshot"]["accepted"] == current["accepted"]
     assert replay["frames"][-1]["snapshot"]["direct_point_comparisons"] == current["direct_point_comparisons"]
     assert replay["frames"][-1]["snapshot"]["anchor_decisions"] == current["anchor_decisions"]

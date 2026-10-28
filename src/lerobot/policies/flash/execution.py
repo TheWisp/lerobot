@@ -23,6 +23,21 @@ class RobotIO(Protocol):
 
 
 @dataclass(frozen=True)
+class PlanEvidence:
+    """Pose snapshot used to solve a queued command, not the pose at dispatch."""
+
+    pose_revision: int
+    reference_role: str
+    reference_version: str
+    reference_source_frame_id: int | None
+    reference_source_time_s: float
+    reference_available_time_s: float
+    attachment_reference_version: str | None = None
+    attachment_source_time_s: float | None = None
+    attachment_available_time_s: float | None = None
+
+
+@dataclass(frozen=True)
 class TimedAction:
     tick: int
     action: dict[str, float]
@@ -31,6 +46,7 @@ class TimedAction:
     event_id: str | None = None
     requires_milestone: str | None = None
     may_skip_if_late: bool = False
+    plan_evidence: PlanEvidence | None = None
 
 
 @dataclass(frozen=True)
@@ -60,6 +76,7 @@ class MotorTick:
     action_source: str = "commanded"
     skipped_before: int = 0
     observed_at_s: float | None = None
+    effective_plan_evidence: PlanEvidence | None = None
 
 
 class PlanRejectedError(RuntimeError):
@@ -334,6 +351,7 @@ class MotorLoop:
         self.epoch_s: float | None = None
         self._last_dispatch_s: float | None = None
         self._last_issued: dict[str, float] | None = None
+        self._last_plan_evidence: PlanEvidence | None = None
         self.last_observed: dict | None = None
         self._skipped_since_record = 0
 
@@ -369,6 +387,7 @@ class MotorLoop:
                 source,
                 skipped_before,
                 observed_at_s,
+                self._last_plan_evidence,
             )
         )
 
@@ -442,6 +461,7 @@ class MotorLoop:
             self.actions.note_rejected(action.event_id, may_have_dispatched=True)
             raise
         self._last_issued = dict(action.action)
+        self._last_plan_evidence = action.plan_evidence
         self.actions.note_issued(action.action, action.event_id)
         dispatched = self.clock()
         if self._last_dispatch_s is not None:

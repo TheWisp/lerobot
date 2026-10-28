@@ -199,7 +199,7 @@ class PlanningCoordinator:
         interval = self.session.progress.interval
         rule = interval.turn_at_point
         turn_angle = self.turn_choices.get(rule.rule_id) if rule is not None else 0.0
-        _, live_poses = self.poses.snapshot()
+        pose_revision, live_poses = self.poses.snapshot()
         now_s = self.session.motor.clock()
         if interval.relation == Relation.EE_TO_START:
             interval_index = self.session.progress.interval_index
@@ -426,6 +426,7 @@ class PlanningCoordinator:
             connection=connection,
             issued_events=snapshot.issued_events,
             turn_angle_rad=turn_angle,
+            pose_revision=pose_revision,
         )
         self.worker.submit(request)
         self._next_revision = revision + 1

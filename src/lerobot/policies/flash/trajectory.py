@@ -38,6 +38,7 @@ class PoseEstimate:
     estimator: str = "unspecified"
     last_direct_observation_s: float | None = None
     symmetry_canonicalized: bool = False
+    source_frame_id: int | None = None
 
     def __post_init__(self) -> None:
         if self.pose is not None:
@@ -52,6 +53,12 @@ class PoseEstimate:
             raise ValueError("pose estimator provenance must be nonempty")
         if self.last_direct_observation_s is not None and self.last_direct_observation_s > self.source_time_s:
             raise ValueError("direct observation cannot postdate pose source")
+        if self.source_frame_id is not None and (
+            isinstance(self.source_frame_id, bool)
+            or not isinstance(self.source_frame_id, int)
+            or self.source_frame_id < 0
+        ):
+            raise ValueError("pose source frame ID must be a nonnegative integer")
 
     @property
     def has_direct_translation(self) -> bool:

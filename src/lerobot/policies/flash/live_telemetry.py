@@ -15,6 +15,7 @@ import cv2
 import numpy as np
 
 from .causal_service import AnchorDecision
+from .execution import MotorTick
 from .perception import EndEffectorKinematics, RGBDFrame
 from .pose_disagreement import FreeSpaceComparison, PoseComparison
 from .pose_evidence import PoseProposal
@@ -43,6 +44,7 @@ def _estimate_json(estimate: PoseEstimate) -> dict:
         "role": estimate.role,
         "pose": estimate.pose.tolist() if estimate.pose is not None else None,
         "source_time_s": estimate.source_time_s,
+        "source_frame_id": estimate.source_frame_id,
         "available_time_s": estimate.available_time_s,
         "evidence": estimate.evidence.value,
         "estimator": estimate.estimator,
@@ -106,6 +108,7 @@ class FlashLiveTelemetry:
         self._latest_decisions: dict[str, dict] = {}
         self._pending_decisions: deque[dict] = deque()
         self._held_attachment: tuple[str, AttachmentState, np.ndarray, float, bool] | None = None
+        self._motor_tick: dict | None = None
         self._thread = Thread(target=self._write_loop, name="flash-live-telemetry", daemon=True)
         self._thread.start()
 
@@ -232,6 +235,19 @@ class FlashLiveTelemetry:
             )
             self._changed()
 
+    def motor_tick(self, tick: MotorTick) -> None:
+        """Expose the evidence behind the latest command without motor-loop I/O."""
+        with self._condition:
+            self._motor_tick = {
+                "tick": tick.tick,
+                "action_source": tick.action_source,
+                "plan_revision": tick.receipt.revision if tick.receipt is not None else None,
+                "plan_evidence": (
+                    asdict(tick.effective_plan_evidence) if tick.effective_plan_evidence is not None else None
+                ),
+            }
+            self._changed()
+
     def _snapshot(self) -> tuple[dict, RGBDFrame | None, tuple[dict, ...]]:
         with self._condition:
             frame = self._frame
@@ -248,6 +264,7 @@ class FlashLiveTelemetry:
             latest_decisions = self._latest_decisions.copy()
             pending_decisions = tuple(self._pending_decisions)
             held = self._held_attachment
+            motor_tick = self._motor_tick.copy() if self._motor_tick is not None else None
         held_prediction = None
         if held is not None and self.kinematics is not None:
             role, attachment, joints, observed_at_s, independently_observed = held
@@ -301,6 +318,7 @@ class FlashLiveTelemetry:
             "accepted": {role: _estimate_json(value) for role, value in accepted.items()},
             "anchor_decisions": latest_decisions,
             "held_prediction": held_prediction,
+            "motor_tick": motor_tick,
         }
         return snapshot, frame, pending_decisions
 

@@ -436,6 +436,7 @@ class SurfacePoseBackend:
                     (accepted,) * 3,
                     estimator="surface_rgbd",
                     last_direct_observation_s=frame.source_time_s if accepted else None,
+                    source_frame_id=frame.frame_id,
                 )
             )
         self._finished_count += 1

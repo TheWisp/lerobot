@@ -12,7 +12,7 @@ from threading import Lock, Thread
 
 import numpy as np
 
-from .execution import PlanRejectedError, TimedAction
+from .execution import PlanEvidence, PlanRejectedError, TimedAction
 from .planner import DemonstratedEntryDiscontinuityError, InfeasibleTrajectoryError, JointPlanner
 from .skill import Interval
 from .trajectory import AttachmentState, ConnectionTrajectory, MissingEvidenceError, PoseEstimate
@@ -34,6 +34,7 @@ class PlanRequest:
     connection: ConnectionTrajectory | None = None
     issued_events: frozenset[str] = frozenset()
     turn_angle_rad: float | None = None
+    pose_revision: int | None = None
 
     def __post_init__(self) -> None:
         seed = np.asarray(self.seed_deg, dtype=float).copy()
@@ -185,6 +186,25 @@ class PlannerWorker:
                     issued_events=request.issued_events,
                     turn_angle_rad=turn_angle,
                 )
+                if request.pose_revision is not None:
+                    evidence = PlanEvidence(
+                        pose_revision=request.pose_revision,
+                        reference_role=request.reference.role,
+                        reference_version=request.reference.reference_version,
+                        reference_source_frame_id=request.reference.source_frame_id,
+                        reference_source_time_s=request.reference.source_time_s,
+                        reference_available_time_s=request.reference.available_time_s,
+                        attachment_reference_version=(
+                            request.attachment.reference_version if request.attachment is not None else None
+                        ),
+                        attachment_source_time_s=(
+                            request.attachment.source_time_s if request.attachment is not None else None
+                        ),
+                        attachment_available_time_s=(
+                            request.attachment.available_time_s if request.attachment is not None else None
+                        ),
+                    )
+                    actions = [replace(action, plan_evidence=evidence) for action in actions]
                 with self._lock:
                     if request.revision < self._newest_requested:
                         result = PlanResult(

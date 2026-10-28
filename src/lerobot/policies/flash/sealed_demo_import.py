@@ -481,6 +481,7 @@ def prepare(
                             if f"{role}_symmetry_canonicalized" in cache
                             else False
                         ),
+                        source_frame_id=index,
                     )
                     observed_counts[role] += evidence == Evidence.OBSERVED
                 estimates.append(row)

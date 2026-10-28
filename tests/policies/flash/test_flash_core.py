@@ -13,6 +13,7 @@ from lerobot.policies.flash.execution import (
     MissedEventError,
     MotorLoop,
     MotorTick,
+    PlanEvidence,
     PlanRejectedError,
     TimedAction,
 )
@@ -1210,12 +1211,25 @@ def test_regular_lerobot_frame_and_flash_trace_are_written_together(tmp_path):
         read_duration_s=0.001,
         write_duration_s=0.002,
         observed={"joint.pos": 0.0},
-        requested=TimedAction(1, {"joint.pos": 2.0}, "grasp"),
+        requested=TimedAction(
+            1,
+            {"joint.pos": 2.0},
+            "grasp",
+            plan_evidence=PlanEvidence(3, "target", "ref1", 5, 0.8, 0.9),
+        ),
         accepted={"joint.pos": 1.0},
         revision=3,
     )
     estimate = PoseEstimate(
-        "target", pose(0.1), 0.9, 1.0, Evidence.OBSERVED, "ref1", (True, True, True), (True, True, True)
+        "target",
+        pose(0.1),
+        0.9,
+        1.0,
+        Evidence.OBSERVED,
+        "ref1",
+        (True, True, True),
+        (True, True, True),
+        source_frame_id=7,
     )
     comparison = PoseComparison(
         PoseComparisonVerdict.AMBIGUOUS,
@@ -1251,6 +1265,8 @@ def test_regular_lerobot_frame_and_flash_trace_are_written_together(tmp_path):
     assert dataset.frames[0]["task"] == "insert object"
     trace = (tmp_path / "flash/v1/episode_000000.jsonl").read_text()
     assert '"pose_version": 7' in trace
+    assert '"plan_evidence": {"pose_revision": 3' in trace
+    assert '"reference_source_frame_id": 5' in trace
     assert '"reference_version": "ref1"' in trace
     assert '"pose_comparisons": {"target": {"verdict": "ambiguous"' in trace
     assert '"skipped_before": 1' in trace
@@ -1264,6 +1280,7 @@ def test_regular_lerobot_frame_and_flash_trace_are_written_together(tmp_path):
     )
     loaded = load_pose_estimates(tmp_path, 0, expected_frames=1)
     assert loaded[0]["target"].reference_version == "ref1"
+    assert loaded[0]["target"].source_frame_id == 7
     np.testing.assert_allclose(loaded[0]["target"].pose, pose(0.1))
     comparisons = load_pose_comparisons(tmp_path, 0, expected_frames=1)
     assert comparisons[0]["target"].verdict == PoseComparisonVerdict.AMBIGUOUS
@@ -1309,7 +1326,8 @@ def test_idle_motor_ticks_remain_in_regular_dataset_timeline(tmp_path):
         sleep=lambda delay: now.__setitem__(0, now[0] + delay),
     )
     assert loop.tick() is None
-    queue.publish(0, [TimedAction(1, {"joint.pos": 0.8}, "move")])
+    evidence = PlanEvidence(2, "target", "ref1", 4, 0.0, 0.0)
+    queue.publish(0, [TimedAction(1, {"joint.pos": 0.8}, "move", plan_evidence=evidence)])
     assert loop.tick() is not None
     assert loop.tick() is None
     assert [tick.action_source for tick in captured] == ["observed_hold", "commanded", "held_goal"]
@@ -1326,3 +1344,4 @@ def test_idle_motor_ticks_remain_in_regular_dataset_timeline(tmp_path):
     ]
     assert [entry["motor_tick"] for entry in trace] == [0, 1, 2]
     assert [entry["action_source"] for entry in trace] == ["observed_hold", "commanded", "held_goal"]
+    assert [entry["plan_evidence"] for entry in trace] == [None, dict(vars(evidence)), dict(vars(evidence))]

@@ -223,6 +223,7 @@ class MatchedRGBDPoseBackend:
                         model.reference_version,
                         (False, False, False),
                         (False, False, False),
+                        source_frame_id=frame.frame_id,
                     )
                 )
             else:
@@ -240,6 +241,7 @@ class MatchedRGBDPoseBackend:
                         direct_translation_observed=True,
                         estimator=estimator,
                         last_direct_observation_s=frame.source_time_s,
+                        source_frame_id=frame.frame_id,
                     )
                 )
         return tuple(estimates)
