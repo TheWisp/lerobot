@@ -278,6 +278,37 @@ def _apply_reference_polygons(
     return result
 
 
+def _reference_observations(
+    prompts: dict[str, str],
+    frame_indices: dict[str, int],
+    frame_loader,
+    mask_source: Sam3MaskSource,
+    polygons: dict,
+) -> dict[str, tuple[RGBDFrame, np.ndarray]]:
+    """Select each object's clear view without requiring all objects in one image."""
+    if set(frame_indices) != set(prompts) or any(index < 0 for index in frame_indices.values()):
+        raise ValueError("each prepared object needs a nonnegative reference frame")
+    if set(polygons) - set(prompts):
+        raise ValueError(f"reference mask polygons name unknown roles: {set(polygons) - set(prompts)}")
+    observations = {}
+    for view_number, frame_index in enumerate(sorted(set(frame_indices.values()))):
+        if view_number:
+            mask_source.reset_tracking()
+        frame = frame_loader(frame_index)
+        masks = mask_source.masks(frame)
+        roles = {role for role, index in frame_indices.items() if index == frame_index}
+        selected = _apply_reference_polygons(
+            {role: masks[role] for role in roles if role in masks},
+            {role: polygons[role] for role in roles if role in polygons},
+            roles,
+            frame.depth.shape,
+        )
+        if set(selected) != roles:
+            raise ValueError(f"reference frame {frame_index} is missing masks for {roles - set(selected)}")
+        observations.update({role: (frame, selected[role]) for role in roles})
+    return observations
+
+
 def prepare(
     root: Path, annotation_path: Path, *, output_name: str, keypoints_path: Path | None = None
 ) -> tuple[Path, dict]:
@@ -313,8 +344,8 @@ def prepare(
         raise ValueError(f"annotation is missing: {', '.join(missing)}")
     held, target = annotation["held_role"], annotation["target_role"]
     prompts = annotation["prompts_by_role"]
-    if held == target or set(prompts) != {held, target}:
-        raise ValueError("the annotation must give distinct prompts for its held and target roles")
+    if held == target or not {held, target} <= set(prompts) or len(prompts) < 2:
+        raise ValueError("the annotation must name distinct held and target objects")
     if annotation["episode"] != 0:
         raise ValueError("this sealed-format adapter supports its one recorded episode only")
     calibration = json.loads(Path(annotation["calibration_path"]).expanduser().read_text())
@@ -353,32 +384,43 @@ def prepare(
     if not grasp <= start_anchor_end <= release:
         raise ValueError("the start-anchored phase must end between grasp and release")
 
-    version = hashlib.sha256(
-        intrinsics.tobytes() + base_from_camera.tobytes() + str(annotation["reference_frame"]).encode()
-    ).hexdigest()[:12]
     reference_index = int(annotation["reference_frame"])
-    reference_frame = _frame(root, reference_index, intrinsics, base_from_camera, version)
+    custom_reference_indices = annotation.get("reference_frames_by_role") or {}
+    if (
+        not isinstance(custom_reference_indices, dict)
+        or set(custom_reference_indices) - set(prompts)
+        or any(type(index) is not int or index < 0 for index in custom_reference_indices.values())
+    ):
+        raise ValueError("object reference frames must name prepared roles and nonnegative frame indices")
+    reference_indices = {role: custom_reference_indices.get(role, reference_index) for role in prompts}
+    reference_identity = (
+        json.dumps(reference_indices, sort_keys=True) if custom_reference_indices else str(reference_index)
+    )
+    version = hashlib.sha256(
+        intrinsics.tobytes() + base_from_camera.tobytes() + reference_identity.encode()
+    ).hexdigest()[:12]
     vision_config = VisionPipelineConfig.from_settings(annotation, backend="appearance")
     mask_source = Sam3MaskSource(
         prompts, camera_id="flash-demo-preparation", resolution=vision_config.sam_resolution
     )
-    reference_masks = _apply_reference_polygons(
-        mask_source.masks(reference_frame),
+    reference_observations = _reference_observations(
+        prompts,
+        reference_indices,
+        lambda index: _frame(root, index, intrinsics, base_from_camera, version),
+        mask_source,
         annotation.get("reference_polygons_by_role", {}),
-        set(prompts),
-        reference_frame.depth.shape,
     )
-    if set(reference_masks) != set(prompts):
-        raise ValueError(f"reference frame is missing masks for {set(prompts) - set(reference_masks)}")
     extractor = DinoPatchExtractor(model_id=annotation["descriptor_model_id"])
     references, models = [], []
     mask_paths = {}
     for role in prompts:
-        mask_rel = f"flash/v1/masks/{output_name}-{role}-{reference_index:06d}.png"
+        role_frame_index = reference_indices[role]
+        reference_frame, reference_mask = reference_observations[role]
+        mask_rel = f"flash/v1/masks/{output_name}-{role}-{role_frame_index:06d}.png"
         snippet = ReferenceSnippet(
             annotation["repo_id"],
             annotation["episode"],
-            reference_index,
+            role_frame_index,
             role,
             np.eye(4),
             mask_rel,
@@ -386,7 +428,7 @@ def prepare(
         )
         reference = ObjectReference(role, f"{output_name}:{version}", (snippet,))
         model = build_appearance_model(
-            reference, (ReferenceAppearanceFrame(snippet, reference_frame, reference_masks[role]),), extractor
+            reference, (ReferenceAppearanceFrame(snippet, reference_frame, reference_mask),), extractor
         )
         references.append(reference)
         models.append(model)
@@ -417,6 +459,8 @@ def prepare(
         )
     }
     cache_identity["reference_polygons_by_role"] = annotation.get("reference_polygons_by_role", {})
+    if custom_reference_indices:
+        cache_identity["reference_frames_by_role"] = reference_indices
     causal_config = (
         CausalTrackingConfig.from_config(annotation["causal_tracking"])
         if annotation.get("causal_tracking") is not None
@@ -655,7 +699,7 @@ def prepare(
     for role, rel in mask_paths.items():
         path = root / rel
         path.parent.mkdir(parents=True, exist_ok=True)
-        if not cv2.imwrite(str(path), reference_masks[role].astype(np.uint8) * 255):
+        if not cv2.imwrite(str(path), reference_observations[role][1].astype(np.uint8) * 255):
             raise OSError(f"cannot write reference mask {path}")
     manifest = prepared.save(destination)
     (destination / "annotation.json").write_text(json.dumps(annotation, indent=2) + "\n")

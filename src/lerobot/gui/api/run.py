@@ -1602,11 +1602,6 @@ async def prepare_flash_demo(req: FlashDemoPrepareRequest) -> dict:
         def save_inputs() -> tuple[Path, Path, Path, str]:
             if req.bundle_path is not None:
                 root, _ = _flash_demo_paths(req.dataset_root, req.bundle_path)
-                current = _flash_demo_preparation(req.dataset_root, req.bundle_path, req.episode)
-                if set(req.annotation.get("prompts_by_role", {})) != set(
-                    current["annotation"]["prompts_by_role"]
-                ):
-                    raise ValueError("this importer cannot change the prepared object roles")
             else:
                 root = Path(req.dataset_root).expanduser().resolve()
                 if (
@@ -1615,21 +1610,27 @@ async def prepare_flash_demo(req: FlashDemoPrepareRequest) -> dict:
                     or not (root / "meta" / "info.json").is_file()
                 ):
                     raise ValueError("select episode 0 of a local raw RGB-D demo")
-                roles = req.annotation.get("prompts_by_role", {})
-                held, target = req.annotation.get("held_role"), req.annotation.get("target_role")
-                if (
-                    not isinstance(roles, dict)
-                    or set(roles) != {held, target}
-                    or held == target
-                    or any(
-                        not isinstance(role, str)
-                        or re.fullmatch(r"[A-Za-z][A-Za-z0-9 _-]{0,39}", role) is None
-                        or not isinstance(prompt, str)
-                        or not prompt.strip()
-                        for role, prompt in roles.items()
-                    )
-                ):
-                    raise ValueError("name two distinct objects and give each a segmentation prompt")
+            roles = req.annotation.get("prompts_by_role", {})
+            held, target = req.annotation.get("held_role"), req.annotation.get("target_role")
+            if (
+                not isinstance(roles, dict)
+                or len(roles) < 2
+                or not isinstance(held, str)
+                or not isinstance(target, str)
+                or not {held, target} <= set(roles)
+                or held == target
+                or any(
+                    not isinstance(role, str)
+                    or re.fullmatch(r"[A-Za-z][A-Za-z0-9 _-]{0,39}", role) is None
+                    or not isinstance(prompt, str)
+                    or not prompt.strip()
+                    for role, prompt in roles.items()
+                )
+                or len({prompt.strip() for prompt in roles.values()}) != len(roles)
+            ):
+                raise ValueError(
+                    "name distinct held and target objects and give each tracked object a unique segmentation prompt"
+                )
             if req.annotation.get("episode") != req.episode:
                 raise ValueError("annotation episode differs from the selected demo")
             keypoints = req.keypoints_document.get("keypoints")

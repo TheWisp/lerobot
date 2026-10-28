@@ -146,7 +146,12 @@ def test_demo_preparation_versions_edited_inputs_and_launches_existing_importer(
     bundle.parent.mkdir(parents=True)
     bundle.write_text(json.dumps({"skill": "skill.json", "references": []}))
     (bundle.parent / "skill.json").write_text(json.dumps({"source_episode": 0}))
-    annotation = {"episode": 0, "prompts_by_role": {"held": "dowel", "target": "ring"}}
+    annotation = {
+        "episode": 0,
+        "prompts_by_role": {"held": "dowel", "target": "ring"},
+        "held_role": "held",
+        "target_role": "target",
+    }
     (bundle.parent / "annotation.json").write_text(json.dumps(annotation))
     keypoints = {"keypoints": [{"t": 1.0, "move": "line"}]}
     (bundle.parent / "keypoints.json").write_text(json.dumps(keypoints))
@@ -161,7 +166,12 @@ def test_demo_preparation_versions_edited_inputs_and_launches_existing_importer(
     monkeypatch.setattr(run_api, "_ensure_no_active_process", lambda: None)
     monkeypatch.setattr(run_api, "_launch_subprocess", launch)
     monkeypatch.setenv("LEROBOT_FLASH_TRACKING_PYTHON", "/test/shared-vision/python")
-    edited = {**annotation, "grasp_reference_frame": 17}
+    edited = {
+        **annotation,
+        "grasp_reference_frame": 17,
+        "prompts_by_role": {**annotation["prompts_by_role"], "moved_obstacle": "yellow block"},
+        "reference_frames_by_role": {"moved_obstacle": 24},
+    }
     request = FlashDemoPrepareRequest(
         dataset_root=str(tmp_path),
         episode=0,
@@ -229,7 +239,11 @@ def test_raw_demo_preparation_accepts_object_roles_entered_in_editor(tmp_path, m
     monkeypatch.setattr(run_api, "_launch_subprocess", launch)
     annotation = {
         "episode": 0,
-        "prompts_by_role": {"workpiece": "wooden cylinder", "receiver": "green ring"},
+        "prompts_by_role": {
+            "workpiece": "wooden cylinder",
+            "receiver": "green ring",
+            "moved_obstacle": "yellow block",
+        },
         "held_role": "workpiece",
         "target_role": "receiver",
     }
@@ -1411,6 +1425,17 @@ def test_raw_demo_editor_collects_object_names_and_action_from_visible_controls(
         page.get_by_role("button", name="Add object").click()
     section("Object options")
     set_field("Rotational symmetry", "long_axis")
+    section("Objects")
+    set_field("New object name", "moved_obstacle")
+    set_field("What it looks like", "yellow block")
+    page.get_by_role("button", name="Add object").click()
+    section("References")
+    seek(2)
+    page.get_by_role("button", name="Set appearance here").click()
+    assert (
+        "Clear view of moved_obstacle · frame 2"
+        in page.locator("#flash-demo-editor .flash-editor-pane[data-section='references']").inner_text()
+    )
     assert "dowel" not in page.locator("#flash-demo-editor").inner_text().lower()
     section("References")
     page.get_by_role("button", name="Set grasp view here").click()
@@ -1446,7 +1471,9 @@ def test_raw_demo_editor_collects_object_names_and_action_from_visible_controls(
     assert submitted[0]["annotation"]["prompts_by_role"] == {
         "workpiece": "wooden cylinder",
         "receiver": "green ring",
+        "moved_obstacle": "yellow block",
     }
+    assert submitted[0]["annotation"]["reference_frames_by_role"]["moved_obstacle"] == 2
     assert submitted[0]["annotation"]["axial_symmetry_roles"]["receiver"] == {"axis_kind": "long_axis"}
     assert submitted[0]["keypoints_document"]["keypoints"][0]["frame"] == "receiver"
 
@@ -1727,7 +1754,7 @@ def test_3d_scene_projection_and_surface_pick_edit_the_prepared_keyframe(gui_pag
     assert "This interval follows the saved start pose" in page.locator("#flash-demo-editor").inner_text()
     assert page.get_by_role("button", name="Change anchored interval").is_visible()
     page.get_by_role("button", name="Change anchored interval").click()
-    assert page.locator(".flash-editor-settings").evaluate("element => element.open")
+    assert page.locator(".flash-editor-pane[data-section='references']").is_visible()
     page.get_by_role("button", name="Correct mask").click()
     page.wait_for_function("() => flashSceneMode === 'camera' && flashDemoEditor?.drawing")
     page.get_by_role("button", name="Cancel drawing").click()

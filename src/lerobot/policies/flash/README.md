@@ -55,12 +55,15 @@ is not yet replayed. Past motor commands are never rewritten.
 
 Run → FLASH lists a sealed-format SO-107 recording with `showservo_demo.npz`
 even before it has a `flash/v1` extension. Open the raw demo, choose **Prepare
-demo**, and use the playback editor to name the held object and target, enter
-segmentation prompts and calibration, mark grasp/release and key frames, and
+demo**, and use the playback editor to name the objects to track, choose the
+held object and target for this imported action, enter segmentation prompts and
+calibration, mark grasp/release and key frames, and
 review symmetry and matching settings. The editor writes versioned preparation
 inputs and runs the existing offline importer; object names come from these
-inputs, not from object-specific code. This adapter currently supports one held
-object and one target in episode 0 of the sealed format. It does not yet prepare
+inputs, not from object-specific code. Each object may use a different clear
+reference frame; the additional objects are tracked but do not automatically
+become action targets. This adapter still supports one held-object/target action
+pair in episode 0 of the sealed format. It does not yet prepare
 arbitrary LeRobot recordings or infer camera-to-arm calibration from RGB-D.
 
 The equivalent command-line path remains available:
@@ -72,7 +75,7 @@ python benchmarks/flash_prepare_legacy.py <dataset_root> <annotation.json> --out
 That command is a compatibility entry point; the importer is
 [`sealed_demo_import.py`](sealed_demo_import.py). The current sealed-demo path is:
 
-1. An editor annotation identifies the object roles, one reference RGB-D frame,
+1. An editor annotation identifies the object roles, a clear reference RGB-D frame per object,
    grasp/release events, keyframes, calibration and explicit tolerances.
 2. SAM3 masks the reference objects. Aligned depth gives metric surface points;
    DINOv2 features attached to those points form the prepared reference bank.

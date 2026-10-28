@@ -9,6 +9,7 @@ from lerobot.policies.flash.sealed_demo_import import (
     _interval_layout,
     _interval_reference,
     _nearest_index,
+    _reference_observations,
     _symmetry_from_annotation,
     _turn_for_interval,
     explicit_paths_from_prepared_skill,
@@ -20,6 +21,39 @@ def test_prepared_skill_auditor_imports_the_production_legacy_adapter():
     from benchmarks.flash_audit_legacy_skill import audit
 
     assert callable(audit)
+
+
+def test_reference_observations_use_each_objects_clear_frame():
+    from types import SimpleNamespace
+
+    class Masks:
+        def __init__(self):
+            self.seen = []
+            self.resets = 0
+
+        def reset_tracking(self):
+            self.resets += 1
+
+        def masks(self, frame):
+            self.seen.append(frame.frame_id)
+            roles = ("held",) if frame.frame_id == 3 else ("target", "moved_obstacle")
+            return {role: np.ones((5, 5), dtype=bool) for role in roles}
+
+    masks = Masks()
+    selected = _reference_observations(
+        {"held": "dowel", "target": "ring", "moved_obstacle": "block"},
+        {"held": 3, "target": 12, "moved_obstacle": 12},
+        lambda index: SimpleNamespace(frame_id=index, depth=np.zeros((5, 5))),
+        masks,
+        {},
+    )
+    assert masks.seen == [3, 12]
+    assert masks.resets == 1
+    assert {role: frame.frame_id for role, (frame, _) in selected.items()} == {
+        "held": 3,
+        "target": 12,
+        "moved_obstacle": 12,
+    }
 
 
 def test_lift_uses_grasp_anchor_until_nearest_recorded_boundary():

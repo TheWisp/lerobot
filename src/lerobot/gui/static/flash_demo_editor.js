@@ -70,12 +70,19 @@ function _flashEditorJump(frameIndex) {
     seekFlashReplay(nearest);
 }
 
+function _flashEditorReferenceFrame(role) {
+    const annotation = flashDemoEditor.annotation;
+    return Number(annotation.reference_frames_by_role?.[role] ?? annotation.reference_frame);
+}
+
 function _flashEditorSetReferenceFrame(frameIndex) {
     const annotation = flashDemoEditor.annotation;
-    if (Number(annotation.reference_frame) !== Number(frameIndex)) {
-        annotation.reference_frame = Number(frameIndex);
-        delete annotation.reference_polygons_by_role;
-        flashDemoEditor.message = 'Reference frame changed; draw new polygons if the automatic mask needs correction.';
+    const role = flashDemoEditor.role;
+    if (!role || !Number.isInteger(Number(frameIndex))) return;
+    if (_flashEditorReferenceFrame(role) !== Number(frameIndex)) {
+        (annotation.reference_frames_by_role ||= {})[role] = Number(frameIndex);
+        if (annotation.reference_polygons_by_role) delete annotation.reference_polygons_by_role[role];
+        flashDemoEditor.message = `${role} reference changed; review its new mask.`;
     }
     _flashEditorRender();
     _flashRenderTimeline();
@@ -107,8 +114,9 @@ function _flashEditorUpdateFrame() {
     if (!flashDemoEditor) return;
     const current = _flashEditorCurrentFrame();
     const annotation = flashDemoEditor.annotation;
-    const isReference = current.frame_index === Number(annotation.reference_frame);
     const role = flashDemoEditor.role;
+    const referenceFrame = _flashEditorReferenceFrame(role);
+    const isReference = current.frame_index === referenceFrame;
     const mask = document.querySelector('#rerun-viewer .flash-demo-mask');
     const svg = document.querySelector('#rerun-viewer .flash-demo-polygon');
     if (!svg || !mask) return;
@@ -134,7 +142,7 @@ function _flashEditorUpdateFrame() {
     }
     svg.classList.toggle('is-drawing', !!flashDemoEditor.drawing && isReference);
     mask.hidden = !isReference || !!saved?.length || !flashDemoEditor.referenceMasks[role]?.available ||
-        Number(flashDemoEditor.referenceMasks[role]?.frame_index) !== Number(annotation.reference_frame);
+        Number(flashDemoEditor.referenceMasks[role]?.frame_index) !== referenceFrame;
     const frameText = document.getElementById('flash-demo-editor-frame');
     if (frameText) frameText.textContent = `Frame ${current.frame_index} · ${current.snapshot.demo.time_s.toFixed(2)} s`;
     const playheadTitle = document.getElementById('flash-editor-playhead-title');
@@ -144,7 +152,7 @@ function _flashEditorUpdateFrame() {
         ? `${flashDemoEditor.vertices.length} points · click at least 3 to finish`
         : saved?.length ? `Corrected ${role} mask` :
             flashDemoEditor.raw ? 'Mask will come from the description' :
-                `Automatic mask · frame ${annotation.reference_frame}`;
+                `Automatic mask · frame ${referenceFrame}`;
 }
 
 function _flashEditorMaskRole(role) {
@@ -168,7 +176,7 @@ function _flashEditorMaskRole(role) {
 function _flashEditorPolygonClick(event) {
     if (!flashDemoEditor?.drawing) return;
     const current = _flashEditorCurrentFrame();
-    if (current.frame_index !== Number(flashDemoEditor.annotation.reference_frame)) return;
+    if (current.frame_index !== _flashEditorReferenceFrame(flashDemoEditor.role)) return;
     const image = document.querySelector('#rerun-viewer .flash-replay-grid img');
     const rect = image.getBoundingClientRect();
     const width = current.snapshot.camera.width;
@@ -209,7 +217,7 @@ function _flashEditorRender() {
     const requestedSection = state.section;
     state.section = null;
     for (const key of ['setup', 'objects', 'events', 'references', 'keyframes',
-        'pose', 'trackers', 'objectRoles', 'objectOptions', 'exactTimes', 'advanced']) {
+        'pose', 'trackers', 'objectOptions', 'exactTimes', 'advanced']) {
         panes[key] = document.createElement('div');
         panes[key].className = 'flash-editor-pane';
         panes[key].dataset.section = key;
@@ -222,17 +230,15 @@ function _flashEditorRender() {
         panes.pose, panes.trackers);
     const settings = document.createElement('details');
     settings.className = 'flash-editor-settings';
-    settings.open = !!state.settingsOpen || ['objectRoles', 'objectOptions', 'exactTimes',
-        'advanced'].includes(requestedSection) ||
-        (!state.raw && ['setup', 'references'].includes(requestedSection));
+    settings.open = !!state.settingsOpen || ['objectOptions', 'exactTimes',
+        'advanced', 'setup'].includes(requestedSection);
     settings.ontoggle = () => { if (settings.isConnected) state.settingsOpen = settings.open; };
     settings.append(Object.assign(document.createElement('summary'), {textContent: 'Technical settings'}));
-    if (!state.raw) settings.append(panes.setup, panes.references);
-    if (!state.raw) settings.append(panes.objectRoles);
+    if (!state.raw) settings.append(panes.setup);
     settings.append(panes.objectOptions, panes.exactTimes, panes.advanced);
     for (const key of state.raw
-        ? ['objects', 'events', 'references', 'keyframes', 'setup']
-        : ['events', 'objects', 'keyframes']) editor.append(panes[key]);
+        ? ['objects', 'references', 'events', 'keyframes', 'setup']
+        : ['objects', 'events', 'keyframes', 'references']) editor.append(panes[key]);
     if (!state.raw) editor.append(tracking);
     editor.append(settings);
 
@@ -403,98 +409,101 @@ function _flashEditorRender() {
         });
         events.append(row);
     }
-    const exactTimes = _flashEditorSection(panes.exactTimes, 'Exact hold and release times');
+    const exactTimes = _flashEditorSection(panes.exactTimes, 'Exact frame and event values');
     _flashEditorField(exactTimes, 'Grasp time (s)', a.grasp_time_s, value => {
         a.grasp_time_s = value; _flashEditorRender();
     }, null, 'number');
     _flashEditorField(exactTimes, 'Release time (s)', a.release_time_s, value => {
         a.release_time_s = value; _flashEditorRender();
     }, null, 'number');
-    const references = _flashEditorSection(panes.references,
-        state.raw ? 'Reference views' : 'Reference frames',
-        state.raw ? 'Pause on clear views, then mark them.' :
-            'Use a clear view for initial appearance and a last clear view before the object is held.');
-    if (state.raw) {
-        for (const [label, value, buttonLabel, mark] of [
-            ['Clear view of objects', `frame ${a.reference_frame}`, 'Set appearance here', () =>
-                _flashEditorSetReferenceFrame(_flashEditorCurrentFrame().frame_index)],
-            ['Last clear view before hold', a.grasp_reference_frame == null ? 'not marked' :
-                `frame ${a.grasp_reference_frame}`, 'Set grasp view here', () => {
-                    a.grasp_reference_frame = _flashEditorCurrentFrame().frame_index;
-                    _flashEditorRender();
-                }],
-            ['Clear of tray after lift', a.start_anchored_until_s == null ? 'not marked' :
-                `${Number(a.start_anchored_until_s).toFixed(2)} s`, 'Mark lift clear here', () => {
-                    a.start_anchored_until_s = _flashEditorCurrentFrame().snapshot.demo.time_s;
-                    _flashEditorRender();
-                }],
-        ]) {
-            const row = document.createElement('div');
-            row.className = 'flash-editor-moment';
-            row.append(Object.assign(document.createElement('span'), {textContent: `${label} · ${value}`}));
-            _flashEditorButton(row, buttonLabel, mark);
-            references.append(row);
-        }
-    } else {
-        _flashEditorField(references, 'Appearance reference frame', a.reference_frame,
-            value => _flashEditorSetReferenceFrame(value), null, 'number');
-        _flashEditorButton(references, 'Use current for appearance', () => {
-            _flashEditorSetReferenceFrame(_flashEditorCurrentFrame().frame_index);
-        });
-        _flashEditorButton(references, 'Jump to appearance', () => _flashEditorJump(Number(a.reference_frame)));
-        _flashEditorField(references, 'Last clear grasp view (frame)', a.grasp_reference_frame, value => {
-            a.grasp_reference_frame = value;
-        }, null, 'number');
-        _flashEditorButton(references, 'Use current for grasp view', () => {
-            a.grasp_reference_frame = _flashEditorCurrentFrame().frame_index; _flashEditorRender();
-        });
-        _flashEditorButton(references, 'Jump to grasp view', () => _flashEditorJump(Number(a.grasp_reference_frame)));
-        _flashEditorField(references, 'Start-anchored until (s)', a.start_anchored_until_s,
-            value => { a.start_anchored_until_s = value; }, null, 'number');
-        _flashEditorButton(references, 'Use current for start-anchored until (s)', () => {
-            a.start_anchored_until_s = _flashEditorCurrentFrame().snapshot.demo.time_s; _flashEditorRender();
-        });
+    const references = _flashEditorSection(panes.references, 'Reference views',
+        'Choose a clear view for each selected object.');
+    for (const [label, value, buttonLabel, mark] of [
+        [`Clear view of ${state.role || 'selected object'}`, `frame ${_flashEditorReferenceFrame(state.role)}`, 'Set appearance here', () =>
+            _flashEditorSetReferenceFrame(_flashEditorCurrentFrame().frame_index)],
+        ['Last clear view before hold', a.grasp_reference_frame == null ? 'not marked' :
+            `frame ${a.grasp_reference_frame}`, 'Set grasp view here', () => {
+                a.grasp_reference_frame = _flashEditorCurrentFrame().frame_index;
+                _flashEditorRender();
+            }],
+        ['Clear of tray after lift', a.start_anchored_until_s == null ? 'not marked' :
+            `${Number(a.start_anchored_until_s).toFixed(2)} s`, 'Mark lift clear here', () => {
+                a.start_anchored_until_s = _flashEditorCurrentFrame().snapshot.demo.time_s;
+                _flashEditorRender();
+            }],
+    ]) {
+        const row = document.createElement('div');
+        row.className = 'flash-editor-moment';
+        row.append(Object.assign(document.createElement('span'), {textContent: `${label} · ${value}`}));
+        const button = _flashEditorButton(row, buttonLabel, mark);
+        if (buttonLabel === 'Set appearance here') button.disabled = !state.role;
+        references.append(row);
     }
+    if (!state.raw) {
+        _flashEditorButton(references, 'Go to appearance view', () =>
+            _flashEditorJump(_flashEditorReferenceFrame(state.role)));
+    }
+    _flashEditorField(exactTimes, 'Appearance reference frame for selected object',
+        _flashEditorReferenceFrame(state.role), value => _flashEditorSetReferenceFrame(value), null, 'number');
+    _flashEditorField(exactTimes, 'Last clear grasp view (frame)', a.grasp_reference_frame, value => {
+        a.grasp_reference_frame = value;
+    }, null, 'number');
+    _flashEditorField(exactTimes, 'Start-anchored until (s)', a.start_anchored_until_s,
+        value => { a.start_anchored_until_s = value; }, null, 'number');
 
     const objects = _flashEditorSection(panes.objects, 'Objects and masks', state.raw
-        ? 'Name the held object and its target. Describe each for automatic masking.' : '');
-    if (state.raw && roles.length < 2) {
-        _flashEditorField(objects, 'New object name', state.newRole || '', value => { state.newRole = value; });
-        _flashEditorField(objects, 'What it looks like', state.newPrompt || '', value => { state.newPrompt = value; });
-        _flashEditorButton(objects, 'Add object', () => {
-            const name = (state.newRole || '').trim();
-            const prompt = (state.newPrompt || '').trim();
-            if (!/^[A-Za-z][A-Za-z0-9 _-]{0,39}$/.test(name) || !prompt || a.prompts_by_role[name]) {
-                showToast('Name this object', 'Use a distinct name and a visual segmentation prompt.', 'warning');
-                return;
-            }
-            a.prompts_by_role[name] = prompt;
-            state.role = name;
-            if (!a.held_role) a.held_role = name;
-            else if (!a.target_role) a.target_role = name;
-            state.newRole = ''; state.newPrompt = '';
-            _flashEditorRender();
-        });
+        ? 'Name objects to track. Choose one held object and its target for this imported action.' : '');
+    const addObject = state.raw ? objects : document.createElement('details');
+    if (!state.raw) {
+        addObject.append(Object.assign(document.createElement('summary'), {textContent: 'Manage tracked objects'}));
     }
+    _flashEditorField(addObject, 'New object name', state.newRole || '', value => { state.newRole = value; });
+    _flashEditorField(addObject, 'What it looks like', state.newPrompt || '', value => { state.newPrompt = value; });
+    _flashEditorButton(addObject, 'Add object', () => {
+        const name = (state.newRole || '').trim();
+        const prompt = (state.newPrompt || '').trim();
+        if (!/^[A-Za-z][A-Za-z0-9 _-]{0,39}$/.test(name) || !prompt || prompt.includes('.') ||
+            a.prompts_by_role[name] || Object.values(a.prompts_by_role).includes(prompt)) {
+            showToast('Name this object', 'Use a distinct name and a unique visual prompt without periods.', 'warning');
+            return;
+        }
+        a.prompts_by_role[name] = prompt;
+        state.role = name;
+        if (!a.held_role) a.held_role = name;
+        else if (!a.target_role) a.target_role = name;
+        state.newRole = ''; state.newPrompt = '';
+        _flashEditorRender();
+    });
     if (roles.length) {
         _flashEditorField(objects, 'Object', state.role, role => { _flashEditorMaskRole(role); _flashEditorRender(); }, roles);
-        const roleSettings = state.raw ? objects :
-            _flashEditorSection(panes.objectRoles, 'Object settings');
-        _flashEditorField(roleSettings, 'Segmentation prompt', a.prompts_by_role[state.role], value => {
+        _flashEditorField(objects, 'Segmentation prompt', a.prompts_by_role[state.role], value => {
             a.prompts_by_role[state.role] = value;
         });
-        _flashEditorField(roleSettings, 'Held object', a.held_role, value => { a.held_role = value; }, roles);
-        _flashEditorField(roleSettings, 'Target object', a.target_role, value => { a.target_role = value; }, roles);
-        if (state.raw) _flashEditorButton(objects, 'Remove selected object', () => {
+        const actionRoles = state.raw ? objects : document.createElement('details');
+        if (!state.raw) {
+            actionRoles.append(Object.assign(document.createElement('summary'), {
+                textContent: `Action pair · ${a.held_role} → ${a.target_role}`,
+            }));
+            objects.append(actionRoles);
+        }
+        _flashEditorField(actionRoles, 'Held object', a.held_role, value => {
+            a.held_role = value; _flashEditorRender();
+        }, roles);
+        _flashEditorField(actionRoles, 'Target object', a.target_role, value => {
+            a.target_role = value; _flashEditorRender();
+        }, roles);
+        _flashEditorButton(state.raw ? objects : addObject, 'Remove selected object', () => {
             delete a.prompts_by_role[state.role];
             delete a.axial_symmetry_roles?.[state.role];
             delete a.reference_polygons_by_role?.[state.role];
+            delete a.reference_frames_by_role?.[state.role];
             state.role = Object.keys(a.prompts_by_role)[0] || '';
             if (!a.prompts_by_role[a.held_role]) a.held_role = state.role;
             if (!a.prompts_by_role[a.target_role]) a.target_role = '';
             _flashEditorRender();
         });
     }
+    if (!state.raw) objects.append(addObject);
     const symmetry = a.axial_symmetry_roles || {};
     const selectedSymmetry = symmetry[state.role] || {};
     const objectOptions = _flashEditorSection(panes.objectOptions, 'Object rotation options');
@@ -548,7 +557,7 @@ function _flashEditorRender() {
         } else {
             _flashEditorButton(objects, 'Correct mask', async () => {
                 if (flashSceneMode === '3d') await toggleFlashSceneView();
-                _flashEditorJump(Number(a.reference_frame));
+                _flashEditorJump(_flashEditorReferenceFrame(state.role));
                 state.drawing = true; state.vertices = [];
                 _flashEditorRender();
             });
@@ -1175,9 +1184,9 @@ async function _flashEditorRegenerate() {
             'max_demo_pose_gap_frames', 'connection_speed_m_s', 'min_similarity',
             'registration_threshold_m', 'registration_min_inliers', 'registration_trials', 'sam_resolution',
         ];
-        if (roles.length !== 2 || a.held_role === a.target_role ||
+        if (roles.length < 2 || a.held_role === a.target_role ||
             !roles.includes(a.held_role) || !roles.includes(a.target_role)) {
-            state.section = 'objects'; state.message = 'Name two distinct objects and select held and target.';
+            state.section = 'objects'; state.message = 'Name at least two objects and select distinct held and target objects.';
             _flashEditorRender(); return;
         }
         if (!a.repo_id?.trim() || !a.robot_arm || !a.calibration_path?.trim()) {
@@ -1187,7 +1196,8 @@ async function _flashEditorRegenerate() {
         if (!a.descriptor_model_id?.trim() || requiredNumbers.some(key => !Number.isFinite(a[key])) ||
             !(a.grasp_time_s > 0 && a.grasp_time_s < a.release_time_s) ||
             !(a.start_anchored_until_s >= a.grasp_time_s && a.start_anchored_until_s <= a.release_time_s) ||
-            !Number.isInteger(a.reference_frame) || !Number.isInteger(a.grasp_reference_frame)) {
+            !Number.isInteger(a.reference_frame) || !Number.isInteger(a.grasp_reference_frame) ||
+            roles.some(role => !Number.isInteger(_flashEditorReferenceFrame(role)))) {
             state.section = 'events'; state.message = 'Choose reference frames, grasp, release and lift completion; review matching parameters.';
             _flashEditorRender(); return;
         }

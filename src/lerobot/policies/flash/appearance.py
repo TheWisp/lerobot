@@ -78,6 +78,15 @@ class Sam3MaskSource:
     def last_frame_id(self) -> int | None:
         return self._last_frame_id
 
+    def reset_tracking(self) -> None:
+        """Start an independent reference view without reloading the detector."""
+        if self._adapter is not None:
+            self._adapter.reset()
+        self._last_frame_id = None
+        self._calibration_version = None
+        self._cached_frame = None
+        self._cached_masks = {}
+
     def add_clicked_role(
         self, role: str, prompt: str, point: tuple[float, float], frame: RGBDFrame
     ) -> tuple[bool, float]:

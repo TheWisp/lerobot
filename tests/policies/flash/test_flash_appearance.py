@@ -141,9 +141,11 @@ def test_sam3_mask_source_shares_one_adapter_and_resets_on_discontinuity():
     assert set(source.masks(frame(1, xy, 1.0))) == {"held", "target"}
     source.masks(frame(2, xy, 2.0))
     source.masks(frame(1, xy, 3.0))
+    source.reset_tracking()
+    source.masks(frame(12, xy, 12.0))
     assert len(made) == 1
-    assert made[0].calls.count(("segment",)) == 3
-    assert made[0].calls.count(("reset",)) == 1
+    assert made[0].calls.count(("segment",)) == 4
+    assert made[0].calls.count(("reset",)) == 2
 
 
 def test_appearance_factory_can_cross_spawn_boundary_without_loaded_models():
