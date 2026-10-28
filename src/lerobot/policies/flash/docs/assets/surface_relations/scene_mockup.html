@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FLASH scene editor — design mockup</title>
+<script type="importmap">{"imports":{"three":"./three.module.js"}}</script>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#101928;color:#e6edf5;font:16px system-ui,sans-serif}button{font:inherit;color:inherit;background:#1c2a3f;border:1px solid #34465f;border-radius:7px;padding:8px 14px}button.active{background:#25445b;border-color:#5dd4e5;color:#bcf6ff}button{cursor:pointer}.app{width:1400px;padding:22px}.top{display:flex;align-items:center;gap:30px;height:55px}.brand{font-size:22px;font-weight:650;letter-spacing:.4px}.muted{color:#99aac0}.tabs{display:flex;gap:8px}.grow{flex:1}.concept{font-size:13px;color:#a2b2c5;letter-spacing:.7px}.workspace{display:grid;grid-template-columns:165px 1fr 250px;gap:14px;margin-top:18px}.rail,.inspector{padding:18px 14px;background:#162235;border-radius:10px}h2{font-size:17px;margin:0 0 17px}.object{padding:12px 10px;margin-bottom:8px;border-radius:6px;color:#c6d2df}.object.selected{background:#284153;color:#b8f6fa}.dot{display:inline-block;width:8px;height:8px;border:1px solid currentColor;border-radius:50%;margin-right:8px}.scene{position:relative;height:505px;background:#172333;overflow:hidden;border:1px solid #34465f;border-radius:10px}.scene canvas{position:absolute;inset:0;width:100%;height:100%}.base{filter:blur(1.35px) saturate(.4) brightness(.64)}.original .base{filter:none}.original .overlay,.original .marks{visibility:hidden}.scene-bar{position:absolute;left:14px;right:14px;top:14px;display:flex;gap:8px;align-items:center;z-index:3}.scene-bar button{background:#162235e8;font-size:14px}.scene-label{position:absolute;left:15px;bottom:14px;background:#101928de;border:1px solid #334459;border-radius:6px;padding:7px 10px;font-size:12px}.marks{position:absolute;inset:0;pointer-events:none}.mark{position:absolute;white-space:nowrap;background:#142033e8;border-radius:4px;padding:4px 7px;font-size:13px;color:#c9f6fa;border:1px solid #59818a}.mark.rule{color:#f7d28c;border-color:#8b7450}.detail{font-size:14px;color:#b7c6d8;line-height:1.6;margin:9px 0 22px}.field{font-size:12px;color:#99aac0;margin:18px 0 7px}.selected-tool{color:#f7d28c;border:1px solid #766240;padding:11px 10px;border-radius:7px;background:#302c27}.switch{font-size:13px;color:#c8d8e8;margin:13px 0}.bar{height:5px;background:#31465b;border-radius:5px;margin:10px 0 18px}.bar:before{content:"";display:block;width:65%;height:5px;border-radius:5px;background:#8ba2b9}.wide{width:100%;margin:5px 0}.primary{background:#2b586b;border-color:#53a2af}.timeline{grid-column:2/4;background:#162235;border-radius:10px;padding:16px 22px;margin-top:0}.playback{display:flex;gap:20px;align-items:center;font-size:14px}.track{height:40px;position:relative;margin:15px 4px 2px;border-top:3px solid #41566e}.region{position:absolute;top:-4px;height:8px;background:#e1b15c;left:13%;width:28%;border-radius:3px}.tick{position:absolute;top:-7px;width:12px;height:12px;transform:rotate(45deg);background:#b2c4d9}.tick.selected{background:#ffe0a7}.tick-label{position:absolute;top:16px;color:#bdcada;font-size:12px}.legend{display:flex;gap:22px;font-size:13px;color:#c4d1df;margin-top:18px}.swatch{display:inline-block;width:22px;height:4px;margin:0 7px 3px 0;vertical-align:middle}.amber{background:#e6b65d}.cyan{background:#69e4ec}.white{background:#c5d1df}.note{font-size:14px;color:#a6b5c8;margin:17px 0 0}.tools-page{width:1120px;padding:28px;display:none}.tool-head{font-size:26px;margin:0 0 10px}.tool-subtitle{color:#b5c3d3;font-size:16px;margin:0 0 22px}.tool-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}.tool-card{background:#162235;border:1px solid #334359;border-radius:12px;overflow:hidden}.tool-card .scene{height:430px;border:0;border-radius:0}.tool-description{padding:18px 20px;font-size:16px;line-height:1.55;min-height:148px}.tool-description strong{display:block;margin-bottom:8px;color:#f4dbab;font-size:20px}.below{display:flex;gap:24px;margin-top:18px;color:#c4d1df;font-size:14px}.annotation{color:#97a9c1;font-size:13px;margin-top:17px}body.tools .app{display:none}body.tools .tools-page{display:block}
+</style>
+<div class="app">
+  <div class="top"><div class="brand">FLASH</div><span class="muted">Run</span><div class="tabs"><button class="active">Demo / Edit</button><button>Test</button><button>Replay</button></div><span class="grow"></span><span class="concept">DESIGN MOCKUP · RECORDED RGB-D</span></div>
+  <div class="workspace">
+    <aside class="rail"><h2>Insertion demo</h2><div class="muted" style="font-size:13px;margin-bottom:30px">Episode 0</div><h2>Objects</h2><div class="object selected"><span class="dot"></span>Dowel</div><div class="object"><span class="dot"></span>Ring</div><div class="object"><span class="dot"></span>Tool</div><div class="field" style="margin-top:40px">Recording</div><button class="wide">Browse</button></aside>
+    <div><div class="scene" id="main"><div class="scene-bar"><button onclick="window.restoreCamera()">Camera</button><button class="active">Orbit 3D</button><span class="grow"></span><button id="original">Original</button><button>Layers</button><button aria-label="Maximize">Expand</button></div><div class="scene-label">Frame 100 · 3.33 s · RGB + measured depth</div></div><div class="legend"><span><i class="swatch amber"></i>Allowed region</span><span><i class="swatch cyan"></i>Candidate</span><span><i class="swatch white"></i>Observed outline</span></div></div>
+    <aside class="inspector"><h2>Tool ↔ Dowel</h2><div class="field">Allowed adaptation</div><div class="selected-tool">Slide on surface</div><div class="detail">Paint the allowed patch.<br>Drag the tool to preview.</div><div class="field">Applies over timeline</div><button class="wide">K1 — K2</button><div class="field">Scene emphasis</div><div class="switch">Soften observed objects</div><div class="bar"></div><div class="switch">Keep contact outline</div><div class="field">Preview</div><div class="detail">Illustrative candidate<br>Motion not checked</div><button class="wide primary">Save rule</button></aside>
+    <div class="timeline"><div class="playback"><button>Play</button><span>00:03.33 / 00:23.70</span><span class="grow"></span><button>Add keyframe</button><button>Regenerate</button></div><div class="track"><div class="region"></div><span class="tick selected" style="left:13%"></span><span class="tick" style="left:41%"></span><span class="tick" style="left:67%"></span><span class="tick" style="left:91%"></span><span class="tick-label" style="left:12%">K1</span><span class="tick-label" style="left:40%">K2</span><span class="tick-label" style="left:66%">K3</span><span class="tick-label" style="left:90%">K4</span></div></div>
+  </div><p class="note">Same scene and timeline in Test and Replay. Editing adds handles; it never commands the robot.</p>
+</div>
+<div class="tools-page">
+  <h1 class="tool-head">Two tools. The same observed scene.</h1><p class="tool-subtitle">Real insertion RGB-D · illustrative user permissions and candidate tool directions</p>
+  <div class="tool-grid">
+    <div class="tool-card"><div class="scene" id="turn"></div><div class="tool-description"><strong>Turn at a point</strong>Pick a point and review its direction.<br>Drag the arc ends, or allow a full turn.</div></div>
+    <div class="tool-card"><div class="scene" id="slide"></div><div class="tool-description"><strong>Slide on a surface</strong>Paint a ribbon on measured geometry.<br>Position and direction follow the surface.</div></div>
+  </div><div class="below"><span><i class="swatch amber"></i>Allowed choices</span><span><i class="swatch cyan"></i>Candidate tool point + direction</span></div><p class="annotation">Source: insertion, episode 0, camera frame 100. Partial depth is not completed. These handles are design examples, not validated motion plans.</p>
+</div>
+<script type="module">
+import * as THREE from 'three';
+import {OrbitControls} from './OrbitControls.js';
+const data=await (await fetch('./scene.json')).json();
+const mode=new URLSearchParams(location.search).get('mode');
+if(mode==='tools')document.body.classList.add('tools');
+const amber=0xe6b65d,cyan=0x76edf0,white=0xe1e8eb;
+const vector=a=>new THREE.Vector3(...a);
+const baseGeometry=new THREE.BufferGeometry();
+baseGeometry.setAttribute('position',new THREE.Float32BufferAttribute(data.positions,3));
+baseGeometry.setAttribute('color',new THREE.Float32BufferAttribute(data.colors,3));
+baseGeometry.setIndex(data.indices);
+function line(scene,points,color,opacity=1,dashed=false){
+ if(!dashed){
+  const path=new THREE.CurvePath();const vertices=points.map(p=>Array.isArray(p)?vector(p):p);
+  for(let i=1;i<vertices.length;i++)if(vertices[i].distanceTo(vertices[i-1])>1e-6)path.add(new THREE.LineCurve3(vertices[i-1],vertices[i]));
+  if(!path.curves.length)return;
+  const radius=color===white?.00017:.0007;
+  const tube=new THREE.Mesh(new THREE.TubeGeometry(path,Math.max(16,vertices.length*2),radius,5,false),new THREE.MeshBasicMaterial({color,transparent:true,opacity,depthTest:false}));scene.add(tube);return tube;
+ }
+ const geometry=new THREE.BufferGeometry().setFromPoints(points.map(p=>Array.isArray(p)?vector(p):p));
+ const material=dashed?new THREE.LineDashedMaterial({color,transparent:true,opacity,dashSize:.004,gapSize:.003,depthTest:false}):new THREE.LineBasicMaterial({color,transparent:true,opacity,depthTest:false});
+ const result=new THREE.Line(geometry,material);result.computeLineDistances();scene.add(result);return result;
+}
+function dot(scene,p,radius,color){const obj=new THREE.Mesh(new THREE.SphereGeometry(radius,14,10),new THREE.MeshBasicMaterial({color,depthTest:false}));obj.position.copy(p);scene.add(obj);}
+function tool(scene,p,n,color=cyan,opacity=1){
+ dot(scene,p,.0024,color);
+ const origin=p.clone().addScaledVector(n,.035);
+ const arrow=new THREE.ArrowHelper(n.clone().negate(),origin,.032,color,.007,.004);
+ for(const obj of [arrow.line,arrow.cone]){obj.material.depthTest=false;obj.material.transparent=true;obj.material.opacity=opacity;}
+ scene.add(arrow);
+ line(scene,[origin,p.clone().addScaledVector(n,.008)],color,opacity);
+ let cross=new THREE.Vector3(1,0,0).cross(n).normalize();
+ if(cross.lengthSq()<.1)cross=new THREE.Vector3(0,1,0);
+ line(scene,[origin.clone().addScaledVector(cross,-.005),origin.clone().addScaledVector(cross,.005)],color,opacity);
+}
+function ribbon(scene){
+ const points=data.ribbon.map((p,i)=>vector(p).addScaledVector(vector(data.normals[Math.floor(i/2)]),.0008));
+ const indices=[];for(let i=0;i<points.length-2;i+=2)indices.push(i,i+1,i+2,i+1,i+3,i+2);
+ const g=new THREE.BufferGeometry().setFromPoints(points);g.setIndex(indices);
+ scene.add(new THREE.Mesh(g,new THREE.MeshBasicMaterial({color:amber,opacity:.42,transparent:true,side:THREE.DoubleSide,depthTest:false})));
+ line(scene,points.filter((_,i)=>i%2===0),amber);line(scene,points.filter((_,i)=>i%2===1),amber);
+ for(const i of [0,data.curve.length-1])dot(scene,vector(data.curve[i]),.002,amber);
+}
+function turn(scene){
+ const pivot=vector(data.pivot),normal=vector(data.normal),u=new THREE.Vector3(1,0,0).cross(normal).normalize(),v=normal.clone().cross(u).normalize();
+ const point=a=>pivot.clone().addScaledVector(u,.032*Math.cos(a)).addScaledVector(v,.032*Math.sin(a));
+ const angles=Array.from({length:49},(_,i)=>-.5+i/48*4.6);
+ const positions=[...pivot.toArray(),...angles.flatMap(a=>point(a).toArray())];
+ const indices=[];for(let i=1;i<angles.length;i++)indices.push(0,i,i+1);
+ const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.Float32BufferAttribute(positions,3));g.setIndex(indices);
+ scene.add(new THREE.Mesh(g,new THREE.MeshBasicMaterial({color:amber,opacity:.27,transparent:true,side:THREE.DoubleSide,depthTest:false})));
+ line(scene,angles.map(point),amber);line(scene,[pivot.clone().addScaledVector(normal,-.01),pivot.clone().addScaledVector(normal,.065)],white,.8,true);
+ dot(scene,pivot,.0022,white);dot(scene,point(angles[0]),.0025,amber);dot(scene,point(angles.at(-1)),.0025,amber);
+ for(const [a,opacity] of [[0,.35],[1.7,1],[3.5,.35]]){
+   // Same contact point and approach; the closing-direction crossbar changes heading.
+   const head=pivot.clone().addScaledVector(normal,.043),dir=u.clone().multiplyScalar(Math.cos(a)).addScaledVector(v,Math.sin(a));
+   line(scene,[head.clone().addScaledVector(dir,-.016),head.clone().addScaledVector(dir,.016)],cyan,opacity);
+ }
+ tool(scene,pivot,normal);
+ return pivot;
+}
+function makeScene(id,kind){
+ const container=document.getElementById(id),w=container.clientWidth,h=container.clientHeight;
+ const renderer=new THREE.WebGLRenderer({antialias:true,preserveDrawingBuffer:true});renderer.setPixelRatio(2);renderer.setSize(w,h);renderer.setClearColor(0x516073);renderer.domElement.className='base';container.prepend(renderer.domElement);
+ const overlay=new THREE.WebGLRenderer({antialias:true,alpha:true,preserveDrawingBuffer:true});overlay.setPixelRatio(2);overlay.setSize(w,h);overlay.setClearColor(0x000000,0);overlay.domElement.className='overlay';container.insertBefore(overlay.domElement,renderer.domElement.nextSibling);
+ const scene=new THREE.Scene();scene.add(new THREE.Mesh(baseGeometry,new THREE.MeshBasicMaterial({vertexColors:true,side:THREE.DoubleSide})));
+ const annotations=new THREE.Scene();const camera=new THREE.PerspectiveCamera(43,w/h,.01,3);
+ let center=kind==='turn'?vector(data.pivot):vector(data.curve[7]);
+ if(kind==='main'){camera.position.set(.045,.025,.018);center=new THREE.Vector3(-.03,.005,-.43);}else{camera.position.copy(center).add(new THREE.Vector3(.035,.045,.20));}
+ camera.lookAt(center);
+ const controls=new OrbitControls(camera,overlay.domElement);controls.target.copy(center);controls.enableDamping=false;controls.update();
+ line(annotations,data.dowel,white,.7);line(annotations,data.ring,white,.6);
+ if(kind==='turn'){turn(annotations);}else{ribbon(annotations);for(const [i,o] of [[1,.35],[7,.35],[13,1]])tool(annotations,vector(data.curve[i]),vector(data.normals[i]),cyan,o);}
+ const labels=document.createElement('div');labels.className='marks';container.appendChild(labels);
+ const label=(text,p,dx,dy,rule=false)=>{const el=document.createElement('div');el.className='mark'+(rule?' rule':'');el.textContent=text;labels.appendChild(el);return {el,p,dx,dy};};
+ let marks=[];
+ if(kind==='main')marks=[label('Allowed surface patch',vector(data.curve[7]),-170,45,true),label('Candidate tool',vector(data.curve[13]).addScaledVector(vector(data.normals[13]),.03),45,-50)];
+ if(kind==='turn')marks=[label('Allowed turn',vector(data.pivot),30,68,true),label('Chosen direction',vector(data.pivot).addScaledVector(vector(data.normal),.055),-65,-48)];
+ if(kind==='slide')marks=[label('Painted ribbon',vector(data.curve[7]),35,75,true)];
+ const draw=()=>{renderer.render(scene,camera);overlay.render(annotations,camera);for(const m of marks){const q=m.p.clone().project(camera);m.el.style.left=Math.max(8,Math.min(w-m.el.offsetWidth-8,(q.x+1)/2*w+m.dx))+'px';m.el.style.top=Math.max(8,Math.min(h-32,(-q.y+1)/2*h+m.dy))+'px';}};
+ controls.addEventListener('change',draw);draw();
+ return {container,draw,camera,controls};
+}
+if(mode==='tools'){makeScene('turn','turn');makeScene('slide','slide');}else{
+ const view=makeScene('main','main');
+ window.restoreCamera=()=>{view.camera.position.set(0,0,0);view.controls.target.set(0,0,-.43);view.controls.update();view.draw();};
+ const original=document.getElementById('original');
+ original.onpointerdown=()=>view.container.classList.add('original');
+ for(const event of ['pointerup','pointerleave'])original.addEventListener(event,()=>view.container.classList.remove('original'));
+}
+await document.fonts.ready;
+window.MOCKUP_READY=true;
+</script>
+</html>
