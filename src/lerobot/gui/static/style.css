@@ -786,16 +786,11 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 #run-section-flash[data-mode="review"] .flash-review-return,
 #run-section-flash[data-mode="live"] .flash-library { display: none; }
 .flash-demo-editor .flash-editor-pane > section { padding: 12px 0; }
-.flash-demo-editor .flash-editor-disclosure { border-top: 1px solid #31516c; }
-.flash-demo-editor .flash-editor-disclosure > summary { padding: 13px 0; cursor: pointer; color: #e6edf3; font-size: 14px; font-weight: 600; }
-.flash-demo-editor .flash-editor-disclosure > section { border-top: 0; padding-top: 0; }
 .flash-demo-editor .flash-editor-pane > section > strong { display: block; font-size: 14px; color: #fff; }
-.flash-editor-settings { border-top: 1px solid #31516c; margin-top: 4px; }
-.flash-editor-settings > summary { padding: 12px 0; cursor: pointer; color: #bdd0e0; font-size: 13px; font-weight: 600; }
-.flash-editor-object-options, .flash-editor-exact-times { margin: 10px 0; }
-.flash-editor-object-options > summary, .flash-editor-exact-times > summary { cursor: pointer; color: #bdd0e0; }
+.flash-editor-settings, .flash-editor-tracking { border-top: 1px solid #31516c; margin-top: 4px; }
+.flash-editor-settings > summary, .flash-editor-tracking > summary { padding: 12px 0; cursor: pointer; color: #bdd0e0; font-size: 13px; font-weight: 600; }
 .flash-editor-moment { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 8px 0; }
-.flash-editor-moment span { color: #e6edf3; white-space: nowrap; }
+.flash-editor-moment span { color: #e6edf3; flex: 1; }
 .flash-demo-editor .flash-editor-moment button { margin: 0; }
 .flash-demo-editor .flash-editor-group { border-top: 1px solid #31516c; }
 .flash-demo-editor .flash-editor-group > summary { cursor: pointer; padding: 12px 0; font-size: 13px; font-weight: 600; color: #bdd0e0; }

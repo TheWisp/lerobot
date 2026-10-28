@@ -710,24 +710,23 @@ def test_run_flash_lists_demos_and_shows_extracted_pose_overlay(gui_page):
     page.wait_for_function("() => !!document.querySelector('#flash-demo-editor')")
     assert "Edit demo" in page.locator("#flash-demo-editor").inner_text()
     assert page.locator("#flash-demo-editor-frame").inner_text().startswith("Frame 4")
-    page.locator("#flash-demo-editor .flash-editor-pane[data-section='objects'] > summary").click()
     assert page.locator(
         "#flash-demo-editor .flash-editor-pane[data-section='objects'] > section"
     ).is_visible()
-    assert page.get_by_role("button", name="Draw replacement mask").count() == 1, page.locator(
+    assert page.get_by_role("button", name="Correct mask").count() == 1, page.locator(
         "#flash-demo-editor"
     ).inner_text()
-    page.get_by_role("button", name="Draw replacement mask").click()
+    page.get_by_role("button", name="Correct mask").click()
     page.evaluate("""() => {
         const image = document.querySelector('#rerun-viewer .flash-replay-grid img');
         const box = image.getBoundingClientRect();
         for (const [x, y] of [[0.4, 0.4], [0.6, 0.4], [0.5, 0.6]])
             _flashEditorPolygonClick({clientX: box.left + box.width * x, clientY: box.top + box.height * y});
     }""")
-    page.get_by_role("button", name="Finish polygon").click()
-    assert "Manual object mask: 3 vertices" in page.locator("#flash-demo-editor-polygon-status").inner_text()
+    page.get_by_role("button", name="Save mask").click()
+    assert "Corrected object mask" in page.locator("#flash-demo-editor-polygon-status").inner_text()
     assert len(page.evaluate("flashDemoEditor.annotation.reference_polygons_by_role.object")) == 3
-    page.locator(".flash-editor-settings > summary").click()
+    page.locator(".flash-editor-tracking > summary").click()
     assert page.get_by_label("Processing scope", exact=True).input_value() == ""
     assert page.get_by_label("Grow points from later views").is_checked()
     page.get_by_label("Maximum points per object").fill("256")
@@ -1333,11 +1332,12 @@ def test_raw_demo_editor_collects_object_names_and_action_from_visible_controls(
             "Events": "events",
             "References": "references",
             "Advanced": "advanced",
+            "Object options": "objectOptions",
             "Key frames": "keyframes",
         }[name]
-        if current_section == "advanced" and not page.locator(".flash-editor-settings").evaluate(
-            "el => el.open"
-        ):
+        if current_section in ("advanced", "objectOptions") and not page.locator(
+            ".flash-editor-settings"
+        ).evaluate("el => el.open"):
             page.locator(".flash-editor-settings > summary").click()
 
     def set_field(label, value):
@@ -1367,16 +1367,16 @@ def test_raw_demo_editor_collects_object_names_and_action_from_visible_controls(
         set_field("New object name", role)
         set_field("What it looks like", prompt)
         page.get_by_role("button", name="Add object").click()
-    page.locator(".flash-editor-object-options > summary").click()
+    section("Object options")
     set_field("Rotational symmetry", "long_axis")
     assert "dowel" not in page.locator("#flash-demo-editor").inner_text().lower()
     section("References")
-    page.get_by_role("button", name="Use current for grasp view").click()
+    page.get_by_role("button", name="Set grasp view here").click()
     seek(1)
     section("Events")
     page.get_by_role("button", name="Mark grasp here").click()
     section("References")
-    page.get_by_role("button", name="Use current for start-anchored until").click()
+    page.get_by_role("button", name="Mark lift clear here").click()
     seek(2)
     section("Events")
     page.get_by_role("button", name="Mark release here").click()
@@ -1582,10 +1582,6 @@ def test_3d_scene_projection_and_surface_pick_edit_the_prepared_keyframe(gui_pag
     page.wait_for_function("() => !!flashDemoEditor")
     assert not page.locator("#run-sidebar").is_visible()
     assert page.locator(".flash-editor-navigation").count() == 0
-    assert not page.locator(
-        "#flash-demo-editor .flash-editor-pane[data-section='objects'] > section"
-    ).is_visible()
-    page.locator("#flash-demo-editor .flash-editor-pane[data-section='objects'] > summary").click()
     assert page.locator(
         "#flash-demo-editor .flash-editor-pane[data-section='objects'] > section"
     ).is_visible()
@@ -1597,9 +1593,9 @@ def test_3d_scene_projection_and_surface_pick_edit_the_prepared_keyframe(gui_pag
     page.get_by_label("Path", exact=True).select_option("line")
     assert not page.get_by_label("Lift (mm)").count()
     assert not page.get_by_text("Pose evidence", exact=True).is_visible()
-    page.locator(".flash-editor-settings > summary").click()
+    page.locator(".flash-editor-tracking > summary").click()
     assert page.get_by_text("Pose evidence", exact=True).is_visible()
-    assert page.locator(".flash-editor-settings .flash-editor-group").count() == 0
+    assert page.locator(".flash-editor-tracking .flash-editor-group").count() == 0
     page.get_by_role("button", name="Choose reference in scene").click()
     box = page.locator(".flash-scene-canvas").bounding_box()
     scale = min(box["width"] / width, box["height"] / height)
@@ -1679,6 +1675,10 @@ def test_3d_scene_projection_and_surface_pick_edit_the_prepared_keyframe(gui_pag
     assert page.get_by_role("button", name="Choose reference in scene").is_disabled()
     assert page.get_by_label("Move relative to", exact=True).is_disabled()
     assert "grasp-start reference" in page.locator("#flash-demo-editor").inner_text()
+    page.get_by_role("button", name="Correct mask").click()
+    page.wait_for_function("() => flashSceneMode === 'camera' && flashDemoEditor?.drawing")
+    page.get_by_role("button", name="Cancel drawing").click()
+    assert not page.evaluate("flashDemoEditor.drawing")
     page.set_viewport_size({"width": 390, "height": 844})
     assert page.evaluate(
         "() => { const main = document.querySelector('#run-main'); "

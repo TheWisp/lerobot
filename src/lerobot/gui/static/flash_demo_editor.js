@@ -124,18 +124,23 @@ function _flashEditorUpdateFrame() {
         Number(flashDemoEditor.referenceMasks[role]?.frame_index) !== Number(annotation.reference_frame);
     const frameText = document.getElementById('flash-demo-editor-frame');
     if (frameText) frameText.textContent = `Frame ${current.frame_index} · ${current.snapshot.demo.time_s.toFixed(2)} s`;
+    const playheadTitle = document.getElementById('flash-editor-playhead-title');
+    if (playheadTitle) playheadTitle.textContent = `At ${current.snapshot.demo.time_s.toFixed(2)} s`;
     const polygonText = document.getElementById('flash-demo-editor-polygon-status');
     if (polygonText) polygonText.textContent = flashDemoEditor.drawing
-        ? `${flashDemoEditor.vertices.length} vertices; finish after at least 3`
-        : saved?.length ? `Manual ${role} mask: ${saved.length} vertices` :
-            flashDemoEditor.raw ? 'No prepared mask yet; the text prompt will create one when prepared.' :
-                `Prepared ${role} mask shown on its reference frame`;
+        ? `${flashDemoEditor.vertices.length} points · click at least 3 to finish`
+        : saved?.length ? `Corrected ${role} mask` :
+            flashDemoEditor.raw ? 'Mask will come from the description' :
+                `Automatic mask · frame ${annotation.reference_frame}`;
 }
 
 function _flashEditorMaskRole(role) {
+    const changed = flashDemoEditor.role !== role;
     flashDemoEditor.role = role;
-    flashDemoEditor.drawing = false;
-    flashDemoEditor.vertices = [];
+    if (changed) {
+        flashDemoEditor.drawing = false;
+        flashDemoEditor.vertices = [];
+    }
     const mask = document.querySelector('#rerun-viewer .flash-demo-mask');
     if (flashReplay.bundle_path) {
         mask.src = `/api/run/flash/demo/reference-mask?${new URLSearchParams({
@@ -175,11 +180,9 @@ function _flashEditorRender() {
     const heading = document.createElement('h3');
     heading.textContent = state.raw ? 'Prepare demo' : 'Edit demo';
     editor.append(heading);
-    if (state.raw) {
-        const summary = document.createElement('p');
-        summary.textContent = 'Name the objects, mark hold and release, then prepare.';
-        editor.append(summary);
-    }
+    const guidance = document.createElement('p');
+    guidance.textContent = 'Scrub the video to a moment, then mark it or edit its key frame.';
+    editor.append(guidance);
     const changed = document.createElement('p');
     changed.id = 'flash-demo-editor-change-status';
     editor.append(changed);
@@ -191,43 +194,32 @@ function _flashEditorRender() {
     const panes = {};
     const requestedSection = state.section;
     state.section = null;
+    for (const key of ['setup', 'objects', 'events', 'references', 'keyframes',
+        'pose', 'trackers', 'objectRoles', 'objectOptions', 'exactTimes', 'advanced']) {
+        panes[key] = document.createElement('div');
+        panes[key].className = 'flash-editor-pane';
+        panes[key].dataset.section = key;
+    }
+    const tracking = document.createElement('details');
+    tracking.className = 'flash-editor-tracking';
+    tracking.open = !!state.trackingOpen || ['pose', 'trackers'].includes(requestedSection);
+    tracking.ontoggle = () => { if (tracking.isConnected) state.trackingOpen = tracking.open; };
+    tracking.append(Object.assign(document.createElement('summary'), {textContent: 'Inspect tracking'}),
+        panes.pose, panes.trackers);
     const settings = document.createElement('details');
     settings.className = 'flash-editor-settings';
-    settings.open = !!state.settingsOpen || !!(requestedSection &&
-        !['objects', 'events', 'keyframes'].includes(requestedSection));
+    settings.open = !!state.settingsOpen || ['objectRoles', 'objectOptions', 'exactTimes',
+        'advanced'].includes(requestedSection) ||
+        (!state.raw && ['setup', 'references'].includes(requestedSection));
     settings.ontoggle = () => { if (settings.isConnected) state.settingsOpen = settings.open; };
-    const settingsTitle = document.createElement('summary');
-    settingsTitle.textContent = 'Tracking and settings';
-    settings.append(settingsTitle);
-    for (const key of [
-        ...(state.raw ? ['objects', 'events', 'keyframes'] : ['keyframes', 'objects', 'events']),
-        'setup', 'references', 'pose', 'trackers', 'advanced',
-    ]) {
-        const pane = document.createElement(['objects', 'events'].includes(key) ? 'details' : 'div');
-        pane.className = 'flash-editor-pane';
-        pane.dataset.section = key;
-        panes[key] = pane;
-        if (key === 'objects' || key === 'events') {
-            pane.classList.add('flash-editor-disclosure');
-            pane.open = key === 'objects' ? (state.objectsOpen ?? state.raw) || requestedSection === key
-                : !!state.eventsOpen || requestedSection === key;
-            pane.ontoggle = () => {
-                if (!pane.isConnected) return;
-                if (key === 'objects') state.objectsOpen = pane.open;
-                else state.eventsOpen = pane.open;
-            };
-            const title = document.createElement('summary');
-            title.textContent = key === 'objects' ? 'Objects and masks' : 'Hold and release';
-            pane.append(title);
-        }
-        if (['objects', 'events', 'keyframes'].includes(key)) {
-            editor.append(pane);
-        } else if (key !== 'setup' && !(key === 'references' && state.raw)) {
-            settings.append(pane);
-        }
-    }
-    if (state.raw) panes.objects.append(panes.setup);
-    else settingsTitle.after(panes.setup);
+    settings.append(Object.assign(document.createElement('summary'), {textContent: 'Technical settings'}));
+    if (!state.raw) settings.append(panes.setup, panes.references);
+    if (!state.raw) settings.append(panes.objectRoles);
+    settings.append(panes.objectOptions, panes.exactTimes, panes.advanced);
+    for (const key of state.raw
+        ? ['objects', 'events', 'references', 'keyframes', 'setup']
+        : ['events', 'objects', 'keyframes']) editor.append(panes[key]);
+    if (!state.raw) editor.append(tracking);
     editor.append(settings);
 
     const setup = _flashEditorSection(panes.setup, 'Recording and calibration', state.raw
@@ -382,7 +374,8 @@ function _flashEditorRender() {
         }
     }
 
-    const events = _flashEditorSection(panes.events, '', 'Pause at each moment, then mark it.');
+    const events = _flashEditorSection(panes.events, 'At the playhead');
+    events.querySelector('strong').id = 'flash-editor-playhead-title';
     for (const [key, label] of [
         ['grasp_time_s', 'Grasp'], ['release_time_s', 'Release'],
     ]) {
@@ -396,40 +389,61 @@ function _flashEditorRender() {
         });
         events.append(row);
     }
-    const exactTimes = document.createElement('details');
-    exactTimes.className = 'flash-editor-exact-times';
-    exactTimes.append(Object.assign(document.createElement('summary'), {textContent: 'Adjust exact times'}));
+    const exactTimes = _flashEditorSection(panes.exactTimes, 'Exact hold and release times');
     _flashEditorField(exactTimes, 'Grasp time (s)', a.grasp_time_s, value => {
         a.grasp_time_s = value; _flashEditorRender();
     }, null, 'number');
     _flashEditorField(exactTimes, 'Release time (s)', a.release_time_s, value => {
         a.release_time_s = value; _flashEditorRender();
     }, null, 'number');
-    events.append(exactTimes);
-    const references = _flashEditorSection(panes.references, 'Reference frames',
-        'Use a clear view for initial appearance and a last clear view before the object is held.');
-    _flashEditorField(references, 'Appearance reference frame', a.reference_frame,
-        value => _flashEditorSetReferenceFrame(value), null, 'number');
-    _flashEditorButton(references, 'Use current for appearance', () => {
-        _flashEditorSetReferenceFrame(_flashEditorCurrentFrame().frame_index);
-    });
-    _flashEditorButton(references, 'Jump to appearance', () => _flashEditorJump(Number(a.reference_frame)));
-    _flashEditorField(references, 'Last clear grasp view (frame)', a.grasp_reference_frame, value => {
-        a.grasp_reference_frame = value;
-    }, null, 'number');
-    _flashEditorButton(references, 'Use current for grasp view', () => {
-        a.grasp_reference_frame = _flashEditorCurrentFrame().frame_index; _flashEditorRender();
-    });
-    _flashEditorButton(references, 'Jump to grasp view', () => _flashEditorJump(Number(a.grasp_reference_frame)));
-    _flashEditorField(references, 'Start-anchored until (s)', a.start_anchored_until_s,
-        value => { a.start_anchored_until_s = value; }, null, 'number');
-    _flashEditorButton(references, 'Use current for start-anchored until (s)', () => {
-        a.start_anchored_until_s = _flashEditorCurrentFrame().snapshot.demo.time_s; _flashEditorRender();
-    });
+    const references = _flashEditorSection(panes.references,
+        state.raw ? 'Reference views' : 'Reference frames',
+        state.raw ? 'Pause on clear views, then mark them.' :
+            'Use a clear view for initial appearance and a last clear view before the object is held.');
+    if (state.raw) {
+        for (const [label, value, buttonLabel, mark] of [
+            ['Clear view of objects', `frame ${a.reference_frame}`, 'Set appearance here', () =>
+                _flashEditorSetReferenceFrame(_flashEditorCurrentFrame().frame_index)],
+            ['Last clear view before hold', a.grasp_reference_frame == null ? 'not marked' :
+                `frame ${a.grasp_reference_frame}`, 'Set grasp view here', () => {
+                    a.grasp_reference_frame = _flashEditorCurrentFrame().frame_index;
+                    _flashEditorRender();
+                }],
+            ['Clear of tray after lift', a.start_anchored_until_s == null ? 'not marked' :
+                `${Number(a.start_anchored_until_s).toFixed(2)} s`, 'Mark lift clear here', () => {
+                    a.start_anchored_until_s = _flashEditorCurrentFrame().snapshot.demo.time_s;
+                    _flashEditorRender();
+                }],
+        ]) {
+            const row = document.createElement('div');
+            row.className = 'flash-editor-moment';
+            row.append(Object.assign(document.createElement('span'), {textContent: `${label} · ${value}`}));
+            _flashEditorButton(row, buttonLabel, mark);
+            references.append(row);
+        }
+    } else {
+        _flashEditorField(references, 'Appearance reference frame', a.reference_frame,
+            value => _flashEditorSetReferenceFrame(value), null, 'number');
+        _flashEditorButton(references, 'Use current for appearance', () => {
+            _flashEditorSetReferenceFrame(_flashEditorCurrentFrame().frame_index);
+        });
+        _flashEditorButton(references, 'Jump to appearance', () => _flashEditorJump(Number(a.reference_frame)));
+        _flashEditorField(references, 'Last clear grasp view (frame)', a.grasp_reference_frame, value => {
+            a.grasp_reference_frame = value;
+        }, null, 'number');
+        _flashEditorButton(references, 'Use current for grasp view', () => {
+            a.grasp_reference_frame = _flashEditorCurrentFrame().frame_index; _flashEditorRender();
+        });
+        _flashEditorButton(references, 'Jump to grasp view', () => _flashEditorJump(Number(a.grasp_reference_frame)));
+        _flashEditorField(references, 'Start-anchored until (s)', a.start_anchored_until_s,
+            value => { a.start_anchored_until_s = value; }, null, 'number');
+        _flashEditorButton(references, 'Use current for start-anchored until (s)', () => {
+            a.start_anchored_until_s = _flashEditorCurrentFrame().snapshot.demo.time_s; _flashEditorRender();
+        });
+    }
 
-    const objects = _flashEditorSection(panes.objects, '', state.raw
-        ? 'This SO-107 importer handles one held object and one target. Choose their names; prompts describe what SAM should segment in the reference frame.'
-        : 'Select an object to inspect or correct its mask.');
+    const objects = _flashEditorSection(panes.objects, 'Objects and masks', state.raw
+        ? 'Name the held object and its target. Describe each for automatic masking.' : '');
     if (state.raw && roles.length < 2) {
         _flashEditorField(objects, 'New object name', state.newRole || '', value => { state.newRole = value; });
         _flashEditorField(objects, 'What it looks like', state.newPrompt || '', value => { state.newPrompt = value; });
@@ -450,11 +464,13 @@ function _flashEditorRender() {
     }
     if (roles.length) {
         _flashEditorField(objects, 'Object', state.role, role => { _flashEditorMaskRole(role); _flashEditorRender(); }, roles);
-        _flashEditorField(objects, 'Segmentation prompt', a.prompts_by_role[state.role], value => {
+        const roleSettings = state.raw ? objects :
+            _flashEditorSection(panes.objectRoles, 'Object settings');
+        _flashEditorField(roleSettings, 'Segmentation prompt', a.prompts_by_role[state.role], value => {
             a.prompts_by_role[state.role] = value;
         });
-        _flashEditorField(objects, 'Held object', a.held_role, value => { a.held_role = value; }, roles);
-        _flashEditorField(objects, 'Target object', a.target_role, value => { a.target_role = value; }, roles);
+        _flashEditorField(roleSettings, 'Held object', a.held_role, value => { a.held_role = value; }, roles);
+        _flashEditorField(roleSettings, 'Target object', a.target_role, value => { a.target_role = value; }, roles);
         if (state.raw) _flashEditorButton(objects, 'Remove selected object', () => {
             delete a.prompts_by_role[state.role];
             delete a.axial_symmetry_roles?.[state.role];
@@ -467,12 +483,7 @@ function _flashEditorRender() {
     }
     const symmetry = a.axial_symmetry_roles || {};
     const selectedSymmetry = symmetry[state.role] || {};
-    const objectOptions = document.createElement('details');
-    objectOptions.className = 'flash-editor-object-options';
-    objectOptions.open = !!state.objectOptionsOpen;
-    objectOptions.ontoggle = () => { if (objectOptions.isConnected) state.objectOptionsOpen = objectOptions.open; };
-    objectOptions.append(Object.assign(document.createElement('summary'), {textContent: 'Object rotation options'}));
-    objects.append(objectOptions);
+    const objectOptions = _flashEditorSection(panes.objectOptions, 'Object rotation options');
     if (state.role) {
         const symmetryNote = document.createElement('p');
         symmetryNote.textContent = 'The selected axis is estimated from this object’s reference RGB-D points; the object name does not choose the axis.';
@@ -504,29 +515,54 @@ function _flashEditorRender() {
     }
     const polygonStatus = document.createElement('p');
     polygonStatus.id = 'flash-demo-editor-polygon-status';
+    polygonStatus.hidden = !state.role;
     objects.append(polygonStatus);
     if (state.role) {
-        _flashEditorButton(objects, 'Draw replacement mask', () => {
-            _flashEditorJump(Number(a.reference_frame));
-            state.drawing = true; state.vertices = [];
-            _flashEditorUpdateFrame();
-        });
-        _flashEditorButton(objects, 'Finish polygon', () => {
-            if (state.vertices.length < 3) { showToast('Mask needs three points', 'Click at least three vertices.', 'warning'); return; }
-            (a.reference_polygons_by_role ||= {})[state.role] = [...state.vertices];
-            state.drawing = false; state.vertices = [];
-            _flashEditorUpdateFrame();
-        });
-        _flashEditorButton(objects, 'Use automatic mask', () => {
-            delete a.reference_polygons_by_role?.[state.role];
-            state.drawing = false; state.vertices = [];
-            _flashEditorUpdateFrame();
-        });
+        if (state.drawing) {
+            _flashEditorButton(objects, 'Save mask', () => {
+                if (state.vertices.length < 3) {
+                    showToast('Mask needs three points', 'Click at least three vertices.', 'warning'); return;
+                }
+                (a.reference_polygons_by_role ||= {})[state.role] = [...state.vertices];
+                state.drawing = false; state.vertices = [];
+                _flashEditorRender();
+            });
+            _flashEditorButton(objects, 'Cancel drawing', () => {
+                state.drawing = false; state.vertices = [];
+                _flashEditorRender();
+            });
+        } else {
+            _flashEditorButton(objects, 'Correct mask', async () => {
+                if (flashSceneMode === '3d') await toggleFlashSceneView();
+                _flashEditorJump(Number(a.reference_frame));
+                state.drawing = true; state.vertices = [];
+                _flashEditorRender();
+            });
+            if (a.reference_polygons_by_role?.[state.role]?.length) {
+                _flashEditorButton(objects, 'Use automatic mask', () => {
+                    delete a.reference_polygons_by_role[state.role];
+                    _flashEditorRender();
+                });
+            }
+        }
     }
-    if (state.raw) panes.objects.append(panes.references);
 
-    const keypoints = _flashEditorSection(panes.keyframes, 'Key-frame action');
+    const keypoints = _flashEditorSection(panes.keyframes, 'Key frames');
     const points = state.keypointsDocument.keypoints;
+    _flashEditorButton(keypoints, 'Add key frame at current time', () => {
+        const time = _flashEditorCurrentFrame().snapshot.demo.time_s;
+        if (points.some(point => Math.abs(point.t - time) < 1e-6)) {
+            showToast('Key frame already exists', 'Choose another frame or edit the existing event.', 'warning');
+            return;
+        }
+        const prior = [...points].reverse().find(point => point.t < time) || points[0] ||
+            {kind: 'key', frame: 'world', move: 'line', grip: 'first', constraint: 'pose'};
+        points.push({ ...prior, t: time, kind: 'key' });
+        points.sort((left, right) => left.t - right.t);
+        state.keypointIndex = points.findIndex(point => point.t === time);
+        _flashEditorRender();
+        _flashRenderTimeline();
+    });
     if (points.length) {
         state.keypointIndex = Math.max(0, Math.min(state.keypointIndex, points.length - 1));
         const index = state.keypointIndex;
@@ -737,21 +773,6 @@ function _flashEditorRender() {
         details.append(exactKeyframe);
         keypoints.append(details);
     }
-    _flashEditorButton(keypoints, 'Add key frame at current time', () => {
-        const time = _flashEditorCurrentFrame().snapshot.demo.time_s;
-        if (points.some(point => Math.abs(point.t - time) < 1e-6)) {
-            showToast('Key frame already exists', 'Choose another frame or edit the existing event.', 'warning');
-            return;
-        }
-        const prior = [...points].reverse().find(point => point.t < time) || points[0] ||
-            {kind: 'key', frame: 'world', move: 'line', grip: 'first', constraint: 'pose'};
-        points.push({ ...prior, t: time, kind: 'key' });
-        points.sort((left, right) => left.t - right.t);
-        state.keypointIndex = points.findIndex(point => point.t === time);
-        _flashEditorRender();
-        _flashRenderTimeline();
-    });
-
     const advanced = document.createElement('div');
     advanced.className = 'flash-editor-advanced';
     if (state.raw) {
@@ -941,7 +962,6 @@ async function toggleFlashDemoEditor() {
             raw, newRole: '', newPrompt: '',
             original: JSON.stringify([result.annotation, result.keypoints_document]),
             drawing: false, vertices: [], running: false,
-            objectsOpen: raw, eventsOpen: raw,
             message: result.path_selection_migrated
                 ? 'This older demo replayed a path at grasp despite its saved “straight” label. The editor now shows that path as “Follow recording”; preview keeps its motion.' : '',
             trackers, tracker: trackers.trackers.find(item => item.runnable)?.id || 'point2pose',
