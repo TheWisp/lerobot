@@ -1,5 +1,6 @@
 """A prepared demo must preserve the same per-frame evidence its replay reads."""
 
+import gzip
 import hashlib
 import json
 
@@ -123,3 +124,48 @@ def test_preparation_evidence_crosses_into_demo_replay(tmp_path):
     assert evidence["groups"]["object"]["ids"] == [7]
     assert evidence["groups"]["object"]["base_xyz_m"] == [[0.1, 0.2, 1.0]]
     assert json.loads((bundle_dir / "scene-evidence/manifest.json").read_text())["complete"] is True
+
+
+def test_demo_evidence_retains_measured_translation_with_constrained_orientation(tmp_path):
+    writer = SceneEvidenceWriter(tmp_path / "scene", total_frames=1, roles=("object",))
+    frame = RGBDFrame(
+        0,
+        np.zeros((4, 4, 3), np.uint8),
+        np.full((4, 4), 1000, np.uint16),
+        np.eye(3),
+        0.001,
+        np.eye(4),
+        1.0,
+        1.0,
+        "calibration",
+    )
+    partial = PoseEstimate(
+        "object",
+        np.eye(4),
+        1.0,
+        1.0,
+        Evidence.PREDICTED,
+        "reference",
+        (True,) * 3,
+        (False,) * 3,
+        direct_translation_observed=True,
+    )
+    mask = np.ones(frame.depth.shape, bool)
+    result = PerceptionResult(
+        (partial,),
+        {},
+        0,
+        1.0,
+        "calibration",
+        {"object": mask},
+        proposals=(PoseProposal(0, "calibration", partial, np.eye(4), VisibleSurfaceSupport(16)),),
+    )
+    writer.record(frame, result, {}, {"object": partial})
+    writer.finish()
+    with gzip.open(tmp_path / "scene/000000.json.gz", "rt") as stream:
+        saved = json.load(stream)
+    for record in (saved["estimates"]["object"], saved["proposals"]["object"]):
+        assert record["evidence"] == "predicted"
+        assert record["direct_translation_observed"] is True
+        assert record["translation_supported"] == [True] * 3
+        assert record["rotation_supported"] == [False] * 3

@@ -199,6 +199,11 @@ class SymmetryCanonicalizingBackend:
                             estimate,
                             pose=pose,
                             evidence=Evidence.PREDICTED if symmetry.lock_to_baseline else estimate.evidence,
+                            direct_translation_observed=(
+                                estimate.has_direct_translation
+                                if symmetry.lock_to_baseline
+                                else estimate.direct_translation_observed
+                            ),
                             symmetry_canonicalized=True,
                         )
                     )
@@ -211,6 +216,8 @@ class SymmetryCanonicalizingBackend:
                             evidence=Evidence.LOST,
                             translation_supported=(False,) * 3,
                             rotation_supported=(False,) * 3,
+                            direct_translation_observed=False,
+                            last_direct_observation_s=None,
                         )
                     )
         return tuple(out)

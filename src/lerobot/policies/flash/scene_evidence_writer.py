@@ -13,7 +13,7 @@ from .perception import RGBDFrame
 from .perception_step import PerceptionResult
 from .trajectory import PoseEstimate
 
-SCENE_EVIDENCE_CAPTURE_VERSION = 4
+SCENE_EVIDENCE_CAPTURE_VERSION = 5
 
 
 def _mask_runs(mask: np.ndarray) -> list[list[int]]:
@@ -78,6 +78,9 @@ class SceneEvidenceWriter:
                     "evidence": estimate.evidence.value,
                     "estimator": estimate.estimator,
                     "pose": estimate.pose.tolist() if estimate.pose is not None else None,
+                    "translation_supported": estimate.translation_supported,
+                    "rotation_supported": estimate.rotation_supported,
+                    "direct_translation_observed": estimate.direct_translation_observed,
                     "source_time_s": estimate.source_time_s,
                     "last_direct_observation_s": estimate.last_direct_observation_s,
                 }
@@ -87,6 +90,9 @@ class SceneEvidenceWriter:
                 proposal.role: {
                     "evidence": proposal.estimate.evidence.value,
                     "estimator": proposal.estimate.estimator,
+                    "translation_supported": proposal.estimate.translation_supported,
+                    "rotation_supported": proposal.estimate.rotation_supported,
+                    "direct_translation_observed": proposal.estimate.direct_translation_observed,
                     "raw_pose": proposal.raw_pose.tolist() if proposal.raw_pose is not None else None,
                     "motion_prior_pose": (
                         proposal.motion_prior_pose.tolist()

@@ -13,9 +13,9 @@ from .perception_step import PerceptionPipeline, PerceptionResult, PerceptionRun
 from .symmetry import AxialSymmetry
 from .trajectory import Evidence, PoseEstimate
 
-# Version 6 scores competing poses against only the visible model surface,
-# so cached selections made with the earlier all-points comparison are stale.
-POSE_TRACE_SELECTION_VERSION = 6
+# Version 7 retains direct position evidence when an annotated support plane
+# supplies predicted orientation. Earlier caches treated that position as prediction.
+POSE_TRACE_SELECTION_VERSION = 7
 
 
 def extract_pose_trace(

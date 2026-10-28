@@ -927,6 +927,9 @@ def prepare(
         "source_episode": annotation["episode"],
         "demo_frames_evaluated": len(estimates),
         "observed_pose_frames": observed_counts,
+        "direct_translation_frames": {
+            role: sum(row[role].has_direct_translation for row in estimates) for role in prompts
+        },
         "pose_evidence_frames": {
             role: {
                 evidence.value: sum(row[role].evidence == evidence for row in estimates)

@@ -5,8 +5,9 @@ from pathlib import Path
 import numpy as np
 from scipy.spatial.transform import Rotation
 
+from lerobot.policies.flash.causal_service import CausalPoseService
 from lerobot.policies.flash.grasp_symmetry import select_grasp_symmetry
-from lerobot.policies.flash.perception import ObjectReference, ReferenceSnippet, RGBDFrame
+from lerobot.policies.flash.perception import LatestPoseStore, ObjectReference, ReferenceSnippet, RGBDFrame
 from lerobot.policies.flash.perception_step import PerceptionPipeline
 from lerobot.policies.flash.planner import JointPlanner, PlannerLimits
 from lerobot.policies.flash.pose_evidence import VisibleSurfaceSupport
@@ -250,3 +251,120 @@ def test_interchangeable_axis_follows_smooth_rotation_through_perpendicular():
     outputs = [backend.update(None)[0].pose for _ in observations]
     for actual, expected in zip(outputs, continuous, strict=True):
         np.testing.assert_allclose(actual, expected, atol=1e-9)
+
+
+def test_locked_support_plane_keeps_measured_center_with_predicted_orientation():
+    class SequenceBackend:
+        def __init__(self, estimates):
+            self.estimates = iter(estimates)
+
+        def initialize(self, _references):
+            pass
+
+        def update(self, _frame):
+            return (next(self.estimates),)
+
+    observed_pose = np.eye(4)
+    observed_pose[:3, :3] = Rotation.from_euler("z", 30, degrees=True).as_matrix()
+    observed_pose[0, 3] = 0.15
+    estimates = (
+        PoseEstimate(
+            "ring",
+            observed_pose,
+            1.0,
+            1.0,
+            Evidence.OBSERVED,
+            "v1",
+            (True,) * 3,
+            (True,) * 3,
+            last_direct_observation_s=1.0,
+        ),
+        PoseEstimate(
+            "ring",
+            observed_pose,
+            2.0,
+            2.0,
+            Evidence.PREDICTED,
+            "v1",
+            (True,) * 3,
+            (False,) * 3,
+            last_direct_observation_s=1.0,
+        ),
+    )
+    symmetry = AxialSymmetry(
+        "ring",
+        np.array([0, 0, 1]),
+        np.zeros(3),
+        np.eye(4),
+        lock_to_baseline=True,
+        max_observed_tilt_rad=np.deg2rad(15),
+    )
+    backend = SymmetryCanonicalizingBackend(SequenceBackend(estimates), (symmetry,))
+    backend.initialize((type("Reference", (), {"role": "ring"})(),))
+
+    current = backend.update(None)[0]
+    assert current.evidence == Evidence.PREDICTED
+    assert current.has_direct_translation
+    assert current.rotation_supported == (True,) * 3
+    assert current.usable(1.0, 1.0, allow_prediction=True)
+    np.testing.assert_allclose(current.pose[:3, 3], observed_pose[:3, 3])
+    np.testing.assert_allclose(current.pose[:3, :3], np.eye(3))
+    assert current.last_direct_observation_s == 1.0
+
+    frame = RGBDFrame(
+        0,
+        np.zeros((16, 16, 3), np.uint8),
+        np.full((16, 16), 1000, np.uint16),
+        np.array([[100, 0, 8], [0, 100, 8], [0, 0, 1]], dtype=float),
+        0.001,
+        np.eye(4),
+        1.0,
+        1.0,
+        "cal",
+    )
+    scene = CausalPoseService(LatestPoseStore())
+    scene.process_offline(frame, (current,), {"ring": np.ones(frame.depth.shape, bool)})
+    assert scene.observed["ring"][0].has_direct_translation
+
+    carried = backend.update(None)[0]
+    assert carried.evidence == Evidence.PREDICTED
+    assert not carried.has_direct_translation
+
+
+def test_rejected_support_orientation_clears_direct_position():
+    class TiltedBackend:
+        def initialize(self, _references):
+            pass
+
+        def update(self, _frame):
+            tilted = np.eye(4)
+            tilted[:3, :3] = Rotation.from_euler("x", 30, degrees=True).as_matrix()
+            return (
+                PoseEstimate(
+                    "ring",
+                    tilted,
+                    1.0,
+                    1.0,
+                    Evidence.OBSERVED,
+                    "v1",
+                    (True,) * 3,
+                    (True,) * 3,
+                    last_direct_observation_s=1.0,
+                ),
+            )
+
+    symmetry = AxialSymmetry(
+        "ring",
+        np.array([0, 0, 1]),
+        np.zeros(3),
+        np.eye(4),
+        lock_to_baseline=True,
+        max_observed_tilt_rad=np.deg2rad(15),
+    )
+    backend = SymmetryCanonicalizingBackend(TiltedBackend(), (symmetry,))
+    backend.initialize((type("Reference", (), {"role": "ring"})(),))
+    rejected = backend.update(None)[0]
+    assert rejected.evidence == Evidence.LOST
+    assert rejected.pose is None
+    assert not rejected.has_direct_translation
+    assert rejected.last_direct_observation_s is None
