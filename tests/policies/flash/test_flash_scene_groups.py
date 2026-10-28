@@ -146,7 +146,13 @@ def test_group_bridge_is_same_when_first_direct_pose_arrives_after_second():
     def run(order):
         store = LatestPoseStore()
         decisions = []
-        service = CausalPoseService(store, image_scale=1.0, on_anchor_decision=decisions.append)
+        support_events = []
+        service = CausalPoseService(
+            store,
+            image_scale=1.0,
+            on_anchor_decision=decisions.append,
+            on_scene_support=lambda frame_id, groups: support_events.append((frame_id, groups)),
+        )
         service.scene.update = lambda item: scenes[item.frame_id]
         for kind, index in order:
             if kind == "frame":
@@ -163,10 +169,12 @@ def test_group_bridge_is_same_when_first_direct_pose_arrives_after_second():
                     (True,) * 3,
                 )
                 service._anchor(_Anchor(index, (estimate,), {"object": mask}))
-        return service, store.snapshot()[1]["object"], decisions
+        return service, store.snapshot()[1]["object"], decisions, support_events
 
-    ordered, ordered_pose, _ = run([("frame", 0), ("direct", 0), ("frame", 1), ("direct", 1), ("frame", 2)])
-    reordered, reordered_pose, decisions = run(
+    ordered, ordered_pose, _, _ = run(
+        [("frame", 0), ("direct", 0), ("frame", 1), ("direct", 1), ("frame", 2)]
+    )
+    reordered, reordered_pose, decisions, support_events = run(
         [("frame", 0), ("frame", 1), ("direct", 1), ("frame", 2), ("direct", 0)]
     )
     assert "object" in ordered.relationships
@@ -176,6 +184,9 @@ def test_group_bridge_is_same_when_first_direct_pose_arrives_after_second():
     np.testing.assert_allclose(ordered_pose.pose, reordered_pose.pose, atol=1e-6)
     assert decisions[-1].outcome == "accepted_historical_group"
     assert reordered_pose.available_time_s >= decisions[-1].decided_at_s
+    assert support_events[-1][0] == frames[2].frame_id
+    assert support_events[-1][1]["object"]["verified"]
+    assert support_events[-1][1]["object"]["ids"].size >= reordered.environment_min_inliers
 
 
 def test_late_group_bridge_rejects_intervening_direct_pose_contradiction():

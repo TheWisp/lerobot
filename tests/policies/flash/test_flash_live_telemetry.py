@@ -252,13 +252,28 @@ def test_delayed_mask_is_joined_only_to_its_source_camera_frame(tmp_path: Path) 
             }
         },
     )
+    # A delayed source-frame decision can establish a stronger group after
+    # the first support event was already queued for the same camera frame.
+    telemetry.scene_support(
+        9,
+        {
+            "object": {
+                "verified": True,
+                "measured_this_frame": True,
+                "ids": np.array([2, 3]),
+                "xy": np.array([[5, 4], [6, 5]]),
+                "base_xyz": np.array([[0.01, 0.02, 1.0], [0.02, 0.02, 1.0]]),
+                "last_group_measurement_s": 9.0,
+            }
+        },
+    )
     telemetry.close()
 
     replay = _flash_tracker_replay(tmp_path, 0)
     evidence_by_frame = {item["snapshot"]["camera"]["frame_id"]: item for item in replay["frames"]}
     assert evidence_by_frame[9]["evidence"]["masks_rle"]["object"]
     assert evidence_by_frame[9]["snapshot"]["observed_masks"]["object"]["frame_id"] == 9
-    assert evidence_by_frame[9]["evidence"]["groups"]["object"]["ids"] == [2]
+    assert evidence_by_frame[9]["evidence"]["groups"]["object"]["ids"] == [2, 3]
     assert set(evidence_by_frame[9]["evidence"]["late_sources"]) == {"mask", "scene group"}
     assert "evidence" not in evidence_by_frame[10]
     data = telemetry.mask_path.read_bytes()

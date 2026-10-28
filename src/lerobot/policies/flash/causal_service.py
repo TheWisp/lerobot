@@ -381,6 +381,10 @@ class CausalPoseService:
                 }
         return result
 
+    def _report_scene_support(self) -> None:
+        if self.on_scene_support is not None and self.scene_history:
+            self.on_scene_support(self.scene_history[-1].frame_id, self.scene_group_supports())
+
     def _sync_attachment(self) -> str | None:
         with self._attachment_lock:
             role = self._attached_role
@@ -518,8 +522,7 @@ class CausalPoseService:
                 and role not in self.candidate_relationships
             ):
                 self._publish_static(role, anchor, frame)
-        if self.on_scene_support is not None:
-            self.on_scene_support(frame.frame_id, self.scene_group_supports())
+        self._report_scene_support()
 
     def _publish_environment(
         self,
@@ -943,6 +946,10 @@ class CausalPoseService:
                 confirmed=True,
                 available_at_s=accepted_at_s,
             )
+        # The relation can be discovered after the last camera frame. Record
+        # the newly available support on that frame, with its actual arrival
+        # time, rather than making a replay invent an earlier observation.
+        self._report_scene_support()
         return accepted_at_s
 
     def _replay_one(self, role: str) -> bool:
@@ -1158,6 +1165,7 @@ class CausalPoseService:
     ) -> None:
         """Verify co-motion before a group can predict a hidden object."""
         role = estimate.role
+        previous_relationship = self.relationships.get(role) or self.candidate_relationships.get(role)
         # An independent direct view can re-establish the stationary prior
         # after a formerly verified support group lost all measurable points.
         self._expired_verified_roles.discard(role)
@@ -1230,6 +1238,9 @@ class CausalPoseService:
         observation = (estimate, scene, tuple(mask.copy() for mask in masks.values()))
         self.observed[role] = observation
         self.direct_history.setdefault(role, deque(maxlen=self.history.maxlen)).append(observation)
+        current_relationship = self.relationships.get(role) or self.candidate_relationships.get(role)
+        if current_relationship is not previous_relationship:
+            self._report_scene_support()
 
     def _pose_disagrees(self, role: str, predicted: np.ndarray, observed: np.ndarray) -> bool:
         local_center = self.object_centers_by_role.get(role)
