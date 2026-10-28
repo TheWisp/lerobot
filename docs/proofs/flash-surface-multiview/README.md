@@ -152,8 +152,8 @@ environment. Their maps are diagnostic hypotheses, not trusted pose outputs.
 ## Held dowel: test a later view against earlier frames
 
 The prepared insertion demo still has one saved dowel surface, measured before
-the grasp. Its held-object correction accepts small changes to the
-gripper-to-object relation immediately. In this preparation, the accepted
+the grasp. The earlier preparation accepted small changes to the
+gripper-to-object relation immediately. In that preparation, the accepted
 relation at frame 291 and the one at frame 475 differ by 12.8 mm at the saved
 surface centre and 11.7° in rotation. The later frame shows more of the dowel.
 
@@ -179,6 +179,26 @@ points can be hidden; low forward distance alone is not enough to publish a
 pose. Neither the model nor the live control rule has been changed by this
 audit. It motivates an interval-level attachment check and an admission test
 for new views before either is used for control.
+
+The [per-frame fit report](held_dowel_fit_holdout.json) records the same 44
+held-out frames fitted from the **fixed frame-475
+gripper prediction** using the first view alone and both views. The table
+reports how far the fitter moved away from that independent motion prior;
+smaller is more consistent with a rigid attachment, but is not proof that the
+attachment or fit is correct.
+
+| Fitter surface      | Median first-view point motion | 90th-percentile point motion | Median full rotation | Median shaft-axis tilt |
+| ------------------- | -----------------------------: | ---------------------------: | -------------------: | ---------------------: |
+| Initial view        |                       10.19 mm |                     15.71 mm |               22.01° |                  2.75° |
+| Initial + frame 475 |                        6.75 mm |                     14.19 mm |                9.56° |                  2.55° |
+
+The additional view reduced point motion on 39 of 44 frames, but five got
+worse. On a partial cylinder, full rotation includes a poorly observed roll;
+even two views left 90th-percentile full rotation at 34.85°. The model must
+therefore retain the gripper motion prior and expose unsupported rotations,
+not treat a lower fit cost as a measured six-axis pose. Reproduce this check
+with `benchmarks/flash_held_surface_holdout.py` and `--fit` over frames
+300–429 in steps of three; the report records the surface and solver settings.
 
 The subsequent shared attachment rule now checks the configured clean-depth
 support for **every** visual correction, including small changes. Repreparing
