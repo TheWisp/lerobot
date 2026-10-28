@@ -49,9 +49,21 @@ def inspect_recorded_trial(dataset_root: str | Path, episode: int) -> dict:
         "frame_count": len(poses),
         "ready": False,
         "reason": None,
-        "roles": [],
+        "roles": sorted({role for estimates in poses.values() for role in estimates}),
+        "pose_counts": {},
         "observed_frames": {},
         "symmetry_roles": [],
+    }
+    result["pose_counts"] = {
+        role: {
+            evidence.value: sum(
+                estimate.evidence == evidence
+                for estimates in poses.values()
+                if (estimate := estimates.get(role)) is not None
+            )
+            for evidence in Evidence
+        }
+        for role in result["roles"]
     }
     try:
         _, _, prepared = _source(root, episode)

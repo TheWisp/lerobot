@@ -1809,6 +1809,10 @@ def test_recorded_motion_editor_marks_contiguous_sections_in_same_replay(gui_pag
                 "reason": None,
                 "roles": ["tool", "target"],
                 "observed_frames": {"tool": [0, 1, 2, 3], "target": [0, 1, 2, 3]},
+                "pose_counts": {
+                    "tool": {"observed": 4, "predicted": 0},
+                    "target": {"observed": 4, "predicted": 0},
+                },
                 "symmetry_roles": [],
             }
         ),
@@ -1847,6 +1851,7 @@ def test_recorded_motion_editor_marks_contiguous_sections_in_same_replay(gui_pag
         "target"
     )
     page.locator(".flash-recorded-section").nth(1).locator('[data-field="held_role"]').select_option("tool")
+    assert "2/2 frames with measured full pose" in page.locator(".flash-recorded-section").nth(1).inner_text()
     page.get_by_role("button", name="Prepare candidate").click()
     page.wait_for_function(
         "() => !!document.querySelector('#flash-recorded-status')?.textContent.includes('Candidate saved')"

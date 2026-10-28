@@ -199,6 +199,7 @@ def test_recorded_trial_requires_a_portable_reference_snapshot(tmp_path):
     inspection = inspect_recorded_trial(tmp_path, 0)
     assert inspection["frame_count"] == 3
     assert not inspection["ready"]
+    assert inspection["pose_counts"]["object"]["observed"] == 3
     assert "reference" in inspection["reason"] or "trial_config" in inspection["reason"]
 
 

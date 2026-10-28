@@ -80,6 +80,9 @@ function _flashRecordedRender() {
     let html = '<h3>Mark motion <button type="button" class="flash-recorded-close" onclick="closeFlashRecordedEditor()" aria-label="Close editor">×</button></h3>';
     html += `<p id="flash-recorded-playhead">Frame ${playhead} of ${last}. Move the playback cursor to a change in motion, then end a section there.</p>`;
     if (!source.ready) html += `<p class="flash-recorded-warning">${_esc(source.reason)}</p>`;
+    const evidence = Object.entries(source.pose_counts || {}).map(([role, counts]) =>
+        `${_esc(role)}: ${counts.observed || 0} camera-observed, ${counts.predicted || 0} predicted`);
+    if (evidence.length) html += `<p>${evidence.join(' · ')}</p>`;
     html += '<div class="flash-recorded-add">';
     html += `<button type="button" id="flash-recorded-add-here" onclick="flashRecordedAddSection(false)" ${playhead <= nextStart ? 'disabled' : ''}>End section here</button>`;
     html += `<button type="button" onclick="flashRecordedAddSection(true)" ${last <= nextStart ? 'disabled' : ''}>End at last frame</button>`;
@@ -95,6 +98,17 @@ function _flashRecordedRender() {
         ], item.relation)}</select></label>`;
         if (item.relation !== 'ee_to_start') html += `<label>Target object<select data-index="${index}" data-field="reference_role">${_flashRecordedOptions(roles.map(role => [role, role]), item.reference_role)}</select></label>`;
         if (item.relation === 'held_to_target') html += `<label>Held object<select data-index="${index}" data-field="held_role">${_flashRecordedOptions(roles.filter(role => role !== item.reference_role).map(role => [role, role]), item.held_role)}</select></label>`;
+        if (item.relation !== 'ee_to_start' && source.ready) {
+            const route = item.mode === 'connection';
+            const total = route ? 2 : item.last_frame - item.first_frame + 1;
+            const evidenceFor = role => {
+                const count = (source.observed_frames?.[role] || []).filter(frame =>
+                    route ? frame === item.first_frame || frame === item.last_frame
+                        : frame >= item.first_frame && frame <= item.last_frame).length;
+                return `${count}/${total} frames with measured full pose`;
+            };
+            html += `<p>Target: ${evidenceFor(item.reference_role)}${item.held_role && item.relation === 'held_to_target' ? ` · held: ${evidenceFor(item.held_role)}` : ''}</p>`;
+        }
         if (item.mode === 'connection') html += `<label>End point<select data-index="${index}" data-field="endpoint_requirement">${_flashRecordedOptions([
             ['required', 'Must reach'], ['preferred', 'Best effort']
         ], item.endpoint_requirement)}</select></label>`;
