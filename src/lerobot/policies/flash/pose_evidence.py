@@ -12,6 +12,45 @@ from .trajectory import PoseEstimate
 
 
 @dataclass(frozen=True)
+class SurfaceAgreement:
+    """Two measured directions of geometric support, without a pose-confidence claim."""
+
+    measured_to_reference_p90_m: float
+    reference_depth_pixels: int
+    reference_to_depth_p90_m: float | None
+
+    def __post_init__(self) -> None:
+        if (
+            not isfinite(self.measured_to_reference_p90_m)
+            or self.measured_to_reference_p90_m < 0
+            or self.reference_depth_pixels < 0
+            or (
+                self.reference_to_depth_p90_m is not None
+                and (not isfinite(self.reference_to_depth_p90_m) or self.reference_to_depth_p90_m < 0)
+            )
+        ):
+            raise ValueError("registered surface agreement needs nonnegative finite measurements")
+
+
+@dataclass(frozen=True)
+class RegisteredSurfaceEvidence:
+    reference_version: str
+    view_count: int
+    first_view: SurfaceAgreement
+    all_views: SurfaceAgreement
+    elapsed_ms: float
+
+    def __post_init__(self) -> None:
+        if (
+            not self.reference_version
+            or self.view_count < 1
+            or not isfinite(self.elapsed_ms)
+            or self.elapsed_ms < 0
+        ):
+            raise ValueError("registered surface evidence needs a source reference and finite timing")
+
+
+@dataclass(frozen=True)
 class VisibleSurfaceSupport:
     """Measured support; missing fields mean the producer did not measure them.
 
@@ -146,6 +185,7 @@ class PoseProposal:
     failure: str | None = None
     motion_prior_pose: np.ndarray | None = None
     conditional_surface_information: ConditionalSurfaceInformation | None = None
+    registered_surface_evidence: RegisteredSurfaceEvidence | None = None
 
     def __post_init__(self) -> None:
         if self.frame_id < 0 or not self.calibration_version:
@@ -154,6 +194,11 @@ class PoseProposal:
             object.__setattr__(self, "raw_pose", transform(self.raw_pose))
         if self.motion_prior_pose is not None:
             object.__setattr__(self, "motion_prior_pose", transform(self.motion_prior_pose))
+        if (
+            self.registered_surface_evidence is not None
+            and self.registered_surface_evidence.reference_version != self.estimate.reference_version
+        ):
+            raise ValueError("registered surface evidence differs from the proposal object frame")
 
     @property
     def role(self) -> str:

@@ -152,6 +152,11 @@ class SymmetryCanonicalizingBackend:
         """Retain conditional surface evidence without resolving a pose branch."""
         return getattr(self.inner, "last_surface_information", {})
 
+    @property
+    def last_registered_surface_evidence(self):
+        """Keep source-frame demo-surface diagnostics through symmetry handling."""
+        return getattr(self.inner, "last_registered_surface_evidence", {})
+
     def initialize(self, references: tuple[ObjectReference, ...]) -> None:
         if not set(self.symmetries) <= {item.role for item in references}:
             raise ValueError("axial symmetry role lacks an object reference")

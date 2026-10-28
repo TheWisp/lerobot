@@ -12,6 +12,8 @@ from lerobot.policies.flash.perception_step import PerceptionResult
 from lerobot.policies.flash.pose_evidence import (
     ConditionalSurfaceInformation,
     PoseProposal,
+    RegisteredSurfaceEvidence,
+    SurfaceAgreement,
     VisibleSurfaceSupport,
 )
 from lerobot.policies.flash.scene_evidence_writer import SceneEvidenceWriter
@@ -78,6 +80,13 @@ def test_preparation_evidence_crosses_into_demo_replay(tmp_path):
             20,
             0.005,
         ),
+        RegisteredSurfaceEvidence(
+            "reference",
+            2,
+            SurfaceAgreement(0.002, 20, 0.003),
+            SurfaceAgreement(0.001, 30, 0.004),
+            1.2,
+        ),
     )
     result = PerceptionResult((lost,), {}, 0, 1.0, "calibration", {"object": mask}, proposals=(proposal,))
 
@@ -106,6 +115,10 @@ def test_preparation_evidence_crosses_into_demo_replay(tmp_path):
     assert evidence["proposals"]["object"]["failure"] == "full pose unobservable"
     assert evidence["proposals"]["object"]["visible_support"]["principal_surface_points"] == 12
     assert evidence["proposals"]["object"]["conditional_surface_information"]["matched_reference_points"] == 8
+    assert (
+        evidence["proposals"]["object"]["registered_surface_evidence"]["all_views"]["reference_depth_pixels"]
+        == 30
+    )
     assert evidence["estimates"]["object"]["evidence"] == "lost"
     assert evidence["groups"]["object"]["ids"] == [7]
     assert evidence["groups"]["object"]["base_xyz_m"] == [[0.1, 0.2, 1.0]]

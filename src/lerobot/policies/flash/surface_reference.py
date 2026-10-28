@@ -11,11 +11,14 @@ from dataclasses import asdict, dataclass
 from numbers import Integral
 
 import numpy as np
+from scipy.spatial import cKDTree
 
 from .appearance import ReferenceAppearanceFrame
 from .perception import ObjectReference
+from .pose_evidence import SurfaceAgreement
 from .registration import transform_points
-from .surface_observation import SurfaceObservationConfig, observation, spatial_sample
+from .surface_observation import SurfaceObservationConfig, move, observation, spatial_sample
+from .surface_tracking import reference_depth_support
 
 
 @dataclass(frozen=True)
@@ -34,6 +37,74 @@ class RegisteredSurfaceModel:
         ):
             raise ValueError("registered surface views need finite metric Nx3 points")
         object.__setattr__(self, "view_points_object_m", views)
+
+
+@dataclass(frozen=True)
+class PreparedSurfaceAgreement:
+    """Object-frame search trees reused across camera frames."""
+
+    model: RegisteredSurfaceModel
+    first_tree: cKDTree
+    all_tree: cKDTree
+    all_points: np.ndarray
+
+    @classmethod
+    def build(cls, model: RegisteredSurfaceModel) -> PreparedSurfaceAgreement:
+        first = model.view_points_object_m[0]
+        all_points = (
+            first if len(model.view_points_object_m) == 1 else np.concatenate(model.view_points_object_m)
+        )
+        first_tree = cKDTree(first)
+        return cls(
+            model,
+            first_tree,
+            first_tree if all_points is first else cKDTree(all_points),
+            all_points,
+        )
+
+
+def registered_surface_agreement(
+    model: RegisteredSurfaceModel,
+    camera_from_object: np.ndarray,
+    measured_camera_points: np.ndarray,
+    clean_depth_pixels: np.ndarray,
+    depth_m: np.ndarray,
+    intrinsics: np.ndarray,
+    *,
+    prepared: PreparedSurfaceAgreement | None = None,
+) -> tuple[SurfaceAgreement, SurfaceAgreement]:
+    """Score the first view and all registered views against one live RGB-D frame.
+
+    A low measured-to-reference distance can come from a tiny matching patch.
+    The reverse depth comparison exposes a projected surface that contradicts
+    measured depth. Neither direction alone establishes the correct 6D pose.
+    """
+    pose = np.asarray(camera_from_object, dtype=float)
+    measured = np.asarray(measured_camera_points, dtype=float)
+    if pose.shape != (4, 4) or not np.isfinite(pose).all() or measured.ndim != 2 or measured.shape[1] != 3:
+        raise ValueError("surface agreement needs a finite camera pose and Nx3 measured points")
+    if len(measured) < 3 or not np.isfinite(measured).all():
+        raise ValueError("surface agreement needs at least three finite measured points")
+    prepared = prepared or PreparedSurfaceAgreement.build(model)
+    if prepared.model is not model:
+        raise ValueError("prepared surface agreement belongs to another model")
+    measured_object = move(measured, np.linalg.inv(pose))
+    first = move(model.view_points_object_m[0], pose)
+    all_views = (
+        first if prepared.all_points is model.view_points_object_m[0] else move(prepared.all_points, pose)
+    )
+
+    def score(reference: np.ndarray, tree: cKDTree) -> SurfaceAgreement:
+        distance = tree.query(measured_object)[0]
+        support, depth_p90_mm = reference_depth_support(reference, clean_depth_pixels, depth_m, intrinsics)
+        return SurfaceAgreement(
+            float(np.percentile(distance, 90)),
+            support,
+            depth_p90_mm / 1000 if depth_p90_mm is not None else None,
+        )
+
+    first_score = score(first, prepared.first_tree)
+    return first_score, first_score if all_views is first else score(all_views, prepared.all_tree)
 
 
 def build_registered_surface_model(

@@ -100,6 +100,11 @@ class SceneEvidenceWriter:
                         if proposal.conditional_surface_information is not None
                         else None
                     ),
+                    "registered_surface_evidence": (
+                        asdict(proposal.registered_surface_evidence)
+                        if proposal.registered_surface_evidence is not None
+                        else None
+                    ),
                 }
                 for proposal in result.proposals
             },

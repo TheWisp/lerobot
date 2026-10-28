@@ -69,6 +69,7 @@ class PerceptionPipeline:
         raw_poses = getattr(self.backend, "last_candidate_poses", {})
         motion_priors = getattr(self.backend, "last_motion_prior_poses", {})
         surface_information = getattr(self.backend, "last_surface_information", {})
+        registered_surface_evidence = getattr(self.backend, "last_registered_surface_evidence", {})
         visible_support = getattr(self.backend, "last_visible_support", {})
         proposals = tuple(
             PoseProposal(
@@ -83,6 +84,7 @@ class PerceptionPipeline:
                 failures.get(estimate.role),
                 motion_priors.get(estimate.role),
                 surface_information.get(estimate.role),
+                registered_surface_evidence.get(estimate.role),
             )
             for estimate in estimates
         )

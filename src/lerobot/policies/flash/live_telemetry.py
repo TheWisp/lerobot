@@ -186,6 +186,11 @@ class FlashLiveTelemetry:
                         if proposal.conditional_surface_information is not None
                         else None
                     ),
+                    "registered_surface_evidence": (
+                        asdict(proposal.registered_surface_evidence)
+                        if proposal.registered_surface_evidence is not None
+                        else None
+                    ),
                 }
                 for proposal in source_proposals
             }
@@ -285,6 +290,11 @@ class FlashLiveTelemetry:
                 asdict(decision.proposal.conditional_surface_information)
                 if decision.proposal is not None
                 and decision.proposal.conditional_surface_information is not None
+                else None
+            ),
+            "registered_surface_evidence": (
+                asdict(decision.proposal.registered_surface_evidence)
+                if decision.proposal is not None and decision.proposal.registered_surface_evidence is not None
                 else None
             ),
             "backend_failure": decision.proposal.failure if decision.proposal is not None else None,

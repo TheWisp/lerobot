@@ -597,6 +597,7 @@ def prepare(
             models=tuple(models),
             extractor=extractor,
             axial_symmetries=tuple(axial_symmetries),
+            surface_models=tuple(surface_models),
             clock=lambda: 0.0,
         )
         grasp_camera = _nearest_index(camera_times, times[grasp])

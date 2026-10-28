@@ -12,6 +12,8 @@ from lerobot.policies.flash.offline_perception import extract_pose_trace
 from lerobot.policies.flash.perception import ObjectReference, ReferenceSnippet, RGBDFrame
 from lerobot.policies.flash.perception_step import PerceptionPipeline, PerceptionResult
 from lerobot.policies.flash.perception_worker import _run_backend
+from lerobot.policies.flash.surface_observation import SurfaceObservationConfig, observation
+from lerobot.policies.flash.surface_reference import RegisteredSurfaceModel
 from lerobot.policies.flash.tracking_debug_worker import debug_reference, make_debug_pipeline
 from lerobot.policies.flash.trajectory import Evidence, PoseEstimate
 from lerobot.policies.flash.vision_pipeline import (
@@ -372,6 +374,64 @@ def test_small_patch_fit_cannot_promote_reference_depth_disagreement():
     assert result.estimates[0].evidence == Evidence.LOST
     assert result.proposals[0].raw_pose is not None
     assert result.proposals[0].visible_support.reference_depth_residual_p90_m == 0.05
+
+
+def test_registered_demo_surface_is_reported_without_changing_pose_decision():
+    from dataclasses import asdict
+
+    class Seed:
+        def initialize(self, references):
+            self.references = references
+
+        def update(self, frame):
+            return (
+                PoseEstimate(
+                    "object",
+                    np.eye(4),
+                    frame.source_time_s,
+                    frame.available_time_s,
+                    Evidence.OBSERVED,
+                    self.references[0].version,
+                    (True,) * 3,
+                    (True,) * 3,
+                ),
+            )
+
+    frame = frames()[0]
+    mask = Masks().masks(frame)["object"]
+    points = observation(frame.metric_depth(), mask, frame.intrinsics, asdict(SurfaceObservationConfig()))[
+        "points"
+    ]
+    config = VisionPipelineConfig(compiled_surface_fit=False, reuse_surface_search=False)
+    outputs = []
+    for offset_m in (0.0, 0.3):
+        model = RegisteredSurfaceModel("object", reference().version, (points + [offset_m, 0, 0],))
+        with patch(
+            "lerobot.policies.flash.vision_pipeline.build_appearance_pose_backend", return_value=Seed()
+        ):
+            backend = build_vision_backend(
+                config,
+                Masks(),
+                models=(object(),),
+                extractor=object(),
+                matcher=object(),
+                surface_models=(model,),
+                clock=lambda: 0.0,
+            )
+        outputs.append(PerceptionPipeline(backend, (reference(),)).process(frame))
+
+    supported, contradicted = outputs
+    assert supported.estimates[0].evidence == contradicted.estimates[0].evidence == Evidence.OBSERVED
+    np.testing.assert_allclose(supported.estimates[0].pose, contradicted.estimates[0].pose)
+    first = supported.details["object"]["diagnostics"]["registered_surface_agreement"]
+    shifted = contradicted.details["object"]["diagnostics"]["registered_surface_agreement"]
+    assert supported.proposals[0].registered_surface_evidence is not None
+    assert contradicted.proposals[0].registered_surface_evidence is not None
+    assert first["reference_version"] == reference().version
+    assert first["first_view"]["measured_to_reference_p90_m"] < 0.001
+    assert first["first_view"]["reference_depth_pixels"] > 0
+    assert shifted["first_view"]["measured_to_reference_p90_m"] > 0.1
+    assert shifted["first_view"]["reference_depth_pixels"] == 0
 
 
 def test_rejected_fit_retains_visual_recovery_and_a_separate_motion_prior():

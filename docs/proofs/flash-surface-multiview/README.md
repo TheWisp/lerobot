@@ -124,6 +124,15 @@ registrations through ambiguous rotations, and publish a corrected object
 frame only after cross-view checks resolve them. A low mask/depth residual by
 itself is not such a check.
 
+The recorded gamepad depth fixture adds a direct warning for that last point.
+At held frame 430, the candidate's measured surface is only 2.35 mm p90 from
+the saved reference, but that same reference projects 124 mm p90 away from
+reliable depth pixels on the object. Adding measured views from held frames 290
+and 300 does not remove the contradiction. These are checks of a recorded pose
+candidate, not independently labeled pose errors. New prepared bundles now
+record both directions of agreement for their first and combined registered
+views in source-frame proposal evidence; neither number changes control yet.
+
 Reproduce the labeled ablation with `PYTHONPATH=src python
 benchmarks/flash_surface_multiview_oracle.py CASE --output OUTPUT.json` and
 `--admission confirmed` for the three-view variant. The current backend run

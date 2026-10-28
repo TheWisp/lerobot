@@ -18,10 +18,11 @@ import numpy as np
 
 from .appearance import AppearanceModel, MaskSource, Sam3MaskSource, build_appearance_pose_backend
 from .perception import PoseBackend, RGBDFrame
-from .pose_evidence import ConditionalSurfaceInformation, VisibleSurfaceSupport
+from .pose_evidence import ConditionalSurfaceInformation, RegisteredSurfaceEvidence, VisibleSurfaceSupport
 from .surface_correspondence import SurfaceMotionConfig
 from .surface_grounding import ShapeConfig
 from .surface_observation import SurfaceObservationConfig, prepare_surface_frame
+from .surface_reference import PreparedSurfaceAgreement, RegisteredSurfaceModel, registered_surface_agreement
 from .surface_tracking import SurfaceTrackingSession, load_ufm
 from .symmetry import AxialSymmetry
 from .trajectory import Evidence, PoseEstimate
@@ -176,11 +177,17 @@ class SurfacePoseBackend:
     frame is chosen once at A. Such sessions are never created by a skill factory.
     """
 
-    def __init__(self, masks, matcher, config, *, initializer=None, clock=time.monotonic):
+    def __init__(self, masks, matcher, config, *, initializer=None, surface_models=(), clock=time.monotonic):
         self.mask_source = masks
         self.matcher = matcher
         self.config = config
         self.initializer = initializer
+        self.surface_models = {model.role: model for model in surface_models}
+        if len(self.surface_models) != len(surface_models):
+            raise ValueError("registered surface models need unique roles")
+        self.prepared_surface_agreement = {
+            role: PreparedSurfaceAgreement.build(model) for role, model in self.surface_models.items()
+        }
         self.clock = clock
         self.last_masks = {}
         self.last_failure = {}
@@ -189,6 +196,7 @@ class SurfacePoseBackend:
         self.last_motion_prior_poses = {}
         self.last_visible_support = {}
         self.last_surface_information = {}
+        self.last_registered_surface_evidence = {}
         self.references = {}
         self.sessions = {}
         self.reference_camera_from_object = {}
@@ -216,11 +224,17 @@ class SurfacePoseBackend:
         self.references = {r.role: r for r in references}
         if len(self.references) != len(references) or not references:
             raise ValueError("surface tracker needs unique references")
+        if any(
+            role not in self.references or model.reference_version != self.references[role].version
+            for role, model in self.surface_models.items()
+        ):
+            raise ValueError("registered surface model differs from the initialized object reference")
         self.previous_frame = None
         self.last_candidate_poses = {}
         self.last_motion_prior_poses = {}
         self.last_visible_support = {}
         self.last_surface_information = {}
+        self.last_registered_surface_evidence = {}
         self.sessions.clear()
         self.reference_camera_from_object.clear()
         if self.initializer is not None:
@@ -360,6 +374,7 @@ class SurfacePoseBackend:
         self.last_failure, self.last_details = {}, {}
         self.last_candidate_poses, self.last_motion_prior_poses, self.last_visible_support = {}, {}, {}
         self.last_surface_information = {}
+        self.last_registered_surface_evidence = {}
         unregistered = prepared["unregistered"]
 
         def finish_job(job):
@@ -397,6 +412,29 @@ class SurfacePoseBackend:
                         @ self.reference_camera_from_object[role]
                     )
             diagnostics = detail["diagnostics"]
+            model = self.surface_models.get(role)
+            if pose is not None and model is not None:
+                current = prepared["jobs"][role][1]["current"]
+                observed = current["obs"]
+                start = time.perf_counter()
+                first, all_views = registered_surface_agreement(
+                    model,
+                    np.linalg.inv(frame.base_from_camera) @ pose,
+                    observed["points"],
+                    observed["valid_image"],
+                    current["depth"],
+                    frame.intrinsics,
+                    prepared=self.prepared_surface_agreement[role],
+                )
+                evidence = RegisteredSurfaceEvidence(
+                    model.reference_version,
+                    len(model.view_points_object_m),
+                    first,
+                    all_views,
+                    (time.perf_counter() - start) * 1000,
+                )
+                self.last_registered_surface_evidence[role] = evidence
+                diagnostics["registered_surface_agreement"] = asdict(evidence)
             self.last_candidate_poses[role] = (
                 np.asarray(pose, dtype=float).copy() if pose is not None else None
             )
@@ -552,6 +590,7 @@ def build_vision_backend(
     extractor=None,
     matcher=None,
     axial_symmetries=(),
+    surface_models=(),
     local_reference=False,
     clock=time.monotonic,
 ):
@@ -578,7 +617,12 @@ def build_vision_backend(
         backend = initializer
     else:
         backend = SurfacePoseBackend(
-            masks, load_ufm() if matcher is None else matcher, config, initializer=initializer, clock=clock
+            masks,
+            load_ufm() if matcher is None else matcher,
+            config,
+            initializer=initializer,
+            surface_models=surface_models,
+            clock=clock,
         )
     if axial_symmetries:
         from .symmetry import SymmetryCanonicalizingBackend
@@ -599,6 +643,7 @@ class VisionBackendFactory:
     axial_symmetries: tuple[AxialSymmetry, ...] = ()
     seed_points_by_role: dict[str, tuple[float, float]] | None = None
     device: str = "cuda"
+    surface_models: tuple[RegisteredSurfaceModel, ...] = ()
 
     def __call__(self) -> PoseBackend:
         from .dino_features import DinoPatchExtractor
@@ -617,4 +662,5 @@ class VisionBackendFactory:
             models=self.models,
             extractor=DinoPatchExtractor(model_id=self.dino_model_id, device=self.device),
             axial_symmetries=self.axial_symmetries,
+            surface_models=self.surface_models,
         )

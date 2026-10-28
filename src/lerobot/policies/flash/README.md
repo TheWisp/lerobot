@@ -188,10 +188,16 @@ The surface backend first registers the current observation into the prepared
 object frame using the reference matcher. It then transports that same frame
 with the temporally tracked surface; it does not recompute the object's origin
 from the current visible points. Failed initial registration remains `LOST`.
-Its fit still uses the first live observed surface. The newly stored registered
-demo surfaces are available as versioned reference data but do not yet alter
-live pose proposals or control; their registration and fitting need separate
-validation before that switch.
+Its fit still uses the first live observed surface. For newly prepared bundles,
+the source-frame proposal also records how the saved demo surface agrees with
+the current masked depth, using the first registered view and all registered
+views separately. It measures both visible depth points to the saved surface
+and the saved surface back to reliable depth pixels. A low one-way distance can
+hide a wrong pose; these numbers are diagnostics, not confidence probabilities.
+The sealed-demo importer currently registers one view per object, so its two
+readouts coincide. The saved surfaces do not yet alter pose acceptance or
+control; registering additional views and validating their effect on fitting
+remain necessary before that switch.
 The camera-only debugger has no demo to register against, so it explicitly
 creates a local reference at the initial A landmark. This initialization
 choice does not change surface filtering, motion estimation or fitting.

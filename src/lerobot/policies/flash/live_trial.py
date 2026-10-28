@@ -222,6 +222,7 @@ def trial(
             dino_model_id=bundle.descriptor_model_id,
             axial_symmetries=bundle.axial_symmetries,
             seed_points_by_role=settings.get("seed_points_by_role"),
+            surface_models=bundle.surface_models,
         )
         output_root = Path(settings["output_root"]).expanduser()
         if output_root.exists():
