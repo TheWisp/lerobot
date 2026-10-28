@@ -34,5 +34,6 @@ not switch the camera into orbit mode, and the browser reported no page errors.
 This is an editor preview, not a validated robot motion. The saved insertion
 demo locks ring orientation to its baseline, so its accepted ring pose is marked
 predicted at every frame. The preview warns that Test cannot use this point frame
-yet. The cyan overlay also does not align with the visible ring in this frame;
-the scene renderer's pixel alignment test above does not establish pose accuracy.
+yet. The cyan measured patch is on the green ring beneath the dowel; the blue
+object farther right is a different object. This screenshot does not establish
+the accuracy of the ring's predicted orientation.
