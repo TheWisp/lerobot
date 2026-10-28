@@ -43,6 +43,8 @@ function _flashPaintObservedPhoto(frame, camera) {
 function _flashSceneOptions() {
     return {
         showSurface: document.getElementById('flash-scene-surface')?.checked,
+        showPoints: document.getElementById('flash-scene-points')?.checked,
+        pointSpacingPx: Math.max(2, Math.min(16, Number(document.getElementById('flash-scene-point-spacing')?.value || 5))),
         showProjection: document.getElementById('flash-scene-projection')?.checked,
         showDepthScene: document.getElementById('flash-scene-depth')?.checked,
         showAxes: document.getElementById('flash-scene-axes')?.checked,
@@ -92,7 +94,7 @@ async function _flashUpdateSceneFrame() {
             _flashSceneOptions(), frame.evidence);
         flashSceneView.highlight(flashHighlightedOverlay);
         const groups = Object.entries(frame.evidence?.groups || {}).map(([role, group]) =>
-            `${role}: ${group.ids.length} ${group.verified ? 'verified' : 'candidate'} group points${group.measured_this_frame === false ? ' (fit unavailable)' : ''}`).join(' · ');
+            `${role} context: ${group.ids.length} ${group.verified ? 'verified' : 'candidate'} support points${group.measured_this_frame === false ? ' (fit unavailable)' : ''}`).join(' · ');
         status.textContent = frame.evidence?.available
             ? `Rebuilt RGB-D evidence · frame ${selected.frame_index}${groups ? ` · ${groups}` : ''}`
             : `Recorded RGB-D · frame ${selected.frame_index} · no rebuilt per-frame masks`;
@@ -124,7 +126,6 @@ async function toggleFlashSceneView() {
             const evidenceResponse = await fetch(`/api/run/flash/demo/scene-evidence/status?${query}`);
             if (evidenceResponse.ok) flashReplay.sceneEvidence = await evidenceResponse.json();
             if (flashReplay.sceneEvidence?.available) {
-                document.getElementById('flash-scene-projection').checked = false;
                 const index = Number(document.getElementById('flash-tracker-scrub').value);
                 renderFlashDemoSnapshot({...flashReplay.frames[index].snapshot, ...flashReplay.geometry});
             }
@@ -135,7 +136,7 @@ async function toggleFlashSceneView() {
                 option.textContent = role;
                 select.append(option);
             }
-            const {createFlashSceneView} = await import('/static/flash_scene_view.js?v=10');
+            const {createFlashSceneView} = await import('/static/flash_scene_view.js?v=11');
             flashSceneView = createFlashSceneView(grid.querySelector('.flash-scene-canvas'), surfaces);
         }
         flashSceneMode = '3d';
@@ -1206,11 +1207,13 @@ function _flashInstallReplay(replay, imageAlt) {
             '<button type="button" onclick="flashSceneView?.focus(document.getElementById(\'flash-scene-object\').value)">Focus</button>' +
             '<button type="button" onclick="flashSceneView?.reset()">Camera</button>' +
             '<span class="flash-scene-break"></span>' +
-            '<label><input type="checkbox" id="flash-scene-surface" checked onchange="_flashUpdateSceneFrame()">Observed</label>' +
-            '<label><input type="checkbox" id="flash-scene-projection" checked onchange="_flashUpdateSceneFrame()">Pose patch</label>' +
+            '<label title="Current frame, using this frame’s mask and measured depth"><input type="checkbox" id="flash-scene-surface" checked onchange="_flashUpdateSceneFrame()">Measured surface</label>' +
+            '<label title="Current mask-and-depth samples for display; these are not tracked landmarks"><input type="checkbox" id="flash-scene-points" checked onchange="_flashUpdateSceneFrame()">Surface points</label>' +
+            '<label title="Display spacing in recorded camera pixels">Spacing <input type="number" id="flash-scene-point-spacing" min="2" max="16" step="1" value="5" onchange="_flashUpdateSceneFrame()"></label>' +
+            '<label title="Reference surface projected by the used estimate; green is the prepared skill pose, orange is a gripper-predicted held pose. It can disagree with current depth"><input type="checkbox" id="flash-scene-projection" checked onchange="_flashUpdateSceneFrame()">Pose estimate</label>' +
             '<label><input type="checkbox" id="flash-scene-depth" onchange="_flashUpdateSceneFrame()">Scene depth</label>' +
             '<label><input type="checkbox" id="flash-scene-axes" checked onchange="_flashUpdateSceneFrame()">Axes</label>' +
-            '<label><input type="checkbox" id="flash-scene-group" onchange="_flashUpdateSceneFrame()">Group points</label>' +
+            '<label title="Tracked scene context used by the group predictor; these need not lie on the object"><input type="checkbox" id="flash-scene-group" onchange="_flashUpdateSceneFrame()">Scene support</label>' +
             '<label><input type="checkbox" id="flash-scene-gripper" onchange="_flashUpdateSceneFrame()">Gripper</label></div>';
         const status = document.createElement('div');
         status.id = 'flash-scene-status';

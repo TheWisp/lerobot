@@ -2,7 +2,6 @@
 import * as THREE from '/static/vendor/three.module.js';
 import { OrbitControls } from '/static/vendor/OrbitControls.js';
 
-const observedColor = 0xe2f3f5;
 const groupColor = 0xe5b661;
 const gripperColor = 0xf2a578;
 const visionColor = 0xaadce9;
@@ -24,20 +23,20 @@ function makeReference(data) {
     geometry.setIndex(data.indices);
     const group = new THREE.Group();
     group.add(new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({
-        vertexColors: true, side: THREE.DoubleSide, transparent: true, opacity: 0.92, depthTest: false,
+        vertexColors: true, side: THREE.DoubleSide, transparent: true, opacity: 0.22, depthTest: false,
     })));
     group.add(new THREE.Points(geometry, new THREE.PointsMaterial({
-        color: observedColor, size: 2, sizeAttenuation: false, transparent: true, opacity: 0.55, depthTest: false,
+        color: 0x34d399, size: 3, sizeAttenuation: false, transparent: true, opacity: 0.9, depthTest: false,
     })));
     return {group, geometry};
 }
 
-function makeObservedSurface(runs, depth, rgba, camera) {
+function makeObservedSurface(runs, depth, rgba, camera, options) {
     const {width, height, intrinsics: k} = camera;
     const pixelCount = width * height;
     const lookup = new Int32Array(pixelCount);
     lookup.fill(-1);
-    const positions = [], colors = [], pixels = [];
+    const positions = [], colors = [], pixels = [], pointPositions = [];
     const fx = k[0][0], fy = k[1][1], cx = k[0][2], cy = k[1][2];
     for (const [start, count] of runs) {
         for (let pixel = start; pixel < start + count; pixel++) {
@@ -47,9 +46,12 @@ function makeObservedSurface(runs, depth, rgba, camera) {
             const u = pixel % width, v = Math.floor(pixel / width);
             lookup[pixel] = pixels.length;
             pixels.push(pixel);
-            positions.push((u - cx) * z / fx, -(v - cy) * z / fy, -z);
+            const x = (u - cx) * z / fx, y = -(v - cy) * z / fy;
+            positions.push(x, y, -z);
             colors.push(rgba[pixel * 4] / 255, rgba[pixel * 4 + 1] / 255,
                 rgba[pixel * 4 + 2] / 255);
+            if (u % options.pointSpacingPx === 0 && v % options.pointSpacingPx === 0)
+                pointPositions.push(x, y, -z);
         }
     }
     const faces = [];
@@ -71,9 +73,19 @@ function makeObservedSurface(runs, depth, rgba, camera) {
     geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
     geometry.setIndex(faces);
     const group = new THREE.Group();
-    group.add(new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({
+    const mesh = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({
         vertexColors: true, side: THREE.DoubleSide, depthTest: false,
-    })));
+    }));
+    mesh.visible = options.showSurface !== false;
+    group.add(mesh);
+    const pointGeometry = new THREE.BufferGeometry();
+    pointGeometry.setAttribute('position', new THREE.Float32BufferAttribute(pointPositions, 3));
+    const points = new THREE.Points(pointGeometry, new THREE.PointsMaterial({
+        color: 0x35e3ed, size: 4, sizeAttenuation: false,
+        transparent: true, opacity: 0.88, depthTest: false,
+    }));
+    points.visible = !!options.showPoints;
+    group.add(points);
     return group;
 }
 
@@ -233,8 +245,8 @@ export function createFlashSceneView(canvas, surfaces) {
         for (const [role, ref] of Object.entries(references)) {
             const used = held?.role === role ? held : snapshot.accepted?.[role];
             const observedRuns = frameEvidence?.masks_rle?.[role];
-            if (options.showSurface !== false && observedRuns?.length) {
-                const observed = makeObservedSurface(observedRuns, depth, rgba, snapshot.camera);
+            if ((options.showSurface !== false || options.showPoints) && observedRuns?.length) {
+                const observed = makeObservedSurface(observedRuns, depth, rgba, snapshot.camera, options);
                 if (observed.children[0].geometry.attributes.position.count) {
                     observed.children[0].geometry.computeBoundingSphere();
                     observedCenters[role] = observed.children[0].geometry.boundingSphere.center.clone();
@@ -246,6 +258,7 @@ export function createFlashSceneView(canvas, surfaces) {
                 const surface = ref.group.clone();
                 // A clone shares the buffers, but owns its material for this frame.
                 surface.children.forEach(child => { child.material = child.material.clone(); });
+                if (held?.role === role) surface.children[1].material.color.setHex(gripperColor);
                 setPose(surface, used.pose, baseFromCamera);
                 surface.userData = {kind: held?.role === role ? 'held' : 'accepted', role, enabled: true};
                 evidence.add(surface);
