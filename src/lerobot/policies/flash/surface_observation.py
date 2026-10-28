@@ -41,6 +41,24 @@ class SurfaceFrameFilters:
     smoothed: np.ndarray
 
 
+def depth_quality_mask(depth: np.ndarray, mask: np.ndarray, config: SurfaceObservationConfig) -> np.ndarray:
+    """Pixels inside a mask with a valid, locally continuous depth reading.
+
+    This is for scoring measured depth, not for replacing the segmentation
+    mask: uncertain boundary pixels must not create a large depth residual,
+    while the full silhouette still counts toward pose coverage.
+    """
+    if depth.shape != mask.shape or mask.dtype != bool:
+        raise ValueError("depth quality needs an aligned boolean object mask")
+    metric = np.where(np.isfinite(depth), depth, 0).astype(np.float32, copy=False)
+    margin = config.mask_margin_px
+    interior = cv2.erode(mask.astype(np.uint8), np.ones((2 * margin + 1,) * 2, np.uint8)) > 0
+    neighborhood = np.ones((config.depth_neighborhood_px,) * 2, np.uint8)
+    lower = cv2.erode(metric, neighborhood)
+    upper = cv2.dilate(metric, neighborhood)
+    return interior & (lower > 0) & (upper - lower <= config.depth_span_m)
+
+
 def prepare_surface_frame(depth: np.ndarray, config: dict) -> SurfaceFrameFilters:
     neighborhood = np.ones((config["depth_neighborhood_px"],) * 2, np.uint8)
     lower = cv2.erode(depth, neighborhood)

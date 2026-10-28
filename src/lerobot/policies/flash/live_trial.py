@@ -304,6 +304,7 @@ def trial(
             object_points_by_role=points_by_role,
             live_telemetry=telemetry,
             grasp_symmetries=bundle.axial_symmetries,
+            observation_quality=vision_config.observation,
             kinematics=kin,
             arm_joint_names=arm_names,
             gripper_joint_name="gripper",

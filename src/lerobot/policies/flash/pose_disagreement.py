@@ -26,6 +26,8 @@ class SurfaceSupport:
     masked_depth_points: int
     projected_point_mask_fraction: float
     depth_residual_p90_m: float
+    clean_depth_points: int | None = None
+    clean_depth_residual_p90_m: float | None = None
 
 
 @dataclass(frozen=True)
@@ -134,6 +136,7 @@ def surface_support(
     base_from_object: np.ndarray,
     *,
     depth_occlusion_tolerance_m: float,
+    clean_depth_mask: np.ndarray | None = None,
 ) -> SurfaceSupport:
     """Compare the frontmost projected surface on each camera ray with depth.
 
@@ -145,6 +148,12 @@ def surface_support(
     """
     if mask.shape != frame.depth.shape or mask.dtype != bool:
         raise ValueError("object mask must align with RGB-D")
+    if clean_depth_mask is not None and (
+        clean_depth_mask.shape != mask.shape
+        or clean_depth_mask.dtype != bool
+        or np.any(clean_depth_mask & ~mask)
+    ):
+        raise ValueError("clean depth mask must be inside the aligned object mask")
     if not np.isfinite(depth_occlusion_tolerance_m) or depth_occlusion_tolerance_m <= 0:
         raise ValueError("depth occlusion tolerance must be finite and positive")
     points = np.asarray(points_object_m, dtype=float)
@@ -172,11 +181,17 @@ def surface_support(
     testable = projected & ~occluded_elsewhere
     supported = testable & mask_flat & valid & (depth + depth_occlusion_tolerance_m >= front)
     residual = depth[supported] - front[supported]
+    clean_supported = supported & clean_depth_mask.ravel() if clean_depth_mask is not None else None
+    clean_residual = depth[clean_supported] - front[clean_supported] if clean_supported is not None else None
     return SurfaceSupport(
         int(testable.sum()),
         int(supported.sum()),
         float(supported.sum() / testable.sum()) if testable.any() else 0.0,
         float(np.percentile(np.abs(residual), 90)) if len(residual) else float("inf"),
+        int(clean_supported.sum()) if clean_supported is not None else None,
+        float(np.percentile(np.abs(clean_residual), 90))
+        if clean_residual is not None and len(clean_residual)
+        else None,
     )
 
 
@@ -191,6 +206,7 @@ def compare_pose_proposals(
     max_agreement_angle_rad: float,
     min_masked_depth_points: int,
     depth_occlusion_tolerance_m: float,
+    clean_depth_mask: np.ndarray | None = None,
 ) -> PoseComparison:
     """Pareto-compare surface fit and mask coverage after a task-sized pose change.
 
@@ -217,6 +233,7 @@ def compare_pose_proposals(
         points_object_m,
         candidate_pose,
         depth_occlusion_tolerance_m=depth_occlusion_tolerance_m,
+        clean_depth_mask=clean_depth_mask,
     )
     prior = surface_support(
         frame,
@@ -224,6 +241,7 @@ def compare_pose_proposals(
         points_object_m,
         prior_pose,
         depth_occlusion_tolerance_m=depth_occlusion_tolerance_m,
+        clean_depth_mask=clean_depth_mask,
     )
     if (
         candidate.masked_depth_points < min_masked_depth_points

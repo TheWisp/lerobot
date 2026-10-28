@@ -53,6 +53,7 @@ from lerobot.policies.flash.skill import (
     Relation,
     SpatialSample,
 )
+from lerobot.policies.flash.surface_observation import SurfaceObservationConfig
 from lerobot.policies.flash.trajectory import (
     AttachmentState,
     ConnectionTrajectory,
@@ -1180,6 +1181,7 @@ def test_small_held_correction_exposes_its_depth_support_even_when_accepted():
         object_points_object_m=points,
         min_visual_support_points=12,
         depth_occlusion_tolerance_m=0.005,
+        observation_quality=SurfaceObservationConfig(),
     )
     assert updater.activate(
         0.02,
@@ -1208,6 +1210,8 @@ def test_small_held_correction_exposes_its_depth_support_even_when_accepted():
     assert evidence["verdict"] == "agree"
     assert evidence["visual"]["supported_pixels"] >= 12
     assert evidence["visual"]["depth_residual_p90_m"] > evidence["depth_tolerance_m"]
+    assert evidence["visual"]["clean_depth_pixels"] >= 12
+    assert evidence["visual"]["clean_depth_residual_p90_m"] > evidence["depth_tolerance_m"]
     assert evidence["correction_accepted"]
     updater.deactivate()
     assert updater.latest_visual_evidence() is None

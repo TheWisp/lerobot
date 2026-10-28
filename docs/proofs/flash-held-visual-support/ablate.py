@@ -13,13 +13,17 @@ from pathlib import Path
 
 import numpy as np
 
-from lerobot.policies.flash.geometry import transform
+from lerobot.policies.flash.geometry import inverse, transform
 from lerobot.policies.flash.held_pose_diagnostics import _arm_pose_at
 from lerobot.policies.flash.perception import HeldAttachmentUpdater
 from lerobot.policies.flash.pose_disagreement import surface_support
+from lerobot.policies.flash.registration import DegenerateRegistrationError
 from lerobot.policies.flash.runtime import AttachmentRuntimeLimits
 from lerobot.policies.flash.sealed_demo_import import _frame, _nearest_index
+from lerobot.policies.flash.shape_registration import visible_surface_p90
+from lerobot.policies.flash.surface_observation import depth_quality_mask
 from lerobot.policies.flash.trajectory import Evidence, PoseEstimate
+from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig
 
 
 class RecordedGraspKinematics:
@@ -119,6 +123,7 @@ def evaluate(bundle: Path, rule: str, *, require_recorded_parity: bool = True) -
     grasp = _nearest_index(arm_times, annotation["grasp_time_s"])
     release = _nearest_index(arm_times, annotation["release_time_s"])
     limits = AttachmentRuntimeLimits.from_config(annotation["held_attachment"])
+    observation = VisionPipelineConfig.from_settings(annotation, backend="appearance").observation
     config = annotation.get("causal_tracking")
     min_points = config["min_inliers"] if config else annotation["registration_min_inliers"]
     tolerance = config["fit_threshold_m"] if config else annotation["registration_threshold_m"]
@@ -136,6 +141,7 @@ def evaluate(bundle: Path, rule: str, *, require_recorded_parity: bool = True) -
         object_points_object_m=model,
         min_visual_support_points=min_points,
         depth_occlusion_tolerance_m=tolerance,
+        observation_quality=observation,
         rule=rule,
     )
     selected_idx = int(annotation["grasp_reference_frame"])
@@ -174,7 +180,30 @@ def evaluate(bundle: Path, rule: str, *, require_recorded_parity: bool = True) -
             ee = _arm_pose_at(arm_times, tips, float(source_time))
             if mask is not None and ee is not None:
                 frame = _frame(root, i, intrinsics, base_from_camera, "analysis", float(source_time))
-                accepted = updater.on_pose_update(i, {role: pose}, frame=frame, mask=mask, ee_at_capture=ee)
+                clean = depth_quality_mask(frame.metric_depth(), mask, observation)
+
+                def measured_to_model(pose, current_frame, current_clean):
+                    try:
+                        return (
+                            visible_surface_p90(
+                                model,
+                                inverse(base_from_camera) @ pose,
+                                current_frame.depth,
+                                current_clean,
+                                intrinsics,
+                                current_frame.depth_m_per_unit,
+                                min_points=3,
+                            )
+                            * 1000
+                        )
+                    except DegenerateRegistrationError:
+                        return None
+
+                prior_pose = ee @ updater.last_accepted_gripper_from_object
+                comparison_mask = clean if rule == "cleaned_observation" else mask
+                accepted = updater.on_pose_update(
+                    i, {role: pose}, frame=frame, mask=comparison_mask, ee_at_capture=ee
+                )
                 evidence = updater.latest_visual_evidence()
                 if evidence is not None:
                     decisions.append(
@@ -192,6 +221,16 @@ def evaluate(bundle: Path, rule: str, *, require_recorded_parity: bool = True) -
                             if evidence["gripper"] is None
                             or evidence["gripper"]["depth_residual_p90_m"] is None
                             else evidence["gripper"]["depth_residual_p90_m"] * 1000,
+                            "visual_clean_depth_mm": None
+                            if evidence["visual"]["clean_depth_residual_p90_m"] is None
+                            else evidence["visual"]["clean_depth_residual_p90_m"] * 1000,
+                            "gripper_clean_depth_mm": None
+                            if evidence["gripper"] is None
+                            or evidence["gripper"]["clean_depth_residual_p90_m"] is None
+                            else evidence["gripper"]["clean_depth_residual_p90_m"] * 1000,
+                            "visual_measured_to_model_mm": measured_to_model(pose.pose, frame, clean),
+                            "gripper_measured_to_model_mm": measured_to_model(prior_pose, frame, clean),
+                            "clean_depth_pixels": int(clean.sum()),
                             "reason": updater.last_rejection,
                         }
                     )
@@ -252,7 +291,13 @@ if __name__ == "__main__":
     parser.add_argument("--bundle", action="append", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
-    rules = ("baseline", "prior_dominates", "supported_prior_dominates", "visual_over_tolerance")
+    rules = (
+        "baseline",
+        "prior_dominates",
+        "supported_prior_dominates",
+        "visual_over_tolerance",
+        "cleaned_observation",
+    )
     results = []
     for bundle in args.bundle:
         if not bundle.is_file():

@@ -10,6 +10,7 @@ from lerobot.policies.flash.pose_disagreement import (
     compare_pose_proposals,
     surface_support,
 )
+from lerobot.policies.flash.surface_observation import SurfaceObservationConfig, depth_quality_mask
 
 
 def test_surface_support_uses_only_frontmost_model_point_on_camera_ray():
@@ -62,6 +63,39 @@ def test_external_occluder_does_not_count_against_hidden_model_surface():
     )
     assert support.projected_points == 0
     assert support.masked_depth_points == 0
+
+
+def test_unreliable_boundary_depth_is_reported_separately_from_silhouette_coverage():
+    depth = np.ones((32, 32), dtype=np.float32)
+    mask = np.zeros_like(depth, dtype=bool)
+    mask[10:22, 10:22] = True
+    depth[16, 20] = 1.06  # A depth edge inside the segmented outline.
+    frame = RGBDFrame(
+        1,
+        np.zeros((32, 32, 3), dtype=np.uint8),
+        depth,
+        np.array([[100.0, 0, 16], [0, 100.0, 16], [0, 0, 1]]),
+        1.0,
+        np.eye(4),
+        1.0,
+        1.0,
+        "calibration",
+    )
+    points = np.array([[0.0, 0.0, 1.0], [0.04, 0.0, 1.0]])
+    raw = surface_support(frame, mask, points, np.eye(4), depth_occlusion_tolerance_m=0.005)
+    clean = surface_support(
+        frame,
+        mask,
+        points,
+        np.eye(4),
+        depth_occlusion_tolerance_m=0.005,
+        clean_depth_mask=depth_quality_mask(depth, mask, SurfaceObservationConfig()),
+    )
+    assert raw.depth_residual_p90_m > 0.05
+    assert clean.depth_residual_p90_m == raw.depth_residual_p90_m  # Control rule is unchanged.
+    assert clean.projected_point_mask_fraction == raw.projected_point_mask_fraction
+    assert clean.clean_depth_points == 1
+    assert clean.clean_depth_residual_p90_m == 0.0
 
 
 def test_equal_surface_support_does_not_claim_the_new_pose_is_better():

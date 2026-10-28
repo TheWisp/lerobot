@@ -704,6 +704,7 @@ def prepare(
                 if causal_config is not None
                 else vision_config.registration_threshold_m
             ),
+            observation_quality=vision_config.observation,
         )
         if not updater.activate(float(times[grasp]), selected, joints[grasp]):
             raise ValueError("selected grasp pose cannot seed the held attachment")

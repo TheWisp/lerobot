@@ -770,11 +770,15 @@ def test_run_flash_lists_demos_and_shows_extracted_pose_overlay(gui_page):
                                     "supported_pixels": 40,
                                     "mask_fraction": 0.4,
                                     "depth_residual_p90_m": 0.008,
+                                    "clean_depth_pixels": 28,
+                                    "clean_depth_residual_p90_m": 0.003,
                                 },
                                 "gripper": {
                                     "supported_pixels": 35,
                                     "mask_fraction": 0.5,
                                     "depth_residual_p90_m": 0.004,
+                                    "clean_depth_pixels": 27,
+                                    "clean_depth_residual_p90_m": 0.004,
                                 },
                                 "correction_accepted": True,
                             },
@@ -848,8 +852,17 @@ def test_run_flash_lists_demos_and_shows_extracted_pose_overlay(gui_page):
     assert "active" in page.locator('.tab[data-tab="run"]').get_attribute("class").split()
     assert "Pose used by skill" in page.locator("#flash-tracker-content").inner_text()
     assert "held image check" in page.locator("#flash-tracker-content").inner_text()
-    assert "reference-surface fit exceeds" in page.locator("#flash-tracker-content").inner_text()
-    assert "gripper prediction fits this image better" in page.locator("#flash-tracker-content").inner_text()
+    assert (
+        "raw depth mismatch disappears after excluding uncertain edge pixels"
+        in page.locator("#flash-tracker-content").inner_text()
+    )
+    assert (
+        "raw decision score favors the gripper prediction"
+        in page.locator("#flash-tracker-content").inner_text()
+    )
+    assert (
+        "28 reliable interior pixels, 3.0 mm depth p90" in page.locator("#flash-tracker-content").inner_text()
+    )
     assert "Current perception; not saved in skill" in page.locator("#flash-tracker-content").inner_text()
     assert "predicted" in page.locator("#flash-tracker-content").inner_text()
     assert page.get_by_role("button", name="Edit demo in 3D").is_visible()

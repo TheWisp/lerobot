@@ -91,7 +91,8 @@ the recorded attachment matrices, conflict flags and correction flags exactly
 for both demos. The alternative rules withhold an accepted correction when the
 gripper projection dominates on both mask coverage and depth residual, when
 that dominance also passes the configured depth tolerance, or whenever the
-visual residual exceeds that tolerance. The harness saves the
+visual residual exceeds that tolerance. A fifth variant replaces the full
+object mask with its reliable-depth interior for the decision. The harness saves the
 [summary](ablation_results.json) and [per-frame decisions](ablation_results_frames.csv).
 
 | Demo           | Rule                                           | Conflicted camera frames during annotated hold | Accepted direct corrections | Median visible-surface depth p90 |
@@ -100,10 +101,12 @@ visual residual exceeds that tolerance. The harness saves the
 | Dowel / ring   | Withhold gripper-dominated correction          |                                            205 |                          17 |                          7.01 mm |
 | Dowel / ring   | Withhold only when gripper is within tolerance |                                            205 |                          27 |                          7.64 mm |
 | Dowel / ring   | Require visual residual within tolerance       |                                            244 |                          11 |                         19.24 mm |
+| Dowel / ring   | Replace decision mask with reliable interior   |                                            205 |                          32 |                          7.64 mm |
 | Gamepad / cube | Current baseline                               |                                              6 |                          20 |                          3.49 mm |
 | Gamepad / cube | Withhold gripper-dominated correction          |                                              6 |                          13 |                          3.49 mm |
 | Gamepad / cube | Withhold only when gripper is within tolerance |                                              6 |                          15 |                          3.49 mm |
 | Gamepad / cube | Require visual residual within tolerance       |                                              6 |                          17 |                          3.49 mm |
+| Gamepad / cube | Replace decision mask with reliable interior   |                                              7 |                          19 |                          3.65 mm |
 
 The dowel's lower image residual under the first alternative is misleading:
 withholding five early small corrections changes the gripper prior enough that
@@ -117,3 +120,43 @@ it has not been integrated into the runtime. It demonstrates that a single
 instantaneous score or a stricter threshold is not a supported fix. We need
 better view coverage and temporal evidence, then a benchmark with independent
 task-point/axis checks before changing the active policy.
+
+## Depth-edge audit
+
+The original comparison sampled raw depth wherever a projected reference point
+landed inside the object mask. A mask can include pixels at a depth jump. Those
+pixels can report the background behind the object and make a plausible pose
+appear tens of millimetres in front of the measured surface. The
+[frame-303 image](gamepad-frame303-depth-edge.png) marks this on the held
+gamepad's right edge. Using the pipeline's existing mask-interior and local
+depth-continuity settings, **only for the depth residual**, gives:
+
+| Demo frame  | Visual raw depth p90 | Visual reliable-interior p90 | Gripper raw depth p90 | Gripper reliable-interior p90 |
+| ----------- | -------------------: | ---------------------------: | --------------------: | ----------------------------: |
+| Gamepad 303 |             61.96 mm |                      1.51 mm |              58.83 mm |                       1.71 mm |
+| Gamepad 310 |             41.62 mm |                      2.56 mm |               3.80 mm |                       2.62 mm |
+| Dowel 291   |              5.85 mm |                      5.04 mm |              74.98 mm |                       4.82 mm |
+
+The dowel result is consequential: frame 291 ended the v6-style conflict
+because raw depth strongly favored the visual pose. On reliable interior
+pixels, the two hypotheses are effectively tied. The measured-current-surface
+to reference-model check favors visual by 3.53 versus 5.27 mm, but the sparse
+first-view model cannot certify a hidden tip or full orientation. We therefore
+cannot claim the frame-291 correction was accurate just because it cleared a
+conflict. Replacing the full mask in the decision rule is also wrong: it
+shrinks silhouette coverage, and the offline ablation leaves 205 dowel camera
+frames conflicted and raises the gamepad from 6 to 7. New preparations and
+live recordings record reliable-interior depth alongside the raw decision
+score and show both in the same replay view; older immutable bundles cannot
+acquire this evidence retroactively. This **does not change control decisions**. The diagnostic
+preparation took a median 1.24 ms per held observation on the recorded
+gamepad frames. The next rule needs a temporally consistent comparison with
+independent support, not a single-frame edge-filter threshold.
+
+The local `flash-dowel-ring-20261028-depth-audit-v11` and
+`flash-gamepad-cube-20261028-depth-audit-v11` preparations contain the new
+per-frame evidence for playback. Both were regenerated from the same raw demos
+and annotations. After normalizing the prepared-version name, each v11 skill
+is identical to v10; attachment transforms, conflict flags, correction flags
+and visual-ambiguity flags also match exactly. The replay loader exposes the
+new score on the matching RGB-D frame (dowel 291 and gamepad 303 checked).

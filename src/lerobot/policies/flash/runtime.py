@@ -26,6 +26,7 @@ from .progress import Phase, Verdict
 from .recording import RecordedTick, TickRecordAssembler
 from .session import FlashSession, PoseChange
 from .skill import AttachmentAction, FlashSkill, Relation
+from .surface_observation import SurfaceObservationConfig
 from .symmetry import AxialSymmetry
 from .trajectory import PoseEstimate
 
@@ -139,6 +140,7 @@ class FlashRuntime:
         object_points_by_role: dict[str, np.ndarray] | None = None,
         live_telemetry: FlashLiveTelemetry | None = None,
         grasp_symmetries: tuple[AxialSymmetry, ...] = (),
+        observation_quality: SurfaceObservationConfig | None = None,
     ) -> None:
         self._validate_bindings(skill, references)
         self.skill = skill
@@ -192,6 +194,7 @@ class FlashRuntime:
                 depth_occlusion_tolerance_m=(
                     causal_tracking.fit_threshold_m if causal_tracking is not None else None
                 ),
+                observation_quality=observation_quality,
             )
             for transition in skill.attachment_transitions
         }

@@ -15,6 +15,7 @@ from .trajectory import AttachmentState, Evidence, PoseEstimate
 
 if TYPE_CHECKING:
     from .pose_disagreement import PoseComparison, SurfaceSupport
+    from .surface_observation import SurfaceObservationConfig
 
 
 @dataclass(frozen=True)
@@ -392,6 +393,7 @@ class HeldAttachmentUpdater:
         object_points_object_m: np.ndarray | None = None,
         min_visual_support_points: int = 3,
         depth_occlusion_tolerance_m: float | None = None,
+        observation_quality: SurfaceObservationConfig | None = None,
     ) -> None:
         if not role or not reference_version or not arm_joint_names:
             raise ValueError("held attachment needs a role, object frame and arm joints")
@@ -429,6 +431,7 @@ class HeldAttachmentUpdater:
             raise ValueError("held attachment needs at least three measured surface points")
         self.min_visual_support_points = min_visual_support_points
         self.depth_occlusion_tolerance_m = depth_occlusion_tolerance_m
+        self.observation_quality = observation_quality
         if depth_occlusion_tolerance_m is not None and (
             not np.isfinite(depth_occlusion_tolerance_m) or depth_occlusion_tolerance_m <= 0
         ):
@@ -536,6 +539,17 @@ class HeldAttachmentUpdater:
             self._last_visual_correction_accepted = False
             candidate = inverse(ee) @ held.pose
             prior = self._estimate.gripper_from_object
+            clean_depth_mask = None
+            if (
+                frame is not None
+                and mask is not None
+                and self.observation_quality is not None
+                and self.object_points_object_m is not None
+                and self.depth_occlusion_tolerance_m is not None
+            ):
+                from .surface_observation import depth_quality_mask
+
+                clean_depth_mask = depth_quality_mask(frame.metric_depth(), mask, self.observation_quality)
             if (
                 prior is None
                 and frame is not None
@@ -554,6 +568,7 @@ class HeldAttachmentUpdater:
                         self.object_points_object_m,
                         held.pose,
                         depth_occlusion_tolerance_m=self.depth_occlusion_tolerance_m,
+                        clean_depth_mask=clean_depth_mask,
                     ),
                 )
             if prior is not None:
@@ -579,6 +594,7 @@ class HeldAttachmentUpdater:
                         max_agreement_angle_rad=self.max_update_turn_rad,
                         min_masked_depth_points=self.min_visual_support_points,
                         depth_occlusion_tolerance_m=self.depth_occlusion_tolerance_m,
+                        clean_depth_mask=clean_depth_mask,
                     )
                     self._last_visual_comparison = (frame.frame_id, held.source_time_s, comparison)
                 relative = inverse(prior) @ candidate
@@ -687,6 +703,8 @@ class HeldAttachmentUpdater:
                 "supported_pixels": value.masked_depth_points,
                 "mask_fraction": value.projected_point_mask_fraction,
                 "depth_residual_p90_m": float(residual) if np.isfinite(residual) else None,
+                "clean_depth_pixels": value.clean_depth_points,
+                "clean_depth_residual_p90_m": value.clean_depth_residual_p90_m,
             }
 
         if item is not None:

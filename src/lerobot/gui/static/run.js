@@ -845,12 +845,21 @@ function _flashHeldVisualEvidence(evidence) {
     const score = support => {
         const pixels = Number(support?.supported_pixels || 0);
         const residual = support?.depth_residual_p90_m;
-        const depth = residual == null ? 'no depth fit' : `${(Number(residual) * 1000).toFixed(1)} mm depth p90`;
-        return `${pixels} pixels, ${depth}`;
+        const depth = residual == null ? 'no raw depth fit' : `${(Number(residual) * 1000).toFixed(1)} mm raw depth p90`;
+        const clean = support?.clean_depth_residual_p90_m;
+        const cleanPixels = support?.clean_depth_pixels;
+        const reliable = cleanPixels == null ? '' : clean == null
+            ? `; ${cleanPixels} reliable interior pixels, no depth fit`
+            : `; ${cleanPixels} reliable interior pixels, ${(Number(clean) * 1000).toFixed(1)} mm depth p90`;
+        return `${pixels} pixels, ${depth}${reliable}`;
     };
     const tolerance = evidence.depth_tolerance_m;
     const visualResidual = evidence.visual?.depth_residual_p90_m;
-    const exceeds = tolerance != null && visualResidual != null && visualResidual > tolerance;
+    const cleanResidual = evidence.visual?.clean_depth_residual_p90_m;
+    const exceeds = tolerance != null && (cleanResidual ?? visualResidual) != null &&
+        (cleanResidual ?? visualResidual) > tolerance;
+    const edgeAffected = tolerance != null && visualResidual != null && cleanResidual != null &&
+        visualResidual > tolerance && cleanResidual <= tolerance;
     const visualCoverage = evidence.visual?.mask_fraction;
     const gripperCoverage = evidence.gripper?.mask_fraction;
     const gripperResidual = evidence.gripper?.depth_residual_p90_m;
@@ -859,13 +868,16 @@ function _flashHeldVisualEvidence(evidence) {
         gripperCoverage >= visualCoverage && gripperResidual <= visualResidual &&
         (gripperCoverage > visualCoverage || gripperResidual < visualResidual);
     const decision = evidence.correction_accepted ? 'Visual correction applied' : 'Visual correction withheld';
-    const warning = exceeds ? ' · reference-surface fit exceeds the configured depth tolerance' : '';
+    const warning = exceeds ? (cleanResidual == null
+        ? ' · raw reference-surface fit exceeds the configured depth tolerance'
+        : ' · reliable-surface fit exceeds the configured depth tolerance') :
+        edgeAffected ? ' · raw depth mismatch disappears after excluding uncertain edge pixels' : '';
     const preference = evidence.correction_accepted && gripperFitsBetter
-        ? ' · gripper prediction fits this image better' : '';
+        ? ' · raw decision score favors the gripper prediction' : '';
     return `<div class="flash-tracker-comparison"><strong>${_esc(evidence.role)} · held image check</strong>` +
         `<small>Camera frame ${_esc(String(evidence.frame_id))} · ${decision}${warning}${preference}</small>` +
         `<small>Visual: ${score(evidence.visual)} · gripper prediction: ${evidence.gripper ? score(evidence.gripper) : 'not available'}. ` +
-        'These are visible-surface checks, not a measured object-pose error.</small></div>';
+        'Control still uses the raw score; the reliable-interior score is diagnostic. Neither measures hidden contact-pose error.</small></div>';
 }
 
 function renderFlashSnapshot(snapshot, mode = 'Live') {

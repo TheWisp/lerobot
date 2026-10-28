@@ -326,6 +326,8 @@ def _surface_support_json(support: SurfaceSupport) -> dict[str, int | float | No
         "depth_residual_p90_m": (
             support.depth_residual_p90_m if math.isfinite(support.depth_residual_p90_m) else None
         ),
+        "clean_depth_points": support.clean_depth_points,
+        "clean_depth_residual_p90_m": support.clean_depth_residual_p90_m,
     }
 
 
@@ -335,6 +337,8 @@ def _surface_support_from_json(item: dict) -> SurfaceSupport:
         item["masked_depth_points"],
         item["projected_point_mask_fraction"],
         item["depth_residual_p90_m"] if item["depth_residual_p90_m"] is not None else float("inf"),
+        item.get("clean_depth_points"),
+        item.get("clean_depth_residual_p90_m"),
     )
 
 
