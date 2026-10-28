@@ -69,6 +69,7 @@ def analyze(result_path: Path, audit_path: Path, horizons_s: list[float]) -> dic
                 continue
             future = measurements[future_index]
             measured = np.asarray(future["tracked_surface_axis_gripper"])
+            source_measured = np.asarray(item["tracked_surface_axis_gripper"])
             candidate = np.asarray(item["proposals"]["vision_candidate"]["axis_gripper"])
             gripper = np.asarray(item["proposals"]["gripper_fallback"]["axis_gripper"])
             rows.append(
@@ -78,6 +79,7 @@ def analyze(result_path: Path, audit_path: Path, horizons_s: list[float]) -> dic
                     "actual_horizon_s": future["source_time_s"] - item["source_time_s"],
                     "vision_gap_deg": gap_deg(candidate, measured),
                     "gripper_gap_deg": gap_deg(gripper, measured),
+                    "partial_axis_gap_deg": gap_deg(source_measured, measured),
                     "source_split_vote": split_vote(item),
                 }
             )
@@ -106,6 +108,14 @@ def analyze(result_path: Path, audit_path: Path, horizons_s: list[float]) -> dic
                 "median_gripper_gap_deg": float(np.median([item["gripper_gap_deg"] for item in rows]))
                 if rows
                 else None,
+                "median_partial_axis_gap_deg": float(
+                    np.median([item["partial_axis_gap_deg"] for item in rows])
+                )
+                if rows
+                else None,
+                "partial_axis_closer_than_gripper_frames": sum(
+                    item["partial_axis_gap_deg"] < item["gripper_gap_deg"] for item in rows
+                ),
                 "split_vote_results": vote_results,
                 "samples": rows,
             }

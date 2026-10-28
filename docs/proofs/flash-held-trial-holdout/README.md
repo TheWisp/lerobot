@@ -47,6 +47,25 @@ The [future-axis check](audit_future_axis.py) compares each proposal's direction
 
 This strengthens the case that the first attempt's rejected direction is useful beyond its source image, while the second still supplies no general rule to favor vision. Adjacent masks and depth errors can be correlated; the check does not validate position, end identity, contact-tip accuracy, or physical outcome.
 
+The same future check can carry only the **direction measured from the visible
+surface** at the source frame into the measured gripper frame. It makes no
+claim about the dowel's center, either end, or rotation about that direction.
+At a 0.6-second look-ahead it was closer to the later visible direction than
+the saved gripper prediction in 93/99 and 142/145 source frames, respectively:
+
+| Attempt  | Source frames | Median partial-direction gap | Median gripper-prediction gap |
+| -------- | ------------: | ---------------------------: | ----------------------------: |
+| 20:33:10 |            99 |                         7.3° |                         18.2° |
+| 20:18:38 |           145 |                         5.2° |                         13.7° |
+
+The source frames overlap heavily. Grouping them into non-overlapping
+0.6-second source-time blocks gives a positive median directional improvement
+in 11/11 and 13/13 blocks. These are still only two trials of the same object,
+and the source and future directions share a camera, mask and depth pipeline.
+This is evidence to test a **partial orientation constraint** separately from
+full-pose correction; it does not establish a calibrated error bound or justify
+moving the hidden insertion tip in control.
+
 The surface pipeline already divides its spatial samples into interleaved fit and validation tiles. For each source image, we also compare candidate and gripper directions with the principal direction measured from **each half separately**. A proposal gets a shadow vote only when it is closer in both halves; otherwise the vote is ambiguous. At the 0.6-second future check:
 
 | Attempt  | Both halves favor | Source frames | Voted source predicts the later direction better |
