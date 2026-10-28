@@ -107,7 +107,13 @@ That command is a compatibility entry point; the importer is
 
 New regular LeRobot episodes have a separate, model-neutral skill compiler in
 [`compiler.py`](compiler.py): it takes dataset frames, role-indexed pose
-sidecars and explicit interval annotations. The sealed importer is an adapter
+sidecars and explicit interval annotations. Start-relative intervals need no
+object pose; generated connections use their endpoint poses and estimate speed
+from the recorded path, while demonstrated intervals preserve every frame.
+Intervals must form a continuous timeline, and a push can compile without a
+grasp or attachment event. Compilation reads only timestamp, robot state and
+action columns from a regular dataset; RGB-D decoding remains in perception.
+The sealed importer is an adapter
 for the historical SO-107 recording layout and its one-held/one-target
 annotation. It should not become the general demo schema; the Run → FLASH
 editor currently prepares that sealed layout only.

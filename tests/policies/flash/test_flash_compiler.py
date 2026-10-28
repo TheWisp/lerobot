@@ -18,7 +18,7 @@ from lerobot.policies.flash.skill import (
     MotionMode,
     Relation,
 )
-from lerobot.policies.flash.trajectory import Evidence, PoseEstimate
+from lerobot.policies.flash.trajectory import Evidence, PoseEstimate, spatial_goal
 
 
 def pose(x):
@@ -99,13 +99,13 @@ def test_compiles_timing_speed_and_reference_version_from_dataset(tmp_path):
     interval = skill.intervals[0]
     assert interval.speed_m_s == pytest.approx(0.1)
     assert interval.reference_version == "object-v1"
-    assert [sample.source_frame_index for sample in interval.samples] == [0, 1, 2]
+    assert [sample.source_frame_index for sample in interval.samples] == [0, 2]
     assert interval.samples[1].gripper == 3.0
-    assert interval.samples[1].demo_ee[0, 3] == pytest.approx(0.05)
+    assert interval.samples[1].demo_ee[0, 3] == pytest.approx(0.1)
     path = tmp_path / "flash_skill.json"
     skill.save(path)
     restored = FlashSkill.load(path)
-    assert restored.intervals[0].samples[1].source_frame_index == 1
+    assert restored.intervals[0].samples[1].source_frame_index == 2
     assert restored.intervals[0].reference_version == "object-v1"
 
 
@@ -122,7 +122,143 @@ def test_compiles_bare_joint_names_from_selected_episode():
             IntervalAnnotation("carry", 0, 2, MotionMode.CONNECTION, Relation.EE_TO_OBJECT, "object"),
         ),
     )
-    assert skill.intervals[0].samples[2].demo_ee[0, 3] == pytest.approx(0.1)
+    assert skill.intervals[0].samples[1].demo_ee[0, 3] == pytest.approx(0.1)
+
+
+def test_push_timeline_compiles_without_object_pose_during_start_motion_or_attachment():
+    poses = tracks()
+    del poses[0]
+    skill = compile_skill(
+        dataset=FakeDataset(),
+        source_repo_id="demo/data",
+        source_episode=1,
+        kinematics=FakeKinematics(),
+        arm_joint_names=("arm",),
+        gripper_joint_name="gripper",
+        poses_by_frame=poses,
+        annotations=(
+            IntervalAnnotation("approach", 0, 1, MotionMode.CONNECTION, Relation.EE_TO_START, "start"),
+            IntervalAnnotation("push", 1, 2, MotionMode.DEMONSTRATED, Relation.EE_TO_OBJECT, "object"),
+        ),
+    )
+    assert skill.attachment_transitions == ()
+    assert [interval.name for interval in skill.intervals] == ["approach", "push"]
+    approach, push = skill.intervals
+    assert [sample.source_frame_index for sample in approach.samples] == [0, 1]
+    assert [sample.source_frame_index for sample in push.samples] == [1, 2]
+    assert all(sample.reference_evidence == "recorded_start" for sample in approach.samples)
+    np.testing.assert_allclose(approach.samples[1].demo_reference, pose(0))
+    np.testing.assert_allclose(spatial_goal(approach, approach.samples[-1], pose(0.2), None), pose(0.25))
+
+
+def test_connection_needs_pose_at_endpoints_but_not_during_free_motion():
+    poses = tracks()
+    del poses[1]
+    skill = compile_skill(
+        dataset=FakeDataset(),
+        source_repo_id="demo/data",
+        source_episode=1,
+        kinematics=FakeKinematics(),
+        arm_joint_names=("arm",),
+        gripper_joint_name="gripper",
+        poses_by_frame=poses,
+        annotations=(
+            IntervalAnnotation("transport", 0, 2, MotionMode.CONNECTION, Relation.EE_TO_OBJECT, "object"),
+        ),
+    )
+    assert [sample.source_frame_index for sample in skill.intervals[0].samples] == [0, 2]
+    assert skill.intervals[0].speed_m_s == pytest.approx(0.1)
+
+
+def test_connection_speed_uses_recorded_travel_not_endpoint_displacement():
+    class BacktrackingDataset(FakeDataset):
+        def episode_rows(self, episode):
+            assert episode == 1
+            return 0, 4
+
+        def __getitem__(self, index):
+            joint = (0, 10, 0, 10)[index]
+            return {
+                "timestamp": float(index),
+                "observation.state": np.array([joint, 2.0]),
+                "action": np.array([joint, 3.0]),
+            }
+
+    skill = compile_skill(
+        dataset=BacktrackingDataset(),
+        source_repo_id="demo/data",
+        source_episode=1,
+        kinematics=FakeKinematics(),
+        arm_joint_names=("arm",),
+        gripper_joint_name="gripper",
+        poses_by_frame={},
+        annotations=(IntervalAnnotation("free", 0, 3, MotionMode.CONNECTION, Relation.EE_TO_START, "start"),),
+    )
+    assert len(skill.intervals[0].samples) == 2
+    assert skill.intervals[0].speed_m_s == pytest.approx(0.1)
+
+
+def test_compiler_reads_only_state_action_and_timestamp_columns_when_available():
+    class StateOnlyDataset(FakeDataset):
+        def __getitem__(self, index):
+            raise AssertionError("decoding video for skill compilation is unnecessary")
+
+        def select_columns(self, names):
+            assert names == ["timestamp", "observation.state", "action"]
+            return FakeDataset()
+
+    skill = compile_skill(
+        dataset=StateOnlyDataset(),
+        source_repo_id="demo/data",
+        source_episode=1,
+        kinematics=FakeKinematics(),
+        arm_joint_names=("arm",),
+        gripper_joint_name="gripper",
+        poses_by_frame={},
+        annotations=(IntervalAnnotation("free", 0, 2, MotionMode.CONNECTION, Relation.EE_TO_START, "start"),),
+    )
+    assert [sample.source_frame_index for sample in skill.intervals[0].samples] == [0, 2]
+
+
+def test_connection_rejects_an_event_in_an_unreplayed_middle_frame():
+    with pytest.raises(ValueError, match="events belong at the endpoint"):
+        compile_skill(
+            dataset=FakeDataset(),
+            source_repo_id="demo/data",
+            source_episode=1,
+            kinematics=FakeKinematics(),
+            arm_joint_names=("arm",),
+            gripper_joint_name="gripper",
+            poses_by_frame=tracks(),
+            annotations=(
+                IntervalAnnotation(
+                    "travel",
+                    0,
+                    2,
+                    MotionMode.CONNECTION,
+                    Relation.EE_TO_OBJECT,
+                    "object",
+                    events=(ActionEventAnnotation(1, "close"),),
+                ),
+            ),
+        )
+
+
+def test_timeline_rejects_an_unmarked_gap_between_intervals():
+    with pytest.raises(ValueError, match="continuous, ordered timeline"):
+        compile_skill(
+            dataset=FakeDataset(),
+            source_repo_id="demo/data",
+            source_episode=1,
+            kinematics=FakeKinematics(),
+            arm_joint_names=("arm",),
+            gripper_joint_name="gripper",
+            poses_by_frame=tracks(),
+            annotations=(
+                IntervalAnnotation("first", 0, 1, MotionMode.DEMONSTRATED, Relation.EE_TO_OBJECT, "object"),
+                IntervalAnnotation("last", 2, 3, MotionMode.DEMONSTRATED, Relation.EE_TO_OBJECT, "object"),
+            ),
+        )
 
 
 def test_predicted_demo_pose_requires_explicit_annotation():

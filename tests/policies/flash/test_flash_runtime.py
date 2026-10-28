@@ -192,6 +192,47 @@ def test_motor_epoch_starts_after_pose_readiness(monkeypatch):
     assert recorder.finished == ("unknown", "test completed")
 
 
+def test_start_relative_first_interval_waits_for_first_actual_object(monkeypatch):
+    object_interval = replace(
+        skill().intervals[0],
+        samples=(SpatialSample(1, identity(), identity()), SpatialSample(2, identity(), identity())),
+    )
+    world_interval = Interval(
+        "approach",
+        MotionMode.CONNECTION,
+        Relation.EE_TO_START,
+        "start",
+        (
+            SpatialSample(0, identity(), identity()),
+            SpatialSample(1, identity(), identity()),
+        ),
+        speed_m_s=0.1,
+        reference_version="start-v1",
+    )
+    test_skill = FlashSkill("demo", 0, (world_interval, object_interval))
+    attempt = runtime(test_skill, (reference("target", "target-v1"),), FakeRecorder())
+    waited = []
+
+    def wait_ready(roles, *, max_pose_age_s, timeout_s):
+        waited.append(roles)
+        attempt.poses.publish(
+            (
+                PoseEstimate(
+                    "target", identity(), 1.0, 1.0, Evidence.OBSERVED, "target-v1", (True,) * 3, (True,) * 3
+                ),
+            )
+        )
+
+    monkeypatch.setattr(attempt.perception, "start", lambda timeout_s: None)
+    monkeypatch.setattr(attempt.perception, "wait_ready", wait_ready)
+    monkeypatch.setattr(attempt.perception, "close", lambda: None)
+    monkeypatch.setattr(attempt.planner, "start", lambda: None)
+    monkeypatch.setattr(attempt.planner, "close", lambda: None)
+    attempt.start(pose_start_timeout_s=2, first_pose_timeout_s=2)
+    assert waited == [("target",)]
+    attempt.close("unknown", "test completed")
+
+
 def test_startup_selects_declared_grasp_symmetry_before_motor_epoch(monkeypatch):
     symmetry = AxialSymmetry("target", np.array([0.0, 0.0, 1.0]), np.zeros(3), identity())
     attempt = runtime(

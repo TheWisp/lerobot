@@ -154,6 +154,7 @@ def _interval_reference(
     carrying: bool,
     held: str,
     target: str,
+    available_roles: set[str] | None = None,
 ) -> tuple[str, Relation, bool]:
     """Use the authored participant, except during an explicit start-anchored interval."""
     selected = end_key.get("frame")
@@ -164,9 +165,9 @@ def _interval_reference(
         # Old keypoint files sometimes omitted frame; retain their previous
         # timing-based interpretation rather than changing archived skills.
         selected = target if carrying or first >= grasp else held
-    if selected not in (held, target):
+    if selected not in (available_roles if available_roles is not None else {held, target}):
         raise ValueError(f"keypoint reference {selected!r} is not a prepared object")
-    relation = Relation.HELD_TO_TARGET if carrying and selected == target else Relation.EE_TO_OBJECT
+    relation = Relation.HELD_TO_TARGET if carrying and selected != held else Relation.EE_TO_OBJECT
     return selected, relation, False
 
 
@@ -621,6 +622,7 @@ def prepare(
             carrying=carrying,
             held=held,
             target=target,
+            available_roles=set(prompts),
         )
         carrying = relation == Relation.HELD_TO_TARGET
         indices = range(first, last + 1) if demonstrated else (first, last)

@@ -150,6 +150,15 @@ def compile_skill(
     joint_indices = [_joint_index(state_names, name, "observation.state") for name in arm_joint_names]
     gripper_index = _joint_index(action_names, gripper_joint_name, "action")
     first_row, episode_length = dataset.episode_rows(source_episode)
+    select_columns = getattr(dataset, "select_columns", None)
+    state_rows = (
+        select_columns(["timestamp", "observation.state", "action"]) if callable(select_columns) else dataset
+    )
+    if any(
+        left.last_frame != right.first_frame
+        for left, right in zip(annotations, annotations[1:], strict=False)
+    ):
+        raise ValueError("FLASH intervals must form a continuous, ordered timeline")
     intervals = []
     for annotation in annotations:
         samples = []
@@ -157,11 +166,39 @@ def compile_skill(
         events_by_frame = {event.frame_index: event for event in annotation.events}
         if annotation.last_frame >= episode_length:
             raise ValueError(f"{annotation.name}: frame bound exceeds episode {source_episode}")
+        if annotation.mode == MotionMode.CONNECTION and any(
+            event.frame_index != annotation.last_frame for event in annotation.events
+        ):
+            raise ValueError(f"{annotation.name}: generated connection events belong at the endpoint")
+        if annotation.relation == Relation.EE_TO_START:
+            versions[annotation.reference_role] = f"start:{source_repo_id}:{source_episode}:{annotation.name}"
+        start_reference = None
+        previous_ee = None
+        path_length_m = 0.0
         for frame_index in range(annotation.first_frame, annotation.last_frame + 1):
-            frame = dataset[first_row + frame_index]
+            frame = state_rows[first_row + frame_index]
+            state = np.asarray(frame["observation.state"], dtype=float).reshape(-1)
+            ee = transform(kinematics.forward_kinematics(state[joint_indices]))
+            if start_reference is None:
+                start_reference = ee
+            if previous_ee is not None:
+                path_length_m += float(np.linalg.norm(ee[:3, 3] - previous_ee[:3, 3]))
+            previous_ee = ee
+            # Generated connections use only their endpoint at execution. The
+            # middle frames establish demonstrated travel speed, not a required
+            # sequence of object poses or gripper commands.
+            if annotation.mode == MotionMode.CONNECTION and frame_index not in (
+                annotation.first_frame,
+                annotation.last_frame,
+            ):
+                continue
             estimates = poses_by_frame.get(frame_index, {})
-            reference = _measured_pose(
-                estimates, annotation.reference_role, frame_index, annotation.allow_predicted_demo_pose
+            reference = (
+                None
+                if annotation.relation == Relation.EE_TO_START
+                else _measured_pose(
+                    estimates, annotation.reference_role, frame_index, annotation.allow_predicted_demo_pose
+                )
             )
             held = (
                 _measured_pose(
@@ -176,19 +213,17 @@ def compile_skill(
                 prior = versions.setdefault(estimate.role, estimate.reference_version)
                 if prior != estimate.reference_version:
                     raise ValueError(f"frame {frame_index}: {estimate.role} object frame version changed")
-            state = np.asarray(frame["observation.state"], dtype=float).reshape(-1)
             action = np.asarray(frame["action"], dtype=float).reshape(-1)
-            joints = state[joint_indices]
             event = events_by_frame.get(frame_index)
             samples.append(
                 SpatialSample(
                     time_s=float(frame["timestamp"]),
-                    demo_ee=transform(kinematics.forward_kinematics(joints)),
-                    demo_reference=reference.pose,
+                    demo_ee=ee,
+                    demo_reference=start_reference if reference is None else reference.pose,
                     demo_held=held.pose if held is not None else None,
                     gripper=float(action[gripper_index]),
                     source_frame_index=frame_index,
-                    reference_evidence=reference.evidence.value,
+                    reference_evidence=("recorded_start" if reference is None else reference.evidence.value),
                     held_evidence=held.evidence.value if held is not None else None,
                     event_id=event.event_id if event is not None else None,
                     requires_milestone=event.requires_milestone if event is not None else None,
@@ -196,11 +231,7 @@ def compile_skill(
             )
         speed = annotation.speed_m_s
         if annotation.mode == MotionMode.CONNECTION and speed is None:
-            length = sum(
-                float(np.linalg.norm(b.demo_ee[:3, 3] - a.demo_ee[:3, 3]))
-                for a, b in zip(samples, samples[1:], strict=False)
-            )
-            speed = length / (samples[-1].time_s - samples[0].time_s)
+            speed = path_length_m / (samples[-1].time_s - samples[0].time_s)
             if speed <= 0:
                 raise ValueError(f"{annotation.name}: cannot infer speed from a stationary demo interval")
         intervals.append(

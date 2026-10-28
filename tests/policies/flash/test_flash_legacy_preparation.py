@@ -172,6 +172,43 @@ def test_authored_reference_wins_over_grasp_timing_when_not_start_anchored():
     assert during_carry == ("tool", Relation.EE_TO_OBJECT, False)
 
 
+def test_additional_tracked_object_can_anchor_a_key_frame():
+    roles = {"tool", "receiver", "moving_fixture"}
+    before = _interval_reference(
+        first=20,
+        grasp=80,
+        end_key={"frame": "moving_fixture", "move": "line"},
+        start_anchored=False,
+        carrying=False,
+        held="tool",
+        target="receiver",
+        available_roles=roles,
+    )
+    while_carrying = _interval_reference(
+        first=120,
+        grasp=80,
+        end_key={"frame": "moving_fixture", "move": "follow"},
+        start_anchored=False,
+        carrying=True,
+        held="tool",
+        target="receiver",
+        available_roles=roles,
+    )
+    assert before == ("moving_fixture", Relation.EE_TO_OBJECT, False)
+    assert while_carrying == ("moving_fixture", Relation.HELD_TO_TARGET, False)
+    with pytest.raises(ValueError, match="not a prepared object"):
+        _interval_reference(
+            first=20,
+            grasp=80,
+            end_key={"frame": "unknown", "move": "line"},
+            start_anchored=False,
+            carrying=False,
+            held="tool",
+            target="receiver",
+            available_roles=roles,
+        )
+
+
 def test_start_anchor_still_overrides_old_keypoint_reference():
     assert _interval_reference(
         first=80,

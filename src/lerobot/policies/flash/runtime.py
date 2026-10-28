@@ -358,12 +358,16 @@ class FlashRuntime:
                 self._causal_started = True
             self.perception.start(timeout_s=pose_start_timeout_s)
             self._perception_started = True
-            first_role = self.skill.intervals[0].reference_role
-            self.perception.wait_ready(
-                (first_role,),
-                max_pose_age_s=self.planner.planner.limits.max_pose_age_s,
-                timeout_s=first_pose_timeout_s,
+            first_object_interval = next(
+                (interval for interval in self.skill.intervals if interval.relation != Relation.EE_TO_START),
+                None,
             )
+            if first_object_interval is not None:
+                self.perception.wait_ready(
+                    (first_object_interval.reference_role,),
+                    max_pose_age_s=self.planner.planner.limits.max_pose_age_s,
+                    timeout_s=first_pose_timeout_s,
+                )
             # A demonstration may use more objects after the grasp. Establish
             # every referenced object frame before starting irreversible motion;
             # a support-constrained pose can be predicted in unconstrained axes.
@@ -411,8 +415,10 @@ class FlashRuntime:
                 else:
                     raise RuntimeError("causal scene tracking did not catch up to the live camera")
             _, first_poses = self.poses.snapshot()
-            if first_poses[first_role].reference_version != self.skill.intervals[0].reference_version:
-                raise ValueError(f"{first_role}: live pose does not use the demonstrated object frame")
+            if first_object_interval is not None:
+                first_role = first_object_interval.reference_role
+                if first_poses[first_role].reference_version != first_object_interval.reference_version:
+                    raise ValueError(f"{first_role}: live pose does not use the demonstrated object frame")
             if self.coordinator.grasp_symmetries:
                 initial = self.session.motor.robot.get_state_observation()
                 self.coordinator.prepare_grasp_choices(
