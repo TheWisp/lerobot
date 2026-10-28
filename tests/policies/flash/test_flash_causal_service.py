@@ -1,5 +1,6 @@
 """A delayed pose anchor must replay against its own RGB-D frame."""
 
+import itertools
 import time
 from threading import Event
 
@@ -197,6 +198,58 @@ def test_late_older_observation_rechecks_a_newer_direct_fit_against_its_point_hi
     assert late_order.last_direct_observation_s == source_order.last_direct_observation_s
     assert late_decisions[-1].frame_id == 2
     assert late_decisions[-1].outcome == "replayed_direct_point_unresolved"
+
+
+def test_multiple_delayed_pose_jobs_converge_to_the_same_camera_order_belief():
+    """Job completion order cannot decide which of several source-frame fits wins."""
+    image = np.random.default_rng(61).integers(0, 256, (96, 96), dtype=np.uint8)
+    frames = [
+        frame(cv2.warpAffine(image, np.float32([[1, 0, 2 * index], [0, 1, 0]]), (96, 96)), index)
+        for index in range(8)
+    ]
+    mask = np.zeros((96, 96), dtype=bool)
+    mask[20:76, 20:76] = True
+    points = np.array([[x, y, 1.0] for x in np.linspace(-0.2, 0.2, 15) for y in np.linspace(-0.2, 0.2, 15)])
+    anchors = {}
+    for index, error_m in ((0, 0.0), (2, 0.002), (4, 0.06), (6, 0.003)):
+        pose = np.eye(4)
+        pose[0, 3] = 0.02 * index + error_m
+        anchors[index] = _Anchor(
+            index,
+            (
+                PoseEstimate(
+                    "object", pose, index / 30, index / 30, Evidence.OBSERVED, "v1", (True,) * 3, (True,) * 3
+                ),
+            ),
+            {"object": mask},
+        )
+
+    def run(order):
+        store = LatestPoseStore()
+        service = CausalPoseService(store, history_frames=20, object_points_by_role={"object": points})
+        if order is None:
+            for item in frames:
+                service._frame(item)
+                if item.frame_id in anchors:
+                    service._anchor(anchors[item.frame_id])
+                    service._drain_pending()
+        else:
+            for item in frames:
+                service._frame(item)
+            for index in order:
+                service._anchor(anchors[index])
+                service._drain_pending()
+        return store.snapshot()[1]["object"], service
+
+    expected, source_order = run(None)
+    assert source_order.anchor_decisions_by_source[(4, "object")].outcome == "direct_point_unresolved"
+    assert expected.pose[0, 3] == pytest.approx(0.14, abs=0.01)
+    for order in itertools.permutations(anchors):
+        actual, service = run(order)
+        np.testing.assert_allclose(actual.pose, expected.pose, atol=0.005, err_msg=str(order))
+        assert actual.source_time_s == expected.source_time_s
+        assert actual.evidence == expected.evidence
+        assert service.error is None
 
 
 def test_event_replay_keeps_current_belief_if_its_source_frame_expires():
