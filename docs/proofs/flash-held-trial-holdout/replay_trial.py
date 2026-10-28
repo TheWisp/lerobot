@@ -75,9 +75,9 @@ def tip_at(at):
 
 
 grasp_idx = next(i for i, r in enumerate(rows) if r["event_id"] == "attach-held")
-release_idx = next(i for i, r in enumerate(rows) if r["event_id"] == "detach-held")
+release_idx = next((i for i, r in enumerate(rows) if r["event_id"] == "detach-held"), None)
 grasp_time = motor_times[grasp_idx]
-release_time = motor_times[release_idx]
+release_time = motor_times[release_idx] if release_idx is not None else np.nextafter(motor_times[-1], np.inf)
 limits = AttachmentRuntimeLimits.from_config(settings["attachment"])
 updater = HeldAttachmentUpdater(
     role,
@@ -251,6 +251,7 @@ with gzip.open(output, "wt", encoding="utf-8") as stream:
             "held_role": role,
             "grasp_time_s": grasp_time,
             "release_time_s": release_time,
+            "release_event_present": release_idx is not None,
             "pregrasp_attachment_seeded": seeded,
             "source_time_replay_without_inference_latency": True,
             "frames": result,

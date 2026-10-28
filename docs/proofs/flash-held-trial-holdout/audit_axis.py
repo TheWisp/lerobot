@@ -121,6 +121,8 @@ def measure(result_path: Path, sample_rows: list[int]) -> list[dict]:
         right = int(np.searchsorted(motor_times, source_time_s))
         fraction = (source_time_s - motor_times[right - 1]) / (motor_times[right] - motor_times[right - 1])
         ee = interpolate(tips[right - 1], tips[right], fraction)
+        surface_axis_base = base_from_camera[:3, :3] @ surface_axis if surface_axis is not None else None
+        surface_axis_gripper = ee[:3, :3].T @ surface_axis_base if surface_axis_base is not None else None
         observation_2d = np.stack(np.nonzero(mask)[::-1]).astype(float)
         _, axes_2d = np.linalg.eigh(np.cov(observation_2d))
         observed_2d_axis = axes_2d[:, -1]
@@ -171,6 +173,12 @@ def measure(result_path: Path, sample_rows: list[int]) -> list[dict]:
                 "pca_spread_mm": spreads_mm.tolist(),
                 "tracked_surface_points": len(tracked_surface),
                 "tracked_surface_spread_mm": surface_spreads_mm,
+                "tracked_surface_axis_base": (
+                    surface_axis_base.tolist() if surface_axis_base is not None else None
+                ),
+                "tracked_surface_axis_gripper": (
+                    surface_axis_gripper.tolist() if surface_axis_gripper is not None else None
+                ),
                 "dominant_spread_excess_mm": float(spreads_mm[-1] - spreads_mm[-2]),
                 "backend_failure": recorded["backend_failure"],
                 "fit_metrics": recorded["fit_metrics"],

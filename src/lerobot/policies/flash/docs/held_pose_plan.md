@@ -8,6 +8,8 @@ ordinary LeRobot episodes under
 they are not committed to git. The audit uses the latest 19 local attempts,
 17:22:16 through 20:33:10, rather than selecting only completed motions.
 
+**28 October follow-up:** [Two independent recorded-attempt replays](../../../../../docs/proofs/flash-held-trial-holdout/README.md) now rerun the current surface backend from RGB-D and measured joints, retaining rejected proposals and masks. A rejected visible-patch direction is substantially closer to measured depth than the gripper prediction late in one attempt; the two are about equally supported late in the other. The shared proposal now records the measured patch direction, three spreads and point count even when a complete pose is rejected. This is a shadow measurement, not a change to the selected pose or held attachment. The group tracker, inference timing and physical outcomes were not rerun; no full-pose accuracy claim follows from the depth-direction comparison. The next experiment must calibrate when that direction is actually observable and evaluate a partial update against future frames and task landmarks before control uses it.
+
 ## What the attempts establish
 
 | Evidence                                                 | Finding                                                                                                                                                                                                                                                       | Limit of the finding                                                                                                                                                                          |

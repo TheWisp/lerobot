@@ -9,6 +9,7 @@ At recorded camera frame 481, the rejected vision candidate's long axis differs 
 ## Reproduction and scope
 
 - Trial: `~/.cache/huggingface/lerobot/demos/flash_insertion_trial_20261020_020-20261020-203310-655401`, episode 0 (646 motor rows, 553 unique RGB-D frames). Its saved outcome is `unknown / unverified outcome`.
+- Independent second attempt: `~/.cache/huggingface/lerobot/demos/flash_insertion_trial_20261020_020-20261020-201838-054325`, episode 0 (534 unique RGB-D frames). Its compressed results, masks and axis audit are in `second-trial/`.
 - Current prepared bundle: `~/.cache/huggingface/lerobot/demos/insertion/flash/v1/prepared/flash-dowel-ring-20261028-depth-audit-v11/bundle.json`. No recorded trial pose proposals were fed to the backend.
 - `replay_trial.py` deduplicates aligned RGB-D frames, re-runs current segmentation and surface fitting, and seeds/updates the gripper attachment using source-time-aligned saved joint states. `result.json.gz` retains accepted estimates **and rejected raw candidates**; `masks.npz` retains the per-frame masks. `audit_axis.py` compares both hypotheses with the principal direction of the tracker's measured surface, and separately with all clean mask-depth pixels. `axis_audit_all_held.json.gz` contains this comparison for the entire held interval. Reproduction needs the local trial, bundle, calibration, and model weights; these are not copied into git.
 - The trial's original tracker and inference scheduling are not reproduced. The group tracker was not rerun; this checks the current vision and gripper branches, not the full live engine. Replaying 553 frames took about 109 seconds, so this run says nothing about live frame rate.
@@ -26,7 +27,16 @@ PYTHONPATH=src /tmp/flash-native-benchmark-venv/bin/python docs/proofs/flash-hel
   --output docs/proofs/flash-held-trial-holdout/axis_audit_all_held.json.gz
 ```
 
-The held interval contains 284 unique RGB-D frames. The current backend returned 115 observed dowel poses and 169 `LOST` estimates; the gripper attachment was available on 265 frames. For the later recorded interval (motor rows 330 through release), the rejected vision candidate is closer to the tracker's visible-surface direction on 100 of 137 frames. Its median 3D direction gap is 10.5°, versus 15.5° for the gripper fallback. This is a diagnostic comparison, **not** a measured controller success rate. Some frames favor the gripper. At row 340, the tracker's visible surface favors the gripper direction (4.1° versus 10.2°); a rule that blindly accepts every vision candidate would fail there. A separate PCA of all clean mask pixels gives different angles for that weak view, demonstrating why one surface direction cannot be treated as ground truth.
+For the second attempt, substitute its trial path above and use `docs/proofs/flash-held-trial-holdout/second-trial` for the replay output directory and axis-audit paths.
+
+Both held intervals contain frames with visible masks but no accepted full pose. The table compares each proposal with the tracker's connected visible-surface direction **after the last accepted direct pose** in that attempt:
+
+| Recorded attempt | Held RGB-D frames | Direct poses / `LOST` | Later frames | Vision closer to visible direction | Median vision gap | Median gripper gap |
+| ---------------- | ----------------: | --------------------: | -----------: | ---------------------------------: | ----------------: | -----------------: |
+| 20:33:10         |               284 |             115 / 169 |          103 |                           94 / 103 |             10.5° |              17.9° |
+| 20:18:38         |               339 |             149 / 190 |          149 |                           81 / 149 |             13.4° |              13.3° |
+
+This is a diagnostic comparison, **not** a measured controller success rate or full-pose ground truth. The first attempt has a strong late directional discrepancy, while the second does not justify preferring vision overall. Even in the first, some frames favor the gripper. At row 340, the tracker's visible surface favors the gripper direction (4.1° versus 10.2°); a rule that blindly accepts every vision candidate would fail there. A separate PCA of all clean mask pixels gives different angles for that weak view, demonstrating why one surface direction cannot be treated as ground truth.
 
 ## What failed
 
