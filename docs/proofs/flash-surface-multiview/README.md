@@ -200,6 +200,17 @@ not treat a lower fit cost as a measured six-axis pose. Reproduce this check
 with `benchmarks/flash_held_surface_holdout.py` and `--fit` over frames
 300–429 in steps of three; the report records the surface and solver settings.
 
+The [gamepad control](held_gamepad_fit_holdout.json) repeats the same procedure
+on a separate prepared demo. Its candidate held view at frame 300 has 415
+clean depth points, scored on 21 later frames (350–450, every fifth frame).
+Adding it left the median measured-to-reference gap at 3.36 mm and increased
+median first-view point motion under fitting from 6.83 to 7.13 mm; only 8 of
+21 frames improved. The reverse depth disagreement was about 121 mm for both
+models, so neither view certifies the candidate attachment. This is a useful
+negative control: a later view with many measured points need not add useful
+geometry or validate its registration. Each view needs independent registration
+evidence and cross-frame review before it can alter the active object model.
+
 The subsequent shared attachment rule now checks the configured clean-depth
 support for **every** visual correction, including small changes. Repreparing
 the insertion demo from its unchanged pose trace rejects the weak corrections

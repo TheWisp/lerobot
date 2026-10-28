@@ -1,0 +1,1214 @@
+{
+  "dataset_root": "/tmp/flash-gamepad-multiview-audit-20261028",
+  "bundle": "/tmp/flash-gamepad-multiview-audit-20261028/flash/v1/prepared/current-multiview-audit/bundle.json",
+  "role": "gamepad",
+  "baseline_anchor_frame": 290,
+  "candidate_frame": 300,
+  "reference_points": 2490,
+  "candidate_points": 415,
+  "first_view_singular_values": [
+    0.9868374125045025,
+    0.5398617722983513,
+    0.09790955674367342
+  ],
+  "fit_from_candidate_attachment": true,
+  "validation": [
+    {
+      "frame": 350,
+      "measured_points": 93,
+      "score": {
+        "baseline_attachment_first_view": {
+          "measured_to_reference_p90_mm": 8.8897979023698,
+          "reference_to_depth_p90_mm": 128.7340082569394,
+          "reference_depth_pixels": 219
+        },
+        "candidate_attachment_first_view": {
+          "measured_to_reference_p90_mm": 7.623585120454609,
+          "reference_to_depth_p90_mm": 123.9659824198105,
+          "reference_depth_pixels": 214
+        },
+        "candidate_attachment_two_views": {
+          "measured_to_reference_p90_mm": 7.451279576576308,
+          "reference_to_depth_p90_mm": 123.92798249256863,
+          "reference_depth_pixels": 234
+        }
+      },
+      "fit_from_candidate_attachment": {
+        "first_view": {
+          "initial_cost": 1.4422239901394032,
+          "fitted_cost": 0.25378804679061256,
+          "center_shift_mm": 4.28300082277322,
+          "reference_point_displacement_p90_mm": 9.904382164091656,
+          "rotation_deg": 16.845749800423484,
+          "dominant_axis_tilt_deg": 16.843331213260264,
+          "solver": {
+            "initial_cost": 1.4422239901394032,
+            "cost": 0.25378804679061256,
+            "evaluations": 34,
+            "converged": true,
+            "batched_jacobian": true,
+            "fit_reference_points": 1214,
+            "fit_target_points": 93
+          }
+        },
+        "two_views": {
+          "initial_cost": 1.3830364755740794,
+          "fitted_cost": 0.2172846981844958,
+          "center_shift_mm": 4.857598466901387,
+          "reference_point_displacement_p90_mm": 11.907650604558704,
+          "rotation_deg": 21.818154532070043,
+          "dominant_axis_tilt_deg": 16.4907929870087,
+          "solver": {
+            "initial_cost": 1.3830364755740794,
+            "cost": 0.2172846981844958,
+            "evaluations": 36,
+            "converged": true,
+            "batched_jacobian": true,
+            "fit_reference_points": 1293,
+            "fit_target_points": 93
+          }
+        }
+      }
+    },
+    {
+      "frame": 355,
+      "measured_points": 39,
+      "score": {
+        "baseline_attachment_first_view": {
+          "measured_to_reference_p90_mm": 5.656465275650342,
+          "reference_to_depth_p90_mm": 126.07602319623868,
+          "reference_depth_pixels": 180
+        },
+        "candidate_attachment_first_view": {
+          "measured_to_reference_p90_mm": 3.7651404113367555,
+          "reference_to_depth_p90_mm": 121.4022695984767,
+          "reference_depth_pixels": 168
+        },
+        "candidate_attachment_two_views": {
+          "measured_to_reference_p90_mm": 3.7651404113367555,
+          "reference_to_depth_p90_mm": 121.14164939553217,
+          "reference_depth_pixels": 198
+        }
+      },
+      "fit_from_candidate_attachment": {
+        "first_view": {
+          "initial_cost": 0.5717409908666996,
+          "fitted_cost": 0.21850113316063385,
+          "center_shift_mm": 2.9356198768176327,
+          "reference_point_displacement_p90_mm": 6.676061147836493,
+          "rotation_deg": 11.672639716648273,
+          "dominant_axis_tilt_deg": 11.553199891623958,
+          "solver": {
+            "initial_cost": 0.5717409908666996,
+            "cost": 0.21850113316063385,
+            "evaluations": 32,
+            "converged": true,
+            "batched_jacobian": true,
+            "fit_reference_points": 1214,
+            "fit_target_points": 39
+          }
+        },
+        "two_views": {
+          "initial_cost": 0.5525672459549488,
+          "fitted_cost": 0.20514200979795538,
+          "center_shift_mm": 3.0186959742130783,
+          "reference_point_displacement_p90_mm": 6.777867138557743,
+          "rotation_deg": 11.85094496104507,
+          "dominant_axis_tilt_deg": 11.74735449777672,
+          "solver": {
+            "initial_cost": 0.5525672459549488,
+            "cost": 0.20514200979795538,
+            "evaluations": 36,
+            "converged": true,
+            "batched_jacobian": true,
+            "fit_reference_points": 1293,
+            "fit_target_points": 39
+          }
+        }
+      }
+    },
+    {
+      "frame": 360,
+      "measured_points": 37,
+      "score": {
+        "baseline_attachment_first_view": {
+          "measured_to_reference_p90_mm": 6.127968635229505,
+          "reference_to_depth_p90_mm": 126.01149092650616,
+          "reference_depth_pixels": 173
+        },
+        "candidate_attachment_first_view": {
+          "measured_to_reference_p90_mm": 4.736014209061831,
+          "reference_to_depth_p90_mm": 121.36884150603605,
+          "reference_depth_pixels": 161
+        },
+        "candidate_attachment_two_views": {
+          "measured_to_reference_p90_mm": 4.660978507471899,
+          "reference_to_depth_p90_mm": 121.07344823366034,
+          "reference_depth_pixels": 191
+        }
+      },
+      "fit_from_candidate_attachment": {
+        "first_view": {
+          "initial_cost": 0.6821944320782927,
+          "fitted_cost": 0.2724188880605938,
+          "center_shift_mm": 1.8641833090451365,
+          "reference_point_displacement_p90_mm": 4.319175013138962,
+          "rotation_deg": 7.0698612999504435,
+          "dominant_axis_tilt_deg": 6.91944725329289,
+          "solver": {
+            "initial_cost": 0.6821944320782927,
+            "cost": 0.2724188880605938,
+            "evaluations": 19,
+            "converged": true,
+            "batched_jacobian": true,
+            "fit_reference_points": 1214,
+            "fit_target_points": 37
+          }
+        },
+        "two_views": {
+          "initial_cost": 0.654875755296939,
+          "fitted_cost": 0.26022096248193466,
+          "center_shift_mm": 1.9498519518658015,
+          "reference_point_displacement_p90_mm": 4.407539022396935,
+          "rotation_deg": 7.513234337459592,
+          "dominant_axis_tilt_deg": 7.301040079924757,
+          "solver": {
+            "initial_cost": 0.654875755296939,
+            "cost": 0.26022096248193466,
+            "evaluations": 49,
+            "converged": true,
+            "batched_jacobian": true,
+            "fit_reference_points": 1293,
+            "fit_target_points": 37
+          }
+        }
+      }
+    },
+    {
+      "frame": 365,
+      "measured_points": 70,
+      "score": {
+        "baseline_attachment_first_view": {
+          "measured_to_reference_p90_mm": 8.222274269046563,
+          "reference_to_depth_p90_mm": 127.90126909597352,
+          "reference_depth_pixels": 189
+        },
+        "candidate_attachment_first_view": {
+          "measured_to_reference_p90_mm": 5.128212974729434,
+          "reference_to_depth_p90_mm": 123.09330150942593,
+          "reference_depth_pixels": 162
+        },
+        "candidate_attachment_two_views": {
+          "measured_to_reference_p90_mm": 5.039463094061366,
+          "reference_to_depth_p90_mm": 130.7299234725,
+          "reference_depth_pixels": 180
+        }
+      },
+      "fit_from_candidate_attachment": {
+        "first_view": {
+          "initial_cost": 1.2875064551775939,
+          "fitted_cost": 0.34297772642821023,
+          "center_shift_mm": 3.6865933131660475,
+          "reference_point_displacement_p90_mm": 9.942460344191527,
+          "rotation_deg": 18.585199182184788,
+          "dominant_axis_tilt_deg": 15.686803812856127,
+          "solver": {
+            "initial_cost": 1.2875064551775939,
+            "cost": 0.34297772642821023,
+            "evaluations": 43,
+            "converged": true,
+            "batched_jacobian": true,
+            "fit_reference_points": 1214,
+            "fit_target_points": 70
+          }
+        },
+        "two_views": {
+          "initial_cost": 1.2245246431613386,
+          "fitted_cost": 0.3481082787450546,
+          "center_shift_mm": 3.100534413789288,
+          "reference_point_displacement_p90_mm": 9.57047917142196,
+          "rotation_deg": 17.876600909192486,
+          "dominant_axis_tilt_deg": 16.230653414718777,
+          "solver": {
+            "initial_cost": 1.2245246431613386,
+            "cost": 0.3481082787450546,
+            "evaluations": 30,
+            "converged": true,
+            "batched_jacobian": true,
+            "fit_reference_points": 1293,
+            "fit_target_points": 70
+          }
+        }
+      }
+    },
+    {
+      "frame": 370,
+      "measured_points": 57,
+      "score": {
+        "baseline_attachment_first_view": {
+          "measured_to_reference_p90_mm": 4.904962316066582,
+          "reference_to_depth_p90_mm": 129.74953505921928,
+          "reference_depth_pixels": 196
+        },
+        "candidate_attachment_first_view": {
+          "measured_to_reference_p90_mm": 2.3220492763965375,
+          "reference_to_depth_p90_mm": 124.15604980375628,
+          "reference_depth_pixels": 181
+        },
+        "candidate_attachment_two_views": {
+          "measured_to_reference_p90_mm": 2.3220492763965375,
+          "reference_to_depth_p90_mm": 124.15604980375628,
+          "reference_depth_pixels": 181
+        }
+      },
+      "fit_from_candidate_attachment": {
+        "first_view": {
+          "initial_cost": 0.5162987480974848,
+          "fitted_cost": 0.1731940763511037,
+          "center_shift_mm": 4.231526741184814,
+          "reference_point_displacement_p90_mm": 6.831856328198272,
+          "rotation_deg": 8.377063576453248,
+          "dominant_axis_tilt_deg": 8.10996352890752,
+          "solver": {
+            "initial_cost": 0.5162987480974848,
+            "cost": 0.1731940763511037,
+            "evaluations": 32,
+            "converged": true,
+            "batched_jacobian": true,
+            "fit_reference_points": 1214,
+            "fit_target_points": 57
+          }
+        },
+        "two_views": {
+          "initial_cost": 0.49434574856879115,
+          "fitted_cost": 0.15270794490728531,
+          "center_shift_mm": 4.068787076260039,
+          "reference_point_displacement_p90_mm": 6.140435573503235,
+          "rotation_deg": 8.137133641321842,
+          "dominant_axis_tilt_deg": 7.964366377630098,
+          "solver": {
+            "initial_cost": 0.49434574856879115,
+            "cost": 0.15270794490728531,
+            "evaluations": 43,
+            "converged": true,
+            "batched_jacobian": true,
+            "fit_reference_points": 1293,
+            "fit_target_points": 57
+          }
+        }
+      }
+    },
+    {
+      "frame": 375,
+      "measured_points": 61,
+      "score": {
+        "baseline_attachment_first_view": {
+          "measured_to_reference_p90_mm": 4.32637074884679,
+          "reference_to_depth_p90_mm": 127.03468227472494,
+          "reference_depth_pixels": 169
+        },
+        "candidate_attachment_first_view": {
+          "measured_to_reference_p90_mm": 1.891309113441004,
+          "reference_to_depth_p90_mm": 122.60832504868164,
+          "reference_depth_pixels": 161
+        },
+        "candidate_attachment_two_views": {
+          "measured_to_reference_p90_mm": 1.891309113441004,
+          "reference_to_depth_p90_mm": 122.60832504868164,
+          "reference_depth_pixels": 161
+        }
+      },
+      "fit_from_candidate_attachment": {
+        "first_view": {
+          "initial_cost": 0.3802445255851058,
+          "fitted_cost": 0.21281878542841653,
+          "center_shift_mm": 2.9066386650586415,
+          "reference_point_displacement_p90_mm": 6.56261573559272,
+          "rotation_deg": 9.990089182161359,
+          "dominant_axis_tilt_deg": 9.88958007394507,
+          "solver": {
+            "initial_cost": 0.3802445255851058,
+            "cost": 0.21281878542841653,
+            "evaluations": 25,
+            "converged": true,
+            "batched_jacobian": true,
+            "fit_reference_points": 1214,
+            "fit_target_points": 61
+          }
+        },
+        "two_views": {
+          "initial_cost": 0.3639584822191394,
+          "fitted_cost": 0.18827913929270412,
+          "center_shift_mm": 2.48247702529527,
+          "reference_point_displacement_p90_mm": 6.496050629837873,
+          "rotation_deg": 12.711516457651028,
+          "dominant_axis_tilt_deg": 10.021430423092053,
+          "solver": {
+            "initial_cost": 0.3639584822191394,
+            "cost": 0.18827913929270412,
+            "evaluations": 43,
+            "converged": true,
+            "batched_jacobian": true,
+            "fit_reference_points": 1293,
+            "fit_target_points": 61
+          }
+        }
+      }
+    },
+    {
+      "frame": 380,
+      "measured_points": 47,
+      "score": {
+        "baseline_attachment_first_view": {
+          "measured_to_reference_p90_mm": 4.756247017322302,
+          "reference_to_depth_p90_mm": 127.71384689781206,
+          "reference_depth_pixels": 151
+        },
+        "candidate_attachment_first_view": {
+          "measured_to_reference_p90_mm": 2.3365421067766152,
+          "reference_to_depth_p90_mm": 122.74633227740881,
+          "reference_depth_pixels": 146
+        },
+        "candidate_attachment_two_views": {
+          "measured_to_reference_p90_mm": 2.3365421067766152,
+          "reference_to_depth_p90_mm": 122.74633227740881,
+          "reference_depth_pixels": 146
+        }
+      },
+      "fit_from_candidate_attachment": {
+        "first_view": {
+          "initial_cost": 0.5084757873168859,
+          "fitted_cost": 0.14334952364079684,
+          "center_shift_mm": 4.076444290116518,
+          "reference_point_displacement_p90_mm": 9.027610823653747,
+          "rotation_deg": 13.029048925434651,
+          "dominant_axis_tilt_deg": 12.889622321345605,
+          "solver": {
+            "initial_cost": 0.5084757873168859,
+            "cost": 0.14334952364079684,
+            "evaluations": 50,
+            "converged": false,
+            "batched_jacobian": true,
+            "fit_reference_points": 1214,
+            "fit_target_points": 47
+          }
+        },
+        "two_views": {
+          "initial_cost": 0.4850106765980218,
+          "fitted_cost": 0.13331936693423374,
+          "center_shift_mm": 4.206773572264942,
+          "reference_point_displacement_p90_mm": 9.054453202410107,
+          "rotation_deg": 12.837174097446189,
+          "dominant_axis_tilt_deg": 12.508549660768892,
+          "solver": {
+            "initial_cost": 0.4850106765980218,
+            "cost": 0.13331936693423374,
+            "evaluations": 36,
+            "converged": true,
+            "batched_jacobian": true,
+            "fit_reference_points": 1293,
+            "fit_target_points": 47
+          }
+        }
+      }
+    },
+    {
+      "frame": 385,
+      "measured_points": 76,
+      "score": {
+        "baseline_attachment_first_view": {
+          "measured_to_reference_p90_mm": 5.295775718313595,
+          "reference_to_depth_p90_mm": 128.47658216473516,
+          "reference_depth_pixels": 248
+        },
+        "candidate_attachment_first_view": {
+          "measured_to_reference_p90_mm": 2.9793824104329647,
+          "reference_to_depth_p90_mm": 123.39860241886768,
+          "reference_depth_pixels": 236
+        },
+        "candidate_attachment_two_views": {
+          "measured_to_reference_p90_mm": 2.9793824104329647,
+          "reference_to_depth_p90_mm": 123.358681835385,
+          "reference_depth_pixels": 249
+        }
+      },
+      "fit_from_candidate_attachment": {
+        "first_view": {
+          "initial_cost": 0.6079152957721918,
+          "fitted_cost": 0.25345151497980933,
+          "center_shift_mm": 3.83293835429094,
+          "reference_point_displacement_p90_mm": 5.820925750675736,
+          "rotation_deg": 13.749318185140664,
+          "dominant_axis_tilt_deg": 3.8054385042874284,
+          "solver": {
+            "initial_cost": 0.6079152957721918,
+            "cost": 0.25345151497980933,
+            "evaluations": 47,
+            "converged": true,
+            "batched_jacobian": true,
+            "fit_reference_points": 1214,
+            "fit_target_points": 76
+          }
+        },
+        "two_views": {
+          "initial_cost": 0.5826121712924579,
+          "fitted_cost": 0.24159057180558416,
+          "center_shift_mm": 3.758467557577852,
+          "reference_point_displacement_p90_mm": 5.874820641904608,
+          "rotation_deg": 13.895004809142264,
+          "dominant_axis_tilt_deg": 4.135782301433911,
+          "solver": {
+            "initial_cost": 0.5826121712924579,
+            "cost": 0.24159057180558416,
+            "evaluations": 50,
+            "converged": false,
+            "batched_jacobian": true,
+            "fit_reference_points": 1293,
+            "fit_target_points": 76
+          }
+        }
+      }
+    },
+    {
+      "frame": 390,
+      "measured_points": 87,
+      "score": {
+        "baseline_attachment_first_view": {
+          "measured_to_reference_p90_mm": 4.366192625954851,
+          "reference_to_depth_p90_mm": 127.34818182762211,
+          "reference_depth_pixels": 303
+        },
+        "candidate_attachment_first_view": {
+          "measured_to_reference_p90_mm": 3.8315048082895067,
+          "reference_to_depth_p90_mm": 122.09828041379359,
+          "reference_depth_pixels": 278
+        },
+        "candidate_attachment_two_views": {
+          "measured_to_reference_p90_mm": 3.68721752313954,
+          "reference_to_depth_p90_mm": 121.9513524097903,
+          "reference_depth_pixels": 306
+        }
+      },
+      "fit_from_candidate_attachment": {
+        "first_view": {
+          "initial_cost": 0.7054166425287111,
+          "fitted_cost": 0.28957588657555006,
+          "center_shift_mm": 6.875144752478975,
+          "reference_point_displacement_p90_mm": 11.165222411472774,
+          "rotation_deg": 13.655395288168645,
+          "dominant_axis_tilt_deg": 10.954433463523802,
+          "solver": {
+            "initial_cost": 0.7054166425287111,
+            "cost": 0.28957588657555006,
+            "evaluations": 50,
+            "converged": false,
+            "batched_jacobian": true,
+            "fit_reference_points": 1214,
+            "fit_target_points": 87
+          }
+        },
+        "two_views": {
+          "initial_cost": 0.6691365096555963,
+          "fitted_cost": 0.2510879577637594,
+          "center_shift_mm": 6.463790540121682,
+          "reference_point_displacement_p90_mm": 10.253118556379608,
+          "rotation_deg": 11.329821633513786,
+          "dominant_axis_tilt_deg": 11.09710465109272,
+          "solver": {
+            "initial_cost": 0.6691365096555963,
+            "cost": 0.2510879577637594,
+            "evaluations": 50,
+            "converged": false,
+            "batched_jacobian": true,
+            "fit_reference_points": 1293,
+            "fit_target_points": 87
+          }
+        }
+      }
+    },
+    {
+      "frame": 395,
+      "measured_points": 87,
+      "score": {
+        "baseline_attachment_first_view": {
+          "measured_to_reference_p90_mm": 5.788888800508882,
+          "reference_to_depth_p90_mm": 9.996772018073145,
+          "reference_depth_pixels": 252
+        },
+        "candidate_attachment_first_view": {
+          "measured_to_reference_p90_mm": 3.35629001644041,
+          "reference_to_depth_p90_mm": 4.138022743388953,
+          "reference_depth_pixels": 234
+        },
+        "candidate_attachment_two_views": {
+          "measured_to_reference_p90_mm": 3.35629001644041,
+          "reference_to_depth_p90_mm": 4.035153441886264,
+          "reference_depth_pixels": 261
+        }
+      },
+      "fit_from_candidate_attachment": {
+        "first_view": {
+          "initial_cost": 0.6503232597979554,
+          "fitted_cost": 0.33473403263546986,
+          "center_shift_mm": 2.5422259113505614,
+          "reference_point_displacement_p90_mm": 3.5862017755721953,
+          "rotation_deg": 5.72954842699689,
+          "dominant_axis_tilt_deg": 3.0528562206108454,
+          "solver": {
+            "initial_cost": 0.6503232597979554,
+            "cost": 0.33473403263546986,
+            "evaluations": 37,
+            "converged": true,
+            "batched_jacobian": true,
+            "fit_reference_points": 1214,
+            "fit_target_points": 87
+          }
+        },
+        "two_views": {
+          "initial_cost": 0.6505753514893993,
+          "fitted_cost": 0.3172394454797374,
+          "center_shift_mm": 2.8866754023511185,
+          "reference_point_displacement_p90_mm": 4.0556105936681695,
+          "rotation_deg": 5.7231812237587585,
+          "dominant_axis_tilt_deg": 3.9678171956548236,
+          "solver": {
+            "initial_cost": 0.6505753514893993,
+            "cost": 0.3172394454797374,
+            "evaluations": 47,
+            "converged": true,
+            "batched_jacobian": true,
+            "fit_reference_points": 1293,
+            "fit_target_points": 87
+          }
+        }
+      }
+    },
+    {
+      "frame": 400,
+      "measured_points": 80,
+      "score": {
+        "baseline_attachment_first_view": {
+          "measured_to_reference_p90_mm": 7.7799382896664335,
+          "reference_to_depth_p90_mm": 9.089841035621271,
+          "reference_depth_pixels": 232
+        },
+        "candidate_attachment_first_view": {
+          "measured_to_reference_p90_mm": 3.394619270990962,
+          "reference_to_depth_p90_mm": 3.8022990703853505,
+          "reference_depth_pixels": 225
+        },
+        "candidate_attachment_two_views": {
+          "measured_to_reference_p90_mm": 3.394619270990962,
+          "reference_to_depth_p90_mm": 3.646066888256651,
+          "reference_depth_pixels": 249
+        }
+      },
+      "fit_from_candidate_attachment": {
+        "first_view": {
+          "initial_cost": 0.6433200421298545,
+          "fitted_cost": 0.31023785546824095,
+          "center_shift_mm": 2.2988264462106844,
+          "reference_point_displacement_p90_mm": 4.263713161410841,
+          "rotation_deg": 5.523533255665106,
+          "dominant_axis_tilt_deg": 5.5187914716426665,
+          "solver": {
+            "initial_cost": 0.6433200421298545,
+            "cost": 0.31023785546824095,
+            "evaluations": 31,
+            "converged": true,
+            "batched_jacobian": true,
+            "fit_reference_points": 1214,
+            "fit_target_points": 80
+          }
+        },
+        "two_views": {
+          "initial_cost": 0.6422165541654008,
+          "fitted_cost": 0.30125996919317305,
+          "center_shift_mm": 2.2414795883769596,
+          "reference_point_displacement_p90_mm": 4.303666372007379,
+          "rotation_deg": 5.771677887901169,
+          "dominant_axis_tilt_deg": 5.771614344417235,
+          "solver": {
+            "initial_cost": 0.6422165541654008,
+            "cost": 0.30125996919317305,
+            "evaluations": 24,
+            "converged": true,
+            "batched_jacobian": true,
+            "fit_reference_points": 1293,
+            "fit_target_points": 80
+          }
+        }
+      }
+    },
+    {
+      "frame": 405,
+      "measured_points": 84,
+      "score": {
+        "baseline_attachment_first_view": {
+          "measured_to_reference_p90_mm": 6.424588484521427,
+          "reference_to_depth_p90_mm": 9.196731279757493,
+          "reference_depth_pixels": 238
+        },
+        "candidate_attachment_first_view": {
+          "measured_to_reference_p90_mm": 4.537046938235192,
+          "reference_to_depth_p90_mm": 4.906457487427984,
+          "reference_depth_pixels": 225
+        },
+        "candidate_attachment_two_views": {
+          "measured_to_reference_p90_mm": 4.537046938235192,
+          "reference_to_depth_p90_mm": 4.138022743388953,
+          "reference_depth_pixels": 244
+        }
+      },
+      "fit_from_candidate_attachment": {
+        "first_view": {
+          "initial_cost": 0.7309017026900517,
+          "fitted_cost": 0.41724428110733985,
+          "center_shift_mm": 2.907246007574085,
+          "reference_point_displacement_p90_mm": 3.434468346339342,
+          "rotation_deg": 4.063208653706537,
+          "dominant_axis_tilt_deg": 1.718422894997133,
+          "solver": {
+            "initial_cost": 0.7309017026900517,
+            "cost": 0.41724428110733985,
+            "evaluations": 32,
+            "converged": true,
+            "batched_jacobian": true,
+            "fit_reference_points": 1214,
+            "fit_target_points": 84
+          }
+        },
+        "two_views": {
+          "initial_cost": 0.7363374391077522,
+          "fitted_cost": 0.41240576747375424,
+          "center_shift_mm": 2.9648247476223237,
+          "reference_point_displacement_p90_mm": 3.5246277328172413,
+          "rotation_deg": 4.5606793746742875,
+          "dominant_axis_tilt_deg": 1.6275452588433705,
+          "solver": {
+            "initial_cost": 0.7363374391077522,
+            "cost": 0.41240576747375424,
+            "evaluations": 39,
+            "converged": true,
+            "batched_jacobian": true,
+            "fit_reference_points": 1293,
+            "fit_target_points": 84
+          }
+        }
+      }
+    },
+    {
+      "frame": 410,
+      "measured_points": 87,
+      "score": {
+        "baseline_attachment_first_view": {
+          "measured_to_reference_p90_mm": 4.4744718540652535,
+          "reference_to_depth_p90_mm": 9.16969486728333,
+          "reference_depth_pixels": 258
+        },
+        "candidate_attachment_first_view": {
+          "measured_to_reference_p90_mm": 4.165315436816936,
+          "reference_to_depth_p90_mm": 5.663266327325765,
+          "reference_depth_pixels": 243
+        },
+        "candidate_attachment_two_views": {
+          "measured_to_reference_p90_mm": 4.165315436816936,
+          "reference_to_depth_p90_mm": 4.7827143472595814,
+          "reference_depth_pixels": 270
+        }
+      },
+      "fit_from_candidate_attachment": {
+        "first_view": {
+          "initial_cost": 0.8096715130145935,
+          "fitted_cost": 0.2842880737027885,
+          "center_shift_mm": 9.44349908253803,
+          "reference_point_displacement_p90_mm": 17.047281165687448,
+          "rotation_deg": 21.07230199132017,
+          "dominant_axis_tilt_deg": 18.737460016049376,
+          "solver": {
+            "initial_cost": 0.8096715130145935,
+            "cost": 0.2842880737027885,
+            "evaluations": 50,
+            "converged": false,
+            "batched_jacobian": true,
+            "fit_reference_points": 1214,
+            "fit_target_points": 87
+          }
+        },
+        "two_views": {
+          "initial_cost": 0.8076198085077091,
+          "fitted_cost": 0.28999238724715093,
+          "center_shift_mm": 9.332051317759536,
+          "reference_point_displacement_p90_mm": 16.71431445520287,
+          "rotation_deg": 20.64869189542957,
+          "dominant_axis_tilt_deg": 17.896640803037208,
+          "solver": {
+            "initial_cost": 0.8076198085077091,
+            "cost": 0.28999238724715093,
+            "evaluations": 48,
+            "converged": true,
+            "batched_jacobian": true,
+            "fit_reference_points": 1293,
+            "fit_target_points": 87
+          }
+        }
+      }
+    },
+    {
+      "frame": 415,
+      "measured_points": 93,
+      "score": {
+        "baseline_attachment_first_view": {
+          "measured_to_reference_p90_mm": 7.696070566132514,
+          "reference_to_depth_p90_mm": 9.211130187691557,
+          "reference_depth_pixels": 250
+        },
+        "candidate_attachment_first_view": {
+          "measured_to_reference_p90_mm": 3.13550726973812,
+          "reference_to_depth_p90_mm": 3.896772597224818,
+          "reference_depth_pixels": 241
+        },
+        "candidate_attachment_two_views": {
+          "measured_to_reference_p90_mm": 3.13550726973812,
+          "reference_to_depth_p90_mm": 3.7962091683251815,
+          "reference_depth_pixels": 265
+        }
+      },
+      "fit_from_candidate_attachment": {
+        "first_view": {
+          "initial_cost": 0.5856494698080086,
+          "fitted_cost": 0.32638536078677605,
+          "center_shift_mm": 1.6940564953583095,
+          "reference_point_displacement_p90_mm": 3.1661937755584617,
+          "rotation_deg": 5.309755479707566,
+          "dominant_axis_tilt_deg": 4.117163663283737,
+          "solver": {
+            "initial_cost": 0.5856494698080086,
+            "cost": 0.32638536078677605,
+            "evaluations": 26,
+            "converged": true,
+            "batched_jacobian": true,
+            "fit_reference_points": 1214,
+            "fit_target_points": 93
+          }
+        },
+        "two_views": {
+          "initial_cost": 0.5926704356814844,
+          "fitted_cost": 0.3145008265301219,
+          "center_shift_mm": 2.1624806392340186,
+          "reference_point_displacement_p90_mm": 3.579453677290394,
+          "rotation_deg": 5.825436897156146,
+          "dominant_axis_tilt_deg": 4.322021875404054,
+          "solver": {
+            "initial_cost": 0.5926704356814844,
+            "cost": 0.3145008265301219,
+            "evaluations": 50,
+            "converged": false,
+            "batched_jacobian": true,
+            "fit_reference_points": 1293,
+            "fit_target_points": 93
+          }
+        }
+      }
+    },
+    {
+      "frame": 420,
+      "measured_points": 55,
+      "score": {
+        "baseline_attachment_first_view": {
+          "measured_to_reference_p90_mm": 4.682398815506673,
+          "reference_to_depth_p90_mm": 16.901287504356986,
+          "reference_depth_pixels": 258
+        },
+        "candidate_attachment_first_view": {
+          "measured_to_reference_p90_mm": 5.364279648896923,
+          "reference_to_depth_p90_mm": 31.771231852199275,
+          "reference_depth_pixels": 249
+        },
+        "candidate_attachment_two_views": {
+          "measured_to_reference_p90_mm": 5.364279648896923,
+          "reference_to_depth_p90_mm": 10.683376119458583,
+          "reference_depth_pixels": 275
+        }
+      },
+      "fit_from_candidate_attachment": {
+        "first_view": {
+          "initial_cost": 1.106127610003023,
+          "fitted_cost": 0.5562917695679221,
+          "center_shift_mm": 6.712436830837158,
+          "reference_point_displacement_p90_mm": 11.133374694322852,
+          "rotation_deg": 12.852881690637597,
+          "dominant_axis_tilt_deg": 11.012545057794346,
+          "solver": {
+            "initial_cost": 1.106127610003023,
+            "cost": 0.5562917695679221,
+            "evaluations": 50,
+            "converged": false,
+            "batched_jacobian": true,
+            "fit_reference_points": 1214,
+            "fit_target_points": 55
+          }
+        },
+        "two_views": {
+          "initial_cost": 1.0998953921679226,
+          "fitted_cost": 0.550944375955247,
+          "center_shift_mm": 6.586490074120931,
+          "reference_point_displacement_p90_mm": 10.873250521180497,
+          "rotation_deg": 12.342658338540025,
+          "dominant_axis_tilt_deg": 10.400135834779862,
+          "solver": {
+            "initial_cost": 1.0998953921679226,
+            "cost": 0.550944375955247,
+            "evaluations": 44,
+            "converged": true,
+            "batched_jacobian": true,
+            "fit_reference_points": 1293,
+            "fit_target_points": 55
+          }
+        }
+      }
+    },
+    {
+      "frame": 425,
+      "measured_points": 84,
+      "score": {
+        "baseline_attachment_first_view": {
+          "measured_to_reference_p90_mm": 9.130667869809109,
+          "reference_to_depth_p90_mm": 10.3231464940088,
+          "reference_depth_pixels": 272
+        },
+        "candidate_attachment_first_view": {
+          "measured_to_reference_p90_mm": 3.8374276712869384,
+          "reference_to_depth_p90_mm": 4.76098985890957,
+          "reference_depth_pixels": 265
+        },
+        "candidate_attachment_two_views": {
+          "measured_to_reference_p90_mm": 3.780406212297686,
+          "reference_to_depth_p90_mm": 4.6376161914322145,
+          "reference_depth_pixels": 311
+        }
+      },
+      "fit_from_candidate_attachment": {
+        "first_view": {
+          "initial_cost": 0.6338959814167137,
+          "fitted_cost": 0.2775131621246574,
+          "center_shift_mm": 2.3962761734108837,
+          "reference_point_displacement_p90_mm": 5.346275200531866,
+          "rotation_deg": 8.738946416783632,
+          "dominant_axis_tilt_deg": 8.408011929689788,
+          "solver": {
+            "initial_cost": 0.6338959814167137,
+            "cost": 0.2775131621246574,
+            "evaluations": 48,
+            "converged": true,
+            "batched_jacobian": true,
+            "fit_reference_points": 1214,
+            "fit_target_points": 84
+          }
+        },
+        "two_views": {
+          "initial_cost": 0.6462841637351107,
+          "fitted_cost": 0.25059478415248104,
+          "center_shift_mm": 2.636809712596999,
+          "reference_point_displacement_p90_mm": 6.053596882474254,
+          "rotation_deg": 8.96076994968169,
+          "dominant_axis_tilt_deg": 8.8015581344626,
+          "solver": {
+            "initial_cost": 0.6462841637351107,
+            "cost": 0.25059478415248104,
+            "evaluations": 50,
+            "converged": false,
+            "batched_jacobian": true,
+            "fit_reference_points": 1293,
+            "fit_target_points": 84
+          }
+        }
+      }
+    },
+    {
+      "frame": 430,
+      "measured_points": 157,
+      "score": {
+        "baseline_attachment_first_view": {
+          "measured_to_reference_p90_mm": 5.763322818408412,
+          "reference_to_depth_p90_mm": 6.310746577337367,
+          "reference_depth_pixels": 365
+        },
+        "candidate_attachment_first_view": {
+          "measured_to_reference_p90_mm": 2.5991397494835886,
+          "reference_to_depth_p90_mm": 3.1308262028804887,
+          "reference_depth_pixels": 340
+        },
+        "candidate_attachment_two_views": {
+          "measured_to_reference_p90_mm": 2.482804163853978,
+          "reference_to_depth_p90_mm": 3.22900819232233,
+          "reference_depth_pixels": 386
+        }
+      },
+      "fit_from_candidate_attachment": {
+        "first_view": {
+          "initial_cost": 0.512423020751945,
+          "fitted_cost": 0.19036048169112313,
+          "center_shift_mm": 2.483337249747045,
+          "reference_point_displacement_p90_mm": 7.200373095802806,
+          "rotation_deg": 17.29000515165031,
+          "dominant_axis_tilt_deg": 7.236614287520273,
+          "solver": {
+            "initial_cost": 0.512423020751945,
+            "cost": 0.19036048169112313,
+            "evaluations": 29,
+            "converged": true,
+            "batched_jacobian": true,
+            "fit_reference_points": 1214,
+            "fit_target_points": 157
+          }
+        },
+        "two_views": {
+          "initial_cost": 0.5030413813169428,
+          "fitted_cost": 0.18415711787835787,
+          "center_shift_mm": 2.456463503726948,
+          "reference_point_displacement_p90_mm": 7.130141813005663,
+          "rotation_deg": 17.11203232808829,
+          "dominant_axis_tilt_deg": 7.06985480830637,
+          "solver": {
+            "initial_cost": 0.5030413813169428,
+            "cost": 0.18415711787835787,
+            "evaluations": 35,
+            "converged": true,
+            "batched_jacobian": true,
+            "fit_reference_points": 1293,
+            "fit_target_points": 157
+          }
+        }
+      }
+    },
+    {
+      "frame": 435,
+      "measured_points": 153,
+      "score": {
+        "baseline_attachment_first_view": {
+          "measured_to_reference_p90_mm": 5.755048226332057,
+          "reference_to_depth_p90_mm": 6.31973522696021,
+          "reference_depth_pixels": 383
+        },
+        "candidate_attachment_first_view": {
+          "measured_to_reference_p90_mm": 2.522102158131116,
+          "reference_to_depth_p90_mm": 3.1628592044158355,
+          "reference_depth_pixels": 371
+        },
+        "candidate_attachment_two_views": {
+          "measured_to_reference_p90_mm": 2.441198853357432,
+          "reference_to_depth_p90_mm": 3.3500246034216867,
+          "reference_depth_pixels": 418
+        }
+      },
+      "fit_from_candidate_attachment": {
+        "first_view": {
+          "initial_cost": 0.5208533469507033,
+          "fitted_cost": 0.13689433972274828,
+          "center_shift_mm": 3.092690780000008,
+          "reference_point_displacement_p90_mm": 6.120098223710137,
+          "rotation_deg": 13.59176421968122,
+          "dominant_axis_tilt_deg": 6.646850644229832,
+          "solver": {
+            "initial_cost": 0.5208533469507033,
+            "cost": 0.13689433972274828,
+            "evaluations": 50,
+            "converged": false,
+            "batched_jacobian": true,
+            "fit_reference_points": 1214,
+            "fit_target_points": 153
+          }
+        },
+        "two_views": {
+          "initial_cost": 0.5198201278666198,
+          "fitted_cost": 0.1515416548369767,
+          "center_shift_mm": 2.791474446990604,
+          "reference_point_displacement_p90_mm": 7.8977045409054165,
+          "rotation_deg": 19.163492833020822,
+          "dominant_axis_tilt_deg": 7.353695430062149,
+          "solver": {
+            "initial_cost": 0.5198201278666198,
+            "cost": 0.1515416548369767,
+            "evaluations": 29,
+            "converged": true,
+            "batched_jacobian": true,
+            "fit_reference_points": 1293,
+            "fit_target_points": 153
+          }
+        }
+      }
+    },
+    {
+      "frame": 440,
+      "measured_points": 81,
+      "score": {
+        "baseline_attachment_first_view": {
+          "measured_to_reference_p90_mm": 5.256091031567242,
+          "reference_to_depth_p90_mm": 133.73786362584752,
+          "reference_depth_pixels": 328
+        },
+        "candidate_attachment_first_view": {
+          "measured_to_reference_p90_mm": 2.8937489021610423,
+          "reference_to_depth_p90_mm": 128.28034564103135,
+          "reference_depth_pixels": 334
+        },
+        "candidate_attachment_two_views": {
+          "measured_to_reference_p90_mm": 2.8510991098461393,
+          "reference_to_depth_p90_mm": 128.47897155037282,
+          "reference_depth_pixels": 358
+        }
+      },
+      "fit_from_candidate_attachment": {
+        "first_view": {
+          "initial_cost": 1.3072986809122218,
+          "fitted_cost": 0.19691049325709212,
+          "center_shift_mm": 4.259523942571328,
+          "reference_point_displacement_p90_mm": 9.900107235347594,
+          "rotation_deg": 15.021041646387987,
+          "dominant_axis_tilt_deg": 14.914888020544147,
+          "solver": {
+            "initial_cost": 1.3072986809122218,
+            "cost": 0.19691049325709212,
+            "evaluations": 31,
+            "converged": true,
+            "batched_jacobian": true,
+            "fit_reference_points": 1214,
+            "fit_target_points": 81
+          }
+        },
+        "two_views": {
+          "initial_cost": 1.2478393210103114,
+          "fitted_cost": 0.13105021841889442,
+          "center_shift_mm": 4.992063471888841,
+          "reference_point_displacement_p90_mm": 13.342957619214467,
+          "rotation_deg": 22.738523645165674,
+          "dominant_axis_tilt_deg": 20.84020249213727,
+          "solver": {
+            "initial_cost": 1.2478393210103114,
+            "cost": 0.13105021841889442,
+            "evaluations": 50,
+            "converged": false,
+            "batched_jacobian": true,
+            "fit_reference_points": 1293,
+            "fit_target_points": 81
+          }
+        }
+      }
+    },
+    {
+      "frame": 445,
+      "measured_points": 55,
+      "score": {
+        "baseline_attachment_first_view": {
+          "measured_to_reference_p90_mm": 5.250789239795098,
+          "reference_to_depth_p90_mm": 132.93254111155017,
+          "reference_depth_pixels": 248
+        },
+        "candidate_attachment_first_view": {
+          "measured_to_reference_p90_mm": 2.8613338854425447,
+          "reference_to_depth_p90_mm": 127.87217652533245,
+          "reference_depth_pixels": 243
+        },
+        "candidate_attachment_two_views": {
+          "measured_to_reference_p90_mm": 2.8613338854425447,
+          "reference_to_depth_p90_mm": 127.79815804113274,
+          "reference_depth_pixels": 258
+        }
+      },
+      "fit_from_candidate_attachment": {
+        "first_view": {
+          "initial_cost": 1.1147427119910118,
+          "fitted_cost": 0.18178910367739326,
+          "center_shift_mm": 3.418543666525413,
+          "reference_point_displacement_p90_mm": 9.394001414172113,
+          "rotation_deg": 18.14718858685168,
+          "dominant_axis_tilt_deg": 14.852669770124322,
+          "solver": {
+            "initial_cost": 1.1147427119910118,
+            "cost": 0.18178910367739326,
+            "evaluations": 33,
+            "converged": true,
+            "batched_jacobian": true,
+            "fit_reference_points": 1214,
+            "fit_target_points": 55
+          }
+        },
+        "two_views": {
+          "initial_cost": 1.066981988734148,
+          "fitted_cost": 0.15903501869255757,
+          "center_shift_mm": 4.113107809183504,
+          "reference_point_displacement_p90_mm": 10.563593191551453,
+          "rotation_deg": 21.724975844599303,
+          "dominant_axis_tilt_deg": 15.626443735221672,
+          "solver": {
+            "initial_cost": 1.066981988734148,
+            "cost": 0.15903501869255757,
+            "evaluations": 45,
+            "converged": true,
+            "batched_jacobian": true,
+            "fit_reference_points": 1293,
+            "fit_target_points": 55
+          }
+        }
+      }
+    },
+    {
+      "frame": 450,
+      "measured_points": 52,
+      "score": {
+        "baseline_attachment_first_view": {
+          "measured_to_reference_p90_mm": 4.8140140130138125,
+          "reference_to_depth_p90_mm": 132.95546561537913,
+          "reference_depth_pixels": 251
+        },
+        "candidate_attachment_first_view": {
+          "measured_to_reference_p90_mm": 2.32952377465379,
+          "reference_to_depth_p90_mm": 128.0704414140028,
+          "reference_depth_pixels": 244
+        },
+        "candidate_attachment_two_views": {
+          "measured_to_reference_p90_mm": 2.32952377465379,
+          "reference_to_depth_p90_mm": 127.87655161929406,
+          "reference_depth_pixels": 262
+        }
+      },
+      "fit_from_candidate_attachment": {
+        "first_view": {
+          "initial_cost": 1.1671141136703471,
+          "fitted_cost": 0.14592117927113984,
+          "center_shift_mm": 5.1097074585634115,
+          "reference_point_displacement_p90_mm": 11.847094593932674,
+          "rotation_deg": 20.175242902891224,
+          "dominant_axis_tilt_deg": 17.245121494099635,
+          "solver": {
+            "initial_cost": 1.1671141136703471,
+            "cost": 0.14592117927113984,
+            "evaluations": 37,
+            "converged": true,
+            "batched_jacobian": true,
+            "fit_reference_points": 1214,
+            "fit_target_points": 52
+          }
+        },
+        "two_views": {
+          "initial_cost": 1.1278344220851642,
+          "fitted_cost": 0.14120223523518477,
+          "center_shift_mm": 5.107180220405745,
+          "reference_point_displacement_p90_mm": 11.8205439920309,
+          "rotation_deg": 20.004281668840733,
+          "dominant_axis_tilt_deg": 17.162451422159833,
+          "solver": {
+            "initial_cost": 1.1278344220851642,
+            "cost": 0.14120223523518477,
+            "evaluations": 50,
+            "converged": true,
+            "batched_jacobian": true,
+            "fit_reference_points": 1293,
+            "fit_target_points": 52
+          }
+        }
+      }
+    }
+  ]
+}
