@@ -93,8 +93,9 @@ class FlashLiveTelemetry:
         kinematics: EndEffectorKinematics | None = None,
         period_s: float = 0.1,
         frame_history: int = 8,
+        decision_history_frames: int | None = None,
     ) -> None:
-        if frame_history < 1:
+        if frame_history < 1 or (decision_history_frames is not None and decision_history_frames < 1):
             raise ValueError("live frame history must contain at least one frame")
         self.live_path = live_path
         self.trace_path = trace_path
@@ -110,7 +111,12 @@ class FlashLiveTelemetry:
         # One source-frame decision per role and retained display frame is the
         # bounded writer backlog. A stalled disk must fail explicitly, never
         # grow an unbounded queue in the estimator process.
-        self.decision_backlog_limit = frame_history * max(1, len(centers_by_role))
+        # The writer can be behind by one display window when event-time
+        # replay revises every retained source-frame decision. Keep both
+        # bounded windows without silently dropping any decision.
+        self.decision_backlog_limit = (frame_history + (decision_history_frames or 0)) * max(
+            1, len(centers_by_role)
+        )
         self.kinematics = kinematics
         self._written_frame_id: int | None = None
         self._frame_ids: deque[int] = deque()

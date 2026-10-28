@@ -239,11 +239,17 @@ def trial(
         points_by_role = {
             model.points.role: model.points.points_object_m for model in bundle.appearance_models
         }
+        causal_tracking = (
+            CausalTrackingConfig.from_config(settings["causal_tracking"])
+            if settings.get("causal_tracking") is not None
+            else None
+        )
         telemetry = FlashLiveTelemetry(
             telemetry_path or output_root / "flash" / "v1" / "live_tracker.json",
             tracker_trace_path,
             centers_by_role,
             points_by_role=points_by_role,
+            decision_history_frames=causal_tracking.history_frames if causal_tracking is not None else None,
             # Pinocchio FK mutates its Data workspace. The telemetry writer
             # therefore has its own model instead of racing the planner.
             kinematics=SelectedJointKinematics(
@@ -292,11 +298,7 @@ def trial(
             depth_feature="overhead_depth",
             max_camera_age_s=settings["max_camera_age_s"],
             fps=settings["fps"],
-            causal_tracking=(
-                CausalTrackingConfig.from_config(settings["causal_tracking"])
-                if settings.get("causal_tracking") is not None
-                else None
-            ),
+            causal_tracking=causal_tracking,
         )
         try:
             result = runtime.run(
@@ -337,6 +339,8 @@ def trial(
                                 "replay_compute_total_s": runtime.causal.replay_compute_total_s,
                                 "replay_compute_max_s": runtime.causal.replay_compute_max_s,
                                 "pending_point_tracks": tuple(runtime.causal.pending),
+                                "event_replays": runtime.causal.event_replays,
+                                "pending_event_replays": tuple(runtime.causal.pending_event_replays),
                             }
                             if runtime.causal is not None
                             else None
@@ -411,6 +415,8 @@ def trial(
                         "replay_compute_total_s": runtime.causal.replay_compute_total_s,
                         "replay_compute_max_s": runtime.causal.replay_compute_max_s,
                         "pending_point_tracks": tuple(runtime.causal.pending),
+                        "event_replays": runtime.causal.event_replays,
+                        "pending_event_replays": tuple(runtime.causal.pending_event_replays),
                     }
                     if runtime.causal is not None
                     else None

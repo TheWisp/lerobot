@@ -229,7 +229,7 @@ class FlashRuntime:
             skill.milestones, self.session.post_evidence, clock=self.session.motor.clock
         )
         self._last_pose_version = 0
-        self._last_pose_times: dict[str, float] = {}
+        self._last_pose_by_role: dict[str, PoseEstimate] = {}
 
         def on_pose_update(version: int, poses: dict[str, PoseEstimate]) -> None:
             if self.live_telemetry is not None:
@@ -251,15 +251,13 @@ class FlashRuntime:
             self.attachment.on_pose_update(version, poses)
             if version != self._last_pose_version:
                 changed = frozenset(
-                    role
-                    for role, pose in poses.items()
-                    if pose.source_time_s > self._last_pose_times.get(role, float("-inf"))
+                    role for role, pose in poses.items() if self._last_pose_by_role.get(role) is not pose
                 )
                 if changed:
                     self.session.post_evidence(
                         PoseChange(changed, f"pose:{version}", max(poses[r].source_time_s for r in changed))
                     )
-                    self._last_pose_times.update({role: poses[role].source_time_s for role in changed})
+                    self._last_pose_by_role.update({role: poses[role] for role in changed})
                 self._last_pose_version = version
             # Revisit the same source frame to withdraw a true gate when it expires.
             self.milestones(version, poses)

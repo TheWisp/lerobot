@@ -185,6 +185,21 @@ class LatestPoseStore:
         with self._lock:
             return self._version, dict(self._poses)
 
+    def revise(self, estimate: PoseEstimate) -> int:
+        """Replace a same-time belief after replaying earlier source-frame evidence.
+
+        Ordinary publication favors a direct observation over a prediction at
+        the same camera time. Event replay may invalidate that observation, so
+        its revised belief needs an explicit, versioned replacement instead.
+        """
+        with self._lock:
+            previous = self._poses.get(estimate.role)
+            if previous is not None and estimate.source_time_s < previous.source_time_s:
+                raise ValueError("a replay revision cannot move scene time backwards")
+            self._poses[estimate.role] = estimate
+            self._version += 1
+            return self._version
+
 
 class TimedEndEffectorHistory:
     """Interpolate measured EE poses onto camera capture times, without extrapolation.

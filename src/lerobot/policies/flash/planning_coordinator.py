@@ -277,7 +277,10 @@ class PlanningCoordinator:
             or self._planned_reference is None
             or (
                 interval.relation != Relation.EE_TO_START
-                and self._planned_reference.source_time_s != reference.source_time_s
+                and (
+                    self._planned_reference.source_time_s != reference.source_time_s
+                    or not np.array_equal(self._planned_reference.pose, reference.pose)
+                )
             )
             or self._planned_attachment_time_s != (attachment.source_time_s if attachment else None)
         )

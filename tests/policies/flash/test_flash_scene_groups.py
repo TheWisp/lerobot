@@ -218,10 +218,13 @@ def test_late_group_bridge_rejects_intervening_direct_pose_contradiction():
         )
         service._anchor(_Anchor(index, (estimate,), {"object": mask}))
 
+    service._drain_pending()
+
     assert "object" not in service.relationships
-    assert decisions[-1].outcome == "superseded_by_direct"
-    assert len(service.direct_history["object"]) == 3
-    assert store.snapshot()[1]["object"].source_time_s == frames[3].source_time_s
+    assert decisions[-1].outcome == "replayed_accepted"
+    assert len(service.direct_history["object"]) == 4
+    assert store.snapshot()[1]["object"].source_time_s == frames[4].source_time_s
+    assert store.snapshot()[1]["object"].estimator == "environment_support_hypothesis"
 
 
 def test_unresolved_support_rotation_does_not_rotate_object_frame():
@@ -731,10 +734,10 @@ def test_older_delayed_proposal_cannot_erase_newer_direct_observation():
         assert service.direct_published == 1
         service.submit_anchor(0, (older,), {"object": mask})
         deadline = time.monotonic() + 3
-        while service.superseded_proposals < 1 and service.error is None and time.monotonic() < deadline:
+        while service.event_replays < 1 and service.error is None and time.monotonic() < deadline:
             time.sleep(0.01)
         assert service.error is None
-        assert service.superseded_proposals == 1
+        assert service.event_replays == 1
         estimate = store.snapshot()[1]["object"]
         assert estimate.last_direct_observation_s == frames[1].source_time_s
         assert estimate.pose[0, 3] == pytest.approx(0.04)

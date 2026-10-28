@@ -281,6 +281,31 @@ def test_startup_pose_updates_do_not_overflow_unconsumed_evidence():
     assert attempt.session._evidence.qsize() == 1
 
 
+def test_same_frame_pose_revision_invalidates_cached_progress_evidence():
+    attempt = runtime(skill(), (reference("target", "target-v1"),), FakeRecorder())
+    callback = attempt.perception.on_pose_update
+    assert callback is not None
+    attempt._ready = True
+    original = PoseEstimate(
+        "target", identity(), 1.0, 1.0, Evidence.OBSERVED, "target-v1", (True,) * 3, (True,) * 3
+    )
+    first_version = attempt.poses.publish((original,))
+    callback(*attempt.poses.snapshot())
+    assert attempt.session._evidence.get_nowait().roles == frozenset({"target"})
+    callback(*attempt.poses.snapshot())
+    assert attempt.session._evidence.empty()
+
+    corrected = identity()
+    corrected[0, 3] = 0.005
+    revision = attempt.poses.revise(replace(original, pose=corrected, evidence=Evidence.PREDICTED))
+    assert revision > first_version
+    callback(*attempt.poses.snapshot())
+    event = attempt.session._evidence.get_nowait()
+    assert event.roles == frozenset({"target"})
+    assert event.source_id == f"pose:{revision}"
+    assert event.source_time_s == original.source_time_s
+
+
 def test_delayed_direct_pose_updates_held_attachment_after_newer_point_prediction():
     base = skill()
     interval = replace(

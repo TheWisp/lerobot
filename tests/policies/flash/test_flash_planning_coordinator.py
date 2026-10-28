@@ -169,6 +169,20 @@ def test_coordinator_starts_in_future_and_replans_from_committed_prefix():
     assert robot.sent[-1]["arm.pos"] == 30.5
 
 
+def test_same_camera_frame_pose_revision_replans_the_unissued_suffix():
+    _, _, session, poses, worker, coordinator = make_runtime()
+    for _ in range(4):
+        coordinator.step()
+    assert session.progress.phase == Phase.MOVING
+    prior_count = len(worker.requests)
+    coordinator.schedule()
+    assert len(worker.requests) == prior_count
+    poses.revise(target(0.205, 0.0))
+    coordinator.schedule()
+    assert len(worker.requests) == prior_count + 1
+    assert worker.requests[-1].reference.pose[0, 3] == pytest.approx(0.205)
+
+
 def test_moved_demonstrated_entry_aligns_before_its_local_clock_starts():
     now, robot, session, poses, _, coordinator = make_runtime()
     original = session.progress.skill.intervals[0]

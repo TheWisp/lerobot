@@ -45,7 +45,13 @@ The perception result now also carries a typed source-frame proposal with the
 backend's raw fit, including one the backend rejected, and measured visible
 surface support. The live camera shows a rejected raw fit only on its exact
 source frame. This makes rejection inspectable; it does not yet move acceptance
-out of the backend or replay later direct observations after a delayed change.
+out of the backend. A late older proposal now replays retained camera frames,
+point motion, group arbitration and later direct proposals in source order for
+the affected unattached object. It commits a new pose version only after
+catching up, and records revised direct decisions. Replay steps yield to new
+camera events. If the required frame or earlier accepted anchor has expired,
+the newer belief is preserved and the reason is recorded; attachment history
+is not yet replayed. Past motor commands are never rewritten.
 
 Run → FLASH lists a sealed-format SO-107 recording with `showservo_demo.npz`
 even before it has a `flash/v1` extension. Open the raw demo, choose **Prepare

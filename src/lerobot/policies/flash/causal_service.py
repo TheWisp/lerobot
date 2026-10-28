@@ -71,6 +71,18 @@ class _PendingTrack:
     proposals: dict[int, PoseEstimate]
 
 
+@dataclass
+class _PendingEventReplay:
+    role: str
+    shadow: CausalPoseService
+    decisions: list[AnchorDecision]
+    trigger: _Anchor
+    candidate: PoseEstimate
+    anchor_revision: int
+    remaining_frame_ids: deque[int]
+    last_frame_id: int | None = None
+
+
 @dataclass(frozen=True)
 class CausalTrackingConfig:
     history_frames: int
@@ -176,6 +188,11 @@ class CausalPoseService:
         self.store = store
         self.history: deque[RGBDFrame] = deque(maxlen=history_frames)
         self.scene_history: deque[SceneTracks] = deque(maxlen=history_frames)
+        self.anchor_events: dict[int, dict[str, _Anchor]] = {}
+        self.anchor_decisions_by_source: dict[tuple[int, str], AnchorDecision] = {}
+        self.anchor_event_revision_by_role: dict[str, int] = {}
+        self.attachment_by_frame: dict[int, str | None] = {}
+        self.pending_event_replays: dict[str, _PendingEventReplay] = {}
         self.queue: Queue[RGBDFrame | _Anchor | None] = Queue(maxsize=queue_frames)
         self.tracker_kwargs = {
             "min_inliers": min_inliers,
@@ -275,6 +292,7 @@ class CausalPoseService:
         self.max_queue_age_s = 0.0
         self.replay_compute_total_s = 0.0
         self.replay_compute_max_s = 0.0
+        self.event_replays = 0
 
     @property
     def error(self) -> Exception | None:
@@ -426,31 +444,59 @@ class CausalPoseService:
                 # by the next queued frame, so replay cannot starve the
                 # current scene state for the duration of its whole history.
                 self._drain_pending(while_queue_empty=True)
+            # A stopped camera has no future event to yield to. Finish any
+            # retained replay before the service closes its decision journal.
+            self._drain_pending()
         except Exception as exc:
             with self._lock:
                 self._error = exc
 
     def _drain_pending(self, *, while_queue_empty: bool = False) -> None:
-        while self.pending and (not while_queue_empty or self.queue.empty()):
+        while (self.pending or self.pending_event_replays) and (not while_queue_empty or self.queue.empty()):
+            progressed = False
+            if self.pending_event_replays:
+                replay_role = next(iter(self.pending_event_replays))
+                replay_started_s = time.perf_counter()
+                progressed = self._event_replay_step(replay_role)
+                elapsed_s = time.perf_counter() - replay_started_s
+                self.replay_compute_total_s += elapsed_s
+                self.replay_compute_max_s = max(self.replay_compute_max_s, elapsed_s)
+            if while_queue_empty and not self.queue.empty():
+                break
             attached_role = self._sync_attachment()
             replay_role = next(
                 (role for role in self.pending if role == attached_role or role not in self.relationships),
                 None,
             )
-            if replay_role is None:
+            if replay_role is not None:
+                replay_started_s = time.perf_counter()
+                progressed = self._replay_one(replay_role) or progressed
+                elapsed_s = time.perf_counter() - replay_started_s
+                self.replay_compute_total_s += elapsed_s
+                self.replay_compute_max_s = max(self.replay_compute_max_s, elapsed_s)
+            if not progressed:
                 break
-            replay_started_s = time.perf_counter()
-            if not self._replay_one(replay_role):
-                break
-            elapsed_s = time.perf_counter() - replay_started_s
-            self.replay_compute_total_s += elapsed_s
-            self.replay_compute_max_s = max(self.replay_compute_max_s, elapsed_s)
 
     def _frame(self, frame: RGBDFrame) -> None:
         attached_role = self._sync_attachment()
         if self.history and frame.frame_id <= self.history[-1].frame_id:
             raise ValueError("causal camera frames must increase")
         self.history.append(frame)
+        self.attachment_by_frame[frame.frame_id] = attached_role
+        retained = {item.frame_id for item in self.history}
+        for frame_id in self.anchor_events.keys() - retained:
+            del self.anchor_events[frame_id]
+        for key in tuple(self.anchor_decisions_by_source):
+            if key[0] not in retained:
+                del self.anchor_decisions_by_source[key]
+        for frame_id in self.attachment_by_frame.keys() - retained:
+            del self.attachment_by_frame[frame_id]
+        for role, pending in tuple(self.pending_event_replays.items()):
+            pending.remaining_frame_ids.append(frame.frame_id)
+            if (
+                pending.last_frame_id is None and pending.trigger.frame_id not in retained
+            ) or pending.remaining_frame_ids[0] not in retained:
+                self._abort_event_replay(role, "event_replay_history_expired")
         scene_started_s = time.perf_counter()
         scene = self.scene.update(frame)
         self.scene_update_total_s += time.perf_counter() - scene_started_s
@@ -633,6 +679,19 @@ class CausalPoseService:
             for candidate in result.estimates:
                 self._record_anchor_decision(result, candidate, source_error)
             return
+        events = self.anchor_events.setdefault(result.frame_id, {})
+        for estimate in result.estimates:
+            events[estimate.role] = _Anchor(
+                result.frame_id,
+                (estimate,),
+                result.masks,
+                result.source_time_s,
+                result.calibration_version,
+                tuple(proposal for proposal in result.proposals if proposal.role == estimate.role),
+            )
+            self.anchor_event_revision_by_role[estimate.role] = (
+                self.anchor_event_revision_by_role.get(estimate.role, 0) + 1
+            )
         for estimate in result.estimates:
             candidate = estimate
             self._count_anchor_outcome(estimate.role, "received")
@@ -703,10 +762,13 @@ class CausalPoseService:
                             decided_at_s=accepted_at_s,
                         )
                         continue
-                    # A full event-time scene replay is still needed when an
-                    # older result might change intervening point/attachment
-                    # decisions. Replaying only its point motion here would
-                    # erase the later direct observation.
+                    if self._start_source_order_replay(estimate.role, attached_role, result, candidate):
+                        self._count_anchor_outcome(estimate.role, "event_replay_pending")
+                        self._record_anchor_decision(result, candidate, "event_replay_pending")
+                        continue
+                    # The retained history is insufficient to reconsider the
+                    # intervening source-frame decisions. Preserve the newer
+                    # belief rather than pretending an old result is current.
                     self.superseded_proposals += 1
                     self._count_anchor_outcome(estimate.role, "superseded_by_direct")
                     self._record_anchor_decision(result, candidate, "superseded_by_direct")
@@ -952,6 +1014,200 @@ class CausalPoseService:
         self._report_scene_support()
         return accepted_at_s
 
+    def _start_source_order_replay(
+        self, role: str, attached_role: str | None, trigger: _Anchor, candidate: PoseEstimate
+    ) -> bool:
+        """Prepare source-order replay without blocking the camera event worker.
+
+        The scene point identities are already measured on each camera frame.
+        Object point motion, group arbitration and retained direct proposals
+        run in source order in an isolated service, one frame at a time between
+        incoming camera events. An incomplete history leaves the live belief
+        untouched.
+        """
+        frames = list(self.history)
+        if (
+            not frames
+            or attached_role == role
+            or any(self.attachment_by_frame.get(frame.frame_id) == role for frame in frames)
+        ):
+            return False
+        event_frames = {
+            frame.frame_id for frame in frames if role in self.anchor_events.get(frame.frame_id, {})
+        }
+        if not event_frames:
+            return False
+        current = self.store.snapshot()[1].get(role)
+        if current is not None:
+            current_direct_s = current.last_direct_observation_s
+            if current_direct_s is None and current.evidence == Evidence.OBSERVED:
+                current_direct_s = current.source_time_s
+            if current_direct_s is not None and not any(
+                events[role].estimates[0].source_time_s == current_direct_s
+                for events in self.anchor_events.values()
+                if role in events
+            ):
+                return False
+        first_s = frames[0].source_time_s
+        prior_times = [item[0].source_time_s for item in self.direct_history.get(role, ())]
+        if (active := self.active.get(role)) is not None:
+            prior_times.append(active[1].source_time_s)
+        if (pending := self.pending.get(role)) is not None:
+            prior_times.append(pending.anchor.source_time_s)
+        if (observed := self.observed.get(role)) is not None:
+            prior_times.append(observed[0].source_time_s)
+        if any(source_s < first_s for source_s in prior_times):
+            return False
+        if any(scene.frame_id not in event_frames for _, scene, _ in self.direct_history.get(role, ())):
+            return False
+        for relation in (self.relationships.get(role), self.candidate_relationships.get(role)):
+            if relation is not None and relation.anchor_time_s < first_s:
+                return False
+        scene_ids = {scene.frame_id for scene in self.scene_history}
+        if any(frame.frame_id not in scene_ids for frame in frames):
+            return False
+        decisions: list[AnchorDecision] = []
+        shadow = CausalPoseService(
+            LatestPoseStore(),
+            history_frames=self.history.maxlen,
+            queue_frames=self.queue.maxsize,
+            **self.tracker_kwargs,
+            scene_max_points=self.scene.max_points,
+            environment_context_radius_m=self.environment_context_radius_m,
+            environment_min_motion_m=self.environment_min_motion_m,
+            environment_prediction_max_s=self.environment_prediction_max_s,
+            environment_min_inliers=self.environment_min_inliers,
+            static_prediction_max_s=self.static_prediction_max_s,
+            max_pose_disagreement_translation_m=self.max_pose_disagreement_translation_m,
+            max_pose_disagreement_rotation_rad=self.max_pose_disagreement_rotation_rad,
+            object_centers_by_role=self.object_centers_by_role,
+            object_points_by_role=self.object_points_by_role,
+            axial_symmetries=tuple(self.axial_symmetries.values()),
+            on_anchor_decision=decisions.append,
+        )
+        shadow.scene.update = lambda frame: next(
+            scene for scene in self.scene_history if scene.frame_id == frame.frame_id
+        )
+        self.pending_event_replays[role] = _PendingEventReplay(
+            role,
+            shadow,
+            decisions,
+            trigger,
+            candidate,
+            self.anchor_event_revision_by_role[role],
+            deque(frame.frame_id for frame in frames),
+        )
+        return True
+
+    def _abort_event_replay(self, role: str, outcome: str) -> None:
+        pending = self.pending_event_replays.pop(role)
+        self._count_anchor_outcome(role, outcome)
+        self._record_anchor_decision(pending.trigger, pending.candidate, outcome)
+
+    def _event_replay_step(self, role: str) -> bool:
+        pending = self.pending_event_replays[role]
+        if self._sync_attachment() == role:
+            self._abort_event_replay(role, "event_replay_attachment_changed")
+            return False
+        if pending.anchor_revision != self.anchor_event_revision_by_role[role]:
+            if not self._start_source_order_replay(
+                role, self._sync_attachment(), pending.trigger, pending.candidate
+            ):
+                self._abort_event_replay(role, "event_replay_history_expired")
+                return False
+            pending = self.pending_event_replays[role]
+        if pending.last_frame_id is None and pending.trigger.frame_id not in {
+            frame.frame_id for frame in self.history
+        }:
+            self._abort_event_replay(role, "event_replay_history_expired")
+            return False
+        if not pending.remaining_frame_ids:
+            return False
+        next_id = pending.remaining_frame_ids[0]
+        next_frame = next((frame for frame in self.history if frame.frame_id == next_id), None)
+        if next_frame is None:
+            self._abort_event_replay(role, "event_replay_history_expired")
+            return False
+        pending.shadow.set_attached_role(self.attachment_by_frame[next_frame.frame_id])
+        pending.shadow._frame(next_frame)
+        if event := self.anchor_events.get(next_frame.frame_id, {}).get(role):
+            pending.shadow._anchor(event, decision_time_s=next_frame.available_time_s)
+            pending.shadow._drain_pending()
+        pending.last_frame_id = next_frame.frame_id
+        pending.remaining_frame_ids.popleft()
+        if pending.remaining_frame_ids:
+            return True
+        result = pending.shadow.store.snapshot()[1].get(role)
+        current = self.store.snapshot()[1].get(role)
+        if result is None or (current is not None and result.source_time_s < current.source_time_s):
+            del self.pending_event_replays[role]
+            self._count_anchor_outcome(role, "event_replay_outdated")
+            return False
+        for name in (
+            "active",
+            "pending",
+            "motion_history",
+            "observed",
+            "direct_history",
+            "relationships",
+            "candidate_relationships",
+        ):
+            original = getattr(self, name)
+            revised = getattr(pending.shadow, name)
+            if role in revised:
+                original[role] = revised[role]
+            else:
+                original.pop(role, None)
+        if role in pending.shadow._expired_verified_roles:
+            self._expired_verified_roles.add(role)
+        else:
+            self._expired_verified_roles.discard(role)
+        result = replace(result, available_time_s=max(result.available_time_s, time.perf_counter()))
+        self.store.revise(result)
+        if self.on_layer is not None:
+            self.on_layer(result)
+        self._report_scene_support()
+        revised = next(
+            (
+                decision
+                for decision in pending.decisions
+                if decision.frame_id == pending.trigger.frame_id and decision.candidate.role == role
+            ),
+            None,
+        )
+        outcome = revised.outcome if revised is not None else "no_direct_pose"
+        self._count_anchor_outcome(role, f"replayed_{outcome}")
+        self._record_anchor_decision(
+            pending.trigger,
+            pending.candidate,
+            f"replayed_{outcome}",
+            accepted=revised.accepted if revised is not None else None,
+        )
+        for decision in pending.decisions:
+            key = (decision.frame_id, role)
+            if decision.frame_id == pending.trigger.frame_id:
+                continue
+            previous = self.anchor_decisions_by_source.get(key)
+            if previous is None or previous.outcome.removeprefix("replayed_") == decision.outcome:
+                continue
+            decided_at_s = time.perf_counter()
+            changed = replace(
+                decision,
+                outcome=f"replayed_{decision.outcome}",
+                decided_at_s=decided_at_s,
+                accepted=(
+                    replace(decision.accepted, available_time_s=decided_at_s)
+                    if decision.accepted is not None
+                    else None
+                ),
+            )
+            self.anchor_decisions_by_source[key] = changed
+            if self.on_anchor_decision is not None:
+                self.on_anchor_decision(changed)
+        del self.pending_event_replays[role]
+        self.event_replays += 1
+        return True
+
     def _replay_one(self, role: str) -> bool:
         pending = self.pending[role]
         next_frame = next((frame for frame in self.history if frame.frame_id > pending.last_frame_id), None)
@@ -1003,20 +1259,19 @@ class CausalPoseService:
         accepted: PoseEstimate | None = None,
         decided_at_s: float | None = None,
     ) -> None:
+        decision = AnchorDecision(
+            result.frame_id,
+            result.calibration_version,
+            candidate,
+            outcome,
+            time.perf_counter() if decided_at_s is None else decided_at_s,
+            accepted,
+            next((proposal for proposal in result.proposals if proposal.role == candidate.role), None),
+        )
+        if any(frame.frame_id == result.frame_id for frame in self.history):
+            self.anchor_decisions_by_source[(result.frame_id, candidate.role)] = decision
         if self.on_anchor_decision is not None:
-            self.on_anchor_decision(
-                AnchorDecision(
-                    result.frame_id,
-                    result.calibration_version,
-                    candidate,
-                    outcome,
-                    time.perf_counter() if decided_at_s is None else decided_at_s,
-                    accepted,
-                    next(
-                        (proposal for proposal in result.proposals if proposal.role == candidate.role), None
-                    ),
-                )
-            )
+            self.on_anchor_decision(decision)
 
     def _direct_conflicts_with_verified_group(
         self, estimate: PoseEstimate, frame: RGBDFrame, scene: SceneTracks, mask: np.ndarray

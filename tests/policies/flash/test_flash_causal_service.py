@@ -146,6 +146,120 @@ def test_later_observation_rebases_pending_track_without_restarting_replay():
         service.close()
 
 
+@pytest.mark.parametrize("last_frame", [2, 3])
+def test_late_older_observation_rechecks_a_newer_direct_fit_against_its_point_history(last_frame):
+    """Arrival order must not make a disputed later pose become the final belief."""
+    image = np.random.default_rng(4).integers(0, 255, (96, 96), dtype=np.uint8)
+    frames = [
+        frame(cv2.warpAffine(image, np.float32([[1, 0, 2 * i], [0, 1, 0]]), (96, 96)), i) for i in range(4)
+    ]
+    mask = np.zeros(image.shape, dtype=bool)
+    mask[20:76, 20:76] = True
+    points = np.array([[x, y, 1.0] for x in np.linspace(-0.2, 0.2, 15) for y in np.linspace(-0.2, 0.2, 15)])
+
+    def run(events):
+        store = LatestPoseStore()
+        decisions = []
+        service = CausalPoseService(
+            store, object_points_by_role={"object": points}, on_anchor_decision=decisions.append
+        )
+        for kind, index in events:
+            if kind == "frame":
+                service._frame(frames[index])
+            else:
+                pose = np.eye(4)
+                if index == 2:
+                    pose[0, 3] = 0.1  # The image and point motion support only 0.04 m.
+                estimate = PoseEstimate(
+                    "object", pose, index / 30, index / 30, Evidence.OBSERVED, "v1", (True,) * 3, (True,) * 3
+                )
+                service._anchor(_Anchor(index, (estimate,), {"object": mask}))
+                if index == 0 and service.history[-1].frame_id > 0:
+                    assert service.event_replays == 0
+                    assert "object" in service.pending_event_replays
+                    service.queue.put_nowait(frames[-1])
+                    service._drain_pending(while_queue_empty=True)
+                    assert service.pending_event_replays["object"].last_frame_id is None
+                    service.queue.get_nowait()
+                service._drain_pending()
+        return store.snapshot()[1]["object"], decisions
+
+    source_events = [("frame", 0), ("anchor", 0), ("frame", 1), ("frame", 2), ("anchor", 2)]
+    late_events = [("frame", 0), ("frame", 1), ("frame", 2), ("anchor", 2)]
+    if last_frame == 3:
+        source_events.append(("frame", 3))
+        late_events.append(("frame", 3))
+    late_events.append(("anchor", 0))
+    source_order, ordered_decisions = run(source_events)
+    late_order, late_decisions = run(late_events)
+    assert ordered_decisions[-1].outcome == "direct_point_unresolved"
+    np.testing.assert_allclose(late_order.pose, source_order.pose, atol=0.005)
+    assert late_order.last_direct_observation_s == source_order.last_direct_observation_s
+    assert late_decisions[-1].frame_id == 2
+    assert late_decisions[-1].outcome == "replayed_direct_point_unresolved"
+
+
+def test_event_replay_keeps_current_belief_if_its_source_frame_expires():
+    image = np.random.default_rng(5).integers(0, 255, (96, 96), dtype=np.uint8)
+    frames = [frame(image, index) for index in range(4)]
+    mask = np.zeros(image.shape, dtype=bool)
+    mask[20:76, 20:76] = True
+    store = LatestPoseStore()
+    decisions = []
+    service = CausalPoseService(store, history_frames=3, on_anchor_decision=decisions.append)
+    for item in frames[:3]:
+        service._frame(item)
+    newer = PoseEstimate(
+        "object", np.eye(4), 2 / 30, 2 / 30, Evidence.OBSERVED, "v1", (True,) * 3, (True,) * 3
+    )
+    service._anchor(_Anchor(2, (newer,), {"object": mask}))
+    service._drain_pending()
+    older = PoseEstimate("object", np.eye(4), 0.0, 0.0, Evidence.OBSERVED, "v1", (True,) * 3, (True,) * 3)
+    service._anchor(_Anchor(0, (older,), {"object": mask}))
+    assert "object" in service.pending_event_replays
+    service._frame(frames[3])
+    before = store.snapshot()[1]["object"]
+    assert "object" not in service.pending_event_replays
+    service._drain_pending()
+    after = store.snapshot()[1]["object"]
+    np.testing.assert_array_equal(after.pose, before.pose)
+    assert service.event_replays == 0
+    assert service.anchor_outcomes_by_role["object"]["event_replay_history_expired"] == 1
+    assert decisions[-1].frame_id == 0
+    assert decisions[-1].outcome == "event_replay_history_expired"
+    assert set(service.anchor_events) == {2}
+
+
+def test_event_replay_refuses_to_skip_an_evicted_intermediate_frame():
+    image = np.random.default_rng(4).integers(0, 255, (96, 96), dtype=np.uint8)
+    frames = [
+        frame(cv2.warpAffine(image, np.float32([[1, 0, 2 * index], [0, 1, 0]]), (96, 96)), index)
+        for index in range(6)
+    ]
+    mask = np.zeros(image.shape, dtype=bool)
+    mask[20:76, 20:76] = True
+    store = LatestPoseStore()
+    decisions = []
+    service = CausalPoseService(store, history_frames=4, on_anchor_decision=decisions.append)
+    for item in frames[:4]:
+        service._frame(item)
+    newer = PoseEstimate(
+        "object", np.eye(4), 3 / 30, 3 / 30, Evidence.OBSERVED, "v1", (True,) * 3, (True,) * 3
+    )
+    service._anchor(_Anchor(3, (newer,), {"object": mask}))
+    service._drain_pending()
+    older = PoseEstimate("object", np.eye(4), 0.0, 0.0, Evidence.OBSERVED, "v1", (True,) * 3, (True,) * 3)
+    service._anchor(_Anchor(0, (older,), {"object": mask}))
+    assert service._event_replay_step("object")  # Frame 0 is already in the replay.
+    assert service.pending_event_replays["object"].remaining_frame_ids[0] == 1
+    service._frame(frames[4])
+    assert "object" in service.pending_event_replays
+    service._frame(frames[5])  # Frame 1 is evicted before the replay consumes it.
+    assert "object" not in service.pending_event_replays
+    assert decisions[-1].outcome == "event_replay_history_expired"
+    assert service.event_replays == 0
+
+
 def test_old_point_replay_yields_to_a_new_camera_frame(monkeypatch):
     image = np.random.default_rng(24).integers(0, 255, (96, 96), dtype=np.uint8)
     frames = [frame(image, index) for index in range(22)]
