@@ -9,14 +9,20 @@ reported. Run with PYTHONPATH=src and one or more --bundle paths.
 import argparse
 import csv
 import json
+from dataclasses import replace
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 
 from lerobot.policies.flash.geometry import inverse, transform
 from lerobot.policies.flash.held_pose_diagnostics import _arm_pose_at
 from lerobot.policies.flash.perception import HeldAttachmentUpdater
-from lerobot.policies.flash.pose_disagreement import surface_support
+from lerobot.policies.flash.pose_disagreement import (
+    PoseComparisonVerdict,
+    compare_pose_proposals,
+    surface_support,
+)
 from lerobot.policies.flash.registration import DegenerateRegistrationError
 from lerobot.policies.flash.runtime import AttachmentRuntimeLimits
 from lerobot.policies.flash.sealed_demo_import import _frame, _nearest_index
@@ -48,7 +54,83 @@ class AblatedUpdater(HeldAttachmentUpdater):
         old_conflicted = self._conflicted
         old_ambiguous = self._visual_ambiguous
         old_pending = self._pending_visual
-        accepted = super().on_pose_update(version, poses, frame=frame, mask=mask, ee_at_capture=ee_at_capture)
+        if self.rule in {"clean_depth_verdict", "clean_depth_temporal"}:
+            # Keep the whole object mask for projected-surface coverage; only
+            # use reliable interior pixels for the depth comparison. Patch the
+            # pure comparator here so this research variant cannot silently
+            # change the production updater's default rule.
+            def compare_with_clean_depth(*args, **kwargs):
+                result = compare_pose_proposals(*args, **kwargs)
+                candidate, prior = result.candidate, result.prior
+                minimum = kwargs["min_masked_depth_points"]
+                if (
+                    candidate.clean_depth_points is None
+                    or prior.clean_depth_points is None
+                    or candidate.clean_depth_points < minimum
+                    or prior.clean_depth_points < minimum
+                ):
+                    verdict = PoseComparisonVerdict.INSUFFICIENT_EVIDENCE
+                elif (
+                    result.object_center_difference_m <= kwargs["max_agreement_offset_m"]
+                    and result.rotation_difference_rad <= kwargs["max_agreement_angle_rad"]
+                ):
+                    verdict = PoseComparisonVerdict.AGREE
+                elif (
+                    candidate.projected_point_mask_fraction >= prior.projected_point_mask_fraction
+                    and candidate.clean_depth_residual_p90_m <= prior.clean_depth_residual_p90_m
+                    and (
+                        candidate.projected_point_mask_fraction > prior.projected_point_mask_fraction
+                        or candidate.clean_depth_residual_p90_m < prior.clean_depth_residual_p90_m
+                    )
+                ):
+                    verdict = PoseComparisonVerdict.CANDIDATE_FAVORED
+                elif (
+                    prior.projected_point_mask_fraction >= candidate.projected_point_mask_fraction
+                    and prior.clean_depth_residual_p90_m <= candidate.clean_depth_residual_p90_m
+                    and (
+                        prior.projected_point_mask_fraction > candidate.projected_point_mask_fraction
+                        or prior.clean_depth_residual_p90_m < candidate.clean_depth_residual_p90_m
+                    )
+                ):
+                    verdict = PoseComparisonVerdict.PRIOR_FAVORED
+                else:
+                    verdict = PoseComparisonVerdict.AMBIGUOUS
+                if (
+                    self.rule == "clean_depth_temporal"
+                    and verdict == PoseComparisonVerdict.AMBIGUOUS
+                    and self._pending_visual is not None
+                    and ee_at_capture is not None
+                ):
+                    # A second image need not independently prefer the same
+                    # hypothesis if it is neutral and its visual proposal is
+                    # the same rigid gripper-object relation as the earlier,
+                    # favored image. A prior-favored image still vetoes it.
+                    _, pending = self._pending_visual
+                    current = inverse(ee_at_capture) @ args[3]
+                    center = self.object_center_object_m
+                    earlier_center = pending[:3, :3] @ center + pending[:3, 3]
+                    current_center = current[:3, :3] @ center + current[:3, 3]
+                    turn = float(
+                        np.arccos(np.clip((np.trace(pending[:3, :3].T @ current[:3, :3]) - 1) / 2, -1, 1))
+                    )
+                    if (
+                        np.linalg.norm(earlier_center - current_center) <= self.max_update_shift_m
+                        and turn <= self.max_update_turn_rad
+                    ):
+                        verdict = PoseComparisonVerdict.CANDIDATE_FAVORED
+                return replace(result, verdict=verdict)
+
+            with patch(
+                "lerobot.policies.flash.pose_disagreement.compare_pose_proposals",
+                side_effect=compare_with_clean_depth,
+            ):
+                accepted = super().on_pose_update(
+                    version, poses, frame=frame, mask=mask, ee_at_capture=ee_at_capture
+                )
+        else:
+            accepted = super().on_pose_update(
+                version, poses, frame=frame, mask=mask, ee_at_capture=ee_at_capture
+            )
         if not accepted or old_attachment is None or self.rule == "baseline":
             return accepted
         evidence = self.latest_visual_evidence()
@@ -297,6 +379,8 @@ if __name__ == "__main__":
         "supported_prior_dominates",
         "visual_over_tolerance",
         "cleaned_observation",
+        "clean_depth_verdict",
+        "clean_depth_temporal",
     )
     results = []
     for bundle in args.bundle:

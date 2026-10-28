@@ -160,3 +160,43 @@ and annotations. After normalizing the prepared-version name, each v11 skill
 is identical to v10; attachment transforms, conflict flags, correction flags
 and visual-ambiguity flags also match exactly. The replay loader exposes the
 new score on the matching RGB-D frame (dowel 291 and gamepad 303 checked).
+
+## Does the held rule generalize beyond the newest preparation?
+
+Selecting an old preparation in the UI exposed a **real historical failure**;
+opening the newest one is only a navigation fix. The controlled old-input
+replay above shows that the current rule removes most of that failure on both
+raw demos, with the same object annotations and reference points. It does not
+show that either corrected pose is accurate, or that the rule works on an
+unseen object or camera view. In particular, the current dowel correction at frame
+291 is not strongly supported by reliable interior depth.
+
+The [clean-depth counterfactual](clean_depth_ablation.json) keeps the full mask
+for silhouette coverage and changes only the depth part of the pose verdict to
+the reliable interior. Its [per-frame evidence](clean_depth_ablation_frames.csv)
+shows the following. These are software replays of two already recorded demos;
+no robot action was changed.
+
+| Rule                                                                                                     | Dowel conflicted camera frames | Gamepad conflicted camera frames |
+| -------------------------------------------------------------------------------------------------------- | -----------------------------: | -------------------------------: |
+| Current rule, raw depth                                                                                  |                             20 |                                6 |
+| Reliable depth on each image independently                                                               |                            205 |                                7 |
+| Reliable depth, with a previously favored candidate confirmed by a consistent, non-opposing second image |                             20 |                                7 |
+
+For the dowel, frame 284 favors vision under both the full-mask coverage and
+reliable-depth checks. At frame 291 the reliable-depth scores are nearly tied,
+but its gripper-relative visual pose is 5.8 mm and 8.2° from frame 284, within
+the already configured attachment-update limits. The earlier observed pose at
+frame 271 is 23.5 mm and 32.1° from frame 284, so it does not form the same
+rigid attachment hypothesis. This temporal explanation reproduces the
+current dowel conflict count without relying on the raw-depth edge artifact.
+The gamepad's first favored image has too few reliable depth pixels for the
+gripper hypothesis, so this conservative variant resolves one camera frame
+later. The late near-180° gamepad flip remains ambiguous in both variants.
+
+This is a useful candidate rule, **not yet an accuracy result**: consecutive
+views can repeat the same systematic pose error, and the first-view reference
+surface does not measure the hidden contact tip. A held-out recording with
+independently checked object landmarks is needed before enabling this rule in
+control. The runtime still uses the current raw-depth rule; the candidate is
+isolated in the offline harness.
