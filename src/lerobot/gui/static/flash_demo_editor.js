@@ -173,11 +173,11 @@ function _flashEditorRender() {
     const heading = document.createElement('h3');
     heading.textContent = state.raw ? 'Prepare demo' : 'Edit demo';
     editor.append(heading);
-    if (state.raw) {
-        const summary = document.createElement('p');
-        summary.textContent = 'Name the objects, mark the action on the timeline, then prepare.';
-        editor.append(summary);
-    }
+    const summary = document.createElement('p');
+    summary.textContent = state.raw
+        ? 'Name the objects, mark the important moments, then prepare.'
+        : 'Choose a key frame on the timeline, change its action, then preview.';
+    editor.append(summary);
     const changed = document.createElement('p');
     changed.id = 'flash-demo-editor-change-status';
     editor.append(changed);
@@ -194,20 +194,21 @@ function _flashEditorRender() {
         state.section = null;
     }
     const secondarySections = new Set(state.raw
-        ? ['pose', 'trackers', 'advanced']
-        : ['setup', 'pose', 'trackers', 'advanced']);
+        ? ['references', 'pose', 'trackers', 'advanced']
+        : ['objects', 'setup', 'references', 'pose', 'trackers', 'advanced']);
     const more = document.createElement('details');
     more.className = 'flash-editor-group flash-editor-more';
     more.open = !!expanded.more || secondarySections.has(requestedSection);
     const moreTitle = document.createElement('summary');
-    moreTitle.textContent = 'More settings';
+    moreTitle.textContent = state.raw ? 'Tracking and settings' : 'Objects, tracking and settings';
     moreTitle.onclick = () => { expanded.more = !more.open; };
     more.append(moreTitle);
+    const mainSections = state.raw
+        ? [['setup', 'Recording setup'], ['objects', 'Objects'], ['events', 'Timing'], ['keyframes', 'Action']]
+        : [['keyframes', 'Action'], ['events', 'Timing'], ['objects', 'Objects'], ['setup', 'Recording setup']];
     for (const [key, label, primary] of [
-        ['keyframes', 'Key frames', true],
-        ['objects', 'Objects and masks', state.raw],
-        ['events', 'Action timing', state.raw],
-        ['setup', 'Recording setup', state.raw],
+        ...mainSections.map(([key, label]) => [key, label, !['setup', 'objects'].includes(key) || state.raw]),
+        ['references', 'Reference frames', false],
         ['pose', 'Pose evidence', false],
         ['trackers', 'Tracker experiments', false],
         ['advanced', 'Matching parameters', false],
@@ -388,29 +389,36 @@ function _flashEditorRender() {
         }
     }
 
-    const events = _flashEditorSection(panes.events, 'Reference and events', 'Move the playhead to the desired frame, then choose “Use current”.');
-    _flashEditorField(events, 'Appearance reference frame', a.reference_frame,
-        value => _flashEditorSetReferenceFrame(value), null, 'number');
-    _flashEditorButton(events, 'Use current for appearance', () => {
-        _flashEditorSetReferenceFrame(_flashEditorCurrentFrame().frame_index);
-    });
-    _flashEditorButton(events, 'Jump to appearance', () => _flashEditorJump(Number(a.reference_frame)));
-    _flashEditorField(events, 'Last clear grasp view (frame)', a.grasp_reference_frame, value => {
-        a.grasp_reference_frame = value;
-    }, null, 'number');
-    _flashEditorButton(events, 'Use current for grasp view', () => {
-        a.grasp_reference_frame = _flashEditorCurrentFrame().frame_index; _flashEditorRender();
-    });
-    _flashEditorButton(events, 'Jump to grasp view', () => _flashEditorJump(Number(a.grasp_reference_frame)));
+    const events = _flashEditorSection(panes.events, 'Grasp and release',
+        'Move the playhead, then mark when the object is held or released.');
     for (const [key, label] of [
         ['grasp_time_s', 'Grasp time (s)'], ['release_time_s', 'Release time (s)'],
-        ['start_anchored_until_s', 'Start-anchored until (s)'],
     ]) {
         _flashEditorField(events, label, a[key], value => { a[key] = value; }, null, 'number');
-        _flashEditorButton(events, `Use current for ${label.toLowerCase()}`, () => {
+        _flashEditorButton(events, key === 'grasp_time_s' ? 'Mark grasp here' : 'Mark release here', () => {
             a[key] = _flashEditorCurrentFrame().snapshot.demo.time_s; _flashEditorRender();
         });
     }
+    const references = _flashEditorSection(panes.references, 'Reference frames',
+        'Use a clear view for initial appearance and a last clear view before the object is held.');
+    _flashEditorField(references, 'Appearance reference frame', a.reference_frame,
+        value => _flashEditorSetReferenceFrame(value), null, 'number');
+    _flashEditorButton(references, 'Use current for appearance', () => {
+        _flashEditorSetReferenceFrame(_flashEditorCurrentFrame().frame_index);
+    });
+    _flashEditorButton(references, 'Jump to appearance', () => _flashEditorJump(Number(a.reference_frame)));
+    _flashEditorField(references, 'Last clear grasp view (frame)', a.grasp_reference_frame, value => {
+        a.grasp_reference_frame = value;
+    }, null, 'number');
+    _flashEditorButton(references, 'Use current for grasp view', () => {
+        a.grasp_reference_frame = _flashEditorCurrentFrame().frame_index; _flashEditorRender();
+    });
+    _flashEditorButton(references, 'Jump to grasp view', () => _flashEditorJump(Number(a.grasp_reference_frame)));
+    _flashEditorField(references, 'Start-anchored until (s)', a.start_anchored_until_s,
+        value => { a.start_anchored_until_s = value; }, null, 'number');
+    _flashEditorButton(references, 'Use current for start-anchored until (s)', () => {
+        a.start_anchored_until_s = _flashEditorCurrentFrame().snapshot.demo.time_s; _flashEditorRender();
+    });
 
     const objects = _flashEditorSection(panes.objects, 'Objects and masks', state.raw
         ? 'This SO-107 importer handles one held object and one target. Choose their names; prompts describe what SAM should segment in the reference frame.'
@@ -503,7 +511,8 @@ function _flashEditorRender() {
         });
     }
 
-    const keypoints = _flashEditorSection(panes.keyframes, 'Key frame');
+    const keypoints = _flashEditorSection(panes.keyframes, 'Key frame',
+        'Use the timeline dots to choose a key frame. The action below applies at that moment.');
     const points = state.keypointsDocument.keypoints;
     if (points.length) {
         state.keypointIndex = Math.max(0, Math.min(state.keypointIndex, points.length - 1));
@@ -553,7 +562,7 @@ function _flashEditorRender() {
             if (startAnchored || state.pickingReference) {
                 const note = document.createElement('p');
                 note.textContent = startAnchored
-                ? 'This interval uses the grasp-start reference. To change it, first edit “Start-anchored until” under Action timing.'
+                ? 'This interval uses the grasp-start reference. To change it, edit “Start-anchored until” under Tracking and settings.'
                     : 'Click a measured object in the 3D scene to use it as this key frame’s reference.';
                 details.append(note);
             }

@@ -12,6 +12,14 @@ panel can launch a bounded live trial and record another ordinary LeRobot
 dataset. Startup requires each needed object to register into the _same stable
 object frame_ used by the demonstration before robot motion begins.
 
+The demo editor keeps the current key frame and grasp/release timing beside
+playback. Raw demo setup also shows object naming. Object corrections, tracker
+experiments and numeric settings are optional.
+Demo and recorded rollout review can use the same 3D scene viewer. A rollout
+shows its recorded RGB-D frame and saved pose, but older rollouts do not contain
+same-frame object masks, so their 3D view does not claim a measured object
+surface. The live Test view does not yet use this 3D renderer.
+
 Run → FLASH lists a sealed-format SO-107 recording with `showservo_demo.npz`
 even before it has a `flash/v1` extension. Open the raw demo, choose **Prepare
 demo**, and use the playback editor to name the held object and target, enter
@@ -43,8 +51,8 @@ That command is a compatibility entry point; the importer is
    estimator. The latter proposes motion with UFM and corrects it against the
    current segmented depth surface. The selected `vision_pipeline` configuration
    is saved in the prepared bundle and preparation cache identity; live execution
-   uses that saved configuration. The editor's **Preparation and matching
-   parameters → Vision pipeline (demo and run)** selects the backend.
+   uses that saved configuration. The editor's **Tracking and settings → Vision
+   pipeline (demo and run)** selects the backend.
    An annotation without this field retains appearance matching; an old bundle
    without the field retains the legacy live appearance/shape configuration.
    Previously, preparation disabled shape fallback while execution enabled it

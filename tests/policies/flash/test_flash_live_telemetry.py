@@ -96,7 +96,23 @@ def test_live_tracker_layers_are_replayed_with_camera_frame(tmp_path: Path) -> N
     assert current["accepted"]["object"]["estimator"] == "environment_group_motion"
     assert current["direct_point_comparisons"]["object"]["verdict"] == "ambiguous"
     assert current["direct_free_space_comparisons"]["object"]["verdict"] == "contradicted"
+    (tmp_path / "meta").mkdir()
+    (tmp_path / "meta" / "info.json").write_text(
+        json.dumps(
+            {
+                "features": {
+                    "observation.images.front": {"dtype": "image"},
+                    "observation.images.front_depth": {"dtype": "image", "info": {"is_depth_map": True}},
+                }
+            }
+        )
+    )
     replay = _flash_tracker_replay(tmp_path, 0)
+    assert replay["kind"] == "rollout"
+    assert replay["camera_features"] == {
+        "rgb": "observation.images.front",
+        "depth": "observation.images.front_depth",
+    }
     assert replay["layer_history"]
     assert replay["frames"][-1]["frame_index"] == 8
     assert replay["frames"][-1]["snapshot"]["accepted"] == current["accepted"]

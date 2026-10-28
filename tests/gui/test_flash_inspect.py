@@ -675,7 +675,8 @@ def test_run_flash_lists_demos_and_shows_extracted_pose_overlay(gui_page):
     page.wait_for_function("() => !!document.querySelector('#flash-demo-editor')")
     assert "Edit demo" in page.locator("#flash-demo-editor").inner_text()
     assert page.locator("#flash-demo-editor-frame").inner_text().startswith("Frame 4")
-    page.locator("#flash-demo-editor .flash-editor-group[data-section='objects'] > summary").click()
+    page.get_by_text("Objects, tracking and settings", exact=True).click()
+    assert page.locator("#flash-demo-editor .flash-editor-pane[data-section='objects']").is_visible()
     page.get_by_role("button", name="Draw replacement mask").click()
     page.evaluate("""() => {
         const image = document.querySelector('#rerun-viewer .flash-replay-grid img');
@@ -686,7 +687,6 @@ def test_run_flash_lists_demos_and_shows_extracted_pose_overlay(gui_page):
     page.get_by_role("button", name="Finish polygon").click()
     assert "Manual object mask: 3 vertices" in page.locator("#flash-demo-editor-polygon-status").inner_text()
     assert len(page.evaluate("flashDemoEditor.annotation.reference_polygons_by_role.object")) == 3
-    page.get_by_text("More settings", exact=True).click()
     assert page.get_by_label("Processing scope", exact=True).input_value() == ""
     assert page.get_by_label("Grow points from later views").is_checked()
     page.get_by_label("Maximum points per object").fill("256")
@@ -969,6 +969,109 @@ def test_run_flash_tracker_panel_reuses_view_for_recorded_layers(gui_page):
 
 @pytest.mark.requires_playwright
 @pytest.mark.skipif(importlib.util.find_spec("playwright") is None, reason="Playwright is not installed")
+def test_rollout_replay_uses_recorded_metric_depth_in_the_shared_scene(gui_page):
+    page = gui_page
+    height, width = 48, 64
+    _, encoded = cv2.imencode(".jpg", np.full((height, width, 3), 100, dtype=np.uint8))
+    requested_depth = []
+    page.route(
+        "**/api/run/flash/recordings",
+        lambda route: route.fulfill(
+            json=[
+                {
+                    "dataset_root": "/tmp/metric-rollout",
+                    "episode": 0,
+                    "modified_at_s": 12,
+                    "frames": 1,
+                    "outcome": "unknown",
+                }
+            ]
+        ),
+    )
+    page.route(
+        "**/api/run/flash/telemetry/replay?*",
+        lambda route: route.fulfill(
+            json={
+                "available": True,
+                "kind": "rollout",
+                "layer_history": True,
+                "camera_features": {
+                    "rgb": "observation.images.front",
+                    "depth": "observation.images.front_depth",
+                },
+                "frames": [
+                    {
+                        "frame_index": 3,
+                        "snapshot": {
+                            "recorded_at_s": 12,
+                            "camera": {
+                                "frame_id": 3,
+                                "source_time_s": 11.9,
+                                "width": width,
+                                "height": height,
+                                "intrinsics": [[50, 0, 32], [0, 50, 24], [0, 0, 1]],
+                                "base_from_camera": np.eye(4).tolist(),
+                            },
+                            "centers_object_m": {"object": [0, 0, 1]},
+                            "points_object_m": {"object": [[0, 0, 1], [0.01, 0, 1], [0, 0.01, 1]]},
+                            "observed_masks": {
+                                "object": {"frame_id": 2, "boundary_xy": [[1, 1], [2, 1], [2, 2]]}
+                            },
+                            "proposals": {},
+                            "layers": {},
+                            "accepted": {
+                                "object": {
+                                    "pose": np.eye(4).tolist(),
+                                    "evidence": "observed",
+                                    "source_time_s": 11.9,
+                                    "estimator": "appearance_rgbd",
+                                }
+                            },
+                            "held_prediction": None,
+                        },
+                    }
+                ],
+            }
+        ),
+    )
+    page.route(
+        "**/episodes/0/frame/3?*",
+        lambda route: route.fulfill(body=encoded.tobytes(), content_type="image/jpeg"),
+    )
+    page.route(
+        "**/episodes/0/depth-frame/3?*",
+        lambda route: (
+            requested_depth.append(route.request.url),
+            route.fulfill(
+                body=np.full((height, width), 1000, dtype="<u2").tobytes(),
+                content_type="application/octet-stream",
+            ),
+        ),
+    )
+    page.evaluate("switchTab('run')")
+    page.evaluate("() => selectWorkflow('flash')")
+    page.evaluate(
+        "datasets['/tmp/metric-rollout'] = {id: '/tmp/metric-rollout', root: '/tmp/metric-rollout'}"
+    )
+    page.get_by_role("tab", name="Rollouts").click()
+    page.locator("#run-flash-recordings .flash-recording").click()
+    page.wait_for_function(
+        "() => document.querySelector('.flash-replay-grid img')?.dataset.loadedFrame === '3'"
+    )
+    page.get_by_role("button", name="3D scene").click()
+    page.wait_for_function("() => flashSceneFrameCache?.frameIndex === 3")
+    assert len(requested_depth) == 1
+    assert "camera=observation.images.front_depth" in requested_depth[0]
+    assert page.evaluate("flashSceneFrameCache.depth[0]") == 1000
+    assert "same-frame masks were not recorded" in page.locator("#flash-scene-status").inner_text()
+    assert page.locator(".flash-scene-photo").evaluate("element => element.style.visibility") == "hidden"
+    assert page.locator("#flash-scene-edit").count() == 0
+    assert page.locator("#flash-scene-surface").count() == 0
+    assert page.locator("#flash-scene-group").count() == 0
+
+
+@pytest.mark.requires_playwright
+@pytest.mark.skipif(importlib.util.find_spec("playwright") is None, reason="Playwright is not installed")
 def test_raw_demo_editor_collects_object_names_and_action_from_visible_controls(gui_page):
     page = gui_page
     submitted = []
@@ -1040,10 +1143,11 @@ def test_raw_demo_editor_collects_object_names_and_action_from_visible_controls(
         current_section = {
             "Objects": "objects",
             "Events": "events",
+            "References": "references",
             "Advanced": "advanced",
             "Key frames": "keyframes",
         }[name]
-        if current_section == "advanced":
+        if current_section in {"advanced", "references"}:
             more = page.locator("#flash-demo-editor .flash-editor-more")
             if not more.evaluate("element => element.open"):
                 more.locator("summary").click()
@@ -1080,13 +1184,16 @@ def test_raw_demo_editor_collects_object_names_and_action_from_visible_controls(
         page.get_by_role("button", name="Add object").click()
     set_field("Rotational symmetry", "long_axis")
     assert "dowel" not in page.locator("#flash-demo-editor").inner_text().lower()
-    section("Events")
+    section("References")
     page.get_by_role("button", name="Use current for grasp view").click()
     seek(1)
-    page.get_by_role("button", name="Use current for grasp time").click()
+    section("Events")
+    page.get_by_role("button", name="Mark grasp here").click()
+    section("References")
     page.get_by_role("button", name="Use current for start-anchored until").click()
     seek(2)
-    page.get_by_role("button", name="Use current for release time").click()
+    section("Events")
+    page.get_by_role("button", name="Mark release here").click()
     section("Advanced")
     page.get_by_role("button", name="Apply SO-107 starter parameters").click()
     set_field("Vision pipeline (demo and run)", "surface")
@@ -1269,14 +1376,14 @@ def test_3d_scene_projection_and_surface_pick_edit_the_prepared_keyframe(gui_pag
     page.wait_for_function("() => !!flashDemoEditor")
     assert not page.locator("#run-sidebar").is_visible()
     assert page.locator("#flash-demo-editor .flash-editor-group > summary").all_inner_texts() == [
-        "Objects and masks",
-        "Action timing",
-        "More settings",
+        "Objects, tracking and settings",
     ]
-    page.get_by_text("More settings", exact=True).click()
+    assert not page.locator("#flash-demo-editor .flash-editor-pane[data-section='objects']").is_visible()
+    assert page.locator("#flash-demo-editor .flash-editor-pane[data-section='events']").is_visible()
+    page.get_by_text("Objects, tracking and settings", exact=True).click()
     assert page.get_by_text("Pose evidence", exact=True).is_visible()
     assert page.locator(".flash-editor-more .flash-editor-group").count() == 0
-    page.get_by_text("More settings", exact=True).click()
+    page.get_by_text("Objects, tracking and settings", exact=True).click()
     page.get_by_role("button", name="Pick object in scene").click()
     box = page.locator(".flash-scene-canvas").bounding_box()
     scale = min(box["width"] / width, box["height"] / height)
@@ -1303,9 +1410,6 @@ def test_3d_scene_projection_and_surface_pick_edit_the_prepared_keyframe(gui_pag
     assert page.evaluate("([x, y]) => flashSceneView.pickObserved(x, y)?.role", tool_pixel) == "tool"
     page.mouse.click(*tool_pixel)
     assert page.evaluate("flashDemoEditor.role") == "tool"
-    assert page.locator("#flash-demo-editor .flash-editor-group[data-section='objects']").evaluate(
-        "element => element.open"
-    )
     assert page.evaluate("flashDemoEditor.keypointsDocument.keypoints[0].frame") == "fixture"
     assert "Unsaved edits" in page.locator("#flash-demo-editor-change-status").inner_text()
     page.get_by_role("button", name="Preview updated demo").click()

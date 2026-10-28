@@ -1076,6 +1076,17 @@ async def flash_live_telemetry() -> dict:
 
 
 def _flash_tracker_replay(root: Path, episode: int) -> dict:
+    info_path = root.expanduser().resolve() / "meta" / "info.json"
+    camera_features = None
+    if info_path.is_file():
+        features = json.loads(info_path.read_text(encoding="utf-8")).get("features", {})
+        for depth_key, feature in features.items():
+            if not feature.get("info", {}).get("is_depth_map") or not depth_key.endswith("_depth"):
+                continue
+            rgb_key = depth_key.removesuffix("_depth")
+            if rgb_key in features:
+                camera_features = {"rgb": rgb_key, "depth": depth_key}
+                break
     extension = root.expanduser().resolve() / "flash" / "v1"
     trace_path = extension / f"episode_{episode:06d}.jsonl"
     if not trace_path.is_file():
@@ -1105,12 +1116,20 @@ def _flash_tracker_replay(root: Path, episode: int) -> dict:
             else:
                 frame_index = 0
             frames.append({"frame_index": frame_index, "snapshot": snapshot})
-        return {"available": True, "layer_history": True, "frames": frames}
+        return {
+            "available": True,
+            "kind": "rollout",
+            "layer_history": True,
+            "camera_features": camera_features,
+            "frames": frames,
+        }
     # Older trials recorded the accepted planner pose at motor ticks, but not
     # every rejected/direct/group layer. Show only what those traces establish.
     return {
         "available": True,
+        "kind": "rollout",
         "layer_history": False,
+        "camera_features": camera_features,
         "frames": [
             {
                 "frame_index": tick["frame_index"],
