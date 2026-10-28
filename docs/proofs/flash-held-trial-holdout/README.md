@@ -66,6 +66,23 @@ This is evidence to test a **partial orientation constraint** separately from
 full-pose correction; it does not establish a calibrated error bound or justify
 moving the hidden insertion tip in control.
 
+The trial audit now projects each measured line onto the closest orientation
+of the saved gripper attachment, leaving its pivot position prior-based. The
+median required turn is 17.8° in the first attempt and 13.3° in the second;
+individual turns reach 72.6° and 50.9°. That is too large to present as a
+small pose refinement without validating the task point and the source-time
+attachment. The projection preserves the unmeasured roll and reports the
+margin between the two possible end assignments.
+
+This line correspondence is not implied by axial symmetry. In the saved
+reference clouds, the dowel's declared symmetry axis agrees with the cloud's
+dominant direction, and its 3D spreads are 3.6, 7.3 and 30.9 mm. The ring's
+symmetry axis is 90° from its cloud's dominant direction, whose two largest
+spreads are close (12.8 and 14.2 mm). Applying the dowel's visible-axis rule
+to every symmetric object would therefore be a geometry error. A reusable
+direction constraint must carry an established object-to-observation line
+correspondence and its evidence, rather than infer it from a symmetry label.
+
 The surface pipeline already divides its spatial samples into interleaved fit and validation tiles. For each source image, we also compare candidate and gripper directions with the principal direction measured from **each half separately**. A proposal gets a shadow vote only when it is closer in both halves; otherwise the vote is ambiguous. At the 0.6-second future check:
 
 | Attempt  | Both halves favor | Source frames | Voted source predicts the later direction better |

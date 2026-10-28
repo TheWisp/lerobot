@@ -13,6 +13,8 @@ from pathlib import Path
 
 import numpy as np
 
+from lerobot.policies.flash.axis_constraint import UndirectedAxisConstraint
+
 
 def load(path: Path):
     if path.suffix == ".gz":
@@ -39,6 +41,7 @@ def split_vote(item: dict) -> str:
 
 def analyze(result_path: Path, audit_path: Path, horizons_s: list[float]) -> dict:
     result = load(result_path)
+    recorded_by_row = {item["row"]: item for item in result["frames"]}
     held = [
         item
         for item in result["frames"]
@@ -72,6 +75,19 @@ def analyze(result_path: Path, audit_path: Path, horizons_s: list[float]) -> dic
             source_measured = np.asarray(item["tracked_surface_axis_gripper"])
             candidate = np.asarray(item["proposals"]["vision_candidate"]["axis_gripper"])
             gripper = np.asarray(item["proposals"]["gripper_fallback"]["axis_gripper"])
+            attachment = np.asarray(recorded_by_row[item["row"]]["attachment"], dtype=float)
+            model_axis = attachment[:3, :3].T @ gripper
+            constraint = UndirectedAxisConstraint(
+                result["held_role"],
+                result["prepared_bundle"],
+                item["camera_frame_id"],
+                item["source_time_s"],
+                "gripper",
+                tuple(model_axis),
+                tuple(source_measured),
+            )
+            projected = constraint.closest_pose(attachment, pivot_object_m=np.zeros(3))
+            projected_axis = projected.candidate_pose[:3, :3] @ model_axis
             rows.append(
                 {
                     "row": item["row"],
@@ -79,7 +95,9 @@ def analyze(result_path: Path, audit_path: Path, horizons_s: list[float]) -> dic
                     "actual_horizon_s": future["source_time_s"] - item["source_time_s"],
                     "vision_gap_deg": gap_deg(candidate, measured),
                     "gripper_gap_deg": gap_deg(gripper, measured),
-                    "partial_axis_gap_deg": gap_deg(source_measured, measured),
+                    "partial_axis_gap_deg": gap_deg(projected_axis, measured),
+                    "partial_axis_turn_from_gripper_deg": float(np.degrees(projected.turn_from_prior_rad)),
+                    "partial_axis_branch_margin_deg": float(np.degrees(projected.branch_margin_rad)),
                     "source_split_vote": split_vote(item),
                 }
             )
@@ -116,6 +134,11 @@ def analyze(result_path: Path, audit_path: Path, horizons_s: list[float]) -> dic
                 "partial_axis_closer_than_gripper_frames": sum(
                     item["partial_axis_gap_deg"] < item["gripper_gap_deg"] for item in rows
                 ),
+                "median_partial_axis_turn_from_gripper_deg": float(
+                    np.median([item["partial_axis_turn_from_gripper_deg"] for item in rows])
+                )
+                if rows
+                else None,
                 "split_vote_results": vote_results,
                 "samples": rows,
             }
