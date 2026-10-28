@@ -85,6 +85,9 @@ class PoseRelationAnnotation:
     rotation_tolerance_rad: float | None
     max_pose_age_s: float
     allow_predicted_demo_pose: bool = False
+    moving_point_m: tuple[float, float, float] | None = None
+    moving_direction: tuple[float, float, float] | None = None
+    direction_tolerance_rad: float | None = None
 
     def __post_init__(self) -> None:
         if not self.name or self.frame_index < 0 or not self.moving_role or not self.reference_role:
@@ -233,7 +236,14 @@ def compile_skill(
             annotation.moving_role,
             annotation.frame_index,
             annotation.allow_predicted_demo_pose,
-            require_rotation=annotation.rotation_tolerance_rad is not None,
+            require_rotation=(
+                annotation.rotation_tolerance_rad is not None
+                or annotation.moving_direction is not None
+                or bool(
+                    annotation.moving_point_m is not None
+                    and np.any(np.asarray(annotation.moving_point_m) != 0)
+                )
+            ),
         )
         compiled_milestones.append(
             MilestoneSpec(
@@ -248,6 +258,9 @@ def compile_skill(
                     annotation.translation_tolerance_m,
                     annotation.rotation_tolerance_rad,
                     annotation.max_pose_age_s,
+                    annotation.moving_point_m,
+                    annotation.moving_direction,
+                    annotation.direction_tolerance_rad,
                 ),
             )
         )

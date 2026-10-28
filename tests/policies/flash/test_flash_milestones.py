@@ -1,6 +1,7 @@
 """Milestones distinguish observed success, observed failure and missing evidence."""
 
 import numpy as np
+import pytest
 
 from lerobot.policies.flash.milestones import PoseMilestonePublisher, verify_pose_relation
 from lerobot.policies.flash.progress import Progress, Verdict
@@ -118,3 +119,94 @@ def test_true_pose_milestone_is_revoked_once_when_observation_expires():
     publisher(3, poses)
     assert [event.verdict for event in published] == [Verdict.TRUE, Verdict.UNKNOWN]
     assert published[0].source_id != published[1].source_id
+
+
+def test_local_contact_point_and_direction_ignore_irrelevant_roll_but_reject_bad_alignment(tmp_path):
+    """A contact requires the measured point and axis, not an arbitrary frame roll."""
+    spec = MilestoneSpec(
+        "contact",
+        ("moving", "reference"),
+        PoseRelationCriterion(
+            "moving",
+            "reference",
+            np.eye(4),
+            "moving-v1",
+            "reference-v1",
+            0.003,
+            None,
+            0.2,
+            moving_point_m=(0.05, 0, 0),
+            moving_direction=(1, 0, 0),
+            direction_tolerance_rad=0.05,
+        ),
+    )
+    sample = SpatialSample(0, pose(), pose())
+    skill = FlashSkill(
+        "demo/source",
+        0,
+        (
+            Interval(
+                "move",
+                MotionMode.DEMONSTRATED,
+                Relation.EE_TO_OBJECT,
+                "reference",
+                (sample, SpatialSample(1, pose(), pose())),
+            ),
+        ),
+        milestones=(spec,),
+    )
+    path = tmp_path / "skill.json"
+    skill.save(path)
+    spec = FlashSkill.load(path).milestones[0]
+    reference = observed("reference", 0, version="reference-v1")
+
+    roll = np.eye(4)
+    angle = np.pi * 0.75
+    roll[1:3, 1:3] = [[np.cos(angle), -np.sin(angle)], [np.sin(angle), np.cos(angle)]]
+    moving = PoseEstimate("moving", roll, 1, 1, Evidence.OBSERVED, "moving-v1", (True,) * 3, (True,) * 3)
+    poses = {"reference": reference, "moving": moving}
+    assert verify_pose_relation(spec, poses, pose_version=1, now_s=1).verdict == Verdict.TRUE
+
+    tilt = np.eye(4)
+    tilt[:3, :3] = [[np.cos(0.2), 0, np.sin(0.2)], [0, 1, 0], [-np.sin(0.2), 0, np.cos(0.2)]]
+    local_point = np.array([0.05, 0, 0])
+    tilt[:3, 3] = local_point - tilt[:3, :3] @ local_point
+    poses["moving"] = PoseEstimate(
+        "moving", tilt, 1, 1, Evidence.OBSERVED, "moving-v1", (True,) * 3, (True,) * 3
+    )
+    assert verify_pose_relation(spec, poses, pose_version=2, now_s=1).verdict == Verdict.FALSE
+
+    displaced = roll.copy()
+    displaced[0, 3] = 0.01
+    poses["moving"] = PoseEstimate(
+        "moving", displaced, 1, 1, Evidence.OBSERVED, "moving-v1", (True,) * 3, (True,) * 3
+    )
+    assert verify_pose_relation(spec, poses, pose_version=3, now_s=1).verdict == Verdict.FALSE
+
+    poses["moving"] = PoseEstimate(
+        "moving", roll, 1, 1, Evidence.OBSERVED, "moving-v1", (True,) * 3, (False,) * 3
+    )
+    assert verify_pose_relation(spec, poses, pose_version=4, now_s=1).verdict == Verdict.UNKNOWN
+
+
+def test_feature_relation_rejects_incomplete_or_conflicting_annotations():
+    base = {
+        "moving_role": "moving",
+        "reference_role": "reference",
+        "reference_from_moving": np.eye(4),
+        "moving_version": "m-v1",
+        "reference_version": "r-v1",
+        "translation_tolerance_m": 0.01,
+        "rotation_tolerance_rad": None,
+        "max_pose_age_s": 0.2,
+    }
+    with pytest.raises(ValueError, match="together"):
+        PoseRelationCriterion(**base, moving_direction=(1, 0, 0))
+    with pytest.raises(ValueError, match="unit"):
+        PoseRelationCriterion(**base, moving_direction=(2, 0, 0), direction_tolerance_rad=0.1)
+    with pytest.raises(ValueError, match="either"):
+        PoseRelationCriterion(
+            **{**base, "rotation_tolerance_rad": 0.1},
+            moving_direction=(1, 0, 0),
+            direction_tolerance_rad=0.1,
+        )

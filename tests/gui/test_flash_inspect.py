@@ -54,6 +54,9 @@ def test_flash_inspect_subprocess_returns_spatial_intervals(tmp_path):
                             "reference_version": "target-v1",
                             "translation_tolerance_m": 0.01,
                             "rotation_tolerance_rad": None,
+                            "moving_point_m": [0.04, 0, 0],
+                            "moving_direction": [1, 0, 0],
+                            "direction_tolerance_rad": 0.1,
                             "max_pose_age_s": 0.2,
                         },
                     }
@@ -76,6 +79,8 @@ def test_flash_inspect_subprocess_returns_spatial_intervals(tmp_path):
     assert inspected["source_repo_id"] == "example/dataset"
     assert inspected["intervals"][0]["demo_duration_s"] == 1.0
     assert inspected["milestones"][0]["pose_relation"]["translation_tolerance_m"] == 0.01
+    assert inspected["milestones"][0]["pose_relation"]["moving_point_m"] == [0.04, 0, 0]
+    assert inspected["milestones"][0]["pose_relation"]["direction_tolerance_rad"] == 0.1
 
 
 def test_flash_trial_config_inspection_shows_effective_thresholds(tmp_path):
@@ -882,7 +887,7 @@ def test_run_flash_subtab_launches_selected_prepared_skill(gui_page):
     page.locator("#run-flash-skill").select_option(bundle)
     assert "0 motion intervals" in page.locator("#run-flash-skill-detail").inner_text()
     assert (
-        "Milestone placed: verify held relative to target within 0.01 m"
+        "placed: held frame origin to target within 0.01 m"
         in page.locator("#run-flash-skill-detail").inner_text()
     )
     assert not requests

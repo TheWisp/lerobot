@@ -1836,9 +1836,17 @@ function _flashSkillDetail() {
     for (const milestone of skill.milestones) {
         const row = document.createElement('div');
         const rule = milestone.pose_relation;
-        row.textContent = rule
-            ? `Milestone ${milestone.name}: verify ${rule.moving_role} relative to ${rule.reference_role} within ${rule.translation_tolerance_m} m`
-            : `Milestone ${milestone.name}: external verifier needed`;
+        if (rule) {
+            const point = rule.moving_point_m ? 'selected point' : 'frame origin';
+            const direction = rule.direction_tolerance_rad != null
+                ? `; direction within ${rule.direction_tolerance_rad} rad`
+                : rule.rotation_tolerance_rad != null
+                    ? `; full orientation within ${rule.rotation_tolerance_rad} rad`
+                    : '';
+            row.textContent = `${milestone.name}: ${rule.moving_role} ${point} to ${rule.reference_role} within ${rule.translation_tolerance_m} m${direction}`;
+        } else {
+            row.textContent = `${milestone.name}: external verifier needed`;
+        }
         container.append(row);
     }
     if (skill.warnings.length) {

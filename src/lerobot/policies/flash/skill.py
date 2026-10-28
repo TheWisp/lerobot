@@ -163,7 +163,12 @@ class Interval:
 
 @dataclass(frozen=True)
 class PoseRelationCriterion:
-    """Observed moving-object pose required relative to a reference object."""
+    """Observed relation between two object frames or their functional features.
+
+    A local point replaces the moving-frame origin for the position check. A
+    local direction checks only its alignment, leaving rotation about that
+    direction free. Task tolerance is distinct from pose-estimator support.
+    """
 
     moving_role: str
     reference_role: str
@@ -173,6 +178,9 @@ class PoseRelationCriterion:
     translation_tolerance_m: float
     rotation_tolerance_rad: float | None
     max_pose_age_s: float
+    moving_point_m: tuple[float, float, float] | None = None
+    moving_direction: tuple[float, float, float] | None = None
+    direction_tolerance_rad: float | None = None
 
     def __post_init__(self) -> None:
         if not all((self.moving_role, self.reference_role, self.moving_version, self.reference_version)):
@@ -185,6 +193,28 @@ class PoseRelationCriterion:
             limits += (self.rotation_tolerance_rad,)
         if any(not np.isfinite(value) or value <= 0 for value in limits):
             raise ValueError("pose relation tolerances and maximum age must be finite and positive")
+        if self.rotation_tolerance_rad is not None and self.direction_tolerance_rad is not None:
+            raise ValueError("specify either full rotation or direction tolerance")
+        if (self.moving_direction is None) != (self.direction_tolerance_rad is None):
+            raise ValueError("a moving direction and its tolerance must be specified together")
+        if self.direction_tolerance_rad is not None and (
+            not np.isfinite(self.direction_tolerance_rad) or self.direction_tolerance_rad <= 0
+        ):
+            raise ValueError("direction tolerance must be finite and positive")
+        if self.moving_point_m is not None:
+            point = np.asarray(self.moving_point_m, dtype=float)
+            if point.shape != (3,) or not np.isfinite(point).all():
+                raise ValueError("moving point must have three finite local coordinates")
+            object.__setattr__(self, "moving_point_m", tuple(float(value) for value in point))
+        if self.moving_direction is not None:
+            direction = np.asarray(self.moving_direction, dtype=float)
+            if (
+                direction.shape != (3,)
+                or not np.isfinite(direction).all()
+                or not np.isclose(np.linalg.norm(direction), 1.0, atol=1e-5)
+            ):
+                raise ValueError("moving direction must be a unit local vector")
+            object.__setattr__(self, "moving_direction", tuple(float(value) for value in direction))
 
 
 @dataclass(frozen=True)
@@ -356,6 +386,9 @@ class FlashSkill:
                             "reference_version": milestone.pose_relation.reference_version,
                             "translation_tolerance_m": milestone.pose_relation.translation_tolerance_m,
                             "rotation_tolerance_rad": milestone.pose_relation.rotation_tolerance_rad,
+                            "moving_point_m": milestone.pose_relation.moving_point_m,
+                            "moving_direction": milestone.pose_relation.moving_direction,
+                            "direction_tolerance_rad": milestone.pose_relation.direction_tolerance_rad,
                             "max_pose_age_s": milestone.pose_relation.max_pose_age_s,
                         }
                         if milestone.pose_relation is not None

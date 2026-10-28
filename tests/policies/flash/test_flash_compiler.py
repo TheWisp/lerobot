@@ -9,6 +9,8 @@ from lerobot.policies.flash.compiler import (
     PoseRelationAnnotation,
     compile_skill,
 )
+from lerobot.policies.flash.milestones import verify_pose_relation
+from lerobot.policies.flash.progress import Verdict
 from lerobot.policies.flash.skill import (
     AttachmentAction,
     AttachmentTransition,
@@ -221,3 +223,42 @@ def test_compiles_a_pose_milestone_from_an_observed_demo_frame(tmp_path):
             ),
             pose_relation_annotations=(annotation,),
         )
+
+
+def test_compiles_and_replays_a_local_point_and_direction_milestone(tmp_path):
+    poses = tracks()
+    poses[2]["part"] = PoseEstimate(
+        "part", pose(0.1), 1.0, 1.0, Evidence.OBSERVED, "part-v1", (True,) * 3, (True,) * 3
+    )
+    skill = compile_skill(
+        dataset=FakeDataset(),
+        source_repo_id="demo/data",
+        source_episode=1,
+        kinematics=FakeKinematics(),
+        arm_joint_names=("arm",),
+        gripper_joint_name="gripper",
+        poses_by_frame=poses,
+        annotations=(
+            IntervalAnnotation("move", 0, 2, MotionMode.DEMONSTRATED, Relation.EE_TO_OBJECT, "object"),
+        ),
+        pose_relation_annotations=(
+            PoseRelationAnnotation(
+                "aligned",
+                2,
+                "part",
+                "object",
+                0.005,
+                None,
+                0.2,
+                moving_point_m=(0.05, 0, 0),
+                moving_direction=(1, 0, 0),
+                direction_tolerance_rad=0.1,
+            ),
+        ),
+    )
+    path = tmp_path / "skill.json"
+    skill.save(path)
+    compiled = FlashSkill.load(path).milestones[0]
+    assert compiled.pose_relation.moving_point_m == (0.05, 0, 0)
+    assert compiled.pose_relation.moving_direction == (1, 0, 0)
+    assert verify_pose_relation(compiled, poses[2], pose_version=1, now_s=1).verdict == Verdict.TRUE

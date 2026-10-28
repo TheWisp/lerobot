@@ -323,6 +323,12 @@ held object's reference-frame version. Missing versions are shown in skill
 inspection and rejected by the joint planner. A pose-relation milestone can
 select an observed demo frame to define its target object relationship, while
 the task tolerances and maximum evidence age are supplied explicitly.
+It can check a local functional point and a local direction instead of the
+moving object's frame origin and full orientation. Rotation about that
+direction is then irrelevant to the milestone, while a displaced point or
+tilted direction fails. This is a task constraint, not evidence that an
+unobserved pose component has become known. The current planner still uses
+the full pose to generate its motion; this check alone does not adapt a path.
 Held-to-target intervals also name the held role; skill inspection reports a
 missing role or a missing matching attach event before live integration. It
 also counts observed and predicted demo poses and warns when a held interval
@@ -365,11 +371,11 @@ The [recorded-evidence audit](docs/evidence_status.md) separates demo extraction
 offline pose checks, visually successful sealed-prototype runs and the
 interrupted physical trials of this redesign.
 
-The next architecture milestone is the [scene-estimator contract](docs/architecture.md#one-scene-estimator-several-evidence-sources), independent of which tracker is best on a particular view. The current code has one publisher when causal tracking is enabled, but it still treats a backend's candidate `PoseEstimate` as an accepted six-axis observation. In particular, the RGB-D backend keeps its own previous candidate for shape-continuity checks, and the scene service has no general rule for comparing a new candidate with visible depth, point motion, a group prediction and unresolved symmetry at the same source time. Candidate dispositions are now recorded, but later direct observations are not replayed when a delayed candidate changes an earlier state.
+The next architecture milestone is the [scene-estimator contract](docs/architecture.md#one-scene-estimator-several-evidence-sources), independent of which tracker is best on a particular view. The current code has one publisher when causal tracking is enabled, but it still treats a backend's candidate `PoseEstimate` as an accepted six-axis observation. In particular, the RGB-D backend keeps its own previous candidate for shape-continuity checks, and the scene service has no general rule for comparing a new candidate with visible depth, point motion, a group prediction and unresolved symmetry at the same source time. Candidate dispositions are recorded. Delayed direct poses within retained history are replayed in source order in a bounded shadow calculation, but this is not yet a full event replay across all evidence types.
 
 Implementation should proceed in this order:
 
 1. Introduce typed source-frame evidence for identity, visible geometry, relative motion and relationship hypotheses. Allow a producer to abstain or constrain only an observable subspace; retain source/calibration/reference versions and raw support.
-2. Move candidate acceptance and event-time replay into the scene-estimator owner. Keep a bounded event history, compare proposals to the state at their original frame, replay later measurements as well as motion, publish one versioned belief, and record each decision. The interim service conservatively discards a late proposal older than a newer direct observation; that guard is not a substitute for full replay. Backends must not maintain a private notion of what the scene accepted.
+2. Move candidate acceptance and event-time replay into the scene-estimator owner. Keep a bounded event history, compare proposals to the state at their original frame, replay later measurements as well as motion, publish one versioned belief, and record each decision. Source-order replay of retained direct poses is implemented; other evidence and conflicting alternatives still need this treatment. Backends must not maintain a private notion of what the scene accepted.
 3. Make the policy check the accepted belief at its contact points against the active interval's requirements. Unknown or conflicting dimensions must lead to a declared observation/recovery choice, not a fabricated pose or a model-name-specific override.
 4. Run the same recorded disagreement, occlusion, moved-support and held-slip cases against alternate backends before another physical insertion claim. Report both pose error and source-to-decision age; a better mask alone is insufficient.

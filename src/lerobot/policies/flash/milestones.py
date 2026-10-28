@@ -93,16 +93,33 @@ def verify_pose_relation(
         return update(Verdict.UNKNOWN, "object frame version differs from milestone annotation")
     if not reference.usable(now_s, criterion.max_pose_age_s, False):
         return update(Verdict.UNKNOWN, "reference pose is not freshly and fully observed")
-    moving_rotation = (criterion.rotation_tolerance_rad is not None,) * 3
+    local_point = np.asarray(criterion.moving_point_m if criterion.moving_point_m is not None else (0, 0, 0))
+    needs_orientation = (
+        criterion.rotation_tolerance_rad is not None
+        or criterion.moving_direction is not None
+        or bool(np.any(local_point != 0))
+    )
+    moving_rotation = (needs_orientation,) * 3
     if not moving.usable(now_s, criterion.max_pose_age_s, False, rotation=moving_rotation):
         return update(Verdict.UNKNOWN, "moving pose lacks fresh observed required axes")
 
     actual = inverse(reference.pose) @ moving.pose
-    error = inverse(criterion.reference_from_moving) @ actual
-    translation_error_m = float(np.linalg.norm(error[:3, 3]))
-    rotation_error_rad = float(np.arccos(np.clip((np.trace(error[:3, :3]) - 1.0) / 2.0, -1.0, 1.0)))
+    expected = criterion.reference_from_moving
+    actual_point = actual[:3, :3] @ local_point + actual[:3, 3]
+    expected_point = expected[:3, :3] @ local_point + expected[:3, 3]
+    translation_error_m = float(np.linalg.norm(actual_point - expected_point))
+    if criterion.moving_direction is not None:
+        direction = np.asarray(criterion.moving_direction)
+        actual_direction = actual[:3, :3] @ direction
+        expected_direction = expected[:3, :3] @ direction
+        rotation_error_rad = float(np.arccos(np.clip(actual_direction @ expected_direction, -1.0, 1.0)))
+        rotation_limit = criterion.direction_tolerance_rad
+    else:
+        error = inverse(expected) @ actual
+        rotation_error_rad = float(np.arccos(np.clip((np.trace(error[:3, :3]) - 1.0) / 2.0, -1.0, 1.0)))
+        rotation_limit = criterion.rotation_tolerance_rad
     if translation_error_m > criterion.translation_tolerance_m or (
-        criterion.rotation_tolerance_rad is not None and rotation_error_rad > criterion.rotation_tolerance_rad
+        rotation_limit is not None and rotation_error_rad > rotation_limit
     ):
         return update(
             Verdict.FALSE,

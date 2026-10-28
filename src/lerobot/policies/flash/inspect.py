@@ -60,6 +60,9 @@ def inspect_skill(path: str) -> dict:
                         "reference_role": m.pose_relation.reference_role,
                         "translation_tolerance_m": m.pose_relation.translation_tolerance_m,
                         "rotation_tolerance_rad": m.pose_relation.rotation_tolerance_rad,
+                        "moving_point_m": m.pose_relation.moving_point_m,
+                        "moving_direction": m.pose_relation.moving_direction,
+                        "direction_tolerance_rad": m.pose_relation.direction_tolerance_rad,
                     }
                     if m.pose_relation is not None
                     else None
