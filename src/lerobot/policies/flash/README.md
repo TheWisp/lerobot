@@ -87,8 +87,7 @@ That command is a compatibility entry point; the importer is
    estimator. The latter proposes motion with UFM and corrects it against the
    current segmented depth surface. The selected `vision_pipeline` configuration
    is saved in the prepared bundle and preparation cache identity; live execution
-   uses that saved configuration. The editor's **Tracking and settings → Vision
-   pipeline (demo and run)** selects the backend.
+   uses that saved configuration. The demo editor exposes the backend in **Tracking**.
    An annotation without this field retains appearance matching; an old bundle
    without the field retains the legacy live appearance/shape configuration.
    Previously, preparation disabled shape fallback while execution enabled it
@@ -99,7 +98,10 @@ That command is a compatibility entry point; the importer is
    compiled demo trace; a rejected direct fit is recorded as lost, while the
    raw proposal remains available for review. The pose-trace cache version
    separates this rule from earlier cached traces. Existing bundles are not
-   rewritten automatically.
+   rewritten automatically. In **Source**, the editor can read the same trial
+   JSON used for the robot and snapshot its scene-tracking settings into the
+   prepared bundle. A live trial checks this snapshot before connecting to the
+   arm. A prepared demo without it remains explicitly direct-only.
 4. The recorded arm poses and gripper commands become dense demonstrated
    intervals or generated connections according to the keyframe annotation.
    After grasp, the held-object demo pose is a **prediction** from the selected

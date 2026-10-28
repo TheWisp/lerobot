@@ -264,6 +264,14 @@ function _flashEditorRender() {
     _flashEditorField(setup, 'Dataset identity', a.repo_id, value => { a.repo_id = value; });
     _flashEditorField(setup, 'Arm side', a.robot_arm, value => { a.robot_arm = value; }, ['', 'left', 'right']);
     _flashEditorField(setup, 'Robot/camera calibration file', a.calibration_path, value => { a.calibration_path = value; });
+    const sceneTracking = document.createElement('p');
+    sceneTracking.className = 'form-hint';
+    sceneTracking.textContent = a.causal_tracking
+        ? 'Scene tracking is saved in this demo. Group predictions can bridge missing direct views.'
+        : 'Direct vision only: no group bridge is saved in this demo.';
+    setup.append(sceneTracking);
+    _flashEditorField(setup, 'Trial settings file for scene tracking', state.trackingConfigPath,
+        value => { state.trackingConfigPath = value; });
 
     const pose = _flashEditorSection(panes.pose, 'Pose evidence', state.raw
         ? 'No object pose exists yet. Preparation will extract a first pose trace from the RGB-D recording.'
@@ -1013,6 +1021,7 @@ async function toggleFlashDemoEditor() {
             trackerRole: '',
             trackerImportRole: result.annotation.held_role,
             trackerSource: '', trackerMessage,
+            trackingConfigPath: raw ? (_val('run-flash-config') || '') : '',
         };
         const viewer = document.getElementById('rerun-viewer');
         viewer.classList.add('flash-demo-editing');
@@ -1232,6 +1241,7 @@ async function _flashEditorRegenerate() {
                 dataset_root: flashReplay.datasetRoot, bundle_path: flashReplay.bundle_path,
                 episode: flashReplay.episode, annotation: state.annotation,
                 keypoints_document: state.keypointsDocument,
+                tracking_config_path: state.trackingConfigPath.trim() || null,
             }),
         });
         const result = await response.json();

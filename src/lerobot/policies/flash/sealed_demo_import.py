@@ -697,6 +697,7 @@ def prepare(
         annotation["descriptor_model_id"],
         tuple(axial_symmetries),
         vision_config,
+        causal_config,
     )
     for role, rel in mask_paths.items():
         path = root / rel

@@ -107,4 +107,5 @@ def prepare_recorded_episode(
         reference.descriptor_model_id,
         tuple(symmetries),
         reference.vision_pipeline,
+        reference.causal_tracking,
     ).save(output)

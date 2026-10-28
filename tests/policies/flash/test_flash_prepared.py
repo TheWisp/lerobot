@@ -1,11 +1,13 @@
 """Prepared references remain portable derived data beside a regular episode."""
 
 import json
+from dataclasses import asdict
 
 import numpy as np
 import pytest
 
 from lerobot.policies.flash.appearance import AppearanceModel
+from lerobot.policies.flash.causal_service import CausalTrackingConfig
 from lerobot.policies.flash.inspect import inspect_skill
 from lerobot.policies.flash.matched_rgbd import ObjectPointModel
 from lerobot.policies.flash.perception import ObjectReference, ReferenceSnippet
@@ -44,6 +46,7 @@ def test_prepared_skill_round_trip_keeps_object_frames_and_multiview_provenance(
         {"object": "patterned object"},
         "facebook/dinov2-small",
         vision_pipeline=VisionPipelineConfig(registration_threshold_m=0.007),
+        causal_tracking=CausalTrackingConfig(60, 64, 12, 0.1, 0.005),
     )
     manifest = prepared.save(tmp_path / "flash/v1/prepared/demo-a")
     restored = PreparedFlashSkill.load(manifest)
@@ -51,10 +54,20 @@ def test_prepared_skill_round_trip_keeps_object_frames_and_multiview_provenance(
     assert [snippet.frame_index for snippet in restored.references[0].snippets] == [3, 9]
     np.testing.assert_allclose(restored.appearance_models[0].points.points_object_m, points)
     assert restored.vision_pipeline == prepared.vision_pipeline
+    assert restored.causal_tracking == prepared.causal_tracking
+    assert json.loads(manifest.read_text())["causal_tracking"] == asdict(prepared.causal_tracking)
     assert restored.vision_pipeline.backend == "surface"
     assert restored.prompts_by_role == {"object": "patterned object"}
     assert restored.descriptor_model_id == "facebook/dinov2-small"
     assert not (manifest.parent / "rgb.mp4").exists()
+    from lerobot.policies.flash.live_trial import trial
+
+    mismatched_trial = tmp_path / "mismatched-trial.json"
+    mismatched_trial.write_text(
+        json.dumps({"causal_tracking": asdict(CausalTrackingConfig(60, 64, 12, 0.1, 0.006))})
+    )
+    with pytest.raises(ValueError, match="live scene tracking differs"):
+        trial(manifest, mismatched_trial, preflight=True)
     inspected = inspect_skill(str(manifest))
     assert inspected["runtime_bindings_complete"]
     assert inspected["prepared_references"] == [
@@ -65,6 +78,9 @@ def test_prepared_skill_round_trip_keeps_object_frames_and_multiview_provenance(
     del data["vision_pipeline"]
     manifest.write_text(json.dumps(data))
     assert PreparedFlashSkill.load(manifest).vision_pipeline is None
+    del data["causal_tracking"]
+    manifest.write_text(json.dumps(data))
+    assert PreparedFlashSkill.load(manifest).causal_tracking is None
     data["models"] = "../outside.npz"
     manifest.write_text(json.dumps(data))
     with pytest.raises(ValueError, match="inside the bundle"):

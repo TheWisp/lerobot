@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import json
 import shutil
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import numpy as np
 
 from .appearance import AppearanceModel
+from .causal_service import CausalTrackingConfig
 from .matched_rgbd import ObjectPointModel
 from .perception import ObjectReference, ReferenceSnippet
 from .skill import FlashSkill
@@ -33,6 +34,7 @@ class PreparedFlashSkill:
     descriptor_model_id: str
     axial_symmetries: tuple[AxialSymmetry, ...] = ()
     vision_pipeline: VisionPipelineConfig | None = None
+    causal_tracking: CausalTrackingConfig | None = None
 
     def __post_init__(self) -> None:
         refs = {reference.role: reference for reference in self.references}
@@ -123,6 +125,7 @@ class PreparedFlashSkill:
         manifest = {
             "schema_version": 1,
             "vision_pipeline": self.vision_pipeline.to_dict() if self.vision_pipeline else None,
+            "causal_tracking": asdict(self.causal_tracking) if self.causal_tracking else None,
             "skill": "skill.json",
             "models": "models.npz",
             "references": references,
@@ -187,6 +190,9 @@ class PreparedFlashSkill:
             VisionPipelineConfig.from_dict(manifest["vision_pipeline"])
             if manifest.get("vision_pipeline") is not None
             else None,
+            CausalTrackingConfig.from_config(manifest["causal_tracking"])
+            if manifest.get("causal_tracking") is not None
+            else None,
         )
 
 
@@ -249,5 +255,6 @@ def snapshot_prepared_skill(
         prepared.descriptor_model_id,
         prepared.axial_symmetries,
         prepared.vision_pipeline,
+        prepared.causal_tracking,
     )
     return snapshot.save(bundle_root)

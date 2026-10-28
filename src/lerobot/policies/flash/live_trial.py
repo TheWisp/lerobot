@@ -124,6 +124,13 @@ def trial(
     ):
         raise ValueError("live vision config differs from the prepared demo; reprepare it first")
     settings = {**settings, "vision_pipeline": vision_config.to_dict()}
+    configured_scene = (
+        CausalTrackingConfig.from_config(settings["causal_tracking"])
+        if settings.get("causal_tracking") is not None
+        else None
+    )
+    if bundle.causal_tracking is not None and configured_scene != bundle.causal_tracking:
+        raise ValueError("live scene tracking differs from the prepared demo; reprepare it first")
     if auto_output and not preflight:
         settings = _new_attempt_settings(settings, datetime.now(UTC).strftime("%Y%m%d-%H%M%S-%f"))
     profile = json.loads(Path(settings["robot_profile"]).expanduser().read_text())
@@ -255,11 +262,7 @@ def trial(
         points_by_role = {
             model.points.role: model.points.points_object_m for model in bundle.appearance_models
         }
-        causal_tracking = (
-            CausalTrackingConfig.from_config(settings["causal_tracking"])
-            if settings.get("causal_tracking") is not None
-            else None
-        )
+        causal_tracking = configured_scene
         telemetry = FlashLiveTelemetry(
             telemetry_path or output_root / "flash" / "v1" / "live_tracker.json",
             tracker_trace_path,

@@ -264,6 +264,7 @@ class FlashDemoPrepareRequest(FlashDatasetInspectRequest):
     bundle_path: str | None = None
     annotation: dict[str, Any]
     keypoints_document: dict[str, Any]
+    tracking_config_path: str | None = None
     output_name: str | None = None
 
 
@@ -1761,8 +1762,34 @@ async def prepare_flash_demo(req: FlashDemoPrepareRequest) -> dict:
                     or not (root / "meta" / "info.json").is_file()
                 ):
                     raise ValueError("select episode 0 of a local raw RGB-D demo")
-            roles = req.annotation.get("prompts_by_role", {})
-            held, target = req.annotation.get("held_role"), req.annotation.get("target_role")
+            annotation = dict(req.annotation)
+            if req.tracking_config_path:
+                from dataclasses import asdict
+
+                from lerobot.policies.flash.causal_service import CausalTrackingConfig
+
+                config_path = Path(req.tracking_config_path).expanduser().resolve()
+                settings = json.loads(config_path.read_text(encoding="utf-8"))
+                if Path(settings["source_dataset_root"]).expanduser().resolve() != root:
+                    raise ValueError("tracking config belongs to another demo dataset")
+                if (
+                    Path(settings["calibration_path"]).expanduser().resolve()
+                    != Path(annotation["calibration_path"]).expanduser().resolve()
+                    or settings["robot_arm"] != annotation["robot_arm"]
+                ):
+                    raise ValueError("tracking config must use the demo's arm and calibration")
+                if settings.get("causal_tracking") is None:
+                    raise ValueError("tracking config has no scene/group tracker settings")
+                annotation["causal_tracking"] = asdict(
+                    CausalTrackingConfig.from_config(settings["causal_tracking"])
+                )
+                annotation["causal_tracking_source"] = str(config_path)
+            elif annotation.get("causal_tracking") is not None:
+                from lerobot.policies.flash.causal_service import CausalTrackingConfig
+
+                CausalTrackingConfig.from_config(annotation["causal_tracking"])
+            roles = annotation.get("prompts_by_role", {})
+            held, target = annotation.get("held_role"), annotation.get("target_role")
             if (
                 not isinstance(roles, dict)
                 or len(roles) < 2
@@ -1782,7 +1809,7 @@ async def prepare_flash_demo(req: FlashDemoPrepareRequest) -> dict:
                 raise ValueError(
                     "name distinct held and target objects and give each tracked object a unique segmentation prompt"
                 )
-            if req.annotation.get("episode") != req.episode:
+            if annotation.get("episode") != req.episode:
                 raise ValueError("annotation episode differs from the selected demo")
             keypoints = req.keypoints_document.get("keypoints")
             if not isinstance(keypoints, list) or not keypoints:
@@ -1800,7 +1827,7 @@ async def prepare_flash_demo(req: FlashDemoPrepareRequest) -> dict:
             input_dir.mkdir(parents=True, exist_ok=False)
             annotation_path = input_dir / "annotation.json"
             keypoints_path = input_dir / "keypoints.json"
-            annotation_path.write_text(json.dumps(req.annotation, indent=2) + "\n", encoding="utf-8")
+            annotation_path.write_text(json.dumps(annotation, indent=2) + "\n", encoding="utf-8")
             keypoints_path.write_text(json.dumps(req.keypoints_document, indent=2) + "\n", encoding="utf-8")
             return root, annotation_path, keypoints_path, name
 

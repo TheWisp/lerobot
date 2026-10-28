@@ -12,6 +12,7 @@ from urllib.parse import parse_qs, urlsplit
 import cv2
 import numpy as np
 import pytest
+from fastapi import HTTPException
 
 from lerobot.gui.api.run import (
     FlashConfigInspectRequest,
@@ -198,6 +199,65 @@ def test_demo_preparation_versions_edited_inputs_and_launches_existing_importer(
         "--output-name",
         "revised",
     ]
+
+
+def test_demo_preparation_snapshots_matching_scene_tracking_settings(tmp_path, monkeypatch):
+    from dataclasses import asdict
+
+    from lerobot.gui.api import run as run_api
+    from lerobot.policies.flash.causal_service import CausalTrackingConfig
+
+    (tmp_path / "meta").mkdir()
+    (tmp_path / "meta/info.json").write_text("{}")
+    (tmp_path / "showservo_demo.npz").write_bytes(b"fixture")
+    calibration = tmp_path / "calibration.json"
+    calibration.write_text("{}")
+    config = tmp_path / "trial.json"
+    tracking = asdict(CausalTrackingConfig(60, 64, 12, 0.1, 0.005))
+    settings = {
+        "source_dataset_root": str(tmp_path),
+        "calibration_path": str(calibration),
+        "robot_arm": "left",
+        "causal_tracking": tracking,
+    }
+    config.write_text(json.dumps(settings))
+
+    async def launch(args, *, command, config):
+        run_api._active_process = SimpleNamespace(pid=321)
+
+    monkeypatch.setattr(run_api, "_ensure_no_active_process", lambda: None)
+    monkeypatch.setattr(run_api, "_launch_subprocess", launch)
+    annotation = {
+        "episode": 0,
+        "calibration_path": str(calibration),
+        "robot_arm": "left",
+        "prompts_by_role": {"held": "dowel", "target": "ring"},
+        "held_role": "held",
+        "target_role": "target",
+    }
+
+    def request(name):
+        return FlashDemoPrepareRequest(
+            dataset_root=str(tmp_path),
+            episode=0,
+            annotation=annotation,
+            keypoints_document={"keypoints": [{"t": 1.0}]},
+            tracking_config_path=str(config),
+            output_name=name,
+        )
+
+    result = asyncio.run(prepare_flash_demo(request("with-scene")))
+    assert result["status"] == "started"
+    saved = json.loads((tmp_path / "flash/v1/preparation-inputs/with-scene/annotation.json").read_text())
+    assert saved["causal_tracking"] == tracking
+    assert saved["causal_tracking_source"] == str(config)
+    assert "causal_tracking" not in annotation
+
+    settings["source_dataset_root"] = str(tmp_path / "another-demo")
+    config.write_text(json.dumps(settings))
+    with pytest.raises(HTTPException, match="another demo dataset"):
+        asyncio.run(prepare_flash_demo(request("wrong-scene")))
+    assert not (tmp_path / "flash/v1/preparation-inputs/wrong-scene").exists()
 
 
 def test_raw_demo_can_be_reviewed_without_preexisting_flash_labels(tmp_path):
@@ -1442,6 +1502,8 @@ def test_raw_demo_editor_collects_object_names_and_action_from_visible_controls(
 
     set_field("Arm side", "left")
     set_field("Robot/camera calibration file", "/tmp/calibration.json")
+    assert "Direct vision only" in page.locator("#flash-demo-editor").inner_text()
+    set_field("Trial settings file for scene tracking", "/tmp/trial.json")
     section("Objects")
     for role, prompt in (("workpiece", "wooden cylinder"), ("receiver", "green ring")):
         set_field("New object name", role)
@@ -1491,6 +1553,7 @@ def test_raw_demo_editor_collects_object_names_and_action_from_visible_controls(
         "() => document.querySelector('#flash-demo-editor-status').textContent.includes('captured test request')"
     )
     assert submitted[0]["annotation"]["vision_pipeline"]["backend"] == "surface"
+    assert submitted[0]["tracking_config_path"] == "/tmp/trial.json"
     assert submitted[0].get("bundle_path") is None
     assert submitted[0]["annotation"]["prompts_by_role"] == {
         "workpiece": "wooden cylinder",
