@@ -741,6 +741,7 @@ function _flashLayerName(estimator) {
 
 function _flashLayerColor(estimator) {
     if (estimator === 'candidate_tracker') return '#f472b6';
+    if (estimator === 'raw_proposal') return '#f472b6';
     if (estimator === 'demo_reference') return '#34d399';
     if (estimator === 'demo_held' || estimator === 'demo_held_recorded_gripper') return '#fb923c';
     if (estimator === 'demo_ee') return '#58a6ff';
@@ -771,6 +772,7 @@ function renderFlashSnapshot(snapshot, mode = 'Live') {
     modeEl.textContent = mode;
     const roles = [...new Set([
         ...Object.keys(snapshot.proposals || {}),
+        ...Object.keys(snapshot.raw_proposals || {}),
         ...Object.keys(snapshot.layers || {}),
         ...Object.keys(snapshot.accepted || {}),
         ...Object.keys(snapshot.observed_masks || {}),
@@ -794,6 +796,15 @@ function renderFlashSnapshot(snapshot, mode = 'Live') {
         const proposal = snapshot.proposals?.[role];
         if (proposal) html += _flashOverlayRow('proposal', role, '', 'flash-tracker-layer',
             `<span class="flash-tracker-dot" style="background:#58a6ff"></span>Direct proposal <small>${_esc(_flashPoseText(proposal, snapshot))}</small>`);
+        const raw = snapshot.raw_proposals?.[role];
+        if (raw?.pose && proposal?.evidence === 'lost') {
+            const shown = raw.frame_id === snapshot.camera?.frame_id &&
+                (!snapshot.camera.calibration_version || raw.calibration_version === snapshot.camera.calibration_version);
+            html += _flashOverlayRow('raw_proposal', role, '', 'flash-tracker-layer',
+                `<span class="flash-tracker-dot" style="background:#f472b6"></span>Rejected raw fit` +
+                `<small>${_esc(raw.failure || 'Not accepted by vision')} · camera frame ${_esc(String(raw.frame_id))}` +
+                `${shown ? '' : ' · open its camera frame to see the outline'}</small>`);
+        }
         for (const [name, pose] of Object.entries(snapshot.layers?.[role] || {})) {
             html += _flashOverlayRow('layer', role, name, 'flash-tracker-layer',
                 `<span class="flash-tracker-dot" style="background:${_flashLayerColor(name)}"></span>${_esc(_flashLayerName(name))}<small>${_esc(_flashPoseText(pose, snapshot))}</small>`);
@@ -1210,7 +1221,16 @@ function _flashDrawOverlay() {
             draw(held.role, held.estimator, held, true, 'held');
         }
         for (const [role, pose] of Object.entries(snapshot.proposals || {})) {
-            draw(role, 'appearance_rgbd', pose, false, 'proposal');
+            const aligned = snapshot.proposal_frame_id != null
+                ? snapshot.proposal_frame_id === camera.frame_id
+                : pose.source_time_s === camera.source_time_s;
+            if (aligned) draw(role, 'appearance_rgbd', pose, false, 'proposal');
+        }
+        for (const [role, raw] of Object.entries(snapshot.raw_proposals || {})) {
+            if (snapshot.proposals?.[role]?.evidence !== 'lost' || !raw.pose ||
+                raw.frame_id !== camera.frame_id ||
+                (camera.calibration_version && raw.calibration_version !== camera.calibration_version)) continue;
+            draw(role, 'raw_proposal', {pose: raw.pose}, false, 'raw_proposal');
         }
         for (const [role, mask] of Object.entries(snapshot.observed_masks || {})) {
             if (mask.frame_id !== camera.frame_id) continue;

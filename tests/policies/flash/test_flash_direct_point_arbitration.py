@@ -11,6 +11,7 @@ from lerobot.policies.flash.causal_points import CausalRigidPointTracker, RigidP
 from lerobot.policies.flash.causal_service import CausalPoseService, _Anchor
 from lerobot.policies.flash.perception import LatestPoseStore, RGBDFrame
 from lerobot.policies.flash.pose_disagreement import PoseComparisonVerdict
+from lerobot.policies.flash.pose_evidence import PoseProposal, VisibleSurfaceSupport
 from lerobot.policies.flash.scene_groups import SceneTracks
 from lerobot.policies.flash.symmetry import AxialSymmetry
 from lerobot.policies.flash.trajectory import Evidence, PoseEstimate
@@ -100,9 +101,23 @@ def test_real_contact_conflict_keeps_point_prediction_and_records_direct_candida
     service, store, frame, mask, direct, predicted, comparisons = _recorded_service("dowel")
     decisions = []
     service.on_anchor_decision = decisions.append
+    proposal = PoseProposal(
+        frame.frame_id,
+        frame.calibration_version,
+        direct,
+        direct.pose,
+        VisibleSurfaceSupport(int(mask.sum()), 18, 18, 0.001, True),
+    )
 
     service._anchor(
-        _Anchor(frame.frame_id, (direct,), {"dowel": mask}, frame.source_time_s, frame.calibration_version)
+        _Anchor(
+            frame.frame_id,
+            (direct,),
+            {"dowel": mask},
+            frame.source_time_s,
+            frame.calibration_version,
+            (proposal,),
+        )
     )
 
     assert store.snapshot()[1]["dowel"] is predicted
@@ -116,6 +131,7 @@ def test_real_contact_conflict_keeps_point_prediction_and_records_direct_candida
     assert decisions[0].candidate is direct
     assert decisions[0].outcome == "direct_point_unresolved"
     assert decisions[0].accepted is None
+    assert decisions[0].proposal is proposal
 
 
 def test_same_rule_accepts_recorded_ring_correction():

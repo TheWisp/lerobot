@@ -18,6 +18,7 @@ import numpy as np
 
 from .appearance import AppearanceModel, MaskSource, Sam3MaskSource, build_appearance_pose_backend
 from .perception import PoseBackend, RGBDFrame
+from .pose_evidence import VisibleSurfaceSupport
 from .surface_correspondence import SurfaceMotionConfig
 from .surface_grounding import ShapeConfig
 from .surface_observation import SurfaceObservationConfig, prepare_surface_frame
@@ -181,6 +182,8 @@ class SurfacePoseBackend:
         self.last_masks = {}
         self.last_failure = {}
         self.last_details = {}
+        self.last_candidate_poses = {}
+        self.last_visible_support = {}
         self.references = {}
         self.sessions = {}
         self.reference_camera_from_object = {}
@@ -209,6 +212,8 @@ class SurfacePoseBackend:
         if len(self.references) != len(references) or not references:
             raise ValueError("surface tracker needs unique references")
         self.previous_frame = None
+        self.last_candidate_poses = {}
+        self.last_visible_support = {}
         self.sessions.clear()
         self.reference_camera_from_object.clear()
         if self.initializer is not None:
@@ -345,6 +350,7 @@ class SurfacePoseBackend:
         self.last_masks = prepared["masks"]
         self.last_mask_ms = prepared["mask_ms"]
         self.last_failure, self.last_details = {}, {}
+        self.last_candidate_poses, self.last_visible_support = {}, {}
         unregistered = prepared["unregistered"]
 
         def finish_job(job):
@@ -382,6 +388,22 @@ class SurfacePoseBackend:
                         @ self.reference_camera_from_object[role]
                     )
             diagnostics = detail["diagnostics"]
+            self.last_candidate_poses[role] = (
+                np.asarray(pose, dtype=float).copy() if pose is not None else None
+            )
+            depth_residual_mm = diagnostics.get("surface_p90_mm")
+            mask = self.last_masks.get(role)
+            self.last_visible_support[role] = VisibleSurfaceSupport(
+                mask_pixels=int(np.count_nonzero(mask)) if mask is not None else 0,
+                depth_points=diagnostics.get("surface_points"),
+                motion_inliers=diagnostics.get("inliers"),
+                depth_residual_p90_m=(
+                    float(depth_residual_mm) / 1000
+                    if depth_residual_mm is not None and np.isfinite(depth_residual_mm)
+                    else None
+                ),
+                surface_fit_converged=diagnostics.get("converged"),
+            )
             accepted = pose is not None and (
                 detail["status"] == "reference"
                 or (

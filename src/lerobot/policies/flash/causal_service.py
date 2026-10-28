@@ -24,6 +24,7 @@ from .pose_disagreement import (
     compare_pose_proposals,
     free_space_support,
 )
+from .pose_evidence import PoseProposal
 from .registration import transform_points
 from .scene_groups import (
     EnvironmentRelationship,
@@ -46,6 +47,7 @@ class _Anchor:
     masks: dict[str, np.ndarray]
     source_time_s: float | None = None
     calibration_version: str | None = None
+    proposals: tuple[PoseProposal, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -58,6 +60,7 @@ class AnchorDecision:
     outcome: str
     decided_at_s: float
     accepted: PoseEstimate | None = None
+    proposal: PoseProposal | None = None
 
 
 @dataclass
@@ -292,8 +295,20 @@ class CausalPoseService:
         *,
         source_time_s: float | None = None,
         calibration_version: str | None = None,
+        proposals: tuple[PoseProposal, ...] = (),
     ) -> None:
-        self._submit(_Anchor(frame_id, estimates, masks, source_time_s, calibration_version))
+        estimates_by_role = {estimate.role: estimate for estimate in estimates}
+        if any(
+            proposal.frame_id != frame_id
+            or proposal.role not in estimates_by_role
+            or proposal.reference_version != estimates_by_role[proposal.role].reference_version
+            or proposal.source_time_s != estimates_by_role[proposal.role].source_time_s
+            or (source_time_s is not None and proposal.source_time_s != source_time_s)
+            or (calibration_version is not None and proposal.calibration_version != calibration_version)
+            for proposal in proposals
+        ) or len({proposal.role for proposal in proposals}) != len(proposals):
+            raise ValueError("source-frame proposals differ from the pose anchor")
+        self._submit(_Anchor(frame_id, estimates, masks, source_time_s, calibration_version, proposals))
 
     def process_offline(
         self,
@@ -302,6 +317,7 @@ class CausalPoseService:
         masks: dict[str, np.ndarray],
         *,
         attached_role: str | None = None,
+        proposals: tuple[PoseProposal, ...] = (),
     ) -> dict[str, PoseEstimate]:
         """Apply one recorded frame through the same scene estimator as live.
 
@@ -322,6 +338,7 @@ class CausalPoseService:
                 masks,
                 frame.source_time_s,
                 frame.calibration_version,
+                proposals,
             )
         )
         self._drain_pending()
@@ -803,6 +820,9 @@ class CausalPoseService:
                     outcome,
                     time.perf_counter(),
                     accepted,
+                    next(
+                        (proposal for proposal in result.proposals if proposal.role == candidate.role), None
+                    ),
                 )
             )
 

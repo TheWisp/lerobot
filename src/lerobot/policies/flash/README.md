@@ -33,6 +33,11 @@ bounded by retained frame count and tracked role count; if disk I/O cannot keep
 up, the estimator reports an error instead of silently losing decisions or
 growing memory without limit. An accepted source-frame candidate may still be
 rebased through later point motion before becoming the planner's current pose.
+The perception result now also carries a typed source-frame proposal with the
+backend's raw fit, including one the backend rejected, and measured visible
+surface support. The live camera shows a rejected raw fit only on its exact
+source frame. This makes rejection inspectable; it does not yet move acceptance
+out of the backend or replay later direct observations after a delayed change.
 
 Run → FLASH lists a sealed-format SO-107 recording with `showservo_demo.npz`
 even before it has a `flash/v1` extension. Open the raw demo, choose **Prepare

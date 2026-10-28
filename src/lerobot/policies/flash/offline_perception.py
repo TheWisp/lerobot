@@ -65,6 +65,7 @@ def extract_pose_trace(
                     attached_role=(
                         attached_role_at_frame(frame.frame_id) if attached_role_at_frame else None
                     ),
+                    proposals=result.proposals,
                 )
                 by_role = {
                     role: fused[role]

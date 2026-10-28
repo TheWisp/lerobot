@@ -277,6 +277,15 @@ def test_failed_rgb_motion_remains_visible_for_debugging_but_not_authoritative()
     assert result.details["object"]["status"] == "fitted_without_rgb_motion"
     assert result.details["object"]["base_from_object"] is not None
     assert result.details["object"]["accepted"] is False
+    proposal = result.proposals[0]
+    assert proposal.frame_id == sequence[1].frame_id
+    assert proposal.calibration_version == sequence[1].calibration_version
+    assert proposal.reference_version == result.estimates[0].reference_version
+    np.testing.assert_allclose(proposal.raw_pose, result.details["object"]["base_from_object"])
+    assert proposal.visible_support.mask_pixels > 0
+    assert proposal.visible_support.depth_points > 0
+    assert proposal.visible_support.depth_residual_p90_m is not None
+    assert proposal.failure == "surface proposal lacks accepted RGB-D support"
 
 
 def test_pipeline_rejects_frame_or_camera_discontinuity_instead_of_corrupting_reference():

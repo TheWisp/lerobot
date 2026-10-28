@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from .perception import ObjectReference, PoseBackend, RGBDFrame
+from .pose_evidence import PoseProposal, VisibleSurfaceSupport
 from .trajectory import PoseEstimate
 
 
@@ -17,6 +18,7 @@ class PerceptionResult:
     calibration_version: str
     masks: dict[str, np.ndarray]
     details: dict[str, dict] = field(default_factory=dict)
+    proposals: tuple[PoseProposal, ...] = ()
 
 
 class PerceptionPipeline:
@@ -63,14 +65,32 @@ class PerceptionPipeline:
                 or np.asarray(mask).dtype != bool
             ):
                 raise ValueError(f"{role}: causal mask does not align with RGB-D")
+        failures = dict(getattr(self.backend, "last_failure", {}))
+        raw_poses = getattr(self.backend, "last_candidate_poses", {})
+        visible_support = getattr(self.backend, "last_visible_support", {})
+        proposals = tuple(
+            PoseProposal(
+                frame.frame_id,
+                frame.calibration_version,
+                estimate,
+                raw_poses.get(estimate.role, estimate.pose),
+                visible_support.get(
+                    estimate.role,
+                    VisibleSurfaceSupport(int(masks[estimate.role].sum()) if estimate.role in masks else 0),
+                ),
+                failures.get(estimate.role),
+            )
+            for estimate in estimates
+        )
         return PerceptionResult(
             estimates,
-            dict(getattr(self.backend, "last_failure", {})),
+            failures,
             frame.frame_id,
             frame.source_time_s,
             frame.calibration_version,
             {role: mask.copy() for role, mask in masks.items()},
             dict(getattr(self.backend, "last_details", {})),
+            proposals,
         )
 
 

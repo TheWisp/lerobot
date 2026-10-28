@@ -17,6 +17,7 @@ import numpy as np
 from .causal_service import AnchorDecision
 from .perception import EndEffectorKinematics, RGBDFrame
 from .pose_disagreement import FreeSpaceComparison, PoseComparison
+from .pose_evidence import PoseProposal
 from .trajectory import AttachmentState, Evidence, PoseEstimate
 
 
@@ -93,6 +94,8 @@ class FlashLiveTelemetry:
         self._closed = False
         self._frame: RGBDFrame | None = None
         self._proposals: dict[str, PoseEstimate] = {}
+        self._raw_proposals: dict[str, dict] = {}
+        self._proposal_frame_id: int | None = None
         self._masks: dict[str, np.ndarray] = {}
         self._mask_frame_id: int | None = None
         self._layers: dict[str, dict[str, PoseEstimate]] = {}
@@ -120,10 +123,23 @@ class FlashLiveTelemetry:
         estimates: tuple[PoseEstimate, ...],
         masks: dict[str, np.ndarray] | None = None,
         frame_id: int | None = None,
+        source_proposals: tuple[PoseProposal, ...] = (),
     ) -> None:
         with self._condition:
             for estimate in estimates:
                 self._proposals[estimate.role] = estimate
+            self._proposal_frame_id = frame_id
+            self._raw_proposals = {
+                proposal.role: {
+                    "frame_id": proposal.frame_id,
+                    "calibration_version": proposal.calibration_version,
+                    "pose": proposal.raw_pose.tolist() if proposal.raw_pose is not None else None,
+                    "estimator": proposal.estimate.estimator,
+                    "failure": proposal.failure,
+                    "visible_support": asdict(proposal.visible_support),
+                }
+                for proposal in source_proposals
+            }
             if masks is not None:
                 self._masks = dict(masks)
                 self._mask_frame_id = frame_id
@@ -168,6 +184,7 @@ class FlashLiveTelemetry:
 
     def anchor_decision(self, decision: AnchorDecision) -> None:
         """Keep every source-frame verdict, even if display snapshots coalesce."""
+        raw_pose = decision.proposal.raw_pose if decision.proposal is not None else decision.candidate.pose
         event = {
             "schema_version": 1,
             "frame_id": decision.frame_id,
@@ -177,6 +194,11 @@ class FlashLiveTelemetry:
             "outcome": decision.outcome,
             "decided_at_s": decision.decided_at_s,
             "candidate": _estimate_json(decision.candidate),
+            "raw_pose": raw_pose.tolist() if raw_pose is not None else None,
+            "visible_support": (
+                asdict(decision.proposal.visible_support) if decision.proposal is not None else None
+            ),
+            "backend_failure": decision.proposal.failure if decision.proposal is not None else None,
             "accepted": _estimate_json(decision.accepted) if decision.accepted is not None else None,
         }
         with self._condition:
@@ -214,6 +236,8 @@ class FlashLiveTelemetry:
         with self._condition:
             frame = self._frame
             proposals = self._proposals.copy()
+            raw_proposals = self._raw_proposals.copy()
+            proposal_frame_id = self._proposal_frame_id
             masks = self._masks.copy()
             mask_frame_id = self._mask_frame_id
             layers = {role: values.copy() for role, values in self._layers.items()}
@@ -253,6 +277,7 @@ class FlashLiveTelemetry:
                     "height": frame.rgb.shape[0],
                     "intrinsics": frame.intrinsics.tolist(),
                     "base_from_camera": frame.base_from_camera.tolist(),
+                    "calibration_version": frame.calibration_version,
                 }
                 if frame is not None
                 else None
@@ -264,6 +289,8 @@ class FlashLiveTelemetry:
                 for role, mask in masks.items()
             },
             "proposals": {role: _estimate_json(value) for role, value in proposals.items()},
+            "proposal_frame_id": proposal_frame_id,
+            "raw_proposals": raw_proposals,
             "layers": {
                 role: {name: _estimate_json(value) for name, value in entries.items()}
                 for role, entries in layers.items()

@@ -265,7 +265,9 @@ class FlashRuntime:
 
         def on_pose_result(result) -> None:
             if self.live_telemetry is not None:
-                self.live_telemetry.proposals(result.estimates, result.masks, result.frame_id)
+                self.live_telemetry.proposals(
+                    result.estimates, result.masks, result.frame_id, result.proposals
+                )
             assert causal is not None
             causal.submit_anchor(
                 result.frame_id,
@@ -273,6 +275,7 @@ class FlashRuntime:
                 result.masks,
                 source_time_s=result.source_time_s,
                 calibration_version=result.calibration_version,
+                proposals=result.proposals,
             )
 
         pose_process = PoseProcess(

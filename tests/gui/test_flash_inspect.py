@@ -1095,6 +1095,7 @@ def test_live_flash_uses_the_same_frame_tagged_rgbd_scene(gui_page):
         "camera": {
             "frame_id": 9,
             "source_time_s": 12.0,
+            "calibration_version": "camera-v1",
             "width": width,
             "height": height,
             "intrinsics": [[50, 0, 32], [0, 50, 24], [0, 0, 1]],
@@ -1102,9 +1103,21 @@ def test_live_flash_uses_the_same_frame_tagged_rgbd_scene(gui_page):
             "rgbd_available": True,
         },
         "centers_object_m": {"object": [0, 0, 1]},
-        "points_object_m": {"object": [[0, 0, 1], [0.01, 0, 1], [0, 0.01, 1]]},
+        "points_object_m": {"object": [[-0.1, -0.1, 1], [0.1, -0.1, 1], [-0.1, 0.1, 1]]},
         "observed_masks": {"object": {"frame_id": 8, "boundary_xy": [[1, 1], [2, 1], [2, 2]]}},
-        "proposals": {},
+        "proposal_frame_id": 9,
+        "proposals": {
+            "object": {"pose": None, "evidence": "lost", "source_time_s": 12.0, "estimator": "surface_rgbd"}
+        },
+        "raw_proposals": {
+            "object": {
+                "frame_id": 9,
+                "calibration_version": "camera-v1",
+                "pose": np.eye(4).tolist(),
+                "estimator": "surface_rgbd",
+                "failure": "surface fit is uncertain",
+            }
+        },
         "layers": {},
         "accepted": {
             "object": {
@@ -1138,6 +1151,16 @@ def test_live_flash_uses_the_same_frame_tagged_rgbd_scene(gui_page):
     page.wait_for_function(
         "() => document.querySelector('.flash-replay-grid img')?.dataset.loadedFrame === '9'"
     )
+    assert "Rejected raw fit" in page.locator("#flash-tracker-content").inner_text()
+    pink_pixels = """() => {
+        const canvas = document.querySelector('.flash-pose-canvas');
+        const rgba = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
+        let count = 0;
+        for (let i = 0; i < rgba.length; i += 4)
+            if (rgba[i] > 220 && rgba[i+1] > 80 && rgba[i+1] < 160 && rgba[i+2] > 150 && rgba[i+2] < 220 && rgba[i+3] > 0) count++;
+        return count;
+    }"""
+    assert page.evaluate(pink_pixels) > 0
     assert page.locator("#flash-tracker-replay-controls").is_hidden()
     page.get_by_role("button", name="3D scene").click()
     page.wait_for_function("() => flashSceneFrameCache?.frameIndex === 9")
@@ -1160,6 +1183,9 @@ def test_live_flash_uses_the_same_frame_tagged_rgbd_scene(gui_page):
     page.wait_for_function("() => flashSceneFrameCache?.frameIndex === 10")
     assert page.evaluate("flashSceneFrameCache.depth[0]") == 1010
     assert "Live RGB-D · frame 10" in page.locator("#flash-scene-status").inner_text()
+    page.get_by_role("button", name="RGB camera").click()
+    page.evaluate("_flashDrawOverlay()")
+    assert page.evaluate(pink_pixels) == 0
     page.evaluate("stopFlashTelemetry()")
 
 
