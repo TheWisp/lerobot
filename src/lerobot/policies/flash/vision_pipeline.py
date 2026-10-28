@@ -39,6 +39,7 @@ class VisionPipelineConfig:
     parallel_surface_objects: bool = True
     pipeline_surface_frames: bool = True
     surface_object_workers: int = 2
+    surface_reference_max_points_per_view: int = 15000
     compiled_surface_fit: bool = True
     reuse_surface_search: bool = True
     observation: SurfaceObservationConfig = field(default_factory=SurfaceObservationConfig)
@@ -72,6 +73,8 @@ class VisionPipelineConfig:
             raise ValueError("surface acceleration settings must be booleans")
         if self.surface_object_workers < 1:
             raise ValueError("surface_object_workers must be positive")
+        if self.surface_reference_max_points_per_view < 3:
+            raise ValueError("surface reference needs at least three points per view")
         if not np.isfinite(self.min_similarity) or not -1 <= self.min_similarity <= 1:
             raise ValueError("invalid appearance similarity")
         if not np.isfinite(self.registration_threshold_m) or self.registration_threshold_m <= 0:

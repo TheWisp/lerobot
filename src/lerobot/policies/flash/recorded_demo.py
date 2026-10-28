@@ -108,4 +108,5 @@ def prepare_recorded_episode(
         tuple(symmetries),
         reference.vision_pipeline,
         reference.causal_tracking,
+        reference.surface_models,
     ).save(output)

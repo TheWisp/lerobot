@@ -78,7 +78,10 @@ That command is a compatibility entry point; the importer is
 1. An editor annotation identifies the object roles, a clear reference RGB-D frame per object,
    grasp/release events, keyframes, calibration and explicit tolerances.
 2. SAM3 masks the reference objects. Aligned depth gives metric surface points;
-   DINOv2 features attached to those points form the prepared reference bank.
+   DINOv2 features attached to those points form the prepared appearance bank.
+   New preparations also save the filtered dense depth surface separately for
+   each declared registered view, in the same object frame. The surface budget
+   per view is set by `vision_pipeline.surface_reference_max_points_per_view`.
 3. Demo extraction, the live inference worker and the camera debugger call
    [`PerceptionPipeline.process`](perception_step.py). It owns the estimator
    lifecycle and checks that poses, masks and diagnostics refer to the same
@@ -185,6 +188,10 @@ The surface backend first registers the current observation into the prepared
 object frame using the reference matcher. It then transports that same frame
 with the temporally tracked surface; it does not recompute the object's origin
 from the current visible points. Failed initial registration remains `LOST`.
+Its fit still uses the first live observed surface. The newly stored registered
+demo surfaces are available as versioned reference data but do not yet alter
+live pose proposals or control; their registration and fitting need separate
+validation before that switch.
 The camera-only debugger has no demo to register against, so it explicitly
 creates a local reference at the initial A landmark. This initialization
 choice does not change surface filtering, motion estimation or fitting.

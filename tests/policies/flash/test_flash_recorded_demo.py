@@ -13,6 +13,7 @@ from lerobot.policies.flash.prepared import PreparedFlashSkill
 from lerobot.policies.flash.recorded_demo import prepare_recorded_episode
 from lerobot.policies.flash.recorded_trial import inspect_recorded_trial, prepare_recorded_trial
 from lerobot.policies.flash.skill import FlashSkill, Interval, MotionMode, Relation, SpatialSample
+from lerobot.policies.flash.surface_reference import RegisteredSurfaceModel
 from lerobot.policies.flash.symmetry import AxialSymmetry
 
 
@@ -94,6 +95,7 @@ def _recorded_inputs(root, *, version="object-v1", symmetry=False, second_object
         {"object": "patterned object", **({"target": "blue target"} if second_object else {})},
         "encoder",
         symmetries,
+        surface_models=(RegisteredSurfaceModel("object", "object-v1", (model.points.points_object_m,)),),
     ).save(root / "flash/v1/reference_bundles/episode_000000")
     trace = root / "flash/v1/episode_000000.jsonl"
     with trace.open("w") as stream:
@@ -162,6 +164,10 @@ def test_recorded_episode_compiles_to_portable_prepared_skill(tmp_path):
     assert prepared.skill.intervals[0].reference_version == "object-v1"
     assert [sample.source_frame_index for sample in prepared.skill.intervals[0].samples] == [0, 1, 2]
     assert (tmp_path / prepared.references[0].snippets[0].mask_artifact).read_bytes() == b"mask"
+    np.testing.assert_allclose(
+        prepared.surface_models[0].view_points_object_m[0],
+        PreparedFlashSkill.load(reference_path).surface_models[0].view_points_object_m[0],
+    )
 
 
 def test_recorded_episode_rejects_pose_trace_in_different_object_frame(tmp_path):

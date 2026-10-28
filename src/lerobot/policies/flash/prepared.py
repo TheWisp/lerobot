@@ -14,6 +14,7 @@ from .causal_service import CausalTrackingConfig
 from .matched_rgbd import ObjectPointModel
 from .perception import ObjectReference, ReferenceSnippet
 from .skill import FlashSkill
+from .surface_reference import RegisteredSurfaceModel
 from .symmetry import AxialSymmetry
 from .vision_pipeline import VisionPipelineConfig
 
@@ -35,6 +36,7 @@ class PreparedFlashSkill:
     axial_symmetries: tuple[AxialSymmetry, ...] = ()
     vision_pipeline: VisionPipelineConfig | None = None
     causal_tracking: CausalTrackingConfig | None = None
+    surface_models: tuple[RegisteredSurfaceModel, ...] = ()
 
     def __post_init__(self) -> None:
         refs = {reference.role: reference for reference in self.references}
@@ -43,6 +45,15 @@ class PreparedFlashSkill:
             raise ValueError("prepared skill needs unique object references and appearance models")
         if set(refs) != set(models) or set(refs) != set(self.prompts_by_role):
             raise ValueError("each object role needs one reference, model and prompt")
+        surfaces = {model.role: model for model in self.surface_models}
+        if len(surfaces) != len(self.surface_models) or not set(surfaces) <= set(refs):
+            raise ValueError("registered surfaces need distinct prepared object roles")
+        if any(
+            model.reference_version != refs[role].version
+            or len(model.view_points_object_m) != len(refs[role].snippets)
+            for role, model in surfaces.items()
+        ):
+            raise ValueError("registered surface views differ from their object reference")
         if any(model.points.reference_version != refs[role].version for role, model in models.items()):
             raise ValueError("appearance model frame differs from its object reference")
         if any(not prompt.strip() for prompt in self.prompts_by_role.values()) or len(
@@ -98,16 +109,22 @@ class PreparedFlashSkill:
         self.skill.save(root / "skill.json")
         arrays = {}
         models = {model.points.role: model for model in self.appearance_models}
+        surfaces = {model.role: model for model in self.surface_models}
         references = []
         for index, reference in enumerate(self.references):
             model = models[reference.role]
             arrays[f"points_{index}"] = model.points.points_object_m
             arrays[f"descriptors_{index}"] = model.descriptors
+            surface = surfaces.get(reference.role)
+            if surface is not None:
+                for view_index, points in enumerate(surface.view_points_object_m):
+                    arrays[f"surface_{index}_{view_index}"] = points
             references.append(
                 {
                     "role": reference.role,
                     "version": reference.version,
                     "model_index": index,
+                    "surface_view_count": len(surface.view_points_object_m) if surface is not None else 0,
                     "snippets": [
                         {
                             "repo_id": snippet.repo_id,
@@ -157,7 +174,7 @@ class PreparedFlashSkill:
             if Path(manifest[key]).name != manifest[key]:
                 raise ValueError("prepared-skill files must stay inside the bundle directory")
         skill = FlashSkill.load(source.parent / manifest["skill"])
-        references, appearance_models = [], []
+        references, appearance_models, surface_models = [], [], []
         with np.load(source.parent / manifest["models"], allow_pickle=False) as arrays:
             for item in manifest["references"]:
                 snippets = tuple(
@@ -180,6 +197,17 @@ class PreparedFlashSkill:
                 )
                 references.append(reference)
                 appearance_models.append(model)
+                surface_count = item.get("surface_view_count", 0)
+                if type(surface_count) is not int or surface_count not in (0, len(snippets)):
+                    raise ValueError("registered surface count differs from reference snippets")
+                if surface_count:
+                    surface_models.append(
+                        RegisteredSurfaceModel(
+                            reference.role,
+                            reference.version,
+                            tuple(arrays[f"surface_{index}_{view}"] for view in range(surface_count)),
+                        )
+                    )
         return cls(
             skill,
             tuple(references),
@@ -193,6 +221,7 @@ class PreparedFlashSkill:
             CausalTrackingConfig.from_config(manifest["causal_tracking"])
             if manifest.get("causal_tracking") is not None
             else None,
+            tuple(surface_models),
         )
 
 
@@ -256,5 +285,6 @@ def snapshot_prepared_skill(
         prepared.axial_symmetries,
         prepared.vision_pipeline,
         prepared.causal_tracking,
+        prepared.surface_models,
     )
     return snapshot.save(bundle_root)

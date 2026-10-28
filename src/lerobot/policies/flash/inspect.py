@@ -17,6 +17,7 @@ def inspect_skill(path: str) -> dict:
         raise ValueError("skill file must exist and be at most 16 MiB")
     metadata = json.loads(source.read_text())
     prepared = PreparedFlashSkill.load(source) if "models" in metadata and "references" in metadata else None
+    surface_by_role = {model.role: model for model in prepared.surface_models} if prepared else {}
     skill = prepared.skill if prepared is not None else FlashSkill.load(source)
     missing = []
     missing_frames = []
@@ -108,6 +109,16 @@ def inspect_skill(path: str) -> dict:
                     "version": reference.version,
                     "views": len(reference.snippets),
                     "model_points": len(model.points.points_object_m),
+                    "registered_surface_views": (
+                        len(surface_by_role[reference.role].view_points_object_m)
+                        if reference.role in surface_by_role
+                        else 0
+                    ),
+                    "registered_surface_points": (
+                        sum(len(points) for points in surface_by_role[reference.role].view_points_object_m)
+                        if reference.role in surface_by_role
+                        else 0
+                    ),
                 }
                 for reference, model in zip(prepared.references, prepared.appearance_models, strict=True)
             ]

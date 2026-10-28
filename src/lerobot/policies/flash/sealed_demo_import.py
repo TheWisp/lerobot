@@ -53,6 +53,7 @@ from lerobot.policies.flash.skill import (
     SpatialSample,
     TurnAtPoint,
 )
+from lerobot.policies.flash.surface_reference import build_registered_surface_model
 from lerobot.policies.flash.symmetry import AxialSymmetry
 from lerobot.policies.flash.trajectory import Evidence, PoseEstimate
 from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig, build_vision_backend
@@ -434,7 +435,7 @@ def prepare(
         annotation.get("reference_polygons_by_role", {}),
     )
     extractor = DinoPatchExtractor(model_id=annotation["descriptor_model_id"])
-    references, models = [], []
+    references, models, surface_models = [], [], []
     mask_paths = {}
     for role in prompts:
         role_frame_index = reference_indices[role]
@@ -450,11 +451,17 @@ def prepare(
             version,
         )
         reference = ObjectReference(role, f"{output_name}:{version}", (snippet,))
-        model = build_appearance_model(
-            reference, (ReferenceAppearanceFrame(snippet, reference_frame, reference_mask),), extractor
+        views = (ReferenceAppearanceFrame(snippet, reference_frame, reference_mask),)
+        model = build_appearance_model(reference, views, extractor)
+        surface_model = build_registered_surface_model(
+            reference,
+            views,
+            observation_config=vision_config.observation,
+            max_points_per_view=vision_config.surface_reference_max_points_per_view,
         )
         references.append(reference)
         models.append(model)
+        surface_models.append(surface_model)
         mask_paths[role] = mask_rel
 
     axial_symmetries = []
@@ -891,6 +898,7 @@ def prepare(
         tuple(axial_symmetries),
         vision_config,
         causal_config,
+        tuple(surface_models),
     )
     for role, rel in mask_paths.items():
         path = root / rel
