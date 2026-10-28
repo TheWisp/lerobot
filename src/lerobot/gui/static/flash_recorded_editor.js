@@ -1,6 +1,5 @@
 // Timeline editing for regular FLASH recordings. Uses the same Run viewer as playback.
 let flashRecordedEditor = null;
-
 function closeFlashRecordedEditor() {
     if (!flashRecordedEditor) return;
     flashRecordedEditor = null;
@@ -13,6 +12,7 @@ function closeFlashRecordedEditor() {
 
 async function toggleFlashReplayEditor() {
     if (['rollout', 'recorded_demo'].includes(flashReplay?.kind)) return toggleFlashRecordedEditor();
+    if (flashReplay?.kind === 'observation_demo') return toggleFlashObservationEditor();
     return toggleFlashDemoEditor();
 }
 

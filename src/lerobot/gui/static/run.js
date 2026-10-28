@@ -226,6 +226,9 @@ async function toggleFlashSceneView() {
                 const point = flashDemoEditor.keypointsDocument.keypoints[flashDemoEditor.keypointIndex];
                 flashSceneView.setTurnPreview(point ? _flashEditorTurnForPoint(flashDemoEditor, point) || null : null);
             }
+            if (flashObservationEditor?.selected?.allowed_turn)
+                flashSceneView.setTurnPreview({reference_role: flashObservationEditor.selected.reference_role,
+                    ...flashObservationEditor.selected.allowed_turn});
         }
         flashSceneMode = '3d';
         grid.classList.add('flash-scene-active');
@@ -242,6 +245,10 @@ async function toggleFlashSceneView() {
 
 async function openFlashDemoSceneEditor() {
     if (flashSceneMode !== '3d') await toggleFlashSceneView();
+    if (flashReplay?.kind === 'observation_demo') {
+        if (!flashObservationEditor) await toggleFlashObservationEditor();
+        return;
+    }
     if (!flashDemoEditor) await toggleFlashDemoEditor();
     if (flashDemoEditor) {
         const points = flashDemoEditor.keypointsDocument.keypoints;
@@ -264,7 +271,9 @@ function _flashScenePointerUp(event) {
     const picked = flashSceneView.pickObserved(event.clientX, event.clientY);
     if (!picked) return;
     document.getElementById('flash-scene-object').value = picked.role;
-    if (flashDemoEditor?.pickingTurn) {
+    if (flashObservationEditor?.pickingTurn) {
+        flashObservationPickedTurn(picked);
+    } else if (flashDemoEditor?.pickingTurn) {
         flashDemoEditorPickTurn(picked);
     } else if (flashDemoEditor?.pickingReference) {
         flashDemoEditorPickReference(picked.role);
@@ -1537,6 +1546,7 @@ function startFlashTelemetry() {
     if (flashTelemetryTimer) return;
     const generation = ++flashTelemetryGeneration;
     closeFlashRecordedEditor();
+    closeFlashObservationEditor();
     closeFlashDemoEditor();
     flashSceneRequest++;
     flashSceneFrameCache = null;
@@ -1665,9 +1675,10 @@ function _flashCreateSceneGrid(kind, imageAlt, depthAvailable = true) {
         const toolbar = document.createElement('div');
         toolbar.className = 'flash-scene-toolbar';
         toolbar.innerHTML = `<button type="button" id="flash-scene-toggle" onclick="toggleFlashSceneView()"${kind === 'live' ? ' disabled' : ''}>3D scene</button>` +
-            (kind === 'demo' ? '<button type="button" id="flash-scene-edit" onclick="openFlashDemoSceneEditor()">Edit demo in 3D</button>' +
+            (['demo', 'observation_demo'].includes(kind) ? '<button type="button" id="flash-scene-edit" onclick="openFlashDemoSceneEditor()">' +
+                (kind === 'observation_demo' ? 'Edit relationships' : 'Edit demo in 3D') + '</button>' +
                 '<span id="flash-demo-review-status" class="flash-demo-review-status" hidden></span>' +
-                '<button type="button" id="flash-compare-sources" onclick="toggleFlashCompareSources()" aria-pressed="false">Compare source estimates</button>' : '') +
+                (kind === 'demo' ? '<button type="button" id="flash-compare-sources" onclick="toggleFlashCompareSources()" aria-pressed="false">Compare source estimates</button>' : '') : '') +
             '<div id="flash-scene-tools" hidden>' +
             '<select id="flash-scene-object" aria-label="Focus object" onchange="this.value ? flashSceneView?.focus(this.value) : flashSceneView?.frameAll()"><option value="">All objects</option></select>' +
             '<button type="button" onclick="flashSceneView?.reset()">Align to camera</button>' +
@@ -1684,7 +1695,8 @@ function _flashCreateSceneGrid(kind, imageAlt, depthAvailable = true) {
             (hasGroupSupport
                 ? '<label title="Tracked scene context used by the group predictor"><input type="checkbox" id="flash-scene-group" onchange="_flashUpdateSceneFrame()">Scene support</label>'
                 : '') +
-            '<label><input type="checkbox" id="flash-scene-gripper" onchange="_flashUpdateSceneFrame()">Gripper</label></div></details></div>';
+            (kind === 'observation_demo' ? '' : '<label><input type="checkbox" id="flash-scene-gripper" onchange="_flashUpdateSceneFrame()">Gripper</label>') +
+            '</div></details></div>';
         const status = document.createElement('div');
         status.id = 'flash-scene-status';
         status.textContent = kind === 'live' ? 'Waiting for aligned live RGB-D' : 'Loading recorded RGB-D';
@@ -1704,6 +1716,7 @@ function _flashInstallReplay(replay, imageAlt) {
     flashSceneView = null;
     flashSceneMode = 'camera';
     closeFlashRecordedEditor();
+    closeFlashObservationEditor();
     closeFlashDemoEditor();
     stopFlashTelemetry();
     stopObsStreamViewer();
@@ -1722,7 +1735,7 @@ function _flashInstallReplay(replay, imageAlt) {
     const reviewStatus = document.getElementById('flash-demo-review-status');
     if (reviewStatus) {
         const reviewed = replay.review_status === 'accepted';
-        reviewStatus.hidden = reviewed;
+        reviewStatus.hidden = reviewed || replay.kind === 'observation_demo';
         reviewStatus.textContent = 'Object poses need review';
         reviewStatus.title = 'The camera frames and robot motion are recorded. Object poses were inferred and this prepared skill has not been accepted as a verified pose trace.';
     }
@@ -1730,8 +1743,10 @@ function _flashInstallReplay(replay, imageAlt) {
     document.getElementById('flash-tracker-scrub').max = Math.max(0, replay.frames.length - 1);
     document.getElementById('flash-tracker-play').textContent = 'Play';
     const editToggle = document.getElementById('flash-demo-edit-toggle');
-    editToggle.hidden = !['demo', 'raw_demo', 'rollout', 'recorded_demo'].includes(replay.kind);
-    editToggle.textContent = replay.kind === 'raw_demo' ? 'Prepare demo' : ['rollout', 'recorded_demo'].includes(replay.kind) ? 'Mark motion' : 'Edit on camera';
+    editToggle.hidden = !['demo', 'raw_demo', 'rollout', 'recorded_demo', 'observation_demo'].includes(replay.kind);
+    editToggle.textContent = replay.kind === 'raw_demo' ? 'Prepare demo'
+        : replay.kind === 'observation_demo' ? 'Edit relationships'
+        : ['rollout', 'recorded_demo'].includes(replay.kind) ? 'Mark motion' : 'Edit on camera';
     _flashRenderTimeline();
 }
 
@@ -1746,6 +1761,21 @@ function _flashRenderTimeline() {
     markers.replaceChildren();
     const replay = flashReplay;
     document.querySelector('.flash-timeline-legend').hidden = !['demo', 'raw_demo'].includes(replay?.kind);
+    if (replay?.kind === 'observation_demo' && replay.frames?.length) {
+        const keys = flashObservationEditor?.annotation.keyframes || replay.annotations?.keyframes || [];
+        const last = Math.max(1, replay.frames.at(-1).frame_index);
+        for (const key of keys) {
+            const marker = document.createElement('button');
+            marker.type = 'button';
+            marker.className = 'flash-timeline-marker flash-timeline-key';
+            marker.style.left = `${100 * key.frame_index / last}%`;
+            marker.title = `Frame ${key.frame_index}: ${key.moving_role} → ${key.reference_role}`;
+            marker.setAttribute('aria-label', marker.title);
+            marker.onclick = () => flashObservationJump(key.frame_index, key.moving_role, key.reference_role);
+            markers.append(marker);
+        }
+        return;
+    }
     if (replay?.kind === 'recorded_demo' && replay.frames?.length) {
         const last = replay.frames.at(-1).frame_index || 1;
         for (const interval of replay.prepared_intervals || []) {
@@ -2100,6 +2130,7 @@ function seekFlashReplay(index) {
             else _flashEditorUpdateFrame();
         }
         if (flashRecordedEditor) _flashRecordedUpdateFrame();
+        if (flashObservationEditor) _flashObservationUpdateFrame();
     };
     nextImage.onerror = () => {
         if (flashReplay !== replay || replay.frames[Number(scrub.value)] !== selected) return;

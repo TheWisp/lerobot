@@ -16,6 +16,7 @@ import numpy as np
 
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
+from .observation_annotations import load_annotations
 from .observation_dataset import camera_feature_keys
 
 
@@ -144,6 +145,44 @@ def load_observation_replay(root: Path, episode: int = 0) -> dict:
                 },
             }
         )
+    annotation_warning = None
+    try:
+        annotations = load_annotations(root, episode)
+    except ValueError as exc:
+        annotations = None
+        annotation_warning = str(exc)
+    relationship_evidence = []
+    for keyframe in (annotations or {}).get("keyframes", []):
+        index = keyframe["frame_index"]
+        if not 0 <= index < len(frames):
+            continue
+        estimates = frames[index]["snapshot"]["accepted"]
+        moving = estimates.get(keyframe["moving_role"])
+        reference = estimates.get(keyframe["reference_role"])
+        relation = {
+            "frame_index": index,
+            "moving_role": keyframe["moving_role"],
+            "reference_role": keyframe["reference_role"],
+        }
+        if moving and reference:
+            relative = np.linalg.inv(np.asarray(reference["pose"])) @ np.asarray(moving["pose"])
+            relation.update(
+                {
+                    "relative_pose": relative.tolist(),
+                    "moving_evidence": moving["evidence"],
+                    "reference_evidence": reference["evidence"],
+                    "both_observed": moving["evidence"] == reference["evidence"] == "observed",
+                }
+            )
+        else:
+            relation.update(
+                {
+                    "relative_pose": None,
+                    "both_observed": False,
+                    "reason": "one or both object poses are unavailable",
+                }
+            )
+        relationship_evidence.append(relation)
     return {
         "available": True,
         "kind": "observation_demo",
@@ -156,4 +195,7 @@ def load_observation_replay(root: Path, episode: int = 0) -> dict:
         "evidence_available": evidence_available,
         "robot_actions_available": False,
         "gripper_prediction_available": False,
+        "annotations": annotations,
+        "annotation_warning": annotation_warning,
+        "relationship_evidence": relationship_evidence,
     }

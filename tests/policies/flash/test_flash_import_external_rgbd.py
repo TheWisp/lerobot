@@ -1,15 +1,22 @@
 """An external RGB-D import must preserve depth validity and source timing."""
 
+import asyncio
 import gzip
 import hashlib
 import json
 
 import cv2
 import numpy as np
+import pytest
 
 from benchmarks.flash_import_external_rgbd import import_rgbd
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
-from lerobot.gui.api.run import _flash_recordings
+from lerobot.gui.api.run import (
+    FlashObservationAnnotationRequest,
+    _flash_recordings,
+    flash_observation_annotations,
+)
+from lerobot.policies.flash.observation_annotations import save_annotations
 from lerobot.policies.flash.observation_dataset import camera_feature_keys
 from lerobot.policies.flash.observation_replay import load_observation_replay
 
@@ -88,9 +95,88 @@ def test_import_preserves_invalid_depth_and_source_clock(tmp_path):
     assert replay["frames"][1]["snapshot"]["accepted"]["object"]["evidence"] == "observed"
     assert replay["frames"][1]["snapshot"]["observed_masks"]["object"]["boundary_xy"]
     assert replay["geometry"]["points_object_m"]["object"]
+    for frame_id in range(3):
+        evidence_path = sidecar / f"{frame_id:06d}.json.gz"
+        with gzip.open(evidence_path, "rt") as stream:
+            evidence = json.load(stream)
+        evidence["estimates"]["reference"] = {
+            "pose": pose,
+            "evidence": "observed" if frame_id == 0 else "predicted",
+            "estimator": "test",
+        }
+        evidence["masks_rle"]["reference"] = [[0, 64 * 64]]
+        with gzip.open(evidence_path, "wt") as stream:
+            json.dump(evidence, stream)
+    replay = load_observation_replay(root)
+    keyframe = {
+        "frame_index": 1,
+        "moving_role": "object",
+        "reference_role": "reference",
+        "required": True,
+        "allowed_turn": None,
+    }
+    request = FlashObservationAnnotationRequest(
+        dataset_root=str(root),
+        episode=0,
+        annotation={
+            "schema_version": 1,
+            "source_metadata_sha256": hashlib.sha256(
+                (root / "flash" / "v1" / "source.json").read_bytes()
+            ).hexdigest(),
+            "keyframes": [keyframe],
+        },
+    )
+    saved = asyncio.run(flash_observation_annotations(request))
+    assert saved["keyframes"] == [keyframe]
+    reviewed = load_observation_replay(root)
+    assert reviewed["annotations"]["keyframes"] == [keyframe]
+    relation = reviewed["relationship_evidence"][0]
+    assert (relation["frame_index"], relation["moving_role"], relation["reference_role"]) == (
+        1,
+        "object",
+        "reference",
+    )
+    assert not relation["both_observed"]
+    assert relation["reference_evidence"] == "predicted"
+    assert np.allclose(relation["relative_pose"], pose)
+    reverse = {
+        **keyframe,
+        "moving_role": "reference",
+        "reference_role": "object",
+        "allowed_turn": {
+            "pivot_reference_m": [0.0, 0.0, 0.0],
+            "axis_reference": [0.0, 0.0, 1.0],
+            "min_angle_rad": -1.0,
+            "max_angle_rad": 1.0,
+            "source_evidence": "observed",
+        },
+    }
+    multiple = save_annotations(root, 0, {**saved, "keyframes": [keyframe, reverse]}, replay)
+    assert len(load_observation_replay(root)["annotations"]["keyframes"]) == 2
+    assert any(
+        item["moving_role"] == "reference" and item["reference_role"] == "object"
+        for item in load_observation_replay(root)["relationship_evidence"]
+    )
+    with pytest.raises(ValueError, match="already marked"):
+        save_annotations(root, 0, {**multiple, "keyframes": [keyframe, keyframe]}, replay)
+    with pytest.raises(ValueError, match="increasing angle range|turn range"):
+        save_annotations(
+            root,
+            0,
+            {
+                **multiple,
+                "keyframes": [{**reverse, "allowed_turn": {**reverse["allowed_turn"], "min_angle_rad": 2.0}}],
+            },
+            replay,
+        )
+    with pytest.raises(ValueError, match="different tracked objects"):
+        save_annotations(root, 0, {**saved, "keyframes": [{**keyframe, "reference_role": "object"}]}, replay)
+    with pytest.raises(ValueError, match="outside this episode"):
+        save_annotations(root, 0, {**saved, "keyframes": [{**keyframe, "frame_index": 3}]}, replay)
     source["source"] = "revised source metadata"
     (root / "flash" / "v1" / "source.json").write_text(json.dumps(source))
     assert not load_observation_replay(root)["evidence_available"]
+    assert load_observation_replay(root)["annotations"] is None
 
 
 def test_observation_camera_names_come_from_metadata():

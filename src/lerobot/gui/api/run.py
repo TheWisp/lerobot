@@ -276,6 +276,10 @@ class FlashRecordedPrepareRequest(FlashDatasetInspectRequest):
     symmetry_baseline_frames: dict[str, int] = Field(default_factory=dict)
 
 
+class FlashObservationAnnotationRequest(FlashDatasetInspectRequest):
+    annotation: dict[str, Any]
+
+
 class FlashTrackerImportRequest(FlashDatasetInspectRequest):
     bundle_path: str
     tracker: str
@@ -1599,6 +1603,26 @@ async def flash_observation_replay(dataset_root: str, episode: int = 0) -> dict:
         )
     except (OSError, KeyError, TypeError, ValueError) as exc:
         raise HTTPException(400, f"Cannot replay RGB-D observation: {exc}") from exc
+
+
+@router.post("/flash/observation/annotations")
+async def flash_observation_annotations(req: FlashObservationAnnotationRequest) -> dict:
+    """Save object-relationship review intent without inventing robot actions."""
+    from lerobot.policies.flash.observation_annotations import save_annotations
+    from lerobot.policies.flash.observation_replay import load_observation_replay
+
+    if req.episode < 0:
+        raise HTTPException(400, "Episode must be nonnegative")
+
+    def save() -> dict:
+        root = Path(req.dataset_root)
+        replay = load_observation_replay(root, req.episode)
+        return save_annotations(root, req.episode, req.annotation, replay)
+
+    try:
+        return await asyncio.get_running_loop().run_in_executor(_flash_telemetry_pool, save)
+    except (OSError, KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(400, f"Cannot save observation annotation: {exc}") from exc
 
 
 @router.get("/flash/demo/frame")

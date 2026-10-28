@@ -12,6 +12,7 @@ Review the extracted demonstration and test its adaptations in the same 3D scene
 - **Choices have consequences.** An adaptation persists through its relationship's lifetime. Later keyframes constrain it; they cannot silently reset physical contact.
 - **Evidence stays visible.** Reliable vision corrects tracking. Supported gripper or group relationships predict through lost observations; pushing never implies rigid attachment.
 - **One pipeline.** Demo extraction, Test and debugging share tracking and normal LeRobot datasets.
+- **Observations can teach relationships.** An RGB-D episode without robot actions uses the same vision and scene-group evidence. Its keyframes and object–object permissions remain editable, but it cannot supply robot motion or a gripper-backed fallback until action and calibration data exist.
 
 ## Components
 

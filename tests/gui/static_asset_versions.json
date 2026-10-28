@@ -68,8 +68,8 @@
     "sha256_16": "98dc567f47edf5c8"
   },
   "flash_recorded_editor.js": {
-    "sha256_16": "a95cfb028b8ed380",
-    "v": "5"
+    "v": "6",
+    "sha256_16": "8d07c468d16edca6"
   },
   "flash_scene_view.js": {
     "sha256_16": "c47f72f5748b8cab",
@@ -128,8 +128,8 @@
     "v": "27"
   },
   "run.js": {
-    "v": "157",
-    "sha256_16": "1c033dae86d2c86f"
+    "v": "159",
+    "sha256_16": "01fc3bd2f73d3aad"
   },
   "style.css": {
     "v": "168",
@@ -166,5 +166,9 @@
   "urdf_viz.html": {
     "sha256_16": "01a0d5cf8a133698",
     "v": "8"
+  },
+  "flash_observation_editor.js": {
+    "v": "2",
+    "sha256_16": "e1979bc014dbf7ac"
   }
 }
