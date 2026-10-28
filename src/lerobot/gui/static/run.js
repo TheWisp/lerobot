@@ -662,12 +662,15 @@ function closeFlashDemoEditor() {
 
 function toggleFlashTrackerPanel() {
     const panel = document.getElementById('flash-tracker-panel');
+    setFlashTrackerPanelCollapsed(!panel.classList.contains('is-collapsed'));
+}
+
+function setFlashTrackerPanelCollapsed(collapsed) {
+    const panel = document.getElementById('flash-tracker-panel');
     const button = document.getElementById('flash-tracker-collapse');
-    const collapsed = panel.classList.toggle('is-collapsed');
-    button.textContent = collapsed ? '+' : '−';
+    panel.classList.toggle('is-collapsed', collapsed);
+    button.textContent = collapsed ? 'Pose details' : 'Hide details';
     button.setAttribute('aria-expanded', String(!collapsed));
-    button.setAttribute('aria-label', collapsed ? 'Expand overlay details' : 'Collapse overlay details');
-    button.title = button.getAttribute('aria-label');
 }
 
 function initFlashTrackerPanelDrag() {
@@ -1221,6 +1224,7 @@ function startFlashTelemetry() {
     stopObsStreamViewer();
     flashUiMode = 'live';
     _flashUpdateWorkspace();
+    setFlashTrackerPanelCollapsed(true);
     const grid = _flashCreateSceneGrid('live', 'Live aligned RGB-D camera');
     const image = grid.querySelector('img');
     document.getElementById('flash-tracker-replay-controls').hidden = true;
@@ -1378,6 +1382,7 @@ function _flashInstallReplay(replay, imageAlt) {
     document.getElementById('flash-track-tools').hidden = true;
     flashUiMode = 'review';
     _flashUpdateWorkspace();
+    setFlashTrackerPanelCollapsed(true);
     flashHighlightedOverlay = null;
     _flashCreateSceneGrid(replay.kind, imageAlt, !!replay.camera_features?.depth);
     document.getElementById('flash-tracker-replay-controls').hidden = false;

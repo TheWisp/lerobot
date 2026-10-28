@@ -635,6 +635,9 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .flash-tracker-heading-actions button:hover { background: #224868; }
 .flash-tracker-panel.is-collapsed #flash-tracker-content { display: none; }
 .flash-tracker-panel.is-collapsed .flash-tracker-heading { margin-bottom: 0; }
+.flash-tracker-panel.is-collapsed .flash-tracker-heading strong,
+.flash-tracker-panel.is-collapsed #flash-tracker-mode { display: none; }
+.flash-tracker-panel.is-collapsed { width: auto; padding: 4px; }
 .flash-tracker-role { border-top: 1px solid #31516c; padding: 6px 0; }
 .flash-tracker-legend { color: #a7b5c8; font-size: 11px; line-height: 1.3; padding-bottom: 6px; }
 .flash-tracker-layer, .flash-tracker-selected { margin-top: 5px; }
@@ -726,6 +729,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 #tab-run.flash-reviewing #rerun-viewer { flex: 1; min-height: 0; display: flex; min-width: 0; }
 #tab-run.flash-reviewing .flash-replay-grid { position: relative; inset: auto; flex: 1; min-width: 0; }
 #tab-run.flash-reviewing .flash-tracker-panel { position: relative; top: auto !important; right: auto !important; left: auto !important; flex: 0 0 320px; width: 320px; max-height: none !important; border-radius: 0; border-width: 0 0 0 1px; background: #101b2a; }
+#tab-run.flash-reviewing .flash-tracker-panel.is-collapsed { position: absolute; z-index: 12; top: 8px !important; right: 8px !important; left: auto !important; flex: none; width: auto; border: 1px solid #31516c; border-radius: 4px; background: rgba(9, 18, 32, .94); }
 #tab-run.flash-reviewing .flash-demo-editor { position: relative; top: auto; right: auto; bottom: auto; flex: 0 0 350px; width: 350px; overflow: auto; }
 #tab-run.flash-reviewing .flash-demo-editing .flash-replay-grid { right: auto; }
 #tab-run.flash-reviewing .flash-demo-editor .flash-tracker-panel { position: relative; width: 100%; max-height: none; border: 0; padding: 0; }

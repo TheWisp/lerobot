@@ -940,6 +940,9 @@ def test_run_flash_tracker_panel_reuses_view_for_recorded_layers(gui_page):
     page.wait_for_function("() => document.querySelector('#flash-tracker-mode').textContent === 'Recording'")
     panel = page.locator("#flash-tracker-panel")
     assert panel.is_visible()
+    assert "is-collapsed" in panel.get_attribute("class").split()
+    assert not page.locator("#flash-tracker-content").is_visible()
+    page.locator("#flash-tracker-collapse").click()
     assert "Direct proposal" in panel.inner_text()
     assert "Verified group" in panel.inner_text()
     assert "Accepted estimator pose: Verified group" in panel.inner_text()
@@ -955,6 +958,8 @@ def test_run_flash_tracker_panel_reuses_view_for_recorded_layers(gui_page):
     page.locator("#flash-tracker-collapse").click()
     assert not page.locator("#flash-tracker-content").is_visible()
     assert page.locator("#flash-tracker-replay-controls").is_visible()
+    collapsed = panel.bounding_box()
+    assert collapsed["width"] < 150
     heading = page.locator("#flash-tracker-heading").bounding_box()
     before = panel.bounding_box()
     page.mouse.move(heading["x"] + 20, heading["y"] + heading["height"] / 2)
