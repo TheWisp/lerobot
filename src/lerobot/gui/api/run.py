@@ -1303,6 +1303,47 @@ def flash_demo_frame(dataset_root: str, frame_index: int) -> FileResponse:
     return FileResponse(path, media_type="image/jpeg")
 
 
+@router.get("/flash/demo/depth-frame")
+async def flash_demo_depth_frame(dataset_root: str, frame_index: int) -> Response:
+    """Aligned metric depth for the 3D inspector; read outside the GUI loop."""
+    if frame_index < 0:
+        raise HTTPException(400, "Frame index must be nonnegative")
+
+    def read() -> bytes:
+        import cv2
+        import numpy as np
+
+        root = Path(dataset_root).expanduser().resolve()
+        if not (root / "meta" / "info.json").is_file():
+            raise FileNotFoundError("Demo dataset is missing")
+        depth = cv2.imread(str(root / "recording" / "depth" / f"{frame_index:06d}.png"), cv2.IMREAD_UNCHANGED)
+        if depth is None or depth.ndim != 2 or depth.dtype != np.uint16:
+            raise FileNotFoundError("Aligned 16-bit demo depth frame is missing")
+        return depth.astype("<u2", copy=False).tobytes()
+
+    try:
+        data = await asyncio.get_running_loop().run_in_executor(_flash_telemetry_pool, read)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    return Response(data, media_type="application/octet-stream")
+
+
+@router.get("/flash/demo/reference-surfaces")
+async def flash_demo_reference_surfaces(dataset_root: str, bundle_path: str) -> dict:
+    """Build only measured reference patches; no inferred back surface."""
+    from lerobot.policies.flash.demo_scene import reference_surfaces
+
+    try:
+
+        def read() -> dict:
+            root, bundle = _flash_demo_paths(dataset_root, bundle_path)
+            return reference_surfaces(root, bundle)
+
+        return await asyncio.get_running_loop().run_in_executor(_flash_config_pool, read)
+    except (OSError, KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(400, f"Cannot build demo surfaces: {exc}") from exc
+
+
 def _flash_demo_paths(dataset_root: str, bundle_path: str) -> tuple[Path, Path]:
     root = Path(dataset_root).expanduser().resolve()
     bundle = Path(bundle_path).expanduser().resolve()

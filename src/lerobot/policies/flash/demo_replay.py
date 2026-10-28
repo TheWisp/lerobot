@@ -213,6 +213,47 @@ def _demo_annotation_path(root: Path, bundle: Path) -> Path:
     return versioned if versioned.is_file() else root / "flash" / "v1" / "import-annotations.json"
 
 
+def _add_saved_extraction_layers(root: Path, bundle: Path, result: dict) -> None:
+    """Expose this version's causal pose trace without recasting it as skill poses."""
+    report_path = bundle.parent / "preparation-report.json"
+    if not report_path.is_file():
+        result["extraction_history"] = "not_recorded"
+        return
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    relative = report.get("pose_trace_cache")
+    if not relative:
+        result["extraction_history"] = "not_recorded"
+        return
+    cache_path = (root / relative).resolve()
+    cache_path.relative_to((root / "flash" / "v1" / "preparation-cache").resolve())
+    if not cache_path.is_file():
+        result["extraction_history"] = "not_recorded"
+        return
+    with np.load(cache_path, allow_pickle=False) as cache:
+        count = min(int(cache["frames"]), len(result["frames"]))
+        for role in result["geometry"]["points_object_m"]:
+            if any(f"{role}_{field}" not in cache for field in ("poses", "evidence", "estimator")):
+                continue
+            for index in range(count):
+                evidence = str(cache[f"{role}_evidence"][index])
+                snapshot = result["frames"][index]["snapshot"]
+                estimator = str(cache[f"{role}_estimator"][index])
+                source_s = snapshot["recorded_at_s"]
+                snapshot.setdefault("layers", {}).setdefault(role, {})["demo_extraction"] = {
+                    "pose": cache[f"{role}_poses"][index].tolist() if evidence != "lost" else None,
+                    "evidence": evidence,
+                    "estimator": estimator,
+                    "source_time_s": source_s,
+                    "last_direct_observation_s": (
+                        float(cache[f"{role}_last_direct_s"][index])
+                        if f"{role}_last_direct_s" in cache
+                        and np.isfinite(cache[f"{role}_last_direct_s"][index])
+                        else None
+                    ),
+                }
+    result["extraction_history"] = "recorded_for_prepared_version"
+
+
 def load_raw_legacy_demo_replay(dataset_root: Path, episode: int) -> dict:
     """Expose an unprepared sealed-format recording without inventing object poses."""
     root = dataset_root.expanduser().resolve()
@@ -307,6 +348,7 @@ def load_legacy_demo_replay(dataset_root: Path, episode: int, bundle_path: Path)
         fps=float(info["fps"]),
     )
     result["bundle_path"] = str(bundle)
+    _add_saved_extraction_layers(root, bundle, result)
     result["grasp_reference"] = {
         "role": annotation["held_role"],
         "camera_frame_index": annotation["grasp_reference_frame"],
