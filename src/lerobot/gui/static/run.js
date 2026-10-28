@@ -45,6 +45,7 @@ function _flashSceneOptions() {
     return {
         showSurface: document.getElementById('flash-scene-surface')?.checked ?? false,
         showPoints: document.getElementById('flash-scene-points')?.checked ?? false,
+        maxSurfaceVertices: Number(document.getElementById('flash-scene-detail')?.value),
         pointSpacingPx: Math.max(2, Math.min(16, Number(document.getElementById('flash-scene-point-spacing')?.value || 5))),
         showProjection: document.getElementById('flash-scene-projection')?.checked,
         showDepthScene: document.getElementById('flash-scene-depth')?.checked,
@@ -192,7 +193,7 @@ async function toggleFlashSceneView() {
                 option.textContent = role;
                 select.append(option);
             }
-            const {createFlashSceneView} = await import('/static/flash_scene_view.js?v=17');
+            const {createFlashSceneView} = await import('/static/flash_scene_view.js?v=18');
             flashSceneView = createFlashSceneView(grid.querySelector('.flash-scene-canvas'), surfaces);
             if (flashDemoEditor) {
                 const point = flashDemoEditor.keypointsDocument.keypoints[flashDemoEditor.keypointIndex];
@@ -1442,7 +1443,8 @@ function _flashCreateSceneGrid(kind, imageAlt, depthAvailable = true) {
             '<details class="flash-scene-layer-menu"><summary>Layers</summary><div class="flash-scene-layer-options">' +
             (hasMeasuredSurface
                 ? '<label title="Current frame, using this frame’s mask and measured depth"><input type="checkbox" id="flash-scene-surface" checked onchange="_flashUpdateSceneFrame()">Measured surface</label>' +
-                    '<label title="Current mask-and-depth samples for display; these are not tracked landmarks"><input type="checkbox" id="flash-scene-points" checked onchange="_flashUpdateSceneFrame()">Surface points</label>' +
+                    '<label title="Current mask-and-depth samples for display; these are not tracked landmarks"><input type="checkbox" id="flash-scene-points" onchange="_flashUpdateSceneFrame()">Surface points</label>' +
+                    '<label title="Display detail only; tracking still uses the original RGB-D"><span>Surface detail</span><select id="flash-scene-detail" onchange="_flashUpdateSceneFrame()"><option value="5000">Fast</option><option value="20000" selected>Balanced</option><option value="80000">Fine</option></select></label>' +
                     '<label title="Display spacing in recorded camera pixels">Spacing <input type="number" id="flash-scene-point-spacing" min="2" max="16" step="1" value="5" onchange="_flashUpdateSceneFrame()"></label>'
                 : '') +
             '<label title="Reference surface projected by the used estimate"><input type="checkbox" id="flash-scene-projection" checked onchange="_flashUpdateSceneFrame()">Pose estimate</label>' +

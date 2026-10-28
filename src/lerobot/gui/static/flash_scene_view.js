@@ -5,6 +5,9 @@ import { OrbitControls } from '/static/vendor/OrbitControls.js';
 const groupColor = 0xe5b661;
 const gripperColor = 0xf2a578;
 const visionColor = 0xaadce9;
+// Display geometry is rebuilt for each shown frame. The viewer's detail
+// control caps WebGL uploads without changing tracker samples or saved RGB-D.
+const defaultSurfaceVertices = 20_000;
 
 function setPose(group, baseFromObject, baseFromCamera) {
     const world = new THREE.Matrix4().set(...baseFromObject.flat());
@@ -17,16 +20,11 @@ function setPose(group, baseFromObject, baseFromCamera) {
 function makeReference(data) {
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.Float32BufferAttribute(data.positions_object_m, 3));
-    const colors = new Float32Array(data.colors_rgb.length * 3);
-    data.colors_rgb.forEach((rgb, index) => rgb.forEach((channel, i) => { colors[index * 3 + i] = channel / 255; }));
-    geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
     geometry.setIndex(data.indices);
     const group = new THREE.Group();
     group.add(new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({
-        vertexColors: true, side: THREE.DoubleSide, transparent: true, opacity: 0.22, depthTest: false,
-    })));
-    group.add(new THREE.Points(geometry, new THREE.PointsMaterial({
-        color: 0x34d399, size: 3, sizeAttenuation: false, transparent: true, opacity: 0.9, depthTest: false,
+        color: visionColor, side: THREE.DoubleSide, transparent: true, opacity: 0.32,
+        depthTest: true, depthWrite: false,
     })));
     return {group, geometry};
 }
@@ -34,55 +32,74 @@ function makeReference(data) {
 function makeObservedSurface(runs, depth, rgba, camera, options) {
     const {width, height, intrinsics: k} = camera;
     const pixelCount = width * height;
+    const maskPixels = runs.reduce((total, [, count]) => total + count, 0);
+    const maxVertices = Number.isFinite(options.maxSurfaceVertices) && options.maxSurfaceVertices > 0
+        ? options.maxSurfaceVertices : defaultSurfaceVertices;
+    const stride = Math.max(1, Math.ceil(Math.sqrt(maskPixels / maxVertices)));
     const lookup = new Int32Array(pixelCount);
     lookup.fill(-1);
+    const mask = stride > 1 ? new Uint8Array(pixelCount) : null;
     const positions = [], colors = [], pixels = [], pointPositions = [];
     const fx = k[0][0], fy = k[1][1], cx = k[0][2], cy = k[1][2];
     for (const [start, count] of runs) {
-        for (let pixel = start; pixel < start + count; pixel++) {
-            if (pixel < 0 || pixel >= pixelCount) throw new Error('Object mask exceeds camera frame');
-            const z = depth[pixel] / 1000;
-            if (!z) continue;
-            const u = pixel % width, v = Math.floor(pixel / width);
-            lookup[pixel] = pixels.length;
-            pixels.push(pixel);
-            const x = (u - cx) * z / fx, y = -(v - cy) * z / fy;
-            positions.push(x, y, -z);
-            colors.push(rgba[pixel * 4] / 255, rgba[pixel * 4 + 1] / 255,
-                rgba[pixel * 4 + 2] / 255);
-            if (u % options.pointSpacingPx === 0 && v % options.pointSpacingPx === 0)
-                pointPositions.push(x, y, -z);
+        if (start < 0 || count < 0 || start + count > pixelCount)
+            throw new Error('Object mask exceeds camera frame');
+        if (mask) mask.fill(1, start, start + count);
+        for (let rowStart = start; rowStart < start + count;) {
+            const v = Math.floor(rowStart / width);
+            const rowEnd = Math.min(start + count, (v + 1) * width);
+            if (v % stride === 0) {
+                const firstU = rowStart - v * width;
+                for (let u = firstU + ((stride - firstU % stride) % stride); v * width + u < rowEnd; u += stride) {
+                    const pixel = v * width + u;
+                    const z = depth[pixel] / 1000;
+                    if (!z) continue;
+                    lookup[pixel] = pixels.length;
+                    pixels.push(pixel);
+                    const x = (u - cx) * z / fx, y = -(v - cy) * z / fy;
+                    positions.push(x, y, -z);
+                    colors.push(rgba[pixel * 4] / 255, rgba[pixel * 4 + 1] / 255,
+                        rgba[pixel * 4 + 2] / 255);
+                    if (options.showPoints && u % options.pointSpacingPx === 0)
+                        pointPositions.push(x, y, -z);
+                }
+            }
+            rowStart = rowEnd;
         }
     }
     const faces = [];
     const add = (a, b, c) => {
         if (a < 0 || b < 0 || c < 0) return;
         const za = -positions[a * 3 + 2], zb = -positions[b * 3 + 2], zc = -positions[c * 3 + 2];
-        const footprint = ((za + zb + zc) / 3) / Math.min(fx, fy);
+        const footprint = stride * ((za + zb + zc) / 3) / Math.min(fx, fy);
         if (Math.max(za, zb, zc) - Math.min(za, zb, zc) <= 3 * footprint)
             faces.push(a, b, c);
     };
     for (const pixel of pixels) {
         const u = pixel % width, v = Math.floor(pixel / width), a = lookup[pixel];
-        if (u >= width - 1 || v >= height - 1) continue;
-        const b = lookup[pixel + 1], c = lookup[pixel + width], d = lookup[pixel + width + 1];
+        if (u >= width - stride || v >= height - stride) continue;
+        const middle = pixel + Math.floor(stride / 2) * (width + 1);
+        if (mask && (!mask[middle] || !depth[middle])) continue;
+        const b = lookup[pixel + stride], c = lookup[pixel + stride * width];
+        const d = lookup[pixel + stride * (width + 1)];
         add(a, c, b); add(b, c, d);
     }
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
     geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
     geometry.setIndex(faces);
+    geometry.computeVertexNormals();
     const group = new THREE.Group();
-    const mesh = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({
-        vertexColors: true, side: THREE.DoubleSide, depthTest: false,
+    const mesh = new THREE.Mesh(geometry, new THREE.MeshLambertMaterial({
+        vertexColors: true, side: THREE.DoubleSide, depthTest: true,
     }));
     mesh.visible = options.showSurface !== false;
     group.add(mesh);
     const pointGeometry = new THREE.BufferGeometry();
     pointGeometry.setAttribute('position', new THREE.Float32BufferAttribute(pointPositions, 3));
     const points = new THREE.Points(pointGeometry, new THREE.PointsMaterial({
-        color: 0x35e3ed, size: 4, sizeAttenuation: false,
-        transparent: true, opacity: 0.88, depthTest: false,
+        color: 0x35e3ed, size: 3, sizeAttenuation: false,
+        transparent: true, opacity: 0.7, depthTest: true, depthWrite: false,
     }));
     points.visible = !!options.showPoints;
     group.add(points);
@@ -204,6 +221,10 @@ function disposeEvidence(item, references) {
 export function createFlashSceneView(canvas, surfaces) {
     const scene = new THREE.Scene();
     scene.background = null;
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x243244, 1.2));
+    const keyLight = new THREE.DirectionalLight(0xffffff, 0.75);
+    keyLight.position.set(-0.4, 0.6, 1);
+    scene.add(keyLight);
     const camera = new THREE.PerspectiveCamera(43, 1, 0.01, 4);
     camera.position.set(0, 0, 0);
     camera.lookAt(0, 0, -0.45);
@@ -316,7 +337,7 @@ export function createFlashSceneView(canvas, surfaces) {
                 const surface = ref.group.clone();
                 // A clone shares the buffers, but owns its material for this frame.
                 surface.children.forEach(child => { child.material = child.material.clone(); });
-                if (held?.role === role) surface.children[1].material.color.setHex(gripperColor);
+                if (held?.role === role) surface.children[0].material.color.setHex(gripperColor);
                 setPose(surface, used.pose, baseFromCamera);
                 surface.userData = {kind: held?.role === role ? 'held' : 'accepted', role, enabled: true};
                 evidence.add(surface);
