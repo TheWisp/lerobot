@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import ctypes
 import gzip
+import hashlib
 import json
 import logging
 import math
@@ -1585,6 +1586,21 @@ async def flash_raw_demo_replay(dataset_root: str, episode: int = 0) -> dict:
         raise HTTPException(400, f"Cannot replay raw FLASH demo: {exc}") from exc
 
 
+@router.get("/flash/observation/replay")
+async def flash_observation_replay(dataset_root: str, episode: int = 0) -> dict:
+    """Review an RGB-D-only LeRobot episode with optional shared perception evidence."""
+    from lerobot.policies.flash.observation_replay import load_observation_replay
+
+    if episode < 0:
+        raise HTTPException(400, "Episode must be nonnegative")
+    try:
+        return await asyncio.get_running_loop().run_in_executor(
+            _flash_telemetry_pool, load_observation_replay, Path(dataset_root), episode
+        )
+    except (OSError, KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(400, f"Cannot replay RGB-D observation: {exc}") from exc
+
+
 @router.get("/flash/demo/frame")
 def flash_demo_frame(dataset_root: str, frame_index: int) -> FileResponse:
     """Serve the same numbered JPEG frame the preparation adapter consumed."""
@@ -1902,6 +1918,40 @@ def _flash_recordings(source_paths: tuple[Path, ...]) -> list[dict]:
         if not isinstance(episode_count, int) or episode_count < 0:
             continue
         demos: dict[int, dict] = {}
+        observation_source = extension / "source.json"
+        if observation_source.is_file():
+            try:
+                source = json.loads(observation_source.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                source = {}
+            if source.get("status") == "perception_only":
+                for episode in range(episode_count):
+                    evidence_root = extension / "observation-evidence" / f"episode_{episode:06d}"
+                    try:
+                        evidence_manifest = json.loads(
+                            (evidence_root / "manifest.json").read_text(encoding="utf-8")
+                        )
+                        evidence_report = json.loads(
+                            (evidence_root / "observation.json").read_text(encoding="utf-8")
+                        )
+                        evidence_available = bool(
+                            evidence_manifest.get("complete")
+                            and evidence_report.get("evidence_identity")
+                            and evidence_manifest.get("source_sha256") == evidence_report["evidence_identity"]
+                            and isinstance(evidence_report.get("surface_reference_max_points_per_view"), int)
+                            and evidence_report.get("source_metadata_sha256")
+                            == hashlib.sha256(observation_source.read_bytes()).hexdigest()
+                        )
+                    except (OSError, ValueError):
+                        evidence_available = False
+                    demos[episode] = {
+                        "kind": "observation_demo",
+                        "dataset_root": str(dataset_root.resolve()),
+                        "episode": episode,
+                        "modified_at_s": observation_source.stat().st_mtime,
+                        "source": source.get("source"),
+                        "evidence_available": evidence_available,
+                    }
         raw_arm = dataset_root / "showservo_demo.npz"
         if episode_count > 0 and raw_arm.is_file() and (dataset_root / "recording" / "times.txt").is_file():
             demos[0] = {
@@ -1946,6 +1996,8 @@ def _flash_recordings(source_paths: tuple[Path, ...]) -> list[dict]:
                     "prepared_skill": None,
                 },
             )
+            if demo["kind"] == "observation_demo":
+                continue
             demo["modified_at_s"] = max(demo["modified_at_s"], modified_at_s)
             demo["skills"].append(path.parent.name if path.name == "bundle.json" else path.stem)
             if path.name == "bundle.json":
@@ -1966,6 +2018,8 @@ def _flash_recordings(source_paths: tuple[Path, ...]) -> list[dict]:
                 demo["bundle_path"] = str(path.resolve())
                 demo["prepared_skill"] = path.parent.name
         for demo in demos.values():
+            if demo["kind"] == "observation_demo":
+                continue
             if demo["bundle_path"] is None and demo["prepared_versions"]:
                 chosen = demo["prepared_versions"][-1]
                 demo["bundle_path"] = chosen["bundle_path"]

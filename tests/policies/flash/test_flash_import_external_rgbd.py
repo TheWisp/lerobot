@@ -1,5 +1,7 @@
 """An external RGB-D import must preserve depth validity and source timing."""
 
+import gzip
+import hashlib
 import json
 
 import cv2
@@ -7,6 +9,9 @@ import numpy as np
 
 from benchmarks.flash_import_external_rgbd import import_rgbd
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
+from lerobot.gui.api.run import _flash_recordings
+from lerobot.policies.flash.observation_dataset import camera_feature_keys
+from lerobot.policies.flash.observation_replay import load_observation_replay
 
 
 def test_import_preserves_invalid_depth_and_source_clock(tmp_path):
@@ -43,3 +48,54 @@ def test_import_preserves_invalid_depth_and_source_clock(tmp_path):
     source = json.loads((root / "flash" / "v1" / "source.json").read_text())
     assert source["status"] == "perception_only"
     assert "robot_actions" in source["missing_for_spatial_skill"]
+    listing = _flash_recordings((tmp_path,))
+    assert [(item["kind"], item["episode"]) for item in listing] == [("observation_demo", 0)]
+    replay = load_observation_replay(root)
+    assert replay["kind"] == "observation_demo"
+    assert len(replay["frames"]) == 3
+    assert not replay["robot_actions_available"]
+    assert not replay["gripper_prediction_available"]
+
+    sidecar = root / "flash" / "v1" / "observation-evidence" / "episode_000000"
+    sidecar.mkdir(parents=True)
+    (sidecar / "manifest.json").write_text(
+        json.dumps({"complete": True, "total_frames": 3, "source_sha256": "test-evidence"})
+    )
+    (sidecar / "observation.json").write_text(
+        json.dumps(
+            {
+                "surface_reference_max_points_per_view": 100,
+                "evidence_identity": "test-evidence",
+                "source_metadata_sha256": hashlib.sha256(
+                    (root / "flash" / "v1" / "source.json").read_bytes()
+                ).hexdigest(),
+            }
+        )
+    )
+    pose = np.eye(4).tolist()
+    for frame_id in range(3):
+        evidence = {
+            "frame_index": frame_id,
+            "estimates": {"object": {"pose": pose, "evidence": "observed", "estimator": "test"}},
+            "masks_rle": {"object": [[0, 64 * 64]]},
+            "groups": {},
+            "proposals": {},
+        }
+        with gzip.open(sidecar / f"{frame_id:06d}.json.gz", "wt") as stream:
+            json.dump(evidence, stream)
+    replay = load_observation_replay(root)
+    assert replay["evidence_available"]
+    assert replay["frames"][1]["snapshot"]["accepted"]["object"]["evidence"] == "observed"
+    assert replay["frames"][1]["snapshot"]["observed_masks"]["object"]["boundary_xy"]
+    assert replay["geometry"]["points_object_m"]["object"]
+    source["source"] = "revised source metadata"
+    (root / "flash" / "v1" / "source.json").write_text(json.dumps(source))
+    assert not load_observation_replay(root)["evidence_available"]
+
+
+def test_observation_camera_names_come_from_metadata():
+    features = {
+        "observation.images.top": {"dtype": "video", "shape": [64, 64, 3]},
+        "observation.images.range": {"dtype": "video", "shape": [64, 64, 1], "info": {"is_depth_map": True}},
+    }
+    assert camera_feature_keys(features, {}) == ("observation.images.top", "observation.images.range")

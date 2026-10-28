@@ -58,7 +58,8 @@ function _flashSceneOptions() {
 
 async function _flashUpdateSceneFrame() {
     const kind = flashReplay?.kind || (flashTelemetryTimer ? 'live' : null);
-    if (flashSceneMode !== '3d' || !flashSceneView || !['demo', 'rollout', 'live'].includes(kind)) return;
+    const recorded = ['rollout', 'recorded_demo', 'observation_demo'].includes(kind);
+    if (flashSceneMode !== '3d' || !flashSceneView || !['demo', 'observation_demo', 'rollout', 'live'].includes(kind)) return;
     const image = document.querySelector('#rerun-viewer .flash-replay-grid img');
     const index = Number(document.getElementById('flash-tracker-scrub').value);
     const selected = kind === 'live'
@@ -87,7 +88,6 @@ async function _flashUpdateSceneFrame() {
         if (frame?.replay !== replay || frame.frameIndex !== selected.frame_index) {
             flashSceneLoadingKey = loadingKey;
             const demo = kind === 'demo';
-            const recorded = kind === 'rollout' || kind === 'recorded_demo';
             const query = demo
                 ? new URLSearchParams({dataset_root: replay.datasetRoot, frame_index: String(selected.frame_index)})
                 : recorded ? new URLSearchParams({camera: replay.camera_features.depth}) : null;
@@ -123,7 +123,7 @@ async function _flashUpdateSceneFrame() {
             .map(([role, mask]) => [role, mask.runs])) : null;
         const liveGroups = kind === 'live' && selected.snapshot.scene_support?.frame_id === camera.frame_id
             ? selected.snapshot.scene_support.groups : null;
-        const frameEvidence = kind === 'demo' ? frame.evidence : (kind === 'rollout' || kind === 'recorded_demo') ? selected.evidence
+        const frameEvidence = kind === 'demo' ? frame.evidence : recorded ? selected.evidence
             : Object.keys(liveMasks).length || Object.keys(liveGroups || {}).length
                 ? {available: true, masks_rle: liveMasks, groups: liveGroups || {}} : null;
         _flashPaintObservedPhoto({...frame, evidence: frameEvidence}, camera);
@@ -176,7 +176,7 @@ async function _flashUpdateSceneFrame() {
 
 async function toggleFlashSceneView() {
     const kind = flashReplay?.kind || (flashTelemetryTimer ? 'live' : null);
-    if (!['demo', 'rollout', 'live'].includes(kind)) return;
+    if (!['demo', 'observation_demo', 'rollout', 'live'].includes(kind)) return;
     const grid = document.querySelector('#rerun-viewer .flash-replay-grid');
     const toggle = document.getElementById('flash-scene-toggle');
     const tools = document.getElementById('flash-scene-tools');
@@ -207,7 +207,8 @@ async function toggleFlashSceneView() {
                 }
             } else {
                 const pointsByRole = kind === 'live' ? flashSnapshot?.points_object_m
-                    : flashReplay.frames.find(frame => Object.keys(frame.snapshot?.points_object_m || {}).length)?.snapshot.points_object_m;
+                    : flashReplay.geometry?.points_object_m ||
+                        flashReplay.frames.find(frame => Object.keys(frame.snapshot?.points_object_m || {}).length)?.snapshot.points_object_m;
                 surfaces = Object.fromEntries(Object.entries(pointsByRole || {}).map(([role, points]) => [
                     role, {positions_object_m: points.flat(), colors_rgb: points.map(() => [180, 190, 200]), indices: []},
                 ]));
@@ -1648,7 +1649,7 @@ function _flashCreateSceneGrid(kind, imageAlt, depthAvailable = true) {
     const canvas = document.createElement('canvas');
     canvas.className = 'flash-pose-canvas';
     grid.append(image, canvas);
-    if (kind === 'demo' || kind === 'live' || (['rollout', 'recorded_demo'].includes(kind) && depthAvailable)) {
+    if (kind === 'demo' || kind === 'live' || (['rollout', 'recorded_demo', 'observation_demo'].includes(kind) && depthAvailable)) {
         const hasMeasuredSurface = kind === 'demo' || kind === 'live' ||
             flashReplay?.frames?.some(frame => frame.evidence?.masks_rle);
         const hasGroupSupport = kind === 'demo' || kind === 'live' ||
@@ -1928,6 +1929,35 @@ async function loadFlashRawDemoReplay(datasetRoot, episodeIndex) {
     }
 }
 
+async function loadFlashObservationReplay(datasetRoot, episodeIndex) {
+    const status = document.getElementById('run-flash-status');
+    if (status) status.textContent = 'Loading perception-only RGB-D episode…';
+    try {
+        const query = new URLSearchParams({dataset_root: datasetRoot, episode: String(episodeIndex)});
+        const response = await fetch(`/api/run/flash/observation/replay?${query}`);
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.detail || 'Cannot read RGB-D observation');
+        let dataset = Object.values(datasets).find(item => item.root === datasetRoot);
+        if (!dataset) {
+            await openDataset(datasetRoot, {trackLastOpened: false});
+            dataset = Object.values(datasets).find(item => item.root === datasetRoot);
+        }
+        if (!dataset) throw new Error('Cannot open the observation as a LeRobot dataset');
+        document.getElementById('run-flash-root').value = datasetRoot;
+        document.getElementById('run-flash-episode').value = String(episodeIndex);
+        _flashInstallReplay({...result, datasetRoot, datasetId: dataset.id, episode: episodeIndex},
+            'RGB-D observation frame');
+        seekFlashReplay(0);
+        toggleFlashReplay();
+        if (status) status.textContent = result.evidence_available
+            ? 'Perception-only episode: vision and scene groups are recorded; no robot action or gripper prediction.'
+            : 'Perception-only episode: RGB-D is available; run object tracking to add pose and group evidence.';
+    } catch (error) {
+        if (status) status.textContent = `Cannot inspect RGB-D observation: ${error.message}`;
+        showToast('Cannot inspect RGB-D observation', error.message, 'error');
+    }
+}
+
 async function _loadFlashRecordings() {
     const list = document.getElementById('run-flash-recordings');
     const demosList = document.getElementById('run-flash-demos');
@@ -1942,8 +1972,8 @@ async function _loadFlashRecordings() {
         if (generation !== flashRecordingsGeneration) return;
         list.replaceChildren();
         demosList.replaceChildren();
-        const demos = recordings.filter(recording => recording.kind === 'demo');
-        const rollouts = recordings.filter(recording => recording.kind !== 'demo');
+        const demos = recordings.filter(recording => ['demo', 'observation_demo'].includes(recording.kind));
+        const rollouts = recordings.filter(recording => !['demo', 'observation_demo'].includes(recording.kind));
         if (!demos.length) demosList.textContent = 'No FLASH demos in your dataset sources.';
         if (!rollouts.length) list.textContent = 'No FLASH rollouts in your dataset sources.';
         for (const recording of demos) {
@@ -1966,13 +1996,16 @@ async function _loadFlashRecordings() {
             const skills = recording.skills || [];
             const versions = recording.prepared_versions || [];
             const viewedVersion = versions.find(version => version.bundle_path === recording.bundle_path);
-            meta.textContent = recording.bundle_path
+            meta.textContent = recording.kind === 'observation_demo'
+                ? `RGB-D observation · ${recording.evidence_available ? 'tracked poses and scene groups' : 'tracking not processed'} · no robot actions`
+                : recording.bundle_path
                 ? `${skills.length} FLASH skill(s) · viewing: ${recording.prepared_skill}` +
                     `${viewedVersion?.candidate ? ' · review candidate' : ''} · Play with extracted poses`
                 : 'Raw SO-107 RGB-D demo · prepare objects and action in playback';
             button.append(label, meta);
-            button.onclick = () => recording.bundle_path
-                ? loadFlashDemoReplay(recording.dataset_root, recording.episode,
+            button.onclick = () => recording.kind === 'observation_demo'
+                ? loadFlashObservationReplay(recording.dataset_root, recording.episode)
+                : recording.bundle_path ? loadFlashDemoReplay(recording.dataset_root, recording.episode,
                     card.querySelector('.flash-recording-version')?.value || recording.bundle_path)
                 : loadFlashRawDemoReplay(recording.dataset_root, recording.episode);
             card.append(button);
@@ -2031,11 +2064,11 @@ function seekFlashReplay(index) {
     const selected = replay.frames[Math.max(0, Math.min(index, replay.frames.length - 1))];
     const scrub = document.getElementById('flash-tracker-scrub');
     scrub.value = String(index);
-    const demo = replay.kind === 'demo' || replay.kind === 'raw_demo';
+    const demo = replay.kind === 'demo' || replay.kind === 'raw_demo' || replay.kind === 'observation_demo';
     const image = document.querySelector('#rerun-viewer .flash-replay-grid img');
     const grid = image.closest('.flash-replay-grid');
     grid.classList.add('flash-frame-loading');
-    const url = demo
+    const url = demo && replay.kind !== 'observation_demo'
         ? `/api/run/flash/demo/frame?${new URLSearchParams({ dataset_root: replay.datasetRoot, frame_index: String(selected.frame_index) })}`
         : `/api/datasets/${encodeURIComponent(replay.datasetId)}/episodes/${replay.episode}` +
             `/frame/${selected.frame_index}?camera=${encodeURIComponent(replay.camera_features?.rgb || 'observation.images.overhead')}`;
@@ -2055,6 +2088,8 @@ function seekFlashReplay(index) {
             : `${Number(scrub.value) + 1} / ${replay.frames.length}`;
         if (replay.kind === 'demo') renderFlashDemoSnapshot({ ...selected.snapshot, ...replay.geometry });
         else if (replay.kind === 'raw_demo') renderFlashRawSnapshot(selected.snapshot);
+        else if (replay.kind === 'observation_demo') renderFlashSnapshot(
+            {...selected.snapshot, ...replay.geometry}, 'Observation');
         else renderFlashSnapshot(replay.kind === 'recorded_demo'
             ? {...selected.snapshot, ...replay.geometry} : selected.snapshot, 'Recording');
         _flashDrawOverlay();
@@ -2092,7 +2127,7 @@ function toggleFlashReplay() {
         const next = Number(document.getElementById('flash-tracker-scrub').value) + 1;
         if (next >= flashReplay.frames.length) { toggleFlashReplay(); return; }
         seekFlashReplay(next);
-    }, ['demo', 'raw_demo'].includes(flashReplay.kind) ? 1000 / flashReplay.fps : 100);
+    }, ['demo', 'raw_demo', 'observation_demo'].includes(flashReplay.kind) ? 1000 / flashReplay.fps : 100);
 }
 
 // The demo editor is loaded from flash_demo_editor.js.

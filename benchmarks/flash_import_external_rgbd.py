@@ -107,13 +107,15 @@ def import_rgbd(
                 "source_time_unit": "seconds",
                 "depth_unit": "millimetres",
                 "camera_intrinsics": intrinsics.tolist(),
+                "rgb_feature": "observation.images.rgb",
+                "depth_feature": "observation.images.depth",
                 "status": "perception_only",
                 "missing_for_spatial_skill": [
                     "camera_to_robot_transform",
                     "measured_end_effector_trajectory",
                     "robot_actions",
-                    "task_timeline_annotations",
                 ],
+                "annotation_scope": "object_tracks_and_object_relations_can_be_reviewed_without_robot_actions",
             },
             indent=2,
         )
