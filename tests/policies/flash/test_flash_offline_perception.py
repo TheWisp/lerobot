@@ -126,3 +126,37 @@ def test_demo_attachment_disables_environment_bridge(monkeypatch):
         attached_role_at_frame=lambda index: "target" if index >= 2 else None,
     )
     assert rows[2]["target"].evidence == Evidence.LOST
+
+
+def test_rejected_direct_fit_is_not_reintroduced_as_a_demo_observation(monkeypatch):
+    mask = np.zeros((96, 96), dtype=bool)
+    mask[46:48, 46:48] = True  # Too few pixels to seed point motion.
+    reference = ObjectReference(
+        "target", "v1", (ReferenceSnippet("demo", 0, 0, "target", np.eye(4), "mask.png", "camera-v1"),)
+    )
+    original_builder = offline_perception.build_causal_pose_service
+
+    def reject_second_frame(*args, **kwargs):
+        service = original_builder(*args, **kwargs)
+        service._direct_conflicts_with_point_motion = (
+            lambda estimate, frame, instance_mask: frame.frame_id == 1
+        )
+        return service
+
+    monkeypatch.setattr(offline_perception, "build_causal_pose_service", reject_second_frame)
+    raw, review = [], []
+    rows = offline_perception.extract_pose_trace(
+        (_frame(index) for index in range(2)),
+        _RecordedBackend(mask),
+        (reference,),
+        causal_tracking=CausalTrackingConfig(8, 8, 12, 0.1, 0.005),
+        on_vision_result=raw.append,
+        on_frame_evidence=lambda frame, result, groups, estimates: review.append(estimates),
+    )
+
+    assert raw[1].estimates[0].evidence == Evidence.OBSERVED
+    assert rows[0]["target"].evidence == Evidence.OBSERVED
+    assert rows[1]["target"].evidence == Evidence.LOST
+    assert rows[1]["target"].pose is None
+    assert rows[1]["target"].estimator == "scene_estimator_rejected"
+    assert review[1]["target"] == rows[1]["target"]

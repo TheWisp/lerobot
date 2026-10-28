@@ -82,7 +82,11 @@ That command is a compatibility entry point; the importer is
    implicitly. New bundles carry one explicit choice for both consumers.
    When `causal_tracking` is configured, recorded frames and direct proposals
    also pass through the same [`CausalPoseService`](causal_service.py) as live
-   execution. Existing bundles and pose traces are not rewritten automatically.
+   execution. Only its accepted pose or current-frame prediction enters the
+   compiled demo trace; a rejected direct fit is recorded as lost, while the
+   raw proposal remains available for review. The pose-trace cache version
+   separates this rule from earlier cached traces. Existing bundles are not
+   rewritten automatically.
 4. The recorded arm poses and gripper commands become dense demonstrated
    intervals or generated connections according to the keyframe annotation.
    After grasp, the held-object demo pose is a **prediction** from the selected

@@ -26,7 +26,7 @@ from lerobot.policies.flash.appearance import (
 from lerobot.policies.flash.causal_service import CausalTrackingConfig
 from lerobot.policies.flash.dino_features import DinoPatchExtractor
 from lerobot.policies.flash.geometry import inverse
-from lerobot.policies.flash.offline_perception import extract_pose_trace
+from lerobot.policies.flash.offline_perception import POSE_TRACE_SELECTION_VERSION, extract_pose_trace
 from lerobot.policies.flash.perception import ObjectReference, ReferenceSnippet, RGBDFrame
 from lerobot.policies.flash.prepared import PreparedFlashSkill
 from lerobot.policies.flash.skill import (
@@ -424,6 +424,7 @@ def prepare(
     )
     cache_identity["causal_tracking"] = annotation.get("causal_tracking")
     cache_identity["vision_pipeline"] = vision_config.to_dict()
+    cache_identity["pose_trace_selection_version"] = POSE_TRACE_SELECTION_VERSION
     cache_key = hashlib.sha256(
         json.dumps(cache_identity, sort_keys=True).encode()
         + intrinsics.tobytes()
@@ -689,6 +690,7 @@ def prepare(
         "reference_masks": mask_paths,
         "pose_trace_cache": str(cache_path.relative_to(root)),
         "pose_trace_cache_hit": cache_hit,
+        "pose_trace_selection_version": POSE_TRACE_SELECTION_VERSION,
         "annotation_artifact": "annotation.json",
         "keypoints_artifact": "keypoints.json",
     }
