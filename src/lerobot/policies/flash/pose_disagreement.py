@@ -207,11 +207,19 @@ def compare_pose_proposals(
     elif (
         candidate.projected_point_mask_fraction >= prior.projected_point_mask_fraction
         and candidate.depth_residual_p90_m <= prior.depth_residual_p90_m
+        and (
+            candidate.projected_point_mask_fraction > prior.projected_point_mask_fraction
+            or candidate.depth_residual_p90_m < prior.depth_residual_p90_m
+        )
     ):
         verdict = PoseComparisonVerdict.CANDIDATE_FAVORED
     elif (
         prior.projected_point_mask_fraction >= candidate.projected_point_mask_fraction
         and prior.depth_residual_p90_m <= candidate.depth_residual_p90_m
+        and (
+            prior.projected_point_mask_fraction > candidate.projected_point_mask_fraction
+            or prior.depth_residual_p90_m < candidate.depth_residual_p90_m
+        )
     ):
         verdict = PoseComparisonVerdict.PRIOR_FAVORED
     else:

@@ -1034,6 +1034,60 @@ def test_held_attachment_uses_postgrasp_observation_and_stops_on_conflict():
     assert "disagrees" in updater.last_rejection
 
 
+def test_held_attachment_reanchors_after_repeated_image_supported_visual_correction():
+    class StationaryKinematics:
+        def forward_kinematics(self, _joints):
+            return np.eye(4)
+
+    xy = np.linspace(-0.1, 0.1, 11)
+    points = np.array([(x, y, 1.0) for x in xy for y in xy])
+    updater = HeldAttachmentUpdater(
+        "held",
+        "held-v1",
+        StationaryKinematics(),
+        ("arm",),
+        history_capacity=5,
+        max_motor_sample_gap_s=0.1,
+        max_attachment_age_s=1.0,
+        max_update_shift_m=0.015,
+        max_update_turn_rad=0.1,
+        object_points_object_m=points,
+        min_visual_support_points=12,
+    )
+    for time_s in (0.0, 0.03, 0.06, 0.09):
+        updater.on_motor_tick(
+            MotorTick(0, time_s, {"arm.pos": 0.0}, 0.0, {"arm.pos": 0.0}, None, observed_at_s=time_s)
+        )
+    pregrasp = PoseEstimate("held", pose(), 0.0, 0.0, Evidence.OBSERVED, "held-v1", (True,) * 3, (True,) * 3)
+    assert updater.activate(0.02, pregrasp, np.array([0.0]))
+    intrinsics = np.array([[100.0, 0.0, 32.0], [0.0, 100.0, 32.0], [0.0, 0.0, 1.0]])
+    mask = np.zeros((64, 64), dtype=bool)
+    mask[22:43, 25:46] = True
+    for frame_id, time_s in ((1, 0.04), (2, 0.07)):
+        frame = RGBDFrame(
+            frame_id,
+            np.zeros((64, 64, 3), dtype=np.uint8),
+            np.ones((64, 64), dtype=np.float32),
+            intrinsics,
+            1.0,
+            np.eye(4),
+            time_s,
+            time_s,
+            "calibration",
+        )
+        observed = PoseEstimate(
+            "held", pose(0.03), time_s, time_s, Evidence.OBSERVED, "held-v1", (True,) * 3, (True,) * 3
+        )
+        accepted = updater.on_pose_update(frame_id, {"held": observed}, frame=frame, mask=mask)
+        assert accepted == (frame_id == 2)
+        if frame_id == 1:
+            assert updater.state(time_s) is None
+            assert not updater.on_pose_update(frame_id, {"held": observed})
+            assert updater.state(time_s) is None
+    assert updater.has_postgrasp_observation
+    assert updater.state(0.08).gripper_from_object[0, 3] == pytest.approx(0.03)
+
+
 def test_held_attachment_compares_physical_center_when_object_frame_rotates():
     class StationaryKinematics:
         def forward_kinematics(self, _joints):

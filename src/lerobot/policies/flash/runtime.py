@@ -16,7 +16,7 @@ from .causal_service import CausalTrackingConfig, build_causal_pose_service
 from .execution import MotorTick, RobotIO
 from .live_telemetry import FlashLiveTelemetry
 from .milestones import PoseMilestonePublisher
-from .perception import HeldAttachmentUpdater, LatestPoseStore, ObjectReference, PoseBackend
+from .perception import HeldAttachmentUpdater, LatestPoseStore, ObjectReference, PoseBackend, RGBDFrame
 from .perception_service import PerceptionService, RGBDSource
 from .perception_worker import PoseProcess
 from .planner import CartesianKinematics, JointPlanner, PlannerLimits
@@ -147,7 +147,14 @@ class FlashRuntime:
         self.max_camera_age_s = max_camera_age_s
         self.live_telemetry = live_telemetry
         self.poses = LatestPoseStore()
-        accepted_direct: SimpleQueue[PoseEstimate] = SimpleQueue()
+        accepted_direct: SimpleQueue[tuple[PoseEstimate, RGBDFrame | None, np.ndarray | None]] = SimpleQueue()
+
+        def queue_held_direct(estimate: PoseEstimate, frame: RGBDFrame, mask: np.ndarray) -> None:
+            # Before startup there is no consumer and no active attachment;
+            # retaining full RGB-D frames here would grow memory unbounded.
+            if self._ready and self.attachment.active_role == estimate.role:
+                accepted_direct.put((estimate, frame, mask))
+
         self.causal = (
             build_causal_pose_service(
                 self.poses,
@@ -161,7 +168,7 @@ class FlashRuntime:
                 on_free_space_comparison=(
                     live_telemetry.free_space_comparison if live_telemetry is not None else None
                 ),
-                on_direct_observation=accepted_direct.put,
+                on_direct_observation_with_frame=queue_held_direct,
                 on_anchor_decision=(live_telemetry.anchor_decision if live_telemetry is not None else None),
                 on_scene_support=(live_telemetry.scene_support if live_telemetry is not None else None),
             )
@@ -180,6 +187,8 @@ class FlashRuntime:
                 max_update_shift_m=attachment_limits.max_update_shift_m,
                 max_update_turn_rad=attachment_limits.max_update_turn_rad,
                 object_center_object_m=(object_centers_by_role or {}).get(transition.role),
+                object_points_object_m=(object_points_by_role or {}).get(transition.role),
+                min_visual_support_points=causal_tracking.min_inliers if causal_tracking is not None else 3,
             )
             for transition in skill.attachment_transitions
         }
@@ -246,8 +255,8 @@ class FlashRuntime:
             # snapshot once the session is ready.
             if not self._ready:
                 return
-            for observed in direct_observations:
-                self.attachment.on_pose_update(version, {observed.role: observed})
+            for observed, frame, mask in direct_observations:
+                self.attachment.on_pose_update(version, {observed.role: observed}, frame=frame, mask=mask)
             self.attachment.on_pose_update(version, poses)
             if version != self._last_pose_version:
                 changed = frozenset(

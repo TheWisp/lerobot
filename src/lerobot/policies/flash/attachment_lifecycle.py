@@ -5,8 +5,10 @@ from __future__ import annotations
 from collections.abc import Mapping
 from math import isfinite
 
+import numpy as np
+
 from .execution import MotorTick
-from .perception import HeldAttachmentUpdater, LatestPoseStore
+from .perception import HeldAttachmentUpdater, LatestPoseStore, RGBDFrame
 from .skill import AttachmentAction, FlashSkill
 from .trajectory import AttachmentState, Evidence, PoseEstimate
 
@@ -80,8 +82,17 @@ class AttachmentLifecycle:
             and 0 <= at_s - pose.source_time_s <= self.max_pregrasp_age_s
         )
 
-    def on_pose_update(self, version: int, poses: dict[str, PoseEstimate]) -> bool:
-        return self.active_role is not None and self.updaters[self.active_role].on_pose_update(version, poses)
+    def on_pose_update(
+        self,
+        version: int,
+        poses: dict[str, PoseEstimate],
+        *,
+        frame: RGBDFrame | None = None,
+        mask: np.ndarray | None = None,
+    ) -> bool:
+        return self.active_role is not None and self.updaters[self.active_role].on_pose_update(
+            version, poses, frame=frame, mask=mask
+        )
 
     def state(self, now_s: float) -> AttachmentState | None:
         return self.updaters[self.active_role].state(now_s) if self.active_role is not None else None

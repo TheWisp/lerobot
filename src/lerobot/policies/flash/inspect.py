@@ -39,10 +39,14 @@ def inspect_skill(path: str) -> dict:
         missing.append("prepared RGB-D object references")
     warnings = []
     for interval in skill.intervals:
-        if interval.relation.value == "held_to_target" and not any(
-            sample.held_evidence == "observed" for sample in interval.samples
-        ):
-            warnings.append(f"{interval.name}: no independently observed held-object demo pose")
+        if interval.relation.value == "held_to_target":
+            if any(sample.held_evidence == "conflicted_prediction" for sample in interval.samples):
+                warnings.append(f"{interval.name}: held-object demo pose has unresolved visual conflict")
+            elif not any(
+                sample.held_evidence in ("observed", "vision_corrected_prediction")
+                for sample in interval.samples
+            ):
+                warnings.append(f"{interval.name}: no independently observed held-object demo correction")
     return {
         "schema_version": skill.schema_version,
         "vision_pipeline": prepared.vision_pipeline.to_dict()

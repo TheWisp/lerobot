@@ -180,6 +180,7 @@ class CausalPoseService:
         on_point_comparison: Callable[[str, PoseComparison], None] | None = None,
         on_free_space_comparison: Callable[[str, FreeSpaceComparison], None] | None = None,
         on_direct_observation: Callable[[PoseEstimate], None] | None = None,
+        on_direct_observation_with_frame: Callable[[PoseEstimate, RGBDFrame, np.ndarray], None] | None = None,
         on_anchor_decision: Callable[[AnchorDecision], None] | None = None,
         on_scene_support: Callable[[int, dict[str, dict]], None] | None = None,
     ) -> None:
@@ -234,6 +235,7 @@ class CausalPoseService:
         self.on_point_comparison = on_point_comparison
         self.on_free_space_comparison = on_free_space_comparison
         self.on_direct_observation = on_direct_observation
+        self.on_direct_observation_with_frame = on_direct_observation_with_frame
         self.on_anchor_decision = on_anchor_decision
         self.on_scene_support = on_scene_support
         if any(
@@ -800,6 +802,8 @@ class CausalPoseService:
             # separate event so a held attachment can correct at image time.
             if estimate.evidence == Evidence.OBSERVED and self.on_direct_observation is not None:
                 self.on_direct_observation(estimate)
+            if estimate.evidence == Evidence.OBSERVED and self.on_direct_observation_with_frame is not None:
+                self.on_direct_observation_with_frame(estimate, source, mask.copy())
             # The pose process only submits source-frame proposals. This is
             # the sole owner that can publish an accepted absolute pose.
             if current is not None and current.source_time_s > estimate.source_time_s:
@@ -1576,6 +1580,7 @@ def build_causal_pose_service(
     on_point_comparison: Callable[[str, PoseComparison], None] | None = None,
     on_free_space_comparison: Callable[[str, FreeSpaceComparison], None] | None = None,
     on_direct_observation: Callable[[PoseEstimate], None] | None = None,
+    on_direct_observation_with_frame: Callable[[PoseEstimate, RGBDFrame, np.ndarray], None] | None = None,
     on_anchor_decision: Callable[[AnchorDecision], None] | None = None,
     on_scene_support: Callable[[int, dict[str, dict]], None] | None = None,
 ) -> CausalPoseService:
@@ -1591,6 +1596,7 @@ def build_causal_pose_service(
         on_point_comparison=on_point_comparison,
         on_free_space_comparison=on_free_space_comparison,
         on_direct_observation=on_direct_observation,
+        on_direct_observation_with_frame=on_direct_observation_with_frame,
         on_anchor_decision=on_anchor_decision,
         on_scene_support=on_scene_support,
     )

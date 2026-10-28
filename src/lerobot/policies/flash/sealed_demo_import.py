@@ -4,7 +4,8 @@ This is an explicit adapter for the old ``showservo_demo.npz`` recording
 layout. It does not infer task intent: a JSON annotation names the held and
 target roles, grasp/release times, prompts, and registration tolerances. Both
 the demonstration and a subsequent rollout use the same FLASH RGB-D matcher.
-Held poses after grasp are deliberately labelled predictions.
+Held poses after grasp are predictions from the latest supported gripper-to-object
+relation, optionally corrected by source-time visual evidence.
 """
 
 from __future__ import annotations
@@ -26,10 +27,16 @@ from lerobot.policies.flash.appearance import (
 from lerobot.policies.flash.causal_service import CausalTrackingConfig
 from lerobot.policies.flash.dino_features import DinoPatchExtractor
 from lerobot.policies.flash.geometry import inverse
-from lerobot.policies.flash.held_pose_diagnostics import compare_demo_held_pose
+from lerobot.policies.flash.held_pose_diagnostics import _arm_pose_at, compare_demo_held_pose
 from lerobot.policies.flash.offline_perception import POSE_TRACE_SELECTION_VERSION, extract_pose_trace
-from lerobot.policies.flash.perception import ObjectReference, ReferenceSnippet, RGBDFrame
+from lerobot.policies.flash.perception import (
+    HeldAttachmentUpdater,
+    ObjectReference,
+    ReferenceSnippet,
+    RGBDFrame,
+)
 from lerobot.policies.flash.prepared import PreparedFlashSkill
+from lerobot.policies.flash.runtime import AttachmentRuntimeLimits
 from lerobot.policies.flash.skill import (
     AttachmentAction,
     AttachmentTransition,
@@ -389,6 +396,8 @@ def prepare(
     release = _nearest_index(times, annotation["release_time_s"])
     if not 0 < grasp < release < len(times) - 1:
         raise ValueError("grasp and release must lie inside the recorded demo")
+    if not np.allclose(kinematics.forward_kinematics(joints[grasp]), recorded_tips[grasp], atol=1e-5):
+        raise ValueError("calibrated fingertip differs from the grasp-time demo pose")
     start_anchor_end = _nearest_index(times, float(annotation["start_anchored_until_s"]))
     if not grasp <= start_anchor_end <= release:
         raise ValueError("the start-anchored phase must end between grasp and release")
@@ -452,6 +461,7 @@ def prepare(
 
     through_frame = _nearest_index(camera_times, times[_nearest_index(times, keypoints[-1]["t"])])
     estimates: list[dict] = []
+    held_observed_masks: dict[int, np.ndarray] = {}
     observed_counts = dict.fromkeys(prompts, 0)
     cache_identity = {
         key: annotation[key]
@@ -486,6 +496,9 @@ def prepare(
     ).hexdigest()[:12]
     cache_path = root / "flash" / "v1" / "preparation-cache" / f"{output_name}-{cache_key}.npz"
     cache_hit = cache_path.exists()
+    if cache_hit and annotation.get("held_attachment") is not None:
+        with np.load(cache_path, allow_pickle=False) as cache:
+            cache_hit = "held_mask_indices" in cache and "held_masks" in cache
     if cache_hit:
         with np.load(cache_path, allow_pickle=False) as cache:
             if int(cache["frames"]) != through_frame + 1:
@@ -539,6 +552,11 @@ def prepare(
                     )
                     observed_counts[role] += evidence == Evidence.OBSERVED
                 estimates.append(row)
+            if "held_mask_indices" in cache:
+                held_observed_masks = {
+                    int(index): mask.astype(bool)
+                    for index, mask in zip(cache["held_mask_indices"], cache["held_masks"], strict=True)
+                }
     else:
         backend = build_vision_backend(
             vision_config,
@@ -550,6 +568,15 @@ def prepare(
         )
         grasp_camera = _nearest_index(camera_times, times[grasp])
         release_camera = _nearest_index(camera_times, times[release])
+
+        def capture_held_mask(frame, result, _groups, by_role) -> None:
+            if (
+                times[grasp] <= frame.source_time_s < times[release]
+                and by_role[held].evidence == Evidence.OBSERVED
+                and held in result.masks
+            ):
+                held_observed_masks[frame.frame_id] = result.masks[held].copy()
+
         estimates = extract_pose_trace(
             (
                 _frame(root, index, intrinsics, base_from_camera, version, float(camera_times[index]))
@@ -563,12 +590,20 @@ def prepare(
             attached_role_at_frame=(
                 lambda frame_id: held if grasp_camera <= frame_id < release_camera else None
             ),
+            on_frame_evidence=capture_held_mask,
         )
         for row in estimates:
             for role, estimate in row.items():
                 observed_counts[role] += estimate.evidence == Evidence.OBSERVED
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         arrays = {"frames": through_frame + 1}
+        arrays["held_mask_indices"] = np.asarray(sorted(held_observed_masks), dtype=np.int32)
+        image_shape = next(iter(reference_observations.values()))[0].depth.shape
+        arrays["held_masks"] = (
+            np.stack([held_observed_masks[index] for index in sorted(held_observed_masks)])
+            if held_observed_masks
+            else np.empty((0, *image_shape), dtype=bool)
+        )
         for role in prompts:
             arrays[f"{role}_observed"] = np.array(
                 [row[role].evidence == Evidence.OBSERVED for row in estimates], dtype=bool
@@ -620,6 +655,85 @@ def prepare(
         grasp_attachment=grip_from_held,
         object_center_m=held_model.mean(axis=0),
     )
+    # Replay the same source-time attachment updater as a live attempt. A
+    # captured visual pose can revise the grasp assumption without changing
+    # the saved object frame. When the image cannot arbitrate a large change,
+    # retain the last accepted relation and mark the bundle for review.
+    held_attachment_by_camera = [grip_from_held.copy() for _ in estimates]
+    held_conflicted_by_camera = [False for _ in estimates]
+    held_corrected_by_camera = [False for _ in estimates]
+    held_correction_frames: list[int] = []
+    held_conflict_frames: list[int] = []
+    held_attachment_policy = annotation.get("held_attachment")
+    if held_attachment_policy is not None:
+        missing_masks = [
+            frame_index
+            for frame_index, row in enumerate(estimates)
+            if times[grasp] <= row[held].source_time_s < times[release]
+            and row[held].evidence == Evidence.OBSERVED
+            and row[held].supports()
+            and frame_index not in held_observed_masks
+        ]
+        if missing_masks:
+            raise ValueError(
+                f"held correction needs recorded aligned masks for {len(missing_masks)} observed frames; "
+                "regenerate the pose-trace cache"
+            )
+        limits = AttachmentRuntimeLimits.from_config(held_attachment_policy)
+        updater = HeldAttachmentUpdater(
+            held,
+            next(reference.version for reference in references if reference.role == held),
+            kinematics,
+            tuple(f"joint-{index}" for index in range(joints.shape[1])),
+            history_capacity=limits.history_capacity,
+            max_motor_sample_gap_s=limits.max_motor_sample_gap_s,
+            max_attachment_age_s=limits.max_attachment_age_s,
+            max_update_shift_m=limits.max_update_shift_m,
+            max_update_turn_rad=limits.max_update_turn_rad,
+            object_center_object_m=held_model.mean(axis=0),
+            object_points_object_m=held_model,
+            min_visual_support_points=(
+                causal_config.min_inliers
+                if causal_config is not None
+                else vision_config.registration_min_inliers
+            ),
+        )
+        if not updater.activate(float(times[grasp]), selected, joints[grasp]):
+            raise ValueError("selected grasp pose cannot seed the held attachment")
+        last_attachment = grip_from_held
+        has_correction = False
+        for frame_index, row in enumerate(estimates):
+            estimate = row[held]
+            if not float(times[grasp]) <= estimate.source_time_s < float(times[release]):
+                held_attachment_by_camera[frame_index] = last_attachment.copy()
+                continue
+            if estimate.evidence == Evidence.OBSERVED and estimate.supports():
+                mask = held_observed_masks.get(frame_index)
+                ee_at_capture = _arm_pose_at(times, recorded_tips, estimate.source_time_s)
+                if mask is not None and ee_at_capture is not None:
+                    frame = _frame(
+                        root,
+                        frame_index,
+                        intrinsics,
+                        base_from_camera,
+                        version,
+                        estimate.source_time_s,
+                    )
+                    if updater.on_pose_update(
+                        frame_index,
+                        {held: estimate},
+                        frame=frame,
+                        mask=mask,
+                        ee_at_capture=ee_at_capture,
+                    ):
+                        last_attachment = updater.last_accepted_gripper_from_object
+                        held_correction_frames.append(frame_index)
+                        has_correction = True
+                    elif updater.state(estimate.source_time_s) is None:
+                        held_conflict_frames.append(frame_index)
+            held_attachment_by_camera[frame_index] = last_attachment.copy()
+            held_conflicted_by_camera[frame_index] = updater.state(estimate.source_time_s) is None
+            held_corrected_by_camera[frame_index] = has_correction
     roles_version = {reference.role: reference.version for reference in references}
     intervals = []
     for number, (first, last, end_key, demonstrated, start_anchored, carrying) in enumerate(
@@ -658,7 +772,12 @@ def prepare(
                 reference_pose, reference_evidence = _metric_pose_at(
                     estimates, reference_role, camera_index, max_previous=max_gap
                 )
-            demo_held = recorded_tips[index] @ grip_from_held if carrying else None
+            causal_camera_index = max(
+                0, min(len(estimates) - 1, int(np.searchsorted(camera_times, times[index], side="right") - 1))
+            )
+            demo_held = (
+                recorded_tips[index] @ held_attachment_by_camera[causal_camera_index] if carrying else None
+            )
             event_id = (
                 "attach-held"
                 if index == grasp and last == grasp
@@ -673,7 +792,15 @@ def prepare(
                     gripper=float(actions[index, -1]),
                     source_frame_index=index,
                     reference_evidence=reference_evidence,
-                    held_evidence="predicted" if carrying else None,
+                    held_evidence=(
+                        "conflicted_prediction"
+                        if carrying and held_conflicted_by_camera[causal_camera_index]
+                        else (
+                            "vision_corrected_prediction"
+                            if carrying and held_corrected_by_camera[causal_camera_index]
+                            else ("predicted" if carrying else None)
+                        )
+                    ),
                     event_id=event_id,
                 )
             )
@@ -725,6 +852,15 @@ def prepare(
         if not cv2.imwrite(str(path), reference_observations[role][1].astype(np.uint8) * 255):
             raise OSError(f"cannot write reference mask {path}")
     manifest = prepared.save(destination)
+    if held_attachment_policy is not None:
+        np.savez_compressed(
+            destination / "held-attachment-trace.npz",
+            role=np.asarray(held),
+            camera_times_s=camera_times[: len(estimates)],
+            gripper_from_object=np.stack(held_attachment_by_camera),
+            conflicted=np.asarray(held_conflicted_by_camera),
+            corrected=np.asarray(held_corrected_by_camera),
+        )
     (destination / "annotation.json").write_text(json.dumps(annotation, indent=2) + "\n")
     (destination / "keypoints.json").write_text(json.dumps(keypoints_document, indent=2) + "\n")
     report = {
@@ -752,7 +888,15 @@ def prepare(
         "grasp_pose_evidence": grasp_evidence,
         "release_sample": release,
         "start_anchored_until_sample": start_anchor_end,
-        "held_contact_pose": "predicted from recorded calibrated fingertip and grasp pose",
+        "held_contact_pose": (
+            "source-time visual corrections with gripper prediction between observations"
+            if held_correction_frames
+            else "predicted from recorded calibrated fingertip and grasp pose"
+        ),
+        "held_attachment_policy": held_attachment_policy,
+        "held_attachment_trace": "held-attachment-trace.npz" if held_attachment_policy else None,
+        "held_correction_frames": held_correction_frames,
+        "held_conflict_frames": held_conflict_frames,
         "held_pose_comparison": held_pose_comparison,
         "intervals": len(intervals),
         "calibration_version": version,

@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+import json
+
 import numpy as np
 
 from lerobot.policies.flash.appearance import AppearanceModel
-from lerobot.policies.flash.demo_replay import _demo_annotation_path, build_demo_replay
+from lerobot.policies.flash.demo_replay import (
+    _add_recorded_attachment_trace,
+    _demo_annotation_path,
+    build_demo_replay,
+)
 from lerobot.policies.flash.matched_rgbd import ObjectPointModel
 from lerobot.policies.flash.perception import ObjectReference, ReferenceSnippet
 from lerobot.policies.flash.prepared import PreparedFlashSkill
@@ -16,6 +22,38 @@ def _pose(x: float) -> np.ndarray:
     pose = np.eye(4)
     pose[0, 3] = x
     return pose
+
+
+def test_demo_attachment_replay_uses_each_image_time_not_a_future_connection_endpoint(tmp_path) -> None:
+    bundle = tmp_path / "bundle.json"
+    (tmp_path / "preparation-report.json").write_text(
+        json.dumps({"held_attachment_trace": "held-attachment-trace.npz"})
+    )
+    np.savez_compressed(
+        tmp_path / "held-attachment-trace.npz",
+        role=np.asarray("workpiece"),
+        camera_times_s=np.array([0.25, 0.75]),
+        gripper_from_object=np.stack([_pose(0.1), _pose(0.2)]),
+        conflicted=np.array([False, False]),
+        corrected=np.array([False, True]),
+    )
+    replay = {
+        "frames": [
+            {
+                "snapshot": {
+                    "recorded_at_s": time_s,
+                    "held_prediction": {"role": "workpiece", "pose": _pose(1.2).tolist()},
+                }
+            }
+            for time_s in (0.25, 0.75)
+        ]
+    }
+    _add_recorded_attachment_trace(bundle, replay, np.array([0.0, 1.0]), np.stack([_pose(0), _pose(1)]))
+    first, second = (entry["snapshot"]["held_prediction"] for entry in replay["frames"])
+    assert np.isclose(first["pose"][0][3], 0.35)
+    assert first["evidence"] == "predicted"
+    assert np.isclose(second["pose"][0][3], 0.95)
+    assert second["evidence"] == "vision_corrected_prediction"
 
 
 def test_demo_replay_uses_the_selected_preparation_recipe(tmp_path) -> None:

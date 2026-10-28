@@ -4,7 +4,7 @@ This is a read-only adapter for the sealed recording layout. It does not rerun
 perception or invent per-frame tracker observations absent from the prepared
 skill. The camera images are the same numbered RGB frames used by preparation.
 For generated connections, a held-object preview follows the recorded gripper
-with the skill's unverified attachment instead of displaying a future endpoint.
+with the attachment known at that image time instead of a future endpoint.
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ import cv2
 import numpy as np
 
 from .geometry import inverse
+from .held_pose_diagnostics import _arm_pose_at
 from .prepared import PreparedFlashSkill
 from .skill import MotionMode, Relation
 
@@ -299,6 +300,44 @@ def _add_saved_extraction_layers(root: Path, bundle: Path, result: dict) -> None
     result["extraction_history"] = "recorded_for_prepared_version"
 
 
+def _add_recorded_attachment_trace(
+    bundle: Path, result: dict, arm_times_s: np.ndarray, arm_tips: np.ndarray
+) -> None:
+    """Draw only the attachment known by each camera frame, not a future endpoint's."""
+    report_path = bundle.parent / "preparation-report.json"
+    if not report_path.is_file():
+        return
+    name = json.loads(report_path.read_text(encoding="utf-8")).get("held_attachment_trace")
+    if not name:
+        return
+    trace_path = (bundle.parent / name).resolve()
+    trace_path.relative_to(bundle.parent.resolve())
+    with np.load(trace_path, allow_pickle=False) as trace:
+        role = str(trace["role"])
+        count = min(len(trace["camera_times_s"]), len(result["frames"]))
+        for index in range(count):
+            snapshot = result["frames"][index]["snapshot"]
+            held = snapshot.get("held_prediction")
+            if held is None or held["role"] != role:
+                continue
+            source_time_s = float(trace["camera_times_s"][index])
+            if not np.isclose(source_time_s, snapshot["recorded_at_s"], atol=1e-9):
+                raise ValueError("held attachment trace and replay camera clocks differ")
+            ee_at_capture = _arm_pose_at(arm_times_s, arm_tips, source_time_s)
+            if ee_at_capture is None:
+                continue
+            held["pose"] = (ee_at_capture @ trace["gripper_from_object"][index]).tolist()
+            held["source_time_s"] = source_time_s
+            held["evidence"] = (
+                "conflicted_prediction"
+                if bool(trace["conflicted"][index])
+                else "vision_corrected_prediction"
+                if bool(trace["corrected"][index])
+                else "predicted"
+            )
+            held["estimator"] = "recorded_source_time_attachment"
+
+
 def load_raw_legacy_demo_replay(dataset_root: Path, episode: int) -> dict:
     """Expose an unprepared sealed-format recording without inventing object poses."""
     root = dataset_root.expanduser().resolve()
@@ -393,6 +432,7 @@ def load_legacy_demo_replay(dataset_root: Path, episode: int, bundle_path: Path)
         fps=float(info["fps"]),
     )
     result["bundle_path"] = str(bundle)
+    _add_recorded_attachment_trace(bundle, result, arm_times_s, arm_tips)
     _add_saved_extraction_layers(root, bundle, result)
     report_path = bundle.parent / "preparation-report.json"
     if report_path.is_file():

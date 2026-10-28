@@ -1304,7 +1304,8 @@ def _flash_recorded_demo_replay(root: Path, episode: int, bundle_path: Path) -> 
                 "attachment_action": attachment.action.value if attachment else "",
                 "attachment_role": attachment.role if attachment else "",
                 "allow_predicted_demo_pose": any(
-                    sample.reference_evidence == "predicted" or sample.held_evidence == "predicted"
+                    sample.reference_evidence == "predicted"
+                    or (sample.held_evidence is not None and sample.held_evidence != "observed")
                     for sample in interval.samples
                 ),
                 "verify_relation": (

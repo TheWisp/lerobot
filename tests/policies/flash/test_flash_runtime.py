@@ -384,8 +384,8 @@ def test_delayed_direct_pose_updates_held_attachment_after_newer_point_predictio
     newer_prediction = PoseEstimate(
         "target", identity(), 1.02, 1.03, Evidence.PREDICTED, "target-v1", (True,) * 3, (True,) * 3
     )
-    assert attempt.causal.on_direct_observation is not None
-    attempt.causal.on_direct_observation(observed)
+    assert attempt.causal.on_direct_observation_with_frame is not None
+    attempt.causal.on_direct_observation_with_frame(observed, None, None)
     callback = attempt.perception.on_pose_update
     assert callback is not None
 
