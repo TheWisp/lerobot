@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gzip
 import json
 import time
 from pathlib import Path
@@ -51,7 +52,7 @@ def test_live_tracker_layers_are_replayed_with_camera_frame(tmp_path: Path) -> N
     (extension / "episode_000000.jsonl").write_text(
         json.dumps({"frame_index": 7, "camera_source_time_s": 10.0})
         + "\n"
-        + json.dumps({"frame_index": 8, "camera_source_time_s": 10.1})
+        + json.dumps({"frame_index": 8, "camera_frame_id": 9, "camera_source_time_s": 10.1})
         + "\n"
     )
     live = tmp_path / "live.json"
@@ -176,10 +177,64 @@ def test_live_tracker_layers_are_replayed_with_camera_frame(tmp_path: Path) -> N
     assert replay["frames"][-1]["snapshot"]["accepted"] == current["accepted"]
     assert replay["frames"][-1]["snapshot"]["direct_point_comparisons"] == current["direct_point_comparisons"]
     assert replay["frames"][-1]["snapshot"]["anchor_decisions"] == current["anchor_decisions"]
+    assert replay["frames"][-1]["evidence"]["masks_rle"]["object"]
+    assert replay["frames"][-1]["evidence"]["image_size"] == [12, 16]
     assert (
         replay["frames"][-1]["snapshot"]["direct_free_space_comparisons"]
         == current["direct_free_space_comparisons"]
     )
+
+
+def test_delayed_mask_is_joined_only_to_its_source_camera_frame(tmp_path: Path) -> None:
+    extension = tmp_path / "flash" / "v1"
+    extension.mkdir(parents=True)
+    (extension / "episode_000000.jsonl").write_text(
+        "\n".join(
+            json.dumps(
+                {"frame_index": index, "camera_frame_id": frame_id, "camera_source_time_s": float(frame_id)}
+            )
+            for index, frame_id in ((0, 9), (1, 10))
+        )
+        + "\n"
+    )
+    telemetry = FlashLiveTelemetry(
+        tmp_path / "live.json", extension / "tracker_episode_000000.jsonl", {"object": np.zeros(3)}
+    )
+
+    def frame(frame_id: int) -> RGBDFrame:
+        return RGBDFrame(
+            frame_id,
+            np.zeros((12, 16, 3), dtype=np.uint8),
+            np.ones((12, 16), dtype=np.uint16),
+            np.eye(3),
+            0.001,
+            np.eye(4),
+            float(frame_id),
+            float(frame_id) + 0.01,
+            "calibration-v1",
+        )
+
+    telemetry.frame(frame(9))
+    deadline = time.monotonic() + 2.0
+    while not (tmp_path / "live.json").exists() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert json.loads((tmp_path / "live.json").read_text())["camera"]["frame_id"] == 9
+    telemetry.frame(frame(10))
+    mask = np.zeros((12, 16), dtype=bool)
+    mask[3:8, 4:10] = True
+    telemetry.proposals((_estimate(9.0, "appearance_rgbd", Evidence.OBSERVED),), {"object": mask}, frame_id=9)
+    telemetry.close()
+
+    replay = _flash_tracker_replay(tmp_path, 0)
+    evidence_by_frame = {item["snapshot"]["camera"]["frame_id"]: item for item in replay["frames"]}
+    assert evidence_by_frame[9]["evidence"]["masks_rle"]["object"]
+    assert evidence_by_frame[9]["snapshot"]["observed_masks"]["object"]["frame_id"] == 9
+    assert "evidence" not in evidence_by_frame[10]
+    data = telemetry.mask_path.read_bytes()
+    telemetry.mask_path.write_bytes(data[:-8])  # Simulate a stopped writer without a gzip footer.
+    interrupted = _flash_tracker_replay(tmp_path, 0)
+    assert interrupted["mask_evidence_incomplete"]
+    assert interrupted["frames"][0]["evidence"]["masks_rle"]["object"]
 
 
 def test_decision_journal_backlog_fails_explicitly_without_losing_queued_event(tmp_path: Path) -> None:
@@ -195,6 +250,22 @@ def test_decision_journal_backlog_fails_explicitly_without_losing_queued_event(t
     telemetry.close()
     decisions = [json.loads(line) for line in telemetry.decision_path.read_text().splitlines()]
     assert [event["frame_id"] for event in decisions] == [1]
+
+
+def test_mask_writer_backlog_is_bounded_and_reports_dropped_evidence(tmp_path: Path) -> None:
+    telemetry = FlashLiveTelemetry(
+        tmp_path / "live.json", tmp_path / "tracker.jsonl", {"object": np.zeros(3)}, frame_history=1
+    )
+    mask = np.ones((3, 4), dtype=bool)
+    with telemetry._condition:
+        telemetry.proposals((), {"object": mask}, frame_id=1)
+        telemetry.proposals((), {"object": mask}, frame_id=2)
+    telemetry.close()
+    snapshot = json.loads((tmp_path / "live.json").read_text())
+    assert snapshot["mask_evidence_dropped"] == 1
+    with gzip.open(telemetry.mask_path, "rt", encoding="utf-8") as stream:
+        events = [json.loads(line) for line in stream]
+    assert [event["frame_id"] for event in events] == [2]
 
 
 @pytest.mark.asyncio

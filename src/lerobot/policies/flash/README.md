@@ -21,12 +21,13 @@ labelled “Follow recording”; saving the edited recipe makes the choice expli
 without changing the original skill.
 Demo, live Test and recorded rollout review use the same 3D scene renderer.
 The live view reads display-only RGB-D copies from the telemetry writer; its
-pose overlay and pixels share a camera frame ID. The rollout shows its recorded
-RGB-D frame and saved pose, but the rollout sidecar does not contain per-pixel
-object masks for 3D measurement, so that view does not claim a measured object
-surface. Replay uses recorded camera frame IDs to attach tracker snapshots to
-images and skips snapshots captured before recording began. Older traces without
-frame IDs can only use a marked approximate time match. The live
+pose overlay and pixels share a camera frame ID. New rollouts also record each
+perception mask under its source camera frame ID, so Replay can show the
+measured RGB-D surface when that exact frame was saved by the dataset recorder.
+Snapshots from a different camera frame never borrow that mask. Older rollouts
+without the mask sidecar show the recorded pose without claiming a measured
+object surface. Replay skips snapshots captured before recording began; older
+traces without frame IDs can only use a marked approximate time match. The live
 scene route has GUI and writer tests but still needs a physical timing check.
 Each causal pose candidate has a source-frame decision with its raw pose,
 accepted pose when applicable, and rejection reason. The live and replay Pose
@@ -201,9 +202,10 @@ An unused output name creates a new bundle and forces the importer to run SAM3,
 DINO and RGB-D pose extraction again; the pose cache includes the output name.
 It does not overwrite a previous bundle. New bundles retain `annotation.json`,
 `keypoints.json` and `preparation-report.json` with cache provenance. This
-importer saves reference-frame masks only, so demo playback cannot display
-historical per-frame masks or rejected fits. The per-frame evidence recording
-specified in the [architecture](docs/architecture.md) is not implemented yet.
+importer saves reference-frame masks only. The separate scene-evidence rebuild
+can add historical per-frame masks and group support to demo playback; it does
+not alter the saved skill. Rejected fits remain in the pose trace and decision
+journal when recorded, rather than being inferred from a mask.
 A legacy bundle modified after import cannot be assumed reproducible from the
 dataset's top-level annotation file alone.
 

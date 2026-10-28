@@ -115,16 +115,21 @@ async function _flashUpdateSceneFrame() {
                 rgba: context.getImageData(0, 0, camera.width, camera.height).data, evidence};
             flashSceneFrameCache = frame;
         }
-        _flashPaintObservedPhoto(frame, camera);
+        const liveMasks = kind === 'live' ? Object.fromEntries(Object.entries(selected.snapshot.observed_masks || {})
+            .filter(([, mask]) => mask.frame_id === camera.frame_id && mask.runs)
+            .map(([role, mask]) => [role, mask.runs])) : null;
+        const frameEvidence = kind === 'demo' ? frame.evidence : kind === 'rollout' ? selected.evidence
+            : Object.keys(liveMasks).length ? {available: true, masks_rle: liveMasks} : null;
+        _flashPaintObservedPhoto({...frame, evidence: frameEvidence}, camera);
         flashSceneView.update(frame.depth, frame.rgba, {...selected.snapshot, ...(replay?.geometry || {})},
-            _flashSceneOptions(), frame.evidence);
+            _flashSceneOptions(), frameEvidence);
         flashSceneView.highlight(flashHighlightedOverlay);
         if (generation === flashSceneRequest) document.querySelector('#rerun-viewer .flash-replay-grid')
             ?.classList.remove('flash-frame-loading');
-        const groups = Object.entries(frame.evidence?.groups || {}).map(([role, group]) =>
+        const groups = Object.entries(frameEvidence?.groups || {}).map(([role, group]) =>
             `${role} context: ${group.ids.length} ${group.verified ? 'verified' : 'candidate'} support points${group.measured_this_frame === false ? ' (fit unavailable)' : ''}`).join(' · ');
-        status.textContent = frame.evidence?.available
-            ? `Rebuilt RGB-D evidence · frame ${selected.frame_index}${groups ? ` · ${groups}` : ''}`
+        status.textContent = frameEvidence?.available
+            ? `${kind === 'demo' ? 'Rebuilt' : 'Recorded'} RGB-D evidence · frame ${selected.frame_index}${groups ? ` · ${groups}` : ''}`
             : kind === 'demo'
                 ? `Recorded RGB-D · frame ${selected.frame_index} · no rebuilt per-frame masks`
                 : kind === 'live'
@@ -1369,6 +1374,7 @@ async function loadFlashTrackerReplay(datasetRoot, episodeIndex) {
             frame.snapshot?.camera && Object.keys(frame.snapshot?.accepted || {}).length);
         seekFlashReplay(Math.max(0, firstTrackedFrame));
         if (!result.layer_history) showToast('Older FLASH recording', 'This trace contains planner poses, but predates per-tracker layer recording.', 'warning');
+        if (result.mask_evidence_incomplete) showToast('Partial FLASH masks', 'Some measured surface frames were not saved. Available frames still show their exact measurements.', 'warning');
     } catch (error) { showToast('Cannot inspect FLASH recording', error.message, 'error'); }
 }
 
@@ -1383,6 +1389,8 @@ function _flashCreateSceneGrid(kind, imageAlt, depthAvailable = true) {
     canvas.className = 'flash-pose-canvas';
     grid.append(image, canvas);
     if (kind === 'demo' || kind === 'live' || (kind === 'rollout' && depthAvailable)) {
+        const hasMeasuredSurface = kind === 'demo' || kind === 'live' ||
+            flashReplay?.frames?.some(frame => frame.evidence?.masks_rle);
         const photo = document.createElement('canvas');
         photo.className = 'flash-scene-photo';
         const scene = document.createElement('canvas');
@@ -1401,7 +1409,7 @@ function _flashCreateSceneGrid(kind, imageAlt, depthAvailable = true) {
                 ? '<button type="button" id="flash-scene-edit" onclick="openFlashDemoSceneEditor()">Edit key frames</button>'
                 : '') +
             '<details class="flash-scene-layer-menu"><summary>Layers</summary><div class="flash-scene-layer-options">' +
-            (kind === 'demo'
+            (hasMeasuredSurface
                 ? '<label title="Current frame, using this frame’s mask and measured depth"><input type="checkbox" id="flash-scene-surface" checked onchange="_flashUpdateSceneFrame()">Measured surface</label>' +
                     '<label title="Current mask-and-depth samples for display; these are not tracked landmarks"><input type="checkbox" id="flash-scene-points" checked onchange="_flashUpdateSceneFrame()">Surface points</label>' +
                     '<label title="Display spacing in recorded camera pixels">Spacing <input type="number" id="flash-scene-point-spacing" min="2" max="16" step="1" value="5" onchange="_flashUpdateSceneFrame()"></label>'

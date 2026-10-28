@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import ctypes
+import gzip
 import json
 import logging
 import os
@@ -1130,6 +1131,26 @@ def _flash_tracker_replay(root: Path, episode: int) -> dict:
         else []
     )
     if snapshots:
+        mask_path = layers_path.with_suffix(".masks.jsonl.gz")
+        replay_camera_ids = {
+            camera["frame_id"]
+            for snapshot in snapshots
+            if (camera := snapshot.get("camera")) and camera.get("frame_id") in ticks_by_camera_id
+        }
+        masks_by_camera_id: dict[int, dict] = {}
+        mask_evidence_incomplete = any(snapshot.get("mask_evidence_dropped", 0) > 0 for snapshot in snapshots)
+        if mask_path.is_file() and replay_camera_ids:
+            try:
+                with gzip.open(mask_path, "rt", encoding="utf-8") as mask_stream:
+                    for line in mask_stream:
+                        if line.strip():
+                            event = json.loads(line)
+                            if event["frame_id"] in replay_camera_ids:
+                                masks_by_camera_id[event["frame_id"]] = event
+            except (EOFError, OSError, json.JSONDecodeError):
+                # An interrupted trial can leave the last compressed event
+                # unfinished. Earlier complete events remain usable.
+                mask_evidence_incomplete = True
         frames = []
         for snapshot in snapshots:
             camera = snapshot.get("camera")
@@ -1154,13 +1175,23 @@ def _flash_tracker_replay(root: Path, episode: int) -> dict:
             else:
                 frame_index = 0
                 alignment = "none"
-            frames.append({"frame_index": frame_index, "alignment": alignment, "snapshot": snapshot})
+            replay_frame = {"frame_index": frame_index, "alignment": alignment, "snapshot": snapshot}
+            if alignment == "camera_frame_id":
+                evidence = masks_by_camera_id.get(camera["frame_id"])
+                if evidence and evidence["image_size"] == [camera.get("height"), camera.get("width")]:
+                    replay_frame["evidence"] = {"available": True, **evidence}
+                    snapshot["observed_masks"] = {
+                        role: {"frame_id": camera["frame_id"], "boundary_xy": boundary}
+                        for role, boundary in evidence.get("boundaries_xy", {}).items()
+                    }
+            frames.append(replay_frame)
         if not frames:
             raise HTTPException(404, "No tracker snapshot has a recorded camera frame")
         return {
             "available": True,
             "kind": "rollout",
             "layer_history": True,
+            "mask_evidence_incomplete": mask_evidence_incomplete,
             "camera_features": camera_features,
             "frames": frames,
         }

@@ -1024,11 +1024,18 @@ def test_run_flash_tracker_panel_reuses_view_for_recorded_layers(gui_page):
 
 @pytest.mark.requires_playwright
 @pytest.mark.skipif(importlib.util.find_spec("playwright") is None, reason="Playwright is not installed")
-def test_rollout_replay_uses_recorded_metric_depth_in_the_shared_scene(gui_page):
+@pytest.mark.parametrize("with_mask_evidence", [False, True])
+def test_rollout_replay_uses_recorded_metric_depth_in_the_shared_scene(gui_page, with_mask_evidence):
     page = gui_page
     height, width = 48, 64
     _, encoded = cv2.imencode(".jpg", np.full((height, width, 3), 100, dtype=np.uint8))
     requested_depth = []
+    evidence = {
+        "available": True,
+        "frame_id": 3,
+        "image_size": [height, width],
+        "masks_rle": {"object": [[row * width + 20, 20] for row in range(15, 30)]},
+    }
     page.route(
         "**/api/run/flash/recordings",
         lambda route: route.fulfill(
@@ -1057,6 +1064,7 @@ def test_rollout_replay_uses_recorded_metric_depth_in_the_shared_scene(gui_page)
                 "frames": [
                     {
                         "frame_index": 3,
+                        **({"evidence": evidence} if with_mask_evidence else {}),
                         "snapshot": {
                             "recorded_at_s": 12,
                             "camera": {
@@ -1118,10 +1126,21 @@ def test_rollout_replay_uses_recorded_metric_depth_in_the_shared_scene(gui_page)
     assert len(requested_depth) == 1
     assert "camera=observation.images.front_depth" in requested_depth[0]
     assert page.evaluate("flashSceneFrameCache.depth[0]") == 1000
-    assert "measured 3D surface unavailable" in page.locator("#flash-scene-status").inner_text()
-    assert page.locator(".flash-scene-photo").evaluate("element => element.style.visibility") == "hidden"
+    if with_mask_evidence:
+        assert "Recorded RGB-D evidence" in page.locator("#flash-scene-status").inner_text()
+        assert page.locator("#flash-scene-surface").count() == 1
+        assert page.locator(".flash-scene-photo").evaluate("element => element.style.visibility") == "visible"
+        assert (
+            page.locator(".flash-scene-photo").evaluate(
+                "element => element.getContext('2d').getImageData(25, 20, 1, 1).data[3]"
+            )
+            > 0
+        )
+    else:
+        assert "measured 3D surface unavailable" in page.locator("#flash-scene-status").inner_text()
+        assert page.locator(".flash-scene-photo").evaluate("element => element.style.visibility") == "hidden"
+        assert page.locator("#flash-scene-surface").count() == 0
     assert page.locator("#flash-scene-edit").count() == 0
-    assert page.locator("#flash-scene-surface").count() == 0
     assert page.locator("#flash-scene-group").count() == 0
 
 
@@ -1207,7 +1226,7 @@ def test_live_flash_uses_the_same_frame_tagged_rgbd_scene(gui_page):
     page.wait_for_function("() => flashSceneFrameCache?.frameIndex === 9")
     assert page.evaluate("flashSceneFrameCache.depth[0]") == 1000
     assert "Live RGB-D · frame 9" in page.locator("#flash-scene-status").inner_text()
-    assert page.locator("#flash-scene-surface").count() == 0
+    assert page.locator("#flash-scene-surface").count() == 1
     assert page.locator(".flash-scene-photo").evaluate("element => element.style.visibility") == "hidden"
     page.route(
         "**/api/run/flash/telemetry/frame/10/rgb",

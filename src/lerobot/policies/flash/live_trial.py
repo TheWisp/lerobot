@@ -225,6 +225,7 @@ def trial(
                 artifacts={
                     "tracker_trace": tracker_trace_path.name,
                     "anchor_decisions": tracker_trace_path.with_suffix(".decisions.jsonl").name,
+                    "source_frame_masks": tracker_trace_path.with_suffix(".masks.jsonl.gz").name,
                 },
             )
         )

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gzip
 import json
 import os
 import time
@@ -37,6 +38,12 @@ def _mask_boundary(mask: np.ndarray) -> list[list[int]]:
     if not contours:
         return []
     return max(contours, key=cv2.contourArea)[:, 0, :].tolist()
+
+
+def _mask_runs(mask: np.ndarray) -> list[list[int]]:
+    flat = np.asarray(mask, dtype=np.uint8).ravel()
+    edges = np.flatnonzero(np.diff(np.r_[0, flat, 0]))
+    return [[int(start), int(end - start)] for start, end in edges.reshape(-1, 2)]
 
 
 def _estimate_json(estimate: PoseEstimate) -> dict:
@@ -78,6 +85,7 @@ class FlashLiveTelemetry:
         self.live_path = live_path
         self.trace_path = trace_path
         self.decision_path = trace_path.with_suffix(".decisions.jsonl")
+        self.mask_path = trace_path.with_suffix(".masks.jsonl.gz")
         self.centers = {role: center.tolist() for role, center in centers_by_role.items()}
         self.points = {
             role: np.asarray(points, dtype=float).tolist() for role, points in (points_by_role or {}).items()
@@ -100,6 +108,8 @@ class FlashLiveTelemetry:
         self._proposal_frame_id: int | None = None
         self._masks: dict[str, np.ndarray] = {}
         self._mask_frame_id: int | None = None
+        self._pending_mask_events: deque[tuple[int, dict[str, np.ndarray]]] = deque()
+        self._mask_events_dropped = 0
         self._layers: dict[str, dict[str, PoseEstimate]] = {}
         self._comparisons: dict[str, dict] = {}
         self._point_comparisons: dict[str, dict] = {}
@@ -144,8 +154,17 @@ class FlashLiveTelemetry:
                 for proposal in source_proposals
             }
             if masks is not None:
-                self._masks = dict(masks)
+                copied_masks = {role: np.asarray(mask, dtype=bool).copy() for role, mask in masks.items()}
+                self._masks = copied_masks
                 self._mask_frame_id = frame_id
+                if frame_id is not None:
+                    # The camera and perception callbacks run at different rates.
+                    # Retain the source frame's masks for exact replay alignment;
+                    # contour-only display snapshots can miss that frame entirely.
+                    if len(self._pending_mask_events) >= self.frame_history:
+                        self._pending_mask_events.popleft()
+                        self._mask_events_dropped += 1
+                    self._pending_mask_events.append((frame_id, copied_masks))
             self._changed()
 
     def layer(self, estimate: PoseEstimate) -> None:
@@ -248,7 +267,9 @@ class FlashLiveTelemetry:
             }
             self._changed()
 
-    def _snapshot(self) -> tuple[dict, RGBDFrame | None, tuple[dict, ...]]:
+    def _snapshot(
+        self,
+    ) -> tuple[dict, RGBDFrame | None, tuple[dict, ...], tuple[tuple[int, dict[str, np.ndarray]], ...]]:
         with self._condition:
             frame = self._frame
             proposals = self._proposals.copy()
@@ -263,6 +284,9 @@ class FlashLiveTelemetry:
             accepted = self._accepted.copy()
             latest_decisions = self._latest_decisions.copy()
             pending_decisions = tuple(self._pending_decisions)
+            pending_mask_events = tuple(self._pending_mask_events)
+            self._pending_mask_events.clear()
+            mask_events_dropped = self._mask_events_dropped
             held = self._held_attachment
             motor_tick = self._motor_tick.copy() if self._motor_tick is not None else None
         held_prediction = None
@@ -302,9 +326,18 @@ class FlashLiveTelemetry:
             "centers_object_m": self.centers,
             "points_object_m": self.points,
             "observed_masks": {
-                role: {"frame_id": mask_frame_id, "boundary_xy": _mask_boundary(mask)}
+                role: {
+                    "frame_id": mask_frame_id,
+                    "boundary_xy": _mask_boundary(mask),
+                    **(
+                        {"runs": _mask_runs(mask)}
+                        if frame is not None and mask_frame_id == frame.frame_id
+                        else {}
+                    ),
+                }
                 for role, mask in masks.items()
             },
+            "mask_evidence_dropped": mask_events_dropped,
             "proposals": {role: _estimate_json(value) for role, value in proposals.items()},
             "proposal_frame_id": proposal_frame_id,
             "raw_proposals": raw_proposals,
@@ -320,7 +353,7 @@ class FlashLiveTelemetry:
             "held_prediction": held_prediction,
             "motor_tick": motor_tick,
         }
-        return snapshot, frame, pending_decisions
+        return snapshot, frame, pending_decisions, pending_mask_events
 
     def _write_frame(self, frame: RGBDFrame) -> None:
         if frame.frame_id == self._written_frame_id:
@@ -351,6 +384,7 @@ class FlashLiveTelemetry:
         with (
             self.trace_path.open("w", encoding="utf-8") as trace,
             self.decision_path.open("w", encoding="utf-8") as decisions,
+            gzip.open(self.mask_path, "wt", encoding="utf-8") as mask_events,
         ):
             while True:
                 with self._condition:
@@ -358,7 +392,29 @@ class FlashLiveTelemetry:
                     revision = self._revision
                     closing = self._closed
                 if revision != seen:
-                    snapshot, frame, pending_decisions = self._snapshot()
+                    snapshot, frame, pending_decisions, pending_masks = self._snapshot()
+                    for frame_id, masks in pending_masks:
+                        if not masks:
+                            continue
+                        image_size = next(iter(masks.values())).shape
+                        if any(mask.shape != image_size for mask in masks.values()):
+                            raise ValueError("FLASH object masks do not share one camera frame")
+                        mask_events.write(
+                            json.dumps(
+                                {
+                                    "frame_id": frame_id,
+                                    "image_size": list(image_size),
+                                    "masks_rle": {role: _mask_runs(mask) for role, mask in masks.items()},
+                                    "boundaries_xy": {
+                                        role: _mask_boundary(mask) for role, mask in masks.items()
+                                    },
+                                },
+                                separators=(",", ":"),
+                                allow_nan=False,
+                            )
+                            + "\n"
+                        )
+                    mask_events.flush()
                     for decision in pending_decisions:
                         decisions.write(json.dumps(decision, separators=(",", ":"), allow_nan=False) + "\n")
                     decisions.flush()
