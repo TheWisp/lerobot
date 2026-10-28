@@ -13,7 +13,7 @@ from .perception import RGBDFrame
 from .perception_step import PerceptionResult
 from .trajectory import PoseEstimate
 
-SCENE_EVIDENCE_CAPTURE_VERSION = 2
+SCENE_EVIDENCE_CAPTURE_VERSION = 3
 
 
 def _mask_runs(mask: np.ndarray) -> list[list[int]]:
@@ -88,6 +88,11 @@ class SceneEvidenceWriter:
                     "evidence": proposal.estimate.evidence.value,
                     "estimator": proposal.estimate.estimator,
                     "raw_pose": proposal.raw_pose.tolist() if proposal.raw_pose is not None else None,
+                    "motion_prior_pose": (
+                        proposal.motion_prior_pose.tolist()
+                        if proposal.motion_prior_pose is not None
+                        else None
+                    ),
                     "failure": proposal.failure,
                     "visible_support": asdict(proposal.visible_support),
                 }

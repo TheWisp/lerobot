@@ -183,6 +183,7 @@ class SurfacePoseBackend:
         self.last_failure = {}
         self.last_details = {}
         self.last_candidate_poses = {}
+        self.last_motion_prior_poses = {}
         self.last_visible_support = {}
         self.references = {}
         self.sessions = {}
@@ -213,6 +214,7 @@ class SurfacePoseBackend:
             raise ValueError("surface tracker needs unique references")
         self.previous_frame = None
         self.last_candidate_poses = {}
+        self.last_motion_prior_poses = {}
         self.last_visible_support = {}
         self.sessions.clear()
         self.reference_camera_from_object.clear()
@@ -350,7 +352,7 @@ class SurfacePoseBackend:
         self.last_masks = prepared["masks"]
         self.last_mask_ms = prepared["mask_ms"]
         self.last_failure, self.last_details = {}, {}
-        self.last_candidate_poses, self.last_visible_support = {}, {}
+        self.last_candidate_poses, self.last_motion_prior_poses, self.last_visible_support = {}, {}, {}
         unregistered = prepared["unregistered"]
 
         def finish_job(job):
@@ -391,6 +393,15 @@ class SurfacePoseBackend:
             self.last_candidate_poses[role] = (
                 np.asarray(pose, dtype=float).copy() if pose is not None else None
             )
+            motion_prior_camera = detail.get("motion_only_prior_camera_from_reference")
+            motion_prior = (
+                frame.base_from_camera
+                @ np.asarray(motion_prior_camera, dtype=float)
+                @ self.reference_camera_from_object[role]
+                if motion_prior_camera is not None and role in self.reference_camera_from_object
+                else None
+            )
+            self.last_motion_prior_poses[role] = motion_prior
             depth_residual_mm = diagnostics.get("surface_p90_mm")
             mask = self.last_masks.get(role)
             surface_axis_camera = diagnostics.get("principal_surface_axis_camera")
@@ -475,7 +486,12 @@ class SurfacePoseBackend:
             detail["accepted"] = accepted
             detail["reference_version"] = reference.version
             detail["base_from_object"] = pose.tolist() if pose is not None else None
+            detail["motion_only_prior_base_from_object"] = (
+                motion_prior.tolist() if motion_prior is not None else None
+            )
             self.last_details[role] = detail
+            if role not in unregistered:
+                session.record_publication(accepted)
             if not accepted:
                 if pose is None:
                     self.last_failure[role] = detail["status"]

@@ -92,7 +92,11 @@ class VisibleSurfaceSupport:
 
 @dataclass(frozen=True)
 class PoseProposal:
-    """A backend's raw fit and observed support, including fits it abstains from using."""
+    """Raw fit and support, plus an optional independent motion-only prior.
+
+    Neither optional pose is an accepted measurement. A missing motion prior
+    means no complete measured frame-motion chain reaches this image.
+    """
 
     frame_id: int
     calibration_version: str
@@ -100,12 +104,15 @@ class PoseProposal:
     raw_pose: np.ndarray | None
     visible_support: VisibleSurfaceSupport
     failure: str | None = None
+    motion_prior_pose: np.ndarray | None = None
 
     def __post_init__(self) -> None:
         if self.frame_id < 0 or not self.calibration_version:
             raise ValueError("pose proposal needs a source frame and calibration")
         if self.raw_pose is not None:
             object.__setattr__(self, "raw_pose", transform(self.raw_pose))
+        if self.motion_prior_pose is not None:
+            object.__setattr__(self, "motion_prior_pose", transform(self.motion_prior_pose))
 
     @property
     def role(self) -> str:

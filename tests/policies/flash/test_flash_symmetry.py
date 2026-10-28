@@ -37,6 +37,7 @@ def test_symmetry_wrapper_keeps_rejected_surface_evidence_for_the_shared_pipelin
         "calibration",
     )
     raw = _x_pose(0.1)
+    motion_prior = _x_pose(0.02)
     support = VisibleSurfaceSupport(
         4,
         principal_surface_axis_base=(1.0, 0.0, 0.0),
@@ -47,6 +48,7 @@ def test_symmetry_wrapper_keeps_rejected_surface_evidence_for_the_shared_pipelin
     class RejectedBackend:
         last_masks = {"object": np.ones((4, 4), bool)}
         last_candidate_poses = {"object": raw}
+        last_motion_prior_poses = {"object": motion_prior}
         last_visible_support = {"object": support}
         last_failure = {"object": "full pose unobservable"}
 
@@ -79,6 +81,7 @@ def test_symmetry_wrapper_keeps_rejected_surface_evidence_for_the_shared_pipelin
     proposal = result.proposals[0]
     assert result.estimates[0].evidence == Evidence.LOST
     np.testing.assert_allclose(proposal.raw_pose, raw)
+    np.testing.assert_allclose(proposal.motion_prior_pose, motion_prior)
     assert proposal.visible_support == support
     assert proposal.failure == "full pose unobservable"
 

@@ -212,6 +212,17 @@ can support several poses with similar geometry scores.
 | Geometry-only fit, failed convergence, insufficient inliers, excessive gap, or a narrower patch                                                                     | `LOST`, with the candidate available to the debugger.                                       |
 | Missing mask/depth or missing initial demo registration                                                                                                             | `LOST`; no old pose is relabeled as a new observation.                                      |
 
+The raw surface tracker and the published pose have different jobs. The raw
+tracker may continue fitting after a frame is rejected so that it can recover
+when the object becomes visible again; rejection still publishes `LOST`.
+Alongside it, the shared pipeline records a **motion-only prior** transported
+from the last accepted RGB-D pose through consecutive measured frame-motion
+steps. A failed motion step makes that prior unavailable until another pose is
+accepted. Both hypotheses are saved with the same camera frame in demo and
+trial evidence. The motion-only prior is diagnostic, not a second accepted pose
+or proof of a rigid grasp. Future fusion must compare them with fresh image
+evidence and preserve unresolved disagreement.
+
 At the documented defaults, motion fitting needs six supporting RGB-D pairs;
 publication needs at least twelve inliers and a surface p90 gap no larger than
 5 mm. These counts are **pairs of matched pixels lifted to 3D**, not the number

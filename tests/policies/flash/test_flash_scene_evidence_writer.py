@@ -51,6 +51,8 @@ def test_preparation_evidence_crosses_into_demo_replay(tmp_path):
     mask[1:3, 1:3] = True
     raw = np.eye(4)
     raw[0, 3] = 0.1
+    motion_prior = np.eye(4)
+    motion_prior[0, 3] = 0.02
     proposal = PoseProposal(
         0,
         "calibration",
@@ -63,6 +65,7 @@ def test_preparation_evidence_crosses_into_demo_replay(tmp_path):
             principal_surface_points=12,
         ),
         "full pose unobservable",
+        motion_prior,
     )
     result = PerceptionResult((lost,), {}, 0, 1.0, "calibration", {"object": mask}, proposals=(proposal,))
 
@@ -87,6 +90,7 @@ def test_preparation_evidence_crosses_into_demo_replay(tmp_path):
     assert evidence["available"]
     assert evidence["masks_rle"]["object"] == [[5, 2], [9, 2]]
     assert evidence["proposals"]["object"]["raw_pose"] == raw.tolist()
+    assert evidence["proposals"]["object"]["motion_prior_pose"] == motion_prior.tolist()
     assert evidence["proposals"]["object"]["failure"] == "full pose unobservable"
     assert evidence["proposals"]["object"]["visible_support"]["principal_surface_points"] == 12
     assert evidence["estimates"]["object"]["evidence"] == "lost"

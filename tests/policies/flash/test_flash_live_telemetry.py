@@ -92,6 +92,8 @@ def test_live_tracker_layers_are_replayed_with_camera_frame(tmp_path: Path) -> N
     mask = np.zeros((12, 16), dtype=bool)
     mask[3:8, 4:10] = True
     telemetry.proposals((direct,), {"object": mask}, frame_id=9)
+    motion_prior = direct.pose.copy()
+    motion_prior[0, 3] = 0.02
     source_proposal = PoseProposal(
         9,
         "calibration-v1",
@@ -109,7 +111,9 @@ def test_live_tracker_layers_are_replayed_with_camera_frame(tmp_path: Path) -> N
             principal_surface_split_axes_base=((0.0, 1.0, 0.0), (0.0, 1.0, 0.0)),
             principal_surface_split_gap_rad=0.0,
         ),
+        motion_prior_pose=motion_prior,
     )
+    telemetry.proposals((direct,), {"object": mask}, frame_id=9, source_proposals=(source_proposal,))
     telemetry.anchor_decision(
         AnchorDecision(9, "calibration-v1", direct, "accepted", 10.2, direct, source_proposal)
     )
@@ -177,6 +181,8 @@ def test_live_tracker_layers_are_replayed_with_camera_frame(tmp_path: Path) -> N
     assert decisions[1]["frame_id"] == 9
     assert decisions[1]["reference_version"] == "reference-v1"
     assert decisions[1]["raw_pose"][0][3] == pytest.approx(0.1)
+    assert decisions[1]["motion_prior_pose"][0][3] == pytest.approx(0.02)
+    assert current["raw_proposals"]["object"]["motion_prior_pose"][0][3] == pytest.approx(0.02)
     assert decisions[1]["visible_support"] == {
         "mask_pixels": 30,
         "depth_points": 20,

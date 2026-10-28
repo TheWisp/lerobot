@@ -341,6 +341,64 @@ def test_small_patch_fit_cannot_promote_reference_depth_disagreement():
     assert result.proposals[0].visible_support.reference_depth_residual_p90_m == 0.05
 
 
+def test_rejected_fit_retains_visual_recovery_and_a_separate_motion_prior():
+    """A rejected local fit is a hypothesis; it must not erase the motion-only one."""
+    from lerobot.policies.flash.surface_grounding import WholeSurfaceFit
+
+    class FullMasks(Masks):
+        def masks(self, frame):
+            mask = np.zeros(frame.depth.shape, bool)
+            mask[20:44, 15 + frame.frame_id : 55 + frame.frame_id] = True
+            return {"object": mask}
+
+    sequence = frames()[:3]
+    backend = build_vision_backend(
+        VisionPipelineConfig(), FullMasks(), matcher=object(), local_reference=True, clock=lambda: 0.0
+    )
+    pipeline = PerceptionPipeline(backend, (reference(),))
+    first = pipeline.process(sequence[0])
+    original = WholeSurfaceFit.correct
+    proposals = []
+
+    def bad_then_normal(self, proposal):
+        proposals.append(proposal.copy())
+        if len(proposals) == 1:
+            bad = proposal.copy()
+            bad[0, 3] += 0.1
+            return bad, {"converged": True, "inliers": 100}
+        return original(self, proposal)
+
+    with (
+        patch("lerobot.policies.flash.surface_tracking.ufm_pairs", synthetic_pairs),
+        patch.object(WholeSurfaceFit, "correct", bad_then_normal),
+    ):
+        rejected = pipeline.process(sequence[1])
+        recovered = pipeline.process(sequence[2])
+
+    assert rejected.estimates[0].evidence == Evidence.LOST
+    assert rejected.proposals[0].raw_pose is not None
+    first_x = first.estimates[0].pose[0, 3]
+    np.testing.assert_allclose(rejected.proposals[0].motion_prior_pose[0, 3] - first_x, 0.004, atol=1e-9)
+    # The raw branch can recover from its own next fit; its initial proposal
+    # is intentionally different from the independent accumulated motion.
+    np.testing.assert_allclose(proposals[1][0, 3], 0.108, atol=1e-9)
+    np.testing.assert_allclose(recovered.proposals[0].motion_prior_pose[0, 3] - first_x, 0.008, atol=1e-9)
+    assert recovered.estimates[0].evidence == Evidence.OBSERVED
+
+
+def test_motion_prior_stays_unknown_after_missing_correspondence():
+    pipeline = PerceptionPipeline(local_backend(), (reference(),))
+    sequence = frames()
+    pipeline.process(sequence[0])
+    with patch(
+        "lerobot.policies.flash.surface_tracking.ufm_pairs",
+        lambda *args: (np.zeros((0, 3)), np.zeros((0, 3))),
+    ):
+        result = pipeline.process(sequence[1])
+    assert result.estimates[0].evidence == Evidence.LOST
+    assert result.proposals[0].motion_prior_pose is None
+
+
 def test_narrow_visible_patch_remains_a_proposal_instead_of_a_full_pose():
     from lerobot.policies.flash.surface_tracking import SurfaceTrackingSession
 

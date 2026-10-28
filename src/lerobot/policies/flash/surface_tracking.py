@@ -110,6 +110,11 @@ class SurfaceTrackingSession:
         self.reference = None
         self.previous = None
         self.pose = np.eye(4)
+        # Keep an independent motion-only lineage from the last RGB-D accepted
+        # fit. The visual fit remains free to recover after a rejected frame.
+        self.last_accepted_pose = None
+        self.motion_from_accepted = np.eye(4)
+        self.motion_chain_complete = True
         self.anchors = None
         self.basis = None
         self.reference_frame_id = None
@@ -125,9 +130,12 @@ class SurfaceTrackingSession:
         *,
         frame_filters: SurfaceFrameFilters | None = None,
     ):
-        return self.finish(
+        result = self.finish(
             self.prepare(rgb, depth_m, mask, intrinsics, frame_id, frame_filters=frame_filters)
         )
+        # A standalone inspection session has no outer RGB-D publication gate.
+        self.record_publication("camera_from_reference" in result)
+        return result
 
     def prepare(self, rgb, depth_m, mask, intrinsics, frame_id, *, frame_filters=None):
         """Measure image motion without reading or changing the fitted pose.
@@ -253,6 +261,11 @@ class SurfaceTrackingSession:
             status = "reference"
         else:
             step = prepared["step"]
+            if self.last_accepted_pose is not None:
+                if step is None:
+                    self.motion_chain_complete = False
+                elif self.motion_chain_complete:
+                    self.motion_from_accepted = step @ self.motion_from_accepted
             proposal = self.pose if step is None else step @ self.pose
             prior = self.pose.copy()
             start = time.perf_counter()
@@ -278,6 +291,11 @@ class SurfaceTrackingSession:
                 final_rotation_deg=angle(self.pose, prior),
             )
             status = "fitted" if step is not None else "fitted_without_rgb_motion"
+        motion_only_prior = (
+            self.motion_from_accepted @ self.last_accepted_pose
+            if self.last_accepted_pose is not None and self.motion_chain_complete
+            else None
+        )
         all_points = current["all_surface_points"]
         predicted = move(self.reference, self.pose)
         distances = cKDTree(predicted).query(all_points)[0] * 1000
@@ -303,6 +321,9 @@ class SurfaceTrackingSession:
             "status": status,
             "diagnostics": detail,
             "camera_from_reference": self.pose.tolist(),
+            "motion_only_prior_camera_from_reference": (
+                motion_only_prior.tolist() if motion_only_prior is not None else None
+            ),
             "camera_from_object": object_pose.tolist(),
             "observed_m": all_points.tolist(),
             "reference_m": predicted.tolist(),
@@ -312,3 +333,10 @@ class SurfaceTrackingSession:
             "axes_px": project(axes, intrinsics).tolist(),
             "reference_px": project(predicted, intrinsics).tolist(),
         }
+
+    def record_publication(self, accepted: bool) -> None:
+        """Anchor the shadow prediction only after the RGB-D publication gate."""
+        if accepted:
+            self.last_accepted_pose = self.pose.copy()
+            self.motion_from_accepted = np.eye(4)
+            self.motion_chain_complete = True

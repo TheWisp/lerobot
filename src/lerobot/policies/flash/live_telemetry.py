@@ -173,6 +173,11 @@ class FlashLiveTelemetry:
                     "frame_id": proposal.frame_id,
                     "calibration_version": proposal.calibration_version,
                     "pose": proposal.raw_pose.tolist() if proposal.raw_pose is not None else None,
+                    "motion_prior_pose": (
+                        proposal.motion_prior_pose.tolist()
+                        if proposal.motion_prior_pose is not None
+                        else None
+                    ),
                     "estimator": proposal.estimate.estimator,
                     "failure": proposal.failure,
                     "visible_support": asdict(proposal.visible_support),
@@ -263,6 +268,11 @@ class FlashLiveTelemetry:
             "decided_at_s": decision.decided_at_s,
             "candidate": _estimate_json(decision.candidate),
             "raw_pose": raw_pose.tolist() if raw_pose is not None else None,
+            "motion_prior_pose": (
+                decision.proposal.motion_prior_pose.tolist()
+                if decision.proposal is not None and decision.proposal.motion_prior_pose is not None
+                else None
+            ),
             "visible_support": (
                 asdict(decision.proposal.visible_support) if decision.proposal is not None else None
             ),

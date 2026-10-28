@@ -67,6 +67,7 @@ class PerceptionPipeline:
                 raise ValueError(f"{role}: causal mask does not align with RGB-D")
         failures = dict(getattr(self.backend, "last_failure", {}))
         raw_poses = getattr(self.backend, "last_candidate_poses", {})
+        motion_priors = getattr(self.backend, "last_motion_prior_poses", {})
         visible_support = getattr(self.backend, "last_visible_support", {})
         proposals = tuple(
             PoseProposal(
@@ -79,6 +80,7 @@ class PerceptionPipeline:
                     VisibleSurfaceSupport(int(masks[estimate.role].sum()) if estimate.role in masks else 0),
                 ),
                 failures.get(estimate.role),
+                motion_priors.get(estimate.role),
             )
             for estimate in estimates
         )

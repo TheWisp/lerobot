@@ -138,6 +138,11 @@ class SymmetryCanonicalizingBackend:
         return getattr(self.inner, "last_candidate_poses", {})
 
     @property
+    def last_motion_prior_poses(self) -> dict[str, np.ndarray]:
+        """Keep the independent motion-only lineage with its source image."""
+        return getattr(self.inner, "last_motion_prior_poses", {})
+
+    @property
     def last_visible_support(self):
         """Preserve measured partial evidence even when no full pose survives."""
         return getattr(self.inner, "last_visible_support", {})
