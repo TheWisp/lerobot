@@ -67,6 +67,46 @@ def test_reference_surface_uses_masked_depth_and_does_not_bridge_depth_edges(tmp
     assert all(np.ptp(points[face, 2]) == 0 for face in faces)
 
 
+def test_reference_surface_renders_all_registered_views_in_one_object_frame(tmp_path) -> None:
+    root = tmp_path
+    rgb_dir = root / "recording/rgb"
+    depth_dir = root / "recording/depth"
+    masks = root / "flash/v1/masks"
+    for directory in (rgb_dir, depth_dir, masks):
+        directory.mkdir(parents=True)
+    np.savetxt(root / "recording/cam_K.txt", np.array([[100, 0, 0], [0, 100, 0], [0, 0, 1]]))
+    snippets = []
+    for index in (0, 1):
+        rgb = np.full((3, 3, 3), 20 + index * 30, np.uint8)
+        depth = np.full((3, 3), 1000, np.uint16)
+        mask = np.full((3, 3), 255, np.uint8)
+        assert cv2.imwrite(str(rgb_dir / f"{index:06d}.jpg"), rgb)
+        assert cv2.imwrite(str(depth_dir / f"{index:06d}.png"), depth)
+        assert cv2.imwrite(str(masks / f"{index}.png"), mask)
+        object_from_camera = np.eye(4)
+        object_from_camera[0, 3] = index * 0.1
+        snippets.append(
+            {
+                "frame_index": index,
+                "mask_artifact": f"flash/v1/masks/{index}.png",
+                "object_from_camera": object_from_camera.tolist(),
+            }
+        )
+    bundle = root / "flash/v1/prepared/example/bundle.json"
+    bundle.parent.mkdir(parents=True)
+    bundle.write_text(json.dumps({"references": [{"role": "object", "snippets": snippets}]}))
+
+    surface = reference_surfaces(root, bundle, step_px=1)["object"]
+    points = np.asarray(surface["positions_object_m"]).reshape(-1, 3)
+    faces = np.asarray(surface["indices"]).reshape(-1, 3)
+    assert surface["source_frame_indices"] == [0, 1]
+    assert len(points) == 18
+    assert np.allclose(points[0], [0, 0, 1])
+    assert np.allclose(points[9], [0.1, 0, 1])
+    assert any(np.all(face >= 9) for face in faces)
+    assert all(np.all(face < 9) or np.all(face >= 9) for face in faces)
+
+
 def test_extraction_layer_preserves_group_prediction_and_lost_state(tmp_path) -> None:
     root = tmp_path
     bundle_dir = root / "flash/v1/prepared/example"

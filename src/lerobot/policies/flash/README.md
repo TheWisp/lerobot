@@ -199,6 +199,9 @@ The sealed-demo importer currently registers one view per object, so its two
 readouts coincide. The saved surfaces do not yet alter pose acceptance or
 control; registering additional views and validating their effect on fitting
 remain necessary before that switch.
+The 3D demo viewer draws every registered snippet in the saved object frame,
+with separate triangles for each measured view. This is display geometry;
+showing several views does not establish that their registration is correct.
 The camera-only debugger has no demo to register against, so it explicitly
 creates a local reference at the initial A landmark. This initialization
 choice does not change surface filtering, motion estimation or fitting.
