@@ -219,6 +219,7 @@ export function createFlashSceneView(canvas, surfaces) {
     let turnPreview = null;
     let turnGroup = null;
     let observedCenters = {};
+    let observedBounds = {};
     let focusedRole = null;
     let lastFocusCenter = null;
     const raycaster = new THREE.Raycaster();
@@ -264,6 +265,8 @@ export function createFlashSceneView(canvas, surfaces) {
     function reset() {
         focusedRole = null;
         lastFocusCenter = null;
+        const selector = canvas.parentElement.querySelector('#flash-scene-object');
+        if (selector) selector.value = '';
         controls.target.set(0, 0, -0.45);
         camera.position.set(0, 0, 0);
         controls.update();
@@ -293,6 +296,7 @@ export function createFlashSceneView(canvas, surfaces) {
         const baseFromCamera = snapshot.camera.base_from_camera;
         const held = snapshot.held_prediction;
         observedCenters = {};
+        observedBounds = {};
         for (const [role, ref] of Object.entries(references)) {
             const used = held?.role === role ? held : snapshot.accepted?.[role];
             const observedRuns = frameEvidence?.masks_rle?.[role];
@@ -300,7 +304,9 @@ export function createFlashSceneView(canvas, surfaces) {
                 const observed = makeObservedSurface(observedRuns, depth, rgba, snapshot.camera, options);
                 if (observed.children[0].geometry.attributes.position.count) {
                     observed.children[0].geometry.computeBoundingSphere();
+                    observed.children[0].geometry.computeBoundingBox();
                     observedCenters[role] = observed.children[0].geometry.boundingSphere.center.clone();
+                    observedBounds[role] = observed.children[0].geometry.boundingBox.clone();
                 }
                 observed.userData = {kind: 'observed', role, enabled: true};
                 observed.children[0].userData.role = role;
@@ -412,15 +418,57 @@ export function createFlashSceneView(canvas, surfaces) {
     }
 
     function objectCenter(role) {
+        // Camera navigation follows the visible measured surface. The accepted
+        // pose is evidence to inspect, and may be the very thing that is wrong.
+        if (observedCenters[role]) return observedCenters[role].clone();
         const local = latestSnapshot?.centers_object_m?.[role];
         const pose = latestSnapshot?.held_prediction?.role === role
             ? latestSnapshot.held_prediction : latestSnapshot?.accepted?.[role];
         if (!local || !pose?.pose || !latestSnapshot.camera?.base_from_camera)
-            return observedCenters[role]?.clone() || null;
+            return null;
         const point = new THREE.Vector3(...local);
         const world = new THREE.Matrix4().set(...pose.pose.flat());
         const cameraFromWorld = new THREE.Matrix4().set(...latestSnapshot.camera.base_from_camera.flat()).invert();
         return point.applyMatrix4(cameraFromWorld.multiply(world)).multiply(new THREE.Vector3(1, -1, -1));
+    }
+
+    function viewingDistance(radius) {
+        const vertical = THREE.MathUtils.degToRad(camera.fov);
+        const horizontal = 2 * Math.atan(Math.tan(vertical / 2) * camera.aspect);
+        return Math.max(radius, 0.01) / Math.sin(Math.min(vertical, horizontal) / 2) * 1.25;
+    }
+
+    function frameAll() {
+        const bounds = new THREE.Box3();
+        for (const role of Object.keys(references)) {
+            if (observedBounds[role]) {
+                bounds.union(observedBounds[role]);
+                continue;
+            }
+            const predicted = evidence.children.find(item => item.userData.role === role &&
+                ['accepted', 'held'].includes(item.userData.kind) && item.userData.enabled);
+            if (predicted) bounds.union(new THREE.Box3().setFromObject(predicted));
+        }
+        if (bounds.isEmpty()) {
+            for (const role of Object.keys(references)) {
+                const center = objectCenter(role);
+                if (center) bounds.expandByPoint(center);
+            }
+        }
+        if (bounds.isEmpty()) return false;
+        const center = bounds.getCenter(new THREE.Vector3());
+        const radius = bounds.getBoundingSphere(new THREE.Sphere()).radius;
+        focusedRole = null;
+        lastFocusCenter = null;
+        const selector = canvas.parentElement.querySelector('#flash-scene-object');
+        if (selector) selector.value = '';
+        setCameraAligned(false);
+        controls.target.copy(center);
+        camera.position.copy(center).add(new THREE.Vector3(0.15, 0.12, 1).normalize()
+            .multiplyScalar(viewingDistance(radius)));
+        controls.update();
+        draw();
+        return true;
     }
 
     function focus(role) {
@@ -429,12 +477,13 @@ export function createFlashSceneView(canvas, surfaces) {
         focusedRole = role;
         lastFocusCenter = center.clone();
         references[role].geometry.computeBoundingSphere();
-        const radius = references[role].geometry.boundingSphere.radius;
-        const distance = 2 * radius / Math.sin(THREE.MathUtils.degToRad(camera.fov / 2));
+        const radius = observedBounds[role]?.getBoundingSphere(new THREE.Sphere()).radius ||
+            references[role].geometry.boundingSphere.radius;
+        const distance = viewingDistance(radius);
         controls.target.copy(center);
         camera.position.copy(center).add(new THREE.Vector3(0.15, 0.12, 1).normalize().multiplyScalar(distance));
-        controls.update();
         setCameraAligned(false);
+        controls.update();
         draw();
         return true;
     }
@@ -483,9 +532,13 @@ export function createFlashSceneView(canvas, surfaces) {
     controls.addEventListener('change', () => {
         // OrbitControls fires `start` for a plain click. Preserve the aligned
         // RGB backdrop until the camera actually moves away from calibration.
+        // On the first drag, orbit around what was measured instead of the
+        // optical-axis point, which can leave the objects outside the view.
         if (cameraAligned && (camera.position.lengthSq() > 1e-10 ||
-            controls.target.distanceToSquared(new THREE.Vector3(0, 0, -0.45)) > 1e-10))
+            controls.target.distanceToSquared(new THREE.Vector3(0, 0, -0.45)) > 1e-10)) {
+            if (frameAll()) return;
             setCameraAligned(false);
+        }
         draw();
     });
     const resize = new ResizeObserver(draw);
@@ -506,5 +559,5 @@ export function createFlashSceneView(canvas, surfaces) {
         }
         renderer.dispose();
     }
-    return {update, reset, focus, pickObserved, projectCameraXYZ, highlight, setTurnPreview, draw, dispose};
+    return {update, reset, focus, frameAll, pickObserved, projectCameraXYZ, highlight, setTurnPreview, draw, dispose};
 }

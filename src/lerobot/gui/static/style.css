@@ -786,6 +786,9 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 #run-section-flash[data-mode="review"] .flash-review-return,
 #run-section-flash[data-mode="live"] .flash-library { display: none; }
 .flash-demo-editor .flash-editor-pane > section { padding: 12px 0; }
+.flash-demo-editor .flash-editor-disclosure { border-top: 1px solid #31516c; }
+.flash-demo-editor .flash-editor-disclosure > summary { padding: 13px 0; cursor: pointer; color: #e6edf3; font-size: 14px; font-weight: 600; }
+.flash-demo-editor .flash-editor-disclosure > section { border-top: 0; padding-top: 0; }
 .flash-demo-editor .flash-editor-pane > section > strong { display: block; font-size: 14px; color: #fff; }
 .flash-editor-settings { border-top: 1px solid #31516c; margin-top: 4px; }
 .flash-editor-settings > summary { padding: 12px 0; cursor: pointer; color: #bdd0e0; font-size: 13px; font-weight: 600; }

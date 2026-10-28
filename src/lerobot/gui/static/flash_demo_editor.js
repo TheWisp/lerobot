@@ -32,9 +32,11 @@ function _flashEditorField(parent, labelText, value, onChange, options = null, t
 
 function _flashEditorSection(parent, title, description = '') {
     const section = document.createElement('section');
-    const heading = document.createElement('strong');
-    heading.textContent = title;
-    section.append(heading);
+    if (title) {
+        const heading = document.createElement('strong');
+        heading.textContent = title;
+        section.append(heading);
+    }
     if (description) {
         const note = document.createElement('p');
         note.textContent = description;
@@ -173,11 +175,11 @@ function _flashEditorRender() {
     const heading = document.createElement('h3');
     heading.textContent = state.raw ? 'Prepare demo' : 'Edit demo';
     editor.append(heading);
-    const summary = document.createElement('p');
-    summary.textContent = state.raw
-        ? 'Name the objects, mark the action on the timeline, then prepare.'
-        : 'Select a moment on the timeline and edit what the robot should do.';
-    editor.append(summary);
+    if (state.raw) {
+        const summary = document.createElement('p');
+        summary.textContent = 'Name the objects, mark hold and release, then prepare.';
+        editor.append(summary);
+    }
     const changed = document.createElement('p');
     changed.id = 'flash-demo-editor-change-status';
     editor.append(changed);
@@ -201,10 +203,23 @@ function _flashEditorRender() {
         ...(state.raw ? ['objects', 'events', 'keyframes'] : ['keyframes', 'objects', 'events']),
         'setup', 'references', 'pose', 'trackers', 'advanced',
     ]) {
-        const pane = document.createElement('div');
+        const pane = document.createElement(['objects', 'events'].includes(key) ? 'details' : 'div');
         pane.className = 'flash-editor-pane';
         pane.dataset.section = key;
         panes[key] = pane;
+        if (key === 'objects' || key === 'events') {
+            pane.classList.add('flash-editor-disclosure');
+            pane.open = key === 'objects' ? (state.objectsOpen ?? state.raw) || requestedSection === key
+                : !!state.eventsOpen || requestedSection === key;
+            pane.ontoggle = () => {
+                if (!pane.isConnected) return;
+                if (key === 'objects') state.objectsOpen = pane.open;
+                else state.eventsOpen = pane.open;
+            };
+            const title = document.createElement('summary');
+            title.textContent = key === 'objects' ? 'Objects and masks' : 'Hold and release';
+            pane.append(title);
+        }
         if (['objects', 'events', 'keyframes'].includes(key)) {
             editor.append(pane);
         } else if (key !== 'setup' && !(key === 'references' && state.raw)) {
@@ -367,8 +382,7 @@ function _flashEditorRender() {
         }
     }
 
-    const events = _flashEditorSection(panes.events, 'Hold and release',
-        'Pause at each moment, then mark it.');
+    const events = _flashEditorSection(panes.events, '', 'Pause at each moment, then mark it.');
     for (const [key, label] of [
         ['grasp_time_s', 'Grasp'], ['release_time_s', 'Release'],
     ]) {
@@ -413,9 +427,9 @@ function _flashEditorRender() {
         a.start_anchored_until_s = _flashEditorCurrentFrame().snapshot.demo.time_s; _flashEditorRender();
     });
 
-    const objects = _flashEditorSection(panes.objects, 'Objects and masks', state.raw
+    const objects = _flashEditorSection(panes.objects, '', state.raw
         ? 'This SO-107 importer handles one held object and one target. Choose their names; prompts describe what SAM should segment in the reference frame.'
-        : 'These names were entered during preparation. Select an object to inspect its reference mask or draw a correction.');
+        : 'Select an object to inspect or correct its mask.');
     if (state.raw && roles.length < 2) {
         _flashEditorField(objects, 'New object name', state.newRole || '', value => { state.newRole = value; });
         _flashEditorField(objects, 'What it looks like', state.newPrompt || '', value => { state.newPrompt = value; });
@@ -511,8 +525,7 @@ function _flashEditorRender() {
     }
     if (state.raw) panes.objects.append(panes.references);
 
-    const keypoints = _flashEditorSection(panes.keyframes, 'Key frame',
-        'Use the timeline dots to choose a key frame. The action below applies at that moment.');
+    const keypoints = _flashEditorSection(panes.keyframes, 'Key-frame action');
     const points = state.keypointsDocument.keypoints;
     if (points.length) {
         state.keypointIndex = Math.max(0, Math.min(state.keypointIndex, points.length - 1));
@@ -928,6 +941,7 @@ async function toggleFlashDemoEditor() {
             raw, newRole: '', newPrompt: '',
             original: JSON.stringify([result.annotation, result.keypoints_document]),
             drawing: false, vertices: [], running: false,
+            objectsOpen: raw, eventsOpen: raw,
             message: result.path_selection_migrated
                 ? 'This older demo replayed a path at grasp despite its saved “straight” label. The editor now shows that path as “Follow recording”; preview keeps its motion.' : '',
             trackers, tracker: trackers.trackers.find(item => item.runnable)?.id || 'point2pose',

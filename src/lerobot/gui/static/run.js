@@ -182,7 +182,7 @@ async function toggleFlashSceneView() {
                 option.textContent = role;
                 select.append(option);
             }
-            const {createFlashSceneView} = await import('/static/flash_scene_view.js?v=16');
+            const {createFlashSceneView} = await import('/static/flash_scene_view.js?v=17');
             flashSceneView = createFlashSceneView(grid.querySelector('.flash-scene-canvas'), surfaces);
             if (flashDemoEditor) {
                 const point = flashDemoEditor.keypointsDocument.keypoints[flashDemoEditor.keypointIndex];
@@ -1395,8 +1395,8 @@ function _flashCreateSceneGrid(kind, imageAlt, depthAvailable = true) {
         toolbar.className = 'flash-scene-toolbar';
         toolbar.innerHTML = `<button type="button" id="flash-scene-toggle" onclick="toggleFlashSceneView()"${kind === 'live' ? ' disabled' : ''}>3D scene</button>` +
             '<div id="flash-scene-tools" hidden>' +
-            '<select id="flash-scene-object" aria-label="Focus object" onchange="flashSceneView?.focus(this.value)"><option value="">Focus object</option></select>' +
-            '<button type="button" onclick="flashSceneView?.reset()">Reset view</button>' +
+            '<select id="flash-scene-object" aria-label="Focus object" onchange="this.value ? flashSceneView?.focus(this.value) : flashSceneView?.frameAll()"><option value="">All objects</option></select>' +
+            '<button type="button" onclick="flashSceneView?.reset()">Align to camera</button>' +
             (kind === 'demo'
                 ? '<button type="button" id="flash-scene-edit" onclick="openFlashDemoSceneEditor()">Edit key frames</button>'
                 : '') +

@@ -710,7 +710,13 @@ def test_run_flash_lists_demos_and_shows_extracted_pose_overlay(gui_page):
     page.wait_for_function("() => !!document.querySelector('#flash-demo-editor')")
     assert "Edit demo" in page.locator("#flash-demo-editor").inner_text()
     assert page.locator("#flash-demo-editor-frame").inner_text().startswith("Frame 4")
-    assert page.locator("#flash-demo-editor .flash-editor-pane[data-section='objects']").is_visible()
+    page.locator("#flash-demo-editor .flash-editor-pane[data-section='objects'] > summary").click()
+    assert page.locator(
+        "#flash-demo-editor .flash-editor-pane[data-section='objects'] > section"
+    ).is_visible()
+    assert page.get_by_role("button", name="Draw replacement mask").count() == 1, page.locator(
+        "#flash-demo-editor"
+    ).inner_text()
     page.get_by_role("button", name="Draw replacement mask").click()
     page.evaluate("""() => {
         const image = document.querySelector('#rerun-viewer .flash-replay-grid img');
@@ -1552,11 +1558,37 @@ def test_3d_scene_projection_and_surface_pick_edit_the_prepared_keyframe(gui_pag
     projected = page.evaluate("() => flashSceneView.projectCameraXYZ([(45-29)/50, (24-26)/50, 1])")
     assert np.allclose(projected, expected, atol=0.5)
 
+    # A drag leaves the calibrated view and must frame all visible objects.
+    # A click, used by the editor to pick a measured surface, stays aligned.
+    page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+    page.mouse.down()
+    page.mouse.move(box["x"] + box["width"] / 2 + 220, box["y"] + box["height"] / 2 + 80, steps=8)
+    page.mouse.up()
+    assert "flash-scene-orbit" in page.locator(".flash-replay-grid").get_attribute("class")
+    for x in (-0.3, 0.3):
+        px, py = page.evaluate("x => flashSceneView.projectCameraXYZ([x, 0, 1])", x)
+        assert box["x"] < px < box["x"] + box["width"]
+        assert box["y"] < py < box["y"] + box["height"]
+    page.get_by_label("Focus object").select_option("tool")
+    px, py = page.evaluate("() => flashSceneView.projectCameraXYZ([-0.31, -0.05, 1])")
+    assert abs(px - box["x"] - box["width"] / 2) < box["width"] * 0.15
+    assert abs(py - box["y"] - box["height"] / 2) < box["height"] * 0.15
+    page.get_by_label("Focus object").select_option("")
+    assert page.get_by_label("Focus object").input_value() == ""
+    page.get_by_role("button", name="Align to camera").click()
+    assert "flash-scene-orbit" not in page.locator(".flash-replay-grid").get_attribute("class")
+
     page.get_by_role("button", name="Edit key frames").click()
     page.wait_for_function("() => !!flashDemoEditor")
     assert not page.locator("#run-sidebar").is_visible()
     assert page.locator(".flash-editor-navigation").count() == 0
-    assert page.locator("#flash-demo-editor .flash-editor-pane[data-section='objects']").is_visible()
+    assert not page.locator(
+        "#flash-demo-editor .flash-editor-pane[data-section='objects'] > section"
+    ).is_visible()
+    page.locator("#flash-demo-editor .flash-editor-pane[data-section='objects'] > summary").click()
+    assert page.locator(
+        "#flash-demo-editor .flash-editor-pane[data-section='objects'] > section"
+    ).is_visible()
     assert page.locator("#flash-demo-editor .flash-editor-pane[data-section='keyframes']").is_visible()
     assert page.get_by_label("Reach", exact=True).is_visible()
     assert page.get_by_role("button", name="Move key frame to playhead").is_visible()
