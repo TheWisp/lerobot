@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse, Response, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 if TYPE_CHECKING:
     from lerobot.gui.state import AppState
@@ -264,6 +264,12 @@ class FlashDemoPrepareRequest(FlashDatasetInspectRequest):
     annotation: dict[str, Any]
     keypoints_document: dict[str, Any]
     output_name: str | None = None
+
+
+class FlashRecordedPrepareRequest(FlashDatasetInspectRequest):
+    name: str
+    intervals: list[dict[str, Any]]
+    symmetry_baseline_frames: dict[str, int] = Field(default_factory=dict)
 
 
 class FlashTrackerImportRequest(FlashDatasetInspectRequest):
@@ -1255,6 +1261,98 @@ def _flash_tracker_replay(root: Path, episode: int) -> dict:
     }
 
 
+def _flash_recorded_demo_replay(root: Path, episode: int, bundle_path: Path) -> dict:
+    """Show saved motion sections on the trial's own camera and tracker frames."""
+    from lerobot.policies.flash.prepared import PreparedFlashSkill
+
+    root = root.expanduser().resolve()
+    bundle_path = bundle_path.expanduser().resolve()
+    prepared_root = root / "flash" / "v1" / "prepared"
+    if bundle_path.parent.parent != prepared_root or bundle_path.name != "bundle.json":
+        raise ValueError("prepared skill must be stored with this recording")
+    prepared = PreparedFlashSkill.load(bundle_path)
+    if prepared.skill.source_episode != episode:
+        raise ValueError("prepared skill belongs to a different episode")
+    settings = json.loads((root / "flash" / "v1" / "trial_config.json").read_text(encoding="utf-8"))
+    if prepared.skill.source_repo_id != settings.get("output_repo_id"):
+        raise ValueError("prepared skill belongs to a different recording")
+    result = _flash_tracker_replay(root, episode)
+    result["kind"] = "recorded_demo"
+    result["bundle_path"] = str(bundle_path)
+    result["skill_sample_count"] = sum(len(item.samples) for item in prepared.skill.intervals)
+    result["prepared_intervals"] = []
+    transitions = {item.event_id: item for item in prepared.skill.attachment_transitions}
+    for interval in prepared.skill.intervals:
+        first = interval.samples[0].source_frame_index
+        last = interval.samples[-1].source_frame_index
+        if first is None or last is None:
+            raise ValueError("prepared recorded section has no source frame indices")
+        attachment = transitions.get(interval.samples[-1].event_id)
+        result["prepared_intervals"].append(
+            {
+                "name": interval.name,
+                "first_frame": first,
+                "last_frame": last,
+                "mode": interval.mode.value,
+                "relation": interval.relation.value,
+                "reference_role": interval.reference_role,
+                "held_role": interval.held_role,
+                "endpoint_requirement": interval.endpoint_requirement.value,
+                "attachment_action": attachment.action.value if attachment else "",
+                "attachment_role": attachment.role if attachment else "",
+                "allow_predicted_demo_pose": any(
+                    sample.reference_evidence == "predicted" or sample.held_evidence == "predicted"
+                    for sample in interval.samples
+                ),
+            }
+        )
+    models = {model.points.role: model.points.points_object_m for model in prepared.appearance_models}
+    centers = {role: points.mean(axis=0).tolist() for role, points in models.items()}
+    result["geometry"] = {
+        "points_object_m": {role: points.tolist() for role, points in models.items()},
+        "centers_object_m": centers,
+    }
+    for frame in result["frames"]:
+        index = frame["frame_index"]
+        snapshot = frame["snapshot"]
+        for interval in prepared.skill.intervals:
+            first, last = interval.samples[0].source_frame_index, interval.samples[-1].source_frame_index
+            if not first <= index <= last:
+                continue
+            snapshot["demo_section"] = {
+                "name": interval.name,
+                "mode": interval.mode.value,
+                "relation": interval.relation.value,
+                "first_frame": first,
+                "last_frame": last,
+            }
+            sample = next((item for item in interval.samples if item.source_frame_index == index), None)
+            if sample is not None:
+                layers = snapshot.setdefault("layers", {})
+                layers.setdefault("__gripper__", {})["recorded_ee"] = {
+                    "pose": sample.demo_ee.tolist(),
+                    "evidence": "recorded",
+                    "estimator": "recorded_ee",
+                    "source_time_s": snapshot.get("recorded_at_s"),
+                }
+                if interval.relation.value != "ee_to_start":
+                    layers.setdefault(interval.reference_role, {})["recorded_skill_reference"] = {
+                        "pose": sample.demo_reference.tolist(),
+                        "evidence": sample.reference_evidence,
+                        "estimator": "recorded_skill_reference",
+                        "source_time_s": snapshot.get("recorded_at_s"),
+                    }
+                if interval.held_role and sample.demo_held is not None:
+                    layers.setdefault(interval.held_role, {})["recorded_skill_held"] = {
+                        "pose": sample.demo_held.tolist(),
+                        "evidence": sample.held_evidence,
+                        "estimator": "recorded_skill_held",
+                        "source_time_s": snapshot.get("recorded_at_s"),
+                    }
+            break
+    return result
+
+
 @router.get("/flash/telemetry/replay")
 async def flash_tracker_replay(dataset_root: str, episode: int = 0) -> dict:
     if episode < 0:
@@ -1262,6 +1360,39 @@ async def flash_tracker_replay(dataset_root: str, episode: int = 0) -> dict:
     return await asyncio.get_running_loop().run_in_executor(
         _flash_telemetry_pool, _flash_tracker_replay, Path(dataset_root), episode
     )
+
+
+@router.get("/flash/recorded/source")
+async def flash_recorded_source(dataset_root: str, episode: int = 0) -> dict:
+    """Describe pose evidence and portability for an editable regular episode."""
+    from lerobot.policies.flash.recorded_trial import inspect_recorded_trial
+
+    try:
+        return await asyncio.get_running_loop().run_in_executor(
+            _flash_config_pool, inspect_recorded_trial, dataset_root, episode
+        )
+    except (OSError, KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(400, f"Cannot inspect FLASH recording: {exc}") from exc
+
+
+@router.post("/flash/recorded/prepare")
+async def flash_recorded_prepare(req: FlashRecordedPrepareRequest) -> dict:
+    """Compile marked recording sections in a worker; keep the GUI responsive."""
+    from lerobot.policies.flash.recorded_trial import prepare_recorded_trial
+
+    try:
+        path = await asyncio.get_running_loop().run_in_executor(
+            _flash_config_pool,
+            prepare_recorded_trial,
+            req.dataset_root,
+            req.episode,
+            req.name,
+            req.intervals,
+            req.symmetry_baseline_frames,
+        )
+    except (OSError, KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(400, f"Cannot prepare FLASH recording: {exc}") from exc
+    return {"bundle_path": str(path), "status": "candidate"}
 
 
 @router.get("/flash/demo/replay")
@@ -1277,6 +1408,10 @@ async def flash_demo_replay(
     try:
 
         def read() -> dict:
+            if (Path(dataset_root).expanduser().resolve() / "flash" / "v1" / "trial_config.json").is_file():
+                if candidate_id is not None:
+                    raise ValueError("tracker candidates are only available for imported demonstrations")
+                return _flash_recorded_demo_replay(Path(dataset_root), episode, Path(bundle_path))
             result = load_legacy_demo_replay(Path(dataset_root), episode, Path(bundle_path))
             if candidate_id is not None:
                 manifest, poses_by_role = load_candidate_set(

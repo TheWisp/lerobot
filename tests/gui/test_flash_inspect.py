@@ -1794,3 +1794,119 @@ def test_3d_scene_projection_and_surface_pick_edit_the_prepared_keyframe(gui_pag
     )
     page.get_by_role("button", name="Close editor").click()
     assert page.locator("#run-sidebar").is_visible()
+
+
+def test_recorded_motion_editor_marks_contiguous_sections_in_same_replay(gui_page):
+    page = gui_page
+    submissions = []
+    page.route(
+        "**/api/run/flash/recorded/source?*",
+        lambda route: route.fulfill(
+            json={
+                "episode": 0,
+                "frame_count": 4,
+                "ready": True,
+                "reason": None,
+                "roles": ["tool", "target"],
+                "observed_frames": {"tool": [0, 1, 2, 3], "target": [0, 1, 2, 3]},
+                "symmetry_roles": [],
+            }
+        ),
+    )
+
+    def capture(route):
+        submissions.append(route.request.post_data_json)
+        route.fulfill(
+            json={"bundle_path": "/tmp/trial/flash/v1/prepared/candidate/bundle.json", "status": "candidate"}
+        )
+
+    page.route("**/api/run/flash/recorded/prepare", capture)
+    page.route("**/api/run/flash/recordings", lambda route: route.fulfill(json=[]))
+    page.route("**/episodes/0/frame/*", lambda route: route.fulfill(status=404))
+    page.evaluate("switchTab('run')")
+    page.evaluate("() => selectWorkflow('flash')")
+    page.evaluate("""() => {
+        _flashInstallReplay({
+            kind: 'rollout', datasetRoot: '/tmp/trial', datasetId: 'trial', episode: 0,
+            frames: [0, 1, 2, 3].map(frame_index => ({frame_index, snapshot: {
+                recorded_at_s: frame_index / 30, camera: null, proposals: {}, layers: {}, accepted: {}
+            }}))
+        }, 'Test recording');
+        seekFlashReplay(2);
+    }""")
+    page.locator("#flash-demo-edit-toggle").click()
+    page.wait_for_function("() => !!flashRecordedEditor")
+    assert page.locator("#flash-recorded-playhead").inner_text().startswith("Frame 2 of 3")
+    page.get_by_role("button", name="End section here").click()
+    page.get_by_role("button", name="End at last frame").click()
+    assert page.locator(".flash-recorded-section").count() == 2
+    page.locator(".flash-recorded-section").nth(1).locator('[data-field="relation"]').select_option(
+        "held_to_target"
+    )
+    page.locator(".flash-recorded-section").nth(1).locator('[data-field="reference_role"]').select_option(
+        "target"
+    )
+    page.locator(".flash-recorded-section").nth(1).locator('[data-field="held_role"]').select_option("tool")
+    page.get_by_role("button", name="Prepare candidate").click()
+    page.wait_for_function(
+        "() => !!document.querySelector('#flash-recorded-status')?.textContent.includes('Candidate saved')"
+    )
+    assert submissions[0]["intervals"][0]["last_frame"] == submissions[0]["intervals"][1]["first_frame"] == 2
+    assert submissions[0]["intervals"][1]["relation"] == "held_to_target"
+    assert submissions[0]["intervals"][1]["held_role"] == "tool"
+    assert page.locator("#flash-recorded-editor").is_visible()
+
+
+def test_prepared_recording_reuses_tracker_replay_view(gui_page):
+    page = gui_page
+    page.route(
+        "**/api/run/flash/demo/replay?*",
+        lambda route: route.fulfill(
+            json={
+                "available": True,
+                "kind": "recorded_demo",
+                "camera_features": {},
+                "geometry": {"points_object_m": {}, "centers_object_m": {}},
+                "skill_sample_count": 2,
+                "prepared_intervals": [{"name": "approach", "first_frame": 0, "last_frame": 2}],
+                "frames": [
+                    {
+                        "frame_index": 0,
+                        "snapshot": {
+                            "camera": None,
+                            "recorded_at_s": 0,
+                            "proposals": {},
+                            "accepted": {},
+                            "layers": {
+                                "__gripper__": {
+                                    "recorded_ee": {
+                                        "pose": np.eye(4).tolist(),
+                                        "evidence": "recorded",
+                                        "source_time_s": 0,
+                                    }
+                                }
+                            },
+                            "demo_section": {
+                                "name": "approach",
+                                "mode": "connection",
+                                "relation": "ee_to_start",
+                                "first_frame": 0,
+                                "last_frame": 2,
+                            },
+                        },
+                    }
+                ],
+            }
+        ),
+    )
+    page.route("**/episodes/0/frame/*", lambda route: route.fulfill(status=404))
+    page.evaluate("switchTab('run'); selectWorkflow('flash')")
+    page.evaluate("datasets['/tmp/trial'] = {id: 'trial', root: '/tmp/trial'}")
+    page.evaluate(
+        "loadFlashDemoReplay('/tmp/trial', 0, '/tmp/trial/flash/v1/prepared/candidate/bundle.json')"
+    )
+    page.wait_for_function("() => flashReplay?.kind === 'recorded_demo'")
+    assert "Recorded motion · approach" in page.locator("#flash-tracker-content").inner_text()
+    assert "Recorded gripper pose" in page.locator("#flash-tracker-content").inner_text()
+    assert page.locator("#flash-demo-edit-toggle").is_visible()
+    assert page.locator("#flash-timeline-markers .flash-timeline-marker").count() == 1

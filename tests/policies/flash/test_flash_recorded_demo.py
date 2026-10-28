@@ -11,6 +11,7 @@ from lerobot.policies.flash.matched_rgbd import ObjectPointModel
 from lerobot.policies.flash.perception import ObjectReference, ReferenceSnippet
 from lerobot.policies.flash.prepared import PreparedFlashSkill
 from lerobot.policies.flash.recorded_demo import prepare_recorded_episode
+from lerobot.policies.flash.recorded_trial import inspect_recorded_trial, prepare_recorded_trial
 from lerobot.policies.flash.skill import FlashSkill, Interval, MotionMode, Relation, SpatialSample
 from lerobot.policies.flash.symmetry import AxialSymmetry
 
@@ -191,3 +192,109 @@ def test_start_relative_interval_does_not_inherit_unused_symmetry(tmp_path):
         ),
     )
     assert PreparedFlashSkill.load(output).axial_symmetries == ()
+
+
+def test_recorded_trial_requires_a_portable_reference_snapshot(tmp_path):
+    _recorded_inputs(tmp_path)
+    inspection = inspect_recorded_trial(tmp_path, 0)
+    assert inspection["frame_count"] == 3
+    assert not inspection["ready"]
+    assert "reference" in inspection["reason"] or "trial_config" in inspection["reason"]
+
+
+def test_recorded_trial_editor_compiles_candidate_with_explicit_hold_event(tmp_path, monkeypatch):
+    from lerobot.policies.flash import recorded_trial
+
+    reference_path = _recorded_inputs(tmp_path)
+    profile = tmp_path / "profile.json"
+    profile.write_text(json.dumps({"type": "so107_follower_gravity", "fields": {"arm": "left"}}))
+    calibration = tmp_path / "calibration.json"
+    calibration.write_text(json.dumps({"tool_point": {"offset_m": [0, 0, 0]}}))
+    (tmp_path / "flash/v1/trial_config.json").write_text(
+        json.dumps(
+            {
+                "source_reference_bundle": reference_path.relative_to(tmp_path).as_posix(),
+                "output_root": str(tmp_path.resolve()),
+                "output_repo_id": "trial/recording",
+                "robot_profile": str(profile),
+                "calibration_path": str(calibration),
+                "robot_arm": "left",
+            }
+        )
+    )
+
+    class TrialEpisode(Episode):
+        features = {
+            "observation.state": {"names": ["joint.pos", "gripper.pos"]},
+            "action": {"names": ["joint.pos", "gripper.pos"]},
+        }
+
+    monkeypatch.setattr(recorded_trial, "LeRobotDataset", lambda **kwargs: TrialEpisode())
+    monkeypatch.setattr(recorded_trial, "MOTOR_NAMES", ("joint", "gripper"))
+    monkeypatch.setattr(
+        recorded_trial, "make_calibrated_so107_kinematics", lambda *args, **kwargs: Kinematics()
+    )
+    monkeypatch.setattr(recorded_trial, "SelectedJointKinematics", lambda inner, *args: inner)
+    source = inspect_recorded_trial(tmp_path, 0)
+    assert source["ready"] and source["observed_frames"]["object"] == [0, 1, 2]
+    output = prepare_recorded_trial(
+        tmp_path,
+        0,
+        "candidate",
+        [
+            {
+                "first_frame": 0,
+                "last_frame": 2,
+                "mode": "demonstrated",
+                "relation": "ee_to_object",
+                "reference_role": "object",
+                "attachment_action": "attach",
+                "attachment_role": "object",
+            }
+        ],
+    )
+    prepared = PreparedFlashSkill.load(output)
+    assert prepared.skill.intervals[0].samples[-1].event_id == "section-1-attach"
+    assert prepared.skill.attachment_transitions[0].role == "object"
+    assert json.loads((output.parent / "preparation-report.json").read_text())["review_status"] == "candidate"
+
+
+def test_recorded_demo_replay_keeps_generated_route_endpoint_at_its_recorded_frame(tmp_path, monkeypatch):
+    from lerobot.gui.api import run
+
+    reference_path = _recorded_inputs(tmp_path)
+    output = prepare_recorded_episode(
+        dataset=Episode(),
+        dataset_root=tmp_path,
+        source_repo_id="trial/recording",
+        source_episode=0,
+        reference_bundle_path=reference_path,
+        output_dir=tmp_path / "flash/v1/prepared/route",
+        kinematics=Kinematics(),
+        arm_joint_names=("joint",),
+        gripper_joint_name="finger",
+        annotations=(
+            IntervalAnnotation("route", 0, 2, MotionMode.CONNECTION, Relation.EE_TO_START, "__start__"),
+        ),
+    )
+    (tmp_path / "flash/v1/trial_config.json").write_text(json.dumps({"output_repo_id": "trial/recording"}))
+    monkeypatch.setattr(
+        run,
+        "_flash_tracker_replay",
+        lambda root, episode: {
+            "kind": "rollout",
+            "frames": [
+                {
+                    "frame_index": frame,
+                    "snapshot": {"recorded_at_s": frame / 30, "layers": {}, "accepted": {}},
+                }
+                for frame in range(3)
+            ],
+        },
+    )
+    replay = run._flash_recorded_demo_replay(tmp_path, 0, output)
+    assert replay["kind"] == "recorded_demo"
+    assert replay["prepared_intervals"][0]["last_frame"] == 2
+    assert "recorded_ee" in replay["frames"][0]["snapshot"]["layers"]["__gripper__"]
+    assert replay["frames"][1]["snapshot"]["layers"] == {}
+    assert "recorded_ee" in replay["frames"][2]["snapshot"]["layers"]["__gripper__"]

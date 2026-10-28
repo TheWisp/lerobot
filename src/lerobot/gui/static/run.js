@@ -86,15 +86,16 @@ async function _flashUpdateSceneFrame() {
         if (frame?.replay !== replay || frame.frameIndex !== selected.frame_index) {
             flashSceneLoadingKey = loadingKey;
             const demo = kind === 'demo';
+            const recorded = kind === 'rollout' || kind === 'recorded_demo';
             const query = demo
                 ? new URLSearchParams({dataset_root: replay.datasetRoot, frame_index: String(selected.frame_index)})
-                : kind === 'rollout' ? new URLSearchParams({camera: replay.camera_features.depth}) : null;
+                : recorded ? new URLSearchParams({camera: replay.camera_features.depth}) : null;
             const evidenceReady = demo && replay.sceneEvidence?.available &&
                 selected.frame_index < replay.sceneEvidence.frames_completed;
             const evidenceQuery = evidenceReady ? new URLSearchParams({dataset_root: replay.datasetRoot,
                 bundle_path: replay.bundle_path, frame_index: String(selected.frame_index)}) : null;
             const depthUrl = demo ? `/api/run/flash/demo/depth-frame?${query}`
-                : kind === 'rollout' ? `/api/datasets/${encodeURIComponent(replay.datasetId)}/episodes/${replay.episode}` +
+                : recorded ? `/api/datasets/${encodeURIComponent(replay.datasetId)}/episodes/${replay.episode}` +
                     `/depth-frame/${selected.frame_index}?${query}`
                     : `/api/run/flash/telemetry/frame/${selected.frame_index}/depth`;
             const [response, evidenceResponse] = await Promise.all([
@@ -121,7 +122,7 @@ async function _flashUpdateSceneFrame() {
             .map(([role, mask]) => [role, mask.runs])) : null;
         const liveGroups = kind === 'live' && selected.snapshot.scene_support?.frame_id === camera.frame_id
             ? selected.snapshot.scene_support.groups : null;
-        const frameEvidence = kind === 'demo' ? frame.evidence : kind === 'rollout' ? selected.evidence
+        const frameEvidence = kind === 'demo' ? frame.evidence : (kind === 'rollout' || kind === 'recorded_demo') ? selected.evidence
             : Object.keys(liveMasks).length || Object.keys(liveGroups || {}).length
                 ? {available: true, masks_rle: liveMasks, groups: liveGroups || {}} : null;
         _flashPaintObservedPhoto({...frame, evidence: frameEvidence}, camera);
@@ -747,6 +748,9 @@ function _flashLayerName(estimator) {
         environment_support_hypothesis: 'Group hypothesis',
         stationary_prior: 'Stationary prior',
         grasp_attachment_prediction: 'Gripper attachment prediction',
+        recorded_skill_reference: 'Saved reference in this skill',
+        recorded_skill_held: 'Saved held pose in this skill',
+        recorded_ee: 'Recorded gripper pose',
     })[estimator] || estimator.replaceAll('_', ' ');
 }
 
@@ -756,6 +760,9 @@ function _flashLayerColor(estimator) {
     if (estimator === 'demo_reference') return '#34d399';
     if (estimator === 'demo_held' || estimator === 'demo_held_recorded_gripper') return '#fb923c';
     if (estimator === 'demo_ee') return '#58a6ff';
+    if (estimator === 'recorded_ee') return '#58a6ff';
+    if (estimator === 'recorded_skill_reference') return '#d8b4fe';
+    if (estimator === 'recorded_skill_held') return '#fb923c';
     if (estimator === 'object_point_motion') return '#fbbf24';
     if (estimator === 'environment_group_motion') return '#34d399';
     if (estimator === 'environment_support_hypothesis') return '#a3e635';
@@ -813,6 +820,12 @@ function renderFlashSnapshot(snapshot, mode = 'Live') {
     }
     flashOverlayRows = [];
     let html = '<div class="flash-tracker-legend">Hover a row to highlight it. Solid outline: measured control pose · amber dashed outline: predicted control pose · thin outlines: other estimates · purple: frame-aligned visible mask.</div>' + _flashCommandEvidence(snapshot);
+    if (snapshot.demo_section) {
+        const section = snapshot.demo_section;
+        html += `<div class="flash-tracker-role"><strong>Recorded motion · ${_esc(section.name)}</strong>` +
+            `<small>${_esc(section.mode === 'connection' ? 'Generated route' : 'Follow recorded motion')} · ` +
+            `frames ${section.first_frame}–${section.last_frame} · ${_esc(section.relation.replaceAll('_', ' '))}</small></div>`;
+    }
     for (const role of roles) {
         html += `<div class="flash-tracker-role"><strong>${_esc(role)}</strong>`;
         const mask = snapshot.observed_masks?.[role];
@@ -1309,6 +1322,7 @@ function _flashDrawOverlay() {
 function startFlashTelemetry() {
     if (flashTelemetryTimer) return;
     const generation = ++flashTelemetryGeneration;
+    closeFlashRecordedEditor();
     closeFlashDemoEditor();
     flashSceneRequest++;
     flashSceneFrameCache = null;
@@ -1402,7 +1416,7 @@ async function loadFlashTrackerReplay(datasetRoot, episodeIndex) {
             dataset = Object.values(datasets).find(item => item.root === root);
         }
         if (!dataset) return;
-        _flashInstallReplay({ ...result, datasetId: dataset.id, episode }, 'Recorded overhead camera');
+        _flashInstallReplay({ ...result, datasetId: dataset.id, datasetRoot: root, episode }, 'Recorded overhead camera');
         const firstTrackedFrame = result.frames.findIndex(frame =>
             frame.snapshot?.camera && Object.keys(frame.snapshot?.accepted || {}).length);
         seekFlashReplay(Math.max(0, firstTrackedFrame));
@@ -1421,7 +1435,7 @@ function _flashCreateSceneGrid(kind, imageAlt, depthAvailable = true) {
     const canvas = document.createElement('canvas');
     canvas.className = 'flash-pose-canvas';
     grid.append(image, canvas);
-    if (kind === 'demo' || kind === 'live' || (kind === 'rollout' && depthAvailable)) {
+    if (kind === 'demo' || kind === 'live' || (['rollout', 'recorded_demo'].includes(kind) && depthAvailable)) {
         const hasMeasuredSurface = kind === 'demo' || kind === 'live' ||
             flashReplay?.frames?.some(frame => frame.evidence?.masks_rle);
         const hasGroupSupport = kind === 'demo' || kind === 'live' ||
@@ -1475,6 +1489,7 @@ function _flashInstallReplay(replay, imageAlt) {
     flashSceneView?.dispose();
     flashSceneView = null;
     flashSceneMode = 'camera';
+    closeFlashRecordedEditor();
     closeFlashDemoEditor();
     stopFlashTelemetry();
     stopObsStreamViewer();
@@ -1493,8 +1508,8 @@ function _flashInstallReplay(replay, imageAlt) {
     document.getElementById('flash-tracker-scrub').max = Math.max(0, replay.frames.length - 1);
     document.getElementById('flash-tracker-play').textContent = 'Play';
     const editToggle = document.getElementById('flash-demo-edit-toggle');
-    editToggle.hidden = replay.kind !== 'demo' && replay.kind !== 'raw_demo';
-    editToggle.textContent = replay.kind === 'raw_demo' ? 'Prepare demo' : 'Edit demo';
+    editToggle.hidden = !['demo', 'raw_demo', 'rollout', 'recorded_demo'].includes(replay.kind);
+    editToggle.textContent = replay.kind === 'raw_demo' ? 'Prepare demo' : ['rollout', 'recorded_demo'].includes(replay.kind) ? 'Mark motion' : 'Edit demo';
     _flashRenderTimeline();
 }
 
@@ -1509,6 +1524,23 @@ function _flashRenderTimeline() {
     markers.replaceChildren();
     const replay = flashReplay;
     document.querySelector('.flash-timeline-legend').hidden = !['demo', 'raw_demo'].includes(replay?.kind);
+    if (replay?.kind === 'recorded_demo' && replay.frames?.length) {
+        const last = replay.frames.at(-1).frame_index || 1;
+        for (const interval of replay.prepared_intervals || []) {
+            const marker = document.createElement('button');
+            marker.type = 'button';
+            marker.className = 'flash-timeline-marker';
+            marker.style.left = `${100 * interval.last_frame / last}%`;
+            marker.title = `${interval.name} ends at frame ${interval.last_frame}`;
+            marker.setAttribute('aria-label', marker.title);
+            marker.onclick = () => {
+                const index = replay.frames.findIndex(frame => frame.frame_index >= interval.last_frame);
+                seekFlashReplay(index < 0 ? replay.frames.length - 1 : index);
+            };
+            markers.append(marker);
+        }
+        return;
+    }
     if (!['demo', 'raw_demo'].includes(replay?.kind) || !replay.frames?.length) return;
     const annotation = flashDemoEditor?.annotation || replay.preparation?.annotation;
     const keypoints = flashDemoEditor?.keypointsDocument?.keypoints || replay.preparation?.keypoints_document?.keypoints || [];
@@ -1572,6 +1604,18 @@ async function loadFlashDemoReplay(datasetRoot, episodeIndex, bundlePath, candid
         const response = await fetch(`/api/run/flash/demo/replay?${query}`);
         const result = await response.json();
         if (!response.ok) throw new Error(result.detail || 'Cannot read prepared demo');
+        if (result.kind === 'recorded_demo') {
+            let dataset = Object.values(datasets).find(item => item.root === datasetRoot);
+            if (!dataset) {
+                await openDataset(datasetRoot);
+                dataset = Object.values(datasets).find(item => item.root === datasetRoot);
+            }
+            if (!dataset) return;
+            _flashInstallReplay({...result, datasetRoot, datasetId: dataset.id, episode: episodeIndex}, 'Recorded overhead camera');
+            seekFlashReplay(0);
+            if (status) status.textContent = `${result.skill_sample_count} saved samples and tracker evidence from this recording.`;
+            return;
+        }
         document.getElementById('run-flash-root').value = datasetRoot;
         document.getElementById('run-flash-episode').value = String(episodeIndex);
         _clearFlashPreparedSkills();
@@ -1783,11 +1827,13 @@ function seekFlashReplay(index) {
     image.src = url;
     if (flashReplay.kind === 'demo') renderFlashDemoSnapshot({ ...selected.snapshot, ...flashReplay.geometry });
     else if (flashReplay.kind === 'raw_demo') renderFlashRawSnapshot(selected.snapshot);
-    else renderFlashSnapshot(selected.snapshot, 'Recording');
+    else renderFlashSnapshot(flashReplay.kind === 'recorded_demo'
+        ? {...selected.snapshot, ...flashReplay.geometry} : selected.snapshot, 'Recording');
     if (flashDemoEditor) {
         if (_flashEditorFollowPlayhead()) _flashEditorRender();
         else _flashEditorUpdateFrame();
     }
+    if (flashRecordedEditor) _flashRecordedUpdateFrame();
 }
 
 function toggleFlashReplay() {

@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>LeRobot GUI</title>
     <script>document.title = `LeRobot GUI [${window.location.host}]`;</script>
-    <link rel="stylesheet" href="/static/style.css?v=162">
+    <link rel="stylesheet" href="/static/style.css?v=163">
     <script type="importmap">{"imports":{"three":"/static/vendor/three.module.js"}}</script>
 </head>
 <body>
@@ -317,7 +317,7 @@
                     <button type="button" class="flash-frame-step" onclick="stepFlashReplay(1)" aria-label="Next frame" title="Next frame">›</button>
                     <span id="flash-tracker-frame">0 / 0</span>
                     <label id="flash-track-tools" class="flash-track-tools" hidden><input id="flash-track-visible" type="checkbox" checked onchange="_flashDrawOverlay()">Points <input id="flash-track-trail" type="range" min="0" max="3" step="0.25" value="0.75" oninput="document.getElementById('flash-track-trail-value').textContent = this.value + 's'; _flashDrawOverlay()" aria-label="Point trail duration"><output id="flash-track-trail-value">0.75s</output></label>
-                    <button type="button" id="flash-demo-edit-toggle" onclick="toggleFlashDemoEditor()" hidden>Edit demo</button>
+                    <button type="button" id="flash-demo-edit-toggle" onclick="toggleFlashReplayEditor()" hidden>Edit demo</button>
                 </div>
                 <div class="run-split-handle" id="run-split-handle"></div>
                 <!-- Below the divider, above the bottom tabs — the same place
@@ -805,8 +805,9 @@ nebius iam auth-public-key generate \
     <script src="/static/charts.js?v=5"></script>
     <script src="/static/robot.js?v=27"></script>
     <script src="/static/flash_live_tracking.js?v=9"></script>
-    <script src="/static/run.js?v=146"></script>
+    <script src="/static/run.js?v=147"></script>
     <script src="/static/flash_demo_editor.js?v=32"></script>
+    <script src="/static/flash_recorded_editor.js?v=1"></script>
     <script src="/static/overlay_gate.js?v=1"></script>
     <script src="/static/mask_seed.js?v=4"></script>
     <script src="/static/overlay_pull_gate.js?v=3"></script>

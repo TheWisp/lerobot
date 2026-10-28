@@ -63,8 +63,8 @@ inputs and runs the existing offline importer; object names come from these
 inputs, not from object-specific code. Each object may use a different clear
 reference frame; the additional objects are tracked but do not automatically
 become action targets. This adapter still supports one held-object/target action
-pair in episode 0 of the sealed format. It does not yet prepare
-arbitrary LeRobot recordings or infer camera-to-arm calibration from RGB-D.
+pair in episode 0 of the sealed format. It does not infer camera-to-arm
+calibration from RGB-D.
 
 The equivalent command-line path remains available:
 
@@ -118,13 +118,21 @@ recorded dataset. [`prepare_recorded_episode`](recorded_demo.py) can then compil
 an annotated trial and its frame-indexed pose trace into another prepared
 skill, rejecting a mismatched object-frame version. Copied symmetry rules
 require a chosen directly observed baseline frame in the new episode rather
-than inheriting the old demo's placement. The editor does not yet author
-general interval annotations, and older
-trials without the copied reference bundle need an explicit reference import.
-The sealed importer is an adapter
-for the historical SO-107 recording layout and its one-held/one-target
-annotation. It should not become the general demo schema; the Run → FLASH
-editor currently prepares that sealed layout only.
+than inheriting the old demo's placement.
+
+In **Run → FLASH → Rollouts**,
+**Mark motion** adds consecutive sections directly on the replay timeline.
+Each section states whether to follow its recorded motion or plan a route,
+which object relationship must be preserved, and whether a gripper attachment
+changes at its end. **Prepare candidate** checks the whole recording and saves
+a new skill version under the same dataset; **Demos** replays that version on
+the original trial frames with the saved skill poses beside tracker evidence.
+The editor currently uses the recorded SO-107 calibration adapter. Older
+trials lacking a saved reference snapshot remain viewable but cannot be
+prepared from this editor; no object model is inferred from their names.
+The sealed importer remains an adapter for the historical SO-107 recording
+layout and its one-held/one-target annotation; it is not the general demo
+schema. Milestone and recovery editing for regular recordings is still pending.
 
 The live trial constructs the configured vision backend through
 [`VisionBackendFactory`](vision_pipeline.py). When `causal_tracking` is configured, the
