@@ -710,7 +710,6 @@ def test_run_flash_lists_demos_and_shows_extracted_pose_overlay(gui_page):
     page.wait_for_function("() => !!document.querySelector('#flash-demo-editor')")
     assert "Edit demo" in page.locator("#flash-demo-editor").inner_text()
     assert page.locator("#flash-demo-editor-frame").inner_text().startswith("Frame 4")
-    page.locator(".flash-editor-navigation").get_by_role("button", name="Objects").click()
     assert page.locator("#flash-demo-editor .flash-editor-pane[data-section='objects']").is_visible()
     page.get_by_role("button", name="Draw replacement mask").click()
     page.evaluate("""() => {
@@ -722,7 +721,7 @@ def test_run_flash_lists_demos_and_shows_extracted_pose_overlay(gui_page):
     page.get_by_role("button", name="Finish polygon").click()
     assert "Manual object mask: 3 vertices" in page.locator("#flash-demo-editor-polygon-status").inner_text()
     assert len(page.evaluate("flashDemoEditor.annotation.reference_polygons_by_role.object")) == 3
-    page.locator(".flash-editor-navigation").get_by_role("button", name="More").click()
+    page.locator(".flash-editor-settings > summary").click()
     assert page.get_by_label("Processing scope", exact=True).input_value() == ""
     assert page.get_by_label("Grow points from later views").is_checked()
     page.get_by_label("Maximum points per object").fill("256")
@@ -1303,15 +1302,10 @@ def test_raw_demo_editor_collects_object_names_and_action_from_visible_controls(
             "Advanced": "advanced",
             "Key frames": "keyframes",
         }[name]
-        panel = {
-            "setup": "Objects",
-            "objects": "Objects",
-            "references": "Objects",
-            "events": "Hold / release",
-            "keyframes": "Key frames",
-            "advanced": "More",
-        }[current_section]
-        page.locator(".flash-editor-navigation").get_by_role("button", name=panel, exact=True).click()
+        if current_section == "advanced" and not page.locator(".flash-editor-settings").evaluate(
+            "el => el.open"
+        ):
+            page.locator(".flash-editor-settings > summary").click()
 
     def set_field(label, value):
         control = (
@@ -1340,6 +1334,7 @@ def test_raw_demo_editor_collects_object_names_and_action_from_visible_controls(
         set_field("New object name", role)
         set_field("What it looks like", prompt)
         page.get_by_role("button", name="Add object").click()
+    page.locator(".flash-editor-object-options > summary").click()
     set_field("Rotational symmetry", "long_axis")
     assert "dowel" not in page.locator("#flash-demo-editor").inner_text().lower()
     section("References")
@@ -1533,22 +1528,19 @@ def test_3d_scene_projection_and_surface_pick_edit_the_prepared_keyframe(gui_pag
     page.get_by_role("button", name="Edit key frames").click()
     page.wait_for_function("() => !!flashDemoEditor")
     assert not page.locator("#run-sidebar").is_visible()
-    assert page.locator(".flash-editor-navigation button").all_inner_texts() == [
-        "Objects",
-        "Hold / release",
-        "Key frames",
-        "More",
-    ]
-    assert not page.locator("#flash-demo-editor .flash-editor-pane[data-section='objects']").is_visible()
+    assert page.locator(".flash-editor-navigation").count() == 0
+    assert page.locator("#flash-demo-editor .flash-editor-pane[data-section='objects']").is_visible()
     assert page.locator("#flash-demo-editor .flash-editor-pane[data-section='keyframes']").is_visible()
     assert page.get_by_label("Reach", exact=True).is_visible()
     assert page.get_by_role("button", name="Use current time").is_visible()
-    page.locator(".flash-editor-navigation").get_by_role("button", name="Objects").click()
-    assert page.locator("#flash-demo-editor .flash-editor-pane[data-section='objects']").is_visible()
-    page.locator(".flash-editor-navigation").get_by_role("button", name="More").click()
+    page.get_by_label("Path", exact=True).select_option("lift")
+    assert page.get_by_label("Lift (mm)").is_visible()
+    page.get_by_label("Path", exact=True).select_option("line")
+    assert not page.get_by_label("Lift (mm)").count()
+    assert not page.get_by_text("Pose evidence", exact=True).is_visible()
+    page.locator(".flash-editor-settings > summary").click()
     assert page.get_by_text("Pose evidence", exact=True).is_visible()
-    assert page.locator(".flash-editor-more .flash-editor-group").count() == 0
-    page.locator(".flash-editor-navigation").get_by_role("button", name="Key frames").click()
+    assert page.locator(".flash-editor-settings .flash-editor-group").count() == 0
     page.get_by_role("button", name="Pick object in scene").click()
     box = page.locator(".flash-scene-canvas").bounding_box()
     scale = min(box["width"] / width, box["height"] / height)
@@ -1582,8 +1574,7 @@ def test_3d_scene_projection_and_surface_pick_edit_the_prepared_keyframe(gui_pag
         "() => document.querySelector('#flash-demo-editor-status').textContent.includes('captured')"
     )
     assert submitted[0]["keypoints_document"]["keypoints"][0]["frame"] == "fixture"
-    page.locator(".flash-editor-navigation").get_by_role("button", name="Key frames").click()
-    assert page.evaluate("flashDemoEditor.activePanel") == "keyframes"
+    assert page.locator("#flash-demo-editor .flash-editor-pane[data-section='keyframes']").is_visible()
     assert page.locator(".flash-editor-turn").is_visible()
     page.get_by_role("button", name="Allow turn at a point").click()
     page.wait_for_function("() => flashDemoEditor?.pickingTurn")
@@ -1629,5 +1620,11 @@ def test_3d_scene_projection_and_surface_pick_edit_the_prepared_keyframe(gui_pag
     assert page.get_by_role("button", name="Pick object in scene").is_disabled()
     assert page.get_by_label("Move relative to", exact=True).is_disabled()
     assert "grasp-start reference" in page.locator("#flash-demo-editor").inner_text()
+    page.set_viewport_size({"width": 390, "height": 844})
+    assert page.evaluate(
+        "() => { const main = document.querySelector('#run-main'); "
+        "return main.scrollWidth <= main.clientWidth && "
+        "document.querySelector('#flash-demo-editor').getBoundingClientRect().left >= 0; }"
+    )
     page.get_by_role("button", name="Close editor").click()
     assert page.locator("#run-sidebar").is_visible()

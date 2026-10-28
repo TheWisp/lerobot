@@ -703,7 +703,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .flash-demo-editor[hidden], #flash-demo-edit-toggle[hidden] { display: none; }
 .flash-demo-editing .flash-replay-grid { right: min(360px, 42%); }
 .flash-demo-editor .flash-tracker-panel { position: static; width: 100%; max-height: 210px; margin: 8px 0; padding: 7px; }
-.flash-demo-editor h3 { margin: 0 0 6px; font-size: 15px; }
+.flash-demo-editor h3 { position: sticky; top: -14px; z-index: 4; margin: -14px -14px 8px; padding: 12px 14px; background: #101b2a; border-bottom: 1px solid #31516c; font-size: 15px; }
 .flash-demo-editor p { margin: 4px 0 10px; color: #a7b5c8; line-height: 1.4; }
 .flash-demo-editor section { border-top: 1px solid #31516c; padding: 10px 0; }
 .flash-demo-editor label { display: block; margin: 7px 0; color: #bdd0e0; }
@@ -787,9 +787,13 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 #run-section-flash[data-mode="live"] .flash-library { display: none; }
 .flash-demo-editor .flash-editor-pane > section { padding: 12px 0; }
 .flash-demo-editor .flash-editor-pane > section > strong { display: block; font-size: 14px; color: #fff; }
-.flash-editor-navigation { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 3px; position: sticky; top: -14px; z-index: 2; padding: 9px 0; background: #101b2a; border-bottom: 1px solid #31516c; }
-.flash-demo-editor .flash-editor-navigation button { margin: 0; padding: 7px 2px; white-space: nowrap; font-size: 11px; background: transparent; border-color: transparent; color: #bdd0e0; }
-.flash-demo-editor .flash-editor-navigation button.active { color: #fff; background: #224868; border-color: #4d7798; }
+.flash-editor-settings { border-top: 1px solid #31516c; margin-top: 4px; }
+.flash-editor-settings > summary { padding: 12px 0; cursor: pointer; color: #bdd0e0; font-size: 13px; font-weight: 600; }
+.flash-editor-object-options, .flash-editor-exact-times { margin: 10px 0; }
+.flash-editor-object-options > summary, .flash-editor-exact-times > summary { cursor: pointer; color: #bdd0e0; }
+.flash-editor-moment { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 8px 0; }
+.flash-editor-moment span { color: #e6edf3; white-space: nowrap; }
+.flash-demo-editor .flash-editor-moment button { margin: 0; }
 .flash-demo-editor .flash-editor-group { border-top: 1px solid #31516c; }
 .flash-demo-editor .flash-editor-group > summary { cursor: pointer; padding: 12px 0; font-size: 13px; font-weight: 600; color: #bdd0e0; }
 .flash-demo-editor .flash-editor-group > .flash-editor-pane > section { border-top: 0; padding-top: 0; }
@@ -813,6 +817,14 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     #tab-run.flash-reviewing .flash-tracker-panel { flex: 0 0 205px; width: 100%; border: 1px solid #31516c; border-width: 1px 0 0; }
     #tab-run.flash-reviewing .flash-demo-editor { flex: 0 0 290px; width: 100%; border: 1px solid #31516c; border-width: 1px 0 0; }
     #tab-run.flash-reviewing .flash-editor-footer { position: static; }
+}
+@media (max-width: 600px) {
+    #tab-run.flash-reviewing .flash-tracker-replay-controls { gap: 4px; padding: 6px 8px; flex-wrap: wrap; }
+    #tab-run.flash-reviewing .flash-tracker-replay-controls button { min-width: 0; padding: 0 6px; white-space: nowrap; }
+    #tab-run.flash-reviewing .flash-tracker-replay-controls .flash-frame-step { flex: 0 0 24px; padding: 0; }
+    #tab-run.flash-reviewing .flash-tracker-replay-controls #flash-tracker-frame { min-width: 88px; font-size: 10px; }
+    #tab-run.flash-reviewing .flash-tracker-replay-controls .flash-track-tools:not([hidden]) { order: 3; flex: 1 0 100%; }
+    #tab-run.flash-reviewing .flash-timeline-legend { display: none; }
 }
 /* Marker shown after the label of every required field. Bumping the CSS
  * version (style.css?v=N in index.html) is required when shipping new
