@@ -486,6 +486,11 @@ const _WORKFLOW_VALIDATORS = {
         if (!/^\d+$/.test(episode)) return 'Enter a nonnegative demo episode number.';
         if (!_val('run-flash-skill')) return 'Inspect the dataset and select a prepared skill before running.';
         if (!_val('run-flash-config')) return 'Enter the local robot/camera trial config before running.';
+        const selected = flashPreparedSkills.find(item => item.path === _val('run-flash-skill'));
+        if (selected?.inspection?.conflicted_held_samples > 0 &&
+            !document.getElementById('run-flash-allow-conflicted')?.checked) {
+            return 'Review the demo’s conflicted held pose and enable the experimental override before running.';
+        }
         return null;
     },
 };
@@ -2067,6 +2072,18 @@ function _flashSkillDetail() {
         warnings.textContent = `${skill.warnings.length} evidence warning(s): ${skill.warnings.join('; ')}`;
         container.append(warnings);
     }
+    if (skill.conflicted_held_samples > 0) {
+        const override = document.createElement('label');
+        override.className = 'form-hint';
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.id = 'run-flash-allow-conflicted';
+        checkbox.onchange = _updateLaunchButton;
+        override.append(checkbox, document.createTextNode(
+            ` Experimental: run despite ${skill.conflicted_held_samples} conflicted demo motion samples`
+        ));
+        container.append(override);
+    }
     _updateLaunchButton();
 }
 
@@ -3309,6 +3326,8 @@ async function launchRun() {
                     episode: Number(_val('run-flash-episode')),
                     bundle_path: bundlePath,
                     config_path: _val('run-flash-config'),
+                    allow_conflicted_demo_pose: Boolean(
+                        document.getElementById('run-flash-allow-conflicted')?.checked),
                 }),
             });
             const data = await res.json();

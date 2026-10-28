@@ -148,6 +148,39 @@ No insertion surface pass without this check has been prepared, so there is no
 same-backend pre-check comparison. Its default appearance-based skill has not
 been replaced. Neither candidate has been validated in a physical rollout.
 
+## Source-time held-pose correction candidates (2026-10-28)
+
+The local `flash-dowel-ring-20261028-recorded-clock-v6` and
+`flash-gamepad-cube-20261028-recorded-clock-v6` bundles replay the same raw
+demonstrations with the current capture-time attachment updater. These are
+review candidates, not new demonstrations or verified physical rollouts.
+
+| Demo              | Held camera frames | Gripper prediction | Vision-corrected prediction | Conflicted prediction |
+| ----------------- | -----------------: | -----------------: | --------------------------: | --------------------: |
+| Dowel into ring   |                223 |                  0 |                          39 |                   184 |
+| Gamepad onto cube |                189 |                  3 |                         135 |                    51 |
+
+The dowel conflict begins after a disagreement at camera frame 271 and remains
+through frame 475; two image-supported observations restore an attachment at 476. The gamepad corrects at frame 294, but a roughly 177° direct-pose flip at
+429 conflicts with the carried prediction and remains unresolved through
+release. These frame counts describe the saved **attachment's evidence**, not
+independent accuracy. A single conflict can persist through many frames with
+no later decisive observation. The current importer nevertheless carries the
+last accepted gripper-to-object transform through that interval, so its motion
+samples are reviewable predictions, not measured object motion. Launch now
+requires an explicit experimental override for a skill with such samples. In this pass
+the ring has zero six-axis `observed` frames and 590 `predicted` frames; its
+symmetry-constrained direct translation can still contribute to that
+prediction. The gamepad demo's cube has 320 `observed` and 183 `predicted`
+frames. Do not read these evidence labels as ground-truth pose errors.
+
+Representative camera frames with projected saved held surface (orange) and
+independent extraction where available (cyan):
+
+![Dowel demo held-pose audit](../../../../../docs/proofs/flash-demo-v6-audit/insertion.jpg)
+
+![Gamepad demo held-pose audit](../../../../../docs/proofs/flash-demo-v6-audit/pick_place.jpg)
+
 ## Physical rollouts
 
 The sealed prototype has completed real insertion rollouts. For example,

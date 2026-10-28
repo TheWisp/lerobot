@@ -254,6 +254,7 @@ class FlashDatasetInspectRequest(BaseModel):
 class FlashRunRequest(FlashDatasetInspectRequest):
     bundle_path: str
     config_path: str
+    allow_conflicted_demo_pose: bool = False
 
 
 class FlashConfigInspectRequest(BaseModel):
@@ -1038,13 +1039,24 @@ async def start_flash(req: FlashRunRequest) -> dict:
             "--dataset-root", req.dataset_root, "--episode", str(req.episode)
         )
         bundle = Path(req.bundle_path).expanduser().resolve()
-        if not any(
-            item["kind"] == "prepared"
-            and Path(item["path"]).resolve() == bundle
-            and item["inspection"]["runtime_bindings_complete"]
-            for item in inspection["skills"]
-        ):
+        selected = next(
+            (
+                item
+                for item in inspection["skills"]
+                if item["kind"] == "prepared"
+                and Path(item["path"]).resolve() == bundle
+                and item["inspection"]["runtime_bindings_complete"]
+            ),
+            None,
+        )
+        if selected is None:
             raise HTTPException(400, "Select a complete prepared FLASH skill from this dataset episode")
+        if selected["inspection"].get("conflicted_held_samples", 0) and not req.allow_conflicted_demo_pose:
+            raise HTTPException(
+                400,
+                "This demo contains conflicted held-object poses. Review its replay, then enable the "
+                "experimental override to run with the last accepted gripper prediction.",
+            )
         config = Path(req.config_path).expanduser().resolve()
         if not config.is_file():
             raise HTTPException(400, "Select an existing local robot/camera trial config")
@@ -1064,6 +1076,8 @@ async def start_flash(req: FlashRunRequest) -> dict:
             "--telemetry-path",
             str(_flash_live_path),
         ]
+        if req.allow_conflicted_demo_pose:
+            args.append("--allow-conflicted-demo-pose")
         await _launch_subprocess(args, command="flash", config=req.model_dump())
         return {"status": "started", "command": "flash", "pid": _active_process.pid}
 

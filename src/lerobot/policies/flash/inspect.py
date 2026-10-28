@@ -38,9 +38,12 @@ def inspect_skill(path: str) -> dict:
     if prepared is None:
         missing.append("prepared RGB-D object references")
     warnings = []
+    conflicted_held_samples = 0
     for interval in skill.intervals:
         if interval.relation.value == "held_to_target":
-            if any(sample.held_evidence == "conflicted_prediction" for sample in interval.samples):
+            conflicts = sum(sample.held_evidence == "conflicted_prediction" for sample in interval.samples)
+            conflicted_held_samples += conflicts
+            if conflicts:
                 warnings.append(f"{interval.name}: held-object demo pose has unresolved visual conflict")
             elif not any(
                 sample.held_evidence in ("observed", "vision_corrected_prediction")
@@ -86,6 +89,7 @@ def inspect_skill(path: str) -> dict:
         ],
         "reference_frames_declared": not missing_frames,
         "runtime_bindings_complete": not missing,
+        "conflicted_held_samples": conflicted_held_samples,
         "prepared_references": (
             [
                 {

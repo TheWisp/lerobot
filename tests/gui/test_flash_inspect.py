@@ -375,7 +375,15 @@ def test_inspection_flags_held_interval_without_an_attachment_event(tmp_path):
     assert inspected["reference_frames_declared"]
     assert not inspected["runtime_bindings_complete"]
     assert inspected["intervals"][0]["held_evidence"] == {"predicted": 2}
-    assert inspected["warnings"] == ["place: no independently observed held-object demo pose"]
+    assert inspected["conflicted_held_samples"] == 0
+    assert inspected["warnings"] == ["place: no independently observed held-object demo correction"]
+
+    document = json.loads(path.read_text())
+    document["intervals"][0]["samples"][0]["held_evidence"] = "conflicted_prediction"
+    path.write_text(json.dumps(document))
+    conflicted = inspect_skill(str(path))
+    assert conflicted["conflicted_held_samples"] == 1
+    assert conflicted["warnings"] == ["place: held-object demo pose has unresolved visual conflict"]
 
 
 def test_flash_inspection_uses_regular_dataset_directory(tmp_path):
@@ -461,6 +469,80 @@ def test_flash_launch_uses_shared_process_owner_and_prepared_episode(tmp_path, m
     ]
     assert launched[0][0][-2] == "--telemetry-path"
     assert launched[0][0][-1] == str(run_api._flash_live_path)
+
+
+def test_flash_launch_requires_explicit_override_for_conflicted_demo_pose(tmp_path, monkeypatch):
+    from lerobot.gui.api import run as run_api
+
+    bundle = tmp_path / "flash/v1/prepared/example/bundle.json"
+    bundle.parent.mkdir(parents=True)
+    bundle.write_text("{}")
+    config = tmp_path / "trial.json"
+    config.write_text("{}")
+    launched = []
+    released = []
+
+    async def inspect(*_args):
+        return {
+            "skills": [
+                {
+                    "kind": "prepared",
+                    "path": str(bundle),
+                    "inspection": {"runtime_bindings_complete": True, "conflicted_held_samples": 3},
+                }
+            ]
+        }
+
+    async def release():
+        released.append(True)
+
+    async def launch(args, *, command, config):
+        launched.append(args)
+        run_api._active_process = SimpleNamespace(pid=123)
+
+    monkeypatch.setattr(run_api, "_ensure_no_active_process", lambda: None)
+    monkeypatch.setattr(run_api, "_inspect_flash_subprocess", inspect)
+    monkeypatch.setattr(run_api, "_release_preview_cameras", release)
+    monkeypatch.setattr(run_api, "_launch_subprocess", launch)
+    monkeypatch.setattr(run_api, "_active_process", None)
+    request = FlashRunRequest(
+        dataset_root=str(tmp_path), episode=0, bundle_path=str(bundle), config_path=str(config)
+    )
+    with pytest.raises(HTTPException, match="conflicted held-object poses"):
+        asyncio.run(start_flash(request))
+    assert not released and not launched
+    approved = request.model_copy(update={"allow_conflicted_demo_pose": True})
+    assert asyncio.run(start_flash(approved))["pid"] == 123
+    assert launched[0][-1] == "--allow-conflicted-demo-pose"
+
+
+def test_flash_cli_rejects_conflicted_demo_before_hardware_setup(tmp_path, monkeypatch):
+    from lerobot.policies.flash.live_trial import trial
+    from lerobot.policies.flash.prepared import PreparedFlashSkill
+
+    identity = np.eye(4)
+    skill = FlashSkill(
+        "example/dataset",
+        0,
+        (
+            Interval(
+                "carry",
+                MotionMode.DEMONSTRATED,
+                Relation.HELD_TO_TARGET,
+                "target",
+                (
+                    SpatialSample(0, identity, identity, identity, held_evidence="conflicted_prediction"),
+                    SpatialSample(1, identity, identity, identity, held_evidence="conflicted_prediction"),
+                ),
+                reference_version="target-v1",
+                held_reference_version="held-v1",
+                held_role="held",
+            ),
+        ),
+    )
+    monkeypatch.setattr(PreparedFlashSkill, "load", staticmethod(lambda _path: SimpleNamespace(skill=skill)))
+    with pytest.raises(ValueError, match="conflicted held-object poses"):
+        trial(tmp_path / "bundle.json", tmp_path / "trial.json", preflight=False)
 
 
 def test_flash_stop_waits_for_trial_dataset_save(monkeypatch):
@@ -954,6 +1036,7 @@ def test_run_flash_subtab_launches_selected_prepared_skill(gui_page):
                         "path": bundle,
                         "inspection": {
                             "runtime_bindings_complete": True,
+                            "conflicted_held_samples": 3,
                             "intervals": [],
                             "attachment_transitions": [],
                             "prepared_references": [],
@@ -1026,6 +1109,8 @@ def test_run_flash_subtab_launches_selected_prepared_skill(gui_page):
     assert "Held-pose correction gate: 15 mm" in detail.inner_text()
     assert "Held prediction expiry: disabled" in detail.inner_text()
     assert "Initial pose wait: 20 s" in detail.inner_text()
+    assert page.locator("#run-launch-btn").is_disabled()
+    page.locator("#run-flash-allow-conflicted").check()
     assert page.locator("#run-launch-btn").inner_text() == "Run FLASH"
     page.locator("#run-launch-btn").click()
     assert requests, page.locator("#run-terminal").inner_text()
@@ -1035,6 +1120,7 @@ def test_run_flash_subtab_launches_selected_prepared_skill(gui_page):
             "episode": 0,
             "bundle_path": bundle,
             "config_path": "/tmp/trial.json",
+            "allow_conflicted_demo_pose": True,
         }
     ]
 

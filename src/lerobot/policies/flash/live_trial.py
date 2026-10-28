@@ -105,8 +105,22 @@ def trial(
     source_dataset_root: Path | None = None,
     telemetry_path: Path | None = None,
     stop_requested: Callable[[], bool] | None = None,
+    allow_conflicted_demo_pose: bool = False,
 ) -> dict:
     bundle = PreparedFlashSkill.load(bundle_path)
+    if (
+        not preflight
+        and not allow_conflicted_demo_pose
+        and any(
+            sample.held_evidence == "conflicted_prediction"
+            for interval in bundle.skill.intervals
+            for sample in interval.samples
+        )
+    ):
+        raise ValueError(
+            "demo contains conflicted held-object poses; review its replay and pass "
+            "--allow-conflicted-demo-pose to run with the last accepted gripper prediction"
+        )
     settings = json.loads(config_path.read_text())
     if (
         source_dataset_root is not None
@@ -249,6 +263,7 @@ def trial(
             json.dumps(
                 {
                     **settings,
+                    "allow_conflicted_demo_pose": allow_conflicted_demo_pose,
                     "source_reference_bundle": reference_snapshot.relative_to(output_root).as_posix(),
                 },
                 indent=2,
@@ -514,6 +529,7 @@ def main() -> None:
     parser.add_argument("config", type=Path)
     parser.add_argument("--preflight", action="store_true")
     parser.add_argument("--auto-output", action="store_true", help="write a new dataset for this attempt")
+    parser.add_argument("--allow-conflicted-demo-pose", action="store_true")
     parser.add_argument("--telemetry-path", type=Path, help="GUI-owned live tracker snapshot")
     parser.add_argument(
         "--source-dataset-root", type=Path, help="require this demo dataset in the trial config"
@@ -530,6 +546,7 @@ def main() -> None:
         source_dataset_root=args.source_dataset_root,
         telemetry_path=args.telemetry_path,
         stop_requested=stop.is_set,
+        allow_conflicted_demo_pose=args.allow_conflicted_demo_pose,
     )
     print(json.dumps(report, indent=2))
     if report.get("outcome") == "failure" or (report.get("outcome") == "interrupted" and not stop.is_set()):
