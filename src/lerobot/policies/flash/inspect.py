@@ -54,6 +54,7 @@ def inspect_skill(path: str) -> dict:
             {
                 "name": m.name,
                 "depends_on_roles": m.depends_on_roles,
+                "require_post_motion_evidence": m.require_post_motion_evidence,
                 "pose_relation": (
                     {
                         "moving_role": m.pose_relation.moving_role,

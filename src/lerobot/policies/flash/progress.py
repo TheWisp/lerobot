@@ -117,10 +117,13 @@ class Progress:
         )
 
     def completion_satisfied(self) -> bool:
-        """A result check needs fresh evidence for every participant after motion."""
+        """Only checks that request it need new evidence after motion."""
         name = self.interval.completion_milestone
         if name is None:
             return True
+        spec = next(item for item in self.skill.milestones if item.name == name)
+        if not spec.require_post_motion_evidence:
+            return self._satisfied(name)
         update = self.milestones.get(name)
         if update is None or update.verdict != Verdict.TRUE or self.last_receipt_s is None:
             return False

@@ -358,6 +358,7 @@ def test_recorded_trial_editor_gates_a_section_on_its_observed_result(tmp_path, 
     assert skill.intervals[0].completion_milestone == "section-1-result"
     assert skill.milestones[0].pose_relation.translation_tolerance_m == pytest.approx(0.006)
     assert skill.milestones[0].pose_relation.max_pose_age_s == pytest.approx(0.8)
+    assert skill.milestones[0].require_post_motion_evidence
     assert json.loads((output.parent / "preparation-report.json").read_text())["result_checks"] == 1
     monkeypatch.setattr(
         run,

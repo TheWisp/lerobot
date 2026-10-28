@@ -88,6 +88,7 @@ class PoseRelationAnnotation:
     moving_point_m: tuple[float, float, float] | None = None
     moving_direction: tuple[float, float, float] | None = None
     direction_tolerance_rad: float | None = None
+    require_post_motion_evidence: bool = False
 
     def __post_init__(self) -> None:
         if not self.name or self.frame_index < 0 or not self.moving_role or not self.reference_role:
@@ -305,6 +306,7 @@ def compile_skill(
                     annotation.moving_direction,
                     annotation.direction_tolerance_rad,
                 ),
+                annotation.require_post_motion_evidence,
             )
         )
     return FlashSkill(

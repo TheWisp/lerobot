@@ -341,7 +341,12 @@ def test_completion_milestone_needs_both_objects_observed_after_final_command():
         completion_milestone="placed",
     )
     progress = Progress(
-        FlashSkill("owner/demo", 0, (interaction,), milestones=(MilestoneSpec("placed", ("held", "target")),))
+        FlashSkill(
+            "owner/demo",
+            0,
+            (interaction,),
+            milestones=(MilestoneSpec("placed", ("held", "target"), require_post_motion_evidence=True),),
+        )
     )
     progress.update_milestone(
         MilestoneUpdate("placed", Verdict.TRUE, "before", 10.5, oldest_source_time_s=10.5)
@@ -357,6 +362,24 @@ def test_completion_milestone_needs_both_objects_observed_after_final_command():
         MilestoneUpdate("placed", Verdict.TRUE, "both-new", 11.3, oldest_source_time_s=11.1)
     )
     assert progress.advance(11.3)
+
+
+def test_contact_milestone_can_accumulate_evidence_during_motion():
+    interval = Interval(
+        "lift",
+        MotionMode.DEMONSTRATED,
+        Relation.EE_TO_OBJECT,
+        "object",
+        (sample(0, (0, 0, 0), (0, 0, 0)), sample(1, (0, 0, 0), (0, 0, 0))),
+        completion_milestone="attached",
+    )
+    progress = Progress(
+        FlashSkill("owner/demo", 0, (interval,), milestones=(MilestoneSpec("attached", ("object",)),))
+    )
+    assert progress.begin(10)
+    progress.update_milestone(MilestoneUpdate("attached", Verdict.TRUE, "during-lift", 10.5))
+    progress.receipt(11, interval_complete=True)
+    assert progress.advance(11)
 
 
 def test_target_pose_change_withdraws_previous_milestone_verdict():

@@ -222,6 +222,7 @@ class MilestoneSpec:
     name: str
     depends_on_roles: tuple[str, ...]
     pose_relation: PoseRelationCriterion | None = None
+    require_post_motion_evidence: bool = False
 
     def __post_init__(self) -> None:
         if not self.name or not self.depends_on_roles or any(not role for role in self.depends_on_roles):
@@ -338,6 +339,7 @@ class FlashSkill:
                 item["name"],
                 tuple(item["depends_on_roles"]),
                 PoseRelationCriterion(**item["pose_relation"]) if item.get("pose_relation") else None,
+                item.get("require_post_motion_evidence", False),
             )
             for item in data.get("milestones", [])
         )
@@ -377,6 +379,7 @@ class FlashSkill:
                 {
                     "name": milestone.name,
                     "depends_on_roles": list(milestone.depends_on_roles),
+                    "require_post_motion_evidence": milestone.require_post_motion_evidence,
                     "pose_relation": (
                         {
                             "moving_role": milestone.pose_relation.moving_role,

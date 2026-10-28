@@ -169,6 +169,7 @@ def prepare_recorded_trial(
                     translation_tolerance_m=float(check["translation_tolerance_mm"]) / 1000,
                     rotation_tolerance_rad=radians(float(angle)) if angle not in (None, "") else None,
                     max_pose_age_s=max_pose_age_s,
+                    require_post_motion_evidence=True,
                 )
             )
         annotations.append(
