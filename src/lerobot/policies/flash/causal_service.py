@@ -1311,6 +1311,7 @@ class CausalPoseService:
             max_agreement_offset_m=self.fit_threshold_m,
             max_agreement_angle_rad=float(np.arctan2(self.fit_threshold_m, max(radius, np.finfo(float).eps))),
             min_masked_depth_points=self.environment_min_inliers,
+            depth_occlusion_tolerance_m=self.fit_threshold_m,
         )
         self.last_direct_group_comparison[estimate.role] = comparison
         verdict = comparison.verdict.value
@@ -1379,6 +1380,7 @@ class CausalPoseService:
             max_agreement_offset_m=self.fit_threshold_m,
             max_agreement_angle_rad=float(np.arctan2(self.fit_threshold_m, max(radius, np.finfo(float).eps))),
             min_masked_depth_points=active[0].min_inliers,
+            depth_occlusion_tolerance_m=self.fit_threshold_m,
         )
         self.last_direct_point_comparison[estimate.role] = comparison
         counts = self.direct_point_disagreements_by_role.setdefault(estimate.role, {})

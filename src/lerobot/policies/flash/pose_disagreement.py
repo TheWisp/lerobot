@@ -128,16 +128,25 @@ def free_space_support(
 
 
 def surface_support(
-    frame: RGBDFrame, mask: np.ndarray, points_object_m: np.ndarray, base_from_object: np.ndarray
+    frame: RGBDFrame,
+    mask: np.ndarray,
+    points_object_m: np.ndarray,
+    base_from_object: np.ndarray,
+    *,
+    depth_occlusion_tolerance_m: float,
 ) -> SurfaceSupport:
-    """Compare one proposed object's projected model points with aligned depth.
+    """Compare the frontmost projected surface on each camera ray with depth.
 
-    These are diagnostics, not a full visibility likelihood: model points may
-    be self-occluded, and another object may occlude them. The mask and depth
-    must come from the same aligned RGB-D frame.
+    A deeper model point on the same ray cannot vote against the visible face.
+    A nearer measured surface outside the object's mask is an occluder, not a
+    mismatch. Inside its mask, a model point hidden behind the measured face
+    cannot support that pose; it stays in the coverage denominator. This is
+    still a partial-surface diagnostic, not a calibrated pose likelihood.
     """
     if mask.shape != frame.depth.shape or mask.dtype != bool:
         raise ValueError("object mask must align with RGB-D")
+    if not np.isfinite(depth_occlusion_tolerance_m) or depth_occlusion_tolerance_m <= 0:
+        raise ValueError("depth occlusion tolerance must be finite and positive")
     points = np.asarray(points_object_m, dtype=float)
     if points.ndim != 2 or points.shape[1] != 3 or not np.isfinite(points).all() or not len(points):
         raise ValueError("object model needs finite Nx3 points")
@@ -150,17 +159,23 @@ def surface_support(
     x = np.rint(camera_points[:, 0] / camera_points[:, 2] * frame.intrinsics[0, 0] + frame.intrinsics[0, 2])
     y = np.rint(camera_points[:, 1] / camera_points[:, 2] * frame.intrinsics[1, 1] + frame.intrinsics[1, 2])
     inside = (x >= 0) & (x < frame.depth.shape[1]) & (y >= 0) & (y < frame.depth.shape[0])
-    xy = np.column_stack((x[inside], y[inside])).astype(int)
-    camera_points = camera_points[inside]
-    if not len(xy):
+    if not inside.any():
         return SurfaceSupport(0, 0, 0.0, float("inf"))
-    depth = frame.metric_depth()[xy[:, 1], xy[:, 0]]
-    supported = mask[xy[:, 1], xy[:, 0]] & np.isfinite(depth) & (depth > 0)
-    residual = depth[supported] - camera_points[supported, 2]
+    flat = y[inside].astype(int) * frame.depth.shape[1] + x[inside].astype(int)
+    front = np.full(frame.depth.size, np.inf, dtype=float)
+    np.minimum.at(front, flat, camera_points[inside, 2])
+    projected = np.isfinite(front)
+    depth = frame.metric_depth().ravel()
+    mask_flat = mask.ravel()
+    valid = np.isfinite(depth) & (depth > 0)
+    occluded_elsewhere = projected & ~mask_flat & valid & (depth + depth_occlusion_tolerance_m < front)
+    testable = projected & ~occluded_elsewhere
+    supported = testable & mask_flat & valid & (depth + depth_occlusion_tolerance_m >= front)
+    residual = depth[supported] - front[supported]
     return SurfaceSupport(
-        len(xy),
+        int(testable.sum()),
         int(supported.sum()),
-        float(supported.mean()),
+        float(supported.sum() / testable.sum()) if testable.any() else 0.0,
         float(np.percentile(np.abs(residual), 90)) if len(residual) else float("inf"),
     )
 
@@ -175,6 +190,7 @@ def compare_pose_proposals(
     max_agreement_offset_m: float,
     max_agreement_angle_rad: float,
     min_masked_depth_points: int,
+    depth_occlusion_tolerance_m: float,
 ) -> PoseComparison:
     """Pareto-compare surface fit and mask coverage after a task-sized pose change.
 
@@ -195,8 +211,20 @@ def compare_pose_proposals(
     rotation_difference = float(
         np.arccos(np.clip((np.trace(candidate_pose[:3, :3].T @ prior_pose[:3, :3]) - 1) / 2, -1, 1))
     )
-    candidate = surface_support(frame, mask, points_object_m, candidate_pose)
-    prior = surface_support(frame, mask, points_object_m, prior_pose)
+    candidate = surface_support(
+        frame,
+        mask,
+        points_object_m,
+        candidate_pose,
+        depth_occlusion_tolerance_m=depth_occlusion_tolerance_m,
+    )
+    prior = surface_support(
+        frame,
+        mask,
+        points_object_m,
+        prior_pose,
+        depth_occlusion_tolerance_m=depth_occlusion_tolerance_m,
+    )
     if (
         candidate.masked_depth_points < min_masked_depth_points
         or prior.masked_depth_points < min_masked_depth_points

@@ -697,6 +697,11 @@ def prepare(
                 if causal_config is not None
                 else vision_config.registration_min_inliers
             ),
+            depth_occlusion_tolerance_m=(
+                causal_config.fit_threshold_m
+                if causal_config is not None
+                else vision_config.registration_threshold_m
+            ),
         )
         if not updater.activate(float(times[grasp]), selected, joints[grasp]):
             raise ValueError("selected grasp pose cannot seed the held attachment")

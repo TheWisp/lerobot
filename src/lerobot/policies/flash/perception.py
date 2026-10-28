@@ -388,6 +388,7 @@ class HeldAttachmentUpdater:
         object_center_object_m: np.ndarray | None = None,
         object_points_object_m: np.ndarray | None = None,
         min_visual_support_points: int = 3,
+        depth_occlusion_tolerance_m: float | None = None,
     ) -> None:
         if not role or not reference_version or not arm_joint_names:
             raise ValueError("held attachment needs a role, object frame and arm joints")
@@ -424,6 +425,11 @@ class HeldAttachmentUpdater:
         if min_visual_support_points < 3:
             raise ValueError("held attachment needs at least three measured surface points")
         self.min_visual_support_points = min_visual_support_points
+        self.depth_occlusion_tolerance_m = depth_occlusion_tolerance_m
+        if depth_occlusion_tolerance_m is not None and (
+            not np.isfinite(depth_occlusion_tolerance_m) or depth_occlusion_tolerance_m <= 0
+        ):
+            raise ValueError("depth occlusion tolerance must be finite and positive")
         self._lock = Lock()
         self._estimate = AttachmentEstimate()
         self._active = False
@@ -526,7 +532,12 @@ class HeldAttachmentUpdater:
                 if shift > self.max_update_shift_m or turn > self.max_update_turn_rad:
                     self._conflicted = True
                     self.last_rejection = f"held attachment disagrees by {shift:.4f} m, {turn:.4f} rad"
-                    if frame is None or mask is None or self.object_points_object_m is None:
+                    if (
+                        frame is None
+                        or mask is None
+                        or self.object_points_object_m is None
+                        or self.depth_occlusion_tolerance_m is None
+                    ):
                         self._pending_visual = None
                         return False
                     # Compare both hypotheses against the *same* RGB-D image
@@ -543,6 +554,7 @@ class HeldAttachmentUpdater:
                         max_agreement_offset_m=self.max_update_shift_m,
                         max_agreement_angle_rad=self.max_update_turn_rad,
                         min_masked_depth_points=self.min_visual_support_points,
+                        depth_occlusion_tolerance_m=self.depth_occlusion_tolerance_m,
                     )
                     if comparison.verdict != PoseComparisonVerdict.CANDIDATE_FAVORED:
                         self._pending_visual = None

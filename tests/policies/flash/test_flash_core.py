@@ -1053,6 +1053,7 @@ def test_held_attachment_reanchors_after_repeated_image_supported_visual_correct
         max_update_turn_rad=0.1,
         object_points_object_m=points,
         min_visual_support_points=12,
+        depth_occlusion_tolerance_m=0.005,
     )
     for time_s in (0.0, 0.03, 0.06, 0.09):
         updater.on_motor_tick(

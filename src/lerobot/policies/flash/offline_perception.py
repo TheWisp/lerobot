@@ -13,9 +13,9 @@ from .perception_step import PerceptionPipeline, PerceptionResult, PerceptionRun
 from .symmetry import AxialSymmetry
 from .trajectory import Evidence, PoseEstimate
 
-# Version 5 also uses each recorded RGB-D timestamp. Earlier sealed-demo
-# traces assumed 30 Hz, which diverges from the recorded camera clock.
-POSE_TRACE_SELECTION_VERSION = 5
+# Version 6 scores competing poses against only the visible model surface,
+# so cached selections made with the earlier all-points comparison are stale.
+POSE_TRACE_SELECTION_VERSION = 6
 
 
 def extract_pose_trace(

@@ -5,7 +5,63 @@ from pathlib import Path
 import numpy as np
 
 from lerobot.policies.flash.perception import RGBDFrame
-from lerobot.policies.flash.pose_disagreement import PoseComparisonVerdict, compare_pose_proposals
+from lerobot.policies.flash.pose_disagreement import (
+    PoseComparisonVerdict,
+    compare_pose_proposals,
+    surface_support,
+)
+
+
+def test_surface_support_uses_only_frontmost_model_point_on_camera_ray():
+    depth = np.ones((32, 32), dtype=np.float32)
+    mask = np.zeros_like(depth, dtype=bool)
+    mask[16, 16] = True
+    frame = RGBDFrame(
+        1,
+        np.zeros((32, 32, 3), dtype=np.uint8),
+        depth,
+        np.array([[100.0, 0, 16], [0, 100.0, 16], [0, 0, 1]]),
+        1.0,
+        np.eye(4),
+        1.0,
+        1.0,
+        "calibration",
+    )
+    support = surface_support(
+        frame,
+        mask,
+        np.array([[0.0, 0.0, 1.0], [0.0, 0.0, 1.2]]),
+        np.eye(4),
+        depth_occlusion_tolerance_m=0.005,
+    )
+    assert support.projected_points == 1
+    assert support.masked_depth_points == 1
+    assert support.depth_residual_p90_m == 0.0
+
+
+def test_external_occluder_does_not_count_against_hidden_model_surface():
+    depth = np.ones((32, 32), dtype=np.float32)
+    depth[16, 16] = 0.8
+    frame = RGBDFrame(
+        1,
+        np.zeros((32, 32, 3), dtype=np.uint8),
+        depth,
+        np.array([[100.0, 0, 16], [0, 100.0, 16], [0, 0, 1]]),
+        1.0,
+        np.eye(4),
+        1.0,
+        1.0,
+        "calibration",
+    )
+    support = surface_support(
+        frame,
+        np.zeros_like(depth, dtype=bool),
+        np.array([[0.0, 0.0, 1.0]]),
+        np.eye(4),
+        depth_occlusion_tolerance_m=0.005,
+    )
+    assert support.projected_points == 0
+    assert support.masked_depth_points == 0
 
 
 def test_equal_surface_support_does_not_claim_the_new_pose_is_better():
@@ -32,6 +88,7 @@ def test_equal_surface_support_does_not_claim_the_new_pose_is_better():
         max_agreement_offset_m=0.01,
         max_agreement_angle_rad=0.1,
         min_masked_depth_points=3,
+        depth_occlusion_tolerance_m=0.005,
     )
     assert result.verdict == PoseComparisonVerdict.AMBIGUOUS
 
@@ -62,6 +119,7 @@ def test_recorded_held_dowel_proposals_conflict_across_depth_and_mask_support():
         max_agreement_offset_m=0.01,
         max_agreement_angle_rad=0.2,
         min_masked_depth_points=50,
+        depth_occlusion_tolerance_m=0.005,
     )
     assert result.verdict == PoseComparisonVerdict.AMBIGUOUS
     assert result.object_center_difference_m > 0.03

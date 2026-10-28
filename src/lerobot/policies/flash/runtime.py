@@ -189,6 +189,9 @@ class FlashRuntime:
                 object_center_object_m=(object_centers_by_role or {}).get(transition.role),
                 object_points_object_m=(object_points_by_role or {}).get(transition.role),
                 min_visual_support_points=causal_tracking.min_inliers if causal_tracking is not None else 3,
+                depth_occlusion_tolerance_m=(
+                    causal_tracking.fit_threshold_m if causal_tracking is not None else None
+                ),
             )
             for transition in skill.attachment_transitions
         }

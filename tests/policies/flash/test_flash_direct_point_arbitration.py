@@ -123,7 +123,7 @@ def test_real_contact_conflict_keeps_point_prediction_and_records_direct_candida
     assert store.snapshot()[1]["dowel"] is predicted
     assert service.anchor_outcomes_by_role["dowel"]["direct_point_unresolved"] == 1
     assert comparisons[0][0] == "dowel"
-    assert comparisons[0][1].verdict == PoseComparisonVerdict.AMBIGUOUS
+    assert comparisons[0][1].verdict == PoseComparisonVerdict.PRIOR_FAVORED
     assert comparisons[0][1].object_center_difference_m > 0.01
     assert len(decisions) == 1
     assert decisions[0].frame_id == frame.frame_id
