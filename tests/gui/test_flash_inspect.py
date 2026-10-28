@@ -323,7 +323,7 @@ def test_raw_demo_preparation_accepts_object_roles_entered_in_editor(tmp_path, m
     assert launches[0][1] == "flash_prepare"
 
 
-def test_new_preparation_candidate_does_not_replace_default_demo(tmp_path):
+def test_new_preparation_candidate_opens_for_review_by_default(tmp_path):
     dataset = tmp_path / "demo"
     (dataset / "meta").mkdir(parents=True)
     (dataset / "meta/info.json").write_text(json.dumps({"total_episodes": 1}))
@@ -336,12 +336,13 @@ def test_new_preparation_candidate_does_not_replace_default_demo(tmp_path):
         bundle.write_text(json.dumps({"skill": "skill.json"}))
         os.utime(bundle, (stamp, stamp))
     (prepared / "new/preparation-report.json").write_text(json.dumps({"review_status": "candidate"}))
-    (prepared / "accepted/annotation.json").write_text(
+    (prepared / "new/annotation.json").write_text(
         json.dumps({"held_role": "workpiece", "target_role": "receiver"})
     )
     recordings = _flash_recordings((tmp_path,))
     demo = next(recording for recording in recordings if recording["kind"] == "demo")
-    assert Path(demo["bundle_path"]).parent.name == "accepted"
+    assert Path(demo["bundle_path"]).parent.name == "new"
+    assert demo["prepared_skill"] == "new"
     assert [version["name"] for version in demo["prepared_versions"]] == ["accepted", "new"]
     assert demo["prepared_versions"][-1]["candidate"]
     assert demo["interaction"] == {"held_role": "workpiece", "target_role": "receiver"}
@@ -694,8 +695,8 @@ def test_run_flash_lists_demos_and_shows_extracted_pose_overlay(gui_page):
                     "episode": 2,
                     "interaction": {"held_role": "workpiece", "target_role": "receiver"},
                     "skills": ["spatial-skill", "new-skill"],
-                    "bundle_path": "/tmp/one-demo/flash/v1/prepared/spatial-skill/bundle.json",
-                    "prepared_skill": "spatial-skill",
+                    "bundle_path": "/tmp/one-demo/flash/v1/prepared/new-skill/bundle.json",
+                    "prepared_skill": "new-skill",
                     "prepared_versions": [
                         {
                             "name": "spatial-skill",
@@ -812,10 +813,18 @@ def test_run_flash_lists_demos_and_shows_extracted_pose_overlay(gui_page):
         "() => document.querySelectorAll('#run-flash-demos .flash-recording').length === 1"
     )
     assert "workpiece → receiver" in page.locator("#run-flash-demos .flash-recording").inner_text()
-    assert "spatial-skill" in page.locator("#run-flash-demos").inner_text()
+    assert (
+        "new-skill · review candidate" in page.locator("#run-flash-demos .flash-recording-meta").inner_text()
+    )
     assert "review candidate" in page.locator("#run-flash-demos .flash-recording-version").inner_text()
+    assert (
+        page.locator("#run-flash-demos .flash-recording-version")
+        .input_value()
+        .endswith("/new-skill/bundle.json")
+    )
     page.locator("#run-flash-demos .flash-recording").click()
     page.wait_for_function("() => document.querySelector('#flash-tracker-mode').textContent === 'Demo'")
+    assert "review candidate" in page.locator("#run-flash-demos .flash-recording-meta").inner_text()
     assert "flash-reviewing" in page.locator("#tab-run").get_attribute("class").split()
     assert page.locator("#run-terminal-container").is_hidden()
     assert page.locator("#overlays-panel-run").is_hidden()

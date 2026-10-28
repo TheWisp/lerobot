@@ -1959,9 +1959,12 @@ def _flash_recordings(source_paths: tuple[Path, ...]) -> list[dict]:
                 demo["prepared_versions"].append(
                     {"name": path.parent.name, "bundle_path": str(path.resolve()), "candidate": candidate}
                 )
-                if not candidate:
-                    demo["bundle_path"] = str(path.resolve())
-                    demo["prepared_skill"] = path.parent.name
+                # The demo list is a review surface: open the newest prepared
+                # version, including an unreviewed candidate, and let the
+                # replay's review banner make that status explicit. Trial
+                # launch chooses its skill separately.
+                demo["bundle_path"] = str(path.resolve())
+                demo["prepared_skill"] = path.parent.name
         for demo in demos.values():
             if demo["bundle_path"] is None and demo["prepared_versions"]:
                 chosen = demo["prepared_versions"][-1]

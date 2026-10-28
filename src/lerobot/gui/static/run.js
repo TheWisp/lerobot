@@ -1777,7 +1777,8 @@ async function loadFlashDemoReplay(datasetRoot, episodeIndex, bundlePath, candid
             const select = card.querySelector('.flash-recording-version');
             if (select && [...select.options].some(option => option.value === bundlePath)) select.value = bundlePath;
             const meta = card.querySelector('.flash-recording-meta');
-            if (meta) meta.textContent = `Viewing: ${bundlePath.split('/').slice(-2, -1)[0]} · Play with extracted poses`;
+            if (meta) meta.textContent = `Viewing: ${bundlePath.split('/').slice(-2, -1)[0]}` +
+                `${result.review_status === 'candidate' ? ' · review candidate' : ''} · Play with extracted poses`;
         }
         seekFlashReplay(0);
         if (candidateId && result.tracker_candidate?.tracker === 'trackeverything')
@@ -1892,8 +1893,11 @@ async function _loadFlashRecordings() {
             const meta = document.createElement('span');
             meta.className = 'flash-recording-meta';
             const skills = recording.skills || [];
+            const versions = recording.prepared_versions || [];
+            const viewedVersion = versions.find(version => version.bundle_path === recording.bundle_path);
             meta.textContent = recording.bundle_path
-                ? `${skills.length} FLASH skill(s) · viewing: ${recording.prepared_skill} · Play with extracted poses`
+                ? `${skills.length} FLASH skill(s) · viewing: ${recording.prepared_skill}` +
+                    `${viewedVersion?.candidate ? ' · review candidate' : ''} · Play with extracted poses`
                 : 'Raw SO-107 RGB-D demo · prepare objects and action in playback';
             button.append(label, meta);
             button.onclick = () => recording.bundle_path
@@ -1901,7 +1905,6 @@ async function _loadFlashRecordings() {
                     card.querySelector('.flash-recording-version')?.value || recording.bundle_path)
                 : loadFlashRawDemoReplay(recording.dataset_root, recording.episode);
             card.append(button);
-            const versions = recording.prepared_versions || [];
             if (versions.length > 1) {
                 const select = document.createElement('select');
                 select.className = 'flash-recording-version';
