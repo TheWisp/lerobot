@@ -203,14 +203,13 @@ function _flashEditorRender() {
     heading.textContent = state.raw ? 'Prepare demo' : 'Edit demo';
     editor.append(heading);
     const guidance = document.createElement('p');
-    guidance.textContent = 'Scrub the video to a moment, then mark it or edit its key frame.';
+    guidance.textContent = 'Scrub the replay. Select an object, mark the important moments, then edit the nearest key frame.';
     editor.append(guidance);
     const changed = document.createElement('p');
     changed.id = 'flash-demo-editor-change-status';
     editor.append(changed);
     const frameText = document.createElement('p');
     frameText.id = 'flash-demo-editor-frame';
-    frameText.hidden = true;
     editor.append(frameText);
 
     const panes = {};
@@ -226,19 +225,23 @@ function _flashEditorRender() {
     tracking.className = 'flash-editor-tracking';
     tracking.open = !!state.trackingOpen || ['pose', 'trackers'].includes(requestedSection);
     tracking.ontoggle = () => { if (tracking.isConnected) state.trackingOpen = tracking.open; };
-    tracking.append(Object.assign(document.createElement('summary'), {textContent: 'Inspect tracking'}),
+    tracking.append(Object.assign(document.createElement('summary'), {textContent: 'Inspect tracking and poses'}),
         panes.pose, panes.trackers);
     const settings = document.createElement('details');
     settings.className = 'flash-editor-settings';
     settings.open = !!state.settingsOpen || ['objectOptions', 'exactTimes',
         'advanced', 'setup'].includes(requestedSection);
     settings.ontoggle = () => { if (settings.isConnected) state.settingsOpen = settings.open; };
-    settings.append(Object.assign(document.createElement('summary'), {textContent: 'Technical settings'}));
+    settings.append(Object.assign(document.createElement('summary'), {textContent: 'More settings'}));
     if (!state.raw) settings.append(panes.setup);
     settings.append(panes.objectOptions, panes.exactTimes, panes.advanced);
+    // Keep the ordinary editing path in the same order as the replay workflow.
+    // Reference views belong to the selected object, not a separate destination
+    // that the operator has to find after editing the timeline.
+    if (state.raw) editor.append(panes.setup);
     for (const key of state.raw
-        ? ['objects', 'references', 'events', 'keyframes', 'setup']
-        : ['objects', 'events', 'keyframes', 'references']) editor.append(panes[key]);
+        ? ['objects', 'events', 'keyframes']
+        : ['keyframes', 'objects', 'events']) editor.append(panes[key]);
     if (!state.raw) editor.append(tracking);
     editor.append(settings);
 
@@ -394,7 +397,7 @@ function _flashEditorRender() {
         }
     }
 
-    const events = _flashEditorSection(panes.events, 'At the playhead');
+    const events = _flashEditorSection(panes.events, 'Mark moments');
     events.querySelector('strong').id = 'flash-editor-playhead-title';
     for (const [key, label] of [
         ['grasp_time_s', 'Grasp'], ['release_time_s', 'Release'],
@@ -416,8 +419,8 @@ function _flashEditorRender() {
     _flashEditorField(exactTimes, 'Release time (s)', a.release_time_s, value => {
         a.release_time_s = value; _flashEditorRender();
     }, null, 'number');
-    const references = _flashEditorSection(panes.references, 'Reference views',
-        'Choose a clear view for each selected object.');
+    const references = _flashEditorSection(panes.references, 'Clear views',
+        'Choose a clear view of the selected object for matching.');
     for (const [label, value, buttonLabel, mark] of [
         [`Clear view of ${state.role || 'selected object'}`, `frame ${_flashEditorReferenceFrame(state.role)}`, 'Set appearance here', () =>
             _flashEditorSetReferenceFrame(_flashEditorCurrentFrame().frame_index)],
@@ -451,7 +454,7 @@ function _flashEditorRender() {
     _flashEditorField(exactTimes, 'Start-anchored until (s)', a.start_anchored_until_s,
         value => { a.start_anchored_until_s = value; }, null, 'number');
 
-    const objects = _flashEditorSection(panes.objects, 'Objects and masks', state.raw
+    const objects = _flashEditorSection(panes.objects, 'Objects', state.raw
         ? 'Name objects to track. Choose one held object and its target for this imported action.' : '');
     const addObject = state.raw ? objects : document.createElement('details');
     if (!state.raw) {
@@ -479,13 +482,7 @@ function _flashEditorRender() {
         _flashEditorField(objects, 'Segmentation prompt', a.prompts_by_role[state.role], value => {
             a.prompts_by_role[state.role] = value;
         });
-        const actionRoles = state.raw ? objects : document.createElement('details');
-        if (!state.raw) {
-            actionRoles.append(Object.assign(document.createElement('summary'), {
-                textContent: `Action pair · ${a.held_role} → ${a.target_role}`,
-            }));
-            objects.append(actionRoles);
-        }
+        const actionRoles = objects;
         _flashEditorField(actionRoles, 'Held object', a.held_role, value => {
             a.held_role = value; _flashEditorRender();
         }, roles);
@@ -536,13 +533,16 @@ function _flashEditorRender() {
                 else symmetry[state.role].max_observed_tilt_deg = Number(value);
             });
     }
+    panes.objects.append(panes.references);
+    const maskTools = _flashEditorSection(panes.objects, 'Mask',
+        'Use the automatic mask, or correct it on the clear-view frame.');
     const polygonStatus = document.createElement('p');
     polygonStatus.id = 'flash-demo-editor-polygon-status';
     polygonStatus.hidden = !state.role;
-    objects.append(polygonStatus);
+    maskTools.append(polygonStatus);
     if (state.role) {
         if (state.drawing) {
-            _flashEditorButton(objects, 'Save mask', () => {
+            _flashEditorButton(maskTools, 'Save mask', () => {
                 if (state.vertices.length < 3) {
                     showToast('Mask needs three points', 'Click at least three vertices.', 'warning'); return;
                 }
@@ -550,19 +550,19 @@ function _flashEditorRender() {
                 state.drawing = false; state.vertices = [];
                 _flashEditorRender();
             });
-            _flashEditorButton(objects, 'Cancel drawing', () => {
+            _flashEditorButton(maskTools, 'Cancel drawing', () => {
                 state.drawing = false; state.vertices = [];
                 _flashEditorRender();
             });
         } else {
-            _flashEditorButton(objects, 'Correct mask', async () => {
+            _flashEditorButton(maskTools, 'Correct mask', async () => {
                 if (flashSceneMode === '3d') await toggleFlashSceneView();
                 _flashEditorJump(_flashEditorReferenceFrame(state.role));
                 state.drawing = true; state.vertices = [];
                 _flashEditorRender();
             });
             if (a.reference_polygons_by_role?.[state.role]?.length) {
-                _flashEditorButton(objects, 'Use automatic mask', () => {
+                _flashEditorButton(maskTools, 'Use automatic mask', () => {
                     delete a.reference_polygons_by_role[state.role];
                     _flashEditorRender();
                 });

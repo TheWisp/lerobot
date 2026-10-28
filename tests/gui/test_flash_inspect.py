@@ -650,6 +650,18 @@ def test_run_flash_lists_demos_and_shows_extracted_pose_overlay(gui_page):
     assert "active" in page.locator('.tab[data-tab="run"]').get_attribute("class").split()
     assert "Reference pose used by skill" in page.locator("#flash-tracker-content").inner_text()
     assert "predicted" in page.locator("#flash-tracker-content").inner_text()
+    drawing = page.evaluate("""() => {
+        const context = CanvasRenderingContext2D.prototype;
+        const originalDash = context.setLineDash, originalText = context.fillText;
+        const dashed = [], labels = [];
+        context.setLineDash = function (pattern) { dashed.push([...pattern]); return originalDash.call(this, pattern); };
+        context.fillText = function (label, ...args) { labels.push(label); return originalText.call(this, label, ...args); };
+        try { _flashDrawOverlay(); }
+        finally { context.setLineDash = originalDash; context.fillText = originalText; }
+        return {dashed, labels};
+    }""")
+    assert [5, 4] in drawing["dashed"]
+    assert "object · predicted" in drawing["labels"]
     assert (
         "no mask here does not mean segmentation was lost"
         in page.locator("#flash-tracker-content").inner_text()
@@ -731,7 +743,7 @@ def test_run_flash_lists_demos_and_shows_extracted_pose_overlay(gui_page):
     assert page.locator("#flash-demo-editor-frame").inner_text().startswith("Frame 4")
     assert page.locator(
         "#flash-demo-editor .flash-editor-pane[data-section='objects'] > section"
-    ).is_visible()
+    ).first.is_visible()
     assert page.get_by_role("button", name="Correct mask").count() == 1, page.locator(
         "#flash-demo-editor"
     ).inner_text()
@@ -1378,6 +1390,16 @@ def test_raw_demo_editor_collects_object_names_and_action_from_visible_controls(
     page.wait_for_function("() => flashReplay?.kind === 'raw_demo'")
     page.locator("#flash-demo-edit-toggle").click()
     assert page.locator("#flash-demo-editor-change-status").inner_text() == "Raw demo · no preparation saved"
+    assert page.locator("#flash-demo-editor > .flash-editor-pane").evaluate_all(
+        "panes => panes.map(pane => pane.dataset.section)"
+    ) == ["setup", "objects", "events", "keyframes"]
+    assert (
+        page.locator(
+            "#flash-demo-editor .flash-editor-pane[data-section='objects'] "
+            "> .flash-editor-pane[data-section='references']"
+        ).count()
+        == 1
+    )
 
     current_section = "setup"
 
@@ -1661,7 +1683,12 @@ def test_3d_scene_projection_and_surface_pick_edit_the_prepared_keyframe(gui_pag
     assert page.locator(".flash-editor-navigation").count() == 0
     assert page.locator(
         "#flash-demo-editor .flash-editor-pane[data-section='objects'] > section"
-    ).is_visible()
+    ).first.is_visible()
+    assert page.locator("#flash-demo-editor > .flash-editor-pane").evaluate_all(
+        "panes => panes.map(pane => pane.dataset.section)"
+    ) == ["keyframes", "objects", "events"]
+    assert page.get_by_label("Held object", exact=True).is_visible()
+    assert page.get_by_label("Target object", exact=True).is_visible()
     assert page.locator("#flash-demo-editor .flash-editor-pane[data-section='keyframes']").is_visible()
     assert page.get_by_label("Reach", exact=True).is_visible()
     assert page.get_by_role("button", name="Move key frame to playhead").is_visible()

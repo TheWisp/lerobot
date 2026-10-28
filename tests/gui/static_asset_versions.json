@@ -60,16 +60,16 @@
     "v": "89"
   },
   "flash_demo_editor.js": {
-    "sha256_16": "5418b70c9fcf8f41",
-    "v": "31"
+    "sha256_16": "93fb47b10de40f10",
+    "v": "32"
   },
   "flash_live_tracking.js": {
     "v": "9",
     "sha256_16": "98dc567f47edf5c8"
   },
   "flash_scene_view.js": {
-    "sha256_16": "f0fccbe12fd86196",
-    "v": "18"
+    "sha256_16": "b3d686220ed824b8",
+    "v": "19"
   },
   "flash_surface_cloud.js": {
     "v": "1",
@@ -124,8 +124,8 @@
     "v": "27"
   },
   "run.js": {
-    "sha256_16": "7063f5f4a94f3cc7",
-    "v": "145"
+    "sha256_16": "54ac0181db9a9704",
+    "v": "146"
   },
   "style.css": {
     "sha256_16": "12374fb420b2bca0",

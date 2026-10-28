@@ -193,7 +193,7 @@ async function toggleFlashSceneView() {
                 option.textContent = role;
                 select.append(option);
             }
-            const {createFlashSceneView} = await import('/static/flash_scene_view.js?v=18');
+            const {createFlashSceneView} = await import('/static/flash_scene_view.js?v=19');
             flashSceneView = createFlashSceneView(grid.querySelector('.flash-scene-canvas'), surfaces);
             if (flashDemoEditor) {
                 const point = flashDemoEditor.keypointsDocument.keypoints[flashDemoEditor.keypointIndex];
@@ -812,7 +812,7 @@ function renderFlashSnapshot(snapshot, mode = 'Live') {
         return;
     }
     flashOverlayRows = [];
-    let html = '<div class="flash-tracker-legend">Hover a row to highlight it in the camera view. Solid outline: control pose · thin outlines: other estimates · purple: visible mask when its camera frame matches.</div>' + _flashCommandEvidence(snapshot);
+    let html = '<div class="flash-tracker-legend">Hover a row to highlight it. Solid outline: measured control pose · amber dashed outline: predicted control pose · thin outlines: other estimates · purple: frame-aligned visible mask.</div>' + _flashCommandEvidence(snapshot);
     for (const role of roles) {
         html += `<div class="flash-tracker-role"><strong>${_esc(role)}</strong>`;
         const mask = snapshot.observed_masks?.[role];
@@ -1217,13 +1217,15 @@ function _flashDrawOverlay() {
                 flashHighlightedOverlay.estimator === estimator);
         const draw = (role, name, pose, accepted, kind, estimator = '') => {
             const active = emphasized(kind, role, estimator);
+            const predicted = pose.evidence === 'predicted';
+            const color = predicted ? '#fbbf24' : _flashLayerColor(name);
             context.globalAlpha = active ? 1 : 0.12;
             const points = snapshot.points_object_m?.[role] || [];
             const projectedPoints = points.map(point => _flashProject(point, pose, camera)).filter(Boolean);
             if (projectedPoints.length >= 3) {
-                outline(_flashHull(projectedPoints), _flashLayerColor(name),
-                    flashHighlightedOverlay && active ? 5 : accepted ? 2.5 : 1.5, !accepted);
-                if (accepted) {
+                outline(_flashHull(projectedPoints), color,
+                    flashHighlightedOverlay && active ? 5 : accepted ? 2.5 : 1.5, !accepted || predicted);
+                if (accepted && !predicted) {
                     const previousAlpha = context.globalAlpha;
                     context.globalAlpha = flashReplay?.kind === 'demo' ? previousAlpha * 0.45 : previousAlpha;
                     context.fillStyle = flashReplay?.kind === 'demo' ? _flashLayerColor(name) : '#d8f8ff';
@@ -1239,14 +1241,15 @@ function _flashDrawOverlay() {
             if (!projected) { context.globalAlpha = 1; return; }
             const [x, y] = pixel(projected);
             if (!projectedPoints.length) {
-                context.strokeStyle = _flashLayerColor(name);
+                context.strokeStyle = color;
                 context.lineWidth = accepted ? 2.5 : 1.5;
                 context.beginPath(); context.arc(x, y, accepted ? 9 : 5, 0, 2 * Math.PI); context.stroke();
             }
             if (accepted) {
                 context.font = 'bold 13px sans-serif';
                 context.fillStyle = '#fff';
-                context.fillText(role === '__gripper__' ? 'gripper' : role, x + 8, y - 8);
+                context.fillText(role === '__gripper__' ? 'gripper' :
+                    predicted ? `${role} · predicted` : role, x + 8, y - 8);
             }
             context.globalAlpha = 1;
         };

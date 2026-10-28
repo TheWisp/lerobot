@@ -338,6 +338,10 @@ export function createFlashSceneView(canvas, surfaces) {
                 // A clone shares the buffers, but owns its material for this frame.
                 surface.children.forEach(child => { child.material = child.material.clone(); });
                 if (held?.role === role) surface.children[0].material.color.setHex(gripperColor);
+                else if (used.evidence === 'predicted') {
+                    surface.children[0].material.color.setHex(0xfbbf24);
+                    surface.children[0].material.opacity = 0.2;
+                }
                 setPose(surface, used.pose, baseFromCamera);
                 surface.userData = {kind: held?.role === role ? 'held' : 'accepted', role, enabled: true};
                 evidence.add(surface);
