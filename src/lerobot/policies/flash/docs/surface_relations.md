@@ -15,20 +15,9 @@ Review the extracted demonstration and test its adaptations in the same 3D scene
 
 ## Components
 
-```mermaid
-flowchart TD
-    RGBD[Recorded or test RGB-D] --> Tracking[Shared tracking: surfaces and evidence]
-    Tracking --> Extraction[Demo extraction]
-    Editing[Timeline and relationship annotations] --> Extraction
-    Extraction --> Demo[Prepared demo]
-    Tracking --> Matching[Test: match the current keyframes]
-    Demo --> Matching
-    Matching --> Planning[Async planning and action queue]
-    Planning --> Motor[30 Hz LeRobot control]
-    Extraction -.-> View[Shared 3D view]
-    Matching -.-> View
-    Planning -.-> View
-```
+![Shared perception, demo extraction, testing and replay](assets/surface_relations/components.png)
+
+[Editable diagram](assets/surface_relations/components.svg).
 
 <a id="demo-extraction-from-the-timeline"></a>
 
@@ -51,13 +40,37 @@ Predictions and unlinked views remain explicit. A complete mesh is unnecessary.
 
 _Actual insertion RGB-D, frame 100. Proposed controls and hypothetical handles; not a policy result._
 
-Reconstruct the objects, robot and surroundings. Orbit/pan/zoom follows the
+**Show the tracked object surface as a shaded 3D mesh, with optional wireframe.**
+Keep it sharp above the softened RGB-D surroundings. Separate the current measured
+patch from the accumulated surface at its estimated pose; unseen areas remain open.
+Orbit/pan/zoom follows the
 URDF viewer; **Camera** restores the capture viewpoint. Keep playback below
 the scene. Collapse the recording/object lists and contextual inspector for space.
 
 - **Demo/Edit:** edit keyframes and rules directly on the scene and timeline.
 - **Test:** show matched surfaces, active rules, progress and available plans.
 - **Replay:** exactly Test with recorded snapshots. Future “Use as demo” preserves the recording.
+
+### Tracking layers — same meaning in all three modes
+
+| Layer                  | What appears in the scene                                                                                                                                                                       |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Measured surface**   | Solid, textured mesh of this frame's valid masked depth.                                                                                                                                        |
+| **Used estimate**      | Accumulated surface and a small direction gizmo at the accepted pose. Badge: **Visual**, **Group predicted**, **Gripper predicted**, or **Lost**. Predictions use dashed outlines.              |
+| **Group tracker**      | Tracked supporting points, group membership outlines and a motion arrow. Selecting a predicted object reveals the supporting group and its link to that object.                                 |
+| **Gripper prediction** | Tool point/direction, attachment link and dashed object surface carried by the measured gripper pose. Show when the attachment was established or updated; contact alone does not establish it. |
+
+Default to measured surface + used estimate. Expand **Sources** to compare vision,
+group and gripper proposals, including rejected ones and the reason. Hover isolates
+a source. Show observation time, age and available confidence evidence; do not invent
+a confidence percentage. Reliable vision corrects supported predictions; **Lost**
+fades the last estimate and labels its time.
+
+**Demo:** compute these layers during extraction and review the selected version.
+Robot-based predictions require recorded robot state and calibration.
+**Test:** show the snapshots used by the engine, with image/estimate times when they
+differ. **Replay:** display those recorded snapshots. Missing historical layers say
+**Not recorded**; a fresh extraction is separately labelled **Recomputed**.
 
 ## Editing a relationship
 
@@ -77,11 +90,11 @@ Both edit relationships between any participants; sliding does not imply graspin
 
 ## Make the proposed change stand out
 
-- **Scene:** soften/desaturate observed objects; preserve outlines, contact patches and obstacles. Adjust **Scene emphasis**; hold **Original** to compare. Missing geometry fades to a neutral background.
+- **Scene:** soften/desaturate the background; keep tracked meshes and contact patches sharp. Adjust **Scene emphasis**; hold **Original** to compare. Missing geometry fades to a neutral background.
 - **Allowed choices:** a sharp translucent amber arc or ribbon with draggable endpoints. This is permission, not a path.
 - **Candidate:** sharp cyan object surface or tool point + approach arrow; a crossbar shows closing direction. Alternatives are faint ghosts.
 - **Motion:** show a labelled path only when computed; mark unchecked/occluded portions. Permission, prediction and measured motion stay distinct. Display effects never change checking geometry.
 
 **Layers** stays clear of **Expand** and playback. Hover to highlight, click to
-pin. Visibility affects neither control nor recording. Geometry and overlays
-share source timestamps; replay reproduces the same snapshot.
+pin. Visibility affects neither control nor recording. Every layer carries its source
+timestamp; replay preserves the snapshot and its delays.

@@ -88,6 +88,8 @@ def prepare(recording: Path, mask_path: Path, output: Path) -> None:
         "positions": pos.round(6).ravel().tolist(),
         "colors": colors.round(4).ravel().tolist(),
         "indices": triangles.ravel().tolist(),
+        "dowel_indices": triangles[mask[::2, ::2].ravel()[triangles].all(1)].ravel().tolist(),
+        "ring_indices": triangles[ring[::2, ::2].ravel()[triangles].all(1)].ravel().tolist(),
         "dowel": contour(mask),
         "ring": contour(ring),
         "curve": curve,
