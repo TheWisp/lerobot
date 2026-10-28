@@ -401,6 +401,14 @@ class SurfacePoseBackend:
             )
             if surface_axis_base is not None:
                 surface_axis_base /= np.linalg.norm(surface_axis_base)
+            split_axes_camera = diagnostics.get("principal_surface_split_axes_camera")
+            split_axes_base = None
+            if split_axes_camera is not None:
+                split_axes_base = []
+                for axis_camera in split_axes_camera:
+                    axis_base = frame.base_from_camera[:3, :3] @ np.asarray(axis_camera, dtype=float)
+                    axis_base /= np.linalg.norm(axis_base)
+                    split_axes_base.append(tuple(float(value) for value in axis_base))
             self.last_visible_support[role] = VisibleSurfaceSupport(
                 mask_pixels=int(np.count_nonzero(mask)) if mask is not None else 0,
                 depth_points=diagnostics.get("surface_points"),
@@ -435,6 +443,10 @@ class SurfacePoseBackend:
                 principal_surface_points=(
                     int(diagnostics["principal_surface_points"]) if surface_axis_base is not None else None
                 ),
+                principal_surface_split_axes_base=(
+                    tuple(split_axes_base) if split_axes_base is not None else None
+                ),
+                principal_surface_split_gap_rad=diagnostics.get("principal_surface_split_gap_rad"),
             )
             # A full rigid observation needs two independently extended visible
             # directions. If the smaller spread is below the fit's measured

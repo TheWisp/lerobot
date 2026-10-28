@@ -17,7 +17,9 @@ class VisibleSurfaceSupport:
 
     The principal axis belongs to the currently visible patch, not necessarily
     the complete object. Its sign is arbitrary; its spectrum describes shape,
-    not calibrated orientation confidence or a recovered contact point.
+    not calibrated orientation confidence or a recovered contact point. The
+    spatial split tests stability within one image; its halves can still share
+    the same segmentation or depth bias.
     """
 
     mask_pixels: int
@@ -31,6 +33,10 @@ class VisibleSurfaceSupport:
     principal_surface_axis_base: tuple[float, float, float] | None = None
     principal_surface_spreads_m: tuple[float, float, float] | None = None
     principal_surface_points: int | None = None
+    principal_surface_split_axes_base: (
+        tuple[tuple[float, float, float], tuple[float, float, float]] | None
+    ) = None
+    principal_surface_split_gap_rad: float | None = None
 
     def __post_init__(self) -> None:
         if self.mask_pixels < 0 or any(
@@ -67,6 +73,21 @@ class VisibleSurfaceSupport:
                 or self.principal_surface_points < 3
             ):
                 raise ValueError("invalid principal visible surface evidence")
+        split_axes = self.principal_surface_split_axes_base
+        split_gap = self.principal_surface_split_gap_rad
+        if (split_axes is None) != (split_gap is None):
+            raise ValueError("split visible surface evidence must be complete")
+        if split_axes is not None:
+            split_array = np.asarray(split_axes, dtype=float)
+            if (
+                axis is None
+                or split_array.shape != (2, 3)
+                or not np.isfinite(split_array).all()
+                or not np.allclose(np.linalg.norm(split_array, axis=1), 1.0, rtol=0, atol=1e-6)
+                or not isfinite(split_gap)
+                or not 0 <= split_gap <= np.pi / 2
+            ):
+                raise ValueError("invalid split visible surface evidence")
 
 
 @dataclass(frozen=True)

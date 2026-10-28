@@ -295,6 +295,10 @@ def test_failed_rgb_motion_remains_visible_for_debugging_but_not_authoritative()
     assert abs(axis @ np.array([1.0, 0.0, 0.0])) > 0.9
     assert spreads[0] <= spreads[1] < spreads[2]
     assert proposal.visible_support.principal_surface_points >= 3
+    split_axes = proposal.visible_support.principal_surface_split_axes_base
+    assert split_axes is not None
+    assert all(abs(np.asarray(part) @ np.array([1.0, 0.0, 0.0])) > 0.9 for part in split_axes)
+    assert proposal.visible_support.principal_surface_split_gap_rad < 0.2
     assert proposal.failure == "surface proposal lacks accepted RGB-D support"
 
 
@@ -305,6 +309,10 @@ def test_visible_patch_direction_uses_robot_base_coordinates():
     proposal = PerceptionPipeline(local_backend(), (reference(),)).process(frame).proposals[0]
     axis = np.asarray(proposal.visible_support.principal_surface_axis_base)
     assert abs(axis @ np.array([0.0, 1.0, 0.0])) > 0.9
+    assert all(
+        abs(np.asarray(part) @ np.array([0.0, 1.0, 0.0])) > 0.9
+        for part in proposal.visible_support.principal_surface_split_axes_base
+    )
 
 
 def test_small_patch_fit_cannot_promote_reference_depth_disagreement():

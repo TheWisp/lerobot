@@ -104,12 +104,13 @@ def measure(result_path: Path, sample_rows: list[int]) -> list[dict]:
         eigenvalues, directions = np.linalg.eigh(np.cov(measured.T))
         measured_axis = directions[:, -1]
         spreads_mm = np.sqrt(eigenvalues) * 1000
-        tracked_surface = observation(
+        sampled = observation(
             frame.metric_depth(),
             mask,
             intrinsics,
             asdict(bundle.vision_pipeline.observation),
-        )["points"]
+        )
+        tracked_surface = sampled["points"]
         if len(tracked_surface) >= 3:
             surface_values, surface_directions = np.linalg.eigh(np.cov(tracked_surface.T))
             surface_axis = surface_directions[:, -1]
@@ -117,6 +118,14 @@ def measure(result_path: Path, sample_rows: list[int]) -> list[dict]:
         else:
             surface_axis = None
             surface_spreads_mm = None
+        split_axes = []
+        for subset in (sampled["fit"], ~sampled["fit"]):
+            if np.count_nonzero(subset) >= 3:
+                _, split_directions = np.linalg.eigh(np.cov(tracked_surface[subset].T))
+                split_axes.append(split_directions[:, -1])
+            else:
+                split_axes.append(None)
+        split_gap_deg = axis_gap_deg(*split_axes) if all(axis is not None for axis in split_axes) else None
         source_time_s = recorded["source_time_s"]
         right = int(np.searchsorted(motor_times, source_time_s))
         fraction = (source_time_s - motor_times[right - 1]) / (motor_times[right] - motor_times[right - 1])
@@ -156,6 +165,9 @@ def measure(result_path: Path, sample_rows: list[int]) -> list[dict]:
                 "axis_gap_surface_3d_deg": (
                     axis_gap_deg(direction, surface_axis) if surface_axis is not None else None
                 ),
+                "axis_gap_split_deg": [
+                    axis_gap_deg(direction, axis) if axis is not None else None for axis in split_axes
+                ],
                 "axis_gripper": axis_gripper.tolist(),
                 "axis_gap_mask_2d_deg": axis_gap_deg(projected_axis, observed_2d_axis),
                 "projected_endpoints_xy": projected.tolist(),
@@ -175,6 +187,7 @@ def measure(result_path: Path, sample_rows: list[int]) -> list[dict]:
                 "pca_spread_mm": spreads_mm.tolist(),
                 "tracked_surface_points": len(tracked_surface),
                 "tracked_surface_spread_mm": surface_spreads_mm,
+                "tracked_surface_split_gap_deg": split_gap_deg,
                 "tracked_surface_axis_base": (
                     surface_axis_base.tolist() if surface_axis_base is not None else None
                 ),

@@ -25,6 +25,18 @@ def gap_deg(first, second):
     return float(np.degrees(np.arccos(np.clip(abs(first @ second), -1, 1))))
 
 
+def split_vote(item: dict) -> str:
+    candidate = item["proposals"]["vision_candidate"]["axis_gap_split_deg"]
+    gripper = item["proposals"]["gripper_fallback"]["axis_gap_split_deg"]
+    if any(gap is None for gap in candidate + gripper):
+        return "insufficient"
+    if all(visual < prior for visual, prior in zip(candidate, gripper, strict=True)):
+        return "vision"
+    if all(prior < visual for visual, prior in zip(candidate, gripper, strict=True)):
+        return "gripper"
+    return "ambiguous"
+
+
 def analyze(result_path: Path, audit_path: Path, horizons_s: list[float]) -> dict:
     result = load(result_path)
     held = [
@@ -66,8 +78,21 @@ def analyze(result_path: Path, audit_path: Path, horizons_s: list[float]) -> dic
                     "actual_horizon_s": future["source_time_s"] - item["source_time_s"],
                     "vision_gap_deg": gap_deg(candidate, measured),
                     "gripper_gap_deg": gap_deg(gripper, measured),
+                    "source_split_vote": split_vote(item),
                 }
             )
+        vote_results = {}
+        for vote in ("vision", "gripper", "ambiguous", "insufficient"):
+            selected = [item for item in rows if item["source_split_vote"] == vote]
+            vote_results[vote] = {
+                "frames": len(selected),
+                "vision_predicts_future_better": sum(
+                    item["vision_gap_deg"] < item["gripper_gap_deg"] for item in selected
+                ),
+                "gripper_predicts_future_better": sum(
+                    item["gripper_gap_deg"] < item["vision_gap_deg"] for item in selected
+                ),
+            }
         summaries.append(
             {
                 "requested_horizon_s": horizon_s,
@@ -81,6 +106,7 @@ def analyze(result_path: Path, audit_path: Path, horizons_s: list[float]) -> dic
                 "median_gripper_gap_deg": float(np.median([item["gripper_gap_deg"] for item in rows]))
                 if rows
                 else None,
+                "split_vote_results": vote_results,
                 "samples": rows,
             }
         )

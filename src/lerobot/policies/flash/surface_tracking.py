@@ -202,6 +202,18 @@ class SurfaceTrackingSession:
         detail["principal_surface_axis_camera"] = directions[:, -1].tolist()
         detail["principal_surface_spreads_m"] = np.sqrt(np.maximum(variances, 0.0)).tolist()
         detail["principal_surface_points"] = len(points)
+        split_axes = []
+        for subset in (obs["fit"], ~obs["fit"]):
+            if np.count_nonzero(subset) < 3:
+                break
+            partition = points[subset] - points[subset].mean(axis=0)
+            _, partition_directions = np.linalg.eigh(partition.T @ partition / len(partition))
+            split_axes.append(partition_directions[:, -1])
+        if len(split_axes) == 2:
+            detail["principal_surface_split_axes_camera"] = [axis.tolist() for axis in split_axes]
+            detail["principal_surface_split_gap_rad"] = float(
+                np.arccos(np.clip(abs(split_axes[0] @ split_axes[1]), -1, 1))
+            )
         detail["preprocess_ms"] = (time.perf_counter() - start) * 1000
         if self.previous is not None:
             start = time.perf_counter()

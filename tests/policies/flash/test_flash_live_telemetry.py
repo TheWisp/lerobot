@@ -106,6 +106,8 @@ def test_live_tracker_layers_are_replayed_with_camera_frame(tmp_path: Path) -> N
             principal_surface_axis_base=(0.0, 1.0, 0.0),
             principal_surface_spreads_m=(0.001, 0.002, 0.01),
             principal_surface_points=20,
+            principal_surface_split_axes_base=((0.0, 1.0, 0.0), (0.0, 1.0, 0.0)),
+            principal_surface_split_gap_rad=0.0,
         ),
     )
     telemetry.anchor_decision(
@@ -187,6 +189,8 @@ def test_live_tracker_layers_are_replayed_with_camera_frame(tmp_path: Path) -> N
         "principal_surface_axis_base": [0.0, 1.0, 0.0],
         "principal_surface_spreads_m": [0.001, 0.002, 0.01],
         "principal_surface_points": 20,
+        "principal_surface_split_axes_base": [[0.0, 1.0, 0.0], [0.0, 1.0, 0.0]],
+        "principal_surface_split_gap_rad": 0.0,
     }
     (tmp_path / "meta").mkdir()
     (tmp_path / "meta" / "info.json").write_text(

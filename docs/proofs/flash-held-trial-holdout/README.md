@@ -47,6 +47,17 @@ The [future-axis check](audit_future_axis.py) compares each proposal's direction
 
 This strengthens the case that the first attempt's rejected direction is useful beyond its source image, while the second still supplies no general rule to favor vision. Adjacent masks and depth errors can be correlated; the check does not validate position, end identity, contact-tip accuracy, or physical outcome.
 
+The surface pipeline already divides its spatial samples into interleaved fit and validation tiles. For each source image, we also compare candidate and gripper directions with the principal direction measured from **each half separately**. A proposal gets a shadow vote only when it is closer in both halves; otherwise the vote is ambiguous. At the 0.6-second future check:
+
+| Attempt  | Both halves favor | Source frames | Voted source predicts the later direction better |
+| -------- | ----------------- | ------------: | -----------------------------------------------: |
+| 20:33:10 | Vision            |            86 |                                               81 |
+| 20:33:10 | Gripper           |             5 |                                                4 |
+| 20:18:38 | Vision            |            75 |                                               64 |
+| 20:18:38 | Gripper           |            64 |                                               59 |
+
+The remaining 8 and 6 source frames respectively gave split disagreement. The vote uses no scene-specific angle cutoff, but the halves share a camera, mask and depth biases; their agreement is not a calibrated confidence probability. These are correlated frames of only two attempts with one physical object. The result supports carrying split directional evidence into source-frame proposals and testing a partial held-pose update in shadow; it does **not** yet justify changing control.
+
 Both held intervals contain frames with visible masks but no accepted full pose. The table compares each proposal with the tracker's connected visible-surface direction **after the last accepted direct pose** in that attempt:
 
 | Recorded attempt | Held RGB-D frames | Direct poses / `LOST` | Later frames | Vision closer to visible direction | Median vision gap | Median gripper gap |
@@ -62,4 +73,4 @@ The current backend requires enough spread in _two_ visible directions to accept
 
 The inference is that full-pose acceptance is conflating _directional_ evidence with all six pose coordinates, while the frozen partial reference is a poor reverse-depth comparator after rotation. A generic fix should represent supported degrees of freedom and uncertainty explicitly, test current measured geometry against each hypothesis, preserve ambiguity where the surface does not constrain a direction, and then use gripper/group priors only for the unsupported degrees of freedom. It must be checked on multiple objects and trials before changing execution. The older preparation/UI selection issue is separate: opening the newest preparation would make the display less misleading but would not remove this algorithmic failure.
 
-The shared surface backend now records the visible patch's direction, three 3D spreads, and point count in every source-frame proposal, including rejected full poses. This adds evidence for demo preparation, live testing and replay without altering the selected pose. Rerunning this trial before and after the addition gave identical observed/lost labels, candidate poses, accepted attachment updates and fallback states on all 553 frames. The only existing diagnostic that changed was its lateral spread at under 3 × 10⁻¹⁴ mm, numerical roundoff from requesting eigenvectors alongside eigenvalues. This field is a partial **measurement**, not yet an accepted pose correction.
+The shared surface backend now records the visible patch's direction, three 3D spreads, point count, and both spatial-split directions in every source-frame proposal, including rejected full poses. This adds evidence for demo preparation, live testing and replay without altering the selected pose. Rerunning the first trial before the split addition gave identical observed/lost labels, candidate poses, accepted attachment updates and fallback states on all 553 frames. The only existing diagnostic that changed was its lateral spread at under 3 × 10⁻¹⁴ mm, numerical roundoff from requesting eigenvectors alongside eigenvalues. These fields are partial **measurements**, not yet accepted pose corrections.
