@@ -176,7 +176,7 @@ function _flashEditorRender() {
     const summary = document.createElement('p');
     summary.textContent = state.raw
         ? 'Name the objects, mark the important moments, then prepare.'
-        : 'Choose a key frame on the timeline, change its action, then preview.';
+        : 'Edit the demo while watching its playback, then preview the result.';
     editor.append(summary);
     const changed = document.createElement('p');
     changed.id = 'flash-demo-editor-change-status';
@@ -187,54 +187,44 @@ function _flashEditorRender() {
     editor.append(frameText);
 
     const panes = {};
-    const expanded = state.openSections ||= {};
     const requestedSection = state.section;
-    if (requestedSection) {
-        expanded[requestedSection] = true;
-        state.section = null;
-    }
-    const secondarySections = new Set(state.raw
-        ? ['references', 'pose', 'trackers', 'advanced']
-        : ['objects', 'setup', 'references', 'pose', 'trackers', 'advanced']);
-    const more = document.createElement('details');
-    more.className = 'flash-editor-group flash-editor-more';
-    more.open = !!expanded.more || secondarySections.has(requestedSection);
-    const moreTitle = document.createElement('summary');
-    moreTitle.textContent = state.raw ? 'Tracking and settings' : 'Objects, tracking and settings';
-    moreTitle.onclick = () => { expanded.more = !more.open; };
-    more.append(moreTitle);
-    const mainSections = state.raw
-        ? [['setup', 'Recording setup'], ['objects', 'Objects'], ['events', 'Timing'], ['keyframes', 'Action']]
-        : [['keyframes', 'Action'], ['events', 'Timing'], ['objects', 'Objects'], ['setup', 'Recording setup']];
-    for (const [key, label, primary] of [
-        ...mainSections.map(([key, label]) => [key, label, !['setup', 'objects'].includes(key) || state.raw]),
-        ['references', 'Reference frames', false],
-        ['pose', 'Pose evidence', false],
-        ['trackers', 'Tracker experiments', false],
-        ['advanced', 'Matching parameters', false],
+    state.section = null;
+    if (requestedSection) state.activePanel = ['objects', 'events', 'keyframes'].includes(requestedSection)
+        ? requestedSection : requestedSection === 'setup' || (state.raw && requestedSection === 'references')
+            ? 'objects' : 'more';
+    state.activePanel ||= state.raw ? 'objects' : 'keyframes';
+    const navigation = document.createElement('nav');
+    navigation.className = 'flash-editor-navigation';
+    navigation.setAttribute('aria-label', 'Demo editing');
+    for (const [key, label] of [
+        ['objects', 'Objects'], ['events', 'Hold / release'], ['keyframes', 'Key frames'], ['more', 'More'],
     ]) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = label;
+        button.classList.toggle('active', state.activePanel === key);
+        button.setAttribute('aria-current', state.activePanel === key ? 'page' : 'false');
+        button.onclick = () => { state.activePanel = key; _flashEditorRender(); editor.scrollTop = 0; };
+        navigation.append(button);
+    }
+    editor.append(navigation);
+    const more = document.createElement('div');
+    more.className = 'flash-editor-more';
+    more.hidden = state.activePanel !== 'more';
+    for (const key of ['objects', 'events', 'keyframes', 'setup', 'references', 'pose', 'trackers', 'advanced']) {
         const pane = document.createElement('div');
         pane.className = 'flash-editor-pane';
         pane.dataset.section = key;
         panes[key] = pane;
-        if (primary) {
+        if (['objects', 'events', 'keyframes'].includes(key)) {
+            pane.hidden = state.activePanel !== key;
             editor.append(pane);
-            continue;
-        }
-        if (secondarySections.has(key)) {
+        } else if (key !== 'setup' && !(key === 'references' && state.raw)) {
             more.append(pane);
-            continue;
         }
-        const details = document.createElement('details');
-        details.className = 'flash-editor-group';
-        details.dataset.section = key;
-        details.open = !!expanded[key];
-        const title = document.createElement('summary');
-        title.textContent = label;
-        title.onclick = () => { expanded[key] = !details.open; };
-        details.append(title, pane);
-        editor.append(details);
     }
+    if (state.raw) panes.objects.append(panes.setup);
+    else more.prepend(panes.setup);
     editor.append(more);
 
     const setup = _flashEditorSection(panes.setup, 'Recording and calibration', state.raw
@@ -510,6 +500,7 @@ function _flashEditorRender() {
             _flashEditorUpdateFrame();
         });
     }
+    if (state.raw) panes.objects.append(panes.references);
 
     const keypoints = _flashEditorSection(panes.keyframes, 'Key frame',
         'Use the timeline dots to choose a key frame. The action below applies at that moment.');
@@ -690,23 +681,21 @@ function _flashEditorRender() {
                 turn.append(refine);
             }
         }
-        const more = document.createElement('details');
-        more.className = 'flash-editor-keyframe-more';
-        const moreTitle = document.createElement('summary');
-        moreTitle.textContent = 'Timing and other options';
-        more.append(moreTitle);
-        _flashEditorField(more, 'Time (s)', point.t.toFixed(2), value => {
+        _flashEditorField(details, 'Time (s)', point.t.toFixed(2), value => {
             if (!Number.isFinite(value)) return;
             point.t = value;
             position.textContent = `${index + 1} of ${points.length} · ${value.toFixed(2)} s`;
         }, null, 'number');
-        _flashEditorButton(more, 'Use current time', () => {
+        _flashEditorButton(details, 'Use current time', () => {
             point.t = _flashEditorCurrentFrame().snapshot.demo.time_s; _flashEditorRender();
         });
-        _flashEditorField(more, 'Constraint', point.constraint || 'pose', value => { point.constraint = value; }, ['pose', 'best_effort']);
-        _flashEditorField(more, 'Grip', point.grip || 'first', value => { point.grip = value; }, ['first', 'along']);
-        if (point.move === 'lift') _flashEditorField(more, 'Lift (mm)', point.up_mm || 0, value => { point.up_mm = value; }, null, 'number');
-        _flashEditorButton(more, 'Remove key frame', () => {
+        const constraint = _flashEditorField(details, 'Reach', point.constraint || 'pose', value => {
+            point.constraint = value;
+        }, ['pose', 'best_effort']);
+        constraint.options[0].textContent = 'Must reach';
+        constraint.options[1].textContent = 'Best effort';
+        if (point.move === 'lift') _flashEditorField(details, 'Lift (mm)', point.up_mm || 0, value => { point.up_mm = value; }, null, 'number');
+        _flashEditorButton(details, 'Remove key frame', () => {
             if (turnRule) {
                 showToast('Remove turn first', 'This key frame is part of a saved turn span.', 'warning');
                 return;
@@ -720,7 +709,6 @@ function _flashEditorRender() {
             _flashEditorRender();
             _flashRenderTimeline();
         });
-        details.append(more);
         keypoints.append(details);
     }
     _flashEditorButton(keypoints, 'Add key frame at current time', () => {
