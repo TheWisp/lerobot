@@ -870,8 +870,14 @@ function renderFlashSnapshot(snapshot, mode = 'Live') {
                 superseded_by_direct: 'A newer direct pose was already used',
                 direct_group_unresolved: 'Direct pose disagrees with tracked scene motion',
                 direct_point_unresolved: 'Direct pose disagrees with tracked object points',
+                event_replay_pending: 'Checking this pose against earlier camera frames',
+                event_replay_history_expired: 'Earlier frames expired; current estimate kept',
+                event_replay_attachment_changed: 'Object attachment changed; current estimate kept',
+                event_replay_outdated: 'Newer evidence arrived; current estimate kept',
             };
-            const label = reasons[decision.outcome] || decision.outcome.replaceAll('_', ' ');
+            const replayed = decision.outcome.startsWith('replayed_');
+            const outcome = replayed ? decision.outcome.slice('replayed_'.length) : decision.outcome;
+            const label = `${replayed ? 'Rechecked earlier frames: ' : ''}${reasons[outcome] || outcome.replaceAll('_', ' ')}`;
             html += `<div class="flash-tracker-comparison">${_esc(label)}` +
                 `<small>Candidate from camera frame ${_esc(String(decision.frame_id))}` +
                 ` · ${_esc(decision.candidate?.estimator || 'unknown source')}</small></div>`;

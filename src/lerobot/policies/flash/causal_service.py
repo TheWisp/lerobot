@@ -1140,8 +1140,7 @@ class CausalPoseService:
         result = pending.shadow.store.snapshot()[1].get(role)
         current = self.store.snapshot()[1].get(role)
         if result is None or (current is not None and result.source_time_s < current.source_time_s):
-            del self.pending_event_replays[role]
-            self._count_anchor_outcome(role, "event_replay_outdated")
+            self._abort_event_replay(role, "event_replay_outdated")
             return False
         for name in (
             "active",
