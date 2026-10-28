@@ -1089,6 +1089,77 @@ def test_held_attachment_reanchors_after_repeated_image_supported_visual_correct
     assert updater.state(0.08).gripper_from_object[0, 3] == pytest.approx(0.03)
 
 
+def test_ambiguous_visual_flip_keeps_depth_supported_gripper_prediction():
+    class StationaryKinematics:
+        def forward_kinematics(self, _joints):
+            return np.eye(4)
+
+    xy = np.linspace(-0.1, 0.1, 11)
+    points = np.array([(x, y, 1.0) for x in xy for y in xy])
+    updater = HeldAttachmentUpdater(
+        "held",
+        "held-v1",
+        StationaryKinematics(),
+        ("arm",),
+        history_capacity=5,
+        max_motor_sample_gap_s=0.1,
+        max_attachment_age_s=1.0,
+        max_update_shift_m=0.015,
+        max_update_turn_rad=0.1,
+        object_points_object_m=points,
+        min_visual_support_points=12,
+        depth_occlusion_tolerance_m=0.005,
+    )
+    for time_s in (0.0, 0.03, 0.06, 0.09):
+        updater.on_motor_tick(
+            MotorTick(0, time_s, {"arm.pos": 0.0}, 0.0, {"arm.pos": 0.0}, None, observed_at_s=time_s)
+        )
+    pregrasp = PoseEstimate("held", pose(), 0.0, 0.0, Evidence.OBSERVED, "held-v1", (True,) * 3, (True,) * 3)
+    assert updater.activate(0.02, pregrasp, np.zeros(1))
+    frame = RGBDFrame(
+        1,
+        np.zeros((64, 64, 3), dtype=np.uint8),
+        np.ones((64, 64), dtype=np.float32),
+        np.array([[100.0, 0.0, 32.0], [0.0, 100.0, 32.0], [0.0, 0.0, 1.0]]),
+        1.0,
+        np.eye(4),
+        0.04,
+        0.04,
+        "calibration",
+    )
+    flipped = pose()
+    flipped[:3, :3] = Rotation.from_euler("z", 180, degrees=True).as_matrix()
+    observed = PoseEstimate(
+        "held", flipped, 0.04, 0.04, Evidence.OBSERVED, "held-v1", (True,) * 3, (True,) * 3
+    )
+    assert not updater.on_pose_update(1, {"held": observed}, frame=frame, mask=np.ones((64, 64), bool))
+    assert updater.state(0.04) is not None
+    assert updater.visual_ambiguous
+    assert updater.last_rejection.endswith("image comparison ambiguous")
+    np.testing.assert_allclose(updater.last_accepted_gripper_from_object, np.eye(4))
+    clear = PoseEstimate("held", pose(), 0.07, 0.07, Evidence.OBSERVED, "held-v1", (True,) * 3, (True,) * 3)
+    assert updater.on_pose_update(2, {"held": clear}, ee_at_capture=np.eye(4))
+    assert not updater.visual_ambiguous
+    contradicted_frame = RGBDFrame(
+        3,
+        frame.rgb,
+        np.full((64, 64), 1.03, dtype=np.float32),
+        frame.intrinsics,
+        1.0,
+        np.eye(4),
+        0.08,
+        0.08,
+        "calibration",
+    )
+    contradicted = PoseEstimate(
+        "held", flipped, 0.08, 0.08, Evidence.OBSERVED, "held-v1", (True,) * 3, (True,) * 3
+    )
+    assert not updater.on_pose_update(
+        3, {"held": contradicted}, frame=contradicted_frame, mask=np.ones((64, 64), bool)
+    )
+    assert updater.state(0.08) is None
+
+
 def test_held_attachment_compares_physical_center_when_object_frame_rotates():
     class StationaryKinematics:
         def forward_kinematics(self, _joints):

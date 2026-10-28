@@ -819,7 +819,9 @@ function _flashPoseText(pose, snapshot) {
     const age = Number(snapshot.recorded_at_s) - Number(pose.source_time_s);
     const freshness = Number.isFinite(age) ? ` · ${Math.max(0, age).toFixed(2)} s old` : '';
     const xyz = pose.pose ? ` · ${pose.pose.slice(0, 3).map((row, i) => (row[3] * 1000).toFixed(0)).join(', ')} mm` : '';
-    return `${pose.evidence || 'unknown'}${freshness}${xyz}`;
+    const evidence = pose.evidence === 'ambiguous_visual_prediction'
+        ? 'gripper prediction; visual fit ambiguous' : pose.evidence || 'unknown';
+    return `${evidence}${freshness}${xyz}`;
 }
 
 function _flashCommandEvidence(snapshot) {

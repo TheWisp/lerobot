@@ -142,7 +142,7 @@ class FlashLiveTelemetry:
         self._accepted: dict[str, PoseEstimate] = {}
         self._latest_decisions: dict[str, dict] = {}
         self._pending_decisions: deque[dict] = deque()
-        self._held_attachment: tuple[str, AttachmentState, np.ndarray, float, bool] | None = None
+        self._held_attachment: tuple[str, AttachmentState, np.ndarray, float, bool, bool] | None = None
         self._motor_tick: dict | None = None
         self._thread = Thread(target=self._write_loop, name="flash-live-telemetry", daemon=True)
         self._thread.start()
@@ -283,6 +283,7 @@ class FlashLiveTelemetry:
         observed_at_s: float,
         *,
         independently_observed: bool,
+        visual_ambiguous: bool = False,
     ) -> None:
         """Record the controller's rigid-grasp prediction without doing FK on the motor loop."""
         with self._condition:
@@ -293,6 +294,7 @@ class FlashLiveTelemetry:
                     np.asarray(joints_deg, dtype=float).copy(),
                     observed_at_s,
                     independently_observed,
+                    visual_ambiguous,
                 )
                 if role is not None and attachment is not None and joints_deg is not None
                 else None
@@ -347,7 +349,7 @@ class FlashLiveTelemetry:
             motor_tick = self._motor_tick.copy() if self._motor_tick is not None else None
         held_prediction = None
         if held is not None and self.kinematics is not None:
-            role, attachment, joints, observed_at_s, independently_observed = held
+            role, attachment, joints, observed_at_s, independently_observed, visual_ambiguous = held
             pose = self.kinematics.forward_kinematics(joints) @ attachment.gripper_from_object
             held_prediction = _estimate_json(
                 PoseEstimate(
@@ -363,6 +365,8 @@ class FlashLiveTelemetry:
                     last_direct_observation_s=attachment.source_time_s if independently_observed else None,
                 )
             )
+            if visual_ambiguous:
+                held_prediction["evidence"] = "ambiguous_visual_prediction"
         snapshot = {
             "schema_version": 1,
             "recorded_at_s": time.perf_counter(),

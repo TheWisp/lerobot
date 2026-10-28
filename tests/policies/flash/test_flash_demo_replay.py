@@ -56,6 +56,36 @@ def test_demo_attachment_replay_uses_each_image_time_not_a_future_connection_end
     assert second["evidence"] == "vision_corrected_prediction"
 
 
+def test_demo_attachment_replay_marks_ambiguous_visual_evidence_without_losing_gripper_pose(tmp_path):
+    bundle = tmp_path / "bundle.json"
+    (tmp_path / "preparation-report.json").write_text(
+        json.dumps({"held_attachment_trace": "held-attachment-trace.npz"})
+    )
+    np.savez_compressed(
+        tmp_path / "held-attachment-trace.npz",
+        role=np.asarray("workpiece"),
+        camera_times_s=np.array([0.25]),
+        gripper_from_object=np.stack([_pose(0.1)]),
+        conflicted=np.array([False]),
+        visual_ambiguous=np.array([True]),
+        corrected=np.array([True]),
+    )
+    replay = {
+        "frames": [
+            {
+                "snapshot": {
+                    "recorded_at_s": 0.25,
+                    "held_prediction": {"role": "workpiece", "pose": _pose(1.2).tolist()},
+                }
+            }
+        ]
+    }
+    _add_recorded_attachment_trace(bundle, replay, np.array([0.0, 1.0]), np.stack([_pose(0), _pose(1)]))
+    held = replay["frames"][0]["snapshot"]["held_prediction"]
+    assert np.isclose(held["pose"][0][3], 0.35)
+    assert held["evidence"] == "ambiguous_visual_prediction"
+
+
 def test_demo_replay_uses_the_selected_preparation_recipe(tmp_path) -> None:
     bundle = tmp_path / "flash/v1/prepared/new/bundle.json"
     bundle.parent.mkdir(parents=True)

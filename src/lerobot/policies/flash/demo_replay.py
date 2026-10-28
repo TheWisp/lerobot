@@ -331,6 +331,8 @@ def _add_recorded_attachment_trace(
             held["evidence"] = (
                 "conflicted_prediction"
                 if bool(trace["conflicted"][index])
+                else "ambiguous_visual_prediction"
+                if "visual_ambiguous" in trace and bool(trace["visual_ambiguous"][index])
                 else "vision_corrected_prediction"
                 if bool(trace["corrected"][index])
                 else "predicted"

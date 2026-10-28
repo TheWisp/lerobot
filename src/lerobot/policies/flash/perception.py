@@ -435,6 +435,7 @@ class HeldAttachmentUpdater:
         self._active = False
         self._activation_time_s: float | None = None
         self._conflicted = False
+        self._visual_ambiguous = False
         self._pending_visual: tuple[float, np.ndarray] | None = None
         self._last_visual_source_time_s: float | None = None
         self.has_postgrasp_observation = False
@@ -470,6 +471,7 @@ class HeldAttachmentUpdater:
             self._active = True
             self._activation_time_s = grasp_time_s
             self._conflicted = False
+            self._visual_ambiguous = False
             self._pending_visual = None
             self._last_visual_source_time_s = None
             self.has_postgrasp_observation = False
@@ -530,7 +532,9 @@ class HeldAttachmentUpdater:
                 shift = float(np.linalg.norm(prior_center - candidate_center))
                 turn = float(np.arccos(np.clip((np.trace(relative[:3, :3]) - 1) / 2, -1, 1)))
                 if shift > self.max_update_shift_m or turn > self.max_update_turn_rad:
+                    was_conflicted = self._conflicted
                     self._conflicted = True
+                    self._visual_ambiguous = False
                     self.last_rejection = f"held attachment disagrees by {shift:.4f} m, {turn:.4f} rad"
                     if (
                         frame is None
@@ -559,6 +563,20 @@ class HeldAttachmentUpdater:
                     if comparison.verdict != PoseComparisonVerdict.CANDIDATE_FAVORED:
                         self._pending_visual = None
                         self.last_rejection += f"; image comparison {comparison.verdict.value}"
+                        # An ambiguous visual fit is not evidence that the
+                        # gripper relation changed. Keep a previously usable
+                        # prediction only when its own visible surface still
+                        # agrees with aligned depth at the configured fit
+                        # tolerance. Preserve a pre-existing conflict.
+                        prior_supported = (
+                            comparison.prior.masked_depth_points >= self.min_visual_support_points
+                            and comparison.prior.depth_residual_p90_m <= self.depth_occlusion_tolerance_m
+                            and comparison.prior.projected_point_mask_fraction
+                            >= comparison.candidate.projected_point_mask_fraction
+                        )
+                        if not was_conflicted and prior_supported:
+                            self._conflicted = False
+                            self._visual_ambiguous = comparison.verdict != PoseComparisonVerdict.PRIOR_FAVORED
                         return False
                     pending = self._pending_visual
                     self._pending_visual = (held.source_time_s, candidate.copy())
@@ -584,16 +602,28 @@ class HeldAttachmentUpdater:
             if not self._estimate.update(ee, held):
                 return False
             self._conflicted = False
+            self._visual_ambiguous = False
             self._pending_visual = None
             self.has_postgrasp_observation = True
             self.last_rejection = None
             return True
 
     def state(self, now_s: float) -> AttachmentState | None:
+        return self.state_with_visual_status(now_s)[0]
+
+    def state_with_visual_status(self, now_s: float) -> tuple[AttachmentState | None, bool]:
+        """Read the attachment and its visual-ambiguity label atomically."""
         with self._lock:
             if not self._active or self._conflicted:
-                return None
-            return self._estimate.state(now_s, self.max_attachment_age_s)
+                return None, False
+            state = self._estimate.state(now_s, self.max_attachment_age_s)
+            return state, self._visual_ambiguous if state is not None else False
+
+    @property
+    def visual_ambiguous(self) -> bool:
+        """A visual proposal disagreed, but the gripper prediction remains image-consistent."""
+        with self._lock:
+            return self._visual_ambiguous
 
     @property
     def last_accepted_gripper_from_object(self) -> np.ndarray | None:
@@ -607,5 +637,6 @@ class HeldAttachmentUpdater:
             self._activation_time_s = None
             self._estimate = AttachmentEstimate()
             self._conflicted = False
+            self._visual_ambiguous = False
             self._pending_visual = None
             self._last_visual_source_time_s = None

@@ -42,12 +42,23 @@ def inspect_skill(path: str) -> dict:
     for interval in skill.intervals:
         if interval.relation.value == "held_to_target":
             conflicts = sum(sample.held_evidence == "conflicted_prediction" for sample in interval.samples)
+            ambiguous = sum(
+                sample.held_evidence == "ambiguous_visual_prediction" for sample in interval.samples
+            )
             conflicted_held_samples += conflicts
             if conflicts:
                 warnings.append(f"{interval.name}: held-object demo pose has unresolved visual conflict")
-            elif not any(
-                sample.held_evidence in ("observed", "vision_corrected_prediction")
-                for sample in interval.samples
+            if ambiguous:
+                warnings.append(
+                    f"{interval.name}: held-object visual pose is ambiguous; gripper prediction retained"
+                )
+            if (
+                not conflicts
+                and not ambiguous
+                and not any(
+                    sample.held_evidence in ("observed", "vision_corrected_prediction")
+                    for sample in interval.samples
+                )
             ):
                 warnings.append(f"{interval.name}: no independently observed held-object demo correction")
     return {

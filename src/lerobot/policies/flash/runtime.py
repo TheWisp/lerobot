@@ -207,9 +207,14 @@ class FlashRuntime:
             if self.live_telemetry is not None:
                 role = self.attachment.active_role
                 updater = self.attachment.updaters[role] if role is not None else None
+                attachment_state, visual_ambiguous = (
+                    updater.state_with_visual_status(tick.observed_at_s)
+                    if updater is not None
+                    else (None, False)
+                )
                 self.live_telemetry.held_attachment(
                     role,
-                    updater.state(tick.observed_at_s) if updater is not None else None,
+                    attachment_state,
                     np.array([tick.observed[f"{name}.pos"] for name in self.arm_joint_names])
                     if updater is not None
                     else None,
@@ -217,6 +222,7 @@ class FlashRuntime:
                     independently_observed=updater.has_postgrasp_observation
                     if updater is not None
                     else False,
+                    visual_ambiguous=visual_ambiguous,
                 )
                 self.live_telemetry.motor_tick(tick)
             self.recorder.submit(self.assembler.assemble(tick))

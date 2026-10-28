@@ -401,6 +401,7 @@ def test_held_prediction_is_recorded_separately_from_stale_independent_pose(tmp_
         np.array([0.3]),
         3.0,
         independently_observed=False,
+        visual_ambiguous=True,
     )
     telemetry.close()
     snapshot = json.loads(live.read_text())
@@ -409,6 +410,7 @@ def test_held_prediction_is_recorded_separately_from_stale_independent_pose(tmp_
     assert held["estimator"] == "grasp_attachment_prediction"
     assert held["pose"][0][3] == 0.5
     assert held["last_direct_observation_s"] is None
+    assert held["evidence"] == "ambiguous_visual_prediction"
 
 
 def test_flash_recordings_lists_source_datasets_with_outcomes(tmp_path: Path) -> None:

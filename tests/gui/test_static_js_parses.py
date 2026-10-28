@@ -18,6 +18,7 @@ fell back from the H.264 stream to the per-frame pull path, which read as
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -32,7 +33,12 @@ NODE = shutil.which("node")
 @pytest.mark.skipif(NODE is None, reason="node not installed; CI and dev machines have it")
 @pytest.mark.parametrize("script", SCRIPTS, ids=lambda p: p.name)
 def test_script_parses(script: Path):
-    proc = subprocess.run([NODE, "--check", str(script)], capture_output=True, text=True, timeout=30)
+    source = script.read_text()
+    module = re.search(r"(?m)^\s*(?:import|export)\s", source) is not None
+    command = [NODE, "--check", "--input-type=module"] if module else [NODE, "--check", str(script)]
+    proc = subprocess.run(
+        command, input=source if module else None, capture_output=True, text=True, timeout=30
+    )
     assert proc.returncode == 0, f"{script.name} does not parse:\n{proc.stderr}"
 
 

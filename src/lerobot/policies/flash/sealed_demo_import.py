@@ -661,6 +661,7 @@ def prepare(
     # retain the last accepted relation and mark the bundle for review.
     held_attachment_by_camera = [grip_from_held.copy() for _ in estimates]
     held_conflicted_by_camera = [False for _ in estimates]
+    held_ambiguous_by_camera = [False for _ in estimates]
     held_corrected_by_camera = [False for _ in estimates]
     held_correction_frames: list[int] = []
     held_conflict_frames: list[int] = []
@@ -737,7 +738,9 @@ def prepare(
                     elif updater.state(estimate.source_time_s) is None:
                         held_conflict_frames.append(frame_index)
             held_attachment_by_camera[frame_index] = last_attachment.copy()
-            held_conflicted_by_camera[frame_index] = updater.state(estimate.source_time_s) is None
+            state, visual_ambiguous = updater.state_with_visual_status(estimate.source_time_s)
+            held_conflicted_by_camera[frame_index] = state is None
+            held_ambiguous_by_camera[frame_index] = visual_ambiguous
             held_corrected_by_camera[frame_index] = has_correction
     roles_version = {reference.role: reference.version for reference in references}
     intervals = []
@@ -801,9 +804,13 @@ def prepare(
                         "conflicted_prediction"
                         if carrying and held_conflicted_by_camera[causal_camera_index]
                         else (
-                            "vision_corrected_prediction"
-                            if carrying and held_corrected_by_camera[causal_camera_index]
-                            else ("predicted" if carrying else None)
+                            "ambiguous_visual_prediction"
+                            if carrying and held_ambiguous_by_camera[causal_camera_index]
+                            else (
+                                "vision_corrected_prediction"
+                                if carrying and held_corrected_by_camera[causal_camera_index]
+                                else ("predicted" if carrying else None)
+                            )
                         )
                     ),
                     event_id=event_id,
@@ -864,6 +871,7 @@ def prepare(
             camera_times_s=camera_times[: len(estimates)],
             gripper_from_object=np.stack(held_attachment_by_camera),
             conflicted=np.asarray(held_conflicted_by_camera),
+            visual_ambiguous=np.asarray(held_ambiguous_by_camera),
             corrected=np.asarray(held_corrected_by_camera),
         )
     (destination / "annotation.json").write_text(json.dumps(annotation, indent=2) + "\n")
@@ -902,6 +910,9 @@ def prepare(
         "held_attachment_trace": "held-attachment-trace.npz" if held_attachment_policy else None,
         "held_correction_frames": held_correction_frames,
         "held_conflict_frames": held_conflict_frames,
+        "held_ambiguous_frames": [
+            index for index, ambiguous in enumerate(held_ambiguous_by_camera) if ambiguous
+        ],
         "held_pose_comparison": held_pose_comparison,
         "intervals": len(intervals),
         "calibration_version": version,
