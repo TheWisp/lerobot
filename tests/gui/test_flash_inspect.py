@@ -1457,6 +1457,11 @@ def test_live_flash_uses_the_same_frame_tagged_rgbd_scene(gui_page):
                 "pose": np.eye(4).tolist(),
                 "estimator": "surface_rgbd",
                 "failure": "surface fit is uncertain",
+                "conditional_surface_information": {
+                    "matched_reference_points": 8,
+                    "reference_points": 20,
+                    "strength": [0, 0, 0, 0.1, 0.2, 0.3],
+                },
             }
         },
         "layers": {},
@@ -1493,6 +1498,13 @@ def test_live_flash_uses_the_same_frame_tagged_rgbd_scene(gui_page):
         "() => document.querySelector('.flash-replay-grid img')?.dataset.loadedFrame === '9'"
     )
     assert "Rejected raw fit" in page.locator("#flash-tracker-content").inner_text()
+    assert (
+        "8/20 saved surface samples near measured depth"
+        in page.locator("#flash-tracker-content").inner_text()
+    )
+    page.locator("#flash-tracker-collapse").click()
+    page.locator("#flash-tracker-content .flash-surface-information summary").click()
+    assert "do not verify the pose or hidden surfaces" in page.locator("#flash-tracker-content").inner_text()
     pink_pixels = """() => {
         const canvas = document.querySelector('.flash-pose-canvas');
         const rgba = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
@@ -1522,6 +1534,9 @@ def test_live_flash_uses_the_same_frame_tagged_rgbd_scene(gui_page):
     )
     latest["snapshot"] = {**snapshot, "camera": {**snapshot["camera"], "frame_id": 10}}
     page.wait_for_function("() => flashSceneFrameCache?.frameIndex === 10")
+    assert page.locator("#flash-tracker-content .flash-surface-information").evaluate(
+        "element => element.open"
+    )
     assert page.evaluate("flashSceneFrameCache.depth[0]") == 1010
     assert "Live RGB-D · frame 10" in page.locator("#flash-scene-status").inner_text()
     page.get_by_role("button", name="RGB camera").click()
@@ -1899,6 +1914,11 @@ def test_3d_scene_projection_and_surface_pick_edit_the_prepared_keyframe(gui_pag
                             "reference_depth_pixels": 20,
                             "reference_depth_residual_p90_m": 0.0025,
                         },
+                        "conditional_surface_information": {
+                            "matched_reference_points": 8,
+                            "reference_points": 20,
+                            "strength": [0, 0, 0, 0.1, 0.2, 0.3],
+                        },
                     }
                 },
             }
@@ -1947,6 +1967,10 @@ def test_3d_scene_projection_and_surface_pick_edit_the_prepared_keyframe(gui_pag
     page.wait_for_function("() => flashSceneMode === '3d' && flashSceneFrameCache?.frameIndex === 0")
     assert "Demo extraction" not in page.locator("#flash-tracker-content").inner_text()
     page.get_by_role("button", name="Compare source estimates").click()
+    assert (
+        "8/20 saved surface samples near measured depth"
+        in page.locator("#flash-tracker-content").inner_text()
+    )
     assert (
         "20 clean reference-depth pixels, 2.5 mm p90" in page.locator("#flash-tracker-content").inner_text()
     )

@@ -880,12 +880,33 @@ function _flashHeldVisualEvidence(evidence) {
         'Control still uses the raw score; the reliable-interior score is diagnostic. Neither measures hidden contact-pose error.</small></div>';
 }
 
+function _flashExpandedSurfaceRoles(content) {
+    return new Set([...content.querySelectorAll('details.flash-surface-information[open]')]
+        .map(element => element.dataset.role));
+}
+
+function _flashConditionalSurfaceInfo(info, sourceFrame, role, expanded) {
+    if (!info || !Number.isInteger(info.matched_reference_points) ||
+        !Number.isInteger(info.reference_points) || info.reference_points <= 0 ||
+        !Array.isArray(info.strength) || info.strength.length !== 6 ||
+        !info.strength.every(value => Number.isFinite(value) && value >= 0)) return '';
+    const count = Math.min(info.matched_reference_points, info.reference_points);
+    const fraction = (100 * count / info.reference_points).toFixed(0);
+    const scores = info.strength.map(value => Number(value).toPrecision(2)).join(' · ');
+    return `<details class="flash-tracker-comparison flash-surface-information" data-role="${_esc(role)}"${expanded ? ' open' : ''}><summary>` +
+        `Visible geometry · ${count}/${info.reference_points} saved surface samples near measured depth (${fraction}%)` +
+        `${sourceFrame == null ? '' : ` · camera frame ${_esc(String(sourceFrame))}`}</summary>` +
+        `<small>Six local motion scores, weakest to strongest: ${_esc(scores)}. Lower means this view changes less ` +
+        `for that motion. These scores assume this proposed fit is aligned; they do not verify the pose or hidden surfaces.</small></details>`;
+}
+
 function renderFlashSnapshot(snapshot, mode = 'Live') {
     flashSnapshot = snapshot;
     const panel = document.getElementById('flash-tracker-panel');
     const content = document.getElementById('flash-tracker-content');
     const modeEl = document.getElementById('flash-tracker-mode');
     if (!panel || !content || !snapshot) return;
+    const expandedSurfaceRoles = _flashExpandedSurfaceRoles(content);
     panel.hidden = selectedWorkflow !== 'flash';
     panel.querySelector('.flash-tracker-heading strong').textContent = 'FLASH tracker inspection';
     modeEl.textContent = mode;
@@ -940,6 +961,8 @@ function renderFlashSnapshot(snapshot, mode = 'Live') {
                 `<small>${_esc(raw.failure || 'Not accepted by vision')} · camera frame ${_esc(String(raw.frame_id))}` +
                 `${shown ? '' : ' · open its camera frame to see the outline'}</small>`);
         }
+        html += _flashConditionalSurfaceInfo(raw?.conditional_surface_information, raw?.frame_id,
+            role, expandedSurfaceRoles.has(role));
         for (const [name, pose] of Object.entries(snapshot.layers?.[role] || {})) {
             html += _flashOverlayRow('layer', role, name, 'flash-tracker-layer',
                 `<span class="flash-tracker-dot" style="background:${_flashLayerColor(name)}"></span>${_esc(_flashLayerName(name))}<small>${_esc(_flashPoseText(pose, snapshot))}</small>`);
@@ -1037,6 +1060,7 @@ function renderFlashDemoSnapshot(snapshot) {
     flashOverlayRows = [];
     const panel = document.getElementById('flash-tracker-panel');
     const content = document.getElementById('flash-tracker-content');
+    const expandedSurfaceRoles = _flashExpandedSurfaceRoles(content);
     panel.hidden = selectedWorkflow !== 'flash';
     panel.querySelector('.flash-tracker-heading strong').textContent = flashCompareSources
         ? 'Demo source estimates' : 'Demo poses';
@@ -1150,6 +1174,8 @@ function renderFlashDemoSnapshot(snapshot) {
                 `<span class="flash-tracker-dot" style="background:#f472b6"></span>Rejected vision fit` +
                 `<small>${_esc(proposal.failure)} · hover to inspect</small>`);
         }
+        html += _flashConditionalSurfaceInfo(proposal?.conditional_surface_information,
+            snapshot.camera?.frame_id, role, expandedSurfaceRoles.has(role));
         html += '</div>';
     }
     const heldComparison = flashReplay.held_pose_comparison;

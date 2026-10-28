@@ -210,6 +210,10 @@ when the full pose is rejected, in demo and trial evidence. It is conditional
 on the proposed correspondence and the first-view reference: a wrong fit can
 still look well constrained. It is diagnostic evidence, not a calibrated
 confidence score or an automatic override of vision, group or gripper motion.
+In Run → FLASH, expand **Visible geometry** in the source comparison to see
+the matched-surface count and the six scores for that camera frame. The same
+readout is available in Test and recorded Replay when their source proposals
+contain this evidence; older recordings cannot reconstruct it from a pose alone.
 
 ## Acceptance, loss and occlusion fallback
 

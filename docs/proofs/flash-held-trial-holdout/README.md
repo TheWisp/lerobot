@@ -125,3 +125,26 @@ The updated replay artifacts also include that motion-only proposal. The table c
 The winner reverses between the two attempts. A source-frame check against two interleaved subsets of the current masked depth surface often identifies the better direction: in the first attempt both subsets favor vision in 86 frames, and vision is closer to the later direction in 85; in the second they favor motion-only in 118 frames, and motion-only is closer in 94. It also makes errors: in the second attempt motion-only wins that source check in 24 frames where vision predicts the later direction better. The split subsets share segmentation, depth, and calibration errors, and neighboring camera frames are correlated. This is evidence for preserving and comparing independent hypotheses, not a calibrated confidence or a safe automatic controller switch.
 
 The earlier and newer _prepared demos_ also use byte-identical saved reference point arrays, annotations, and keypoints for both insertion and gamepad stacking, with identical vision settings. Their different conflict counts reflect different code decisions on the same inputs. That is a real algorithm change, but neither the lower conflict count nor the viewer selecting the newer snapshot establishes general accuracy. The held-out trial disagreement above is the counterexample to treating the newer preparation as a solved tracker.
+
+### What the visible-surface information adds
+
+The current replay now records how many points on the saved first-view surface
+are close to each frame's measured RGB-D patch, plus six local motion
+sensitivities at the proposed fit. Removing only this new field from the two
+reruns leaves **every existing result field identical** across 553 and 534
+camera frames. The [audit script](audit_surface_information.py) joins these
+records to the 0.6-second later-direction check:
+
+| Trial    | Frames with the new measurement | Median matched first-view surface in compared frames | Vision closer than motion-only to later visible direction |
+| -------- | ------------------------------: | ---------------------------------------------------: | --------------------------------------------------------: |
+| 20:33:10 |                         535/553 |                                                 9.2% |                                                     92/99 |
+| 20:18:38 |                         526/534 |                                                 9.6% |                                                    47/145 |
+
+The similar surface coverage does not select the better pose source. The
+measurement explains which motions one _proposed fit_ is locally sensitive
+to; it cannot establish that the correspondence or reference geometry is
+right. These future frames overlap heavily and check direction only. FLASH
+records this evidence in Demo, Test and Replay, but does not use it to change
+the controller. Selecting between vision, gripper and scene-motion proposals
+still needs a source-frame comparison of the candidates against the same
+measured image, with unresolved dimensions preserved.

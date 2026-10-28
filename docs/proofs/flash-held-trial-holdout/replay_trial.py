@@ -10,7 +10,7 @@ import gzip
 import io
 import json
 import time
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 
 import numpy as np
@@ -199,11 +199,15 @@ for i, row in enumerate(rows):
     }
     candidate = getattr(inner, "last_candidate_poses", {}).get(role)
     motion_prior = getattr(inner, "last_motion_prior_poses", {}).get(role)
+    surface_information = getattr(inner, "last_surface_information", {}).get(role)
     result.append(
         {
             "fit_metrics": metrics,
             "candidate_pose": candidate.tolist() if candidate is not None else None,
             "motion_prior_pose": motion_prior.tolist() if motion_prior is not None else None,
+            "conditional_surface_information": (
+                asdict(surface_information) if surface_information is not None else None
+            ),
             "mask_pixels": int(mask.sum()) if mask is not None else None,
             "backend_failure": str(failure) if failure else None,
             "row": i,
