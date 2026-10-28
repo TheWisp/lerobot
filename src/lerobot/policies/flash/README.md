@@ -22,11 +22,14 @@ without changing the original skill.
 Demo, live Test and recorded rollout review use the same 3D scene renderer.
 The live view reads display-only RGB-D copies from the telemetry writer; its
 pose overlay and pixels share a camera frame ID. New rollouts also record each
-perception mask under its source camera frame ID, so Replay can show the
-measured RGB-D surface when that exact frame was saved by the dataset recorder.
-Snapshots from a different camera frame never borrow that mask. Older rollouts
-without the mask sidecar show the recorded pose without claiming a measured
-object surface. Replay skips snapshots captured before recording began; older
+perception mask and the scene group's measured support under their source camera
+frame IDs. Replay can show the measured RGB-D object surface and scene support
+when that exact frame was saved by the dataset recorder. Snapshots from a
+different camera frame never borrow either measurement. Older rollouts without
+these sidecars show the recorded pose without claiming a measured object
+surface or group support. Replay marks a source-frame measurement that arrived
+after the displayed snapshot; the mark does not imply the controller had used
+that measurement. Replay skips snapshots captured before recording began; older
 traces without frame IDs can only use a marked approximate time match. The live
 scene route has GUI and writer tests but still needs a physical timing check.
 Each causal pose candidate has a source-frame decision with its raw pose,

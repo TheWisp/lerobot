@@ -76,6 +76,19 @@ def test_live_tracker_layers_are_replayed_with_camera_frame(tmp_path: Path) -> N
     direct = _estimate(10.0, "appearance_rgbd", Evidence.OBSERVED)
     group = _estimate(10.1, "environment_group_motion", Evidence.PREDICTED)
     telemetry.frame(frame)
+    telemetry.scene_support(
+        9,
+        {
+            "object": {
+                "verified": True,
+                "measured_this_frame": True,
+                "ids": np.array([4, 7]),
+                "xy": np.array([[5, 4], [6, 5]]),
+                "base_xyz": np.array([[0.01, 0.02, 1.0], [0.02, 0.03, 1.0]]),
+                "last_group_measurement_s": 10.1,
+            }
+        },
+    )
     mask = np.zeros((12, 16), dtype=bool)
     mask[3:8, 4:10] = True
     telemetry.proposals((direct,), {"object": mask}, frame_id=9)
@@ -134,6 +147,7 @@ def test_live_tracker_layers_are_replayed_with_camera_frame(tmp_path: Path) -> N
     assert len(current["points_object_m"]["object"]) == 2
     assert current["observed_masks"]["object"]["frame_id"] == 9
     assert len(current["observed_masks"]["object"]["boundary_xy"]) >= 4
+    assert current["scene_support"]["groups"]["object"]["ids"] == [4, 7]
     assert set(current["layers"]["object"]) == {"appearance_rgbd", "environment_group_motion"}
     assert current["accepted"]["object"]["estimator"] == "environment_group_motion"
     assert current["direct_point_comparisons"]["object"]["verdict"] == "ambiguous"
@@ -179,6 +193,8 @@ def test_live_tracker_layers_are_replayed_with_camera_frame(tmp_path: Path) -> N
     assert replay["frames"][-1]["snapshot"]["anchor_decisions"] == current["anchor_decisions"]
     assert replay["frames"][-1]["evidence"]["masks_rle"]["object"]
     assert replay["frames"][-1]["evidence"]["image_size"] == [12, 16]
+    assert replay["frames"][-1]["evidence"]["groups"]["object"]["pixels"] == [[5, 4], [6, 5]]
+    assert replay["frames"][-1]["snapshot"]["scene_support"]["frame_id"] == 9
     assert (
         replay["frames"][-1]["snapshot"]["direct_free_space_comparisons"]
         == current["direct_free_space_comparisons"]
@@ -223,12 +239,27 @@ def test_delayed_mask_is_joined_only_to_its_source_camera_frame(tmp_path: Path) 
     mask = np.zeros((12, 16), dtype=bool)
     mask[3:8, 4:10] = True
     telemetry.proposals((_estimate(9.0, "appearance_rgbd", Evidence.OBSERVED),), {"object": mask}, frame_id=9)
+    telemetry.scene_support(
+        9,
+        {
+            "object": {
+                "verified": False,
+                "measured_this_frame": True,
+                "ids": np.array([2]),
+                "xy": np.array([[5, 4]]),
+                "base_xyz": np.array([[0.01, 0.02, 1.0]]),
+                "last_group_measurement_s": 9.0,
+            }
+        },
+    )
     telemetry.close()
 
     replay = _flash_tracker_replay(tmp_path, 0)
     evidence_by_frame = {item["snapshot"]["camera"]["frame_id"]: item for item in replay["frames"]}
     assert evidence_by_frame[9]["evidence"]["masks_rle"]["object"]
     assert evidence_by_frame[9]["snapshot"]["observed_masks"]["object"]["frame_id"] == 9
+    assert evidence_by_frame[9]["evidence"]["groups"]["object"]["ids"] == [2]
+    assert set(evidence_by_frame[9]["evidence"]["late_sources"]) == {"mask", "scene group"}
     assert "evidence" not in evidence_by_frame[10]
     data = telemetry.mask_path.read_bytes()
     telemetry.mask_path.write_bytes(data[:-8])  # Simulate a stopped writer without a gzip footer.

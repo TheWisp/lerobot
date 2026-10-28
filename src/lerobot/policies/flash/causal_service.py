@@ -169,6 +169,7 @@ class CausalPoseService:
         on_free_space_comparison: Callable[[str, FreeSpaceComparison], None] | None = None,
         on_direct_observation: Callable[[PoseEstimate], None] | None = None,
         on_anchor_decision: Callable[[AnchorDecision], None] | None = None,
+        on_scene_support: Callable[[int, dict[str, dict]], None] | None = None,
     ) -> None:
         if history_frames < 2 or queue_frames < 2:
             raise ValueError("causal pose history and queue need at least two frames")
@@ -217,6 +218,7 @@ class CausalPoseService:
         self.on_free_space_comparison = on_free_space_comparison
         self.on_direct_observation = on_direct_observation
         self.on_anchor_decision = on_anchor_decision
+        self.on_scene_support = on_scene_support
         if any(
             center.shape != (3,) or not np.isfinite(center).all()
             for center in self.object_centers_by_role.values()
@@ -516,6 +518,8 @@ class CausalPoseService:
                 and role not in self.candidate_relationships
             ):
                 self._publish_static(role, anchor, frame)
+        if self.on_scene_support is not None:
+            self.on_scene_support(frame.frame_id, self.scene_group_supports())
 
     def _publish_environment(
         self,
@@ -1308,6 +1312,7 @@ def build_causal_pose_service(
     on_free_space_comparison: Callable[[str, FreeSpaceComparison], None] | None = None,
     on_direct_observation: Callable[[PoseEstimate], None] | None = None,
     on_anchor_decision: Callable[[AnchorDecision], None] | None = None,
+    on_scene_support: Callable[[int, dict[str, dict]], None] | None = None,
 ) -> CausalPoseService:
     """Construct the identical estimator policy for recorded and live frames."""
     return CausalPoseService(
@@ -1322,4 +1327,5 @@ def build_causal_pose_service(
         on_free_space_comparison=on_free_space_comparison,
         on_direct_observation=on_direct_observation,
         on_anchor_decision=on_anchor_decision,
+        on_scene_support=on_scene_support,
     )

@@ -118,8 +118,11 @@ async function _flashUpdateSceneFrame() {
         const liveMasks = kind === 'live' ? Object.fromEntries(Object.entries(selected.snapshot.observed_masks || {})
             .filter(([, mask]) => mask.frame_id === camera.frame_id && mask.runs)
             .map(([role, mask]) => [role, mask.runs])) : null;
+        const liveGroups = kind === 'live' && selected.snapshot.scene_support?.frame_id === camera.frame_id
+            ? selected.snapshot.scene_support.groups : null;
         const frameEvidence = kind === 'demo' ? frame.evidence : kind === 'rollout' ? selected.evidence
-            : Object.keys(liveMasks).length ? {available: true, masks_rle: liveMasks} : null;
+            : Object.keys(liveMasks).length || Object.keys(liveGroups || {}).length
+                ? {available: true, masks_rle: liveMasks, groups: liveGroups || {}} : null;
         _flashPaintObservedPhoto({...frame, evidence: frameEvidence}, camera);
         flashSceneView.update(frame.depth, frame.rgba, {...selected.snapshot, ...(replay?.geometry || {})},
             _flashSceneOptions(), frameEvidence);
@@ -129,7 +132,9 @@ async function _flashUpdateSceneFrame() {
         const groups = Object.entries(frameEvidence?.groups || {}).map(([role, group]) =>
             `${role} context: ${group.ids.length} ${group.verified ? 'verified' : 'candidate'} support points${group.measured_this_frame === false ? ' (fit unavailable)' : ''}`).join(' · ');
         status.textContent = frameEvidence?.available
-            ? `${kind === 'demo' ? 'Rebuilt' : 'Recorded'} RGB-D evidence · frame ${selected.frame_index}${groups ? ` · ${groups}` : ''}`
+            ? `${kind === 'demo' ? 'Rebuilt' : 'Recorded'} RGB-D evidence · frame ${selected.frame_index}` +
+                `${groups ? ` · ${groups}` : ''}` +
+                `${frameEvidence.late_sources?.length ? ` · ${frameEvidence.late_sources.join(' and ')} arrived after this snapshot` : ''}`
             : kind === 'demo'
                 ? `Recorded RGB-D · frame ${selected.frame_index} · no rebuilt per-frame masks`
                 : kind === 'live'
@@ -797,6 +802,7 @@ function renderFlashSnapshot(snapshot, mode = 'Live') {
         ...Object.keys(snapshot.layers || {}),
         ...Object.keys(snapshot.accepted || {}),
         ...Object.keys(snapshot.observed_masks || {}),
+        ...Object.keys(snapshot.scene_support?.groups || {}),
     ])].sort();
     if (!roles.length) {
         content.innerHTML = _flashCommandEvidence(snapshot) +
@@ -814,6 +820,13 @@ function renderFlashSnapshot(snapshot, mode = 'Live') {
                 '<span class="flash-tracker-dot" style="background:#d48bff"></span>Visible mask <small>Measured pixels in this camera frame</small>');
         } else {
             html += '<div class="flash-tracker-layer flash-tracker-unavailable">Visible mask <small>No mask for this camera frame</small></div>';
+        }
+        const support = snapshot.scene_support && snapshot.camera &&
+            snapshot.scene_support.frame_id === snapshot.camera.frame_id
+            ? snapshot.scene_support.groups?.[role] : null;
+        if (support?.ids?.length) {
+            html += _flashOverlayRow('group', role, '', 'flash-tracker-layer',
+                `<span class="flash-tracker-dot" style="background:#b0dc74"></span>Scene support <small>${support.ids.length} ${support.verified ? 'verified' : 'candidate'} tracked points</small>`);
         }
         const proposal = snapshot.proposals?.[role];
         if (proposal) html += _flashOverlayRow('proposal', role, '', 'flash-tracker-layer',
@@ -1263,6 +1276,16 @@ function _flashDrawOverlay() {
             outline(mask.boundary_xy || [], '#d48bff', flashHighlightedOverlay && active ? 5 : 2);
             context.globalAlpha = 1;
         }
+        if (flashHighlightedOverlay?.kind === 'group' && snapshot.scene_support?.frame_id === camera.frame_id) {
+            const support = snapshot.scene_support.groups?.[flashHighlightedOverlay.role];
+            if (support) {
+                context.fillStyle = '#b0dc74';
+                for (const point of support.pixels || []) {
+                    const [x, y] = pixel(point);
+                    context.fillRect(x - 2, y - 2, 4, 4);
+                }
+            }
+        }
         // Review candidates stay visible when they closely overlap the saved
         // surface. Hovering their row still isolates them from all other layers.
         for (const [role, layers] of Object.entries(snapshot.layers || {})) {
@@ -1374,7 +1397,7 @@ async function loadFlashTrackerReplay(datasetRoot, episodeIndex) {
             frame.snapshot?.camera && Object.keys(frame.snapshot?.accepted || {}).length);
         seekFlashReplay(Math.max(0, firstTrackedFrame));
         if (!result.layer_history) showToast('Older FLASH recording', 'This trace contains planner poses, but predates per-tracker layer recording.', 'warning');
-        if (result.mask_evidence_incomplete) showToast('Partial FLASH masks', 'Some measured surface frames were not saved. Available frames still show their exact measurements.', 'warning');
+        if (result.mask_evidence_incomplete || result.group_evidence_incomplete) showToast('Partial FLASH scene evidence', 'Some measured surface or group frames were not saved. Available frames still show their exact measurements.', 'warning');
     } catch (error) { showToast('Cannot inspect FLASH recording', error.message, 'error'); }
 }
 
@@ -1391,6 +1414,8 @@ function _flashCreateSceneGrid(kind, imageAlt, depthAvailable = true) {
     if (kind === 'demo' || kind === 'live' || (kind === 'rollout' && depthAvailable)) {
         const hasMeasuredSurface = kind === 'demo' || kind === 'live' ||
             flashReplay?.frames?.some(frame => frame.evidence?.masks_rle);
+        const hasGroupSupport = kind === 'demo' || kind === 'live' ||
+            flashReplay?.frames?.some(frame => Object.keys(frame.evidence?.groups || {}).length);
         const photo = document.createElement('canvas');
         photo.className = 'flash-scene-photo';
         const scene = document.createElement('canvas');
@@ -1417,7 +1442,7 @@ function _flashCreateSceneGrid(kind, imageAlt, depthAvailable = true) {
             '<label title="Reference surface projected by the used estimate"><input type="checkbox" id="flash-scene-projection" checked onchange="_flashUpdateSceneFrame()">Pose estimate</label>' +
             '<label title="Coarse depth mesh for spatial context; incomplete at missing-depth pixels"><input type="checkbox" id="flash-scene-depth" onchange="_flashUpdateSceneFrame()">Scene context</label>' +
             '<label><input type="checkbox" id="flash-scene-axes" checked onchange="_flashUpdateSceneFrame()">Axes</label>' +
-            (kind === 'demo'
+            (hasGroupSupport
                 ? '<label title="Tracked scene context used by the group predictor"><input type="checkbox" id="flash-scene-group" onchange="_flashUpdateSceneFrame()">Scene support</label>'
                 : '') +
             '<label><input type="checkbox" id="flash-scene-gripper" onchange="_flashUpdateSceneFrame()">Gripper</label></div></details></div>';

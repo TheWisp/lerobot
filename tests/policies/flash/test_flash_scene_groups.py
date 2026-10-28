@@ -48,6 +48,39 @@ def test_scene_group_support_snapshot_uses_active_point_ids_only():
     np.testing.assert_array_equal(support["base_xyz"], points[[0, 2]])
 
 
+def test_scene_support_callback_reports_the_same_group_used_on_that_camera_frame(monkeypatch):
+    captured = []
+    service = CausalPoseService(
+        LatestPoseStore(), on_scene_support=lambda frame_id, groups: captured.append((frame_id, groups))
+    )
+    rng = np.random.default_rng(4)
+    points = rng.uniform((0.0, 0.0, 0.9), (0.1, 0.1, 1.1), (12, 3))
+    pixels = np.column_stack((np.arange(12) + 20, np.arange(12) + 30))
+    tracks = SceneTracks(1, 1 / 30, np.arange(12), pixels, points)
+    monkeypatch.setattr(service.scene, "update", lambda _frame: tracks)
+    service.relationships["object"] = EnvironmentRelationship(
+        tracks.ids.copy(), points.copy(), _pose(0), 0, "v1", 0
+    )
+    frame = RGBDFrame(
+        1,
+        np.zeros((64, 64, 3), dtype=np.uint8),
+        np.ones((64, 64), dtype=np.uint16),
+        np.eye(3),
+        0.001,
+        np.eye(4),
+        1 / 30,
+        1 / 30,
+        "camera-v1",
+    )
+
+    service._frame(frame)
+
+    assert captured[0][0] == frame.frame_id
+    assert captured[0][1]["object"]["verified"] is True
+    np.testing.assert_array_equal(captured[0][1]["object"]["ids"], tracks.ids)
+    np.testing.assert_array_equal(captured[0][1]["object"]["xy"], tracks.xy)
+
+
 def test_environment_relation_needs_non_object_co_motion_and_tracks_occlusion():
     rng = np.random.default_rng(8)
     group = rng.uniform((-0.12, -0.12, 0.98), (0.12, 0.12, 1.02), (36, 3))

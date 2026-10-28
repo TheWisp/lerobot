@@ -46,6 +46,20 @@ def _mask_runs(mask: np.ndarray) -> list[list[int]]:
     return [[int(start), int(end - start)] for start, end in edges.reshape(-1, 2)]
 
 
+def _group_support_json(groups: dict[str, dict]) -> dict[str, dict]:
+    return {
+        role: {
+            "verified": bool(group["verified"]),
+            "measured_this_frame": bool(group["measured_this_frame"]),
+            "ids": group["ids"].tolist(),
+            "pixels": group["xy"].tolist(),
+            "base_xyz_m": np.round(group["base_xyz"], 6).tolist(),
+            "last_group_measurement_s": group["last_group_measurement_s"],
+        }
+        for role, group in groups.items()
+    }
+
+
 def _estimate_json(estimate: PoseEstimate) -> dict:
     return {
         "role": estimate.role,
@@ -86,6 +100,7 @@ class FlashLiveTelemetry:
         self.trace_path = trace_path
         self.decision_path = trace_path.with_suffix(".decisions.jsonl")
         self.mask_path = trace_path.with_suffix(".masks.jsonl.gz")
+        self.group_path = trace_path.with_suffix(".groups.jsonl.gz")
         self.centers = {role: center.tolist() for role, center in centers_by_role.items()}
         self.points = {
             role: np.asarray(points, dtype=float).tolist() for role, points in (points_by_role or {}).items()
@@ -108,8 +123,12 @@ class FlashLiveTelemetry:
         self._proposal_frame_id: int | None = None
         self._masks: dict[str, np.ndarray] = {}
         self._mask_frame_id: int | None = None
-        self._pending_mask_events: deque[tuple[int, dict[str, np.ndarray]]] = deque()
+        self._pending_mask_events: deque[tuple[int, float, dict[str, np.ndarray]]] = deque()
         self._mask_events_dropped = 0
+        self._group_support: dict[str, dict] = {}
+        self._group_frame_id: int | None = None
+        self._pending_group_events: deque[tuple[int, float, dict[str, dict]]] = deque()
+        self._group_events_dropped = 0
         self._layers: dict[str, dict[str, PoseEstimate]] = {}
         self._comparisons: dict[str, dict] = {}
         self._point_comparisons: dict[str, dict] = {}
@@ -164,12 +183,32 @@ class FlashLiveTelemetry:
                     if len(self._pending_mask_events) >= self.frame_history:
                         self._pending_mask_events.popleft()
                         self._mask_events_dropped += 1
-                    self._pending_mask_events.append((frame_id, copied_masks))
+                    self._pending_mask_events.append((frame_id, time.perf_counter(), copied_masks))
             self._changed()
 
     def layer(self, estimate: PoseEstimate) -> None:
         with self._condition:
             self._layers.setdefault(estimate.role, {})[estimate.estimator] = estimate
+            self._changed()
+
+    def scene_support(self, frame_id: int, groups: dict[str, dict]) -> None:
+        """Retain measured group support at its camera frame, off the writer thread."""
+        copied = {
+            role: {
+                **group,
+                "ids": np.asarray(group["ids"]).copy(),
+                "xy": np.asarray(group["xy"]).copy(),
+                "base_xyz": np.asarray(group["base_xyz"]).copy(),
+            }
+            for role, group in groups.items()
+        }
+        with self._condition:
+            self._group_support = copied
+            self._group_frame_id = frame_id
+            if len(self._pending_group_events) >= self.frame_history:
+                self._pending_group_events.popleft()
+                self._group_events_dropped += 1
+            self._pending_group_events.append((frame_id, time.perf_counter(), copied))
             self._changed()
 
     def comparison(self, role: str, result: PoseComparison) -> None:
@@ -269,7 +308,13 @@ class FlashLiveTelemetry:
 
     def _snapshot(
         self,
-    ) -> tuple[dict, RGBDFrame | None, tuple[dict, ...], tuple[tuple[int, dict[str, np.ndarray]], ...]]:
+    ) -> tuple[
+        dict,
+        RGBDFrame | None,
+        tuple[dict, ...],
+        tuple[tuple[int, float, dict[str, np.ndarray]], ...],
+        tuple[tuple[int, float, dict[str, dict]], ...],
+    ]:
         with self._condition:
             frame = self._frame
             proposals = self._proposals.copy()
@@ -287,6 +332,11 @@ class FlashLiveTelemetry:
             pending_mask_events = tuple(self._pending_mask_events)
             self._pending_mask_events.clear()
             mask_events_dropped = self._mask_events_dropped
+            group_support = self._group_support.copy()
+            group_frame_id = self._group_frame_id
+            pending_group_events = tuple(self._pending_group_events)
+            self._pending_group_events.clear()
+            group_events_dropped = self._group_events_dropped
             held = self._held_attachment
             motor_tick = self._motor_tick.copy() if self._motor_tick is not None else None
         held_prediction = None
@@ -338,6 +388,12 @@ class FlashLiveTelemetry:
                 for role, mask in masks.items()
             },
             "mask_evidence_dropped": mask_events_dropped,
+            "group_evidence_dropped": group_events_dropped,
+            "scene_support": (
+                {"frame_id": group_frame_id, "groups": _group_support_json(group_support)}
+                if frame is not None and group_frame_id == frame.frame_id
+                else None
+            ),
             "proposals": {role: _estimate_json(value) for role, value in proposals.items()},
             "proposal_frame_id": proposal_frame_id,
             "raw_proposals": raw_proposals,
@@ -353,7 +409,7 @@ class FlashLiveTelemetry:
             "held_prediction": held_prediction,
             "motor_tick": motor_tick,
         }
-        return snapshot, frame, pending_decisions, pending_mask_events
+        return snapshot, frame, pending_decisions, pending_mask_events, pending_group_events
 
     def _write_frame(self, frame: RGBDFrame) -> None:
         if frame.frame_id == self._written_frame_id:
@@ -385,6 +441,7 @@ class FlashLiveTelemetry:
             self.trace_path.open("w", encoding="utf-8") as trace,
             self.decision_path.open("w", encoding="utf-8") as decisions,
             gzip.open(self.mask_path, "wt", encoding="utf-8") as mask_events,
+            gzip.open(self.group_path, "wt", encoding="utf-8") as group_events,
         ):
             while True:
                 with self._condition:
@@ -392,8 +449,8 @@ class FlashLiveTelemetry:
                     revision = self._revision
                     closing = self._closed
                 if revision != seen:
-                    snapshot, frame, pending_decisions, pending_masks = self._snapshot()
-                    for frame_id, masks in pending_masks:
+                    snapshot, frame, pending_decisions, pending_masks, pending_groups = self._snapshot()
+                    for frame_id, available_at_s, masks in pending_masks:
                         if not masks:
                             continue
                         image_size = next(iter(masks.values())).shape
@@ -403,6 +460,7 @@ class FlashLiveTelemetry:
                             json.dumps(
                                 {
                                     "frame_id": frame_id,
+                                    "available_at_s": available_at_s,
                                     "image_size": list(image_size),
                                     "masks_rle": {role: _mask_runs(mask) for role, mask in masks.items()},
                                     "boundaries_xy": {
@@ -415,6 +473,20 @@ class FlashLiveTelemetry:
                             + "\n"
                         )
                     mask_events.flush()
+                    for frame_id, available_at_s, groups in pending_groups:
+                        group_events.write(
+                            json.dumps(
+                                {
+                                    "frame_id": frame_id,
+                                    "available_at_s": available_at_s,
+                                    "groups": _group_support_json(groups),
+                                },
+                                separators=(",", ":"),
+                                allow_nan=False,
+                            )
+                            + "\n"
+                        )
+                    group_events.flush()
                     for decision in pending_decisions:
                         decisions.write(json.dumps(decision, separators=(",", ":"), allow_nan=False) + "\n")
                     decisions.flush()

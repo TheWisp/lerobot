@@ -1099,6 +1099,23 @@ async def flash_live_frame(frame_id: int, kind: str) -> Response:
     return Response(data, media_type="image/jpeg" if kind == "rgb" else "application/octet-stream")
 
 
+def _flash_source_events(path: Path, camera_ids: set[int]) -> tuple[dict[int, dict], bool]:
+    """Read only frame-aligned display evidence; retain complete events after an interrupted write."""
+    events: dict[int, dict] = {}
+    incomplete = False
+    if path.is_file() and camera_ids:
+        try:
+            with gzip.open(path, "rt", encoding="utf-8") as stream:
+                for line in stream:
+                    if line.strip():
+                        event = json.loads(line)
+                        if event["frame_id"] in camera_ids:
+                            events[event["frame_id"]] = event
+        except (EOFError, OSError, json.JSONDecodeError):
+            incomplete = True
+    return events, incomplete
+
+
 def _flash_tracker_replay(root: Path, episode: int) -> dict:
     info_path = root.expanduser().resolve() / "meta" / "info.json"
     camera_features = None
@@ -1131,26 +1148,23 @@ def _flash_tracker_replay(root: Path, episode: int) -> dict:
         else []
     )
     if snapshots:
-        mask_path = layers_path.with_suffix(".masks.jsonl.gz")
         replay_camera_ids = {
             camera["frame_id"]
             for snapshot in snapshots
             if (camera := snapshot.get("camera")) and camera.get("frame_id") in ticks_by_camera_id
         }
-        masks_by_camera_id: dict[int, dict] = {}
-        mask_evidence_incomplete = any(snapshot.get("mask_evidence_dropped", 0) > 0 for snapshot in snapshots)
-        if mask_path.is_file() and replay_camera_ids:
-            try:
-                with gzip.open(mask_path, "rt", encoding="utf-8") as mask_stream:
-                    for line in mask_stream:
-                        if line.strip():
-                            event = json.loads(line)
-                            if event["frame_id"] in replay_camera_ids:
-                                masks_by_camera_id[event["frame_id"]] = event
-            except (EOFError, OSError, json.JSONDecodeError):
-                # An interrupted trial can leave the last compressed event
-                # unfinished. Earlier complete events remain usable.
-                mask_evidence_incomplete = True
+        masks_by_camera_id, mask_incomplete = _flash_source_events(
+            layers_path.with_suffix(".masks.jsonl.gz"), replay_camera_ids
+        )
+        groups_by_camera_id, group_incomplete = _flash_source_events(
+            layers_path.with_suffix(".groups.jsonl.gz"), replay_camera_ids
+        )
+        mask_evidence_incomplete = mask_incomplete or any(
+            snapshot.get("mask_evidence_dropped", 0) > 0 for snapshot in snapshots
+        )
+        group_evidence_incomplete = group_incomplete or any(
+            snapshot.get("group_evidence_dropped", 0) > 0 for snapshot in snapshots
+        )
         frames = []
         for snapshot in snapshots:
             camera = snapshot.get("camera")
@@ -1177,13 +1191,34 @@ def _flash_tracker_replay(root: Path, episode: int) -> dict:
                 alignment = "none"
             replay_frame = {"frame_index": frame_index, "alignment": alignment, "snapshot": snapshot}
             if alignment == "camera_frame_id":
-                evidence = masks_by_camera_id.get(camera["frame_id"])
-                if evidence and evidence["image_size"] == [camera.get("height"), camera.get("width")]:
-                    replay_frame["evidence"] = {"available": True, **evidence}
+                mask_event = masks_by_camera_id.get(camera["frame_id"])
+                group_event = groups_by_camera_id.get(camera["frame_id"])
+                if mask_event and mask_event["image_size"] != [camera.get("height"), camera.get("width")]:
+                    mask_event = None
+                if mask_event or group_event and group_event.get("groups"):
+                    snapshot_time_s = snapshot.get("recorded_at_s")
+                    late_sources = [
+                        name
+                        for name, event in (("mask", mask_event), ("scene group", group_event))
+                        if event is not None
+                        and snapshot_time_s is not None
+                        and event.get("available_at_s", float("-inf")) > snapshot_time_s
+                    ]
+                    replay_frame["evidence"] = {
+                        "available": True,
+                        "frame_id": camera["frame_id"],
+                        "image_size": mask_event["image_size"] if mask_event else None,
+                        "masks_rle": mask_event["masks_rle"] if mask_event else {},
+                        "groups": group_event["groups"] if group_event else {},
+                        "late_sources": late_sources,
+                    }
+                if mask_event:
                     snapshot["observed_masks"] = {
                         role: {"frame_id": camera["frame_id"], "boundary_xy": boundary}
-                        for role, boundary in evidence.get("boundaries_xy", {}).items()
+                        for role, boundary in mask_event.get("boundaries_xy", {}).items()
                     }
+                if group_event:
+                    snapshot["scene_support"] = group_event
             frames.append(replay_frame)
         if not frames:
             raise HTTPException(404, "No tracker snapshot has a recorded camera frame")
@@ -1192,6 +1227,7 @@ def _flash_tracker_replay(root: Path, episode: int) -> dict:
             "kind": "rollout",
             "layer_history": True,
             "mask_evidence_incomplete": mask_evidence_incomplete,
+            "group_evidence_incomplete": group_evidence_incomplete,
             "camera_features": camera_features,
             "frames": frames,
         }

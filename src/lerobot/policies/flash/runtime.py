@@ -163,6 +163,7 @@ class FlashRuntime:
                 ),
                 on_direct_observation=accepted_direct.put,
                 on_anchor_decision=(live_telemetry.anchor_decision if live_telemetry is not None else None),
+                on_scene_support=(live_telemetry.scene_support if live_telemetry is not None else None),
             )
             if causal_tracking is not None
             else None

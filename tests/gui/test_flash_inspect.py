@@ -1035,6 +1035,17 @@ def test_rollout_replay_uses_recorded_metric_depth_in_the_shared_scene(gui_page,
         "frame_id": 3,
         "image_size": [height, width],
         "masks_rle": {"object": [[row * width + 20, 20] for row in range(15, 30)]},
+        "late_sources": ["mask"],
+        "groups": {
+            "object": {
+                "verified": True,
+                "measured_this_frame": True,
+                "ids": [4, 7],
+                "pixels": [[25, 20], [26, 21]],
+                "base_xyz_m": [[0.01, 0.02, 1], [0.02, 0.03, 1]],
+                "last_group_measurement_s": 11.9,
+            }
+        },
     }
     page.route(
         "**/api/run/flash/recordings",
@@ -1080,6 +1091,9 @@ def test_rollout_replay_uses_recorded_metric_depth_in_the_shared_scene(gui_page,
                             "observed_masks": {
                                 "object": {"frame_id": 2, "boundary_xy": [[1, 1], [2, 1], [2, 2]]}
                             },
+                            "scene_support": (
+                                {"frame_id": 3, "groups": evidence["groups"]} if with_mask_evidence else None
+                            ),
                             "proposals": {},
                             "layers": {},
                             "accepted": {
@@ -1128,7 +1142,11 @@ def test_rollout_replay_uses_recorded_metric_depth_in_the_shared_scene(gui_page,
     assert page.evaluate("flashSceneFrameCache.depth[0]") == 1000
     if with_mask_evidence:
         assert "Recorded RGB-D evidence" in page.locator("#flash-scene-status").inner_text()
+        assert "mask arrived after this snapshot" in page.locator("#flash-scene-status").inner_text()
+        assert "2 verified support points" in page.locator("#flash-scene-status").inner_text()
         assert page.locator("#flash-scene-surface").count() == 1
+        assert page.locator("#flash-scene-group").count() == 1
+        assert "Scene support" in page.locator("#flash-tracker-content").text_content()
         assert page.locator(".flash-scene-photo").evaluate("element => element.style.visibility") == "visible"
         assert (
             page.locator(".flash-scene-photo").evaluate(
@@ -1140,8 +1158,8 @@ def test_rollout_replay_uses_recorded_metric_depth_in_the_shared_scene(gui_page,
         assert "measured 3D surface unavailable" in page.locator("#flash-scene-status").inner_text()
         assert page.locator(".flash-scene-photo").evaluate("element => element.style.visibility") == "hidden"
         assert page.locator("#flash-scene-surface").count() == 0
+        assert page.locator("#flash-scene-group").count() == 0
     assert page.locator("#flash-scene-edit").count() == 0
-    assert page.locator("#flash-scene-group").count() == 0
 
 
 @pytest.mark.requires_playwright
