@@ -144,7 +144,7 @@ coverage change is a coverage-versus-certainty trade-off, not a measured
 accuracy gain.
 The final candidates are `flash-gamepad-cube-20261028-depth-pixels` and
 `flash-dowel-ring-20261028-depth-pixels` in their respective demo datasets.
-The dowel candidate is the first surface pass for that demo, so there is no
+No insertion surface pass without this check has been prepared, so there is no
 same-backend pre-check comparison. Its default appearance-based skill has not
 been replaced. Neither candidate has been validated in a physical rollout.
 
