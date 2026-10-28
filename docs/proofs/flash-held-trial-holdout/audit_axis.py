@@ -135,6 +135,7 @@ def measure(result_path: Path, sample_rows: list[int]) -> list[dict]:
                 continue
             camera_from_object = inverse(base_from_camera) @ np.asarray(pose)
             direction = camera_from_object[:3, :3] @ model_axis
+            axis_gripper = ee[:3, :3].T @ np.asarray(pose)[:3, :3] @ model_axis
             camera_endpoints = (camera_from_object[:3, :3] @ endpoints.T).T + camera_from_object[:3, 3]
             projected = (
                 camera_endpoints[:, :2] / camera_endpoints[:, 2, None] @ intrinsics[:2, :2].T
@@ -155,6 +156,7 @@ def measure(result_path: Path, sample_rows: list[int]) -> list[dict]:
                 "axis_gap_surface_3d_deg": (
                     axis_gap_deg(direction, surface_axis) if surface_axis is not None else None
                 ),
+                "axis_gripper": axis_gripper.tolist(),
                 "axis_gap_mask_2d_deg": axis_gap_deg(projected_axis, observed_2d_axis),
                 "projected_endpoints_xy": projected.tolist(),
                 "mask_fraction": support.projected_point_mask_fraction,

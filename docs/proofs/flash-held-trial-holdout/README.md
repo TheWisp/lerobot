@@ -25,9 +25,27 @@ PYTHONPATH=src /tmp/flash-native-benchmark-venv/bin/python docs/proofs/flash-hel
 PYTHONPATH=src /tmp/flash-native-benchmark-venv/bin/python docs/proofs/flash-held-trial-holdout/audit_axis.py \
   --result docs/proofs/flash-held-trial-holdout/result.json.gz --all-held \
   --output docs/proofs/flash-held-trial-holdout/axis_audit_all_held.json.gz
+.venv/bin/python docs/proofs/flash-held-trial-holdout/audit_future_axis.py \
+  --result docs/proofs/flash-held-trial-holdout/result.json.gz \
+  --axis-audit docs/proofs/flash-held-trial-holdout/axis_audit_all_held.json.gz \
+  --horizon-s 0.3 --horizon-s 0.6 --horizon-s 1.0 \
+  --output docs/proofs/flash-held-trial-holdout/future_axis_comparison.json.gz
 ```
 
 For the second attempt, substitute its trial path above and use `docs/proofs/flash-held-trial-holdout/second-trial` for the replay output directory and axis-audit paths.
+
+The [future-axis check](audit_future_axis.py) compares each proposal's direction in the measured gripper frame at one camera time with the visible direction in a later camera frame. It is a check of a rigid-carry prediction, not an in-sample fit. The configured horizons below are evaluation probes, not runtime thresholds; the script accepts any positive horizon. At each probe it selects the first camera frame at or after the requested delay. The full per-frame results are saved for [20:33:10](future_axis_comparison.json.gz) and [20:18:38](second-trial/future_axis_comparison.json.gz).
+
+| Attempt  | Future delay | Compared frames | Vision predicts later direction better | Median vision gap | Median gripper gap |
+| -------- | -----------: | --------------: | -------------------------------------: | ----------------: | -----------------: |
+| 20:33:10 |        0.3 s |             100 |                                     90 |             11.5° |              18.2° |
+| 20:33:10 |        0.6 s |              99 |                                     84 |             11.2° |              18.2° |
+| 20:33:10 |        1.0 s |              94 |                                     75 |             11.2° |              17.8° |
+| 20:18:38 |        0.3 s |             147 |                                     76 |             13.7° |              14.0° |
+| 20:18:38 |        0.6 s |             145 |                                     69 |             14.1° |              13.7° |
+| 20:18:38 |        1.0 s |             138 |                                     64 |             14.9° |              14.1° |
+
+This strengthens the case that the first attempt's rejected direction is useful beyond its source image, while the second still supplies no general rule to favor vision. Adjacent masks and depth errors can be correlated; the check does not validate position, end identity, contact-tip accuracy, or physical outcome.
 
 Both held intervals contain frames with visible masks but no accepted full pose. The table compares each proposal with the tracker's connected visible-surface direction **after the last accepted direct pose** in that attempt:
 
