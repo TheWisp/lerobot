@@ -12,6 +12,7 @@ from lerobot.policies.flash.perception import ObjectReference, ReferenceSnippet
 from lerobot.policies.flash.prepared import PreparedFlashSkill
 from lerobot.policies.flash.recorded_demo import prepare_recorded_episode
 from lerobot.policies.flash.skill import FlashSkill, Interval, MotionMode, Relation, SpatialSample
+from lerobot.policies.flash.symmetry import AxialSymmetry
 
 
 class Episode:
@@ -39,7 +40,7 @@ class Kinematics:
         return result
 
 
-def _recorded_inputs(root, *, version="object-v1"):
+def _recorded_inputs(root, *, version="object-v1", symmetry=False):
     identity = np.eye(4)
     mask = root / "flash/v1/masks/reference_snapshots/episode_000000/view.png"
     mask.parent.mkdir(parents=True)
@@ -71,12 +72,15 @@ def _recorded_inputs(root, *, version="object-v1"):
             ),
         ),
     )
+    symmetries = (AxialSymmetry("object", [0, 0, 1], [0, 0, 0], identity),) if symmetry else ()
     bundle_path = PreparedFlashSkill(
-        source_skill, (reference,), (model,), {"object": "patterned object"}, "encoder"
+        source_skill, (reference,), (model,), {"object": "patterned object"}, "encoder", symmetries
     ).save(root / "flash/v1/reference_bundles/episode_000000")
     trace = root / "flash/v1/episode_000000.jsonl"
     with trace.open("w") as stream:
         for frame in range(3):
+            observed_pose = identity.copy()
+            observed_pose[0, 3] = frame / 10
             stream.write(
                 json.dumps(
                     {
@@ -84,7 +88,7 @@ def _recorded_inputs(root, *, version="object-v1"):
                         "frame_index": frame,
                         "poses": {
                             "object": {
-                                "pose": identity.tolist(),
+                                "pose": observed_pose.tolist(),
                                 "source_time_s": frame / 30,
                                 "available_time_s": frame / 30,
                                 "evidence": "observed",
@@ -145,3 +149,45 @@ def test_recorded_episode_rejects_pose_trace_in_different_object_frame(tmp_path)
             ),
         )
     assert not output.exists()
+
+
+def test_recorded_episode_rebases_symmetry_from_measured_frame(tmp_path):
+    reference_path = _recorded_inputs(tmp_path, symmetry=True)
+    inputs = {
+        "dataset": Episode(),
+        "dataset_root": tmp_path,
+        "source_repo_id": "trial/recording",
+        "source_episode": 0,
+        "reference_bundle_path": reference_path,
+        "output_dir": tmp_path / "flash/v1/prepared/rebased",
+        "kinematics": Kinematics(),
+        "arm_joint_names": ("joint",),
+        "gripper_joint_name": "finger",
+        "annotations": (
+            IntervalAnnotation("move", 0, 2, MotionMode.DEMONSTRATED, Relation.EE_TO_OBJECT, "object"),
+        ),
+    }
+    with pytest.raises(ValueError, match="observed baseline frame"):
+        prepare_recorded_episode(**inputs)
+    output = prepare_recorded_episode(**inputs, symmetry_baseline_frames={"object": 1})
+    symmetry = PreparedFlashSkill.load(output).axial_symmetries[0]
+    assert symmetry.baseline_base_from_object[0, 3] == pytest.approx(0.1)
+
+
+def test_start_relative_interval_does_not_inherit_unused_symmetry(tmp_path):
+    reference_path = _recorded_inputs(tmp_path, symmetry=True)
+    output = prepare_recorded_episode(
+        dataset=Episode(),
+        dataset_root=tmp_path,
+        source_repo_id="trial/recording",
+        source_episode=0,
+        reference_bundle_path=reference_path,
+        output_dir=tmp_path / "flash/v1/prepared/start-only",
+        kinematics=Kinematics(),
+        arm_joint_names=("joint",),
+        gripper_joint_name="finger",
+        annotations=(
+            IntervalAnnotation("move", 0, 2, MotionMode.CONNECTION, Relation.EE_TO_START, "__start__"),
+        ),
+    )
+    assert PreparedFlashSkill.load(output).axial_symmetries == ()

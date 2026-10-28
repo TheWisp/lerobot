@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import replace
 from pathlib import Path
 
 from .compiler import (
@@ -14,7 +15,8 @@ from .compiler import (
 )
 from .prepared import PreparedFlashSkill
 from .recording import load_pose_estimates
-from .skill import AttachmentTransition, MilestoneSpec
+from .skill import AttachmentTransition, MilestoneSpec, Relation
+from .trajectory import Evidence
 
 
 def prepare_recorded_episode(
@@ -32,6 +34,7 @@ def prepare_recorded_episode(
     milestones: tuple[MilestoneSpec, ...] = (),
     pose_relation_annotations: tuple[PoseRelationAnnotation, ...] = (),
     attachment_transitions: tuple[AttachmentTransition, ...] = (),
+    symmetry_baseline_frames: dict[str, int] | None = None,
 ) -> Path:
     """Compile an annotated regular episode into a portable candidate bundle.
 
@@ -73,12 +76,35 @@ def prepare_recorded_episode(
         pose_relation_annotations=pose_relation_annotations,
         attachment_transitions=attachment_transitions,
     )
+    used_roles = {
+        interval.reference_role for interval in skill.intervals if interval.relation != Relation.EE_TO_START
+    }
+    used_roles.update(interval.held_role for interval in skill.intervals if interval.held_role)
+    used_roles.update(role for milestone in skill.milestones for role in milestone.depends_on_roles)
+    relevant_symmetries = tuple(item for item in reference.axial_symmetries if item.role in used_roles)
+    baselines = symmetry_baseline_frames or {}
+    if set(baselines) != {item.role for item in relevant_symmetries}:
+        raise ValueError("each used symmetry needs an observed baseline frame in the recorded episode")
+    symmetries = []
+    for symmetry in relevant_symmetries:
+        frame_index = baselines[symmetry.role]
+        estimate = poses.get(frame_index, {}).get(symmetry.role)
+        if (
+            estimate is None
+            or estimate.pose is None
+            or estimate.evidence != Evidence.OBSERVED
+            or estimate.reference_version
+            != next(item.version for item in reference.references if item.role == symmetry.role)
+            or not estimate.supports(rotation=(True, True, True))
+        ):
+            raise ValueError(f"{symmetry.role} has no observed symmetry baseline at frame {frame_index}")
+        symmetries.append(replace(symmetry, baseline_base_from_object=estimate.pose))
     return PreparedFlashSkill(
         skill,
         reference.references,
         reference.appearance_models,
         reference.prompts_by_role,
         reference.descriptor_model_id,
-        reference.axial_symmetries,
+        tuple(symmetries),
         reference.vision_pipeline,
     ).save(output)

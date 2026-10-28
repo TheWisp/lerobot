@@ -116,8 +116,10 @@ action columns from a regular dataset; RGB-D decoding remains in perception.
 New trials copy their prepared object models and reference masks into the
 recorded dataset. [`prepare_recorded_episode`](recorded_demo.py) can then compile
 an annotated trial and its frame-indexed pose trace into another prepared
-skill, rejecting a mismatched object-frame version. This is a library path;
-the editor does not yet author its general interval annotations, and older
+skill, rejecting a mismatched object-frame version. Copied symmetry rules
+require a chosen directly observed baseline frame in the new episode rather
+than inheriting the old demo's placement. The editor does not yet author
+general interval annotations, and older
 trials without the copied reference bundle need an explicit reference import.
 The sealed importer is an adapter
 for the historical SO-107 recording layout and its one-held/one-target
