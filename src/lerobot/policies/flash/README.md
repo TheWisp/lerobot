@@ -110,9 +110,12 @@ That command is a compatibility entry point; the importer is
 The preparation report compares that prediction with later directly observed
 held poses at their camera capture times. It reports each uninterrupted visible
 run separately, using the fixed reference-cloud center so an arbitrary object
-frame origin cannot inflate translation error. The comparison is diagnostic:
-agreement does not prove the grasp, and a disagreement does not authorize an
-automatic pose switch or a discontinuity in the demonstrated trajectory.
+frame origin cannot inflate translation error. It also reports how far the
+gripper actually moved during each observed run: a stable object-to-gripper
+offset while both are still is not evidence of a rigid grasp. The comparison
+is diagnostic: agreement does not prove the grasp, and a disagreement does not
+authorize an automatic pose switch or a discontinuity in the demonstrated
+trajectory.
 
 New regular LeRobot episodes have a separate, model-neutral skill compiler in
 [`compiler.py`](compiler.py): it takes dataset frames, role-indexed pose

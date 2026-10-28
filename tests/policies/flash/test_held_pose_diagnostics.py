@@ -47,6 +47,9 @@ def test_compares_held_views_at_camera_time_and_separates_observed_runs():
     ]
     assert comparison["runs"][0]["center_gap_median_m"] == pytest.approx(0.02)
     assert comparison["runs"][0]["gripper_relative_center_scatter_p90_m"] == pytest.approx(0)
+    assert comparison["runs"][0]["gripper_excursion_from_first_m"] == pytest.approx(0.1)
+    assert comparison["runs"][0]["gripper_turn_from_first_rad"] == pytest.approx(0)
+    assert comparison["runs"][0]["gripper_relative_turn_from_first_p90_rad"] == pytest.approx(0)
 
 
 def test_reference_center_gap_is_independent_of_remote_object_frame_origin():

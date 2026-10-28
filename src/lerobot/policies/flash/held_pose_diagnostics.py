@@ -78,7 +78,8 @@ def compare_demo_held_pose(
         predicted = ee @ attachment
         observed_center = transform_points(observed, center[None])[0]
         predicted_center = transform_points(predicted, center[None])[0]
-        gripper_center = transform_points(inverse(ee) @ observed, center[None])[0]
+        gripper_from_observed = inverse(ee) @ observed
+        gripper_center = transform_points(gripper_from_observed, center[None])[0]
         relative_rotation = predicted[:3, :3].T @ observed[:3, :3]
         turn = float(np.arccos(np.clip((np.trace(relative_rotation) - 1) / 2, -1, 1)))
         records.append(
@@ -88,14 +89,27 @@ def compare_demo_held_pose(
                 "center_gap_m": float(np.linalg.norm(observed_center - predicted_center)),
                 "rotation_gap_rad": turn,
                 "gripper_center_m": gripper_center,
+                "gripper_from_observed_rotation": gripper_from_observed[:3, :3],
+                "ee_translation_m": ee[:3, 3],
+                "ee_rotation": ee[:3, :3],
             }
         )
 
     def summarize_run(run: list[dict]) -> dict:
+        def turn_from_first(rotations: list[np.ndarray]) -> np.ndarray:
+            first = rotations[0]
+            return np.array(
+                [np.arccos(np.clip((np.trace(first.T @ current) - 1) / 2, -1, 1)) for current in rotations]
+            )
+
         center_gaps = [item["center_gap_m"] for item in run]
         turns = [item["rotation_gap_rad"] for item in run]
         centers = np.stack([item["gripper_center_m"] for item in run])
         scatter = np.linalg.norm(centers - np.median(centers, axis=0), axis=1)
+        ee_positions = np.stack([item["ee_translation_m"] for item in run])
+        ee_excursion = np.linalg.norm(ee_positions - ee_positions[0], axis=1)
+        ee_turn = turn_from_first([item["ee_rotation"] for item in run])
+        attachment_turn = turn_from_first([item["gripper_from_observed_rotation"] for item in run])
         return {
             "first_frame": run[0]["frame_index"],
             "last_frame": run[-1]["frame_index"],
@@ -107,6 +121,9 @@ def compare_demo_held_pose(
             "rotation_gap_median_rad": float(np.median(turns)),
             "rotation_gap_p90_rad": float(np.percentile(turns, 90)),
             "gripper_relative_center_scatter_p90_m": float(np.percentile(scatter, 90)),
+            "gripper_relative_turn_from_first_p90_rad": float(np.percentile(attachment_turn, 90)),
+            "gripper_excursion_from_first_m": float(ee_excursion.max()),
+            "gripper_turn_from_first_rad": float(ee_turn.max()),
         }
 
     runs: list[dict] = []

@@ -230,6 +230,17 @@ In the recorded gamepad-on-cube demo, frame 290 is at 12.84 s, not the
 9.67 s implied by 290/30. The old clock made replay report a fresh pose
 and a last direct observation 3.18 s ago on the same frame.
 
+The prepared held-pose comparison now reports gripper motion alongside
+object-to-gripper scatter. In the recorded gamepad demo, the longest observed
+held stretch has 17 frames and only 9.5 mm / 3.3° of gripper excursion; in the
+recorded dowel demo, the longest stretch has nine frames and only 0.7 mm /
+0.2°. Low relative scatter in these stretches does not establish a rigid
+grasp on its own; modest gripper excursion makes co-motion assessment
+sensitive to pose noise. The report remains diagnostic; the saved skill and runtime
+attachment policy are unchanged. A future attachment correction must evaluate
+source-frame visual support and hold evidence separately, without treating
+agreement with the grasp prediction as a confidence score.
+
 The displayed median/p90 gap is the current depth-filtered cloud's nearest-point
 distance to the transformed reference. A p90 of 5 mm means 90% of those samples
 have a nearest reference sample within 5 mm. It does not mean 90% of identities

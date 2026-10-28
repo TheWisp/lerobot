@@ -1058,9 +1058,20 @@ function renderFlashDemoSnapshot(snapshot) {
         const centerGap = (observedRun.center_gap_median_m * 1000).toFixed(1);
         const turnGap = (observedRun.rotation_gap_median_rad * 180 / Math.PI).toFixed(1);
         const scatter = (observedRun.gripper_relative_center_scatter_p90_m * 1000).toFixed(1);
+        const motionKnown = observedRun.gripper_excursion_from_first_m != null &&
+            observedRun.gripper_turn_from_first_rad != null &&
+            observedRun.gripper_relative_turn_from_first_p90_rad != null;
+        const gripperTravel = motionKnown
+            ? `Gripper moved up to ${(observedRun.gripper_excursion_from_first_m * 1000).toFixed(1)} mm, ` +
+              `${(observedRun.gripper_turn_from_first_rad * 180 / Math.PI).toFixed(1)}° from the first observed frame. `
+            : '';
+        const relativeTurn = motionKnown
+            ? ` and ${(observedRun.gripper_relative_turn_from_first_p90_rad * 180 / Math.PI).toFixed(1)}° `
+            : ' ';
         const consistency = observedRun.observed_frames > 1
-            ? `Observed center varied ${scatter} mm relative to the gripper (p90). `
-            : 'Only one observed frame; consistency cannot be assessed. ';
+            ? `${gripperTravel}Object varied ${scatter} mm${relativeTurn}relative to the gripper (p90). ` +
+              'Stillness alone cannot verify a grasp. '
+            : 'Only one observed frame; co-motion cannot be assessed. ';
         html += `<div class="flash-tracker-role"><strong>${_esc(heldComparison.role)} · held-pose check</strong>` +
             `<div>${observedRun.observed_frames} observed frames · vision versus grasp prediction: ` +
             `${centerGap} mm at the reference center, ${turnGap}° rotation</div>` +

@@ -1667,6 +1667,9 @@ def test_3d_scene_projection_and_surface_pick_edit_the_prepared_keyframe(gui_pag
                             "center_gap_median_m": 0.02,
                             "rotation_gap_median_rad": 0.4,
                             "gripper_relative_center_scatter_p90_m": 0,
+                            "gripper_relative_turn_from_first_p90_rad": 0,
+                            "gripper_excursion_from_first_m": 0,
+                            "gripper_turn_from_first_rad": 0,
                         }
                     ],
                 },
@@ -1775,6 +1778,7 @@ def test_3d_scene_projection_and_surface_pick_edit_the_prepared_keyframe(gui_pag
         in page.locator("#flash-tracker-content").inner_text().lower()
     )
     assert "vision versus grasp prediction: 20.0 mm" in page.locator("#flash-tracker-content").inner_text()
+    assert "co-motion cannot be assessed" in page.locator("#flash-tracker-content").inner_text()
     assert "Rejected vision fit" in page.locator("#flash-tracker-content").inner_text()
     page.locator("#flash-tracker-collapse").click()
     page.locator("#flash-tracker-content [data-flash-index]", has_text="Rejected vision fit").hover()
