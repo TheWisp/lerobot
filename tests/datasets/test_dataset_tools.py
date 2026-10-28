@@ -28,6 +28,7 @@ pytest.importorskip("datasets", reason="datasets is required (install lerobot[da
 
 from lerobot.configs import DepthEncoderConfig, RGBEncoderConfig
 from lerobot.datasets.dataset_tools import (
+    _extract_episode_stats_from_parquet,
     _sweep_orphan_tmp_shards,
     add_features,
     add_features_inplace,
@@ -47,6 +48,37 @@ from lerobot.datasets.io_utils import load_info
 from tests.datasets.test_video_encoding import require_h264, require_hevc, require_libsvtav1
 from tests.fixtures.constants import DUMMY_DEPTH_FEATURES, DUMMY_DEPTH_KEY
 from tests.fixtures.dataset_factories import add_frames
+
+
+def test_extract_episode_stats_restores_rgb_and_single_channel_depth():
+    def nested(*values):
+        result = np.empty(len(values), dtype=object)
+        for index, value in enumerate(values):
+            result[index] = np.array([[value]], dtype=object)
+        return result
+
+    row = {
+        "stats/observation.images.rgb/mean": nested(0.1, 0.2, 0.3),
+        "stats/observation.images.depth/mean": nested(400.0),
+        "stats/observation.images.depth/count": np.array([12]),
+    }
+    features = {
+        "observation.images.rgb": {
+            "dtype": "image",
+            "shape": [480, 848, 3],
+            "names": ["height", "width", "channels"],
+        },
+        "observation.images.depth": {
+            "dtype": "image",
+            "shape": [480, 848, 1],
+            "names": ["height", "width", "channels"],
+        },
+    }
+    stats = _extract_episode_stats_from_parquet(row, features)
+    np.testing.assert_allclose(stats["observation.images.rgb"]["mean"].reshape(-1), [0.1, 0.2, 0.3])
+    assert stats["observation.images.depth"]["mean"].shape == (1, 1, 1)
+    assert stats["observation.images.depth"]["mean"][0, 0, 0] == 400.0
+    np.testing.assert_array_equal(stats["observation.images.depth"]["count"], [12])
 
 
 @pytest.fixture

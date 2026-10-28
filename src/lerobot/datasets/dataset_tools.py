@@ -117,8 +117,9 @@ def _load_episode_with_stats(src_dataset: LeRobotDataset, episode_idx: int) -> d
 def _extract_episode_stats_from_parquet(episode_row: dict, features: dict) -> dict:
     """Extract per-episode stats from a parquet row, handling nested numpy array deserialization.
 
-    When pandas/pyarrow serializes numpy arrays with shape (3, 1, 1) to parquet,
-    they can be deserialized as nested object arrays. This function flattens them back.
+    When pandas/pyarrow serializes image-channel statistics to parquet,
+    they can be deserialized as nested object arrays. Restore the channel
+    dimension from the feature metadata, including single-channel depth.
 
     Args:
         episode_row: Dictionary from a single episode's parquet row
@@ -143,17 +144,19 @@ def _extract_episode_stats_from_parquet(episode_row: dict, features: dict) -> di
         value = episode_row[key]
 
         if feature_name in features:
-            feature_dtype = features[feature_name].get("dtype", "")
+            feature = features[feature_name]
+            feature_dtype = feature.get("dtype", "")
             if feature_dtype in ["image", "video"] and stat_name != "count":
+                names = feature.get("names") or []
+                shape = feature.get("shape") or []
+                channels = shape[names.index("channels")] if "channels" in names else None
                 if isinstance(value, np.ndarray) and value.dtype == object:
-                    flat_values = []
-                    for item in value:
-                        while isinstance(item, np.ndarray):
-                            item = item.flatten()[0]
-                        flat_values.append(item)
-                    value = np.array(flat_values, dtype=np.float64).reshape(3, 1, 1)
-                elif isinstance(value, np.ndarray) and value.shape == (3,):
-                    value = value.reshape(3, 1, 1)
+                    flattened = np.concatenate(
+                        [np.asarray(item, dtype=np.float64).reshape(-1) for item in value]
+                    )
+                    value = flattened.reshape(channels or flattened.size, 1, 1)
+                elif isinstance(value, np.ndarray) and value.ndim == 1:
+                    value = value.reshape(channels or value.size, 1, 1)
 
         episode_stats[feature_name][stat_name] = value
 
