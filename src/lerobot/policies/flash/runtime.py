@@ -266,6 +266,15 @@ class FlashRuntime:
                 return
             for observed, frame, mask in direct_observations:
                 self.attachment.on_pose_update(version, {observed.role: observed}, frame=frame, mask=mask)
+                if self.live_telemetry is not None and self.attachment.active_role == observed.role:
+                    updater = self.attachment.updaters[observed.role]
+                    visual_evidence = updater.latest_visual_evidence()
+                    if (
+                        visual_evidence is not None
+                        and frame is not None
+                        and visual_evidence["frame_id"] == frame.frame_id
+                    ):
+                        self.live_telemetry.held_visual_evidence(visual_evidence)
             self.attachment.on_pose_update(version, poses)
             if version != self._last_pose_version:
                 changed = frozenset(

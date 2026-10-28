@@ -663,6 +663,7 @@ def prepare(
     held_conflicted_by_camera = [False for _ in estimates]
     held_ambiguous_by_camera = [False for _ in estimates]
     held_corrected_by_camera = [False for _ in estimates]
+    held_visual_evidence_by_camera: list[dict | None] = [None for _ in estimates]
     held_correction_frames: list[int] = []
     held_conflict_frames: list[int] = []
     held_attachment_policy = annotation.get("held_attachment")
@@ -725,13 +726,17 @@ def prepare(
                         version,
                         estimate.source_time_s,
                     )
-                    if updater.on_pose_update(
+                    accepted_update = updater.on_pose_update(
                         frame_index,
                         {held: estimate},
                         frame=frame,
                         mask=mask,
                         ee_at_capture=ee_at_capture,
-                    ):
+                    )
+                    visual_evidence = updater.latest_visual_evidence()
+                    if visual_evidence is not None and visual_evidence["frame_id"] == frame_index:
+                        held_visual_evidence_by_camera[frame_index] = visual_evidence
+                    if accepted_update:
                         last_attachment = updater.last_accepted_gripper_from_object
                         held_correction_frames.append(frame_index)
                         has_correction = True
@@ -873,6 +878,9 @@ def prepare(
             conflicted=np.asarray(held_conflicted_by_camera),
             visual_ambiguous=np.asarray(held_ambiguous_by_camera),
             corrected=np.asarray(held_corrected_by_camera),
+            visual_evidence=np.asarray(
+                [json.dumps(value) if value is not None else "" for value in held_visual_evidence_by_camera]
+            ),
         )
     (destination / "annotation.json").write_text(json.dumps(annotation, indent=2) + "\n")
     (destination / "keypoints.json").write_text(json.dumps(keypoints_document, indent=2) + "\n")

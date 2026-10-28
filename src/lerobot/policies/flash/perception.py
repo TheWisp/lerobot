@@ -5,13 +5,16 @@ from __future__ import annotations
 from collections import deque
 from dataclasses import dataclass
 from threading import Lock
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 import numpy as np
 
 from .execution import MotorTick
 from .geometry import interpolate, inverse, transform
 from .trajectory import AttachmentState, Evidence, PoseEstimate
+
+if TYPE_CHECKING:
+    from .pose_disagreement import PoseComparison, SurfaceSupport
 
 
 @dataclass(frozen=True)
@@ -438,6 +441,9 @@ class HeldAttachmentUpdater:
         self._visual_ambiguous = False
         self._pending_visual: tuple[float, np.ndarray] | None = None
         self._last_visual_source_time_s: float | None = None
+        self._last_visual_comparison: tuple[int, float, PoseComparison] | None = None
+        self._last_visual_candidate: tuple[int, float, SurfaceSupport] | None = None
+        self._last_visual_correction_accepted = False
         self.has_postgrasp_observation = False
         self.last_rejection: str | None = None
 
@@ -474,6 +480,9 @@ class HeldAttachmentUpdater:
             self._visual_ambiguous = False
             self._pending_visual = None
             self._last_visual_source_time_s = None
+            self._last_visual_comparison = None
+            self._last_visual_candidate = None
+            self._last_visual_correction_accepted = False
             self.has_postgrasp_observation = False
             self.last_rejection = None
             return bool(
@@ -522,32 +531,43 @@ class HeldAttachmentUpdater:
                 self.last_rejection = "held image is not bracketed by motor observations"
                 return False
             self._last_visual_source_time_s = held.source_time_s
+            self._last_visual_comparison = None
+            self._last_visual_candidate = None
+            self._last_visual_correction_accepted = False
             candidate = inverse(ee) @ held.pose
             prior = self._estimate.gripper_from_object
+            if (
+                prior is None
+                and frame is not None
+                and mask is not None
+                and self.object_points_object_m is not None
+                and self.depth_occlusion_tolerance_m is not None
+            ):
+                from .pose_disagreement import surface_support
+
+                self._last_visual_candidate = (
+                    frame.frame_id,
+                    held.source_time_s,
+                    surface_support(
+                        frame,
+                        mask,
+                        self.object_points_object_m,
+                        held.pose,
+                        depth_occlusion_tolerance_m=self.depth_occlusion_tolerance_m,
+                    ),
+                )
             if prior is not None:
-                relative = inverse(prior) @ candidate
-                center = self.object_center_object_m
-                prior_center = prior[:3, :3] @ center + prior[:3, 3]
-                candidate_center = candidate[:3, :3] @ center + candidate[:3, 3]
-                shift = float(np.linalg.norm(prior_center - candidate_center))
-                turn = float(np.arccos(np.clip((np.trace(relative[:3, :3]) - 1) / 2, -1, 1)))
-                if shift > self.max_update_shift_m or turn > self.max_update_turn_rad:
-                    was_conflicted = self._conflicted
-                    self._conflicted = True
-                    self._visual_ambiguous = False
-                    self.last_rejection = f"held attachment disagrees by {shift:.4f} m, {turn:.4f} rad"
-                    if (
-                        frame is None
-                        or mask is None
-                        or self.object_points_object_m is None
-                        or self.depth_occlusion_tolerance_m is None
-                    ):
-                        self._pending_visual = None
-                        return False
-                    # Compare both hypotheses against the *same* RGB-D image
-                    # and the same fixed object frame. A tracker fitting its
-                    # own moving reference is insufficient evidence here.
-                    from .pose_disagreement import PoseComparisonVerdict, compare_pose_proposals
+                comparison = None
+                if (
+                    frame is not None
+                    and mask is not None
+                    and self.object_points_object_m is not None
+                    and self.depth_occlusion_tolerance_m is not None
+                ):
+                    # Measure every direct proposal, including small updates.
+                    # The current decision rule still treats small corrections
+                    # as provisional; the score makes their support inspectable.
+                    from .pose_disagreement import compare_pose_proposals
 
                     comparison = compare_pose_proposals(
                         frame,
@@ -560,6 +580,25 @@ class HeldAttachmentUpdater:
                         min_masked_depth_points=self.min_visual_support_points,
                         depth_occlusion_tolerance_m=self.depth_occlusion_tolerance_m,
                     )
+                    self._last_visual_comparison = (frame.frame_id, held.source_time_s, comparison)
+                relative = inverse(prior) @ candidate
+                center = self.object_center_object_m
+                prior_center = prior[:3, :3] @ center + prior[:3, 3]
+                candidate_center = candidate[:3, :3] @ center + candidate[:3, 3]
+                shift = float(np.linalg.norm(prior_center - candidate_center))
+                turn = float(np.arccos(np.clip((np.trace(relative[:3, :3]) - 1) / 2, -1, 1)))
+                if shift > self.max_update_shift_m or turn > self.max_update_turn_rad:
+                    was_conflicted = self._conflicted
+                    self._conflicted = True
+                    self._visual_ambiguous = False
+                    self.last_rejection = f"held attachment disagrees by {shift:.4f} m, {turn:.4f} rad"
+                    if comparison is None:
+                        self._pending_visual = None
+                        return False
+                    # A tracker fitting its own moving reference is
+                    # insufficient evidence to correct a large discrepancy.
+                    from .pose_disagreement import PoseComparisonVerdict
+
                     if comparison.verdict != PoseComparisonVerdict.CANDIDATE_FAVORED:
                         self._pending_visual = None
                         self.last_rejection += f"; image comparison {comparison.verdict.value}"
@@ -606,6 +645,7 @@ class HeldAttachmentUpdater:
             self._pending_visual = None
             self.has_postgrasp_observation = True
             self.last_rejection = None
+            self._last_visual_correction_accepted = True
             return True
 
     def state(self, now_s: float) -> AttachmentState | None:
@@ -625,6 +665,60 @@ class HeldAttachmentUpdater:
         with self._lock:
             return self._visual_ambiguous
 
+    def latest_visual_evidence(self) -> dict | None:
+        """The last same-frame RGB-D comparison, including an accepted small update.
+
+        This describes visible-surface support, not a calibrated pose error.
+        It is kept separately from the attachment state so a rejected proposal
+        remains inspectable even when the prediction is withdrawn for control.
+        """
+        with self._lock:
+            item = self._last_visual_comparison
+            candidate_only = self._last_visual_candidate
+            if item is None and candidate_only is None:
+                return None
+            tolerance = self.depth_occlusion_tolerance_m
+            correction_accepted = self._last_visual_correction_accepted
+            rejection_reason = self.last_rejection
+
+        def support(value) -> dict:
+            residual = value.depth_residual_p90_m
+            return {
+                "supported_pixels": value.masked_depth_points,
+                "mask_fraction": value.projected_point_mask_fraction,
+                "depth_residual_p90_m": float(residual) if np.isfinite(residual) else None,
+            }
+
+        if item is not None:
+            frame_id, source_time_s, comparison = item
+            visual = support(comparison.candidate)
+            gripper = support(comparison.prior)
+            pose_difference_m = comparison.object_center_difference_m
+            rotation_difference_rad = comparison.rotation_difference_rad
+            verdict = comparison.verdict.value
+        else:
+            assert candidate_only is not None
+            frame_id, source_time_s, candidate_support = candidate_only
+            visual = support(candidate_support)
+            gripper = None
+            pose_difference_m = None
+            rotation_difference_rad = None
+            verdict = "no_gripper_prediction"
+        return {
+            "role": self.role,
+            "frame_id": frame_id,
+            "source_time_s": source_time_s,
+            "depth_tolerance_m": tolerance,
+            "min_supported_pixels": self.min_visual_support_points,
+            "pose_difference_m": pose_difference_m,
+            "rotation_difference_rad": rotation_difference_rad,
+            "verdict": verdict,
+            "visual": visual,
+            "gripper": gripper,
+            "correction_accepted": correction_accepted,
+            "rejection_reason": rejection_reason,
+        }
+
     @property
     def last_accepted_gripper_from_object(self) -> np.ndarray | None:
         """Last supported attachment for replay; it may be conflicted for control."""
@@ -640,3 +734,6 @@ class HeldAttachmentUpdater:
             self._visual_ambiguous = False
             self._pending_visual = None
             self._last_visual_source_time_s = None
+            self._last_visual_comparison = None
+            self._last_visual_candidate = None
+            self._last_visual_correction_accepted = False

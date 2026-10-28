@@ -317,12 +317,21 @@ def _add_recorded_attachment_trace(
         count = min(len(trace["camera_times_s"]), len(result["frames"]))
         for index in range(count):
             snapshot = result["frames"][index]["snapshot"]
-            held = snapshot.get("held_prediction")
-            if held is None or held["role"] != role:
-                continue
             source_time_s = float(trace["camera_times_s"][index])
             if not np.isclose(source_time_s, snapshot["recorded_at_s"], atol=1e-9):
                 raise ValueError("held attachment trace and replay camera clocks differ")
+            if "visual_evidence" in trace:
+                encoded = str(trace["visual_evidence"][index])
+                if encoded:
+                    evidence = json.loads(encoded)
+                    if evidence["frame_id"] != index or not np.isclose(
+                        evidence["source_time_s"], source_time_s, atol=1e-9
+                    ):
+                        raise ValueError("held visual evidence and replay camera frame differ")
+                    snapshot["held_visual_evidence"] = evidence
+            held = snapshot.get("held_prediction")
+            if held is None or held["role"] != role:
+                continue
             ee_at_capture = _arm_pose_at(arm_times_s, arm_tips, source_time_s)
             if ee_at_capture is None:
                 continue

@@ -143,6 +143,7 @@ class FlashLiveTelemetry:
         self._latest_decisions: dict[str, dict] = {}
         self._pending_decisions: deque[dict] = deque()
         self._held_attachment: tuple[str, AttachmentState, np.ndarray, float, bool, bool] | None = None
+        self._held_visual_evidence: dict | None = None
         self._motor_tick: dict | None = None
         self._thread = Thread(target=self._write_loop, name="flash-live-telemetry", daemon=True)
         self._thread.start()
@@ -299,6 +300,14 @@ class FlashLiveTelemetry:
                 if role is not None and attachment is not None and joints_deg is not None
                 else None
             )
+            if role is None:
+                self._held_visual_evidence = None
+            self._changed()
+
+    def held_visual_evidence(self, evidence: dict) -> None:
+        """Publish the source-frame visual/gripper comparison without changing control state."""
+        with self._condition:
+            self._held_visual_evidence = evidence.copy()
             self._changed()
 
     def motor_tick(self, tick: MotorTick) -> None:
@@ -346,6 +355,7 @@ class FlashLiveTelemetry:
             self._pending_group_events.clear()
             group_events_dropped = self._group_events_dropped
             held = self._held_attachment
+            held_visual_evidence = self._held_visual_evidence.copy() if self._held_visual_evidence else None
             motor_tick = self._motor_tick.copy() if self._motor_tick is not None else None
         held_prediction = None
         if held is not None and self.kinematics is not None:
@@ -417,6 +427,7 @@ class FlashLiveTelemetry:
             "accepted": {role: _estimate_json(value) for role, value in accepted.items()},
             "anchor_decisions": latest_decisions,
             "held_prediction": held_prediction,
+            "held_visual_evidence": held_visual_evidence,
             "motor_tick": motor_tick,
         }
         return snapshot, frame, pending_decisions, pending_mask_events, pending_group_events

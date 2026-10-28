@@ -761,6 +761,23 @@ def test_run_flash_lists_demos_and_shows_extracted_pose_overlay(gui_page):
                                 },
                             },
                             "held_prediction": None,
+                            "held_visual_evidence": {
+                                "role": "object",
+                                "frame_id": 4,
+                                "source_time_s": 1.0,
+                                "depth_tolerance_m": 0.005,
+                                "visual": {
+                                    "supported_pixels": 40,
+                                    "mask_fraction": 0.4,
+                                    "depth_residual_p90_m": 0.008,
+                                },
+                                "gripper": {
+                                    "supported_pixels": 35,
+                                    "mask_fraction": 0.5,
+                                    "depth_residual_p90_m": 0.004,
+                                },
+                                "correction_accepted": True,
+                            },
                             "demo_pose_review": {
                                 "role": "object",
                                 "reference_center_gap_m": 0.021,
@@ -830,6 +847,9 @@ def test_run_flash_lists_demos_and_shows_extracted_pose_overlay(gui_page):
     assert page.locator("#overlays-panel-run").is_hidden()
     assert "active" in page.locator('.tab[data-tab="run"]').get_attribute("class").split()
     assert "Pose used by skill" in page.locator("#flash-tracker-content").inner_text()
+    assert "held image check" in page.locator("#flash-tracker-content").inner_text()
+    assert "reference-surface fit exceeds" in page.locator("#flash-tracker-content").inner_text()
+    assert "gripper prediction fits this image better" in page.locator("#flash-tracker-content").inner_text()
     assert "Current perception; not saved in skill" in page.locator("#flash-tracker-content").inner_text()
     assert "predicted" in page.locator("#flash-tracker-content").inner_text()
     assert page.get_by_role("button", name="Edit demo in 3D").is_visible()

@@ -1160,6 +1160,65 @@ def test_ambiguous_visual_flip_keeps_depth_supported_gripper_prediction():
     assert updater.state(0.08) is None
 
 
+def test_small_held_correction_exposes_its_depth_support_even_when_accepted():
+    class StationaryKinematics:
+        def forward_kinematics(self, _joints):
+            return np.eye(4)
+
+    xy = np.linspace(-0.1, 0.1, 11)
+    points = np.array([(x, y, 1.0) for x in xy for y in xy])
+    updater = HeldAttachmentUpdater(
+        "held",
+        "held-v1",
+        StationaryKinematics(),
+        ("arm",),
+        history_capacity=5,
+        max_motor_sample_gap_s=0.1,
+        max_attachment_age_s=1.0,
+        max_update_shift_m=0.015,
+        max_update_turn_rad=0.1,
+        object_points_object_m=points,
+        min_visual_support_points=12,
+        depth_occlusion_tolerance_m=0.005,
+    )
+    assert updater.activate(
+        0.02,
+        PoseEstimate("held", pose(), 0.0, 0.0, Evidence.OBSERVED, "held-v1", (True,) * 3, (True,) * 3),
+        np.zeros(1),
+    )
+    frame = RGBDFrame(
+        7,
+        np.zeros((64, 64, 3), dtype=np.uint8),
+        np.full((64, 64), 1.01, dtype=np.float32),
+        np.array([[100.0, 0.0, 32.0], [0.0, 100.0, 32.0], [0.0, 0.0, 1.0]]),
+        1.0,
+        np.eye(4),
+        0.04,
+        0.04,
+        "calibration",
+    )
+    observed = PoseEstimate(
+        "held", pose(0.002), 0.04, 0.04, Evidence.OBSERVED, "held-v1", (True,) * 3, (True,) * 3
+    )
+    assert updater.on_pose_update(
+        7, {"held": observed}, frame=frame, mask=np.ones((64, 64), bool), ee_at_capture=np.eye(4)
+    )
+    evidence = updater.latest_visual_evidence()
+    assert evidence["frame_id"] == 7
+    assert evidence["verdict"] == "agree"
+    assert evidence["visual"]["supported_pixels"] >= 12
+    assert evidence["visual"]["depth_residual_p90_m"] > evidence["depth_tolerance_m"]
+    assert evidence["correction_accepted"]
+    updater.deactivate()
+    assert updater.latest_visual_evidence() is None
+    assert not updater.activate(0.02)
+    assert updater.on_pose_update(
+        7, {"held": observed}, frame=frame, mask=np.ones((64, 64), bool), ee_at_capture=np.eye(4)
+    )
+    assert updater.latest_visual_evidence()["verdict"] == "no_gripper_prediction"
+    assert updater.latest_visual_evidence()["correction_accepted"]
+
+
 def test_held_attachment_compares_physical_center_when_object_frame_rotates():
     class StationaryKinematics:
         def forward_kinematics(self, _joints):

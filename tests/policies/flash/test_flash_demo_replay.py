@@ -86,6 +86,36 @@ def test_demo_attachment_replay_marks_ambiguous_visual_evidence_without_losing_g
     assert held["evidence"] == "ambiguous_visual_prediction"
 
 
+def test_demo_replay_keeps_held_image_check_before_the_saved_carry_interval(tmp_path):
+    bundle = tmp_path / "bundle.json"
+    (tmp_path / "preparation-report.json").write_text(
+        json.dumps({"held_attachment_trace": "held-attachment-trace.npz"})
+    )
+    comparison = {
+        "role": "workpiece",
+        "frame_id": 0,
+        "source_time_s": 0.25,
+        "depth_tolerance_m": 0.005,
+        "visual": {"supported_pixels": 30, "mask_fraction": 0.5, "depth_residual_p90_m": 0.003},
+        "gripper": {"supported_pixels": 10, "mask_fraction": 0.2, "depth_residual_p90_m": 0.02},
+        "correction_accepted": False,
+    }
+    np.savez_compressed(
+        tmp_path / "held-attachment-trace.npz",
+        role=np.asarray("workpiece"),
+        camera_times_s=np.array([0.25]),
+        gripper_from_object=np.stack([_pose(0.1)]),
+        conflicted=np.array([True]),
+        corrected=np.array([False]),
+        visual_evidence=np.asarray([json.dumps(comparison)]),
+    )
+    replay = {"frames": [{"snapshot": {"recorded_at_s": 0.25, "held_prediction": None}}]}
+    _add_recorded_attachment_trace(bundle, replay, np.array([0.0, 1.0]), np.stack([_pose(0), _pose(1)]))
+    snapshot = replay["frames"][0]["snapshot"]
+    assert snapshot["held_prediction"] is None
+    assert snapshot["held_visual_evidence"] == comparison
+
+
 def test_demo_replay_uses_the_selected_preparation_recipe(tmp_path) -> None:
     bundle = tmp_path / "flash/v1/prepared/new/bundle.json"
     bundle.parent.mkdir(parents=True)

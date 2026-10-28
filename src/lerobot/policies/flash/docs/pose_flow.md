@@ -44,6 +44,14 @@ gripper prediction is unsupported or contradicted, the attachment remains
 conflicted. The size of a small update, depth tolerance, and minimum measured
 point count come from the trial's configuration.
 
+The updater records a same-frame mask/depth comparison for **every** direct
+held observation, including a small correction and the first observation when
+no gripper prediction exists. Demo playback and live telemetry show the visual
+and gripper projections' supported pixel counts and depth residuals. This is
+diagnostic evidence: it does not yet reject a small correction whose visible
+reference surface fits poorly. The fit is also not an independent measurement
+of the hidden contact point.
+
 The recorded-demo importer now runs this same correction rule at source time
 when the demo annotation includes `held_attachment` and the aligned masks are
 available. A corrected carried sample uses the latest accepted

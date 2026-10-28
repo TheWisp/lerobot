@@ -840,6 +840,34 @@ function _flashCommandEvidence(snapshot) {
         'This is the evidence used to plan the command; the outlines show the current estimate.</small></details>';
 }
 
+function _flashHeldVisualEvidence(evidence) {
+    if (!evidence) return '';
+    const score = support => {
+        const pixels = Number(support?.supported_pixels || 0);
+        const residual = support?.depth_residual_p90_m;
+        const depth = residual == null ? 'no depth fit' : `${(Number(residual) * 1000).toFixed(1)} mm depth p90`;
+        return `${pixels} pixels, ${depth}`;
+    };
+    const tolerance = evidence.depth_tolerance_m;
+    const visualResidual = evidence.visual?.depth_residual_p90_m;
+    const exceeds = tolerance != null && visualResidual != null && visualResidual > tolerance;
+    const visualCoverage = evidence.visual?.mask_fraction;
+    const gripperCoverage = evidence.gripper?.mask_fraction;
+    const gripperResidual = evidence.gripper?.depth_residual_p90_m;
+    const gripperFitsBetter = visualCoverage != null && gripperCoverage != null &&
+        visualResidual != null && gripperResidual != null &&
+        gripperCoverage >= visualCoverage && gripperResidual <= visualResidual &&
+        (gripperCoverage > visualCoverage || gripperResidual < visualResidual);
+    const decision = evidence.correction_accepted ? 'Visual correction applied' : 'Visual correction withheld';
+    const warning = exceeds ? ' · reference-surface fit exceeds the configured depth tolerance' : '';
+    const preference = evidence.correction_accepted && gripperFitsBetter
+        ? ' · gripper prediction fits this image better' : '';
+    return `<div class="flash-tracker-comparison"><strong>${_esc(evidence.role)} · held image check</strong>` +
+        `<small>Camera frame ${_esc(String(evidence.frame_id))} · ${decision}${warning}${preference}</small>` +
+        `<small>Visual: ${score(evidence.visual)} · gripper prediction: ${evidence.gripper ? score(evidence.gripper) : 'not available'}. ` +
+        'These are visible-surface checks, not a measured object-pose error.</small></div>';
+}
+
 function renderFlashSnapshot(snapshot, mode = 'Live') {
     flashSnapshot = snapshot;
     const panel = document.getElementById('flash-tracker-panel');
@@ -856,6 +884,7 @@ function renderFlashSnapshot(snapshot, mode = 'Live') {
         ...Object.keys(snapshot.accepted || {}),
         ...Object.keys(snapshot.observed_masks || {}),
         ...Object.keys(snapshot.scene_support?.groups || {}),
+        ...(snapshot.held_visual_evidence ? [snapshot.held_visual_evidence.role] : []),
     ])].sort();
     if (!roles.length) {
         content.innerHTML = _flashCommandEvidence(snapshot) +
@@ -912,6 +941,8 @@ function renderFlashSnapshot(snapshot, mode = 'Live') {
         html += planningPose
             ? _flashOverlayRow(held ? 'held' : 'accepted', role, '', 'flash-tracker-selected', selectedText)
             : `<div class="flash-tracker-selected">${selectedText}</div>`;
+        if (snapshot.held_visual_evidence?.role === role)
+            html += _flashHeldVisualEvidence(snapshot.held_visual_evidence);
         const decision = snapshot.anchor_decisions?.[role];
         if (decision) {
             const reasons = {
@@ -1025,6 +1056,7 @@ function renderFlashDemoSnapshot(snapshot) {
                     : '') +
                 '</div>';
         }
+        html += _flashHeldVisualEvidence(snapshot.held_visual_evidence);
         if (demo.phase !== 'outside_skill')
             html += `<div class="flash-tracker-role"><strong>${_esc(demo.interval_name)}</strong>` +
                 `<small>${_esc(demo.relation.replaceAll('_', ' '))}</small></div>`;
@@ -1136,6 +1168,7 @@ function renderFlashDemoSnapshot(snapshot) {
             `<small>${consistency}` +
             `This compares estimates; it does not establish which is correct.</small></div>`;
     }
+    html += _flashHeldVisualEvidence(snapshot.held_visual_evidence);
     if (demo.phase === 'outside_skill') {
         html += '<div class="flash-tracker-role">No spatial skill sample applies to this part of the recording.</div>';
     } else {
