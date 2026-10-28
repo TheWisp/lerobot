@@ -23,6 +23,8 @@ def extract_pose_trace(
     axial_symmetries: tuple[AxialSymmetry, ...] = (),
     attached_role_at_frame: Callable[[int], str | None] | None = None,
     on_vision_result: Callable[[PerceptionResult], None] | None = None,
+    on_frame_evidence: Callable[[RGBDFrame, PerceptionResult, dict, dict[str, PoseEstimate]], None]
+    | None = None,
 ) -> list[dict[str, PoseEstimate]]:
     """Extract one causal pose row per recorded frame, without a robot clock.
 
@@ -70,5 +72,9 @@ def extract_pose_trace(
                     else proposal
                     for role, proposal in by_role.items()
                 }
+            if on_frame_evidence is not None:
+                on_frame_evidence(
+                    frame, result, service.scene_group_supports() if service is not None else {}, by_role
+                )
             trace.append(by_role)
     return trace

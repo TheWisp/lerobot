@@ -2,13 +2,20 @@
 
 from __future__ import annotations
 
+import gzip
+import hashlib
 import json
 
 import cv2
 import numpy as np
 
 from lerobot.policies.flash.demo_replay import _add_saved_extraction_layers
-from lerobot.policies.flash.demo_scene import reference_surfaces
+from lerobot.policies.flash.demo_scene import (
+    reference_surfaces,
+    scene_evidence_frame,
+    scene_evidence_status,
+)
+from lerobot.policies.flash.sealed_demo_evidence import _mask_runs
 
 
 def test_reference_surface_uses_masked_depth_and_does_not_bridge_depth_edges(tmp_path) -> None:
@@ -94,3 +101,35 @@ def test_extraction_layer_preserves_group_prediction_and_lost_state(tmp_path) ->
     assert layers[1]["evidence"] == "predicted"
     assert layers[2]["pose"] is None
     assert layers[2]["evidence"] == "lost"
+
+
+def test_rebuilt_scene_evidence_preserves_mask_pixels_and_rejects_stale_bundle(tmp_path) -> None:
+    bundle_dir = tmp_path / "prepared/example"
+    sidecar = bundle_dir / "scene-evidence"
+    sidecar.mkdir(parents=True)
+    bundle = bundle_dir / "bundle.json"
+    annotation = bundle_dir / "annotation.json"
+    bundle.write_text('{"version":1}')
+    annotation.write_text('{"role":"object"}')
+    mask = np.array([[False, True, True], [False, False, True]])
+    runs = _mask_runs(mask)
+    assert runs == [[1, 2], [5, 1]]
+    identity = hashlib.sha256(bundle.read_bytes() + annotation.read_bytes()).hexdigest()
+    (sidecar / "manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "source_sha256": identity,
+                "frames_completed": 1,
+                "total_frames": 1,
+                "complete": True,
+            }
+        )
+    )
+    with gzip.open(sidecar / "000000.json.gz", "wt") as stream:
+        json.dump({"frame_index": 0, "masks_rle": {"object": runs}, "groups": {}}, stream)
+    assert scene_evidence_status(bundle)["available"]
+    assert scene_evidence_frame(bundle, 0)["masks_rle"]["object"] == runs
+    assert not scene_evidence_frame(bundle, 1)["available"]
+    bundle.write_text('{"version":2}')
+    assert not scene_evidence_status(bundle)["available"]

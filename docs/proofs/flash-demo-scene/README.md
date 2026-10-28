@@ -1,11 +1,19 @@
 # FLASH demo scene: insertion recording
 
-The Run → FLASH → Demos viewer now has an optional **3D scene** view. It unprojects each recorded aligned RGB-D frame into a subdued, rotatable scene and places the saved partial surface patches at the poses in the selected prepared version. Object axes, saved extraction estimates, and gripper-backed predictions can be shown separately. The viewer does not change the prepared skill or rerun tracking.
+The Run → FLASH → Demos viewer shows a soft recorded RGB frame behind the current object masks. Masked RGB pixels remain sharp where depth is missing. When the camera orbits, it shows only measured 3D surface; unseen geometry remains absent. The coarse full-scene depth mesh is optional. The saved skill pose patch, extraction pose, actual scene-group support points, and gripper-backed prediction remain separate layers.
 
-This check used `insertion` episode 0 and prepared version `insertion-causal-parity-20261023` on the local SO-107 recording. That version saved a per-frame extraction trace; earlier versions without that trace show the missing source explicitly. The group-support point set and per-frame masks were **not** saved, so the group layer is a pose applied to the saved reference patch, not the original group points.
+The `insertion-causal-parity-20261023` and default `insertion-migrated-v10-preferred-hover` prepared versions originally saved poses but not masks or group point identities. Those can be regenerated from their ordinary RGB-D demo using the same SAM3, appearance, and causal scene-tracking pipeline as preparation:
 
-- [Frame 228: group estimate beside the prepared reference pose](group-frame-228.png). The scene is focused on the dowel; the measured reference patch is sharp against the recorded depth scene.
-- [Frame 500: carried dowel with gripper-backed prediction](held-frame-500.png). The orange ghost is the gripper-backed estimate; it is not an independent observation.
-- [Frame 540: after release](release-frame-540.png). The saved extractor reports the dowel as lost, so no dowel estimate is painted onto this frame.
+```bash
+python -m lerobot.policies.flash.sealed_demo_evidence DATASET_ROOT BUNDLE_JSON
+```
 
-The display keeps missing depth open rather than filling a back surface. In headless software-rendered Chromium, the 3D preview displayed about 40 of 53 requested frames over a 3-second playback sample; this is preview rendering throughput, not the robot-control loop rate. Browser navigation, camera/orbit, focus, source toggles and all three frames produced no page errors.
+Both versions now have all 713 camera frames rebuilt into local `scene-evidence` sidecars, without modifying either prepared skill. For the causal version, the first 591 frames covered by the original pose cache reproduced its evidence labels, estimator labels, and available pose matrices **exactly** for both objects. At frame 228 the rebuilt verified support groups contained 157 dowel-context points and 294 ring-context points. The dowel group is withdrawn during the attached phase, as the causal pipeline requires.
+
+- [Frame 100: current observed surfaces](observed-frame-100.png), colored by the recorded camera instead of a single reference patch.
+- [Frame 228: observed surfaces and actual group support points](group-frame-228.png).
+- [Frame 500: carried object](held-frame-500.png), with the gripper-backed pose available separately.
+- [Frame 540: after release](release-frame-540.png). The dowel's SAM mask and measured visible surface remain available even though the saved pose extractor reports **lost**. This exposes a pose-estimation failure, not loss of every object pixel.
+- [Frame 540: 3D close-up](release-focus-frame-540.png). The flat RGB backdrop is hidden when the camera orbits, avoiding false duplicate geometry.
+
+The rebuilt masks and groups are an inspection sidecar. They do not revise the stored policy pose or make an unmeasured back surface into geometry. Browser inspection of camera, focus, and group toggles produced no page errors.

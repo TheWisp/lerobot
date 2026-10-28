@@ -19,9 +19,32 @@ let flashSceneRequest = 0;
 let flashSceneMode = 'camera';
 let flashSceneFrameCache = null;
 
+function _flashPaintObservedPhoto(frame, camera) {
+    const photo = document.querySelector('#rerun-viewer .flash-scene-photo');
+    if (!photo) return;
+    const runsByRole = frame.evidence?.masks_rle;
+    photo.style.visibility = _flashSceneOptions().showSurface && runsByRole ? 'visible' : 'hidden';
+    if (!runsByRole || photo.style.visibility === 'hidden') return;
+    if (photo.width !== camera.width || photo.height !== camera.height) {
+        photo.width = camera.width;
+        photo.height = camera.height;
+    }
+    const pixels = new Uint8ClampedArray(frame.rgba.length);
+    for (const runs of Object.values(runsByRole)) {
+        for (const [start, count] of runs) {
+            if (start < 0 || start + count > camera.width * camera.height)
+                throw new Error('Object mask exceeds camera frame');
+            pixels.set(frame.rgba.subarray(start * 4, (start + count) * 4), start * 4);
+        }
+    }
+    photo.getContext('2d').putImageData(new ImageData(pixels, camera.width, camera.height), 0, 0);
+}
+
 function _flashSceneOptions() {
     return {
         showSurface: document.getElementById('flash-scene-surface')?.checked,
+        showProjection: document.getElementById('flash-scene-projection')?.checked,
+        showDepthScene: document.getElementById('flash-scene-depth')?.checked,
         showAxes: document.getElementById('flash-scene-axes')?.checked,
         showGroup: document.getElementById('flash-scene-group')?.checked,
         showGripper: document.getElementById('flash-scene-gripper')?.checked,
@@ -43,21 +66,36 @@ async function _flashUpdateSceneFrame() {
         let frame = flashSceneFrameCache;
         if (frame?.replay !== replay || frame.frameIndex !== selected.frame_index) {
             const query = new URLSearchParams({dataset_root: replay.datasetRoot, frame_index: String(selected.frame_index)});
-            const response = await fetch(`/api/run/flash/demo/depth-frame?${query}`);
+            const evidenceReady = replay.sceneEvidence?.available &&
+                selected.frame_index < replay.sceneEvidence.frames_completed;
+            const evidenceQuery = new URLSearchParams({dataset_root: replay.datasetRoot,
+                bundle_path: replay.bundle_path, frame_index: String(selected.frame_index)});
+            const [response, evidenceResponse] = await Promise.all([
+                fetch(`/api/run/flash/demo/depth-frame?${query}`),
+                evidenceReady ? fetch(`/api/run/flash/demo/scene-evidence/frame?${evidenceQuery}`) : null,
+            ]);
             if (!response.ok) throw new Error(`Depth frame ${selected.frame_index} is unavailable`);
-            const bytes = await response.arrayBuffer();
+            if (evidenceResponse && !evidenceResponse.ok) throw new Error('Rebuilt scene evidence is unavailable');
+            const [bytes, evidence] = await Promise.all([response.arrayBuffer(),
+                evidenceResponse ? evidenceResponse.json() : null]);
             if (generation !== flashSceneRequest || replay !== flashReplay || flashSceneMode !== '3d') return;
             const paint = document.createElement('canvas');
             paint.width = camera.width; paint.height = camera.height;
             const context = paint.getContext('2d', {willReadFrequently: true});
             context.drawImage(image, 0, 0, camera.width, camera.height);
             frame = {replay, frameIndex: selected.frame_index, depth: new Uint16Array(bytes),
-                rgba: context.getImageData(0, 0, camera.width, camera.height).data};
+                rgba: context.getImageData(0, 0, camera.width, camera.height).data, evidence};
             flashSceneFrameCache = frame;
         }
-        flashSceneView.update(frame.depth, frame.rgba, {...selected.snapshot, ...replay.geometry}, _flashSceneOptions());
+        _flashPaintObservedPhoto(frame, camera);
+        flashSceneView.update(frame.depth, frame.rgba, {...selected.snapshot, ...replay.geometry},
+            _flashSceneOptions(), frame.evidence);
         flashSceneView.highlight(flashHighlightedOverlay);
-        status.textContent = `Recorded RGB-D · frame ${selected.frame_index} · reference patches from saved demo masks`;
+        const groups = Object.entries(frame.evidence?.groups || {}).map(([role, group]) =>
+            `${role}: ${group.ids.length} ${group.verified ? 'verified' : 'candidate'} group points${group.measured_this_frame === false ? ' (fit unavailable)' : ''}`).join(' · ');
+        status.textContent = frame.evidence?.available
+            ? `Rebuilt RGB-D evidence · frame ${selected.frame_index}${groups ? ` · ${groups}` : ''}`
+            : `Recorded RGB-D · frame ${selected.frame_index} · no rebuilt per-frame masks`;
     } catch (error) {
         if (generation === flashSceneRequest && status) status.textContent = `3D view: ${error.message}`;
     }
@@ -83,6 +121,13 @@ async function toggleFlashSceneView() {
             const response = await fetch(`/api/run/flash/demo/reference-surfaces?${query}`);
             const surfaces = await response.json();
             if (!response.ok) throw new Error(surfaces.detail || 'Cannot load reference surfaces');
+            const evidenceResponse = await fetch(`/api/run/flash/demo/scene-evidence/status?${query}`);
+            if (evidenceResponse.ok) flashReplay.sceneEvidence = await evidenceResponse.json();
+            if (flashReplay.sceneEvidence?.available) {
+                document.getElementById('flash-scene-projection').checked = false;
+                const index = Number(document.getElementById('flash-tracker-scrub').value);
+                renderFlashDemoSnapshot({...flashReplay.frames[index].snapshot, ...flashReplay.geometry});
+            }
             const select = document.getElementById('flash-scene-object');
             for (const role of Object.keys(surfaces)) {
                 const option = document.createElement('option');
@@ -90,7 +135,7 @@ async function toggleFlashSceneView() {
                 option.textContent = role;
                 select.append(option);
             }
-            const {createFlashSceneView} = await import('/static/flash_scene_view.js?v=2');
+            const {createFlashSceneView} = await import('/static/flash_scene_view.js?v=10');
             flashSceneView = createFlashSceneView(grid.querySelector('.flash-scene-canvas'), surfaces);
         }
         flashSceneMode = '3d';
@@ -728,8 +773,9 @@ function renderFlashDemoSnapshot(snapshot) {
     panel.querySelector('.flash-tracker-heading strong').textContent = 'FLASH demo extraction';
     document.getElementById('flash-tracker-mode').textContent = 'Demo';
     const demo = snapshot.demo;
-    let html = `<div class="flash-tracker-legend">Demo time ${demo.time_s.toFixed(2)} s · arm reading ${(demo.camera_arm_delta_s * 1000).toFixed(0)} ms from this RGB frame. The 3D scene shows real aligned depth and the partial surface saved from each reference mask. Prepared skill poses and extraction estimates are separate; neither is a complete object model.</div>`;
-    if (flashReplay.extraction_history !== 'recorded_for_prepared_version')
+    const rebuilt = flashReplay.sceneEvidence?.available;
+    let html = `<div class="flash-tracker-legend">Demo time ${demo.time_s.toFixed(2)} s · arm reading ${(demo.camera_arm_delta_s * 1000).toFixed(0)} ms from this RGB frame. ${rebuilt ? 'The 3D view shows object surfaces and group points rebuilt from this recording.' : 'The 3D view can project partial reference patches; per-frame masks were not saved.'} Prepared skill poses and extraction estimates are separate.</div>`;
+    if (flashReplay.extraction_history !== 'recorded_for_prepared_version' && !rebuilt)
         html += '<div class="flash-tracker-unavailable">Per-frame extraction and group support: not recorded for this prepared version; no mask here does not mean segmentation was lost.</div>';
     if (flashReplay.tracker_candidate) {
         if (flashTrackPoints?.available && flashTrackPoints.candidate_id === flashReplay.tracker_candidate.candidate_id) {
@@ -777,9 +823,12 @@ function renderFlashDemoSnapshot(snapshot) {
             : `${_flashLayerName(pose.estimator)} · ${_flashPoseText(pose, snapshot)}${lastDirect}${separation}`;
         const predictionNote = pose.evidence === 'predicted' && pose.estimator === 'appearance_rgbd'
             ? 'Visual evidence contributed, but the full pose remained predicted. ' : '';
+        const originNote = rebuilt
+            ? 'Current masks and group supports were rebuilt with the same perception pipeline; the saved skill was unchanged.'
+            : 'Per-frame masks and supporting group points were not stored.';
         html += `<div class="flash-tracker-role"><strong>${_esc(role)} · extraction</strong>`;
         html += _flashOverlayRow('layer', role, 'demo_extraction', 'flash-tracker-layer',
-            `<span class="flash-tracker-dot" style="background:${_flashLayerColor(pose.estimator)}"></span>${_esc(detail)}<small>${_esc(predictionNote)}Saved by this prepared version. Per-frame masks and supporting group points were not stored.</small>`);
+            `<span class="flash-tracker-dot" style="background:${_flashLayerColor(pose.estimator)}"></span>${_esc(detail)}<small>${_esc(predictionNote)}${_esc(originNote)}</small>`);
         html += '</div>';
     }
     if (demo.phase === 'outside_skill') {
@@ -1145,23 +1194,28 @@ function _flashInstallReplay(replay, imageAlt) {
     canvas.className = 'flash-pose-canvas';
     grid.append(image, canvas);
     if (replay.kind === 'demo') {
+        const photo = document.createElement('canvas');
+        photo.className = 'flash-scene-photo';
         const scene = document.createElement('canvas');
         scene.className = 'flash-scene-canvas';
         const toolbar = document.createElement('div');
         toolbar.className = 'flash-scene-toolbar';
         toolbar.innerHTML = '<button type="button" id="flash-scene-toggle" onclick="toggleFlashSceneView()">3D scene</button>' +
             '<div id="flash-scene-tools" hidden>' +
-            '<label><input type="checkbox" id="flash-scene-surface" checked onchange="_flashUpdateSceneFrame()">Surface</label>' +
-            '<label><input type="checkbox" id="flash-scene-axes" checked onchange="_flashUpdateSceneFrame()">Axes</label>' +
-            '<label><input type="checkbox" id="flash-scene-group" onchange="_flashUpdateSceneFrame()">Group</label>' +
-            '<label><input type="checkbox" id="flash-scene-gripper" onchange="_flashUpdateSceneFrame()">Gripper</label>' +
             '<select id="flash-scene-object" aria-label="Object to focus"><option value="">Focus object</option></select>' +
             '<button type="button" onclick="flashSceneView?.focus(document.getElementById(\'flash-scene-object\').value)">Focus</button>' +
-            '<button type="button" onclick="flashSceneView?.reset()">Camera</button></div>';
+            '<button type="button" onclick="flashSceneView?.reset()">Camera</button>' +
+            '<span class="flash-scene-break"></span>' +
+            '<label><input type="checkbox" id="flash-scene-surface" checked onchange="_flashUpdateSceneFrame()">Observed</label>' +
+            '<label><input type="checkbox" id="flash-scene-projection" checked onchange="_flashUpdateSceneFrame()">Pose patch</label>' +
+            '<label><input type="checkbox" id="flash-scene-depth" onchange="_flashUpdateSceneFrame()">Scene depth</label>' +
+            '<label><input type="checkbox" id="flash-scene-axes" checked onchange="_flashUpdateSceneFrame()">Axes</label>' +
+            '<label><input type="checkbox" id="flash-scene-group" onchange="_flashUpdateSceneFrame()">Group points</label>' +
+            '<label><input type="checkbox" id="flash-scene-gripper" onchange="_flashUpdateSceneFrame()">Gripper</label></div>';
         const status = document.createElement('div');
         status.id = 'flash-scene-status';
         status.textContent = '3D scene uses recorded depth and saved reference masks';
-        grid.append(scene, toolbar, status);
+        grid.append(photo, scene, toolbar, status);
     }
     grid.addEventListener('click', _flashSelectPointAt);
     viewer.prepend(grid);

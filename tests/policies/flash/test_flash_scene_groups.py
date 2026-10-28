@@ -31,6 +31,23 @@ def _pose(x: float) -> np.ndarray:
     return result
 
 
+def test_scene_group_support_snapshot_uses_active_point_ids_only():
+    service = CausalPoseService(LatestPoseStore())
+    points = np.array([[0.1, 0, 1], [0.2, 0, 1], [0.3, 0, 1]])
+    pixels = np.array([[10, 10], [20, 10], [30, 10]])
+    service.scene_history.append(SceneTracks(4, 4 / 30, np.array([1, 2, 3]), pixels, points))
+    service.relationships["object"] = EnvironmentRelationship(
+        np.array([1, 3, 8]), points.copy(), _pose(0), 0, "v1", 4 / 30
+    )
+
+    support = service.scene_group_supports()["object"]
+    assert support["verified"] is True
+    assert support["measured_this_frame"] is True
+    np.testing.assert_array_equal(support["ids"], [1, 3])
+    np.testing.assert_array_equal(support["xy"], pixels[[0, 2]])
+    np.testing.assert_array_equal(support["base_xyz"], points[[0, 2]])
+
+
 def test_environment_relation_needs_non_object_co_motion_and_tracks_occlusion():
     rng = np.random.default_rng(8)
     group = rng.uniform((-0.12, -0.12, 0.98), (0.12, 0.12, 1.02), (36, 3))

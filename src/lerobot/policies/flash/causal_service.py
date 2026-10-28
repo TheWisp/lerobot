@@ -322,6 +322,30 @@ class CausalPoseService:
                 )
                 self._attached_role = role
 
+    def scene_group_supports(self) -> dict[str, dict]:
+        """Measured current support points for inspection, with group provenance.
+
+        This reads the same active relationships used for pose prediction. It
+        does not infer membership from the final object pose or nearby pixels.
+        """
+        if not self.scene_history:
+            return {}
+        scene = self.scene_history[-1]
+        lookup = {int(point_id): index for index, point_id in enumerate(scene.ids)}
+        result = {}
+        for confirmed, relationships in ((True, self.relationships), (False, self.candidate_relationships)):
+            for role, relationship in relationships.items():
+                indices = [lookup[int(point_id)] for point_id in relationship.ids if int(point_id) in lookup]
+                result[role] = {
+                    "verified": confirmed,
+                    "ids": scene.ids[indices].copy(),
+                    "xy": scene.xy[indices].copy(),
+                    "base_xyz": scene.base_xyz[indices].copy(),
+                    "last_group_measurement_s": relationship.last_group_measurement_s,
+                    "measured_this_frame": relationship.last_group_measurement_s == scene.source_time_s,
+                }
+        return result
+
     def _sync_attachment(self) -> str | None:
         with self._attachment_lock:
             role = self._attached_role

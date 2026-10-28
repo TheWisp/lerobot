@@ -7,6 +7,8 @@ the prepared reference snippet, so the saved pose can place it in each frame.
 
 from __future__ import annotations
 
+import gzip
+import hashlib
 import json
 from pathlib import Path
 
@@ -71,3 +73,40 @@ def reference_surfaces(dataset_root: Path, bundle_path: Path, *, step_px: int = 
             "indices": faces.ravel().tolist(),
         }
     return result
+
+
+def scene_evidence_status(bundle_path: Path) -> dict:
+    """Report whether a same-version RGB-D replay has rebuilt scene evidence."""
+    bundle = bundle_path.expanduser().resolve()
+    sidecar = bundle.parent / "scene-evidence"
+    manifest_path = sidecar / "manifest.json"
+    if not manifest_path.is_file():
+        return {"available": False, "frames_completed": 0}
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    identity = hashlib.sha256(
+        bundle.read_bytes() + (bundle.parent / "annotation.json").read_bytes()
+    ).hexdigest()
+    if manifest.get("schema_version") != 1 or manifest.get("source_sha256") != identity:
+        return {"available": False, "frames_completed": 0, "reason": "sidecar version differs"}
+    return {
+        "available": True,
+        "frames_completed": int(manifest["frames_completed"]),
+        "total_frames": int(manifest["total_frames"]),
+        "complete": bool(manifest["complete"]),
+    }
+
+
+def scene_evidence_frame(bundle_path: Path, frame_index: int) -> dict:
+    if frame_index < 0:
+        raise ValueError("frame index must be nonnegative")
+    status = scene_evidence_status(bundle_path)
+    if not status["available"] or frame_index >= status["frames_completed"]:
+        return {"available": False, "status": status}
+    path = bundle_path.expanduser().resolve().parent / "scene-evidence" / f"{frame_index:06d}.json.gz"
+    if not path.is_file():
+        return {"available": False, "status": status}
+    with gzip.open(path, "rt", encoding="utf-8") as stream:
+        data = json.load(stream)
+    if data["frame_index"] != frame_index:
+        raise ValueError("scene evidence frame does not match the requested index")
+    return {"available": True, **data}

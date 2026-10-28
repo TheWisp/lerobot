@@ -1344,6 +1344,32 @@ async def flash_demo_reference_surfaces(dataset_root: str, bundle_path: str) -> 
         raise HTTPException(400, f"Cannot build demo surfaces: {exc}") from exc
 
 
+@router.get("/flash/demo/scene-evidence/status")
+async def flash_demo_scene_evidence_status(dataset_root: str, bundle_path: str) -> dict:
+    from lerobot.policies.flash.demo_scene import scene_evidence_status
+
+    try:
+        _, bundle = _flash_demo_paths(dataset_root, bundle_path)
+        return await asyncio.get_running_loop().run_in_executor(
+            _flash_config_pool, scene_evidence_status, bundle
+        )
+    except (OSError, KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(400, f"Cannot read demo scene evidence: {exc}") from exc
+
+
+@router.get("/flash/demo/scene-evidence/frame")
+async def flash_demo_scene_evidence_frame(dataset_root: str, bundle_path: str, frame_index: int) -> dict:
+    from lerobot.policies.flash.demo_scene import scene_evidence_frame
+
+    try:
+        _, bundle = _flash_demo_paths(dataset_root, bundle_path)
+        return await asyncio.get_running_loop().run_in_executor(
+            _flash_config_pool, scene_evidence_frame, bundle, frame_index
+        )
+    except (OSError, KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(400, f"Cannot read demo scene evidence: {exc}") from exc
+
+
 def _flash_demo_paths(dataset_root: str, bundle_path: str) -> tuple[Path, Path]:
     root = Path(dataset_root).expanduser().resolve()
     bundle = Path(bundle_path).expanduser().resolve()
