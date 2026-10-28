@@ -143,7 +143,12 @@ function makeContext(depth, rgb, camera) {
     geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
     geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
     geometry.setIndex(triangles);
-    return new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({vertexColors: true, side: THREE.DoubleSide}));
+    // Coarse single-view depth has holes and stretched silhouettes when orbited.
+    // Keep it as faint spatial context; sharp geometry belongs to measured masks.
+    return new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({
+        vertexColors: true, side: THREE.DoubleSide, transparent: true, opacity: 0.18,
+        depthWrite: false,
+    }));
 }
 
 function makePoseAxes(length) {
@@ -182,6 +187,7 @@ export function createFlashSceneView(canvas, surfaces) {
     let observedCenters = {};
     let focusedRole = null;
     let lastFocusCenter = null;
+    const raycaster = new THREE.Raycaster();
     const evidence = new THREE.Group();
     scene.add(evidence);
     const references = Object.fromEntries(Object.entries(surfaces).map(([role, data]) => [role, makeReference(data)]));
@@ -196,12 +202,22 @@ export function createFlashSceneView(canvas, surfaces) {
         camera.aspect = width / height;
         if (frameCamera) {
             const k = frameCamera.intrinsics;
-            const vertical = frameCamera.height / (2 * k[1][1]);
-            const horizontal = frameCamera.width / (2 * k[0][0] * camera.aspect);
-            // Fit the whole recorded camera view inside a differently shaped pane.
-            camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan(Math.max(vertical, horizontal)));
+            const scale = Math.min(width / frameCamera.width, height / frameCamera.height);
+            const insetX = (width - frameCamera.width * scale) / 2;
+            const insetY = (height - frameCamera.height * scale) / 2;
+            const near = camera.near;
+            // Match CSS object-fit: contain and the recorded principal point.
+            // A centered-FOV camera shifts overlays whenever cx/cy are off-center.
+            const left = -near * (k[0][2] + insetX / scale) / k[0][0];
+            const right = near * ((width - insetX) / scale - k[0][2]) / k[0][0];
+            const top = near * (k[1][2] + insetY / scale) / k[1][1];
+            const bottom = near * (k[1][2] - (height - insetY) / scale) / k[1][1];
+            camera.projectionMatrix.makePerspective(left, right, top, bottom, near, camera.far);
+            camera.projectionMatrixInverse.copy(camera.projectionMatrix).invert();
+            camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan((top - bottom) / (2 * near)));
+        } else {
+            camera.updateProjectionMatrix();
         }
-        camera.updateProjectionMatrix();
         renderer.setClearColor(0x172232, cameraAligned ? 0 : 1);
         renderer.render(scene, camera);
     }
@@ -252,6 +268,7 @@ export function createFlashSceneView(canvas, surfaces) {
                     observedCenters[role] = observed.children[0].geometry.boundingSphere.center.clone();
                 }
                 observed.userData = {kind: 'observed', role, enabled: true};
+                observed.children[0].userData.role = role;
                 evidence.add(observed);
             }
             if ((options.showProjection || !frameEvidence?.available) && used?.pose) {
@@ -362,6 +379,29 @@ export function createFlashSceneView(canvas, surfaces) {
         return true;
     }
 
+    function pickObserved(clientX, clientY) {
+        const rect = canvas.getBoundingClientRect();
+        if (!rect.width || !rect.height) return null;
+        const pointer = new THREE.Vector2(
+            2 * (clientX - rect.left) / rect.width - 1,
+            1 - 2 * (clientY - rect.top) / rect.height,
+        );
+        raycaster.setFromCamera(pointer, camera);
+        const meshes = evidence.children.filter(item => item.userData.kind === 'observed')
+            .map(item => item.children[0]);
+        const hit = raycaster.intersectObjects(meshes, false)[0];
+        if (!hit) return null;
+        const point = hit.point;
+        return {role: hit.object.userData.role, camera_xyz_m: [point.x, -point.y, -point.z]};
+    }
+
+    function projectCameraXYZ(cameraXYZ) {
+        const point = new THREE.Vector3(cameraXYZ[0], -cameraXYZ[1], -cameraXYZ[2]).project(camera);
+        const rect = canvas.getBoundingClientRect();
+        return [rect.left + (point.x + 1) * rect.width / 2,
+            rect.top + (1 - point.y) * rect.height / 2];
+    }
+
     controls.addEventListener('change', draw);
     controls.addEventListener('start', () => {
         setCameraAligned(false);
@@ -385,5 +425,5 @@ export function createFlashSceneView(canvas, surfaces) {
         }
         renderer.dispose();
     }
-    return {update, reset, focus, highlight, draw, dispose};
+    return {update, reset, focus, pickObserved, projectCameraXYZ, highlight, draw, dispose};
 }

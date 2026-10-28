@@ -673,7 +673,7 @@ def test_run_flash_lists_demos_and_shows_extracted_pose_overlay(gui_page):
     )
     page.locator("#flash-demo-edit-toggle").click()
     page.wait_for_function("() => !!document.querySelector('#flash-demo-editor')")
-    assert "Demo preparation" in page.locator("#flash-demo-editor").inner_text()
+    assert "Edit demo" in page.locator("#flash-demo-editor").inner_text()
     assert page.locator("#flash-demo-editor-frame").inner_text().startswith("Frame 4")
     page.get_by_role("button", name="Draw replacement mask").click()
     page.evaluate("""() => {
@@ -685,7 +685,7 @@ def test_run_flash_lists_demos_and_shows_extracted_pose_overlay(gui_page):
     page.get_by_role("button", name="Finish polygon").click()
     assert "Manual object mask: 3 vertices" in page.locator("#flash-demo-editor-polygon-status").inner_text()
     assert len(page.evaluate("flashDemoEditor.annotation.reference_polygons_by_role.object")) == 3
-    page.get_by_role("button", name="Trackers", exact=True).click()
+    page.locator("#flash-demo-editor .flash-editor-group[data-section='trackers'] > summary").click()
     assert page.get_by_label("Processing scope", exact=True).input_value() == ""
     assert page.get_by_label("Grow points from later views").is_checked()
     page.get_by_label("Maximum points per object").fill("256")
@@ -695,6 +695,7 @@ def test_run_flash_lists_demos_and_shows_extracted_pose_overlay(gui_page):
     page.get_by_role("button", name="Process demo and preview", exact=True).click()
     page.wait_for_function("() => flashReplay.tracker_candidate?.candidate_id === 'test-tracker'")
     page.wait_for_function("() => !document.getElementById('flash-track-tools').hidden")
+    page.locator("#flash-demo-editor .flash-editor-group[data-section='pose'] > summary").click()
     assert "Raw 3D point paths" in page.locator("#flash-tracker-content").inner_text()
     arc_count = page.evaluate("""() => {
         let n = 0; const original = CanvasRenderingContext2D.prototype.arc;
@@ -745,7 +746,7 @@ def test_run_flash_lists_demos_and_shows_extracted_pose_overlay(gui_page):
     assert colors.index("#f472b6") < colors.index("#22d3ee"), "raw points must remain visible above the fit"
     page.locator(".flash-editor-keypoint").filter(has_text="trackeverything").hover()
     assert page.evaluate("flashHighlightedOverlay?.estimator") == "candidate_tracker"
-    assert page.locator("#flash-demo-editor .flash-editor-footer").is_hidden()
+    assert page.locator("#flash-demo-editor .flash-editor-footer").is_visible()
     applied = []
 
     def apply_tracker(route):
@@ -1032,12 +1033,23 @@ def test_raw_demo_editor_collects_object_names_and_action_from_visible_controls(
     page.locator("#flash-demo-edit-toggle").click()
     assert page.locator("#flash-demo-editor-change-status").inner_text() == "Raw demo · no preparation saved"
 
+    current_section = "setup"
+
     def section(name):
-        page.locator("#flash-demo-editor .flash-editor-tabs button", has_text=name).click()
+        nonlocal current_section
+        current_section = {
+            "Objects": "objects",
+            "Events": "events",
+            "Advanced": "advanced",
+            "Key frames": "keyframes",
+        }[name]
+        group = page.locator(f"#flash-demo-editor .flash-editor-group[data-section='{current_section}']")
+        if group.count() and not group.evaluate("element => element.open"):
+            group.locator("summary").click()
 
     def set_field(label, value):
         control = (
-            page.locator("#flash-demo-editor .flash-editor-pane:not([hidden]) label")
+            page.locator(f"#flash-demo-editor .flash-editor-pane[data-section='{current_section}'] label")
             .filter(has_text=label)
             .locator("input, select")
             .first
@@ -1090,3 +1102,194 @@ def test_raw_demo_editor_collects_object_names_and_action_from_visible_controls(
     }
     assert submitted[0]["annotation"]["axial_symmetry_roles"]["receiver"] == {"axis_kind": "long_axis"}
     assert submitted[0]["keypoints_document"]["keypoints"][0]["frame"] == "receiver"
+
+
+@pytest.mark.requires_playwright
+@pytest.mark.skipif(importlib.util.find_spec("playwright") is None, reason="Playwright is not installed")
+def test_3d_scene_projection_and_surface_pick_edit_the_prepared_keyframe(gui_page):
+    page = gui_page
+    width, height = 64, 48
+    intrinsics = [[50, 0, 29], [0, 50, 26], [0, 0, 1]]  # Deliberately off-centre.
+    identity = np.eye(4).tolist()
+    image = np.full((height, width, 3), 100, dtype=np.uint8)
+    ok, encoded = cv2.imencode(".png", image)
+    assert ok
+    mask_runs = {
+        role: [[row * width + left, 12] for row in range(18, 30)]
+        for role, left in (("tool", 8), ("fixture", 40))
+    }
+    surface = {
+        role: {
+            "positions_object_m": [x, -0.04, 1, x + 0.1, -0.04, 1, x, 0.04, 1],
+            "colors_rgb": [[200, 200, 200]] * 3,
+            "indices": [0, 1, 2],
+        }
+        for role, x in (("tool", -0.4), ("fixture", 0.2))
+    }
+    snapshot = {
+        "camera": {
+            "frame_id": 0,
+            "width": width,
+            "height": height,
+            "intrinsics": intrinsics,
+            "base_from_camera": identity,
+        },
+        "accepted": {
+            role: {
+                "pose": identity,
+                "evidence": "observed",
+                "source_time_s": 1.0,
+                "estimator": "demo_reference",
+            }
+            for role in ("tool", "fixture")
+        },
+        "layers": {},
+        "demo": {
+            "phase": "demonstrated_sample",
+            "time_s": 1.0,
+            "camera_arm_delta_s": 0,
+            "interval_name": "contact",
+            "relation": "ee_to_object",
+            "reference_role": "tool",
+            "source_arm_frame_index": 0,
+            "sample_time_s": 1.0,
+            "event_id": None,
+        },
+    }
+    page.route(
+        "**/api/run/flash/recordings",
+        lambda route: route.fulfill(
+            json=[
+                {
+                    "kind": "demo",
+                    "dataset_root": "/tmp/scene-edit",
+                    "episode": 0,
+                    "skills": ["prepared"],
+                    "prepared_skill": "prepared",
+                    "modified_at_s": 1,
+                    "bundle_path": "/tmp/scene-edit/flash/v1/prepared/prepared/bundle.json",
+                }
+            ]
+        ),
+    )
+    page.route(
+        "**/api/run/flash/demo/replay?*",
+        lambda route: route.fulfill(
+            json={
+                "available": True,
+                "kind": "demo",
+                "fps": 30,
+                "bundle_path": "/tmp/scene-edit/flash/v1/prepared/prepared/bundle.json",
+                "geometry": {
+                    "points_object_m": {role: [[0, 0, 1], [0.1, 0, 1], [0, 0.1, 1]] for role in surface},
+                    "centers_object_m": {role: [0, 0, 1] for role in surface},
+                },
+                "frames": [{"frame_index": 0, "snapshot": snapshot}],
+            }
+        ),
+    )
+    page.route(
+        "**/api/run/flash/demo/frame?*",
+        lambda route: route.fulfill(body=encoded.tobytes(), content_type="image/png"),
+    )
+    page.route(
+        "**/api/run/flash/demo/depth-frame?*",
+        lambda route: route.fulfill(
+            body=np.full((height, width), 1000, dtype="<u2").tobytes(),
+            content_type="application/octet-stream",
+        ),
+    )
+    page.route("**/api/run/flash/demo/reference-surfaces?*", lambda route: route.fulfill(json=surface))
+    page.route(
+        "**/api/run/flash/demo/scene-evidence/status?*",
+        lambda route: route.fulfill(json={"available": True, "frames_completed": 1}),
+    )
+    page.route(
+        "**/api/run/flash/demo/scene-evidence/frame?*",
+        lambda route: route.fulfill(
+            json={"available": True, "frame_index": 0, "masks_rle": mask_runs, "groups": {}}
+        ),
+    )
+    page.route(
+        "**/api/run/flash/demo/preparation?*",
+        lambda route: route.fulfill(
+            json={
+                "annotation": {
+                    "episode": 0,
+                    "reference_frame": 0,
+                    "grasp_reference_frame": 0,
+                    "grasp_time_s": 2.0,
+                    "release_time_s": 3.0,
+                    "start_anchored_until_s": 2.0,
+                    "held_role": "tool",
+                    "target_role": "fixture",
+                    "prompts_by_role": {"tool": "tool", "fixture": "fixture"},
+                    "axial_symmetry_roles": {},
+                },
+                "keypoints_document": {
+                    "keypoints": [{"t": 1.0, "frame": "tool", "move": "line", "grip": "first"}]
+                },
+                "reference_masks": {},
+            }
+        ),
+    )
+    page.route(
+        "**/api/run/flash/demo/trackers?*",
+        lambda route: route.fulfill(json={"trackers": [], "candidates": []}),
+    )
+    submitted = []
+    page.route(
+        "**/api/run/flash/demo/prepare",
+        lambda route: (
+            submitted.append(route.request.post_data_json),
+            route.fulfill(status=400, json={"detail": "captured"}),
+        ),
+    )
+
+    page.evaluate("switchTab('run')")
+    page.evaluate("() => selectWorkflow('flash')")
+    page.locator("#run-flash-demos .flash-recording").click()
+    page.locator("#flash-scene-toggle").click()
+    page.wait_for_function("() => flashSceneMode === '3d' && flashSceneFrameCache?.frameIndex === 0")
+    # The actual WebGL projection must meet the same pixel as the CSS-contained RGB frame.
+    box = page.locator(".flash-scene-canvas").bounding_box()
+    scale = min(box["width"] / width, box["height"] / height)
+    expected = [
+        box["x"] + (box["width"] - width * scale) / 2 + 45 * scale,
+        box["y"] + (box["height"] - height * scale) / 2 + 24 * scale,
+    ]
+    projected = page.evaluate("() => flashSceneView.projectCameraXYZ([(45-29)/50, (24-26)/50, 1])")
+    assert np.allclose(projected, expected, atol=0.5)
+
+    page.get_by_role("button", name="Edit key frames").click()
+    page.get_by_role("button", name="Choose reference from scene").click()
+    box = page.locator(".flash-scene-canvas").bounding_box()
+    scale = min(box["width"] / width, box["height"] / height)
+    fixture_pixel = [
+        box["x"] + (box["width"] - width * scale) / 2 + 45 * scale,
+        box["y"] + (box["height"] - height * scale) / 2 + 24 * scale,
+    ]
+    page.wait_for_function(
+        "([x, y]) => { const [px, py] = flashSceneView.projectCameraXYZ([(45-29)/50, (24-26)/50, 1]); return Math.abs(px-x) < 0.5 && Math.abs(py-y) < 0.5; }",
+        arg=fixture_pixel,
+    )
+    page.wait_for_function(
+        "() => flashDemoEditor?.pickingReference && !document.querySelector('.flash-replay-grid').classList.contains('flash-frame-loading')"
+    )
+    assert page.evaluate("([x, y]) => flashSceneView.pickObserved(x, y)?.role", fixture_pixel) == "fixture"
+    page.mouse.click(*fixture_pixel)
+    assert page.evaluate("flashDemoEditor.keypointsDocument.keypoints[0].frame") == "fixture"
+    assert "Unsaved edits" in page.locator("#flash-demo-editor-change-status").inner_text()
+    page.get_by_role("button", name="Regenerate prepared demo").click()
+    page.wait_for_function(
+        "() => document.querySelector('#flash-demo-editor-status').textContent.includes('captured')"
+    )
+    assert submitted[0]["keypoints_document"]["keypoints"][0]["frame"] == "fixture"
+    page.evaluate("""() => {
+        flashDemoEditor.annotation.grasp_time_s = 0.5;
+        flashDemoEditor.annotation.start_anchored_until_s = 1.5;
+        _flashEditorRender();
+    }""")
+    assert page.get_by_role("button", name="Choose reference from scene").is_disabled()
+    assert page.get_by_label("Reference", exact=True).is_disabled()
+    assert "grasp-start reference" in page.locator("#flash-demo-editor").inner_text()

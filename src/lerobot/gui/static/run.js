@@ -93,6 +93,8 @@ async function _flashUpdateSceneFrame() {
         flashSceneView.update(frame.depth, frame.rgba, {...selected.snapshot, ...replay.geometry},
             _flashSceneOptions(), frame.evidence);
         flashSceneView.highlight(flashHighlightedOverlay);
+        if (generation === flashSceneRequest) document.querySelector('#rerun-viewer .flash-replay-grid')
+            ?.classList.remove('flash-frame-loading');
         const groups = Object.entries(frame.evidence?.groups || {}).map(([role, group]) =>
             `${role} context: ${group.ids.length} ${group.verified ? 'verified' : 'candidate'} support points${group.measured_this_frame === false ? ' (fit unavailable)' : ''}`).join(' · ');
         status.textContent = frame.evidence?.available
@@ -136,11 +138,12 @@ async function toggleFlashSceneView() {
                 option.textContent = role;
                 select.append(option);
             }
-            const {createFlashSceneView} = await import('/static/flash_scene_view.js?v=11');
+            const {createFlashSceneView} = await import('/static/flash_scene_view.js?v=13');
             flashSceneView = createFlashSceneView(grid.querySelector('.flash-scene-canvas'), surfaces);
         }
         flashSceneMode = '3d';
         grid.classList.add('flash-scene-active');
+        grid.classList.add('flash-frame-loading');
         toggle.textContent = 'RGB camera';
         tools.hidden = false;
         flashSceneView.draw();
@@ -149,6 +152,32 @@ async function toggleFlashSceneView() {
         const status = document.getElementById('flash-scene-status');
         if (status) status.textContent = `3D view: ${error.message}`;
     }
+}
+
+async function openFlashDemoSceneEditor() {
+    if (!flashDemoEditor) await toggleFlashDemoEditor();
+    if (flashDemoEditor) {
+        const points = flashDemoEditor.keypointsDocument.keypoints;
+        const time = _flashEditorCurrentFrame().snapshot.demo.time_s;
+        if (points.length) {
+            flashDemoEditor.keypointIndex = points.reduce((best, point, index) =>
+                Math.abs(point.t - time) < Math.abs(points[best].t - time) ? index : best, 0);
+            _flashEditorJumpTime(points[flashDemoEditor.keypointIndex].t);
+        }
+        _flashEditorRender();
+    }
+}
+
+function _flashScenePointerUp(event) {
+    if (flashSceneMode !== '3d' || !flashSceneView) return;
+    const start = event.currentTarget._flashPickStart;
+    if (!start || Math.hypot(start.x - event.clientX, start.y - event.clientY) > 5) return;
+    const selected = flashReplay?.frames[Number(document.getElementById('flash-tracker-scrub')?.value)];
+    if (flashSceneFrameCache?.frameIndex !== selected?.frame_index) return;
+    const picked = flashSceneView.pickObserved(event.clientX, event.clientY);
+    if (!picked) return;
+    document.getElementById('flash-scene-object').value = picked.role;
+    if (flashDemoEditor?.pickingReference) flashDemoEditorPickReference(picked.role);
 }
 
 function _flashUpdateWorkspace() {
@@ -1199,22 +1228,27 @@ function _flashInstallReplay(replay, imageAlt) {
         photo.className = 'flash-scene-photo';
         const scene = document.createElement('canvas');
         scene.className = 'flash-scene-canvas';
+        scene.addEventListener('pointerdown', event => {
+            scene._flashPickStart = {x: event.clientX, y: event.clientY};
+        });
+        scene.addEventListener('pointerup', _flashScenePointerUp);
         const toolbar = document.createElement('div');
         toolbar.className = 'flash-scene-toolbar';
         toolbar.innerHTML = '<button type="button" id="flash-scene-toggle" onclick="toggleFlashSceneView()">3D scene</button>' +
             '<div id="flash-scene-tools" hidden>' +
             '<select id="flash-scene-object" aria-label="Object to focus"><option value="">Focus object</option></select>' +
             '<button type="button" onclick="flashSceneView?.focus(document.getElementById(\'flash-scene-object\').value)">Focus</button>' +
-            '<button type="button" onclick="flashSceneView?.reset()">Camera</button>' +
-            '<span class="flash-scene-break"></span>' +
+            '<button type="button" onclick="flashSceneView?.reset()">Reset view</button>' +
+            '<button type="button" onclick="openFlashDemoSceneEditor()">Edit key frames</button>' +
+            '<details class="flash-scene-layer-menu"><summary>Layers</summary><div class="flash-scene-layer-options">' +
             '<label title="Current frame, using this frame’s mask and measured depth"><input type="checkbox" id="flash-scene-surface" checked onchange="_flashUpdateSceneFrame()">Measured surface</label>' +
             '<label title="Current mask-and-depth samples for display; these are not tracked landmarks"><input type="checkbox" id="flash-scene-points" checked onchange="_flashUpdateSceneFrame()">Surface points</label>' +
             '<label title="Display spacing in recorded camera pixels">Spacing <input type="number" id="flash-scene-point-spacing" min="2" max="16" step="1" value="5" onchange="_flashUpdateSceneFrame()"></label>' +
             '<label title="Reference surface projected by the used estimate; green is the prepared skill pose, orange is a gripper-predicted held pose. It can disagree with current depth"><input type="checkbox" id="flash-scene-projection" checked onchange="_flashUpdateSceneFrame()">Pose estimate</label>' +
-            '<label><input type="checkbox" id="flash-scene-depth" onchange="_flashUpdateSceneFrame()">Scene depth</label>' +
+            '<label title="Coarse depth mesh for spatial context; display only and incomplete at missing-depth pixels"><input type="checkbox" id="flash-scene-depth" onchange="_flashUpdateSceneFrame()">Scene context</label>' +
             '<label><input type="checkbox" id="flash-scene-axes" checked onchange="_flashUpdateSceneFrame()">Axes</label>' +
             '<label title="Tracked scene context used by the group predictor; these need not lie on the object"><input type="checkbox" id="flash-scene-group" onchange="_flashUpdateSceneFrame()">Scene support</label>' +
-            '<label><input type="checkbox" id="flash-scene-gripper" onchange="_flashUpdateSceneFrame()">Gripper</label></div>';
+            '<label><input type="checkbox" id="flash-scene-gripper" onchange="_flashUpdateSceneFrame()">Gripper</label></div></details></div>';
         const status = document.createElement('div');
         status.id = 'flash-scene-status';
         status.textContent = '3D scene uses recorded depth and saved reference masks';
@@ -1477,6 +1511,7 @@ async function _loadFlashRecordings() {
 
 function seekFlashReplay(index) {
     if (!flashReplay?.frames?.length) return;
+    flashSceneRequest++;
     const selected = flashReplay.frames[Math.max(0, Math.min(index, flashReplay.frames.length - 1))];
     const scrub = document.getElementById('flash-tracker-scrub');
     scrub.value = String(index);
@@ -1485,13 +1520,23 @@ function seekFlashReplay(index) {
         ? `${selected.snapshot.demo.time_s.toFixed(1)} s · ${index + 1}/${flashReplay.frames.length}`
         : `${index + 1} / ${flashReplay.frames.length}`;
     const image = document.querySelector('#rerun-viewer .flash-replay-grid img');
+    const grid = image.closest('.flash-replay-grid');
+    grid.classList.add('flash-frame-loading');
+    image.dataset.loadedFrame = '';
     const url = demo
         ? `/api/run/flash/demo/frame?${new URLSearchParams({ dataset_root: flashReplay.datasetRoot, frame_index: String(selected.frame_index) })}`
         : `/api/datasets/${encodeURIComponent(flashReplay.datasetId)}/episodes/${flashReplay.episode}/frame/${selected.frame_index}?camera=observation.images.overhead`;
     image.onload = () => {
+        if (flashReplay.frames[Number(scrub.value)] !== selected) return;
         image.dataset.loadedFrame = String(selected.frame_index);
         _flashDrawOverlay();
         if (flashSceneMode === '3d') void _flashUpdateSceneFrame();
+        else grid.classList.remove('flash-frame-loading');
+    };
+    image.onerror = () => {
+        if (flashReplay.frames[Number(scrub.value)] !== selected) return;
+        const status = document.getElementById('flash-scene-status');
+        if (status) status.textContent = `Frame ${selected.frame_index} could not be loaded`;
     };
     image.src = url;
     if (flashReplay.kind === 'demo') renderFlashDemoSnapshot({ ...selected.snapshot, ...flashReplay.geometry });
@@ -1508,6 +1553,10 @@ function toggleFlashReplay() {
     }
     button.textContent = 'Pause';
     flashReplayTimer = setInterval(() => {
+        const current = flashReplay.frames[Number(document.getElementById('flash-tracker-scrub').value)];
+        const grid = document.querySelector('#rerun-viewer .flash-replay-grid');
+        if (grid?.classList.contains('flash-frame-loading') ||
+            (flashSceneMode === '3d' && flashSceneFrameCache?.frameIndex !== current?.frame_index)) return;
         const next = Number(document.getElementById('flash-tracker-scrub').value) + 1;
         if (next >= flashReplay.frames.length) { toggleFlashReplay(); return; }
         seekFlashReplay(next);

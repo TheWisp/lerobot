@@ -109,13 +109,19 @@ def _interval_reference(
     held: str,
     target: str,
 ) -> tuple[str, Relation, bool]:
-    """Preserve each keypoint's declared reference rather than inferring it from time alone."""
-    relative_to_entry = start_anchored or end_key.get("frame") == "world"
+    """Use the authored participant, except during an explicit start-anchored interval."""
+    selected = end_key.get("frame")
+    relative_to_entry = start_anchored or selected == "world"
     if relative_to_entry:
         return "__start__", Relation.EE_TO_START, True
-    if carrying:
-        return target, Relation.HELD_TO_TARGET, False
-    return (target if first >= grasp else held), Relation.EE_TO_OBJECT, False
+    if selected is None:
+        # Old keypoint files sometimes omitted frame; retain their previous
+        # timing-based interpretation rather than changing archived skills.
+        selected = target if carrying or first >= grasp else held
+    if selected not in (held, target):
+        raise ValueError(f"keypoint reference {selected!r} is not a prepared object")
+    relation = Relation.HELD_TO_TARGET if carrying and selected == target else Relation.EE_TO_OBJECT
+    return selected, relation, False
 
 
 def _endpoint_requirement(end_key: dict) -> EndpointRequirement:

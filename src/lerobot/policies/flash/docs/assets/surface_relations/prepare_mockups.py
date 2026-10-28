@@ -85,6 +85,8 @@ def prepare(recording: Path, mask_path: Path, output: Path) -> None:
     distance = float(np.median(depth[ring & (depth > 0)]))
     pivot = [(253 - k[0, 2]) * distance / k[0, 0], -(199 - k[1, 2]) * distance / k[1, 1], -distance]
     data = {
+        "intrinsics": k.tolist(),
+        "frame_size": [w, h],
         "positions": pos.round(6).ravel().tolist(),
         "colors": colors.round(4).ravel().tolist(),
         "indices": triangles.ravel().tolist(),
@@ -102,6 +104,15 @@ def prepare(recording: Path, mask_path: Path, output: Path) -> None:
     }
     output.mkdir(parents=True, exist_ok=True)
     (output / "scene.json").write_text(json.dumps(data, separators=(",", ":")))
+    cv2.imwrite(str(output / "frame.jpg"), cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
+    for name, (left, top, right, bottom) in {
+        "turn": (150, 105, 350, 270),
+        "slide": (70, 180, 350, 411),
+    }.items():
+        cv2.imwrite(
+            str(output / f"{name}.jpg"),
+            cv2.cvtColor(rgb[top:bottom, left:right], cv2.COLOR_RGB2BGR),
+        )
     source = Path(__file__).resolve().parent
     shutil.copy(source / "scene_mockup.html", output / "index.html")
     vendor = source.parents[4] / "gui/static/vendor"

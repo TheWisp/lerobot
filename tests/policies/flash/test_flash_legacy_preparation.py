@@ -62,6 +62,41 @@ def test_world_relative_retreat_does_not_follow_target_after_release():
     assert (role, relation, anchored) == ("__start__", Relation.EE_TO_START, True)
 
 
+def test_authored_reference_wins_over_grasp_timing_when_not_start_anchored():
+    before_grasp = _interval_reference(
+        first=20,
+        grasp=80,
+        end_key={"frame": "fixture", "move": "line"},
+        start_anchored=False,
+        carrying=False,
+        held="tool",
+        target="fixture",
+    )
+    during_carry = _interval_reference(
+        first=120,
+        grasp=80,
+        end_key={"frame": "tool", "move": "line"},
+        start_anchored=False,
+        carrying=True,
+        held="tool",
+        target="fixture",
+    )
+    assert before_grasp == ("fixture", Relation.EE_TO_OBJECT, False)
+    assert during_carry == ("tool", Relation.EE_TO_OBJECT, False)
+
+
+def test_start_anchor_still_overrides_old_keypoint_reference():
+    assert _interval_reference(
+        first=80,
+        grasp=80,
+        end_key={"frame": "tool", "move": "follow"},
+        start_anchored=True,
+        carrying=False,
+        held="tool",
+        target="fixture",
+    ) == ("__start__", Relation.EE_TO_START, True)
+
+
 def test_best_effort_hover_is_a_preferred_endpoint():
     assert _endpoint_requirement({"constraint": "best_effort"}) == EndpointRequirement.PREFERRED
     assert _endpoint_requirement({"constraint": "pose"}) == EndpointRequirement.REQUIRED

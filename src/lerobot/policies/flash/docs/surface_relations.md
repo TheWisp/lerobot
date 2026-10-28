@@ -43,6 +43,9 @@ _Actual insertion RGB-D, frame 100. Proposed controls and hypothetical handles; 
 **Show the tracked object surface as a shaded 3D mesh, with optional wireframe.**
 Keep it sharp above the softened RGB-D surroundings. Separate the current measured
 patch from the accumulated surface at its estimated pose; unseen areas remain open.
+In the capture viewpoint, project each measured patch with the recorded camera
+intrinsics onto the RGB image. When the view orbits, hide the flat RGB backdrop
+so it cannot masquerade as 3D geometry; retain measured depth as faint context.
 Orbit/pan/zoom follows the
 URDF viewer; **Camera** restores the capture viewpoint. Keep playback below
 the scene. Collapse the recording/object lists and contextual inspector for space.
