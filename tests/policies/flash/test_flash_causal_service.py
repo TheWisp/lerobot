@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 from lerobot.policies.flash.causal_points import CausalRigidPointTracker
-from lerobot.policies.flash.causal_service import CausalPoseService, CausalTrackingConfig
+from lerobot.policies.flash.causal_service import CausalPoseService, CausalTrackingConfig, _Anchor
 from lerobot.policies.flash.perception import LatestPoseStore, RGBDFrame
 from lerobot.policies.flash.scene_groups import ScenePointTracker
 from lerobot.policies.flash.trajectory import Evidence, PoseEstimate
@@ -235,3 +235,99 @@ def test_anchor_requires_the_recorded_capture_time_and_calibration():
         assert store.snapshot() == (0, {})
     finally:
         service.close()
+
+
+def test_accepted_live_pose_is_available_at_scene_decision_not_backend_completion():
+    image = np.random.default_rng(51).integers(0, 255, (96, 96), dtype=np.uint8)
+    captured = frame(image, 0)
+    candidate = PoseEstimate(
+        "object",
+        np.eye(4),
+        captured.source_time_s,
+        captured.available_time_s,
+        Evidence.OBSERVED,
+        "object-v1",
+        (True,) * 3,
+        (True,) * 3,
+    )
+    decisions = []
+    store = LatestPoseStore()
+    service = CausalPoseService(store, on_anchor_decision=decisions.append)
+    service.start()
+    try:
+        service.submit_frame(captured)
+        service.submit_anchor(0, (candidate,), {"object": np.ones(image.shape, dtype=bool)})
+        deadline = time.monotonic() + 2
+        while not decisions and service.error is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert service.error is None
+        assert len(decisions) == 1
+        decision = decisions[0]
+        assert decision.outcome == "accepted"
+        assert decision.candidate.available_time_s == captured.available_time_s
+        assert decision.accepted.available_time_s == decision.decided_at_s
+        assert store.snapshot()[1]["object"].available_time_s >= decision.decided_at_s
+    finally:
+        service.close()
+
+
+def test_offline_source_order_pose_keeps_recorded_availability_time():
+    image = np.random.default_rng(52).integers(0, 255, (96, 96), dtype=np.uint8)
+    captured = frame(image, 0)
+    candidate = PoseEstimate(
+        "object",
+        np.eye(4),
+        captured.source_time_s,
+        captured.available_time_s,
+        Evidence.OBSERVED,
+        "object-v1",
+        (True,) * 3,
+        (True,) * 3,
+    )
+    store = LatestPoseStore()
+    service = CausalPoseService(store)
+    result = service.process_offline(captured, (candidate,), {"object": np.ones(image.shape, dtype=bool)})
+    assert result["object"].available_time_s == captured.available_time_s
+
+
+def test_delayed_symmetry_proposal_does_not_use_later_pose_as_its_reference():
+    image = np.random.default_rng(53).integers(0, 255, (96, 96), dtype=np.uint8)
+    frames = [frame(image, index) for index in range(2)]
+    references = []
+
+    class RecordingSymmetry:
+        role = "object"
+
+        def canonicalize(self, pose, *, reference_pose=None):
+            references.append(reference_pose)
+            return pose
+
+    store = LatestPoseStore()
+    service = CausalPoseService(store, axial_symmetries=(RecordingSymmetry(),))
+    for item in frames:
+        service._frame(item)
+    newer = PoseEstimate(
+        "object",
+        np.eye(4),
+        frames[1].source_time_s,
+        frames[1].available_time_s,
+        Evidence.OBSERVED,
+        "object-v1",
+        (True,) * 3,
+        (True,) * 3,
+    )
+    service.active["object"] = (CausalRigidPointTracker(), newer)
+    store.publish((newer,))
+    older = PoseEstimate(
+        "object",
+        np.eye(4),
+        frames[0].source_time_s,
+        frames[0].available_time_s,
+        Evidence.OBSERVED,
+        "object-v1",
+        (True,) * 3,
+        (True,) * 3,
+    )
+    service._anchor(_Anchor(0, (older,), {"object": np.ones(image.shape, dtype=bool)}))
+    assert references == [None]
+    assert service.superseded_proposals == 1

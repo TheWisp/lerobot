@@ -339,7 +339,8 @@ class CausalPoseService:
                 frame.source_time_s,
                 frame.calibration_version,
                 proposals,
-            )
+            ),
+            decision_time_s=frame.available_time_s,
         )
         self._drain_pending()
         return self.store.snapshot()[1]
@@ -580,7 +581,10 @@ class CausalPoseService:
                 self.on_layer(self.store.snapshot()[1][role])
             self.static_published += 1
 
-    def _anchor(self, result: _Anchor) -> None:
+    def _anchor(self, result: _Anchor, *, decision_time_s: float | None = None) -> None:
+        # Offline extraction is an explicit source-order simulation. Live
+        # results instead become usable only when this worker accepts them,
+        # which can be later than the backend's own completion timestamp.
         attached_role = self._sync_attachment()
         source = next((frame for frame in self.history if frame.frame_id == result.frame_id), None)
         scene = next((item for item in self.scene_history if item.frame_id == result.frame_id), None)
@@ -622,7 +626,14 @@ class CausalPoseService:
             if symmetry is not None and not estimate.symmetry_canonicalized:
                 try:
                     active = self.active.get(estimate.role)
-                    reference = active[1].pose if active is not None else None
+                    # A delayed source frame cannot use an object-frame
+                    # branch selected by a later direct observation. The
+                    # baseline is the only causal reference in that case.
+                    reference = (
+                        active[1].pose
+                        if active is not None and active[1].source_time_s <= source.source_time_s
+                        else None
+                    )
                     estimate = replace(
                         estimate,
                         pose=symmetry.canonicalize(estimate.pose, reference_pose=reference),
@@ -660,8 +671,12 @@ class CausalPoseService:
                 continue
             if estimate.has_direct_translation and estimate.role != attached_role:
                 self._observe_environment(estimate, scene, result.masks)
+            accepted_at_s = time.perf_counter() if decision_time_s is None else decision_time_s
+            estimate = replace(estimate, available_time_s=max(estimate.available_time_s, accepted_at_s))
             self._count_anchor_outcome(estimate.role, "direct_accepted")
-            self._record_anchor_decision(result, candidate, "accepted", accepted=estimate)
+            self._record_anchor_decision(
+                result, candidate, "accepted", accepted=estimate, decided_at_s=accepted_at_s
+            )
             if self.on_layer is not None:
                 self.on_layer(estimate)
             # The newest published state may already be a later point-motion
@@ -809,7 +824,13 @@ class CausalPoseService:
         counts[outcome] = counts.get(outcome, 0) + 1
 
     def _record_anchor_decision(
-        self, result: _Anchor, candidate: PoseEstimate, outcome: str, *, accepted: PoseEstimate | None = None
+        self,
+        result: _Anchor,
+        candidate: PoseEstimate,
+        outcome: str,
+        *,
+        accepted: PoseEstimate | None = None,
+        decided_at_s: float | None = None,
     ) -> None:
         if self.on_anchor_decision is not None:
             self.on_anchor_decision(
@@ -818,7 +839,7 @@ class CausalPoseService:
                     result.calibration_version,
                     candidate,
                     outcome,
-                    time.perf_counter(),
+                    time.perf_counter() if decided_at_s is None else decided_at_s,
                     accepted,
                     next(
                         (proposal for proposal in result.proposals if proposal.role == candidate.role), None
