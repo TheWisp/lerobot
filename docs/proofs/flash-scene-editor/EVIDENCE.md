@@ -26,14 +26,18 @@ interval.
 
 ![Simplified turn editor on insertion demo frame 343](turn-rule-preview.png)
 
-The browser interaction selected key frame 6, picked a point from the surface
-labeled ring, and displayed the turn in the scene. The recording list disappears
-while editing; angle limits and span are under **Refine turn**. A plain click did
-not switch the camera into orbit mode, and the browser reported no page errors.
+In the insertion demo, key frame 6 can now be given a turn around the ring's
+saved center with one button. The angle range is under **Refine turn**. The
+browser saved the rule without page errors. The cyan measured patch is on the
+green ring beneath the dowel; the blue object farther right is unrelated.
 
-This is an editor preview, not a validated robot motion. The saved insertion
-demo locks ring orientation to its baseline, so its accepted ring pose is marked
-predicted at every frame. The preview warns that Test cannot use this point frame
-yet. The cyan measured patch is on the green ring beneath the dowel; the blue
-object farther right is a different object. This screenshot does not establish
-the accuracy of the ring's predicted orientation.
+The center and direction are unchanged by the ring's unobserved spin, although
+the saved center's _accuracy_ is not proven by this screenshot. The UI rule is
+validated against the prepared object data. The editor regenerated a candidate
+on the actual insertion dataset (`flash-prepared-20261028-030548-3f5318`), and
+its compiled skill contains the rule on interval 5. On this demo's recorded connection
+(frames 290–342), endpoint IK from the initial arm state missed the demonstrated
+goal by 21.7 mm. Following the same connection with the runtime planner's
+intermediate IK checks found the recorded zero-angle choice and timed it at
+0.89 s. That check took about 19 ms; the bounded multi-angle search took about
+1.0 s. This is a kinematic check, not collision validation or a robot trial.

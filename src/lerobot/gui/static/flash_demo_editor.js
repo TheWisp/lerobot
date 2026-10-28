@@ -560,22 +560,28 @@ function _flashEditorRender() {
             details.append(turn);
             if (!turnRule || state.pickingTurn) {
                 const lockedOrientation = !!a.axial_symmetry_roles?.[point.frame]?.lock_to_baseline;
+                const invariant = flashReplay.pose_constraints?.[point.frame];
                 const choose = _flashEditorButton(turn,
                     state.pickingTurn ? 'Cancel point pick' :
-                        lockedOrientation ? 'Preview turn (pose predicted)' : 'Allow turn at a point',
+                        lockedOrientation ? 'Allow turn around center' : 'Allow turn at a point',
                     async () => {
                         if (state.pickingTurn) {
                             state.pickingTurn = false;
+                        } else if (lockedOrientation) {
+                            if (!invariant?.center_object_m || !invariant?.axis_object) return;
+                            _flashEditorUseInvariantTurn(state, point, index);
+                            if (flashSceneMode !== '3d') await toggleFlashSceneView();
                         } else {
                             if (flashSceneMode !== '3d') await toggleFlashSceneView();
                             state.pickingTurn = flashSceneMode === '3d';
                         }
                         _flashEditorRender();
                     });
-                choose.disabled = state.running;
+                choose.disabled = state.running || (lockedOrientation &&
+                    (!invariant?.center_object_m || !invariant?.axis_object));
                 if (lockedOrientation && !state.pickingTurn) {
                     const note = document.createElement('p');
-                    note.textContent = 'This object’s orientation is locked to its starting direction, so a turn here is for review only.';
+                    note.textContent = 'Uses the saved object center and direction. Check the marker in the 3D view.';
                     turn.append(note);
                 }
                 if (state.pickingTurn) {
@@ -585,15 +591,18 @@ function _flashEditorRender() {
                 }
             } else {
                 const title = document.createElement('strong');
-                title.textContent = `Turn around this point`;
+                title.textContent = turnRule.source_evidence === 'symmetry_invariant'
+                    ? 'Turn around object center' : 'Turn around picked point';
                 turn.append(title);
                 const evidence = document.createElement('p');
                 const fullTurn = Math.abs(turnRule.min_angle_rad + Math.PI) < 1e-6 &&
                     Math.abs(turnRule.max_angle_rad - Math.PI) < 1e-6;
                 evidence.textContent = `${turnRule.reference_role} · ${fullTurn ? 'Any angle' : 'Limited angles'} · ` +
-                    (turnRule.source_evidence === 'observed' ? 'Measured frame' : 'Predicted frame');
+                    (({observed: 'Measured frame', symmetry_invariant: 'Object center',
+                        predicted: 'Predicted frame'})[turnRule.source_evidence] || 'Unverified frame');
                 turn.append(evidence);
-                if (turnRule.source_evidence !== 'observed') {
+                if (turnRule.source_evidence !== 'observed' &&
+                    turnRule.source_evidence !== 'symmetry_invariant') {
                     const warning = document.createElement('p');
                     warning.className = 'flash-editor-status';
                     warning.textContent = a.axial_symmetry_roles?.[turnRule.reference_role]?.lock_to_baseline
@@ -601,11 +610,23 @@ function _flashEditorRender() {
                         : 'This object pose was predicted. Pick the point on a frame with a measured pose before testing.';
                     turn.append(warning);
                 }
-                _flashEditorButton(turn, 'Change point', async () => {
-                    if (flashSceneMode !== '3d') await toggleFlashSceneView();
-                    state.pickingTurn = flashSceneMode === '3d';
-                    _flashEditorRender();
-                });
+                if (turnRule.source_evidence === 'symmetry_invariant') {
+                    const note = document.createElement('p');
+                    note.textContent = 'The center and direction stay in place as this object spins.';
+                    turn.append(note);
+                } else {
+                    if (a.axial_symmetry_roles?.[point.frame]?.lock_to_baseline &&
+                        flashReplay.pose_constraints?.[point.frame]?.center_object_m)
+                        _flashEditorButton(turn, 'Use stable center', () => {
+                            _flashEditorUseInvariantTurn(state, point, index);
+                            _flashEditorRender();
+                        });
+                    _flashEditorButton(turn, 'Change point', async () => {
+                        if (flashSceneMode !== '3d') await toggleFlashSceneView();
+                        state.pickingTurn = flashSceneMode === '3d';
+                        _flashEditorRender();
+                    });
+                }
                 _flashEditorButton(turn, 'Remove', () => {
                     const rules = state.keypointsDocument.turn_rules;
                     rules.splice(rules.indexOf(turnRule), 1);
@@ -758,6 +779,29 @@ function _flashEditorJumpTime(time) {
 function _flashEditorTurnForPoint(state, point) {
     return (state.keypointsDocument.turn_rules || []).find(rule =>
         point.t > Number(rule.start_s) && point.t <= Number(rule.end_s));
+}
+
+function _flashEditorUseInvariantTurn(state, point, index) {
+    const source = flashReplay.pose_constraints?.[point.frame];
+    if (!source?.orientation_locked_to_baseline || !source.center_object_m || !source.axis_object)
+        throw new Error('This object has no prepared stable center and direction');
+    const rules = state.keypointsDocument.turn_rules ||= [];
+    const prior = _flashEditorTurnForPoint(state, point);
+    const rule = {
+        rule_id: prior?.rule_id || `turn-${crypto.randomUUID()}`,
+        reference_role: point.frame,
+        start_s: prior?.start_s ?? (index ? state.keypointsDocument.keypoints[index - 1].t : 0),
+        end_s: prior?.end_s ?? point.t,
+        pivot_reference_m: source.center_object_m,
+        axis_reference: source.axis_object,
+        min_angle_rad: prior?.min_angle_rad ?? -Math.PI,
+        max_angle_rad: prior?.max_angle_rad ?? Math.PI,
+        source_frame_index: source.source_frame_index,
+        source_evidence: 'symmetry_invariant',
+    };
+    if (prior) rules.splice(rules.indexOf(prior), 1, rule);
+    else rules.push(rule);
+    state.message = 'Turn saved. Regenerate the demo to preview the adapted motion.';
 }
 
 function flashDemoEditorPickTurn(picked) {

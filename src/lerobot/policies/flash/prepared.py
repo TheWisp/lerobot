@@ -52,6 +52,21 @@ class PreparedFlashSkill:
             item.role for item in self.axial_symmetries
         } <= set(refs):
             raise ValueError("axial symmetries must name distinct prepared object roles")
+        symmetries = {item.role: item for item in self.axial_symmetries}
+        for interval in self.skill.intervals:
+            rule = interval.turn_at_point
+            if rule is None or rule.source_evidence != "symmetry_invariant":
+                continue
+            symmetry = symmetries.get(interval.reference_role)
+            if (
+                symmetry is None
+                or not symmetry.lock_to_baseline
+                or not np.allclose(rule.pivot_reference_m, symmetry.center_object_m, rtol=0, atol=1e-9)
+                or not np.allclose(rule.axis_reference, symmetry.axis_object, rtol=0, atol=1e-9)
+            ):
+                raise ValueError(
+                    "a symmetry-invariant turn must use the prepared reference center and direction"
+                )
         if any(
             not snippet.mask_artifact
             or Path(snippet.mask_artifact).is_absolute()

@@ -68,8 +68,10 @@ class TurnAtPoint:
             raise ValueError("turn range must include the demonstrated zero angle")
         if self.source_frame_index is not None and self.source_frame_index < 0:
             raise ValueError("turn source frame must be nonnegative")
-        if self.source_evidence not in ("observed", "predicted", "unverified"):
-            raise ValueError("turn source evidence must be observed, predicted or unverified")
+        if self.source_evidence not in ("observed", "symmetry_invariant", "predicted", "unverified"):
+            raise ValueError(
+                "turn source evidence must be observed, symmetry invariant, predicted or unverified"
+            )
         object.__setattr__(self, "pivot_reference_m", tuple(float(x) for x in pivot))
         object.__setattr__(self, "axis_reference", tuple(float(x) for x in axis))
 

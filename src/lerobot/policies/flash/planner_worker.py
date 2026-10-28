@@ -159,6 +159,7 @@ class PlannerWorker:
                         request.seed_deg,
                         request.reference.pose,
                         attachment_pose,
+                        request.period_s,
                     )
                 connection = request.connection
                 if connection is not None and connection.turn_angle_rad != turn_angle:

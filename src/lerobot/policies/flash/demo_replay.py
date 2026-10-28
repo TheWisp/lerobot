@@ -198,6 +198,13 @@ def build_demo_replay(
             item.role: {
                 "orientation_locked_to_baseline": item.lock_to_baseline,
                 "ends_interchangeable": item.ends_interchangeable,
+                "center_object_m": item.center_object_m.tolist(),
+                "axis_object": item.axis_object.tolist(),
+                "source_frame_index": next(
+                    reference.snippets[0].frame_index
+                    for reference in prepared.references
+                    if reference.role == item.role
+                ),
             }
             for item in prepared.axial_symmetries
         },

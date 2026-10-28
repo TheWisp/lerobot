@@ -122,6 +122,29 @@ class JointPlanner:
         self.gripper_joint_name = gripper_joint_name
         self.limits = limits
 
+    def probe_connection(
+        self,
+        interval: Interval,
+        seed_deg: np.ndarray,
+        live_reference: np.ndarray,
+        live_attachment: np.ndarray | None,
+        period_s: float,
+        turn_angle_rad: float,
+    ) -> float:
+        """Return the timed cost of a complete connection using the runtime IK path."""
+        connection = ConnectionTrajectory.begin(
+            interval,
+            self.kinematics.forward_kinematics(seed_deg),
+            live_reference,
+            live_attachment,
+            0.0,
+            turn_angle_rad,
+        )
+        self._retime_connection(connection, np.asarray(seed_deg, dtype=float), period_s)
+        if connection.achieved_fraction < 1.0:
+            raise InfeasibleTrajectoryError("turn did not reach the requested endpoint")
+        return connection.duration_s
+
     def plan(
         self,
         interval: Interval,

@@ -7,8 +7,13 @@ import numpy as np
 import pytest
 from scipy.spatial.transform import Rotation
 
+from lerobot.policies.flash.appearance import AppearanceModel
+from lerobot.policies.flash.demo_replay import build_demo_replay
+from lerobot.policies.flash.matched_rgbd import ObjectPointModel
+from lerobot.policies.flash.perception import ObjectReference, ReferenceSnippet
 from lerobot.policies.flash.planner import InfeasibleTrajectoryError, JointPlanner, PlannerLimits
 from lerobot.policies.flash.planner_worker import PlannerWorker, PlanRequest
+from lerobot.policies.flash.prepared import PreparedFlashSkill
 from lerobot.policies.flash.skill import (
     FlashSkill,
     Interval,
@@ -17,6 +22,7 @@ from lerobot.policies.flash.skill import (
     SpatialSample,
     TurnAtPoint,
 )
+from lerobot.policies.flash.symmetry import AxialSymmetry
 from lerobot.policies.flash.trajectory import ConnectionTrajectory, Evidence, PoseEstimate, spatial_goal
 from lerobot.policies.flash.turn_choice import select_turn_angle
 
@@ -87,6 +93,51 @@ def test_rule_cannot_change_or_restart_between_keyframes():
         )
 
 
+def test_prepared_skill_accepts_only_a_symmetry_invariant_center_turn(tmp_path):
+    symmetry = AxialSymmetry("target", (0, 0, 1), (0, 0, 0), pose(), True, 0.3)
+    reference = ObjectReference(
+        "target",
+        "target-v1",
+        (ReferenceSnippet("demo/source", 0, 0, "target", pose(), "flash/v1/masks/target.png", "cal-v1"),),
+    )
+    model = AppearanceModel(
+        ObjectPointModel("target", "target-v1", np.array([[0, 0, 1], [0.1, 0, 1], [0, 0.1, 1]])),
+        np.ones((3, 2)),
+    )
+
+    def prepare(rule):
+        skill = FlashSkill("demo/source", 0, (make_interval(rule=rule),))
+        return PreparedFlashSkill(
+            skill, (reference,), (model,), {"target": "target"}, "descriptor", (symmetry,)
+        )
+
+    invariant = TurnAtPoint("center", (0, 0, 0), (0, 0, 1), -pi, pi, 0, "symmetry_invariant")
+    prepared = prepare(invariant)
+    bundle = prepared.save(tmp_path / "prepared")
+    assert PreparedFlashSkill.load(bundle).skill.intervals[0].turn_at_point == invariant
+    replay = build_demo_replay(
+        PreparedFlashSkill.load(bundle),
+        arm_times_s=np.array([0.0, 1.0]),
+        arm_tips=np.stack((pose(), pose())),
+        camera_times_s=np.array([0.1, 0.9]),
+        intrinsics=np.eye(3),
+        base_from_camera=np.eye(4),
+        image_size=(640, 480),
+        fps=30,
+    )
+    assert replay["pose_constraints"]["target"] == {
+        "orientation_locked_to_baseline": True,
+        "ends_interchangeable": False,
+        "center_object_m": [0.0, 0.0, 0.0],
+        "axis_object": [0.0, 0.0, 1.0],
+        "source_frame_index": 0,
+    }
+    with pytest.raises(ValueError, match="prepared reference center"):
+        prepare(TurnAtPoint("offset", (0.01, 0, 0), (0, 0, 1), -pi, pi, 0, "symmetry_invariant"))
+    with pytest.raises(ValueError, match="prepared reference center"):
+        prepare(TurnAtPoint("wrong-direction", (0, 0, 0), (1, 0, 0), -pi, pi, 0, "symmetry_invariant"))
+
+
 def test_async_worker_selects_reachable_turn_and_rebuilds_connection():
     rule = TurnAtPoint("turn", (0, 0, 0), (0, 0, 1), -pi, pi, 17, "observed")
     interval = make_interval(rule=rule)
@@ -94,12 +145,17 @@ def test_async_worker_selects_reachable_turn_and_rebuilds_connection():
     planner = JointPlanner(kinematics, ("wrist",), "gripper", PlannerLimits((1000,), 0.01, 0.01, 10))
     seed = np.array([90.0])
     reference = PoseEstimate("target", pose(), 0, 0, Evidence.OBSERVED, "target-v1", (True,) * 3, (True,) * 3)
-    chosen = select_turn_angle(planner, interval, seed, reference.pose, None)
+    chosen = select_turn_angle(planner, interval, seed, reference.pose, None, 1 / 30)
     assert chosen == pytest.approx(pi / 2, abs=0.02)
-    assert kinematics.ik_calls <= planner.limits.max_turn_ik_evaluations
+    invariant = make_interval(
+        rule=TurnAtPoint("center", (0, 0, 0), (0, 0, 1), -pi, pi, 17, "symmetry_invariant")
+    )
+    assert select_turn_angle(planner, invariant, seed, reference.pose, None, 1 / 30) == pytest.approx(
+        pi / 2, abs=0.02
+    )
     predicted = make_interval(rule=TurnAtPoint("uncertain", (0, 0, 0), (0, 0, 1), -pi, pi, 17, "predicted"))
     with pytest.raises(InfeasibleTrajectoryError, match="directly observed pose"):
-        select_turn_angle(planner, predicted, seed, reference.pose, None)
+        select_turn_angle(planner, predicted, seed, reference.pose, None, 1 / 30)
     original_connection = ConnectionTrajectory.begin(
         interval, kinematics.forward_kinematics(seed), reference.pose, None, 0
     )
@@ -122,3 +178,21 @@ def test_async_worker_selects_reachable_turn_and_rebuilds_connection():
         assert published[0][0] == 1
     finally:
         worker.close()
+
+
+def test_turn_choice_follows_a_continuous_ik_path_when_endpoint_ik_misses():
+    class LocalKinematics:
+        def forward_kinematics(self, joints):
+            return pose(float(joints[0]))
+
+        def inverse_kinematics(self, seed, target):
+            if np.linalg.norm(target[:2, 3] - [seed[0], 0]) > 0.2:
+                return np.asarray(seed)
+            return np.array([target[0, 3]])
+
+    interval = make_interval(rule=TurnAtPoint("turn", (0, 0, 0), (0, 0, 1), -pi, pi, 0, "observed"))
+    planner = JointPlanner(LocalKinematics(), ("arm",), "gripper", PlannerLimits((10,), 0.01, 0.01, 10))
+    seed = np.array([0.0])
+    assert planner.kinematics.inverse_kinematics(seed, pose(1))[0] == 0
+    chosen = select_turn_angle(planner, interval, seed, pose(), None, 1 / 30)
+    assert chosen == pytest.approx(0.0, abs=0.02)

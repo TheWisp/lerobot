@@ -1323,6 +1323,21 @@ def test_3d_scene_projection_and_surface_pick_edit_the_prepared_keyframe(gui_pag
     assert page.get_by_label("Minimum angle (degrees)").is_visible()
     page.get_by_role("button", name="Remove", exact=True).click()
     page.evaluate("""() => {
+        flashDemoEditor.annotation.axial_symmetry_roles.fixture = {lock_to_baseline: true};
+        flashReplay.pose_constraints = {fixture: {
+            orientation_locked_to_baseline: true, center_object_m: [0, 0, 1],
+            axis_object: [0, 0, 1], source_frame_index: 0,
+        }};
+        _flashEditorRender();
+    }""")
+    page.get_by_role("button", name="Allow turn around center").click()
+    invariant = page.evaluate("flashDemoEditor.keypointsDocument.turn_rules[0]")
+    assert invariant["source_evidence"] == "symmetry_invariant"
+    assert invariant["pivot_reference_m"] == [0, 0, 1]
+    assert invariant["axis_reference"] == [0, 0, 1]
+    assert "Object center" in page.locator(".flash-editor-turn").inner_text()
+    page.get_by_role("button", name="Remove", exact=True).click()
+    page.evaluate("""() => {
         flashDemoEditor.annotation.grasp_time_s = 0.5;
         flashDemoEditor.annotation.start_anchored_until_s = 1.5;
         _flashEditorRender();
