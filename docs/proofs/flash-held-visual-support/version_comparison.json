@@ -1,0 +1,56 @@
+{
+  "comparisons": [
+    {
+      "demo": "insertion",
+      "old_preparation": "flash-dowel-ring-20261028-recorded-clock-v6",
+      "new_preparation": "flash-dowel-ring-20261028-recorded-clock-v9",
+      "old_recorded_conflicted_camera_frames": 205,
+      "current_rule_on_old_pose_trace_conflicted_camera_frames": 20,
+      "new_recorded_conflicted_camera_frames": 20,
+      "current_rule_on_new_pose_trace_conflicted_camera_frames": 20,
+      "both_observed_pose_difference_frames": [],
+      "evidence_difference_frames": [
+        233,
+        234,
+        235,
+        498,
+        499,
+        500
+      ],
+      "estimator_difference_frames": [
+        233,
+        234,
+        235,
+        498,
+        499,
+        500
+      ],
+      "common_observation_masks": 30,
+      "changed_common_observation_masks": [],
+      "new_recorded_parity": {
+        "attachment_max_abs": 0.0,
+        "conflict_flag_mismatches": 0,
+        "correction_flag_mismatches": 0
+      }
+    },
+    {
+      "demo": "pick_place",
+      "old_preparation": "flash-gamepad-cube-20261028-recorded-clock-v6",
+      "new_preparation": "flash-gamepad-cube-20261028-recorded-clock-v9",
+      "old_recorded_conflicted_camera_frames": 51,
+      "current_rule_on_old_pose_trace_conflicted_camera_frames": 6,
+      "new_recorded_conflicted_camera_frames": 6,
+      "current_rule_on_new_pose_trace_conflicted_camera_frames": 6,
+      "both_observed_pose_difference_frames": [],
+      "evidence_difference_frames": [],
+      "estimator_difference_frames": [],
+      "common_observation_masks": 23,
+      "changed_common_observation_masks": [],
+      "new_recorded_parity": {
+        "attachment_max_abs": 0.0,
+        "conflict_flag_mismatches": 0,
+        "correction_flag_mismatches": 0
+      }
+    }
+  ]
+}

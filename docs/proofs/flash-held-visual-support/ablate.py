@@ -86,7 +86,7 @@ class AblatedUpdater(HeldAttachmentUpdater):
         return True
 
 
-def evaluate(bundle: Path, rule: str) -> dict:
+def evaluate(bundle: Path, rule: str, *, require_recorded_parity: bool = True) -> dict:
     prepared = bundle.resolve().parent
     root = prepared.parents[3]
     name = prepared.name
@@ -218,8 +218,10 @@ def evaluate(bundle: Path, rule: str) -> dict:
     baseline_max_abs = float(np.max(np.abs(attachments - recorded_attachment)))
     baseline_conflicted_mismatch = int(np.count_nonzero(np.asarray(conflicted) != recorded_conflicted))
     baseline_corrected_mismatch = int(np.count_nonzero(np.asarray(corrected) != recorded_corrected))
-    if rule == "baseline" and (
-        baseline_max_abs > 1e-12 or baseline_conflicted_mismatch or baseline_corrected_mismatch
+    if (
+        require_recorded_parity
+        and rule == "baseline"
+        and (baseline_max_abs > 1e-12 or baseline_conflicted_mismatch or baseline_corrected_mismatch)
     ):
         raise AssertionError("baseline did not reproduce the recorded attachment trace")
     finite = [r for _, _, r in scores if np.isfinite(r)]
@@ -230,6 +232,12 @@ def evaluate(bundle: Path, rule: str) -> dict:
         "accepted_observation_frames": accepted_frames,
         "withheld_observation_frames": updater.withheld,
         "conflicted_camera_frames": int(sum(conflicted)),
+        "recorded_conflicted_camera_frames": int(recorded_conflicted.sum()),
+        "recorded_parity": {
+            "attachment_max_abs": baseline_max_abs,
+            "conflict_flag_mismatches": baseline_conflicted_mismatch,
+            "correction_flag_mismatches": baseline_corrected_mismatch,
+        },
         "median_visible_depth_p90_mm": float(np.median(finite) * 1000),
         "median_projected_mask_fraction": float(np.median([f for _, f, _ in scores])),
         "final_gripper_from_object_translation_delta_vs_recorded_mm": float(

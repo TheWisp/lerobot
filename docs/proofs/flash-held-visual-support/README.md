@@ -49,6 +49,29 @@ drop in conflicted carry samples. The v6-to-v9 pass also changed pose-trace
 selection (version 5 to 6), so the before/after does not isolate the image
 scoring change alone. It cannot establish that all held poses are correct.
 
+A controlled [version comparison](compare_versions.py), saved in
+[version_comparison.json](version_comparison.json), separates those two changes.
+It checks that annotation, keypoints, and reference points are byte-identical;
+every pose and mask jointly observed in the old and new extraction is identical.
+It then runs the **current** held decision rule on each version's saved input:
+
+| Raw demo       | Old recorded conflicted camera frames | Current rule on old input | New recorded conflicted camera frames |
+| -------------- | ------------------------------------: | ------------------------: | ------------------------------------: |
+| Dowel / ring   |                                   205 |                        20 |                                    20 |
+| Gamepad / cube |                                    51 |                         6 |                                     6 |
+
+The dowel extraction differs in only six observation labels; the gamepad
+extraction has no changed pose or label. This supports the narrow conclusion
+that the shared **held decision rule**, rather than a favorable new dowel pose,
+caused the conflict reduction on both demos. It does not validate the corrected
+object pose. In the newer gamepad trace, 41 camera frames remain explicitly
+visually ambiguous, and the dowel's surviving 20 conflicted frames remain real
+failures to establish an attachment. Neither is a ground-truth accuracy result.
+An older prepared version must therefore remain identifiable as historical
+evidence; making the viewer choose the newest version cannot be counted as a
+tracking fix. Independent held-out recordings and checked contact landmarks
+are still required before claiming the estimator generalizes.
+
 This exposes a specific decision gap: a _small_ visual correction is currently
 accepted without requiring its visible surface to fit the current image. The
 new comparison records the gap but intentionally leaves control unchanged.

@@ -42,6 +42,12 @@
       ],
       "withheld_observation_frames": [],
       "conflicted_camera_frames": 20,
+      "recorded_conflicted_camera_frames": 20,
+      "recorded_parity": {
+        "attachment_max_abs": 0.0,
+        "conflict_flag_mismatches": 0,
+        "correction_flag_mismatches": 0
+      },
       "median_visible_depth_p90_mm": 7.447572547477731,
       "median_projected_mask_fraction": 0.3973499361430396,
       "final_gripper_from_object_translation_delta_vs_recorded_mm": 0.0
@@ -87,6 +93,12 @@
         514
       ],
       "conflicted_camera_frames": 205,
+      "recorded_conflicted_camera_frames": 20,
+      "recorded_parity": {
+        "attachment_max_abs": 0.4592744343822767,
+        "conflict_flag_mismatches": 185,
+        "correction_flag_mismatches": 0
+      },
       "median_visible_depth_p90_mm": 7.010801652197574,
       "median_projected_mask_fraction": 0.4082139125242573,
       "final_gripper_from_object_translation_delta_vs_recorded_mm": 3.001308980492735
@@ -132,6 +144,12 @@
         249
       ],
       "conflicted_camera_frames": 205,
+      "recorded_conflicted_camera_frames": 20,
+      "recorded_parity": {
+        "attachment_max_abs": 0.4592744343822767,
+        "conflict_flag_mismatches": 185,
+        "correction_flag_mismatches": 0
+      },
       "median_visible_depth_p90_mm": 7.641799142770411,
       "median_projected_mask_fraction": 0.3973499361430396,
       "final_gripper_from_object_translation_delta_vs_recorded_mm": 0.0
@@ -177,6 +195,12 @@
         514
       ],
       "conflicted_camera_frames": 244,
+      "recorded_conflicted_camera_frames": 20,
+      "recorded_parity": {
+        "attachment_max_abs": 0.5423394212640579,
+        "conflict_flag_mismatches": 224,
+        "correction_flag_mismatches": 0
+      },
       "median_visible_depth_p90_mm": 19.23660333782367,
       "median_projected_mask_fraction": 0.27594220043941187,
       "final_gripper_from_object_translation_delta_vs_recorded_mm": 271.89431630531095
@@ -209,6 +233,12 @@
       ],
       "withheld_observation_frames": [],
       "conflicted_camera_frames": 6,
+      "recorded_conflicted_camera_frames": 6,
+      "recorded_parity": {
+        "attachment_max_abs": 0.0,
+        "conflict_flag_mismatches": 0,
+        "correction_flag_mismatches": 0
+      },
       "median_visible_depth_p90_mm": 3.4934899629244787,
       "median_projected_mask_fraction": 0.2777777777777778,
       "final_gripper_from_object_translation_delta_vs_recorded_mm": 0.0
@@ -242,6 +272,12 @@
         310
       ],
       "conflicted_camera_frames": 6,
+      "recorded_conflicted_camera_frames": 6,
+      "recorded_parity": {
+        "attachment_max_abs": 0.10984288197925957,
+        "conflict_flag_mismatches": 0,
+        "correction_flag_mismatches": 0
+      },
       "median_visible_depth_p90_mm": 3.4934899629244787,
       "median_projected_mask_fraction": 0.2781954887218045,
       "final_gripper_from_object_translation_delta_vs_recorded_mm": 0.0
@@ -275,6 +311,12 @@
         310
       ],
       "conflicted_camera_frames": 6,
+      "recorded_conflicted_camera_frames": 6,
+      "recorded_parity": {
+        "attachment_max_abs": 0.07068896883911852,
+        "conflict_flag_mismatches": 0,
+        "correction_flag_mismatches": 0
+      },
       "median_visible_depth_p90_mm": 3.4934899629244787,
       "median_projected_mask_fraction": 0.2781954887218045,
       "final_gripper_from_object_translation_delta_vs_recorded_mm": 0.0
@@ -308,6 +350,12 @@
         310
       ],
       "conflicted_camera_frames": 6,
+      "recorded_conflicted_camera_frames": 6,
+      "recorded_parity": {
+        "attachment_max_abs": 0.10984288197925957,
+        "conflict_flag_mismatches": 0,
+        "correction_flag_mismatches": 0
+      },
       "median_visible_depth_p90_mm": 3.4934899629244787,
       "median_projected_mask_fraction": 0.2777777777777778,
       "final_gripper_from_object_translation_delta_vs_recorded_mm": 0.0
