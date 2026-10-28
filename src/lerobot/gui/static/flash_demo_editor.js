@@ -85,7 +85,7 @@ function _flashEditorUpdateStatus() {
     const status = document.getElementById('flash-demo-editor-change-status');
     if (status) status.textContent = flashDemoEditor.raw
         ? changed ? 'Unsaved setup · prepare to review a new version' : 'Raw demo · no preparation saved'
-        : changed ? 'Unsaved edits · regenerate to review a new version' : 'Viewing saved preparation';
+        : changed ? 'Unsaved edits · preview to review' : 'Viewing saved preparation';
 }
 
 function _flashEditorUpdateFrame() {
@@ -193,6 +193,16 @@ function _flashEditorRender() {
         expanded[requestedSection] = true;
         state.section = null;
     }
+    const secondarySections = new Set(state.raw
+        ? ['pose', 'trackers', 'advanced']
+        : ['setup', 'pose', 'trackers', 'advanced']);
+    const more = document.createElement('details');
+    more.className = 'flash-editor-group flash-editor-more';
+    more.open = !!expanded.more || secondarySections.has(requestedSection);
+    const moreTitle = document.createElement('summary');
+    moreTitle.textContent = 'More settings';
+    moreTitle.onclick = () => { expanded.more = !more.open; };
+    more.append(moreTitle);
     for (const [key, label, primary] of [
         ['keyframes', 'Key frames', true],
         ['objects', 'Objects and masks', state.raw],
@@ -210,6 +220,10 @@ function _flashEditorRender() {
             editor.append(pane);
             continue;
         }
+        if (secondarySections.has(key)) {
+            more.append(pane);
+            continue;
+        }
         const details = document.createElement('details');
         details.className = 'flash-editor-group';
         details.dataset.section = key;
@@ -220,6 +234,7 @@ function _flashEditorRender() {
         details.append(title, pane);
         editor.append(details);
     }
+    editor.append(more);
 
     const setup = _flashEditorSection(panes.setup, 'Recording and calibration', state.raw
         ? 'The raw frames contain no FLASH object names or camera-to-arm calibration. Supply the calibration used when this demo was recorded.'
@@ -745,10 +760,10 @@ function _flashEditorRender() {
     });
     panes.advanced.append(advanced);
 
-    const output = _flashEditorSection(editor, state.raw ? 'Prepare' : 'Regenerate',
-        'Creates a review candidate. The original demo is unchanged.');
+    const output = document.createElement('section');
     output.classList.add('flash-editor-footer');
-    const generate = _flashEditorButton(output, state.raw ? 'Prepare spatial demo' : 'Regenerate prepared demo',
+    editor.append(output);
+    const generate = _flashEditorButton(output, state.raw ? 'Prepare demo' : 'Preview updated demo',
         () => void _flashEditorRegenerate());
     generate.disabled = state.running;
     const message = document.createElement('p');
@@ -801,7 +816,7 @@ function _flashEditorUseInvariantTurn(state, point, index) {
     };
     if (prior) rules.splice(rules.indexOf(prior), 1, rule);
     else rules.push(rule);
-    state.message = 'Turn saved. Regenerate the demo to preview the adapted motion.';
+    state.message = 'Turn added. Preview to check it.';
 }
 
 function flashDemoEditorPickTurn(picked) {

@@ -27,8 +27,10 @@ interval.
 ![Simplified turn editor on insertion demo frame 343](turn-rule-preview.png)
 
 In the insertion demo, key frame 6 can now be given a turn around the ring's
-saved center with one button. The angle range is under **Refine turn**. The
-browser saved the rule without page errors. The cyan measured patch is on the
+saved center with one button. The angle range is under **Refine turn**. Object
+and action edits stay one click away; technical controls share **More settings**.
+**Preview updated demo** builds a candidate. The browser saved the rule without
+page errors. The cyan measured patch is on the
 green ring beneath the dowel; the blue object farther right is unrelated.
 
 The center and direction are unchanged by the ring's unobserved spin, although

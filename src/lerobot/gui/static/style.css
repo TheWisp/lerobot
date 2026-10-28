@@ -797,6 +797,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .flash-editor-turn-refine { border-top: 1px solid #31516c; margin-top: 8px; padding-top: 8px; }
 .flash-editor-turn-refine > summary { color: #bdd0e0; cursor: pointer; }
 .flash-editor-footer { position: sticky; bottom: -14px; padding: 10px 0 !important; background: #101b2a; border-top: 1px solid #31516c; }
+.flash-editor-footer > button { width: 100%; margin-right: 0; padding: 8px; }
 @media (max-width: 1200px) {
     #tab-run.flash-reviewing #run-sidebar { width: 220px; min-width: 180px; }
     #tab-run.flash-reviewing #rerun-viewer { flex-direction: column; }

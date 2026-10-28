@@ -686,7 +686,7 @@ def test_run_flash_lists_demos_and_shows_extracted_pose_overlay(gui_page):
     page.get_by_role("button", name="Finish polygon").click()
     assert "Manual object mask: 3 vertices" in page.locator("#flash-demo-editor-polygon-status").inner_text()
     assert len(page.evaluate("flashDemoEditor.annotation.reference_polygons_by_role.object")) == 3
-    page.locator("#flash-demo-editor .flash-editor-group[data-section='trackers'] > summary").click()
+    page.get_by_text("More settings", exact=True).click()
     assert page.get_by_label("Processing scope", exact=True).input_value() == ""
     assert page.get_by_label("Grow points from later views").is_checked()
     page.get_by_label("Maximum points per object").fill("256")
@@ -696,7 +696,6 @@ def test_run_flash_lists_demos_and_shows_extracted_pose_overlay(gui_page):
     page.get_by_role("button", name="Process demo and preview", exact=True).click()
     page.wait_for_function("() => flashReplay.tracker_candidate?.candidate_id === 'test-tracker'")
     page.wait_for_function("() => !document.getElementById('flash-track-tools').hidden")
-    page.locator("#flash-demo-editor .flash-editor-group[data-section='pose'] > summary").click()
     assert "Raw 3D point paths" in page.locator("#flash-tracker-content").inner_text()
     arc_count = page.evaluate("""() => {
         let n = 0; const original = CanvasRenderingContext2D.prototype.arc;
@@ -1044,6 +1043,10 @@ def test_raw_demo_editor_collects_object_names_and_action_from_visible_controls(
             "Advanced": "advanced",
             "Key frames": "keyframes",
         }[name]
+        if current_section == "advanced":
+            more = page.locator("#flash-demo-editor .flash-editor-more")
+            if not more.evaluate("element => element.open"):
+                more.locator("summary").click()
         group = page.locator(f"#flash-demo-editor .flash-editor-group[data-section='{current_section}']")
         if group.count() and not group.evaluate("element => element.open"):
             group.locator("summary").click()
@@ -1091,7 +1094,7 @@ def test_raw_demo_editor_collects_object_names_and_action_from_visible_controls(
     seek(1)
     page.get_by_role("button", name="Add key frame at current time").click()
     set_field("Move relative to", "receiver")
-    page.get_by_role("button", name="Prepare spatial demo").click()
+    page.get_by_role("button", name="Prepare demo").click()
     page.wait_for_function(
         "() => document.querySelector('#flash-demo-editor-status').textContent.includes('captured test request')"
     )
@@ -1265,6 +1268,15 @@ def test_3d_scene_projection_and_surface_pick_edit_the_prepared_keyframe(gui_pag
     page.get_by_role("button", name="Edit key frames").click()
     page.wait_for_function("() => !!flashDemoEditor")
     assert not page.locator("#run-sidebar").is_visible()
+    assert page.locator("#flash-demo-editor .flash-editor-group > summary").all_inner_texts() == [
+        "Objects and masks",
+        "Action timing",
+        "More settings",
+    ]
+    page.get_by_text("More settings", exact=True).click()
+    assert page.get_by_text("Pose evidence", exact=True).is_visible()
+    assert page.locator(".flash-editor-more .flash-editor-group").count() == 0
+    page.get_by_text("More settings", exact=True).click()
     page.get_by_role("button", name="Pick object in scene").click()
     box = page.locator(".flash-scene-canvas").bounding_box()
     scale = min(box["width"] / width, box["height"] / height)
@@ -1296,7 +1308,7 @@ def test_3d_scene_projection_and_surface_pick_edit_the_prepared_keyframe(gui_pag
     )
     assert page.evaluate("flashDemoEditor.keypointsDocument.keypoints[0].frame") == "fixture"
     assert "Unsaved edits" in page.locator("#flash-demo-editor-change-status").inner_text()
-    page.get_by_role("button", name="Regenerate prepared demo").click()
+    page.get_by_role("button", name="Preview updated demo").click()
     page.wait_for_function(
         "() => document.querySelector('#flash-demo-editor-status').textContent.includes('captured')"
     )
@@ -1312,7 +1324,7 @@ def test_3d_scene_projection_and_surface_pick_edit_the_prepared_keyframe(gui_pag
     assert rule["reference_role"] == "fixture"
     assert rule["pivot_reference_m"] == pytest.approx(picked["camera_xyz_m"])
     assert page.get_by_label("Move relative to", exact=True).is_disabled()
-    page.get_by_role("button", name="Regenerate prepared demo").click()
+    page.get_by_role("button", name="Preview updated demo").click()
     page.wait_for_function(
         "() => document.querySelector('#flash-demo-editor-status').textContent.includes('captured')"
     )
