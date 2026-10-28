@@ -52,6 +52,7 @@ class PlannerLimits:
     max_attachment_age_s: float | None = None
     max_connection_ik_samples: int = 128
     max_connection_retimings: int = 8
+    max_turn_ik_evaluations: int = 16
 
     def __post_init__(self) -> None:
         values = (
@@ -84,6 +85,12 @@ class PlannerLimits:
             or self.max_connection_retimings < 1
         ):
             raise ValueError("maximum connection retimings must be a positive integer")
+        if (
+            isinstance(self.max_turn_ik_evaluations, bool)
+            or not isinstance(self.max_turn_ik_evaluations, int)
+            or self.max_turn_ik_evaluations < 4
+        ):
+            raise ValueError("turn search needs at least four bounded IK evaluations")
 
     @property
     def effective_attachment_age_s(self) -> float:
@@ -129,6 +136,7 @@ class JointPlanner:
         attachment: AttachmentState | None,
         connection: ConnectionTrajectory | None = None,
         issued_events: frozenset[str] = frozenset(),
+        turn_angle_rad: float = 0.0,
     ) -> list[TimedAction]:
         kwargs = {
             "start_tick": start_tick,
@@ -141,6 +149,7 @@ class JointPlanner:
             "attachment": attachment,
             "connection": connection,
             "issued_events": issued_events,
+            "turn_angle_rad": turn_angle_rad,
         }
         if interval.mode != MotionMode.CONNECTION or connection is None:
             return self._plan_once(interval, **kwargs)
@@ -185,6 +194,7 @@ class JointPlanner:
         attachment: AttachmentState | None,
         connection: ConnectionTrajectory | None = None,
         issued_events: frozenset[str] = frozenset(),
+        turn_angle_rad: float = 0.0,
     ) -> list[TimedAction]:
         if count <= 0 or start_tick < 0 or period_s <= 0:
             raise ValueError("invalid chunk timing")
@@ -236,6 +246,7 @@ class JointPlanner:
                         if interval.relation == Relation.HELD_TO_TARGET
                         else None
                     ),
+                    turn_angle_rad,
                 )
                 complete = due_s >= interval_start_s + interval.demo_duration_s
                 matching_events = [
@@ -258,7 +269,11 @@ class JointPlanner:
                     else None
                 )
                 current_endpoint = spatial_goal(
-                    interval, interval.samples[-1], reference.pose, live_attachment
+                    interval,
+                    interval.samples[-1],
+                    reference.pose,
+                    live_attachment,
+                    connection.turn_angle_rad,
                 )
                 if (
                     np.linalg.norm(current_endpoint[:3, 3] - connection.requested_goal_pose[:3, 3])

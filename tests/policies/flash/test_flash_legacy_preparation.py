@@ -10,6 +10,7 @@ from lerobot.policies.flash.sealed_demo_import import (
     _interval_reference,
     _nearest_index,
     _symmetry_from_annotation,
+    _turn_for_interval,
 )
 from lerobot.policies.flash.skill import EndpointRequirement, Relation
 
@@ -100,6 +101,28 @@ def test_start_anchor_still_overrides_old_keypoint_reference():
 def test_best_effort_hover_is_a_preferred_endpoint():
     assert _endpoint_requirement({"constraint": "best_effort"}) == EndpointRequirement.PREFERRED
     assert _endpoint_requirement({"constraint": "pose"}) == EndpointRequirement.REQUIRED
+
+
+def test_turn_rule_applies_to_each_complete_interval_of_the_same_reference():
+    times = np.array([0.0, 1.0, 2.0, 3.0])
+    rule = {
+        "rule_id": "turn-1",
+        "reference_role": "fixture",
+        "start_s": 0.0,
+        "end_s": 2.0,
+        "pivot_reference_m": [0.01, 0.02, 0.03],
+        "axis_reference": [0, 0, 1],
+        "min_angle_rad": -np.pi,
+        "max_angle_rad": np.pi,
+    }
+    first = _turn_for_interval([rule], times, 0, 1, "fixture")
+    second = _turn_for_interval([rule], times, 1, 2, "fixture")
+    assert first == second
+    assert _turn_for_interval([rule], times, 2, 3, "fixture") is None
+    with pytest.raises(ValueError, match="different reference"):
+        _turn_for_interval([rule], times, 1, 2, "other")
+    with pytest.raises(ValueError, match="interval boundaries"):
+        _turn_for_interval([rule], times, 1, 3, "fixture")
 
 
 def test_legacy_annotation_preserves_end_for_end_symmetry():

@@ -183,6 +183,7 @@ function _flashEditorRender() {
     editor.append(changed);
     const frameText = document.createElement('p');
     frameText.id = 'flash-demo-editor-frame';
+    frameText.hidden = true;
     editor.append(frameText);
 
     const panes = {};
@@ -487,13 +488,13 @@ function _flashEditorRender() {
         });
     }
 
-    const keypoints = _flashEditorSection(panes.keyframes, 'Key frame',
-        'Select a yellow marker on the timeline to edit its motion.');
+    const keypoints = _flashEditorSection(panes.keyframes, 'Key frame');
     const points = state.keypointsDocument.keypoints;
     if (points.length) {
         state.keypointIndex = Math.max(0, Math.min(state.keypointIndex, points.length - 1));
         const index = state.keypointIndex;
         const point = points[index];
+        const turnRule = _flashEditorTurnForPoint(state, point);
         const navigation = document.createElement('div');
         navigation.className = 'flash-editor-keypoint-navigation';
         const previous = _flashEditorButton(navigation, '‹', () => {
@@ -521,7 +522,7 @@ function _flashEditorRender() {
             point.t > Number(a.grasp_time_s) && point.t <= Number(a.start_anchored_until_s);
         if (!state.raw) {
             const pick = _flashEditorButton(details,
-                state.pickingReference ? 'Cancel surface pick' : 'Choose reference from scene',
+                state.pickingReference ? 'Cancel object pick' : 'Pick object in scene',
                 async () => {
                     if (state.pickingReference) {
                         state.pickingReference = false;
@@ -533,7 +534,7 @@ function _flashEditorRender() {
                     if (state.pickingReference) _flashEditorJumpTime(point.t);
                     _flashEditorRender();
                 });
-            pick.disabled = state.running || startAnchored;
+            pick.disabled = state.running || startAnchored || !!turnRule;
             if (startAnchored || state.pickingReference) {
                 const note = document.createElement('p');
                 note.textContent = startAnchored
@@ -542,9 +543,108 @@ function _flashEditorRender() {
                 details.append(note);
             }
         }
-        const reference = _flashEditorField(details, 'Reference', point.frame || 'world', value => { point.frame = value; }, ['world', ...roles]);
-        reference.disabled = startAnchored;
-        _flashEditorField(details, 'Motion', point.move, value => { point.move = value; }, ['line', 'follow', 'lift']);
+        const reference = _flashEditorField(details, 'Move relative to', point.frame || 'world',
+            value => { point.frame = value; }, ['world', ...roles]);
+        for (const option of reference.options) {
+            if (option.value === 'world') option.textContent = 'World (fixed)';
+        }
+        reference.disabled = startAnchored || !!turnRule;
+        const motion = _flashEditorField(details, 'Path', point.move,
+            value => { point.move = value; }, ['line', 'follow', 'lift']);
+        for (const option of motion.options) option.textContent = ({
+            line: 'Straight connection', follow: 'Follow recording', lift: 'Lift then move',
+        })[option.value] || option.value;
+        if (!state.raw && !startAnchored && point.frame !== 'world') {
+            const turn = document.createElement('div');
+            turn.className = 'flash-editor-turn';
+            details.append(turn);
+            if (!turnRule || state.pickingTurn) {
+                const lockedOrientation = !!a.axial_symmetry_roles?.[point.frame]?.lock_to_baseline;
+                const choose = _flashEditorButton(turn,
+                    state.pickingTurn ? 'Cancel point pick' :
+                        lockedOrientation ? 'Preview turn (pose predicted)' : 'Allow turn at a point',
+                    async () => {
+                        if (state.pickingTurn) {
+                            state.pickingTurn = false;
+                        } else {
+                            if (flashSceneMode !== '3d') await toggleFlashSceneView();
+                            state.pickingTurn = flashSceneMode === '3d';
+                        }
+                        _flashEditorRender();
+                    });
+                choose.disabled = state.running;
+                if (lockedOrientation && !state.pickingTurn) {
+                    const note = document.createElement('p');
+                    note.textContent = 'This object’s orientation is locked to its starting direction, so a turn here is for review only.';
+                    turn.append(note);
+                }
+                if (state.pickingTurn) {
+                    const instruction = document.createElement('p');
+                    instruction.textContent = `Click a measured point on ${point.frame}.`;
+                    turn.append(instruction);
+                }
+            } else {
+                const title = document.createElement('strong');
+                title.textContent = `Turn around this point`;
+                turn.append(title);
+                const evidence = document.createElement('p');
+                const fullTurn = Math.abs(turnRule.min_angle_rad + Math.PI) < 1e-6 &&
+                    Math.abs(turnRule.max_angle_rad - Math.PI) < 1e-6;
+                evidence.textContent = `${turnRule.reference_role} · ${fullTurn ? 'Any angle' : 'Limited angles'} · ` +
+                    (turnRule.source_evidence === 'observed' ? 'Measured frame' : 'Predicted frame');
+                turn.append(evidence);
+                if (turnRule.source_evidence !== 'observed') {
+                    const warning = document.createElement('p');
+                    warning.className = 'flash-editor-status';
+                    warning.textContent = a.axial_symmetry_roles?.[turnRule.reference_role]?.lock_to_baseline
+                        ? 'This demo locks the object’s orientation to its starting direction. Its point frame is predicted, so Test cannot use this turn yet.'
+                        : 'This object pose was predicted. Pick the point on a frame with a measured pose before testing.';
+                    turn.append(warning);
+                }
+                _flashEditorButton(turn, 'Change point', async () => {
+                    if (flashSceneMode !== '3d') await toggleFlashSceneView();
+                    state.pickingTurn = flashSceneMode === '3d';
+                    _flashEditorRender();
+                });
+                _flashEditorButton(turn, 'Remove', () => {
+                    const rules = state.keypointsDocument.turn_rules;
+                    rules.splice(rules.indexOf(turnRule), 1);
+                    _flashEditorRender();
+                });
+                const refine = document.createElement('details');
+                refine.className = 'flash-editor-turn-refine';
+                const refineTitle = document.createElement('summary');
+                refineTitle.textContent = 'Refine turn';
+                refine.append(refineTitle);
+                _flashEditorField(refine, 'Minimum angle (degrees)',
+                    (turnRule.min_angle_rad * 180 / Math.PI).toFixed(0), value => {
+                        if (value === null || value > 0 || value * Math.PI / 180 >= turnRule.max_angle_rad) {
+                            showToast('Invalid turn range', 'The minimum must include zero and stay below the maximum.', 'warning');
+                            _flashEditorRender();
+                            return;
+                        }
+                        turnRule.min_angle_rad = value * Math.PI / 180;
+                    }, null, 'number');
+                _flashEditorField(refine, 'Maximum angle (degrees)',
+                    (turnRule.max_angle_rad * 180 / Math.PI).toFixed(0), value => {
+                        if (value === null || value < 0 || value * Math.PI / 180 <= turnRule.min_angle_rad) {
+                            showToast('Invalid turn range', 'The maximum must include zero and stay above the minimum.', 'warning');
+                            _flashEditorRender();
+                            return;
+                        }
+                        turnRule.max_angle_rad = value * Math.PI / 180;
+                    }, null, 'number');
+                const span = _flashEditorField(refine, 'Through key frame', String(turnRule.end_s), value => {
+                    turnRule.end_s = Number(value);
+                    _flashEditorRender();
+                }, points.filter(item => item.t > turnRule.start_s).map(item => String(item.t)));
+                for (const option of span.options) {
+                    const keyIndex = points.findIndex(item => String(item.t) === option.value);
+                    option.textContent = keyIndex < 0 ? option.value : `${keyIndex + 1} · ${Number(option.value).toFixed(2)} s`;
+                }
+                turn.append(refine);
+            }
+        }
         const more = document.createElement('details');
         more.className = 'flash-editor-keyframe-more';
         const moreTitle = document.createElement('summary');
@@ -562,6 +662,10 @@ function _flashEditorRender() {
         _flashEditorField(more, 'Grip', point.grip || 'first', value => { point.grip = value; }, ['first', 'along']);
         if (point.move === 'lift') _flashEditorField(more, 'Lift (mm)', point.up_mm || 0, value => { point.up_mm = value; }, null, 'number');
         _flashEditorButton(more, 'Remove key frame', () => {
+            if (turnRule) {
+                showToast('Remove turn first', 'This key frame is part of a saved turn span.', 'warning');
+                return;
+            }
             if (state.keypointsDocument.keypoints.length <= 1) {
                 showToast('Keep one key frame', 'The prepared skill needs at least one event.', 'warning');
                 return;
@@ -633,6 +737,11 @@ function _flashEditorRender() {
     output.append(message);
     _flashEditorMaskRole(state.role);
     _flashEditorUpdateStatus();
+    flashSceneView?.setTurnPreview(
+        state.keypointsDocument.keypoints[state.keypointIndex]
+            ? _flashEditorTurnForPoint(state, state.keypointsDocument.keypoints[state.keypointIndex]) || null
+            : null,
+    );
     if (requestedSection) requestAnimationFrame(() => {
         const target = editor.querySelector(`.flash-editor-pane[data-section="${requestedSection}"]`);
         if (target) editor.scrollTo({top: target.offsetTop - editor.offsetTop, behavior: 'smooth'});
@@ -644,6 +753,48 @@ function _flashEditorJumpTime(time) {
         Math.abs(frame.snapshot.demo.time_s - time) < Math.abs(flashReplay.frames[best].snapshot.demo.time_s - time)
             ? frameIndex : best, 0);
     seekFlashReplay(nearest);
+}
+
+function _flashEditorTurnForPoint(state, point) {
+    return (state.keypointsDocument.turn_rules || []).find(rule =>
+        point.t > Number(rule.start_s) && point.t <= Number(rule.end_s));
+}
+
+function flashDemoEditorPickTurn(picked) {
+    const state = flashDemoEditor;
+    if (!state?.pickingTurn) return;
+    const points = state.keypointsDocument.keypoints;
+    const index = state.keypointIndex;
+    const point = points[index];
+    if (!point || picked.role !== point.frame) {
+        showToast('Pick the reference object', 'The pivot must lie on this key frame’s reference surface.', 'warning');
+        return;
+    }
+    if (!picked.reference_xyz_m || !picked.reference_normal) {
+        showToast('No local surface point', 'This object needs a usable pose at the selected frame.', 'warning');
+        return;
+    }
+    const rules = state.keypointsDocument.turn_rules ||= [];
+    const prior = _flashEditorTurnForPoint(state, point);
+    const rule = {
+        rule_id: prior?.rule_id || `turn-${crypto.randomUUID()}`,
+        reference_role: point.frame,
+        start_s: prior?.start_s ?? (index ? points[index - 1].t : 0),
+        end_s: prior?.end_s ?? point.t,
+        pivot_reference_m: picked.reference_xyz_m,
+        axis_reference: picked.reference_normal,
+        min_angle_rad: prior?.min_angle_rad ?? -Math.PI,
+        max_angle_rad: prior?.max_angle_rad ?? Math.PI,
+        source_frame_index: _flashEditorCurrentFrame().frame_index,
+        source_evidence: picked.reference_pose_evidence || 'unverified',
+    };
+    if (prior) rules.splice(rules.indexOf(prior), 1, rule);
+    else rules.push(rule);
+    state.pickingTurn = false;
+    state.message = picked.reference_pose_evidence === 'observed'
+        ? `Turn pivot saved on ${point.frame}. Regenerate to check the compiled motion.`
+        : `Pivot saved as a draft: ${point.frame} had a predicted pose at this frame.`;
+    _flashEditorRender();
 }
 
 async function toggleFlashDemoEditor() {
@@ -700,6 +851,7 @@ async function toggleFlashDemoEditor() {
                 Math.abs(point.t - _flashEditorCurrentFrame().snapshot.demo.time_s) <
                     Math.abs(points[best].t - _flashEditorCurrentFrame().snapshot.demo.time_s) ? index : best, 0),
             pickingReference: false,
+            pickingTurn: false,
             raw, newRole: '', newPrompt: '',
             original: JSON.stringify([result.annotation, result.keypoints_document]),
             drawing: false, vertices: [], running: false, message: '',
@@ -714,6 +866,7 @@ async function toggleFlashDemoEditor() {
         };
         const viewer = document.getElementById('rerun-viewer');
         viewer.classList.add('flash-demo-editing');
+        document.getElementById('tab-run')?.classList.add('flash-demo-editing');
         const grid = viewer.querySelector('.flash-replay-grid');
         const mask = document.createElement('img');
         mask.className = 'flash-demo-mask';

@@ -138,8 +138,12 @@ async function toggleFlashSceneView() {
                 option.textContent = role;
                 select.append(option);
             }
-            const {createFlashSceneView} = await import('/static/flash_scene_view.js?v=13');
+            const {createFlashSceneView} = await import('/static/flash_scene_view.js?v=16');
             flashSceneView = createFlashSceneView(grid.querySelector('.flash-scene-canvas'), surfaces);
+            if (flashDemoEditor) {
+                const point = flashDemoEditor.keypointsDocument.keypoints[flashDemoEditor.keypointIndex];
+                flashSceneView.setTurnPreview(point ? _flashEditorTurnForPoint(flashDemoEditor, point) || null : null);
+            }
         }
         flashSceneMode = '3d';
         grid.classList.add('flash-scene-active');
@@ -177,7 +181,9 @@ function _flashScenePointerUp(event) {
     const picked = flashSceneView.pickObserved(event.clientX, event.clientY);
     if (!picked) return;
     document.getElementById('flash-scene-object').value = picked.role;
-    if (flashDemoEditor?.pickingReference) {
+    if (flashDemoEditor?.pickingTurn) {
+        flashDemoEditorPickTurn(picked);
+    } else if (flashDemoEditor?.pickingReference) {
         flashDemoEditorPickReference(picked.role);
     } else if (flashDemoEditor) {
         flashDemoEditor.role = picked.role;
@@ -591,6 +597,7 @@ let flashDemoEditor = null;
 
 function closeFlashDemoEditor() {
     flashDemoEditor = null;
+    flashSceneView?.setTurnPreview(null);
     const trackerPanel = document.getElementById('flash-tracker-panel');
     const viewer = document.getElementById('rerun-viewer');
     if (trackerPanel && viewer && trackerPanel.parentElement !== viewer) {
@@ -604,6 +611,7 @@ function closeFlashDemoEditor() {
     document.querySelector('#rerun-viewer .flash-demo-mask')?.remove();
     document.querySelector('#rerun-viewer .flash-demo-polygon')?.remove();
     document.getElementById('rerun-viewer')?.classList.remove('flash-demo-editing');
+    document.getElementById('tab-run')?.classList.remove('flash-demo-editing');
     const toggle = document.getElementById('flash-demo-edit-toggle');
     if (toggle) toggle.textContent = flashReplay?.kind === 'raw_demo' ? 'Prepare demo' : 'Edit demo';
 }

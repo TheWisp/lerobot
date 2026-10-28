@@ -157,6 +157,38 @@ function makePoseAxes(length) {
     return group;
 }
 
+function makeTurnPreview(rule, pose, baseFromCamera, radius) {
+    const pivot = new THREE.Vector3(...rule.pivot_reference_m);
+    const axis = new THREE.Vector3(...rule.axis_reference).normalize();
+    const group = new THREE.Group();
+    const marker = new THREE.Mesh(
+        new THREE.SphereGeometry(Math.max(0.003, radius * 0.11)),
+        new THREE.MeshBasicMaterial({color: 0xfbbf24, depthTest: false}),
+    );
+    marker.position.copy(pivot);
+    group.add(marker);
+    group.add(new THREE.ArrowHelper(axis, pivot, radius * 1.2, 0xfbbf24, radius * 0.3, radius * 0.16));
+    const tangent = new THREE.Vector3(1, 0, 0).addScaledVector(axis, -axis.x);
+    if (tangent.lengthSq() < 0.01) tangent.set(0, 1, 0).addScaledVector(axis, -axis.y);
+    tangent.normalize();
+    const bitangent = new THREE.Vector3().crossVectors(axis, tangent).normalize();
+    const vertices = [];
+    const span = rule.max_angle_rad - rule.min_angle_rad;
+    const steps = Math.max(12, Math.ceil(64 * span / (2 * Math.PI)));
+    for (let step = 0; step <= steps; step++) {
+        const angle = rule.min_angle_rad + span * step / steps;
+        const point = pivot.clone().addScaledVector(tangent, radius * Math.cos(angle))
+            .addScaledVector(bitangent, radius * Math.sin(angle));
+        vertices.push(point.x, point.y, point.z);
+    }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+    group.add(new THREE.Line(geometry, new THREE.LineBasicMaterial({color: 0xfbbf24, depthTest: false})));
+    setPose(group, pose, baseFromCamera);
+    group.userData = {kind: 'turn_rule', role: rule.reference_role, enabled: true};
+    return group;
+}
+
 function disposeEvidence(item, references) {
     item.traverse(child => {
         // A cloned surface shares the saved reference buffer across frames.
@@ -184,6 +216,8 @@ export function createFlashSceneView(canvas, surfaces) {
     let cameraAligned = true;
     let frameCamera = null;
     let latestSnapshot = null;
+    let turnPreview = null;
+    let turnGroup = null;
     let observedCenters = {};
     let focusedRole = null;
     let lastFocusCenter = null;
@@ -255,6 +289,7 @@ export function createFlashSceneView(canvas, surfaces) {
             evidence.remove(item);
             disposeEvidence(item, references);
         }
+        turnGroup = null;
         const baseFromCamera = snapshot.camera.base_from_camera;
         const held = snapshot.held_prediction;
         observedCenters = {};
@@ -329,7 +364,32 @@ export function createFlashSceneView(canvas, surfaces) {
             }
             lastFocusCenter = center;
         }
+        refreshTurnPreview(false);
         draw();
+    }
+
+    function refreshTurnPreview(shouldDraw = true) {
+        if (turnGroup) {
+            evidence.remove(turnGroup);
+            disposeEvidence(turnGroup, references);
+            turnGroup = null;
+        }
+        const role = turnPreview?.reference_role;
+        const used = role && latestSnapshot?.accepted?.[role];
+        if (used?.pose && latestSnapshot?.camera?.base_from_camera && references[role]) {
+            references[role].geometry.computeBoundingSphere();
+            const radius = Math.max(0.02, references[role].geometry.boundingSphere.radius * 0.8);
+            turnGroup = makeTurnPreview(
+                turnPreview, used.pose, latestSnapshot.camera.base_from_camera, radius
+            );
+            evidence.add(turnGroup);
+        }
+        if (shouldDraw) draw();
+    }
+
+    function setTurnPreview(rule) {
+        turnPreview = rule;
+        refreshTurnPreview();
     }
 
     function highlight(source) {
@@ -392,7 +452,25 @@ export function createFlashSceneView(canvas, surfaces) {
         const hit = raycaster.intersectObjects(meshes, false)[0];
         if (!hit) return null;
         const point = hit.point;
-        return {role: hit.object.userData.role, camera_xyz_m: [point.x, -point.y, -point.z]};
+        const role = hit.object.userData.role;
+        const cameraXYZ = [point.x, -point.y, -point.z];
+        const result = {role, camera_xyz_m: cameraXYZ};
+        const used = latestSnapshot?.accepted?.[role];
+        const baseFromCamera = latestSnapshot?.camera?.base_from_camera;
+        if (used?.pose && baseFromCamera && hit.face) {
+            const worldFromCamera = new THREE.Matrix4().set(...baseFromCamera.flat());
+            const objectFromWorld = new THREE.Matrix4().set(...used.pose.flat()).invert();
+            const objectFromCamera = objectFromWorld.multiply(worldFromCamera);
+            const localPoint = new THREE.Vector3(...cameraXYZ).applyMatrix4(objectFromCamera);
+            const renderNormal = hit.face.normal.clone().transformDirection(hit.object.matrixWorld);
+            const localNormal = new THREE.Vector3(
+                renderNormal.x, -renderNormal.y, -renderNormal.z,
+            ).transformDirection(objectFromCamera);
+            result.reference_xyz_m = localPoint.toArray();
+            result.reference_normal = localNormal.toArray();
+            result.reference_pose_evidence = used.evidence;
+        }
+        return result;
     }
 
     function projectCameraXYZ(cameraXYZ) {
@@ -402,9 +480,12 @@ export function createFlashSceneView(canvas, surfaces) {
             rect.top + (1 - point.y) * rect.height / 2];
     }
 
-    controls.addEventListener('change', draw);
-    controls.addEventListener('start', () => {
-        setCameraAligned(false);
+    controls.addEventListener('change', () => {
+        // OrbitControls fires `start` for a plain click. Preserve the aligned
+        // RGB backdrop until the camera actually moves away from calibration.
+        if (cameraAligned && (camera.position.lengthSq() > 1e-10 ||
+            controls.target.distanceToSquared(new THREE.Vector3(0, 0, -0.45)) > 1e-10))
+            setCameraAligned(false);
         draw();
     });
     const resize = new ResizeObserver(draw);
@@ -425,5 +506,5 @@ export function createFlashSceneView(canvas, surfaces) {
         }
         renderer.dispose();
     }
-    return {update, reset, focus, pickObserved, projectCameraXYZ, highlight, draw, dispose};
+    return {update, reset, focus, pickObserved, projectCameraXYZ, highlight, setTurnPreview, draw, dispose};
 }

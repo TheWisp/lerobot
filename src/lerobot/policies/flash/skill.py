@@ -36,6 +36,45 @@ class AttachmentAction(str, Enum):
 
 
 @dataclass(frozen=True)
+class TurnAtPoint:
+    """Permitted turn about a measured point in the reference object's frame.
+
+    The same rule ID across adjacent intervals means one causal choice, not a
+    new independent rotation at every key frame. An angle of zero reproduces
+    the demonstrated relation exactly.
+    """
+
+    rule_id: str
+    pivot_reference_m: tuple[float, float, float]
+    axis_reference: tuple[float, float, float]
+    min_angle_rad: float
+    max_angle_rad: float
+    source_frame_index: int | None = None
+    source_evidence: str = "unverified"
+
+    def __post_init__(self) -> None:
+        pivot = np.asarray(self.pivot_reference_m, dtype=float)
+        axis = np.asarray(self.axis_reference, dtype=float)
+        if not self.rule_id or pivot.shape != (3,) or axis.shape != (3,):
+            raise ValueError("turn needs an ID, a reference-frame pivot and direction")
+        if not np.isfinite(pivot).all() or not np.isfinite(axis).all():
+            raise ValueError("turn pivot and direction must be finite")
+        magnitude = float(np.linalg.norm(axis))
+        if not np.isclose(magnitude, 1.0, atol=1e-5):
+            raise ValueError("turn direction must be a unit vector")
+        if not all(np.isfinite(x) for x in (self.min_angle_rad, self.max_angle_rad)):
+            raise ValueError("turn angles must be finite")
+        if self.min_angle_rad > 0 or self.max_angle_rad < 0 or self.min_angle_rad >= self.max_angle_rad:
+            raise ValueError("turn range must include the demonstrated zero angle")
+        if self.source_frame_index is not None and self.source_frame_index < 0:
+            raise ValueError("turn source frame must be nonnegative")
+        if self.source_evidence not in ("observed", "predicted", "unverified"):
+            raise ValueError("turn source evidence must be observed, predicted or unverified")
+        object.__setattr__(self, "pivot_reference_m", tuple(float(x) for x in pivot))
+        object.__setattr__(self, "axis_reference", tuple(float(x) for x in axis))
+
+
+@dataclass(frozen=True)
 class AttachmentTransition:
     """Meaning of one demonstrated gripper event for a tracked object."""
 
@@ -89,6 +128,7 @@ class Interval:
     held_reference_version: str | None = None
     held_role: str | None = None
     endpoint_requirement: EndpointRequirement = EndpointRequirement.REQUIRED
+    turn_at_point: TurnAtPoint | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "endpoint_requirement", EndpointRequirement(self.endpoint_requirement))
@@ -111,6 +151,8 @@ class Interval:
             self.mode != MotionMode.CONNECTION or any(sample.event_id for sample in self.samples)
         ):
             raise ValueError("a preferred endpoint must be a generated connection without semantic events")
+        if self.turn_at_point is not None and self.relation == Relation.EE_TO_START:
+            raise ValueError("a reference-frame turn needs an observed object reference")
 
     @property
     def demo_duration_s(self) -> float:
@@ -205,6 +247,18 @@ class FlashSkill:
         }
         if not referenced <= milestone_names:
             raise ValueError(f"missing milestone definitions: {sorted(referenced - milestone_names)}")
+        turns: dict[str, tuple[TurnAtPoint, str, str | None, int]] = {}
+        for index, interval in enumerate(self.intervals):
+            rule = interval.turn_at_point
+            if rule is None:
+                continue
+            prior = turns.get(rule.rule_id)
+            if prior is not None and (
+                prior[:3] != (rule, interval.reference_role, interval.reference_version)
+                or prior[3] != index - 1
+            ):
+                raise ValueError("a turn rule must stay identical across adjacent intervals of one reference")
+            turns[rule.rule_id] = (rule, interval.reference_role, interval.reference_version, index)
 
     @classmethod
     def load(cls, path: str | Path) -> FlashSkill:
@@ -244,6 +298,7 @@ class FlashSkill:
                     endpoint_requirement=EndpointRequirement(
                         item.get("endpoint_requirement", EndpointRequirement.REQUIRED)
                     ),
+                    turn_at_point=TurnAtPoint(**item["turn_at_point"]) if item.get("turn_at_point") else None,
                 )
             )
         milestones = tuple(
@@ -317,6 +372,19 @@ class FlashSkill:
                     "held_reference_version": interval.held_reference_version,
                     "held_role": interval.held_role,
                     "endpoint_requirement": interval.endpoint_requirement.value,
+                    "turn_at_point": (
+                        {
+                            "rule_id": interval.turn_at_point.rule_id,
+                            "pivot_reference_m": interval.turn_at_point.pivot_reference_m,
+                            "axis_reference": interval.turn_at_point.axis_reference,
+                            "min_angle_rad": interval.turn_at_point.min_angle_rad,
+                            "max_angle_rad": interval.turn_at_point.max_angle_rad,
+                            "source_frame_index": interval.turn_at_point.source_frame_index,
+                            "source_evidence": interval.turn_at_point.source_evidence,
+                        }
+                        if interval.turn_at_point is not None
+                        else None
+                    ),
                     "speed_m_s": interval.speed_m_s,
                     "entry_milestone": interval.entry_milestone,
                     "completion_milestone": interval.completion_milestone,

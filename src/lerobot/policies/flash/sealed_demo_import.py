@@ -37,6 +37,7 @@ from lerobot.policies.flash.skill import (
     MotionMode,
     Relation,
     SpatialSample,
+    TurnAtPoint,
 )
 from lerobot.policies.flash.symmetry import AxialSymmetry
 from lerobot.policies.flash.trajectory import Evidence, PoseEstimate
@@ -131,6 +132,38 @@ def _endpoint_requirement(end_key: dict) -> EndpointRequirement:
     if constraint == "pose":
         return EndpointRequirement.REQUIRED
     raise ValueError(f"unsupported keypoint constraint: {constraint!r}")
+
+
+def _turn_for_interval(
+    rules: list[dict], times: np.ndarray, first: int, last: int, reference_role: str
+) -> TurnAtPoint | None:
+    """Apply one authored turn across complete, adjacent timeline intervals."""
+    selected = None
+    for item in rules:
+        start = _nearest_index(times, float(item["start_s"]))
+        end = _nearest_index(times, float(item["end_s"]))
+        if start >= end:
+            raise ValueError("turn rule needs an increasing key-frame span")
+        intersects = first < end and last > start
+        within = first >= start and last <= end
+        if intersects and not within:
+            raise ValueError("turn rule must begin and end at interval boundaries")
+        if not within:
+            continue
+        if reference_role != item["reference_role"]:
+            raise ValueError("turn rule span crosses a different reference object")
+        if selected is not None:
+            raise ValueError("overlapping turn rules are not supported")
+        selected = TurnAtPoint(
+            item["rule_id"],
+            tuple(item["pivot_reference_m"]),
+            tuple(item["axis_reference"]),
+            float(item["min_angle_rad"]),
+            float(item["max_angle_rad"]),
+            int(item["source_frame_index"]) if item.get("source_frame_index") is not None else None,
+            item.get("source_evidence", "unverified"),
+        )
+    return selected
 
 
 def _metric_pose_at(
@@ -259,8 +292,11 @@ def prepare(
     intrinsics = np.loadtxt(root / "recording" / "cam_K.txt").reshape(3, 3)
     keypoints_document = json.loads((keypoints_path or root / "keypoints.json").read_text())
     keypoints = keypoints_document["keypoints"]
+    turn_rules = keypoints_document.get("turn_rules", [])
     if not keypoints or any(b["t"] <= a["t"] for a, b in zip(keypoints, keypoints[1:], strict=False)):
         raise ValueError("keypoints must increase in demo time")
+    if not isinstance(turn_rules, list):
+        raise ValueError("turn rules must be a list")
     grasp = _nearest_index(times, annotation["grasp_time_s"])
     release = _nearest_index(times, annotation["release_time_s"])
     if not 0 < grasp < release < len(times) - 1:
@@ -534,8 +570,13 @@ def prepare(
                 held_reference_version=roles_version[held] if carrying else None,
                 held_role=held if carrying else None,
                 endpoint_requirement=endpoint_requirement,
+                turn_at_point=_turn_for_interval(turn_rules, times, first, last, reference_role),
             )
         )
+    used_turns = {item.turn_at_point.rule_id for item in intervals if item.turn_at_point is not None}
+    declared_turns = {str(item["rule_id"]) for item in turn_rules}
+    if used_turns != declared_turns:
+        raise ValueError(f"turn rules did not cover an interval: {sorted(declared_turns - used_turns)}")
     skill = FlashSkill(
         annotation["repo_id"],
         annotation["episode"],

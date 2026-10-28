@@ -716,6 +716,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 /* FLASH review is a recording workspace. Robot controls and the generic processing
    pane return when the operator explicitly enters the live-trial setup. */
 #tab-run.flash-reviewing #run-sidebar { width: 280px; min-width: 240px; }
+#tab-run.flash-reviewing.flash-demo-editing #run-sidebar { display: none; }
 #tab-run.flash-reviewing .run-actions,
 #tab-run.flash-reviewing #run-split-handle,
 #tab-run.flash-reviewing #run-controls-bar,
@@ -791,6 +792,10 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .flash-demo-editor .flash-editor-keypoint-navigation button { min-width: 30px; font-size: 17px; margin: 0; }
 .flash-editor-keyframe-more { border-top: 1px solid #31516c; margin-top: 10px; padding-top: 8px; }
 .flash-editor-keyframe-more > summary { color: #bdd0e0; cursor: pointer; }
+.flash-editor-turn { border-top: 1px solid #31516c; margin-top: 10px; padding-top: 8px; }
+.flash-editor-turn > strong { display: block; color: #fbbf24; margin-bottom: 6px; }
+.flash-editor-turn-refine { border-top: 1px solid #31516c; margin-top: 8px; padding-top: 8px; }
+.flash-editor-turn-refine > summary { color: #bdd0e0; cursor: pointer; }
 .flash-editor-footer { position: sticky; bottom: -14px; padding: 10px 0 !important; background: #101b2a; border-top: 1px solid #31516c; }
 @media (max-width: 1200px) {
     #tab-run.flash-reviewing #run-sidebar { width: 220px; min-width: 180px; }

@@ -7,7 +7,7 @@ from enum import Enum
 
 import numpy as np
 
-from .geometry import held_object_goal, interpolate, pregrasp_goal, transform
+from .geometry import held_object_goal, interpolate, pregrasp_goal, transform, turn_about_reference_point
 from .skill import Interval, MotionMode, Relation, SpatialSample
 
 
@@ -145,12 +145,24 @@ def spatial_goal(
     sample: SpatialSample,
     live_reference: np.ndarray,
     live_attachment: np.ndarray | None,
+    turn_angle_rad: float = 0.0,
 ) -> np.ndarray:
     if interval.relation in (Relation.EE_TO_OBJECT, Relation.EE_TO_START):
-        return pregrasp_goal(sample.demo_ee, sample.demo_reference, live_reference)
-    if live_attachment is None or sample.demo_held is None:
-        raise MissingEvidenceError("held-to-target motion needs a live gripper-to-object attachment")
-    return held_object_goal(sample.demo_held, sample.demo_reference, live_reference, live_attachment)
+        goal = pregrasp_goal(sample.demo_ee, sample.demo_reference, live_reference)
+    else:
+        if live_attachment is None or sample.demo_held is None:
+            raise MissingEvidenceError("held-to-target motion needs a live gripper-to-object attachment")
+        goal = held_object_goal(sample.demo_held, sample.demo_reference, live_reference, live_attachment)
+    rule = interval.turn_at_point
+    if rule is None:
+        if turn_angle_rad != 0:
+            raise ValueError("turn angle provided without a declared turn rule")
+        return goal
+    if not rule.min_angle_rad <= turn_angle_rad <= rule.max_angle_rad:
+        raise ValueError("turn angle exceeds its declared permitted range")
+    return turn_about_reference_point(
+        goal, live_reference, rule.pivot_reference_m, rule.axis_reference, turn_angle_rad
+    )
 
 
 def demonstrated_goal(
@@ -158,11 +170,12 @@ def demonstrated_goal(
     local_time_s: float,
     live_reference: np.ndarray,
     live_attachment: np.ndarray | None = None,
+    turn_angle_rad: float = 0.0,
 ) -> tuple[np.ndarray, float | None]:
     if interval.mode != MotionMode.DEMONSTRATED:
         raise ValueError("expected a demonstrated interval")
     sample = _interpolated_sample(interval, local_time_s)
-    return spatial_goal(interval, sample, live_reference, live_attachment), sample.gripper
+    return spatial_goal(interval, sample, live_reference, live_attachment, turn_angle_rad), sample.gripper
 
 
 @dataclass
@@ -181,6 +194,7 @@ class ConnectionTrajectory:
     joint_retimed: bool = False
     requested_goal_pose: np.ndarray | None = None
     achieved_fraction: float = 1.0
+    turn_angle_rad: float = 0.0
 
     def __post_init__(self) -> None:
         self.start_pose = transform(self.start_pose)
@@ -190,6 +204,8 @@ class ConnectionTrajectory:
         )
         if not 0 <= self.achieved_fraction <= 1:
             raise ValueError("connection achieved fraction must lie between zero and one")
+        if not np.isfinite(self.turn_angle_rad):
+            raise ValueError("connection turn angle must be finite")
 
     @classmethod
     def begin(
@@ -199,10 +215,13 @@ class ConnectionTrajectory:
         live_reference: np.ndarray,
         live_attachment: np.ndarray | None,
         now_s: float,
+        turn_angle_rad: float = 0.0,
     ) -> ConnectionTrajectory:
         if interval.mode != MotionMode.CONNECTION:
             raise ValueError("expected generated connection")
-        endpoint = spatial_goal(interval, interval.samples[-1], live_reference, live_attachment)
+        endpoint = spatial_goal(
+            interval, interval.samples[-1], live_reference, live_attachment, turn_angle_rad
+        )
         distance = float(np.linalg.norm(transform(endpoint)[:3, 3] - transform(current_ee)[:3, 3]))
         return cls(
             interval,
@@ -211,6 +230,7 @@ class ConnectionTrajectory:
             now_s,
             distance / interval.speed_m_s,
             requested_goal_pose=transform(endpoint),
+            turn_angle_rad=turn_angle_rad,
         )
 
     def retarget(
@@ -220,7 +240,9 @@ class ConnectionTrajectory:
         live_attachment: np.ndarray | None,
         now_s: float,
     ) -> None:
-        replacement = self.begin(self.interval, current_ee, live_reference, live_attachment, now_s)
+        replacement = self.begin(
+            self.interval, current_ee, live_reference, live_attachment, now_s, self.turn_angle_rad
+        )
         self.start_pose, self.goal_pose = replacement.start_pose, replacement.goal_pose
         self.requested_goal_pose = replacement.requested_goal_pose
         self.achieved_fraction = replacement.achieved_fraction

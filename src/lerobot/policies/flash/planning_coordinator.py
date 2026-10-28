@@ -74,6 +74,7 @@ class PlanningCoordinator:
         self.attachment_at = attachment_at
         self.grasp_symmetries = grasp_symmetries
         self.grasp_choices: dict[str, GraspSymmetryChoice] = {}
+        self.turn_choices: dict[str, float] = {}
         self._grasp_prefix_names: dict[str, frozenset[str]] = {}
         self._next_revision = 0
         self._pending_revision: int | None = None
@@ -181,7 +182,23 @@ class PlanningCoordinator:
                             }
                         )
                         self._reported_preferred_limit.add(key)
+            if (
+                result.error is None
+                and result.turn_rule_id is not None
+                and result.turn_angle_rad is not None
+                and result.turn_rule_id not in self.turn_choices
+            ):
+                self.turn_choices[result.turn_rule_id] = result.turn_angle_rad
+                self.session.progress.events.append(
+                    {
+                        "type": "turn_at_point_selected",
+                        "rule_id": result.turn_rule_id,
+                        "angle_rad": result.turn_angle_rad,
+                    }
+                )
         interval = self.session.progress.interval
+        rule = interval.turn_at_point
+        turn_angle = self.turn_choices.get(rule.rule_id) if rule is not None else 0.0
         _, live_poses = self.poses.snapshot()
         now_s = self.session.motor.clock()
         if interval.relation == Relation.EE_TO_START:
@@ -264,7 +281,7 @@ class PlanningCoordinator:
             )
             or self._planned_attachment_time_s != (attachment.source_time_s if attachment else None)
         )
-        if interval.mode == MotionMode.CONNECTION and self._connection is not None:
+        if interval.mode == MotionMode.CONNECTION and self._connection is not None and not changed_interval:
             # A generated path has its own clock. Scene-group poses can get a
             # fresh timestamp on every camera frame even when the endpoint
             # has not moved. Restarting that clock on each such frame makes
@@ -274,6 +291,7 @@ class PlanningCoordinator:
                 interval.samples[-1],
                 reference.pose,
                 attachment.gripper_from_object if attachment is not None else None,
+                turn_angle if turn_angle is not None else self._connection.turn_angle_rad,
             )
             shift = np.linalg.norm(endpoint[:3, 3] - self._connection.requested_goal_pose[:3, 3])
             turn = np.arccos(
@@ -384,6 +402,7 @@ class PlanningCoordinator:
                     reference.pose,
                     attachment.gripper_from_object if attachment is not None else None,
                     due_s,
+                    turn_angle if turn_angle is not None else 0.0,
                 )
                 if new_image or self._connection is None
                 else self._connection
@@ -406,6 +425,7 @@ class PlanningCoordinator:
             ),
             connection=connection,
             issued_events=snapshot.issued_events,
+            turn_angle_rad=turn_angle,
         )
         self.worker.submit(request)
         self._next_revision = revision + 1
@@ -442,6 +462,7 @@ class PlanningCoordinator:
             reference_version=interval.reference_version,
             held_reference_version=interval.held_reference_version,
             held_role=interval.held_role,
+            turn_at_point=interval.turn_at_point,
         )
 
     def _reference_changed_too_far(
@@ -450,9 +471,11 @@ class PlanningCoordinator:
         if prior.reference_version != current.reference_version or current.pose is None:
             return True
         held = attachment.gripper_from_object if attachment is not None else None
+        rule = interval.turn_at_point
+        angle = self.turn_choices.get(rule.rule_id, 0.0) if rule is not None else 0.0
         for sample in interval.samples:
-            old_goal = spatial_goal(interval, sample, prior.pose, held)
-            new_goal = spatial_goal(interval, sample, current.pose, held)
+            old_goal = spatial_goal(interval, sample, prior.pose, held, angle)
+            new_goal = spatial_goal(interval, sample, current.pose, held, angle)
             shift = np.linalg.norm(old_goal[:3, 3] - new_goal[:3, 3])
             turn = np.arccos(np.clip((np.trace(old_goal[:3, :3].T @ new_goal[:3, :3]) - 1) / 2, -1, 1))
             if shift > self.config.max_reference_shift_m or turn > self.config.max_reference_turn_rad:

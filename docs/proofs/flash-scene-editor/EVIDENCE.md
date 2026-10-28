@@ -21,3 +21,18 @@ clicking a measured 3D surface, changing a key frame's reference, and sending
 that edit for preparation. The legacy importer tests check that the authored
 reference changes the generated relation except in an explicit start-anchored
 interval.
+
+## Turn editor check, 2026-10-28
+
+![Simplified turn editor on insertion demo frame 343](turn-rule-preview.png)
+
+The browser interaction selected key frame 6, picked a point from the surface
+labeled ring, and displayed the turn in the scene. The recording list disappears
+while editing; angle limits and span are under **Refine turn**. A plain click did
+not switch the camera into orbit mode, and the browser reported no page errors.
+
+This is an editor preview, not a validated robot motion. The saved insertion
+demo locks ring orientation to its baseline, so its accepted ring pose is marked
+predicted at every frame. The preview warns that Test cannot use this point frame
+yet. The cyan overlay also does not align with the visible ring in this frame;
+the scene renderer's pixel alignment test above does not establish pose accuracy.

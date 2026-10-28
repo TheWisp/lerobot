@@ -16,6 +16,7 @@ from .execution import PlanRejectedError, TimedAction
 from .planner import DemonstratedEntryDiscontinuityError, InfeasibleTrajectoryError, JointPlanner
 from .skill import Interval
 from .trajectory import AttachmentState, ConnectionTrajectory, MissingEvidenceError, PoseEstimate
+from .turn_choice import select_turn_angle
 
 
 @dataclass(frozen=True)
@@ -32,6 +33,7 @@ class PlanRequest:
     attachment: AttachmentState | None
     connection: ConnectionTrajectory | None = None
     issued_events: frozenset[str] = frozenset()
+    turn_angle_rad: float | None = None
 
     def __post_init__(self) -> None:
         seed = np.asarray(self.seed_deg, dtype=float).copy()
@@ -53,6 +55,7 @@ class PlanRequest:
                     connection.joint_retimed,
                     connection.requested_goal_pose.copy(),
                     connection.achieved_fraction,
+                    connection.turn_angle_rad,
                 ),
             )
 
@@ -65,6 +68,8 @@ class PlanResult:
     failure: PlanFailureKind | None = None
     connection: ConnectionTrajectory | None = None
     compute_s: float = 0.0
+    turn_angle_rad: float | None = None
+    turn_rule_id: str | None = None
 
 
 class PlanFailureKind(str, Enum):
@@ -143,6 +148,28 @@ class PlannerWorker:
         while (request := self._requests.get()) is not None:
             started_s = time.perf_counter()
             try:
+                attachment_pose = (
+                    request.attachment.gripper_from_object if request.attachment is not None else None
+                )
+                turn_angle = request.turn_angle_rad
+                if turn_angle is None:
+                    turn_angle = select_turn_angle(
+                        self.planner,
+                        request.interval,
+                        request.seed_deg,
+                        request.reference.pose,
+                        attachment_pose,
+                    )
+                connection = request.connection
+                if connection is not None and connection.turn_angle_rad != turn_angle:
+                    connection = ConnectionTrajectory.begin(
+                        request.interval,
+                        self.planner.kinematics.forward_kinematics(request.seed_deg),
+                        request.reference.pose,
+                        attachment_pose,
+                        request.epoch_s + request.start_tick * request.period_s,
+                        turn_angle,
+                    )
                 actions = self.planner.plan(
                     request.interval,
                     start_tick=request.start_tick,
@@ -153,8 +180,9 @@ class PlannerWorker:
                     seed_deg=request.seed_deg,
                     reference=request.reference,
                     attachment=request.attachment,
-                    connection=request.connection,
+                    connection=connection,
                     issued_events=request.issued_events,
+                    turn_angle_rad=turn_angle,
                 )
                 with self._lock:
                     if request.revision < self._newest_requested:
@@ -167,7 +195,16 @@ class PlannerWorker:
                     else:
                         self.publish(request.revision, actions)
                         result = PlanResult(
-                            request.revision, len(actions), None, connection=request.connection
+                            request.revision,
+                            len(actions),
+                            None,
+                            connection=connection,
+                            turn_angle_rad=turn_angle,
+                            turn_rule_id=(
+                                request.interval.turn_at_point.rule_id
+                                if request.interval.turn_at_point is not None
+                                else None
+                            ),
                         )
             except MissingEvidenceError as exc:
                 result = PlanResult(

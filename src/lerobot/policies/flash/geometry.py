@@ -52,6 +52,32 @@ def held_object_goal(
     return transform(live_target) @ desired_relation @ inverse(live_attachment)
 
 
+def turn_about_reference_point(
+    goal: np.ndarray,
+    reference: np.ndarray,
+    pivot_reference_m: tuple[float, float, float],
+    axis_reference: tuple[float, float, float],
+    angle_rad: float,
+) -> np.ndarray:
+    """Turn a goal about an annotated point carried by its live reference.
+
+    Both the pivot and direction are stored in the *reference object* frame,
+    so moving that object moves the whole allowed family of goals with it.
+    """
+    from scipy.spatial.transform import Rotation
+
+    if not np.isfinite(angle_rad):
+        raise ValueError("turn angle must be finite")
+    reference = transform(reference)
+    pivot = reference[:3, :3] @ np.asarray(pivot_reference_m) + reference[:3, 3]
+    axis = reference[:3, :3] @ np.asarray(axis_reference)
+    rotation = Rotation.from_rotvec(float(angle_rad) * axis).as_matrix()
+    result = np.eye(4)
+    result[:3, :3] = rotation
+    result[:3, 3] = pivot - rotation @ pivot
+    return transform(result @ transform(goal))
+
+
 def interpolate(a: np.ndarray, b: np.ndarray, fraction: float) -> np.ndarray:
     """Linear position and shortest-path rotation interpolation."""
     from scipy.spatial.transform import Rotation, Slerp

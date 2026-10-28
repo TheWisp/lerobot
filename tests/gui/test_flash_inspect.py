@@ -1090,7 +1090,7 @@ def test_raw_demo_editor_collects_object_names_and_action_from_visible_controls(
     section("Key frames")
     seek(1)
     page.get_by_role("button", name="Add key frame at current time").click()
-    set_field("Reference", "receiver")
+    set_field("Move relative to", "receiver")
     page.get_by_role("button", name="Prepare spatial demo").click()
     page.wait_for_function(
         "() => document.querySelector('#flash-demo-editor-status').textContent.includes('captured test request')"
@@ -1263,7 +1263,9 @@ def test_3d_scene_projection_and_surface_pick_edit_the_prepared_keyframe(gui_pag
     assert np.allclose(projected, expected, atol=0.5)
 
     page.get_by_role("button", name="Edit key frames").click()
-    page.get_by_role("button", name="Choose reference from scene").click()
+    page.wait_for_function("() => !!flashDemoEditor")
+    assert not page.locator("#run-sidebar").is_visible()
+    page.get_by_role("button", name="Pick object in scene").click()
     box = page.locator(".flash-scene-canvas").bounding_box()
     scale = min(box["width"] / width, box["height"] / height)
     fixture_pixel = [
@@ -1280,6 +1282,7 @@ def test_3d_scene_projection_and_surface_pick_edit_the_prepared_keyframe(gui_pag
     assert page.evaluate("([x, y]) => flashSceneView.pickObserved(x, y)?.role", fixture_pixel) == "fixture"
     page.mouse.click(*fixture_pixel)
     assert page.evaluate("flashDemoEditor.keypointsDocument.keypoints[0].frame") == "fixture"
+    assert "flash-scene-orbit" not in page.locator(".flash-replay-grid").get_attribute("class")
     assert page.evaluate("flashDemoEditor.role") == "fixture"
     tool_pixel = [
         box["x"] + (box["width"] - width * scale) / 2 + 13 * scale,
@@ -1298,11 +1301,34 @@ def test_3d_scene_projection_and_surface_pick_edit_the_prepared_keyframe(gui_pag
         "() => document.querySelector('#flash-demo-editor-status').textContent.includes('captured')"
     )
     assert submitted[0]["keypoints_document"]["keypoints"][0]["frame"] == "fixture"
+    page.get_by_role("button", name="Allow turn at a point").click()
+    page.wait_for_function("() => flashDemoEditor?.pickingTurn")
+    picked = page.evaluate("([x, y]) => flashSceneView.pickObserved(x, y)", fixture_pixel)
+    assert picked["reference_xyz_m"] == pytest.approx(picked["camera_xyz_m"])
+    assert np.linalg.norm(picked["reference_normal"]) == pytest.approx(1)
+    page.mouse.click(*fixture_pixel)
+    rule = page.evaluate("flashDemoEditor.keypointsDocument.turn_rules[0]")
+    assert "flash-scene-orbit" not in page.locator(".flash-replay-grid").get_attribute("class")
+    assert rule["reference_role"] == "fixture"
+    assert rule["pivot_reference_m"] == pytest.approx(picked["camera_xyz_m"])
+    assert page.get_by_label("Move relative to", exact=True).is_disabled()
+    page.get_by_role("button", name="Regenerate prepared demo").click()
+    page.wait_for_function(
+        "() => document.querySelector('#flash-demo-editor-status').textContent.includes('captured')"
+    )
+    assert submitted[-1]["keypoints_document"]["turn_rules"][0]["rule_id"] == rule["rule_id"]
+    assert "Any angle" in page.locator(".flash-editor-turn").inner_text()
+    assert not page.get_by_label("Minimum angle (degrees)").is_visible()
+    page.get_by_text("Refine turn").click()
+    assert page.get_by_label("Minimum angle (degrees)").is_visible()
+    page.get_by_role("button", name="Remove", exact=True).click()
     page.evaluate("""() => {
         flashDemoEditor.annotation.grasp_time_s = 0.5;
         flashDemoEditor.annotation.start_anchored_until_s = 1.5;
         _flashEditorRender();
     }""")
-    assert page.get_by_role("button", name="Choose reference from scene").is_disabled()
-    assert page.get_by_label("Reference", exact=True).is_disabled()
+    assert page.get_by_role("button", name="Pick object in scene").is_disabled()
+    assert page.get_by_label("Move relative to", exact=True).is_disabled()
     assert "grasp-start reference" in page.locator("#flash-demo-editor").inner_text()
+    page.get_by_role("button", name="Close editor").click()
+    assert page.locator("#run-sidebar").is_visible()
