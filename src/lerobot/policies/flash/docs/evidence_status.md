@@ -82,6 +82,39 @@ The [fixture note](../../../../../tests/policies/flash/fixtures/README.md)
 explains which frames were retained for regression. A surface residual alone
 does not certify every task-relevant orientation or hidden contact pose.
 
+## Two-demo check (2026-10-28)
+
+The same Run → FLASH demo replay now lists the insertion and gamepad-on-cube
+recordings. Their locally prepared bundles are
+`insertion/flash/v1/prepared/flash-scene-20261028-causal` and
+`pick_place/flash/v1/prepared/flash-gamepad-cube-20261028-causal` under the
+LeRobot demo cache. Both use the demo's recorded RGB-D and scene/group
+configuration copied from a matching trial config. The latter is a second
+task case, not a special branch in the tracker.
+
+| Demo and pose source                  | Directly observed held-object frames | Predicted | Lost |
+| ------------------------------------- | -----------------------------------: | --------: | ---: |
+| Dowel insertion, appearance + scene   |                                  169 |        84 |  338 |
+| Gamepad onto cube, appearance + scene |                                  178 |         3 |  322 |
+| Gamepad onto cube, surface + scene    |                                  247 |       128 |  128 |
+
+These are the 591 insertion and 503 gamepad frames processed by the respective
+prepared skills; they are **coverage counts, not accuracy scores**. The
+surface pass used the same demo annotation in the isolated tracking worker and
+is saved as `pick_place/flash/v1/prepared/flash-gamepad-cube-20261028-surface`.
+It finds new gamepad poses during some partially visible carry frames where
+appearance matching loses it, but still loses other carry frames. The
+pregrasp reference surface agrees with its frame-98 mask and depth (523 of 531
+projected reference points inside the mask, 0.9 mm 90th-percentile depth
+residual). At carried frames 290 and 300 the direct surface estimate is about
+20 mm from the grasp-attachment prediction at the reference-cloud centre;
+which is more accurate in 3D is not established. Some direct fits have large
+same-frame reference-surface residuals when the gripper occludes the object.
+The cube's 503 processed frames have 322 direct and 181 predicted poses in the
+appearance pass, with no lost frames. Both demos therefore need an
+observability-aware comparison of vision, group motion and attachment before
+we use a recovered pose to correct contact motion.
+
 ## Physical rollouts
 
 The sealed prototype has completed real insertion rollouts. For example,
