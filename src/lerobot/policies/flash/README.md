@@ -113,6 +113,12 @@ from the recorded path, while demonstrated intervals preserve every frame.
 Intervals must form a continuous timeline, and a push can compile without a
 grasp or attachment event. Compilation reads only timestamp, robot state and
 action columns from a regular dataset; RGB-D decoding remains in perception.
+New trials copy their prepared object models and reference masks into the
+recorded dataset. [`prepare_recorded_episode`](recorded_demo.py) can then compile
+an annotated trial and its frame-indexed pose trace into another prepared
+skill, rejecting a mismatched object-frame version. This is a library path;
+the editor does not yet author its general interval annotations, and older
+trials without the copied reference bundle need an explicit reference import.
 The sealed importer is an adapter
 for the historical SO-107 recording layout and its one-held/one-target
 annotation. It should not become the general demo schema; the Run → FLASH
