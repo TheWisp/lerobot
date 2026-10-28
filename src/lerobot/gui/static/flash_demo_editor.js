@@ -90,6 +90,19 @@ function _flashEditorUpdateStatus() {
         : changed ? 'Unsaved edits · preview to review' : 'Viewing saved preparation';
 }
 
+function _flashEditorFollowPlayhead() {
+    const state = flashDemoEditor;
+    if (!state || state.drawing || state.pickingReference || state.pickingTurn) return false;
+    const points = state.keypointsDocument.keypoints;
+    if (!points.length) return false;
+    const time = _flashEditorCurrentFrame().snapshot.demo.time_s;
+    const nearest = points.reduce((best, point, index) =>
+        Math.abs(point.t - time) < Math.abs(points[best].t - time) ? index : best, 0);
+    if (nearest === state.keypointIndex) return false;
+    state.keypointIndex = nearest;
+    return true;
+}
+
 function _flashEditorUpdateFrame() {
     if (!flashDemoEditor) return;
     const current = _flashEditorCurrentFrame();
@@ -173,6 +186,7 @@ function _flashEditorPolygonClick(event) {
 function _flashEditorRender() {
     const editor = document.getElementById('flash-demo-editor');
     const trackerPanel = document.getElementById('flash-tracker-panel');
+    const previousScroll = editor.scrollTop;
     editor.replaceChildren();
     const state = flashDemoEditor;
     const a = state.annotation;
@@ -232,7 +246,7 @@ function _flashEditorRender() {
     const pose = _flashEditorSection(panes.pose, 'Pose evidence', state.raw
         ? 'No object pose exists yet. Preparation will extract a first pose trace from the RGB-D recording.'
         : 'Hover an item to highlight its projection in the image. This is the pose saved in the selected prepared version.');
-    if (trackerPanel) pose.append(trackerPanel);
+    if (trackerPanel && !state.raw) pose.append(trackerPanel);
 
     const trackers = _flashEditorSection(panes.trackers, 'Compare pose trackers', state.raw
         ? 'Prepare object names, references and calibration before comparing tracker poses.'
@@ -572,18 +586,18 @@ function _flashEditorRender() {
         navigation.className = 'flash-editor-keypoint-navigation';
         const previous = _flashEditorButton(navigation, '‹', () => {
             state.keypointIndex--;
-            _flashEditorRender();
             _flashEditorJumpTime(points[state.keypointIndex].t);
+            _flashEditorRender();
         });
         previous.setAttribute('aria-label', 'Previous key frame');
         previous.disabled = index === 0;
         const position = document.createElement('strong');
-        position.textContent = `${index + 1} of ${points.length} · ${point.t.toFixed(2)} s`;
+        position.textContent = `Nearest ${index + 1}/${points.length} · ${point.t.toFixed(2)} s`;
         navigation.append(position);
         const next = _flashEditorButton(navigation, '›', () => {
             state.keypointIndex++;
-            _flashEditorRender();
             _flashEditorJumpTime(points[state.keypointIndex].t);
+            _flashEditorRender();
         });
         next.setAttribute('aria-label', 'Next key frame');
         next.disabled = index === points.length - 1;
@@ -593,9 +607,15 @@ function _flashEditorRender() {
         const startAnchored = Number.isFinite(Number(a.grasp_time_s)) &&
             Number.isFinite(Number(a.start_anchored_until_s)) &&
             point.t > Number(a.grasp_time_s) && point.t <= Number(a.start_anchored_until_s);
+        const reference = _flashEditorField(details, 'Move relative to', point.frame || 'world',
+            value => { point.frame = value; _flashEditorRender(); }, ['world', ...roles]);
+        for (const option of reference.options) {
+            if (option.value === 'world') option.textContent = 'World (fixed)';
+        }
+        reference.disabled = startAnchored || !!turnRule;
         if (!state.raw) {
             const pick = _flashEditorButton(details,
-                state.pickingReference ? 'Cancel reference selection' : 'Choose reference in scene',
+                state.pickingReference ? 'Cancel scene pick' : 'Pick in 3D scene',
                 async () => {
                     if (state.pickingReference) {
                         state.pickingReference = false;
@@ -611,17 +631,15 @@ function _flashEditorRender() {
             if (startAnchored || state.pickingReference) {
                 const note = document.createElement('p');
                 note.textContent = startAnchored
-                ? 'This interval uses the grasp-start reference. To change it, edit “Start-anchored until” under Tracking and settings.'
+                    ? 'This interval follows the saved start pose.'
                     : 'Click a measured object in the 3D scene to use it as this key frame’s reference.';
                 details.append(note);
+                if (startAnchored) _flashEditorButton(details, 'Change anchored interval', () => {
+                    state.section = 'references';
+                    _flashEditorRender();
+                });
             }
         }
-        const reference = _flashEditorField(details, 'Move relative to', point.frame || 'world',
-            value => { point.frame = value; _flashEditorRender(); }, ['world', ...roles]);
-        for (const option of reference.options) {
-            if (option.value === 'world') option.textContent = 'World (fixed)';
-        }
-        reference.disabled = startAnchored || !!turnRule;
         const motion = _flashEditorField(details, 'Path', point.move,
             value => { point.move = value; _flashEditorRender(); }, ['line', 'follow', 'lift']);
         for (const option of motion.options) option.textContent = ({
@@ -745,7 +763,7 @@ function _flashEditorRender() {
         _flashEditorField(exactKeyframe, 'Time (s)', point.t.toFixed(2), value => {
             if (!Number.isFinite(value)) return;
             point.t = value;
-            position.textContent = `${index + 1} of ${points.length} · ${value.toFixed(2)} s`;
+            position.textContent = `Nearest ${index + 1}/${points.length} · ${value.toFixed(2)} s`;
         }, null, 'number');
         _flashEditorButton(details, 'Move key frame to playhead', () => {
             point.t = _flashEditorCurrentFrame().snapshot.demo.time_s; _flashEditorRender();
@@ -822,6 +840,7 @@ function _flashEditorRender() {
             ? _flashEditorTurnForPoint(state, state.keypointsDocument.keypoints[state.keypointIndex]) || null
             : null,
     );
+    if (!requestedSection) editor.scrollTop = previousScroll;
     if (requestedSection) requestAnimationFrame(() => {
         const target = editor.querySelector(`.flash-editor-pane[data-section="${requestedSection}"]`);
         if (target) editor.scrollTo({

@@ -1781,7 +1781,10 @@ function seekFlashReplay(index) {
     if (flashReplay.kind === 'demo') renderFlashDemoSnapshot({ ...selected.snapshot, ...flashReplay.geometry });
     else if (flashReplay.kind === 'raw_demo') renderFlashRawSnapshot(selected.snapshot);
     else renderFlashSnapshot(selected.snapshot, 'Recording');
-    if (flashDemoEditor) _flashEditorUpdateFrame();
+    if (flashDemoEditor) {
+        if (_flashEditorFollowPlayhead()) _flashEditorRender();
+        else _flashEditorUpdateFrame();
+    }
 }
 
 function toggleFlashReplay() {

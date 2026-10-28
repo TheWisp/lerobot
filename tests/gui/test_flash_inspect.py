@@ -1429,6 +1429,14 @@ def test_raw_demo_editor_collects_object_names_and_action_from_visible_controls(
     seek(1)
     page.get_by_role("button", name="Add key frame at current time").click()
     set_field("Move relative to", "receiver")
+    seek(2)
+    page.get_by_role("button", name="Add key frame at current time").click()
+    assert "Nearest 2/2 · 2.00 s" in page.locator(".flash-editor-keypoint-navigation").inner_text()
+    seek(1)
+    assert "Nearest 1/2 · 1.00 s" in page.locator(".flash-editor-keypoint-navigation").inner_text()
+    page.get_by_role("button", name="Next key frame").click()
+    assert page.locator("#flash-editor-playhead-title").inner_text() == "At 2.00 s"
+    assert "Nearest 2/2 · 2.00 s" in page.locator(".flash-editor-keypoint-navigation").inner_text()
     page.get_by_role("button", name="Prepare demo").click()
     page.wait_for_function(
         "() => document.querySelector('#flash-demo-editor-status').textContent.includes('captured test request')"
@@ -1638,7 +1646,7 @@ def test_3d_scene_projection_and_surface_pick_edit_the_prepared_keyframe(gui_pag
     page.locator(".flash-editor-tracking > summary").click()
     assert page.get_by_text("Pose evidence", exact=True).is_visible()
     assert page.locator(".flash-editor-tracking .flash-editor-group").count() == 0
-    page.get_by_role("button", name="Choose reference in scene").click()
+    page.get_by_role("button", name="Pick in 3D scene").click()
     box = page.locator(".flash-scene-canvas").bounding_box()
     scale = min(box["width"] / width, box["height"] / height)
     fixture_pixel = [
@@ -1714,9 +1722,12 @@ def test_3d_scene_projection_and_surface_pick_edit_the_prepared_keyframe(gui_pag
         flashDemoEditor.annotation.start_anchored_until_s = 1.5;
         _flashEditorRender();
     }""")
-    assert page.get_by_role("button", name="Choose reference in scene").is_disabled()
+    assert page.get_by_role("button", name="Pick in 3D scene").is_disabled()
     assert page.get_by_label("Move relative to", exact=True).is_disabled()
-    assert "grasp-start reference" in page.locator("#flash-demo-editor").inner_text()
+    assert "This interval follows the saved start pose" in page.locator("#flash-demo-editor").inner_text()
+    assert page.get_by_role("button", name="Change anchored interval").is_visible()
+    page.get_by_role("button", name="Change anchored interval").click()
+    assert page.locator(".flash-editor-settings").evaluate("element => element.open")
     page.get_by_role("button", name="Correct mask").click()
     page.wait_for_function("() => flashSceneMode === 'camera' && flashDemoEditor?.drawing")
     page.get_by_role("button", name="Cancel drawing").click()
