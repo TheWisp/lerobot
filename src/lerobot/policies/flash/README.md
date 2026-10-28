@@ -122,6 +122,8 @@ than inheriting the old demo's placement.
 
 In **Run → FLASH → Rollouts**,
 **Mark motion** adds consecutive sections directly on the replay timeline.
+The selected motion can start and end anywhere in the episode; setup and
+parking footage do not become mandatory skill motion.
 Each section states whether to follow its recorded motion or plan a route,
 which object relationship must be preserved, and whether a gripper attachment
 changes at its end. **Prepare candidate** checks the whole recording and saves

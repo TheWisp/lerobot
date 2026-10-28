@@ -31,6 +31,7 @@ async function toggleFlashRecordedEditor() {
         if (flashReplay !== replay) return;
         flashRecordedEditor = {
             source, intervals: (replay.prepared_intervals || []).map(item => ({...item})),
+            startFrame: replay.prepared_intervals?.[0]?.first_frame ?? 0,
             message: '', preparing: false,
         };
         document.getElementById('rerun-viewer').classList.add('flash-demo-editing');
@@ -61,7 +62,7 @@ function _flashRecordedUpdateFrame() {
     if (!state) return;
     const playhead = _flashRecordedPlayhead();
     const last = state.source.frame_count - 1;
-    const nextStart = state.intervals.length ? state.intervals.at(-1).last_frame : 0;
+    const nextStart = state.intervals.length ? state.intervals.at(-1).last_frame : state.startFrame;
     const label = document.getElementById('flash-recorded-playhead');
     if (label) label.textContent = `Frame ${playhead} of ${last}. Move the playback cursor to a change in motion, then end a section there.`;
     const here = document.getElementById('flash-recorded-add-here');
@@ -75,7 +76,7 @@ function _flashRecordedRender() {
     const panel = document.getElementById('flash-recorded-editor');
     const playhead = _flashRecordedPlayhead();
     const last = source.frame_count - 1;
-    const nextStart = intervals.length ? intervals[intervals.length - 1].last_frame : 0;
+    const nextStart = intervals.length ? intervals[intervals.length - 1].last_frame : state.startFrame;
     const roles = source.roles || [];
     let html = '<h3>Mark motion <button type="button" class="flash-recorded-close" onclick="closeFlashRecordedEditor()" aria-label="Close editor">×</button></h3>';
     html += `<p id="flash-recorded-playhead">Frame ${playhead} of ${last}. Move the playback cursor to a change in motion, then end a section there.</p>`;
@@ -83,6 +84,7 @@ function _flashRecordedRender() {
     const evidence = Object.entries(source.pose_counts || {}).map(([role, counts]) =>
         `${_esc(role)}: ${counts.observed || 0} camera-observed, ${counts.predicted || 0} predicted`);
     if (evidence.length) html += `<p>${evidence.join(' · ')}</p>`;
+    if (!intervals.length) html += `<p>Motion starts at frame ${state.startFrame}. <button type="button" onclick="flashRecordedSetStart()">Start here</button></p>`;
     html += '<div class="flash-recorded-add">';
     html += `<button type="button" id="flash-recorded-add-here" onclick="flashRecordedAddSection(false)" ${playhead <= nextStart ? 'disabled' : ''}>End section here</button>`;
     html += `<button type="button" onclick="flashRecordedAddSection(true)" ${last <= nextStart ? 'disabled' : ''}>End at last frame</button>`;
@@ -125,9 +127,8 @@ function _flashRecordedRender() {
         const current = state.symmetryBaselines?.[role];
         html += `<label>Observed frame for ${_esc(role)} rotation rule<select data-symmetry="${_esc(role)}">${_flashRecordedOptions([['', 'Select observed frame'], ...observed.map(frame => [String(frame), `Frame ${frame}`])], current == null ? '' : String(current))}</select></label>`;
     }
-    const complete = intervals.length && intervals[0].first_frame === 0 && intervals[intervals.length - 1].last_frame === last;
-    html += `<p>${complete ? 'Timeline covers the whole recording.' : `Continue until frame ${last} to prepare a candidate.`}</p>`;
-    html += `<button type="button" id="flash-recorded-prepare" onclick="flashRecordedPrepare()" ${!source.ready || !complete || state.preparing ? 'disabled' : ''}>Prepare candidate</button>`;
+    html += `<p>${intervals.length ? `Selected motion: frames ${intervals[0].first_frame}–${intervals.at(-1).last_frame}.` : 'Mark at least one section of motion to prepare a candidate.'}</p>`;
+    html += `<button type="button" id="flash-recorded-prepare" onclick="flashRecordedPrepare()" ${!source.ready || !intervals.length || state.preparing ? 'disabled' : ''}>Prepare candidate</button>`;
     html += `<p class="flash-editor-status" id="flash-recorded-status">${_esc(state.message)}</p>`;
     panel.innerHTML = html;
     for (const input of panel.querySelectorAll('[data-field]')) {
@@ -154,7 +155,7 @@ function _flashRecordedRender() {
 function flashRecordedAddSection(toEnd) {
     const state = flashRecordedEditor;
     if (!state) return;
-    const first = state.intervals.length ? state.intervals[state.intervals.length - 1].last_frame : 0;
+    const first = state.intervals.length ? state.intervals[state.intervals.length - 1].last_frame : state.startFrame;
     const last = toEnd ? state.source.frame_count - 1 : _flashRecordedPlayhead();
     if (last <= first) return;
     const roles = state.source.roles || [];
@@ -164,6 +165,12 @@ function flashRecordedAddSection(toEnd) {
         attachment_action: '', attachment_role: '', allow_predicted_demo_pose: false,
     });
     state.message = '';
+    _flashRecordedRender();
+}
+
+function flashRecordedSetStart() {
+    if (!flashRecordedEditor || flashRecordedEditor.intervals.length) return;
+    flashRecordedEditor.startFrame = _flashRecordedPlayhead();
     _flashRecordedRender();
 }
 

@@ -258,6 +258,18 @@ def test_recorded_trial_editor_compiles_candidate_with_explicit_hold_event(tmp_p
     assert prepared.skill.intervals[0].samples[-1].event_id == "section-1-attach"
     assert prepared.skill.attachment_transitions[0].role == "object"
     assert json.loads((output.parent / "preparation-report.json").read_text())["review_status"] == "candidate"
+    clip = prepare_recorded_trial(
+        tmp_path,
+        0,
+        "clip",
+        [{"first_frame": 1, "last_frame": 2, "mode": "connection", "relation": "ee_to_start"}],
+    )
+    assert [
+        sample.source_frame_index for sample in PreparedFlashSkill.load(clip).skill.intervals[0].samples
+    ] == [
+        1,
+        2,
+    ]
 
 
 def test_recorded_demo_replay_keeps_generated_route_endpoint_at_its_recorded_frame(tmp_path, monkeypatch):

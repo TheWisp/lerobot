@@ -1860,6 +1860,16 @@ def test_recorded_motion_editor_marks_contiguous_sections_in_same_replay(gui_pag
     assert submissions[0]["intervals"][1]["relation"] == "held_to_target"
     assert submissions[0]["intervals"][1]["held_role"] == "tool"
     assert page.locator("#flash-recorded-editor").is_visible()
+    page.locator(".flash-recorded-section").first.get_by_role("button", name="Remove").click()
+    page.evaluate("seekFlashReplay(1)")
+    page.get_by_role("button", name="Start here").click()
+    page.get_by_role("button", name="End at last frame").click()
+    assert page.evaluate("flashRecordedEditor.intervals[0].first_frame") == 1
+    page.get_by_role("button", name="Prepare candidate").click()
+    page.wait_for_function(
+        "() => !!document.querySelector('#flash-recorded-status')?.textContent.includes('Candidate saved')"
+    )
+    assert submissions[1]["intervals"][0]["first_frame"] == 1
 
 
 def test_prepared_recording_reuses_tracker_replay_view(gui_page):

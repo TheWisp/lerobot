@@ -155,14 +155,11 @@ def prepare_recorded_trial(
                 endpoint_requirement=EndpointRequirement(item.get("endpoint_requirement", "required")),
             )
         )
-    if not annotations or annotations[0].first_frame != 0:
-        raise ValueError("the timeline must start at frame 0")
+    if not annotations:
+        raise ValueError("select at least one motion section")
     dataset = LeRobotDataset(
         repo_id=settings["output_repo_id"], root=root, episodes=[episode], download_videos=False
     )
-    _, length = dataset.episode_rows(episode)
-    if annotations[-1].last_frame != length - 1:
-        raise ValueError(f"the timeline must end at frame {length - 1}")
     output = prepare_recorded_episode(
         dataset=dataset,
         dataset_root=root,
