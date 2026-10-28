@@ -366,6 +366,30 @@ def test_recovery_is_explicit_and_bounded():
     assert progress.phase == Phase.FAILED
 
 
+def test_recovery_requires_new_milestone_evidence_before_restarting():
+    interaction = Interval(
+        "approach",
+        MotionMode.CONNECTION,
+        Relation.EE_TO_OBJECT,
+        "object",
+        (sample(0, (0, 0, 0), (0, 0, 0)), sample(1, (0, 0, 0), (0, 0, 0))),
+        speed_m_s=0.1,
+        entry_milestone="visible",
+        recovery_intervals=("approach",),
+    )
+    progress = Progress(
+        FlashSkill("owner/demo", 0, (interaction,), milestones=(MilestoneSpec("visible", ("object",)),))
+    )
+    assert progress.update_milestone(MilestoneUpdate("visible", Verdict.TRUE, "camera:1", 1.0))
+    assert progress.begin(1.1)
+    progress.retry_from("approach", 2.0, "first path blocked", max_attempts=1)
+    assert not progress.can_begin()
+    assert progress.milestones == {}
+    assert not progress.update_milestone(MilestoneUpdate("visible", Verdict.TRUE, "camera:1", 1.0))
+    assert progress.update_milestone(MilestoneUpdate("visible", Verdict.TRUE, "camera:2", 2.1))
+    assert progress.can_begin()
+
+
 def test_retarget_keeps_future_prefix_and_required_event():
     queue = ActionQueue()
     queue.publish(

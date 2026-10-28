@@ -190,6 +190,9 @@ class Progress:
         self.interval_start_s = None
         self.suspended = False
         self.phase = Phase.WAITING
+        # A new attempt must re-establish its prerequisites from new evidence.
+        # Keeping a prior TRUE would let a retry skip the very check that failed.
+        self.milestones.clear()
         self.events.append({"type": "recovery", "interval": interval_name, "at": now_s, "reason": reason})
 
     def finish(self, now_s: float, verdict: Verdict, reason: str) -> None:
