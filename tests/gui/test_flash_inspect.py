@@ -910,6 +910,13 @@ def test_run_flash_tracker_panel_reuses_view_for_recorded_layers(gui_page):
                                     "pose": None,
                                 }
                             },
+                            "anchor_decisions": {
+                                "object": {
+                                    "frame_id": 2,
+                                    "outcome": "direct_group_unresolved",
+                                    "candidate": {"estimator": "appearance_rgbd"},
+                                }
+                            },
                         },
                     }
                 ],
@@ -946,6 +953,8 @@ def test_run_flash_tracker_panel_reuses_view_for_recorded_layers(gui_page):
     assert "Direct proposal" in panel.inner_text()
     assert "Verified group" in panel.inner_text()
     assert "Accepted estimator pose: Verified group" in panel.inner_text()
+    assert "Direct pose disagrees with tracked scene motion" in panel.inner_text()
+    assert "Candidate from camera frame 2" in panel.inner_text()
     assert "No mask for this camera frame" in panel.inner_text()
     group = page.locator("#flash-tracker-content [data-flash-index]").filter(has_text="Verified group").first
     group.hover()

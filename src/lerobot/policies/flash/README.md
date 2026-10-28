@@ -24,6 +24,15 @@ surface. Replay uses recorded camera frame IDs to attach tracker snapshots to
 images and skips snapshots captured before recording began. Older traces without
 frame IDs can only use a marked approximate time match. The live
 scene route has GUI and writer tests but still needs a physical timing check.
+Each causal pose candidate has a source-frame decision with its raw pose,
+accepted pose when applicable, and rejection reason. The live and replay Pose
+details panel shows the latest decision; a separate decision journal retains
+every event even when display snapshots are coalesced. The episode manifest
+names both the tracker snapshots and decision journal. The writer backlog is
+bounded by retained frame count and tracked role count; if disk I/O cannot keep
+up, the estimator reports an error instead of silently losing decisions or
+growing memory without limit. An accepted source-frame candidate may still be
+rebased through later point motion before becoming the planner's current pose.
 
 Run → FLASH lists a sealed-format SO-107 recording with `showservo_demo.npz`
 even before it has a `flash/v1` extension. Open the raw demo, choose **Prepare
@@ -327,7 +336,7 @@ The [recorded-evidence audit](docs/evidence_status.md) separates demo extraction
 offline pose checks, visually successful sealed-prototype runs and the
 interrupted physical trials of this redesign.
 
-The next architecture milestone is the [scene-estimator contract](docs/architecture.md#one-scene-estimator-several-evidence-sources), independent of which tracker is best on a particular view. The current code has one publisher when causal tracking is enabled, but it still treats a backend's candidate `PoseEstimate` as an accepted six-axis observation. In particular, the RGB-D backend keeps its own previous candidate for shape-continuity checks, and the scene service has no general rule for comparing a new candidate with visible depth, point motion, a group prediction and unresolved symmetry at the same source time. The accepted pose trace does not yet retain each raw candidate and its rejection reason.
+The next architecture milestone is the [scene-estimator contract](docs/architecture.md#one-scene-estimator-several-evidence-sources), independent of which tracker is best on a particular view. The current code has one publisher when causal tracking is enabled, but it still treats a backend's candidate `PoseEstimate` as an accepted six-axis observation. In particular, the RGB-D backend keeps its own previous candidate for shape-continuity checks, and the scene service has no general rule for comparing a new candidate with visible depth, point motion, a group prediction and unresolved symmetry at the same source time. Candidate dispositions are now recorded, but later direct observations are not replayed when a delayed candidate changes an earlier state.
 
 Implementation should proceed in this order:
 

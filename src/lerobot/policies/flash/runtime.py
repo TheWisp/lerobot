@@ -162,6 +162,7 @@ class FlashRuntime:
                     live_telemetry.free_space_comparison if live_telemetry is not None else None
                 ),
                 on_direct_observation=accepted_direct.put,
+                on_anchor_decision=(live_telemetry.anchor_decision if live_telemetry is not None else None),
             )
             if causal_tracking is not None
             else None

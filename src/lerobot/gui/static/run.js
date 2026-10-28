@@ -807,6 +807,27 @@ function renderFlashSnapshot(snapshot, mode = 'Live') {
         html += planningPose
             ? _flashOverlayRow(held ? 'held' : 'accepted', role, '', 'flash-tracker-selected', selectedText)
             : `<div class="flash-tracker-selected">${selectedText}</div>`;
+        const decision = snapshot.anchor_decisions?.[role];
+        if (decision) {
+            const reasons = {
+                accepted: 'Pose candidate accepted',
+                missing_mask: 'No matching object mask',
+                lost_pose: 'No usable direct pose',
+                time_mismatch: 'Pose and camera times differ',
+                source_time_mismatch: 'Result and camera times differ',
+                calibration_mismatch: 'Camera calibration differs',
+                frame_history_missing: 'Camera frame expired before the pose arrived',
+                scene_history_missing: 'Scene frame expired before the pose arrived',
+                direct_symmetry_invalid: 'Pose could not be aligned with the object rule',
+                superseded_by_direct: 'A newer direct pose was already used',
+                direct_group_unresolved: 'Direct pose disagrees with tracked scene motion',
+                direct_point_unresolved: 'Direct pose disagrees with tracked object points',
+            };
+            const label = reasons[decision.outcome] || decision.outcome.replaceAll('_', ' ');
+            html += `<div class="flash-tracker-comparison">${_esc(label)}` +
+                `<small>Candidate from camera frame ${_esc(String(decision.frame_id))}` +
+                ` · ${_esc(decision.candidate?.estimator || 'unknown source')}</small></div>`;
+        }
         const comparison = snapshot.direct_group_comparisons?.[role];
         if (comparison) {
             const age = Math.max(0, Number(snapshot.recorded_at_s) - Number(comparison.available_at_s));

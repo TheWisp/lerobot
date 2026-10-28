@@ -98,6 +98,8 @@ def _recorded_service(role: str):
 
 def test_real_contact_conflict_keeps_point_prediction_and_records_direct_candidate():
     service, store, frame, mask, direct, predicted, comparisons = _recorded_service("dowel")
+    decisions = []
+    service.on_anchor_decision = decisions.append
 
     service._anchor(
         _Anchor(frame.frame_id, (direct,), {"dowel": mask}, frame.source_time_s, frame.calibration_version)
@@ -108,10 +110,18 @@ def test_real_contact_conflict_keeps_point_prediction_and_records_direct_candida
     assert comparisons[0][0] == "dowel"
     assert comparisons[0][1].verdict == PoseComparisonVerdict.AMBIGUOUS
     assert comparisons[0][1].object_center_difference_m > 0.01
+    assert len(decisions) == 1
+    assert decisions[0].frame_id == frame.frame_id
+    assert decisions[0].calibration_version == frame.calibration_version
+    assert decisions[0].candidate is direct
+    assert decisions[0].outcome == "direct_point_unresolved"
+    assert decisions[0].accepted is None
 
 
 def test_same_rule_accepts_recorded_ring_correction():
     service, store, frame, mask, direct, _, comparisons = _recorded_service("ring")
+    decisions = []
+    service.on_anchor_decision = decisions.append
 
     service._anchor(
         _Anchor(frame.frame_id, (direct,), {"ring": mask}, frame.source_time_s, frame.calibration_version)
@@ -122,6 +132,10 @@ def test_same_rule_accepts_recorded_ring_correction():
     assert accepted.estimator == "recorded_direct_pose"
     assert service.anchor_outcomes_by_role["ring"]["direct_published"] == 1
     assert comparisons[0][1].verdict == PoseComparisonVerdict.AGREE
+    assert len(decisions) == 1
+    assert decisions[0].outcome == "accepted"
+    assert decisions[0].candidate is direct
+    assert decisions[0].accepted is accepted
 
 
 def test_unmatched_point_pixels_cannot_veto_direct_reacquisition():

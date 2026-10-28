@@ -48,6 +48,18 @@ class _Anchor:
     calibration_version: str | None = None
 
 
+@dataclass(frozen=True)
+class AnchorDecision:
+    """A direct pose candidate's source-frame disposition, including rejection."""
+
+    frame_id: int
+    calibration_version: str | None
+    candidate: PoseEstimate
+    outcome: str
+    decided_at_s: float
+    accepted: PoseEstimate | None = None
+
+
 @dataclass
 class _PendingTrack:
     tracker: CausalRigidPointTracker
@@ -153,6 +165,7 @@ class CausalPoseService:
         on_point_comparison: Callable[[str, PoseComparison], None] | None = None,
         on_free_space_comparison: Callable[[str, FreeSpaceComparison], None] | None = None,
         on_direct_observation: Callable[[PoseEstimate], None] | None = None,
+        on_anchor_decision: Callable[[AnchorDecision], None] | None = None,
     ) -> None:
         if history_frames < 2 or queue_frames < 2:
             raise ValueError("causal pose history and queue need at least two frames")
@@ -200,6 +213,7 @@ class CausalPoseService:
         self.on_point_comparison = on_point_comparison
         self.on_free_space_comparison = on_free_space_comparison
         self.on_direct_observation = on_direct_observation
+        self.on_anchor_decision = on_anchor_decision
         if any(
             center.shape != (3,) or not np.isfinite(center).all()
             for center in self.object_centers_by_role.values()
@@ -553,28 +567,39 @@ class CausalPoseService:
         attached_role = self._sync_attachment()
         source = next((frame for frame in self.history if frame.frame_id == result.frame_id), None)
         scene = next((item for item in self.scene_history if item.frame_id == result.frame_id), None)
-        if (
-            source is None
-            or scene is None
-            or (result.source_time_s is not None and result.source_time_s != source.source_time_s)
-            or (
-                result.calibration_version is not None
-                and result.calibration_version != source.calibration_version
-            )
+        if source is None:
+            source_error = "frame_history_missing"
+        elif scene is None:
+            source_error = "scene_history_missing"
+        elif result.source_time_s is not None and result.source_time_s != source.source_time_s:
+            source_error = "source_time_mismatch"
+        elif (
+            result.calibration_version is not None
+            and result.calibration_version != source.calibration_version
         ):
+            source_error = "calibration_mismatch"
+        else:
+            source_error = None
+        if source_error is not None:
             self.missed_anchors += 1
+            for candidate in result.estimates:
+                self._record_anchor_decision(result, candidate, source_error)
             return
         for estimate in result.estimates:
+            candidate = estimate
             self._count_anchor_outcome(estimate.role, "received")
+            if estimate.pose is None or estimate.evidence == Evidence.LOST:
+                self._count_anchor_outcome(estimate.role, "lost_pose")
+                self._record_anchor_decision(result, candidate, "lost_pose")
+                continue
             mask = result.masks.get(estimate.role)
             if mask is None:
                 self._count_anchor_outcome(estimate.role, "missing_mask")
-                continue
-            if estimate.pose is None or estimate.evidence == Evidence.LOST:
-                self._count_anchor_outcome(estimate.role, "lost_pose")
+                self._record_anchor_decision(result, candidate, "missing_mask")
                 continue
             if estimate.source_time_s != source.source_time_s:
                 self._count_anchor_outcome(estimate.role, "time_mismatch")
+                self._record_anchor_decision(result, candidate, "time_mismatch")
                 continue
             symmetry = self.axial_symmetries.get(estimate.role)
             if symmetry is not None and not estimate.symmetry_canonicalized:
@@ -588,6 +613,7 @@ class CausalPoseService:
                     )
                 except ValueError:
                     self._count_anchor_outcome(estimate.role, "direct_symmetry_invalid")
+                    self._record_anchor_decision(result, candidate, "direct_symmetry_invalid")
                     continue
             self._record_direct_free_space(estimate, source)
             current = self.store.snapshot()[1].get(estimate.role)
@@ -601,6 +627,7 @@ class CausalPoseService:
                     # proposal would erase the later direct observation.
                     self.superseded_proposals += 1
                     self._count_anchor_outcome(estimate.role, "superseded_by_direct")
+                    self._record_anchor_decision(result, candidate, "superseded_by_direct")
                     continue
             if (
                 estimate.has_direct_translation
@@ -608,13 +635,16 @@ class CausalPoseService:
                 and self._direct_conflicts_with_verified_group(estimate, source, scene, mask)
             ):
                 self._count_anchor_outcome(estimate.role, "direct_group_unresolved")
+                self._record_anchor_decision(result, candidate, "direct_group_unresolved")
                 continue
             if self._direct_conflicts_with_point_motion(estimate, source, mask):
                 self._count_anchor_outcome(estimate.role, "direct_point_unresolved")
+                self._record_anchor_decision(result, candidate, "direct_point_unresolved")
                 continue
             if estimate.has_direct_translation and estimate.role != attached_role:
                 self._observe_environment(estimate, scene, result.masks)
             self._count_anchor_outcome(estimate.role, "direct_accepted")
+            self._record_anchor_decision(result, candidate, "accepted", accepted=estimate)
             if self.on_layer is not None:
                 self.on_layer(estimate)
             # The newest published state may already be a later point-motion
@@ -760,6 +790,21 @@ class CausalPoseService:
     def _count_anchor_outcome(self, role: str, outcome: str) -> None:
         counts = self.anchor_outcomes_by_role.setdefault(role, {})
         counts[outcome] = counts.get(outcome, 0) + 1
+
+    def _record_anchor_decision(
+        self, result: _Anchor, candidate: PoseEstimate, outcome: str, *, accepted: PoseEstimate | None = None
+    ) -> None:
+        if self.on_anchor_decision is not None:
+            self.on_anchor_decision(
+                AnchorDecision(
+                    result.frame_id,
+                    result.calibration_version,
+                    candidate,
+                    outcome,
+                    time.perf_counter(),
+                    accepted,
+                )
+            )
 
     def _direct_conflicts_with_verified_group(
         self, estimate: PoseEstimate, frame: RGBDFrame, scene: SceneTracks, mask: np.ndarray
@@ -1058,6 +1103,7 @@ def build_causal_pose_service(
     on_point_comparison: Callable[[str, PoseComparison], None] | None = None,
     on_free_space_comparison: Callable[[str, FreeSpaceComparison], None] | None = None,
     on_direct_observation: Callable[[PoseEstimate], None] | None = None,
+    on_anchor_decision: Callable[[AnchorDecision], None] | None = None,
 ) -> CausalPoseService:
     """Construct the identical estimator policy for recorded and live frames."""
     return CausalPoseService(
@@ -1071,4 +1117,5 @@ def build_causal_pose_service(
         on_point_comparison=on_point_comparison,
         on_free_space_comparison=on_free_space_comparison,
         on_direct_observation=on_direct_observation,
+        on_anchor_decision=on_anchor_decision,
     )

@@ -14,6 +14,7 @@ from threading import Condition, Thread
 import cv2
 import numpy as np
 
+from .causal_service import AnchorDecision
 from .perception import EndEffectorKinematics, RGBDFrame
 from .pose_disagreement import FreeSpaceComparison, PoseComparison
 from .trajectory import AttachmentState, Evidence, PoseEstimate
@@ -73,12 +74,17 @@ class FlashLiveTelemetry:
             raise ValueError("live frame history must contain at least one frame")
         self.live_path = live_path
         self.trace_path = trace_path
+        self.decision_path = trace_path.with_suffix(".decisions.jsonl")
         self.centers = {role: center.tolist() for role, center in centers_by_role.items()}
         self.points = {
             role: np.asarray(points, dtype=float).tolist() for role, points in (points_by_role or {}).items()
         }
         self.period_s = period_s
         self.frame_history = frame_history
+        # One source-frame decision per role and retained display frame is the
+        # bounded writer backlog. A stalled disk must fail explicitly, never
+        # grow an unbounded queue in the estimator process.
+        self.decision_backlog_limit = frame_history * max(1, len(centers_by_role))
         self.kinematics = kinematics
         self._written_frame_id: int | None = None
         self._frame_ids: deque[int] = deque()
@@ -94,6 +100,8 @@ class FlashLiveTelemetry:
         self._point_comparisons: dict[str, dict] = {}
         self._free_space_comparisons: dict[str, dict] = {}
         self._accepted: dict[str, PoseEstimate] = {}
+        self._latest_decisions: dict[str, dict] = {}
+        self._pending_decisions: deque[dict] = deque()
         self._held_attachment: tuple[str, AttachmentState, np.ndarray, float, bool] | None = None
         self._thread = Thread(target=self._write_loop, name="flash-live-telemetry", daemon=True)
         self._thread.start()
@@ -158,6 +166,26 @@ class FlashLiveTelemetry:
             self._accepted = dict(poses)
             self._changed()
 
+    def anchor_decision(self, decision: AnchorDecision) -> None:
+        """Keep every source-frame verdict, even if display snapshots coalesce."""
+        event = {
+            "schema_version": 1,
+            "frame_id": decision.frame_id,
+            "calibration_version": decision.calibration_version,
+            "reference_version": decision.candidate.reference_version,
+            "role": decision.candidate.role,
+            "outcome": decision.outcome,
+            "decided_at_s": decision.decided_at_s,
+            "candidate": _estimate_json(decision.candidate),
+            "accepted": _estimate_json(decision.accepted) if decision.accepted is not None else None,
+        }
+        with self._condition:
+            if len(self._pending_decisions) >= self.decision_backlog_limit:
+                raise RuntimeError("FLASH decision journal fell behind the estimator")
+            self._latest_decisions[event["role"]] = event
+            self._pending_decisions.append(event)
+            self._changed()
+
     def held_attachment(
         self,
         role: str | None,
@@ -182,7 +210,7 @@ class FlashLiveTelemetry:
             )
             self._changed()
 
-    def _snapshot(self) -> tuple[dict, RGBDFrame | None]:
+    def _snapshot(self) -> tuple[dict, RGBDFrame | None, tuple[dict, ...]]:
         with self._condition:
             frame = self._frame
             proposals = self._proposals.copy()
@@ -193,6 +221,8 @@ class FlashLiveTelemetry:
             point_comparisons = self._point_comparisons.copy()
             free_space_comparisons = self._free_space_comparisons.copy()
             accepted = self._accepted.copy()
+            latest_decisions = self._latest_decisions.copy()
+            pending_decisions = tuple(self._pending_decisions)
             held = self._held_attachment
         held_prediction = None
         if held is not None and self.kinematics is not None:
@@ -242,9 +272,10 @@ class FlashLiveTelemetry:
             "direct_point_comparisons": point_comparisons,
             "direct_free_space_comparisons": free_space_comparisons,
             "accepted": {role: _estimate_json(value) for role, value in accepted.items()},
+            "anchor_decisions": latest_decisions,
             "held_prediction": held_prediction,
         }
-        return snapshot, frame
+        return snapshot, frame, pending_decisions
 
     def _write_frame(self, frame: RGBDFrame) -> None:
         if frame.frame_id == self._written_frame_id:
@@ -272,14 +303,23 @@ class FlashLiveTelemetry:
     def _write_loop(self) -> None:
         self.trace_path.parent.mkdir(parents=True, exist_ok=True)
         seen = -1
-        with self.trace_path.open("w", encoding="utf-8") as trace:
+        with (
+            self.trace_path.open("w", encoding="utf-8") as trace,
+            self.decision_path.open("w", encoding="utf-8") as decisions,
+        ):
             while True:
                 with self._condition:
                     self._condition.wait_for(lambda seen=seen: self._revision != seen or self._closed)
                     revision = self._revision
                     closing = self._closed
                 if revision != seen:
-                    snapshot, frame = self._snapshot()
+                    snapshot, frame, pending_decisions = self._snapshot()
+                    for decision in pending_decisions:
+                        decisions.write(json.dumps(decision, separators=(",", ":"), allow_nan=False) + "\n")
+                    decisions.flush()
+                    with self._condition:
+                        for _ in pending_decisions:
+                            self._pending_decisions.popleft()
                     if frame is not None:
                         try:
                             self._write_frame(frame)

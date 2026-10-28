@@ -216,7 +216,18 @@ def trial(
             image_writer_processes=0,
             image_writer_threads=4,
         )
-        recorder = RecorderWorker(FlashEpisodeWriter(dataset, 0, settings["task"]))
+        tracker_trace_path = output_root / "flash" / "v1" / "tracker_episode_000000.jsonl"
+        recorder = RecorderWorker(
+            FlashEpisodeWriter(
+                dataset,
+                0,
+                settings["task"],
+                artifacts={
+                    "tracker_trace": tracker_trace_path.name,
+                    "anchor_decisions": tracker_trace_path.with_suffix(".decisions.jsonl").name,
+                },
+            )
+        )
         config_snapshot = output_root / "flash" / "v1" / "trial_config.json"
         config_snapshot.parent.mkdir(parents=True, exist_ok=True)
         config_snapshot.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
@@ -228,7 +239,7 @@ def trial(
         }
         telemetry = FlashLiveTelemetry(
             telemetry_path or output_root / "flash" / "v1" / "live_tracker.json",
-            output_root / "flash" / "v1" / "tracker_episode_000000.jsonl",
+            tracker_trace_path,
             centers_by_role,
             points_by_role=points_by_role,
             # Pinocchio FK mutates its Data workspace. The telemetry writer

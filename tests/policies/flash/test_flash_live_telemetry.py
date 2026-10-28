@@ -13,6 +13,7 @@ from fastapi import HTTPException
 
 import lerobot.gui.api.run as run_api
 from lerobot.gui.api.run import _flash_recordings, _flash_tracker_replay
+from lerobot.policies.flash.causal_service import AnchorDecision
 from lerobot.policies.flash.live_telemetry import FlashLiveTelemetry, live_frame_path
 from lerobot.policies.flash.perception import RGBDFrame
 from lerobot.policies.flash.pose_disagreement import (
@@ -75,6 +76,8 @@ def test_live_tracker_layers_are_replayed_with_camera_frame(tmp_path: Path) -> N
     mask = np.zeros((12, 16), dtype=bool)
     mask[3:8, 4:10] = True
     telemetry.proposals((direct,), {"object": mask}, frame_id=9)
+    telemetry.anchor_decision(AnchorDecision(9, "calibration-v1", direct, "accepted", 10.2, direct))
+    telemetry.anchor_decision(AnchorDecision(9, "calibration-v1", direct, "direct_point_unresolved", 10.3))
     telemetry.layer(direct)
     telemetry.layer(group)
     support = SurfaceSupport(20, 16, 0.8, 0.003)
@@ -113,6 +116,13 @@ def test_live_tracker_layers_are_replayed_with_camera_frame(tmp_path: Path) -> N
     assert current["accepted"]["object"]["estimator"] == "environment_group_motion"
     assert current["direct_point_comparisons"]["object"]["verdict"] == "ambiguous"
     assert current["direct_free_space_comparisons"]["object"]["verdict"] == "contradicted"
+    assert current["anchor_decisions"]["object"]["outcome"] == "direct_point_unresolved"
+    decisions = [json.loads(line) for line in telemetry.decision_path.read_text().splitlines()]
+    assert [item["outcome"] for item in decisions] == ["accepted", "direct_point_unresolved"]
+    assert decisions[0]["accepted"]["estimator"] == "appearance_rgbd"
+    assert decisions[1]["accepted"] is None
+    assert decisions[1]["frame_id"] == 9
+    assert decisions[1]["reference_version"] == "reference-v1"
     (tmp_path / "meta").mkdir()
     (tmp_path / "meta" / "info.json").write_text(
         json.dumps(
@@ -134,10 +144,26 @@ def test_live_tracker_layers_are_replayed_with_camera_frame(tmp_path: Path) -> N
     assert replay["frames"][-1]["frame_index"] == 8
     assert replay["frames"][-1]["snapshot"]["accepted"] == current["accepted"]
     assert replay["frames"][-1]["snapshot"]["direct_point_comparisons"] == current["direct_point_comparisons"]
+    assert replay["frames"][-1]["snapshot"]["anchor_decisions"] == current["anchor_decisions"]
     assert (
         replay["frames"][-1]["snapshot"]["direct_free_space_comparisons"]
         == current["direct_free_space_comparisons"]
     )
+
+
+def test_decision_journal_backlog_fails_explicitly_without_losing_queued_event(tmp_path: Path) -> None:
+    telemetry = FlashLiveTelemetry(
+        tmp_path / "live.json", tmp_path / "tracker.jsonl", {"object": np.zeros(3)}, frame_history=1
+    )
+    first = AnchorDecision(1, "camera-v1", _estimate(1.0, "vision", Evidence.OBSERVED), "accepted", 1.1)
+    second = AnchorDecision(2, "camera-v1", _estimate(2.0, "vision", Evidence.OBSERVED), "accepted", 2.1)
+    with telemetry._condition:
+        telemetry.anchor_decision(first)
+        with pytest.raises(RuntimeError, match="journal fell behind"):
+            telemetry.anchor_decision(second)
+    telemetry.close()
+    decisions = [json.loads(line) for line in telemetry.decision_path.read_text().splitlines()]
+    assert [event["frame_id"] for event in decisions] == [1]
 
 
 @pytest.mark.asyncio

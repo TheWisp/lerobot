@@ -1171,7 +1171,12 @@ def test_regular_lerobot_frame_and_flash_trace_are_written_together(tmp_path):
             self.finalized = True
 
     dataset = FakeDataset()
-    writer = FlashEpisodeWriter(dataset, 0, "insert object")
+    writer = FlashEpisodeWriter(
+        dataset,
+        0,
+        "insert object",
+        artifacts={"anchor_decisions": "tracker_episode_000000.decisions.jsonl"},
+    )
     worker = RecorderWorker(writer)
     worker.start()
     receipt = ActionReceipt(
@@ -1229,6 +1234,10 @@ def test_regular_lerobot_frame_and_flash_trace_are_written_together(tmp_path):
     assert '"accepted": {"joint.pos": 1.0}' in trace
     assert '"outcome": "unknown"' in (tmp_path / "flash/v1/manifest.json").read_text()
     assert '"timing_regular": false' in (tmp_path / "flash/v1/manifest.json").read_text()
+    manifest = json.loads((tmp_path / "flash/v1/manifest.json").read_text())
+    assert manifest["episodes"]["0"]["artifacts"]["anchor_decisions"] == (
+        "tracker_episode_000000.decisions.jsonl"
+    )
     loaded = load_pose_estimates(tmp_path, 0, expected_frames=1)
     assert loaded[0]["target"].reference_version == "ref1"
     np.testing.assert_allclose(loaded[0]["target"].pose, pose(0.1))

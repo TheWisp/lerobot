@@ -115,7 +115,14 @@ class FlashEpisodeWriter:
     silently incomplete training episode.
     """
 
-    def __init__(self, dataset: DatasetWriter, episode_index: int, task: str) -> None:
+    def __init__(
+        self,
+        dataset: DatasetWriter,
+        episode_index: int,
+        task: str,
+        *,
+        artifacts: dict[str, str] | None = None,
+    ) -> None:
         self.dataset = dataset
         self.episode_index = episode_index
         self.task = task
@@ -124,6 +131,9 @@ class FlashEpisodeWriter:
         self.extension_dir.mkdir(parents=True, exist_ok=True)
         self.partial_path = self.extension_dir / f"episode_{episode_index:06d}.jsonl.partial"
         self.path = self.extension_dir / f"episode_{episode_index:06d}.jsonl"
+        self.artifacts = dict(artifacts or {})
+        if any(Path(name).name != name for name in self.artifacts.values()):
+            raise ValueError("FLASH artifact paths must be local to the versioned extension")
         self._trace = self.partial_path.open("w", encoding="utf-8")
         self.timing_regular = True
 
@@ -208,6 +218,7 @@ class FlashEpisodeWriter:
         )
         manifest["episodes"][str(self.episode_index)] = {
             "trace": self.path.name,
+            "artifacts": self.artifacts,
             "frames": self.frame_index,
             "timing_regular": self.timing_regular,
             "outcome": outcome,
