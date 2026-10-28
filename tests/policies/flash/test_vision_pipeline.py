@@ -287,7 +287,24 @@ def test_failed_rgb_motion_remains_visible_for_debugging_but_not_authoritative()
     assert proposal.visible_support.depth_residual_p90_m is not None
     assert proposal.visible_support.reference_depth_pixels is not None
     assert proposal.visible_support.reference_depth_residual_p90_m is not None
+    # A rejected complete fit still carries the measured visible-patch
+    # direction. The rectangular mask is wider than it is tall at constant
+    # depth, so its long direction is camera X in this fixture.
+    axis = np.asarray(proposal.visible_support.principal_surface_axis_base)
+    spreads = proposal.visible_support.principal_surface_spreads_m
+    assert abs(axis @ np.array([1.0, 0.0, 0.0])) > 0.9
+    assert spreads[0] <= spreads[1] < spreads[2]
+    assert proposal.visible_support.principal_surface_points >= 3
     assert proposal.failure == "surface proposal lacks accepted RGB-D support"
+
+
+def test_visible_patch_direction_uses_robot_base_coordinates():
+    camera_pose = np.eye(4)
+    camera_pose[:3, :3] = np.array([[0, -1, 0], [1, 0, 0], [0, 0, 1]])
+    frame = replace(frames()[0], base_from_camera=camera_pose)
+    proposal = PerceptionPipeline(local_backend(), (reference(),)).process(frame).proposals[0]
+    axis = np.asarray(proposal.visible_support.principal_surface_axis_base)
+    assert abs(axis @ np.array([0.0, 1.0, 0.0])) > 0.9
 
 
 def test_small_patch_fit_cannot_promote_reference_depth_disagreement():

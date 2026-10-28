@@ -13,7 +13,12 @@ from .trajectory import PoseEstimate
 
 @dataclass(frozen=True)
 class VisibleSurfaceSupport:
-    """Measured support; missing fields mean the producer did not measure them."""
+    """Measured support; missing fields mean the producer did not measure them.
+
+    The principal axis belongs to the currently visible patch, not necessarily
+    the complete object. Its sign is arbitrary; its spectrum describes shape,
+    not calibrated orientation confidence or a recovered contact point.
+    """
 
     mask_pixels: int
     depth_points: int | None = None
@@ -23,11 +28,19 @@ class VisibleSurfaceSupport:
     reference_depth_pixels: int | None = None
     reference_depth_residual_p90_m: float | None = None
     visible_lateral_spread_m: float | None = None
+    principal_surface_axis_base: tuple[float, float, float] | None = None
+    principal_surface_spreads_m: tuple[float, float, float] | None = None
+    principal_surface_points: int | None = None
 
     def __post_init__(self) -> None:
         if self.mask_pixels < 0 or any(
             value is not None and value < 0
-            for value in (self.depth_points, self.motion_inliers, self.reference_depth_pixels)
+            for value in (
+                self.depth_points,
+                self.motion_inliers,
+                self.reference_depth_pixels,
+                self.principal_surface_points,
+            )
         ):
             raise ValueError("visible support counts must be nonnegative")
         for measurement in (
@@ -37,6 +50,23 @@ class VisibleSurfaceSupport:
         ):
             if measurement is not None and (not isfinite(measurement) or measurement < 0):
                 raise ValueError("visible surface measurement must be finite and nonnegative")
+        axis, spreads = self.principal_surface_axis_base, self.principal_surface_spreads_m
+        if (axis is None) != (spreads is None) or (axis is None) != (self.principal_surface_points is None):
+            raise ValueError("principal visible surface evidence must be complete")
+        if axis is not None:
+            axis_array = np.asarray(axis, dtype=float)
+            spread_array = np.asarray(spreads, dtype=float)
+            if (
+                axis_array.shape != (3,)
+                or spread_array.shape != (3,)
+                or not np.isfinite(axis_array).all()
+                or not np.isfinite(spread_array).all()
+                or not np.isclose(np.linalg.norm(axis_array), 1.0, rtol=0, atol=1e-6)
+                or np.any(spread_array < 0)
+                or np.any(np.diff(spread_array) < 0)
+                or self.principal_surface_points < 3
+            ):
+                raise ValueError("invalid principal visible surface evidence")
 
 
 @dataclass(frozen=True)

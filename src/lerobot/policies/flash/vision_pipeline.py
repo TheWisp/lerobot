@@ -393,6 +393,14 @@ class SurfacePoseBackend:
             )
             depth_residual_mm = diagnostics.get("surface_p90_mm")
             mask = self.last_masks.get(role)
+            surface_axis_camera = diagnostics.get("principal_surface_axis_camera")
+            surface_axis_base = (
+                frame.base_from_camera[:3, :3] @ np.asarray(surface_axis_camera, dtype=float)
+                if surface_axis_camera is not None
+                else None
+            )
+            if surface_axis_base is not None:
+                surface_axis_base /= np.linalg.norm(surface_axis_base)
             self.last_visible_support[role] = VisibleSurfaceSupport(
                 mask_pixels=int(np.count_nonzero(mask)) if mask is not None else 0,
                 depth_points=diagnostics.get("surface_points"),
@@ -413,6 +421,19 @@ class SurfacePoseBackend:
                     float(diagnostics["visible_lateral_spread_mm"]) / 1000
                     if diagnostics.get("visible_lateral_spread_mm") is not None
                     else None
+                ),
+                principal_surface_axis_base=(
+                    tuple(float(value) for value in surface_axis_base)
+                    if surface_axis_base is not None
+                    else None
+                ),
+                principal_surface_spreads_m=(
+                    tuple(float(value) for value in diagnostics["principal_surface_spreads_m"])
+                    if surface_axis_base is not None
+                    else None
+                ),
+                principal_surface_points=(
+                    int(diagnostics["principal_surface_points"]) if surface_axis_base is not None else None
                 ),
             )
             # A full rigid observation needs two independently extended visible

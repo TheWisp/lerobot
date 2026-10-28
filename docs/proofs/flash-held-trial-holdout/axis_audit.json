@@ -10,6 +10,12 @@
         9.942041175000499,
         13.534163494202174
       ],
+      "tracked_surface_points": 240,
+      "tracked_surface_spread_mm": [
+        2.357922628177882,
+        4.935114427028063,
+        12.000795031815416
+      ],
       "dominant_spread_excess_mm": 3.5921223192016747,
       "backend_failure": "surface proposal lacks accepted RGB-D support",
       "fit_metrics": {
@@ -26,6 +32,7 @@
       "proposals": {
         "vision_candidate": {
           "axis_gap_3d_deg": 31.63400263557838,
+          "axis_gap_surface_3d_deg": 10.204058271215525,
           "axis_gap_mask_2d_deg": 7.133357360653452,
           "projected_endpoints_xy": [
             [
@@ -42,6 +49,7 @@
         },
         "gripper_fallback": {
           "axis_gap_3d_deg": 35.576655060194945,
+          "axis_gap_surface_3d_deg": 4.082873602391402,
           "axis_gap_mask_2d_deg": 0.5117452003527767,
           "projected_endpoints_xy": [
             [
@@ -68,6 +76,12 @@
         7.339335200564305,
         28.03718269697944
       ],
+      "tracked_surface_points": 177,
+      "tracked_surface_spread_mm": [
+        3.8436951823326733,
+        4.402312773187107,
+        15.930555599912497
+      ],
       "dominant_spread_excess_mm": 20.697847496415136,
       "backend_failure": "visible patch is too narrow for a full rigid pose",
       "fit_metrics": {
@@ -84,6 +98,7 @@
       "proposals": {
         "vision_candidate": {
           "axis_gap_3d_deg": 10.396466544142319,
+          "axis_gap_surface_3d_deg": 9.34620055839292,
           "axis_gap_mask_2d_deg": 3.9589916190729637,
           "projected_endpoints_xy": [
             [
@@ -100,6 +115,7 @@
         },
         "gripper_fallback": {
           "axis_gap_3d_deg": 16.363178800425246,
+          "axis_gap_surface_3d_deg": 18.69659972345536,
           "axis_gap_mask_2d_deg": 24.087075876221927,
           "projected_endpoints_xy": [
             [
@@ -126,6 +142,12 @@
         4.747567184668697,
         26.003741685541463
       ],
+      "tracked_surface_points": 215,
+      "tracked_surface_spread_mm": [
+        3.1957086795270615,
+        4.45991033081777,
+        18.61320641179735
+      ],
       "dominant_spread_excess_mm": 21.256174500872767,
       "backend_failure": "visible patch is too narrow for a full rigid pose",
       "fit_metrics": {
@@ -142,6 +164,7 @@
       "proposals": {
         "vision_candidate": {
           "axis_gap_3d_deg": 3.0104769928658137,
+          "axis_gap_surface_3d_deg": 9.730923750263456,
           "axis_gap_mask_2d_deg": 4.001413749214853,
           "projected_endpoints_xy": [
             [
@@ -158,6 +181,7 @@
         },
         "gripper_fallback": {
           "axis_gap_3d_deg": 32.47437971671332,
+          "axis_gap_surface_3d_deg": 33.59553988271779,
           "axis_gap_mask_2d_deg": 84.34935774520613,
           "projected_endpoints_xy": [
             [

@@ -93,7 +93,20 @@ def test_live_tracker_layers_are_replayed_with_camera_frame(tmp_path: Path) -> N
     mask[3:8, 4:10] = True
     telemetry.proposals((direct,), {"object": mask}, frame_id=9)
     source_proposal = PoseProposal(
-        9, "calibration-v1", direct, direct.pose, VisibleSurfaceSupport(30, 20, 16, 0.003, True)
+        9,
+        "calibration-v1",
+        direct,
+        direct.pose,
+        VisibleSurfaceSupport(
+            30,
+            20,
+            16,
+            0.003,
+            True,
+            principal_surface_axis_base=(0.0, 1.0, 0.0),
+            principal_surface_spreads_m=(0.001, 0.002, 0.01),
+            principal_surface_points=20,
+        ),
     )
     telemetry.anchor_decision(
         AnchorDecision(9, "calibration-v1", direct, "accepted", 10.2, direct, source_proposal)
@@ -171,6 +184,9 @@ def test_live_tracker_layers_are_replayed_with_camera_frame(tmp_path: Path) -> N
         "reference_depth_pixels": None,
         "reference_depth_residual_p90_m": None,
         "visible_lateral_spread_m": None,
+        "principal_surface_axis_base": [0.0, 1.0, 0.0],
+        "principal_surface_spreads_m": [0.001, 0.002, 0.01],
+        "principal_surface_points": 20,
     }
     (tmp_path / "meta").mkdir()
     (tmp_path / "meta" / "info.json").write_text(

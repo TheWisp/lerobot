@@ -25,7 +25,13 @@ for ax, row in zip(axes, (417, 511), strict=True):
         proposal = result["proposals"][key]
         endpoints = np.asarray(proposal["projected_endpoints_xy"])
         ax.plot(endpoints[:, 0], endpoints[:, 1], color=color, linewidth=3, marker="o", markersize=4)
-        ax.plot([], [], color=color, linewidth=3, label=f"{label}: {proposal['axis_gap_3d_deg']:.0f}°")
+        ax.plot(
+            [],
+            [],
+            color=color,
+            linewidth=3,
+            label=f"{label}: {proposal['axis_gap_surface_3d_deg']:.0f}°",
+        )
     ax.set_xlim(180, 375)
     ax.set_ylim(340, 110)
     ax.set_title(f"Recorded camera frame {result['camera_frame_id']}", fontsize=16)

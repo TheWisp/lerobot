@@ -9,6 +9,7 @@ import argparse
 import gzip
 import io
 import json
+from dataclasses import asdict
 from pathlib import Path
 
 import numpy as np
@@ -19,7 +20,7 @@ from lerobot.policies.flash.geometry import interpolate, inverse
 from lerobot.policies.flash.perception import RGBDFrame
 from lerobot.policies.flash.pose_disagreement import surface_support
 from lerobot.policies.flash.prepared import PreparedFlashSkill
-from lerobot.policies.flash.surface_observation import depth_quality_mask
+from lerobot.policies.flash.surface_observation import depth_quality_mask, observation
 from lerobot.robots.so107_description.calibrated_kinematics import make_calibrated_so107_kinematics
 
 
@@ -103,6 +104,19 @@ def measure(result_path: Path, sample_rows: list[int]) -> list[dict]:
         eigenvalues, directions = np.linalg.eigh(np.cov(measured.T))
         measured_axis = directions[:, -1]
         spreads_mm = np.sqrt(eigenvalues) * 1000
+        tracked_surface = observation(
+            frame.metric_depth(),
+            mask,
+            intrinsics,
+            asdict(bundle.vision_pipeline.observation),
+        )["points"]
+        if len(tracked_surface) >= 3:
+            surface_values, surface_directions = np.linalg.eigh(np.cov(tracked_surface.T))
+            surface_axis = surface_directions[:, -1]
+            surface_spreads_mm = (np.sqrt(np.maximum(surface_values, 0)) * 1000).tolist()
+        else:
+            surface_axis = None
+            surface_spreads_mm = None
         source_time_s = recorded["source_time_s"]
         right = int(np.searchsorted(motor_times, source_time_s))
         fraction = (source_time_s - motor_times[right - 1]) / (motor_times[right] - motor_times[right - 1])
@@ -136,6 +150,9 @@ def measure(result_path: Path, sample_rows: list[int]) -> list[dict]:
             )
             proposals[name] = {
                 "axis_gap_3d_deg": axis_gap_deg(direction, measured_axis),
+                "axis_gap_surface_3d_deg": (
+                    axis_gap_deg(direction, surface_axis) if surface_axis is not None else None
+                ),
                 "axis_gap_mask_2d_deg": axis_gap_deg(projected_axis, observed_2d_axis),
                 "projected_endpoints_xy": projected.tolist(),
                 "mask_fraction": support.projected_point_mask_fraction,
@@ -152,6 +169,8 @@ def measure(result_path: Path, sample_rows: list[int]) -> list[dict]:
                 "source_time_s": source_time_s,
                 "clean_depth_points": len(measured),
                 "pca_spread_mm": spreads_mm.tolist(),
+                "tracked_surface_points": len(tracked_surface),
+                "tracked_surface_spread_mm": surface_spreads_mm,
                 "dominant_spread_excess_mm": float(spreads_mm[-1] - spreads_mm[-2]),
                 "backend_failure": recorded["backend_failure"],
                 "fit_metrics": recorded["fit_metrics"],

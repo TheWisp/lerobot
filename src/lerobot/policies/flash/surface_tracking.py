@@ -192,8 +192,16 @@ class SurfaceTrackingSession:
         # the second is compared with the fit's own error before claiming a
         # fully observed rigid pose. No object axis or nominal size is assumed.
         centered = points - points.mean(axis=0)
-        variances = np.linalg.eigvalsh(centered.T @ centered / len(points))
+        variances, directions = np.linalg.eigh(centered.T @ centered / len(points))
         detail["visible_lateral_spread_mm"] = float(np.sqrt(max(variances[-2], 0.0)) * 1000)
+        # The visible patch may constrain its long direction without
+        # constraining a complete rigid pose. Retain that measured direction
+        # and the full spread spectrum even when the full-pose gate abstains.
+        # No object axis is assumed here; this is only the patch's principal
+        # direction, with its sign intentionally meaningless.
+        detail["principal_surface_axis_camera"] = directions[:, -1].tolist()
+        detail["principal_surface_spreads_m"] = np.sqrt(np.maximum(variances, 0.0)).tolist()
+        detail["principal_surface_points"] = len(points)
         detail["preprocess_ms"] = (time.perf_counter() - start) * 1000
         if self.previous is not None:
             start = time.perf_counter()
