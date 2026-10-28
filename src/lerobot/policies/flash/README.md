@@ -15,10 +15,15 @@ object frame_ used by the demonstration before robot motion begins.
 The demo editor keeps the current key frame and grasp/release timing beside
 playback. Raw demo setup also shows object naming. Object corrections, tracker
 experiments and numeric settings are optional.
-Demo and recorded rollout review can use the same 3D scene viewer. A rollout
-shows its recorded RGB-D frame and saved pose, but older rollouts do not contain
-same-frame object masks, so their 3D view does not claim a measured object
-surface. The live Test view does not yet use this 3D renderer.
+Demo, live Test and recorded rollout review use the same 3D scene renderer.
+The live view reads display-only RGB-D copies from the telemetry writer; its
+pose overlay and pixels share a camera frame ID. The rollout shows its recorded
+RGB-D frame and saved pose, but the rollout sidecar does not contain per-pixel
+object masks for 3D measurement, so that view does not claim a measured object
+surface. Replay uses recorded camera frame IDs to attach tracker snapshots to
+images and skips snapshots captured before recording began. Older traces without
+frame IDs can only use a marked approximate time match. The live
+scene route has GUI and writer tests but still needs a physical timing check.
 
 Run → FLASH lists a sealed-format SO-107 recording with `showservo_demo.npz`
 even before it has a `flash/v1` extension. Open the raw demo, choose **Prepare

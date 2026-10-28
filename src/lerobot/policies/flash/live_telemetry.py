@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import os
 import time
+from collections import deque
+from contextlib import suppress
 from dataclasses import asdict
 from pathlib import Path
 from threading import Condition, Thread
@@ -15,6 +17,14 @@ import numpy as np
 from .perception import EndEffectorKinematics, RGBDFrame
 from .pose_disagreement import FreeSpaceComparison, PoseComparison
 from .trajectory import AttachmentState, Evidence, PoseEstimate
+
+
+def live_frame_path(live_path: Path, frame_id: int, kind: str) -> Path:
+    """Locate a bounded, display-only RGB-D frame beside the live snapshot."""
+    if frame_id < 0 or kind not in {"rgb", "depth"}:
+        raise ValueError("invalid live frame request")
+    extension = "jpg" if kind == "rgb" else "bin"
+    return live_path.with_suffix(".frames") / f"{frame_id:08d}.{extension}"
 
 
 def _mask_boundary(mask: np.ndarray) -> list[list[int]]:
@@ -57,7 +67,10 @@ class FlashLiveTelemetry:
         points_by_role: dict[str, np.ndarray] | None = None,
         kinematics: EndEffectorKinematics | None = None,
         period_s: float = 0.1,
+        frame_history: int = 8,
     ) -> None:
+        if frame_history < 1:
+            raise ValueError("live frame history must contain at least one frame")
         self.live_path = live_path
         self.trace_path = trace_path
         self.centers = {role: center.tolist() for role, center in centers_by_role.items()}
@@ -65,7 +78,10 @@ class FlashLiveTelemetry:
             role: np.asarray(points, dtype=float).tolist() for role, points in (points_by_role or {}).items()
         }
         self.period_s = period_s
+        self.frame_history = frame_history
         self.kinematics = kinematics
+        self._written_frame_id: int | None = None
+        self._frame_ids: deque[int] = deque()
         self._condition = Condition()
         self._revision = 0
         self._closed = False
@@ -166,7 +182,7 @@ class FlashLiveTelemetry:
             )
             self._changed()
 
-    def _snapshot(self) -> dict:
+    def _snapshot(self) -> tuple[dict, RGBDFrame | None]:
         with self._condition:
             frame = self._frame
             proposals = self._proposals.copy()
@@ -196,7 +212,7 @@ class FlashLiveTelemetry:
                     last_direct_observation_s=attachment.source_time_s if independently_observed else None,
                 )
             )
-        return {
+        snapshot = {
             "schema_version": 1,
             "recorded_at_s": time.perf_counter(),
             "camera": (
@@ -228,6 +244,30 @@ class FlashLiveTelemetry:
             "accepted": {role: _estimate_json(value) for role, value in accepted.items()},
             "held_prediction": held_prediction,
         }
+        return snapshot, frame
+
+    def _write_frame(self, frame: RGBDFrame) -> None:
+        if frame.frame_id == self._written_frame_id:
+            return
+        depth_mm = frame.metric_depth().astype(np.float64) * 1000.0
+        valid = np.isfinite(depth_mm) & (depth_mm > 0) & (depth_mm <= np.iinfo(np.uint16).max)
+        depth_bytes = np.rint(np.where(valid, depth_mm, 0)).astype("<u2").tobytes()
+        ok, encoded = cv2.imencode(".jpg", cv2.cvtColor(frame.rgb, cv2.COLOR_RGB2BGR))
+        if not ok:
+            raise RuntimeError("cannot encode live RGB frame")
+        for kind, payload in (("rgb", encoded.tobytes()), ("depth", depth_bytes)):
+            destination = live_frame_path(self.live_path, frame.frame_id, kind)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            staged = destination.with_suffix(destination.suffix + ".tmp")
+            staged.write_bytes(payload)
+            os.replace(staged, destination)
+        self._written_frame_id = frame.frame_id
+        self._frame_ids.append(frame.frame_id)
+        while len(self._frame_ids) > self.frame_history:
+            expired = self._frame_ids.popleft()
+            for kind in ("rgb", "depth"):
+                # safe-destruct: prune only this telemetry writer's bounded temporary display files.
+                live_frame_path(self.live_path, expired, kind).unlink(missing_ok=True)
 
     def _write_loop(self) -> None:
         self.trace_path.parent.mkdir(parents=True, exist_ok=True)
@@ -239,7 +279,14 @@ class FlashLiveTelemetry:
                     revision = self._revision
                     closing = self._closed
                 if revision != seen:
-                    snapshot = self._snapshot()
+                    snapshot, frame = self._snapshot()
+                    if frame is not None:
+                        try:
+                            self._write_frame(frame)
+                        except (OSError, RuntimeError, ValueError, cv2.error):
+                            snapshot["camera"]["rgbd_available"] = False
+                        else:
+                            snapshot["camera"]["rgbd_available"] = True
                     encoded = json.dumps(snapshot, separators=(",", ":"), allow_nan=False)
                     staged = self.live_path.with_suffix(self.live_path.suffix + ".tmp")
                     staged.parent.mkdir(parents=True, exist_ok=True)
@@ -262,3 +309,12 @@ class FlashLiveTelemetry:
         self._thread.join(timeout=5.0)
         if self._thread.is_alive():
             raise RuntimeError("FLASH telemetry writer did not stop")
+        # Remove only the temporary display files this writer created. The
+        # completed LeRobot recording remains available in Replay.
+        for frame_id in self._frame_ids:
+            for kind in ("rgb", "depth"):
+                # safe-destruct: these frame IDs were written by this telemetry instance.
+                live_frame_path(self.live_path, frame_id, kind).unlink(missing_ok=True)
+        with suppress(OSError):
+            # safe-destruct: remove this writer's empty temporary display directory.
+            self.live_path.with_suffix(".frames").rmdir()

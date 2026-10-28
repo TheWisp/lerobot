@@ -91,11 +91,11 @@ class PerceptionService:
                 frame = self.source.read()
                 self.frames.publish(frame)
                 self.captured += 1
+                frozen = self.frames.snapshot()
+                assert frozen is not None
                 if self.on_frame is not None:
-                    self.on_frame(frame)
+                    self.on_frame(frozen)
                 if self.causal_frames is not None:
-                    frozen = self.frames.snapshot()
-                    assert frozen is not None
                     self.causal_frames(frozen)
                 if not self.worker.submit(frame) and not self.worker.alive:
                     raise PerceptionServiceError("pose process stopped during camera capture")

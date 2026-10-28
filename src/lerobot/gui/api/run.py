@@ -1075,6 +1075,29 @@ async def flash_live_telemetry() -> dict:
     return await asyncio.get_running_loop().run_in_executor(_flash_telemetry_pool, read)
 
 
+@router.get("/flash/telemetry/frame/{frame_id}/{kind}")
+async def flash_live_frame(frame_id: int, kind: str) -> Response:
+    """Read the display copy of an exact live RGB-D frame, outside the GUI loop."""
+    path = _flash_live_path if _active_command == "flash" and is_run_active() else None
+    if path is None:
+        raise HTTPException(404, "No FLASH trial is running")
+    from lerobot.policies.flash.live_telemetry import live_frame_path
+
+    try:
+        frame_path = live_frame_path(path, frame_id, kind)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    def read() -> bytes:
+        return frame_path.read_bytes()
+
+    try:
+        data = await asyncio.get_running_loop().run_in_executor(_flash_telemetry_pool, read)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, "Live display frame has expired") from exc
+    return Response(data, media_type="image/jpeg" if kind == "rgb" else "application/octet-stream")
+
+
 def _flash_tracker_replay(root: Path, episode: int) -> dict:
     info_path = root.expanduser().resolve() / "meta" / "info.json"
     camera_features = None
@@ -1096,6 +1119,10 @@ def _flash_tracker_replay(root: Path, episode: int) -> dict:
         raise HTTPException(404, "FLASH trace has no frames")
     camera_ticks = [tick for tick in ticks if tick.get("camera_source_time_s") is not None]
     times = [tick["camera_source_time_s"] for tick in camera_ticks]
+    ticks_by_camera_id: dict[int, dict] = {}
+    for tick in camera_ticks:
+        if tick.get("camera_frame_id") is not None:
+            ticks_by_camera_id.setdefault(tick["camera_frame_id"], tick)
     layers_path = extension / f"tracker_episode_{episode:06d}.jsonl"
     snapshots = (
         [json.loads(line) for line in layers_path.open(encoding="utf-8") if line.strip()]
@@ -1107,15 +1134,29 @@ def _flash_tracker_replay(root: Path, episode: int) -> dict:
         for snapshot in snapshots:
             camera = snapshot.get("camera")
             source_s = camera.get("source_time_s") if camera else None
-            if source_s is not None and camera_ticks:
+            if camera is None and ticks_by_camera_id:
+                continue
+            if camera and ticks_by_camera_id:
+                tick = ticks_by_camera_id.get(camera.get("frame_id"))
+                if tick is None:
+                    # The camera ran before or between recorded motor ticks.
+                    # No episode image exists for this exact tracker snapshot.
+                    continue
+                frame_index = tick["frame_index"]
+                alignment = "camera_frame_id"
+            elif source_s is not None and camera_ticks:
                 pos = bisect_left(times, source_s)
                 pos = min(pos, len(camera_ticks) - 1)
                 if pos and abs(times[pos - 1] - source_s) < abs(times[pos] - source_s):
                     pos -= 1
                 frame_index = camera_ticks[pos]["frame_index"]
+                alignment = "nearest_camera_time"
             else:
                 frame_index = 0
-            frames.append({"frame_index": frame_index, "snapshot": snapshot})
+                alignment = "none"
+            frames.append({"frame_index": frame_index, "alignment": alignment, "snapshot": snapshot})
+        if not frames:
+            raise HTTPException(404, "No tracker snapshot has a recorded camera frame")
         return {
             "available": True,
             "kind": "rollout",

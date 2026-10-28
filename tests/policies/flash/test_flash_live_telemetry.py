@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 
+import cv2
 import numpy as np
+import pytest
+from fastapi import HTTPException
 
+import lerobot.gui.api.run as run_api
 from lerobot.gui.api.run import _flash_recordings, _flash_tracker_replay
-from lerobot.policies.flash.live_telemetry import FlashLiveTelemetry
+from lerobot.policies.flash.live_telemetry import FlashLiveTelemetry, live_frame_path
 from lerobot.policies.flash.perception import RGBDFrame
 from lerobot.policies.flash.pose_disagreement import (
     FreeSpaceComparison,
@@ -85,7 +90,19 @@ def test_live_tracker_layers_are_replayed_with_camera_frame(tmp_path: Path) -> N
         ),
     )
     telemetry.accepted({"object": group})
+    deadline = time.monotonic() + 2.0
+    rgb_file = live_frame_path(live, frame.frame_id, "rgb")
+    depth_file = live_frame_path(live, frame.frame_id, "depth")
+    while not depth_file.exists() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert np.frombuffer(depth_file.read_bytes(), dtype="<u2").reshape(12, 16)[0, 0] == 1
+    assert cv2.imdecode(np.frombuffer(rgb_file.read_bytes(), dtype=np.uint8), cv2.IMREAD_COLOR).shape == (
+        12,
+        16,
+        3,
+    )
     telemetry.close()
+    assert not depth_file.exists()
 
     current = json.loads(live.read_text())
     assert current["camera"]["frame_id"] == 9
@@ -123,6 +140,31 @@ def test_live_tracker_layers_are_replayed_with_camera_frame(tmp_path: Path) -> N
     )
 
 
+@pytest.mark.asyncio
+async def test_live_display_endpoint_serves_only_the_active_frame_sidecar(
+    tmp_path: Path, monkeypatch
+) -> None:
+    live = tmp_path / "trial.json"
+    depth = live_frame_path(live, 9, "depth")
+    depth.parent.mkdir()
+    depth.write_bytes(np.array([1000, 1001], dtype="<u2").tobytes())
+    monkeypatch.setattr(run_api, "_flash_live_path", live)
+    monkeypatch.setattr(run_api, "_active_command", "flash")
+    monkeypatch.setattr(run_api, "is_run_active", lambda: True)
+    response = await run_api.flash_live_frame(9, "depth")
+    assert response.body == depth.read_bytes()
+    with pytest.raises(HTTPException) as missing:
+        await run_api.flash_live_frame(8, "depth")
+    assert missing.value.status_code == 404
+    with pytest.raises(HTTPException) as invalid:
+        await run_api.flash_live_frame(9, "../../other")
+    assert invalid.value.status_code == 400
+    monkeypatch.setattr(run_api, "is_run_active", lambda: False)
+    with pytest.raises(HTTPException) as stopped:
+        await run_api.flash_live_frame(9, "depth")
+    assert stopped.value.status_code == 404
+
+
 def test_older_trace_does_not_claim_unrecorded_tracker_layers(tmp_path: Path) -> None:
     extension = tmp_path / "flash" / "v1"
     extension.mkdir(parents=True)
@@ -136,6 +178,30 @@ def test_older_trace_does_not_claim_unrecorded_tracker_layers(tmp_path: Path) ->
     assert not replay["layer_history"]
     assert replay["frames"][0]["snapshot"]["layers"] == {}
     assert replay["frames"][0]["snapshot"]["accepted"]["object"]["estimator"] == "object_point_motion"
+
+
+def test_tracker_replay_requires_the_same_recorded_camera_frame_id(tmp_path: Path) -> None:
+    extension = tmp_path / "flash" / "v1"
+    extension.mkdir(parents=True)
+    (extension / "episode_000000.jsonl").write_text(
+        "\n".join(
+            json.dumps({"frame_index": index, "camera_frame_id": frame_id, "camera_source_time_s": source_s})
+            for index, frame_id, source_s in ((0, 65, 10.0), (1, 66, 10.1))
+        )
+        + "\n"
+    )
+    (extension / "tracker_episode_000000.jsonl").write_text(
+        "\n".join(
+            json.dumps({"camera": {"frame_id": frame_id, "source_time_s": source_s}, "accepted": {}})
+            for frame_id, source_s in ((4, 9.99), (66, 10.01))
+        )
+        + "\n"
+    )
+    replay = _flash_tracker_replay(tmp_path, 0)
+    assert [
+        (frame["frame_index"], frame["alignment"], frame["snapshot"]["camera"]["frame_id"])
+        for frame in replay["frames"]
+    ] == [(1, "camera_frame_id", 66)]
 
 
 def test_held_prediction_is_recorded_separately_from_stale_independent_pose(tmp_path: Path) -> None:

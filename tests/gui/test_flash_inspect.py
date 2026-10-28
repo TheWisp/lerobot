@@ -1063,11 +1063,90 @@ def test_rollout_replay_uses_recorded_metric_depth_in_the_shared_scene(gui_page)
     assert len(requested_depth) == 1
     assert "camera=observation.images.front_depth" in requested_depth[0]
     assert page.evaluate("flashSceneFrameCache.depth[0]") == 1000
-    assert "same-frame masks were not recorded" in page.locator("#flash-scene-status").inner_text()
+    assert "measured 3D surface unavailable" in page.locator("#flash-scene-status").inner_text()
     assert page.locator(".flash-scene-photo").evaluate("element => element.style.visibility") == "hidden"
     assert page.locator("#flash-scene-edit").count() == 0
     assert page.locator("#flash-scene-surface").count() == 0
     assert page.locator("#flash-scene-group").count() == 0
+
+
+@pytest.mark.requires_playwright
+@pytest.mark.skipif(importlib.util.find_spec("playwright") is None, reason="Playwright is not installed")
+def test_live_flash_uses_the_same_frame_tagged_rgbd_scene(gui_page):
+    page = gui_page
+    height, width = 48, 64
+    _, rgb = cv2.imencode(".jpg", np.full((height, width, 3), 120, dtype=np.uint8))
+    snapshot = {
+        "recorded_at_s": 12.1,
+        "camera": {
+            "frame_id": 9,
+            "source_time_s": 12.0,
+            "width": width,
+            "height": height,
+            "intrinsics": [[50, 0, 32], [0, 50, 24], [0, 0, 1]],
+            "base_from_camera": np.eye(4).tolist(),
+            "rgbd_available": True,
+        },
+        "centers_object_m": {"object": [0, 0, 1]},
+        "points_object_m": {"object": [[0, 0, 1], [0.01, 0, 1], [0, 0.01, 1]]},
+        "observed_masks": {"object": {"frame_id": 8, "boundary_xy": [[1, 1], [2, 1], [2, 2]]}},
+        "proposals": {},
+        "layers": {},
+        "accepted": {
+            "object": {
+                "pose": np.eye(4).tolist(),
+                "evidence": "observed",
+                "source_time_s": 12.0,
+                "estimator": "appearance_rgbd",
+            }
+        },
+    }
+    latest = {"snapshot": snapshot}
+    page.route("**/api/run/status", lambda route: route.fulfill(json={"running": True, "command": "flash"}))
+    page.route(
+        "**/api/run/flash/telemetry/live",
+        lambda route: route.fulfill(json={"available": True, "snapshot": latest["snapshot"]}),
+    )
+    page.route(
+        "**/api/run/flash/telemetry/frame/9/rgb",
+        lambda route: route.fulfill(body=rgb.tobytes(), content_type="image/jpeg"),
+    )
+    page.route(
+        "**/api/run/flash/telemetry/frame/9/depth",
+        lambda route: route.fulfill(
+            body=np.full((height, width), 1000, dtype="<u2").tobytes(),
+            content_type="application/octet-stream",
+        ),
+    )
+    page.evaluate("switchTab('run')")
+    page.evaluate("() => selectWorkflow('flash')")
+    page.evaluate("startFlashTelemetry()")
+    page.wait_for_function(
+        "() => document.querySelector('.flash-replay-grid img')?.dataset.loadedFrame === '9'"
+    )
+    assert page.locator("#flash-tracker-replay-controls").is_hidden()
+    page.get_by_role("button", name="3D scene").click()
+    page.wait_for_function("() => flashSceneFrameCache?.frameIndex === 9")
+    assert page.evaluate("flashSceneFrameCache.depth[0]") == 1000
+    assert "Live RGB-D · frame 9" in page.locator("#flash-scene-status").inner_text()
+    assert page.locator("#flash-scene-surface").count() == 0
+    assert page.locator(".flash-scene-photo").evaluate("element => element.style.visibility") == "hidden"
+    page.route(
+        "**/api/run/flash/telemetry/frame/10/rgb",
+        lambda route: route.fulfill(body=rgb.tobytes(), content_type="image/jpeg"),
+    )
+    page.route(
+        "**/api/run/flash/telemetry/frame/10/depth",
+        lambda route: route.fulfill(
+            body=np.full((height, width), 1010, dtype="<u2").tobytes(),
+            content_type="application/octet-stream",
+        ),
+    )
+    latest["snapshot"] = {**snapshot, "camera": {**snapshot["camera"], "frame_id": 10}}
+    page.wait_for_function("() => flashSceneFrameCache?.frameIndex === 10")
+    assert page.evaluate("flashSceneFrameCache.depth[0]") == 1010
+    assert "Live RGB-D · frame 10" in page.locator("#flash-scene-status").inner_text()
+    page.evaluate("stopFlashTelemetry()")
 
 
 @pytest.mark.requires_playwright

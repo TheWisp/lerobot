@@ -18,6 +18,7 @@ let flashSceneView = null;
 let flashSceneRequest = 0;
 let flashSceneMode = 'camera';
 let flashSceneFrameCache = null;
+let flashSceneLoadingKey = null;
 
 function _flashPaintObservedPhoto(frame, camera) {
     const photo = document.querySelector('#rerun-viewer .flash-scene-photo');
@@ -54,35 +55,47 @@ function _flashSceneOptions() {
 }
 
 async function _flashUpdateSceneFrame() {
-    if (flashSceneMode !== '3d' || !flashSceneView || !['demo', 'rollout'].includes(flashReplay?.kind)) return;
+    const kind = flashReplay?.kind || (flashTelemetryTimer ? 'live' : null);
+    if (flashSceneMode !== '3d' || !flashSceneView || !['demo', 'rollout', 'live'].includes(kind)) return;
     const image = document.querySelector('#rerun-viewer .flash-replay-grid img');
     const index = Number(document.getElementById('flash-tracker-scrub').value);
-    const selected = flashReplay.frames[index];
+    const selected = kind === 'live'
+        ? {frame_index: flashSnapshot?.camera?.frame_id, snapshot: flashSnapshot}
+        : flashReplay.frames[index];
     const camera = selected?.snapshot?.camera;
     if (!camera) {
-        document.getElementById('flash-scene-status').textContent = 'No camera calibration was recorded at this tick';
+        document.getElementById('flash-scene-status').textContent = kind === 'live'
+            ? 'Waiting for a calibrated live frame' : 'No camera calibration was recorded at this tick';
         document.querySelector('#rerun-viewer .flash-replay-grid')?.classList.remove('flash-frame-loading');
         return;
     }
-    if (!camera || !image?.complete || image.naturalWidth !== camera.width ||
+    if (kind === 'live' && camera.rgbd_available === false) {
+        document.getElementById('flash-scene-status').textContent = 'Live RGB-D display frame is unavailable';
+        return;
+    }
+    if (!image?.complete || image.naturalWidth !== camera.width ||
         image.dataset.loadedFrame !== String(selected.frame_index)) return;
+    const loadingKey = `${kind}:${selected.frame_index}`;
+    if (flashSceneFrameCache?.frameIndex !== selected.frame_index && flashSceneLoadingKey === loadingKey) return;
     const generation = ++flashSceneRequest;
     const replay = flashReplay;
     const status = document.getElementById('flash-scene-status');
     try {
         let frame = flashSceneFrameCache;
         if (frame?.replay !== replay || frame.frameIndex !== selected.frame_index) {
-            const demo = replay.kind === 'demo';
+            flashSceneLoadingKey = loadingKey;
+            const demo = kind === 'demo';
             const query = demo
                 ? new URLSearchParams({dataset_root: replay.datasetRoot, frame_index: String(selected.frame_index)})
-                : new URLSearchParams({camera: replay.camera_features.depth});
+                : kind === 'rollout' ? new URLSearchParams({camera: replay.camera_features.depth}) : null;
             const evidenceReady = demo && replay.sceneEvidence?.available &&
                 selected.frame_index < replay.sceneEvidence.frames_completed;
             const evidenceQuery = evidenceReady ? new URLSearchParams({dataset_root: replay.datasetRoot,
                 bundle_path: replay.bundle_path, frame_index: String(selected.frame_index)}) : null;
             const depthUrl = demo ? `/api/run/flash/demo/depth-frame?${query}`
-                : `/api/datasets/${encodeURIComponent(replay.datasetId)}/episodes/${replay.episode}` +
-                    `/depth-frame/${selected.frame_index}?${query}`;
+                : kind === 'rollout' ? `/api/datasets/${encodeURIComponent(replay.datasetId)}/episodes/${replay.episode}` +
+                    `/depth-frame/${selected.frame_index}?${query}`
+                    : `/api/run/flash/telemetry/frame/${selected.frame_index}/depth`;
             const [response, evidenceResponse] = await Promise.all([
                 fetch(depthUrl),
                 evidenceQuery ? fetch(`/api/run/flash/demo/scene-evidence/frame?${evidenceQuery}`) : null,
@@ -103,7 +116,7 @@ async function _flashUpdateSceneFrame() {
             flashSceneFrameCache = frame;
         }
         _flashPaintObservedPhoto(frame, camera);
-        flashSceneView.update(frame.depth, frame.rgba, {...selected.snapshot, ...replay.geometry},
+        flashSceneView.update(frame.depth, frame.rgba, {...selected.snapshot, ...(replay?.geometry || {})},
             _flashSceneOptions(), frame.evidence);
         flashSceneView.highlight(flashHighlightedOverlay);
         if (generation === flashSceneRequest) document.querySelector('#rerun-viewer .flash-replay-grid')
@@ -112,22 +125,29 @@ async function _flashUpdateSceneFrame() {
             `${role} context: ${group.ids.length} ${group.verified ? 'verified' : 'candidate'} support points${group.measured_this_frame === false ? ' (fit unavailable)' : ''}`).join(' · ');
         status.textContent = frame.evidence?.available
             ? `Rebuilt RGB-D evidence · frame ${selected.frame_index}${groups ? ` · ${groups}` : ''}`
-            : replay.kind === 'demo'
+            : kind === 'demo'
                 ? `Recorded RGB-D · frame ${selected.frame_index} · no rebuilt per-frame masks`
-                : `Recorded RGB-D · frame ${selected.frame_index} · saved pose; same-frame masks were not recorded`;
+                : kind === 'live'
+                    ? `Live RGB-D · frame ${selected.frame_index} · mask outlines are shown only when frame-aligned`
+                    : `Recorded RGB-D · frame ${selected.frame_index} · saved pose; measured 3D surface unavailable` +
+                        (selected.alignment === 'nearest_camera_time' ? ' · camera match is approximate' : '');
     } catch (error) {
         if (generation === flashSceneRequest && status) status.textContent = `3D view: ${error.message}`;
+    } finally {
+        if (flashSceneLoadingKey === loadingKey) flashSceneLoadingKey = null;
     }
 }
 
 async function toggleFlashSceneView() {
-    if (!['demo', 'rollout'].includes(flashReplay?.kind)) return;
+    const kind = flashReplay?.kind || (flashTelemetryTimer ? 'live' : null);
+    if (!['demo', 'rollout', 'live'].includes(kind)) return;
     const grid = document.querySelector('#rerun-viewer .flash-replay-grid');
     const toggle = document.getElementById('flash-scene-toggle');
     const tools = document.getElementById('flash-scene-tools');
     if (flashSceneMode === '3d') {
         flashSceneMode = 'camera';
         flashSceneRequest++;
+        flashSceneLoadingKey = null;
         grid.classList.remove('flash-scene-active');
         toggle.textContent = '3D scene';
         tools.hidden = true;
@@ -136,7 +156,7 @@ async function toggleFlashSceneView() {
     try {
         if (!flashSceneView) {
             let surfaces;
-            if (flashReplay.kind === 'demo') {
+            if (kind === 'demo') {
                 const query = new URLSearchParams({dataset_root: flashReplay.datasetRoot,
                     bundle_path: flashReplay.bundle_path});
                 const response = await fetch(`/api/run/flash/demo/reference-surfaces?${query}`);
@@ -149,8 +169,9 @@ async function toggleFlashSceneView() {
                     renderFlashDemoSnapshot({...flashReplay.frames[index].snapshot, ...flashReplay.geometry});
                 }
             } else {
-                const source = flashReplay.frames.find(frame => Object.keys(frame.snapshot?.points_object_m || {}).length);
-                surfaces = Object.fromEntries(Object.entries(source?.snapshot.points_object_m || {}).map(([role, points]) => [
+                const pointsByRole = kind === 'live' ? flashSnapshot?.points_object_m
+                    : flashReplay.frames.find(frame => Object.keys(frame.snapshot?.points_object_m || {}).length)?.snapshot.points_object_m;
+                surfaces = Object.fromEntries(Object.entries(pointsByRole || {}).map(([role, points]) => [
                     role, {positions_object_m: points.flat(), colors_rgb: points.map(() => [180, 190, 200]), indices: []},
                 ]));
             }
@@ -608,7 +629,7 @@ async function viewFlashDemo(datasetRoot = null, episodeNumber = null, play = fa
 }
 
 let flashTelemetryTimer = null;
-let flashTelemetryBusy = false;
+let flashTelemetryGeneration = 0;
 let flashSnapshot = null;
 let flashReplay = null;
 let flashReplayTimer = null;
@@ -1186,25 +1207,79 @@ function _flashDrawOverlay() {
 
 function startFlashTelemetry() {
     if (flashTelemetryTimer) return;
+    const generation = ++flashTelemetryGeneration;
     closeFlashDemoEditor();
+    flashSceneRequest++;
+    flashSceneFrameCache = null;
+    flashSceneLoadingKey = null;
+    flashSceneView?.dispose();
+    flashSceneView = null;
+    flashSceneMode = 'camera';
     flashReplay = null;
+    flashSnapshot = null;
     clearInterval(flashReplayTimer); flashReplayTimer = null;
-    const replayGrid = document.querySelector('#rerun-viewer .flash-replay-grid');
-    if (replayGrid) replayGrid.remove();
+    stopObsStreamViewer();
+    flashUiMode = 'live';
+    _flashUpdateWorkspace();
+    const grid = _flashCreateSceneGrid('live', 'Live aligned RGB-D camera');
+    const image = grid.querySelector('img');
     document.getElementById('flash-tracker-replay-controls').hidden = true;
-    flashTelemetryTimer = setInterval(async () => {
-        if (flashTelemetryBusy) return;
-        flashTelemetryBusy = true;
+    let busy = false;
+    const poll = async () => {
+        if (busy) return;
+        busy = true;
         try {
             const response = await fetch('/api/run/flash/telemetry/live');
             const data = await response.json();
-            if (data.available) renderFlashSnapshot(data.snapshot, 'Live');
+            if (generation !== flashTelemetryGeneration || !flashTelemetryTimer) return;
+            if (!data.available) return;
+            const snapshot = data.snapshot;
+            const camera = snapshot.camera;
+            const frameId = camera?.frame_id;
+            const ready = camera?.rgbd_available === true;
+            document.getElementById('flash-scene-toggle').disabled = !ready ||
+                !Object.keys(snapshot.points_object_m || {}).length;
+            if (!ready) {
+                document.getElementById('flash-scene-status').textContent =
+                    'Waiting for an aligned live RGB-D display frame';
+                return;
+            }
+            if (image.dataset.loadedFrame === String(frameId)) {
+                renderFlashSnapshot(snapshot, 'Live');
+                if (flashSceneMode === '3d') void _flashUpdateSceneFrame();
+                return;
+            }
+            image._flashPendingSnapshot = snapshot;
+            if (image.dataset.requestedFrame === String(frameId)) return;
+            flashSceneRequest++;
+            grid.classList.add('flash-frame-loading');
+            image.dataset.requestedFrame = String(frameId);
+            image.onload = () => {
+                if (image.dataset.requestedFrame !== String(frameId) ||
+                    generation !== flashTelemetryGeneration || !flashTelemetryTimer) return;
+                image.dataset.loadedFrame = String(frameId);
+                renderFlashSnapshot(image._flashPendingSnapshot, 'Live');
+                if (flashSceneMode === '3d') void _flashUpdateSceneFrame();
+                else grid.classList.remove('flash-frame-loading');
+            };
+            image.onerror = () => {
+                if (image.dataset.requestedFrame !== String(frameId) ||
+                    generation !== flashTelemetryGeneration) return;
+                image.dataset.requestedFrame = '';
+                grid.classList.remove('flash-frame-loading');
+                document.getElementById('flash-scene-status').textContent =
+                    `Live display frame ${frameId} expired; waiting for the next frame`;
+            };
+            image.src = `/api/run/flash/telemetry/frame/${frameId}/rgb`;
         } catch (error) { console.warn('FLASH tracker stream:', error); }
-        finally { flashTelemetryBusy = false; }
-    }, 200);
+        finally { busy = false; }
+    };
+    flashTelemetryTimer = setInterval(poll, 200);
+    void poll();
 }
 
 function stopFlashTelemetry() {
+    flashTelemetryGeneration++;
     if (flashTelemetryTimer) clearInterval(flashTelemetryTimer);
     flashTelemetryTimer = null;
 }
@@ -1233,9 +1308,62 @@ async function loadFlashTrackerReplay(datasetRoot, episodeIndex) {
     } catch (error) { showToast('Cannot inspect FLASH recording', error.message, 'error'); }
 }
 
+function _flashCreateSceneGrid(kind, imageAlt, depthAvailable = true) {
+    const viewer = document.getElementById('rerun-viewer');
+    viewer.querySelector('.flash-replay-grid')?.remove();
+    const grid = document.createElement('div');
+    grid.className = 'flash-replay-grid';
+    const image = document.createElement('img');
+    image.alt = imageAlt;
+    const canvas = document.createElement('canvas');
+    canvas.className = 'flash-pose-canvas';
+    grid.append(image, canvas);
+    if (kind === 'demo' || kind === 'live' || (kind === 'rollout' && depthAvailable)) {
+        const photo = document.createElement('canvas');
+        photo.className = 'flash-scene-photo';
+        const scene = document.createElement('canvas');
+        scene.className = 'flash-scene-canvas';
+        scene.addEventListener('pointerdown', event => {
+            scene._flashPickStart = {x: event.clientX, y: event.clientY};
+        });
+        scene.addEventListener('pointerup', _flashScenePointerUp);
+        const toolbar = document.createElement('div');
+        toolbar.className = 'flash-scene-toolbar';
+        toolbar.innerHTML = `<button type="button" id="flash-scene-toggle" onclick="toggleFlashSceneView()"${kind === 'live' ? ' disabled' : ''}>3D scene</button>` +
+            '<div id="flash-scene-tools" hidden>' +
+            '<select id="flash-scene-object" aria-label="Focus object" onchange="flashSceneView?.focus(this.value)"><option value="">Focus object</option></select>' +
+            '<button type="button" onclick="flashSceneView?.reset()">Reset view</button>' +
+            (kind === 'demo'
+                ? '<button type="button" id="flash-scene-edit" onclick="openFlashDemoSceneEditor()">Edit key frames</button>'
+                : '') +
+            '<details class="flash-scene-layer-menu"><summary>Layers</summary><div class="flash-scene-layer-options">' +
+            (kind === 'demo'
+                ? '<label title="Current frame, using this frame’s mask and measured depth"><input type="checkbox" id="flash-scene-surface" checked onchange="_flashUpdateSceneFrame()">Measured surface</label>' +
+                    '<label title="Current mask-and-depth samples for display; these are not tracked landmarks"><input type="checkbox" id="flash-scene-points" checked onchange="_flashUpdateSceneFrame()">Surface points</label>' +
+                    '<label title="Display spacing in recorded camera pixels">Spacing <input type="number" id="flash-scene-point-spacing" min="2" max="16" step="1" value="5" onchange="_flashUpdateSceneFrame()"></label>'
+                : '') +
+            '<label title="Reference surface projected by the used estimate"><input type="checkbox" id="flash-scene-projection" checked onchange="_flashUpdateSceneFrame()">Pose estimate</label>' +
+            '<label title="Coarse depth mesh for spatial context; incomplete at missing-depth pixels"><input type="checkbox" id="flash-scene-depth" onchange="_flashUpdateSceneFrame()">Scene context</label>' +
+            '<label><input type="checkbox" id="flash-scene-axes" checked onchange="_flashUpdateSceneFrame()">Axes</label>' +
+            (kind === 'demo'
+                ? '<label title="Tracked scene context used by the group predictor"><input type="checkbox" id="flash-scene-group" onchange="_flashUpdateSceneFrame()">Scene support</label>'
+                : '') +
+            '<label><input type="checkbox" id="flash-scene-gripper" onchange="_flashUpdateSceneFrame()">Gripper</label></div></details></div>';
+        const status = document.createElement('div');
+        status.id = 'flash-scene-status';
+        status.textContent = kind === 'live' ? 'Waiting for aligned live RGB-D' : 'Loading recorded RGB-D';
+        grid.append(photo, scene, toolbar, status);
+    }
+    grid.addEventListener('click', _flashSelectPointAt);
+    viewer.prepend(grid);
+    document.getElementById('rerun-placeholder').style.display = 'none';
+    return grid;
+}
+
 function _flashInstallReplay(replay, imageAlt) {
     flashSceneRequest++;
     flashSceneFrameCache = null;
+    flashSceneLoadingKey = null;
     flashSceneView?.dispose();
     flashSceneView = null;
     flashSceneMode = 'camera';
@@ -1251,54 +1379,7 @@ function _flashInstallReplay(replay, imageAlt) {
     flashUiMode = 'review';
     _flashUpdateWorkspace();
     flashHighlightedOverlay = null;
-    const viewer = document.getElementById('rerun-viewer');
-    viewer.querySelector('.flash-replay-grid')?.remove();
-    const grid = document.createElement('div');
-    grid.className = 'flash-replay-grid';
-    const image = document.createElement('img');
-    image.alt = imageAlt;
-    const canvas = document.createElement('canvas');
-    canvas.className = 'flash-pose-canvas';
-    grid.append(image, canvas);
-    if (replay.kind === 'demo' || (replay.kind === 'rollout' && replay.camera_features?.depth)) {
-        const photo = document.createElement('canvas');
-        photo.className = 'flash-scene-photo';
-        const scene = document.createElement('canvas');
-        scene.className = 'flash-scene-canvas';
-        scene.addEventListener('pointerdown', event => {
-            scene._flashPickStart = {x: event.clientX, y: event.clientY};
-        });
-        scene.addEventListener('pointerup', _flashScenePointerUp);
-        const toolbar = document.createElement('div');
-        toolbar.className = 'flash-scene-toolbar';
-        toolbar.innerHTML = '<button type="button" id="flash-scene-toggle" onclick="toggleFlashSceneView()">3D scene</button>' +
-            '<div id="flash-scene-tools" hidden>' +
-            '<select id="flash-scene-object" aria-label="Focus object" onchange="flashSceneView?.focus(this.value)"><option value="">Focus object</option></select>' +
-            '<button type="button" onclick="flashSceneView?.reset()">Reset view</button>' +
-            (replay.kind === 'demo'
-                ? '<button type="button" id="flash-scene-edit" onclick="openFlashDemoSceneEditor()">Edit key frames</button>'
-                : '') +
-            '<details class="flash-scene-layer-menu"><summary>Layers</summary><div class="flash-scene-layer-options">' +
-            (replay.kind === 'demo'
-                ? '<label title="Current frame, using this frame’s mask and measured depth"><input type="checkbox" id="flash-scene-surface" checked onchange="_flashUpdateSceneFrame()">Measured surface</label>' +
-                    '<label title="Current mask-and-depth samples for display; these are not tracked landmarks"><input type="checkbox" id="flash-scene-points" checked onchange="_flashUpdateSceneFrame()">Surface points</label>' +
-                    '<label title="Display spacing in recorded camera pixels">Spacing <input type="number" id="flash-scene-point-spacing" min="2" max="16" step="1" value="5" onchange="_flashUpdateSceneFrame()"></label>'
-                : '') +
-            '<label title="Reference surface projected by the used estimate; green is the prepared skill pose, orange is a gripper-predicted held pose. It can disagree with current depth"><input type="checkbox" id="flash-scene-projection" checked onchange="_flashUpdateSceneFrame()">Pose estimate</label>' +
-            '<label title="Coarse depth mesh for spatial context; display only and incomplete at missing-depth pixels"><input type="checkbox" id="flash-scene-depth" onchange="_flashUpdateSceneFrame()">Scene context</label>' +
-            '<label><input type="checkbox" id="flash-scene-axes" checked onchange="_flashUpdateSceneFrame()">Axes</label>' +
-            (replay.kind === 'demo'
-                ? '<label title="Tracked scene context used by the group predictor; these need not lie on the object"><input type="checkbox" id="flash-scene-group" onchange="_flashUpdateSceneFrame()">Scene support</label>'
-                : '') +
-            '<label><input type="checkbox" id="flash-scene-gripper" onchange="_flashUpdateSceneFrame()">Gripper</label></div></details></div>';
-        const status = document.createElement('div');
-        status.id = 'flash-scene-status';
-        status.textContent = '3D scene uses recorded depth and saved reference masks';
-        grid.append(photo, scene, toolbar, status);
-    }
-    grid.addEventListener('click', _flashSelectPointAt);
-    viewer.prepend(grid);
-    document.getElementById('rerun-placeholder').style.display = 'none';
+    _flashCreateSceneGrid(replay.kind, imageAlt, !!replay.camera_features?.depth);
     document.getElementById('flash-tracker-replay-controls').hidden = false;
     document.getElementById('flash-tracker-scrub').max = Math.max(0, replay.frames.length - 1);
     document.getElementById('flash-tracker-play').textContent = 'Play';
@@ -2909,7 +2990,6 @@ async function launchRun() {
             updateRunUI(true, data.command);
             connectOutputSSE();
             startFlashTelemetry();
-            startObsStreamViewer();
         } catch (e) { showToast('FLASH launch failed', e.message, 'error'); }
         return;
     }
@@ -3692,7 +3772,7 @@ async function pollRunStatus() {
         // If running but no SSE, reconnect
         if (status.running && !runEventSource) {
             connectOutputSSE();
-            if (status.command !== 'flash_prepare') startObsStreamViewer();
+            if (status.command !== 'flash_prepare' && status.command !== 'flash') startObsStreamViewer();
         }
     } catch (e) {
         console.error('Status poll failed:', e);
