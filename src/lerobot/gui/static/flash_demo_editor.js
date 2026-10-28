@@ -546,7 +546,7 @@ function _flashEditorRender() {
             point.t > Number(a.grasp_time_s) && point.t <= Number(a.start_anchored_until_s);
         if (!state.raw) {
             const pick = _flashEditorButton(details,
-                state.pickingReference ? 'Cancel object pick' : 'Pick object in scene',
+                state.pickingReference ? 'Cancel reference selection' : 'Choose reference in scene',
                 async () => {
                     if (state.pickingReference) {
                         state.pickingReference = false;
@@ -587,7 +587,7 @@ function _flashEditorRender() {
                 const invariant = flashReplay.pose_constraints?.[point.frame];
                 const choose = _flashEditorButton(turn,
                     state.pickingTurn ? 'Cancel point pick' :
-                        lockedOrientation ? 'Allow turn around center' : 'Allow turn at a point',
+                        lockedOrientation ? 'Allow rotation around center' : 'Allow rotation around a point',
                     async () => {
                         if (state.pickingTurn) {
                             state.pickingTurn = false;
@@ -698,7 +698,7 @@ function _flashEditorRender() {
             point.t = value;
             position.textContent = `${index + 1} of ${points.length} · ${value.toFixed(2)} s`;
         }, null, 'number');
-        _flashEditorButton(details, 'Use current time', () => {
+        _flashEditorButton(details, 'Move key frame to playhead', () => {
             point.t = _flashEditorCurrentFrame().snapshot.demo.time_s; _flashEditorRender();
         });
         const constraint = _flashEditorField(details, 'Reach', point.constraint || 'pose', value => {

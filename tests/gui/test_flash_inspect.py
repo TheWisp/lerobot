@@ -1532,7 +1532,7 @@ def test_3d_scene_projection_and_surface_pick_edit_the_prepared_keyframe(gui_pag
     assert page.locator("#flash-demo-editor .flash-editor-pane[data-section='objects']").is_visible()
     assert page.locator("#flash-demo-editor .flash-editor-pane[data-section='keyframes']").is_visible()
     assert page.get_by_label("Reach", exact=True).is_visible()
-    assert page.get_by_role("button", name="Use current time").is_visible()
+    assert page.get_by_role("button", name="Move key frame to playhead").is_visible()
     page.get_by_label("Path", exact=True).select_option("lift")
     assert page.get_by_label("Lift (mm)").is_visible()
     page.get_by_label("Path", exact=True).select_option("line")
@@ -1541,7 +1541,7 @@ def test_3d_scene_projection_and_surface_pick_edit_the_prepared_keyframe(gui_pag
     page.locator(".flash-editor-settings > summary").click()
     assert page.get_by_text("Pose evidence", exact=True).is_visible()
     assert page.locator(".flash-editor-settings .flash-editor-group").count() == 0
-    page.get_by_role("button", name="Pick object in scene").click()
+    page.get_by_role("button", name="Choose reference in scene").click()
     box = page.locator(".flash-scene-canvas").bounding_box()
     scale = min(box["width"] / width, box["height"] / height)
     fixture_pixel = [
@@ -1576,7 +1576,7 @@ def test_3d_scene_projection_and_surface_pick_edit_the_prepared_keyframe(gui_pag
     assert submitted[0]["keypoints_document"]["keypoints"][0]["frame"] == "fixture"
     assert page.locator("#flash-demo-editor .flash-editor-pane[data-section='keyframes']").is_visible()
     assert page.locator(".flash-editor-turn").is_visible()
-    page.get_by_role("button", name="Allow turn at a point").click()
+    page.get_by_role("button", name="Allow rotation around a point").click()
     page.wait_for_function("() => flashDemoEditor?.pickingTurn")
     picked = page.evaluate("([x, y]) => flashSceneView.pickObserved(x, y)", fixture_pixel)
     assert picked["reference_xyz_m"] == pytest.approx(picked["camera_xyz_m"])
@@ -1605,7 +1605,7 @@ def test_3d_scene_projection_and_surface_pick_edit_the_prepared_keyframe(gui_pag
         }};
         _flashEditorRender();
     }""")
-    page.get_by_role("button", name="Allow turn around center").click()
+    page.get_by_role("button", name="Allow rotation around center").click()
     invariant = page.evaluate("flashDemoEditor.keypointsDocument.turn_rules[0]")
     assert invariant["source_evidence"] == "symmetry_invariant"
     assert invariant["pivot_reference_m"] == [0, 0, 1]
@@ -1617,7 +1617,7 @@ def test_3d_scene_projection_and_surface_pick_edit_the_prepared_keyframe(gui_pag
         flashDemoEditor.annotation.start_anchored_until_s = 1.5;
         _flashEditorRender();
     }""")
-    assert page.get_by_role("button", name="Pick object in scene").is_disabled()
+    assert page.get_by_role("button", name="Choose reference in scene").is_disabled()
     assert page.get_by_label("Move relative to", exact=True).is_disabled()
     assert "grasp-start reference" in page.locator("#flash-demo-editor").inner_text()
     page.set_viewport_size({"width": 390, "height": 844})
