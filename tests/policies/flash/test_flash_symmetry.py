@@ -6,7 +6,10 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 
 from lerobot.policies.flash.grasp_symmetry import select_grasp_symmetry
+from lerobot.policies.flash.perception import ObjectReference, ReferenceSnippet, RGBDFrame
+from lerobot.policies.flash.perception_step import PerceptionPipeline
 from lerobot.policies.flash.planner import JointPlanner, PlannerLimits
+from lerobot.policies.flash.pose_evidence import VisibleSurfaceSupport
 from lerobot.policies.flash.skill import (
     AttachmentAction,
     AttachmentTransition,
@@ -19,6 +22,65 @@ from lerobot.policies.flash.skill import (
 )
 from lerobot.policies.flash.symmetry import AxialSymmetry, SymmetryCanonicalizingBackend
 from lerobot.policies.flash.trajectory import Evidence, PoseEstimate
+
+
+def test_symmetry_wrapper_keeps_rejected_surface_evidence_for_the_shared_pipeline():
+    frame = RGBDFrame(
+        3,
+        np.zeros((4, 4, 3), np.uint8),
+        np.full((4, 4), 1000, np.uint16),
+        np.eye(3),
+        0.001,
+        np.eye(4),
+        1.0,
+        1.0,
+        "calibration",
+    )
+    raw = _x_pose(0.1)
+    support = VisibleSurfaceSupport(
+        4,
+        principal_surface_axis_base=(1.0, 0.0, 0.0),
+        principal_surface_spreads_m=(0.001, 0.002, 0.01),
+        principal_surface_points=12,
+    )
+
+    class RejectedBackend:
+        last_masks = {"object": np.ones((4, 4), bool)}
+        last_candidate_poses = {"object": raw}
+        last_visible_support = {"object": support}
+        last_failure = {"object": "full pose unobservable"}
+
+        def initialize(self, _references):
+            pass
+
+        def update(self, _frame):
+            return (
+                PoseEstimate(
+                    "object",
+                    None,
+                    1.0,
+                    1.0,
+                    Evidence.LOST,
+                    "reference",
+                    (False,) * 3,
+                    (False,) * 3,
+                    estimator="surface_rgbd",
+                ),
+            )
+
+    symmetry = AxialSymmetry("object", np.array([1, 0, 0]), np.zeros(3), np.eye(4))
+    snippet = ReferenceSnippet("local/demo", 0, 0, "object", np.eye(4), "mask.png", "calibration")
+    reference = ObjectReference("object", "reference", (snippet,))
+    pipeline = PerceptionPipeline(
+        SymmetryCanonicalizingBackend(RejectedBackend(), (symmetry,)), (reference,), require_masks=True
+    )
+
+    result = pipeline.process(frame)
+    proposal = result.proposals[0]
+    assert result.estimates[0].evidence == Evidence.LOST
+    np.testing.assert_allclose(proposal.raw_pose, raw)
+    assert proposal.visible_support == support
+    assert proposal.failure == "full pose unobservable"
 
 
 def _x_pose(x: float) -> np.ndarray:

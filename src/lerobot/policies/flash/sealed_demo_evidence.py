@@ -8,10 +8,8 @@ and the scene-point identities actually retained by the causal group tracker.
 from __future__ import annotations
 
 import argparse
-import gzip
 import hashlib
 import json
-from dataclasses import asdict
 from pathlib import Path
 
 import numpy as np
@@ -21,14 +19,9 @@ from .causal_service import CausalTrackingConfig
 from .dino_features import DinoPatchExtractor
 from .offline_perception import extract_pose_trace
 from .prepared import PreparedFlashSkill
+from .scene_evidence_writer import SceneEvidenceWriter
 from .sealed_demo_import import _frame, _nearest_index
 from .vision_pipeline import VisionPipelineConfig, build_vision_backend
-
-
-def _mask_runs(mask: np.ndarray) -> list[list[int]]:
-    flat = np.asarray(mask, dtype=np.uint8).ravel()
-    edges = np.flatnonzero(np.diff(np.r_[0, flat, 0]))
-    return [[int(start), int(end - start)] for start, end in edges.reshape(-1, 2)]
 
 
 def rebuild(root: Path, bundle: Path, *, through_frame: int | None = None, device: str = "cuda") -> Path:
@@ -79,66 +72,16 @@ def rebuild(root: Path, bundle: Path, *, through_frame: int | None = None, devic
         camera_times, arm_times[_nearest_index(arm_times, annotation["release_time_s"])]
     )
     destination = bundle.parent / "scene-evidence"
-    destination.mkdir(exist_ok=True)
     identity = hashlib.sha256(
         bundle.read_bytes() + (bundle.parent / "annotation.json").read_bytes()
     ).hexdigest()
-    manifest_path = destination / "manifest.json"
-    manifest = {
-        "schema_version": 1,
-        "source_sha256": identity,
-        "total_frames": total,
-        "frames_completed": 0,
-        "complete": False,
-        "roles": list(prepared.prompts_by_role),
-    }
-    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    writer = SceneEvidenceWriter(
+        destination, total_frames=total, roles=tuple(prepared.prompts_by_role), source_sha256=identity
+    )
 
     def record(frame, result, groups, estimates) -> None:
-        data = {
-            "frame_index": frame.frame_id,
-            "image_size": list(frame.depth.shape),
-            "masks_rle": {role: _mask_runs(mask) for role, mask in result.masks.items()},
-            "groups": {
-                role: {
-                    "verified": bool(group["verified"]),
-                    "measured_this_frame": bool(group["measured_this_frame"]),
-                    "ids": group["ids"].tolist(),
-                    "pixels": group["xy"].tolist(),
-                    "base_xyz_m": np.round(group["base_xyz"], 6).tolist(),
-                    "last_group_measurement_s": group["last_group_measurement_s"],
-                }
-                for role, group in groups.items()
-            },
-            "estimates": {
-                role: {
-                    "evidence": estimate.evidence.value,
-                    "estimator": estimate.estimator,
-                    "pose": estimate.pose.tolist() if estimate.pose is not None else None,
-                    "source_time_s": estimate.source_time_s,
-                    "last_direct_observation_s": estimate.last_direct_observation_s,
-                }
-                for role, estimate in estimates.items()
-            },
-            "proposals": {
-                proposal.role: {
-                    "evidence": proposal.estimate.evidence.value,
-                    "estimator": proposal.estimate.estimator,
-                    "raw_pose": proposal.raw_pose.tolist() if proposal.raw_pose is not None else None,
-                    "failure": proposal.failure,
-                    "visible_support": asdict(proposal.visible_support),
-                }
-                for proposal in result.proposals
-            },
-        }
-        frame_path = destination / f"{frame.frame_id:06d}.json.gz"
-        temporary = frame_path.with_suffix(".tmp")
-        with gzip.open(temporary, "wt", encoding="utf-8") as stream:
-            json.dump(data, stream, separators=(",", ":"))
-        temporary.replace(frame_path)
-        manifest["frames_completed"] = frame.frame_id + 1
+        writer.record(frame, result, groups, estimates)
         if (frame.frame_id + 1) % 30 == 0:
-            manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
             print(f"Rebuilt {frame.frame_id + 1}/{total} frames", flush=True)
 
     try:
@@ -163,9 +106,7 @@ def rebuild(root: Path, bundle: Path, *, through_frame: int | None = None, devic
         close = getattr(backend, "close", None)
         if close is not None:
             close()
-        manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
-    manifest["complete"] = True
-    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    writer.finish()
     return destination
 
 

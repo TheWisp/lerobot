@@ -132,6 +132,16 @@ class SymmetryCanonicalizingBackend:
     def last_masks(self) -> dict[str, np.ndarray]:
         return cast(InstanceMaskPoseBackend, self.inner).last_masks
 
+    @property
+    def last_candidate_poses(self) -> dict[str, np.ndarray]:
+        """Keep rejected raw fits inspectable after symmetry canonicalization."""
+        return getattr(self.inner, "last_candidate_poses", {})
+
+    @property
+    def last_visible_support(self):
+        """Preserve measured partial evidence even when no full pose survives."""
+        return getattr(self.inner, "last_visible_support", {})
+
     def initialize(self, references: tuple[ObjectReference, ...]) -> None:
         if not set(self.symmetries) <= {item.role for item in references}:
             raise ValueError("axial symmetry role lacks an object reference")

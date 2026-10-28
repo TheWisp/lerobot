@@ -214,6 +214,15 @@ pose-accuracy risk. The viewer must identify the selected preparation and
 show rejected candidates and ambiguous predictions, while algorithm changes
 must be tested on the same held-out frames across preparations and tasks.
 
+The preparation path now saves each frame's masks, group evidence, accepted
+pose, rejected raw fit, and partial visible-surface measurements during the
+same extraction pass. The symmetry wrapper had previously dropped the raw fit
+and partial measurements before the shared pipeline could record them. Fresh
+isolated preparations of both demos preserved the v11 pose/conflict reports;
+the gamepad cache-hit rerun also restored complete scene evidence. This repairs
+the evidence available for diagnosis and comparison, not the unresolved
+gamepad ambiguity or the unverified accuracy of a held pose.
+
 Representative camera frames with projected saved held surface (orange) and
 independent extraction where available (cyan):
 

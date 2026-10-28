@@ -269,10 +269,13 @@ An unused output name creates a new bundle and forces the importer to run SAM3,
 DINO and RGB-D pose extraction again; the pose cache includes the output name.
 It does not overwrite a previous bundle. New bundles retain `annotation.json`,
 `keypoints.json` and `preparation-report.json` with cache provenance. This
-importer saves reference-frame masks only. The separate scene-evidence rebuild
-can add historical per-frame masks and group support to demo playback; it does
-not alter the saved skill. Rejected fits remain in the pose trace and decision
-journal when recorded, rather than being inferred from a mask.
+importer now streams per-frame masks, group support, accepted estimates and
+rejected raw pose proposals during the same extraction pass. Demo playback reads
+that versioned evidence beside the skill. A separate scene-evidence rebuild is
+still available for older bundles; it does not alter their saved skill. The
+symmetry wrapper preserves a rejected fit and its measured partial surface
+support through the shared perception interface instead of reducing it to
+`lost` before recording.
 A legacy bundle modified after import cannot be assumed reproducible from the
 dataset's top-level annotation file alone.
 

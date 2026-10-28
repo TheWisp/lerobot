@@ -15,7 +15,7 @@ from lerobot.policies.flash.demo_scene import (
     scene_evidence_frame,
     scene_evidence_status,
 )
-from lerobot.policies.flash.sealed_demo_evidence import _mask_runs
+from lerobot.policies.flash.scene_evidence_writer import _mask_runs
 
 
 def test_reference_surface_uses_masked_depth_and_does_not_bridge_depth_edges(tmp_path) -> None:

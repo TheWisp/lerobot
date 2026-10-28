@@ -14,6 +14,7 @@ import argparse
 import copy
 import hashlib
 import json
+import shutil
 from pathlib import Path
 
 import cv2
@@ -37,6 +38,10 @@ from lerobot.policies.flash.perception import (
 )
 from lerobot.policies.flash.prepared import PreparedFlashSkill
 from lerobot.policies.flash.runtime import AttachmentRuntimeLimits
+from lerobot.policies.flash.scene_evidence_writer import (
+    SCENE_EVIDENCE_CAPTURE_VERSION,
+    SceneEvidenceWriter,
+)
 from lerobot.policies.flash.skill import (
     AttachmentAction,
     AttachmentTransition,
@@ -488,6 +493,7 @@ def prepare(
     cache_identity["causal_tracking"] = annotation.get("causal_tracking")
     cache_identity["vision_pipeline"] = vision_config.to_dict()
     cache_identity["pose_trace_selection_version"] = POSE_TRACE_SELECTION_VERSION
+    cache_identity["scene_evidence_capture_version"] = SCENE_EVIDENCE_CAPTURE_VERSION
     cache_key = hashlib.sha256(
         json.dumps(cache_identity, sort_keys=True).encode()
         + intrinsics.tobytes()
@@ -495,7 +501,24 @@ def prepare(
         + camera_times.tobytes()
     ).hexdigest()[:12]
     cache_path = root / "flash" / "v1" / "preparation-cache" / f"{output_name}-{cache_key}.npz"
+    evidence_cache_path = cache_path.with_suffix(".scene-evidence")
     cache_hit = cache_path.exists()
+    if cache_hit:
+        evidence_manifest = evidence_cache_path / "manifest.json"
+        if not evidence_manifest.is_file():
+            cache_hit = False
+        else:
+            evidence_status = json.loads(evidence_manifest.read_text(encoding="utf-8"))
+            cache_hit = (
+                evidence_status.get("complete") is True
+                and evidence_status.get("total_frames") == through_frame + 1
+                and evidence_status.get("frames_completed") == through_frame + 1
+                and evidence_status.get("roles") == list(prompts)
+                and all(
+                    (evidence_cache_path / f"{index:06d}.json.gz").is_file()
+                    for index in range(through_frame + 1)
+                )
+            )
     if cache_hit and annotation.get("held_attachment") is not None:
         with np.load(cache_path, allow_pickle=False) as cache:
             cache_hit = "held_mask_indices" in cache and "held_masks" in cache
@@ -558,6 +581,9 @@ def prepare(
                     for index, mask in zip(cache["held_mask_indices"], cache["held_masks"], strict=True)
                 }
     else:
+        writer = SceneEvidenceWriter(
+            evidence_cache_path, total_frames=through_frame + 1, roles=tuple(prompts)
+        )
         backend = build_vision_backend(
             vision_config,
             mask_source,
@@ -570,6 +596,7 @@ def prepare(
         release_camera = _nearest_index(camera_times, times[release])
 
         def capture_held_mask(frame, result, _groups, by_role) -> None:
+            writer.record(frame, result, _groups, by_role)
             if (
                 times[grasp] <= frame.source_time_s < times[release]
                 and by_role[held].evidence == Evidence.OBSERVED
@@ -592,6 +619,7 @@ def prepare(
             ),
             on_frame_evidence=capture_held_mask,
         )
+        writer.finish()
         for row in estimates:
             for role, estimate in row.items():
                 observed_counts[role] += estimate.evidence == Evidence.OBSERVED
@@ -933,6 +961,15 @@ def prepare(
         "keypoints_artifact": "keypoints.json",
     }
     (destination / "preparation-report.json").write_text(json.dumps(report, indent=2) + "\n")
+    shutil.copytree(evidence_cache_path, destination / "scene-evidence")
+    sidecar_manifest = destination / "scene-evidence" / "manifest.json"
+    sidecar_status = json.loads(sidecar_manifest.read_text(encoding="utf-8"))
+    sidecar_status["source_sha256"] = hashlib.sha256(
+        manifest.read_bytes() + (destination / "annotation.json").read_bytes()
+    ).hexdigest()
+    temporary_manifest = sidecar_manifest.with_suffix(".tmp")
+    temporary_manifest.write_text(json.dumps(sidecar_status, indent=2) + "\n", encoding="utf-8")
+    temporary_manifest.replace(sidecar_manifest)
     return manifest, report
 
 

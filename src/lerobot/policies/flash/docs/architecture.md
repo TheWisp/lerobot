@@ -142,7 +142,13 @@ Selecting a demo opens its existing playback view. A Review/Edit toggle makes th
 
 **Regenerate** runs asynchronous offline preparation from a versioned annotation and immutable source episode. It always creates a new prepared bundle, records the exact annotation, reference masks, model and calibration versions, cache hit/miss, per-frame pose and rejection evidence, and displays a comparison with the previous bundle. A mask-only refresh and a full pose/skill rebuild must be distinguishable; changing a mask or reference view invalidates dependent features, geometry and pose traces. After review, the operator selects the prepared version for a live trial. No preparation job may occupy the fixed-rate motor loop, and a trial must identify the exact prepared version it used.
 
-The current editor is the first slice of this design. It edits the selected imported demo on its existing camera/timeline: reference and grasp frames, a reference-mask polygon, role prompts and axial symmetry, event times, keyframes and preparation parameters. Regeneration versions the inputs and runs the legacy one-view importer asynchronously. Its output is a review candidate; the recordings list opens the newest version for inspection, labels candidates, and lets the operator choose an earlier version. Viewing a candidate does not select it for a robot trial. This slice does **not** capture per-frame preparation masks, rejected correspondences or a multi-view held reference, and it cannot yet compare two versions in one view. Those missing observations are essential to diagnose the held pose rather than just edit its prior.
+Each prepared version retains its annotation and the per-frame masks, scene
+support, accepted poses and rejected raw proposals produced in the same
+extraction pass. These records use source frame IDs and the prepared version's
+identity so a replay can show the evidence behind a pose without recomputing
+the demo. An older version can rebuild the same evidence as a sidecar. Viewing
+a preparation never changes the version selected for Test; comparing versions
+must include both the saved pose and its supporting observation.
 
 ### Common object estimation and relationships
 
