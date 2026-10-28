@@ -177,7 +177,13 @@ function _flashScenePointerUp(event) {
     const picked = flashSceneView.pickObserved(event.clientX, event.clientY);
     if (!picked) return;
     document.getElementById('flash-scene-object').value = picked.role;
-    if (flashDemoEditor?.pickingReference) flashDemoEditorPickReference(picked.role);
+    if (flashDemoEditor?.pickingReference) {
+        flashDemoEditorPickReference(picked.role);
+    } else if (flashDemoEditor) {
+        flashDemoEditor.role = picked.role;
+        flashDemoEditor.section = 'objects';
+        _flashEditorRender();
+    }
 }
 
 function _flashUpdateWorkspace() {
@@ -1236,10 +1242,9 @@ function _flashInstallReplay(replay, imageAlt) {
         toolbar.className = 'flash-scene-toolbar';
         toolbar.innerHTML = '<button type="button" id="flash-scene-toggle" onclick="toggleFlashSceneView()">3D scene</button>' +
             '<div id="flash-scene-tools" hidden>' +
-            '<select id="flash-scene-object" aria-label="Object to focus"><option value="">Focus object</option></select>' +
-            '<button type="button" onclick="flashSceneView?.focus(document.getElementById(\'flash-scene-object\').value)">Focus</button>' +
+            '<select id="flash-scene-object" aria-label="Focus object" onchange="flashSceneView?.focus(this.value)"><option value="">Focus object</option></select>' +
             '<button type="button" onclick="flashSceneView?.reset()">Reset view</button>' +
-            '<button type="button" onclick="openFlashDemoSceneEditor()">Edit key frames</button>' +
+            '<button type="button" id="flash-scene-edit" onclick="openFlashDemoSceneEditor()">Edit key frames</button>' +
             '<details class="flash-scene-layer-menu"><summary>Layers</summary><div class="flash-scene-layer-options">' +
             '<label title="Current frame, using this frame’s mask and measured depth"><input type="checkbox" id="flash-scene-surface" checked onchange="_flashUpdateSceneFrame()">Measured surface</label>' +
             '<label title="Current mask-and-depth samples for display; these are not tracked landmarks"><input type="checkbox" id="flash-scene-points" checked onchange="_flashUpdateSceneFrame()">Surface points</label>' +
@@ -1294,6 +1299,8 @@ function _flashRenderTimeline() {
         const button = document.createElement('button');
         button.type = 'button';
         button.className = `flash-timeline-marker flash-timeline-${event.kind}`;
+        if (event.kind === 'key' && flashDemoEditor?.keypointIndex === event.index)
+            button.classList.add('active');
         button.style.left = `${100 * event.time / duration}%`;
         button.title = `${event.label} · ${Number(event.time).toFixed(2)} s`;
         button.setAttribute('aria-label', button.title);
@@ -1307,6 +1314,7 @@ function _flashRenderTimeline() {
                 flashDemoEditor.section = event.kind === 'key' ? 'keyframes' : 'events';
                 if (event.kind === 'key') flashDemoEditor.keypointIndex = event.index;
                 _flashEditorRender();
+                _flashRenderTimeline();
             }
         };
         markers.append(button);

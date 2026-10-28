@@ -659,9 +659,11 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .flash-replay-timeline { position: relative; display: flex; align-items: center; flex: 1; min-width: 0; height: 34px; }
 .flash-replay-timeline input { position: relative; z-index: 1; width: 100%; }
 .flash-timeline-markers { position: absolute; z-index: 2; inset: 0 7px auto; height: 20px; pointer-events: none; }
-.flash-timeline-marker { position: absolute; top: 0; width: 4px; height: 9px !important; min-width: 0 !important; padding: 0 !important; transform: translateX(-50%); border-radius: 1px !important; pointer-events: auto; background: #fbbf24 !important; }
-.flash-timeline-grasp { top: 10px; background: #34d399 !important; }
-.flash-timeline-release { top: 10px; background: #f87171 !important; }
+.flash-timeline-marker { position: absolute; top: 0; width: 16px; height: 20px !important; min-width: 0 !important; padding: 0 !important; transform: translateX(-50%); border: 0 !important; border-radius: 0 !important; pointer-events: auto; background: transparent !important; cursor: pointer; }
+.flash-timeline-marker::after { content: ''; position: absolute; top: 0; left: 6px; width: 4px; height: 10px; background: #fbbf24; border-radius: 1px; }
+.flash-timeline-marker.active::after { left: 5px; width: 6px; height: 15px; box-shadow: 0 0 0 2px #101b2a; }
+.flash-timeline-grasp::after { top: 10px; background: #34d399; }
+.flash-timeline-release::after { top: 10px; background: #f87171; }
 .flash-timeline-legend { position: absolute; bottom: -3px; left: 3px; display: flex; gap: 12px; color: #a7b5c8; font-size: 10px; white-space: nowrap; pointer-events: none; }
 .flash-timeline-legend[hidden] { display: none; }
 .flash-timeline-legend span:nth-child(1) { color: #fbbf24; }
@@ -783,9 +785,12 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .flash-demo-editor .flash-editor-group > summary { cursor: pointer; padding: 12px 0; font-size: 13px; font-weight: 600; color: #bdd0e0; }
 .flash-demo-editor .flash-editor-group > .flash-editor-pane > section { border-top: 0; padding-top: 0; }
 .flash-demo-editor .flash-editor-keypoint > strong { display: block; margin-bottom: 8px; color: #fff; }
-.flash-editor-keypoint-list { display: flex; flex-wrap: wrap; gap: 4px; margin: 8px 0; }
-.flash-demo-editor .flash-editor-keypoint-list button { margin: 0; }
-.flash-demo-editor .flash-editor-keypoint-list button.active { border-color: #4fc3f7; color: #4fc3f7; }
+.flash-demo-editing #flash-scene-edit { display: none; }
+.flash-editor-keypoint-navigation { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 8px; }
+.flash-editor-keypoint-navigation strong { color: #fff; font-size: 13px; }
+.flash-demo-editor .flash-editor-keypoint-navigation button { min-width: 30px; font-size: 17px; margin: 0; }
+.flash-editor-keyframe-more { border-top: 1px solid #31516c; margin-top: 10px; padding-top: 8px; }
+.flash-editor-keyframe-more > summary { color: #bdd0e0; cursor: pointer; }
 .flash-editor-footer { position: sticky; bottom: -14px; padding: 10px 0 !important; background: #101b2a; border-top: 1px solid #31516c; }
 @media (max-width: 1200px) {
     #tab-run.flash-reviewing #run-sidebar { width: 220px; min-width: 180px; }

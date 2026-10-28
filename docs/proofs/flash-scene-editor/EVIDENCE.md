@@ -5,6 +5,10 @@ Captured 2026-10-28 from insertion episode 0, prepared version
 
 ![Frame 180 with measured surfaces and key-frame editor](demo-ui-frame180.png)
 
+The editor shows one selected key frame beside playback. Yellow timeline markers
+select key frames, arrows move between them, and clicking a measured object opens
+its mask controls. Other settings stay closed until requested.
+
 In the camera-aligned 3D view, measured points from the saved masks and aligned
 depth projected back to their RGB pixel locations. At frames 180, 291, and 450,
 the maximum discrepancy across 85, 64, and 174 sampled masked depth pixels was

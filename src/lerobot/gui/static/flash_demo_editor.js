@@ -173,30 +173,14 @@ function _flashEditorRender() {
     const heading = document.createElement('h3');
     heading.textContent = state.raw ? 'Prepare demo' : 'Edit demo';
     editor.append(heading);
-    const summary = document.createElement('p');
-    summary.textContent = state.raw
-        ? 'Name the objects, mark the action on the timeline, then prepare.'
-        : 'Select a key frame on the timeline. Edit it here while viewing that frame.';
-    editor.append(summary);
+    if (state.raw) {
+        const summary = document.createElement('p');
+        summary.textContent = 'Name the objects, mark the action on the timeline, then prepare.';
+        editor.append(summary);
+    }
     const changed = document.createElement('p');
     changed.id = 'flash-demo-editor-change-status';
     editor.append(changed);
-    const report = state.preparationReport;
-    if (report) {
-        if (report.review_status === 'candidate') {
-            const candidate = document.createElement('p');
-            candidate.textContent = 'Review candidate · inspect its masks and poses before using it for a live trial.';
-            editor.append(candidate);
-        }
-        const evidence = report.pose_evidence_frames;
-        const note = document.createElement('p');
-        note.textContent = evidence
-            ? Object.entries(evidence).map(([role, counts]) =>
-                `${role}: ${counts.observed || 0} observed, ${counts.predicted || 0} predicted, ${counts.lost || 0} lost`
-            ).join(' · ')
-            : 'This version has no per-source evidence count; inspect its pose labels on the timeline.';
-        editor.append(note);
-    }
     const frameText = document.createElement('p');
     frameText.id = 'flash-demo-editor-frame';
     editor.append(frameText);
@@ -210,7 +194,7 @@ function _flashEditorRender() {
     }
     for (const [key, label, primary] of [
         ['keyframes', 'Key frames', true],
-        ['objects', 'Objects and masks', true],
+        ['objects', 'Objects and masks', state.raw],
         ['events', 'Action timing', state.raw],
         ['setup', 'Recording setup', state.raw],
         ['pose', 'Pose evidence', false],
@@ -503,50 +487,35 @@ function _flashEditorRender() {
         });
     }
 
-    const keypoints = _flashEditorSection(panes.keyframes, 'Key frames',
-        'Select a marker below the video, or choose a numbered key frame here.');
-    _flashEditorButton(keypoints, 'Add key frame at current time', () => {
-        const time = _flashEditorCurrentFrame().snapshot.demo.time_s;
-        const points = state.keypointsDocument.keypoints;
-        if (points.some(point => Math.abs(point.t - time) < 1e-6)) {
-            showToast('Key frame already exists', 'Choose another frame or edit the existing event.', 'warning');
-            return;
-        }
-        const prior = [...points].reverse().find(point => point.t < time) || points[0] ||
-            {kind: 'key', frame: 'world', move: 'line', grip: 'first', constraint: 'pose'};
-        points.push({ ...prior, t: time, kind: 'key' });
-        points.sort((left, right) => left.t - right.t);
-        state.keypointIndex = points.findIndex(point => point.t === time);
-        _flashEditorRender();
-        _flashRenderTimeline();
-    });
-    const keypointList = document.createElement('div');
-    keypointList.className = 'flash-editor-keypoint-list';
-    keypoints.append(keypointList);
-    state.keypointsDocument.keypoints.forEach((point, index) => {
-        const select = _flashEditorButton(keypointList, `${index + 1} · ${point.t.toFixed(2)} s`, () => {
-            state.keypointIndex = index;
+    const keypoints = _flashEditorSection(panes.keyframes, 'Key frame',
+        'Select a yellow marker on the timeline to edit its motion.');
+    const points = state.keypointsDocument.keypoints;
+    if (points.length) {
+        state.keypointIndex = Math.max(0, Math.min(state.keypointIndex, points.length - 1));
+        const index = state.keypointIndex;
+        const point = points[index];
+        const navigation = document.createElement('div');
+        navigation.className = 'flash-editor-keypoint-navigation';
+        const previous = _flashEditorButton(navigation, '‹', () => {
+            state.keypointIndex--;
             _flashEditorRender();
-            _flashEditorJumpTime(point.t);
+            _flashEditorJumpTime(points[state.keypointIndex].t);
         });
-        select.classList.toggle('active', index === state.keypointIndex);
-        if (index !== state.keypointIndex) return;
+        previous.setAttribute('aria-label', 'Previous key frame');
+        previous.disabled = index === 0;
+        const position = document.createElement('strong');
+        position.textContent = `${index + 1} of ${points.length} · ${point.t.toFixed(2)} s`;
+        navigation.append(position);
+        const next = _flashEditorButton(navigation, '›', () => {
+            state.keypointIndex++;
+            _flashEditorRender();
+            _flashEditorJumpTime(points[state.keypointIndex].t);
+        });
+        next.setAttribute('aria-label', 'Next key frame');
+        next.disabled = index === points.length - 1;
+        keypoints.append(navigation);
         const details = document.createElement('div');
         details.className = 'flash-editor-keypoint';
-        const title = document.createElement('strong');
-        title.textContent = `Selected · ${point.t.toFixed(2)} s`;
-        details.append(title);
-        _flashEditorField(details, 'Time (s)', point.t.toFixed(2), value => {
-            if (!Number.isFinite(value)) return;
-            point.t = value;
-            title.textContent = `Selected · ${value.toFixed(2)} s`;
-        }, null, 'number');
-        _flashEditorButton(details, 'Use current time', () => {
-            point.t = _flashEditorCurrentFrame().snapshot.demo.time_s; _flashEditorRender();
-        });
-        _flashEditorButton(details, 'Jump', () => {
-            _flashEditorJumpTime(point.t);
-        });
         const startAnchored = Number.isFinite(Number(a.grasp_time_s)) &&
             Number.isFinite(Number(a.start_anchored_until_s)) &&
             point.t > Number(a.grasp_time_s) && point.t <= Number(a.start_anchored_until_s);
@@ -565,21 +534,34 @@ function _flashEditorRender() {
                     _flashEditorRender();
                 });
             pick.disabled = state.running || startAnchored;
-            const note = document.createElement('p');
-            note.textContent = startAnchored
+            if (startAnchored || state.pickingReference) {
+                const note = document.createElement('p');
+                note.textContent = startAnchored
                 ? 'This interval uses the grasp-start reference. To change it, first edit “Start-anchored until” under Action timing.'
-                : state.pickingReference
-                    ? 'Click a measured object in the 3D scene to use it as this key frame’s reference.'
-                    : 'Pick the object this motion is relative to. Regenerate to apply.';
-            details.append(note);
+                    : 'Click a measured object in the 3D scene to use it as this key frame’s reference.';
+                details.append(note);
+            }
         }
         const reference = _flashEditorField(details, 'Reference', point.frame || 'world', value => { point.frame = value; }, ['world', ...roles]);
         reference.disabled = startAnchored;
         _flashEditorField(details, 'Motion', point.move, value => { point.move = value; }, ['line', 'follow', 'lift']);
-        _flashEditorField(details, 'Constraint', point.constraint || 'pose', value => { point.constraint = value; }, ['pose', 'best_effort']);
-        _flashEditorField(details, 'Grip', point.grip || 'first', value => { point.grip = value; }, ['first', 'along']);
-        if (point.move === 'lift') _flashEditorField(details, 'Lift (mm)', point.up_mm || 0, value => { point.up_mm = value; }, null, 'number');
-        _flashEditorButton(details, 'Remove key frame', () => {
+        const more = document.createElement('details');
+        more.className = 'flash-editor-keyframe-more';
+        const moreTitle = document.createElement('summary');
+        moreTitle.textContent = 'Timing and other options';
+        more.append(moreTitle);
+        _flashEditorField(more, 'Time (s)', point.t.toFixed(2), value => {
+            if (!Number.isFinite(value)) return;
+            point.t = value;
+            position.textContent = `${index + 1} of ${points.length} · ${value.toFixed(2)} s`;
+        }, null, 'number');
+        _flashEditorButton(more, 'Use current time', () => {
+            point.t = _flashEditorCurrentFrame().snapshot.demo.time_s; _flashEditorRender();
+        });
+        _flashEditorField(more, 'Constraint', point.constraint || 'pose', value => { point.constraint = value; }, ['pose', 'best_effort']);
+        _flashEditorField(more, 'Grip', point.grip || 'first', value => { point.grip = value; }, ['first', 'along']);
+        if (point.move === 'lift') _flashEditorField(more, 'Lift (mm)', point.up_mm || 0, value => { point.up_mm = value; }, null, 'number');
+        _flashEditorButton(more, 'Remove key frame', () => {
             if (state.keypointsDocument.keypoints.length <= 1) {
                 showToast('Keep one key frame', 'The prepared skill needs at least one event.', 'warning');
                 return;
@@ -589,7 +571,22 @@ function _flashEditorRender() {
             _flashEditorRender();
             _flashRenderTimeline();
         });
+        details.append(more);
         keypoints.append(details);
+    }
+    _flashEditorButton(keypoints, 'Add key frame at current time', () => {
+        const time = _flashEditorCurrentFrame().snapshot.demo.time_s;
+        if (points.some(point => Math.abs(point.t - time) < 1e-6)) {
+            showToast('Key frame already exists', 'Choose another frame or edit the existing event.', 'warning');
+            return;
+        }
+        const prior = [...points].reverse().find(point => point.t < time) || points[0] ||
+            {kind: 'key', frame: 'world', move: 'line', grip: 'first', constraint: 'pose'};
+        points.push({ ...prior, t: time, kind: 'key' });
+        points.sort((left, right) => left.t - right.t);
+        state.keypointIndex = points.findIndex(point => point.t === time);
+        _flashEditorRender();
+        _flashRenderTimeline();
     });
 
     const advanced = document.createElement('div');
@@ -746,6 +743,7 @@ function flashDemoEditorPickReference(role) {
     const point = state.keypointsDocument.keypoints[state.keypointIndex];
     if (!point) return;
     point.frame = role;
+    state.role = role;
     state.pickingReference = false;
     state.message = `Key frame ${state.keypointIndex + 1} now references ${role}. Regenerate to apply.`;
     _flashEditorRender();

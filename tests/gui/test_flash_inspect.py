@@ -675,6 +675,7 @@ def test_run_flash_lists_demos_and_shows_extracted_pose_overlay(gui_page):
     page.wait_for_function("() => !!document.querySelector('#flash-demo-editor')")
     assert "Edit demo" in page.locator("#flash-demo-editor").inner_text()
     assert page.locator("#flash-demo-editor-frame").inner_text().startswith("Frame 4")
+    page.locator("#flash-demo-editor .flash-editor-group[data-section='objects'] > summary").click()
     page.get_by_role("button", name="Draw replacement mask").click()
     page.evaluate("""() => {
         const image = document.querySelector('#rerun-viewer .flash-replay-grid img');
@@ -1278,6 +1279,18 @@ def test_3d_scene_projection_and_surface_pick_edit_the_prepared_keyframe(gui_pag
     )
     assert page.evaluate("([x, y]) => flashSceneView.pickObserved(x, y)?.role", fixture_pixel) == "fixture"
     page.mouse.click(*fixture_pixel)
+    assert page.evaluate("flashDemoEditor.keypointsDocument.keypoints[0].frame") == "fixture"
+    assert page.evaluate("flashDemoEditor.role") == "fixture"
+    tool_pixel = [
+        box["x"] + (box["width"] - width * scale) / 2 + 13 * scale,
+        box["y"] + (box["height"] - height * scale) / 2 + 24 * scale,
+    ]
+    assert page.evaluate("([x, y]) => flashSceneView.pickObserved(x, y)?.role", tool_pixel) == "tool"
+    page.mouse.click(*tool_pixel)
+    assert page.evaluate("flashDemoEditor.role") == "tool"
+    assert page.locator("#flash-demo-editor .flash-editor-group[data-section='objects']").evaluate(
+        "element => element.open"
+    )
     assert page.evaluate("flashDemoEditor.keypointsDocument.keypoints[0].frame") == "fixture"
     assert "Unsaved edits" in page.locator("#flash-demo-editor-change-status").inner_text()
     page.get_by_role("button", name="Regenerate prepared demo").click()
