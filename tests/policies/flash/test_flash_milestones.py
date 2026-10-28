@@ -27,14 +27,14 @@ def observed(role, x, *, version, time_s=1.0, evidence=Evidence.OBSERVED, rotati
     return PoseEstimate(role, pose(x), time_s, time_s, evidence, version, (True,) * 3, rotation)
 
 
-def milestone(*, rotation_tolerance_rad=None):
+def milestone(*, rotation_tolerance_rad=None, offset=0.1):
     return MilestoneSpec(
         "placed",
         ("held", "target"),
         PoseRelationCriterion(
             moving_role="held",
             reference_role="target",
-            reference_from_moving=pose(0.1),
+            reference_from_moving=pose(offset),
             moving_version="held-v1",
             reference_version="target-v1",
             translation_tolerance_m=0.005,
@@ -102,6 +102,37 @@ def test_pose_milestone_never_promotes_prediction_or_unobserved_axes_to_success(
     assert verify_pose_relation(milestone(), poses, pose_version=4, now_s=1.3).verdict == Verdict.UNKNOWN
     poses["held"] = observed("held", 0.5, version="different")
     assert verify_pose_relation(milestone(), poses, pose_version=5, now_s=1.0).verdict == Verdict.UNKNOWN
+
+
+def test_position_only_milestone_accepts_current_depth_translation_but_not_predicted_rotation():
+    target = PoseEstimate(
+        "target",
+        pose(0.4),
+        1.0,
+        1.0,
+        Evidence.PREDICTED,
+        "target-v1",
+        (True,) * 3,
+        (True,) * 3,
+        direct_translation_observed=True,
+        estimator="symmetry_constrained_rgbd",
+    )
+    poses = {"target": target, "held": observed("held", 0.4, version="held-v1")}
+    position = verify_pose_relation(milestone(offset=0), poses, pose_version=1, now_s=1.0)
+    assert position.verdict == Verdict.TRUE
+    assert (
+        verify_pose_relation(
+            milestone(rotation_tolerance_rad=0.1, offset=0), poses, pose_version=2, now_s=1.0
+        ).verdict
+        == Verdict.UNKNOWN
+    )
+
+    poses["target"] = PoseEstimate(
+        "target", pose(0.4), 1.0, 1.0, Evidence.PREDICTED, "target-v1", (True,) * 3, (True,) * 3
+    )
+    predicted = verify_pose_relation(milestone(offset=0), poses, pose_version=3, now_s=1.0)
+    assert predicted.verdict == Verdict.UNKNOWN
+    assert predicted.source_id != position.source_id
 
 
 def test_true_pose_milestone_is_revoked_once_when_observation_expires():

@@ -142,9 +142,11 @@ prepared from this editor; no object model is inferred from their names.
 The sealed importer remains an adapter for the historical SO-107 recording
 layout and its one-held/one-target annotation; it is not the general demo
 schema. Other milestone types and recovery editing for regular recordings are
-still pending. The current insertion recording has no directly observed ring
-pose at the contact endpoint, so its result cannot yet be certified by this
-pose-relation check.
+still pending. The relation verifier can use a directly measured object centre
+for a position-only check even if irrelevant rotation was predicted. It does
+not use that translation to certify an orientation-dependent contact. The
+current insertion recording directly measures the ring centre near contact,
+but its ring orientation and carried dowel tip are not independently verified.
 
 The live trial constructs the configured vision backend through
 [`VisionBackendFactory`](vision_pipeline.py). When `causal_tracking` is configured, the

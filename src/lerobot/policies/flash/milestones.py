@@ -10,7 +10,26 @@ import numpy as np
 from .geometry import inverse
 from .progress import MilestoneUpdate, Verdict
 from .skill import MilestoneSpec
-from .trajectory import PoseEstimate, required_rotation_axes
+from .trajectory import Evidence, PoseEstimate, required_rotation_axes
+
+
+def _usable_direct_components(
+    pose: PoseEstimate, now_s: float, max_age_s: float, rotation: tuple[bool, bool, bool]
+) -> bool:
+    """A direct centre measurement can verify a position-only relation.
+
+    Symmetry may make the complete pose predicted while the current RGB-D
+    frame still measures its translation. It cannot verify any orientation
+    that was filled from a prior or from the gripper.
+    """
+    return (
+        pose.pose is not None
+        and pose.evidence != Evidence.LOST
+        and 0 <= now_s - pose.source_time_s <= max_age_s
+        and now_s >= pose.available_time_s
+        and pose.supports(rotation=rotation)
+        and (pose.evidence == Evidence.OBSERVED or (pose.direct_translation_observed and not any(rotation)))
+    )
 
 
 class PoseMilestonePublisher:
@@ -55,7 +74,9 @@ def verify_pose_relation(
     The evidence identity uses the two source-frame times, so an unrelated
     pose-store update cannot count the same camera evidence twice. Expiration
     gets a distinct identity so it can revoke a previously true verdict.
-    Missing, predicted, stale or partly supported evidence yields UNKNOWN.
+    Missing, stale or partly supported evidence yields UNKNOWN. A directly
+    measured translation may verify a position-only relation even when an
+    irrelevant rotation was predicted; a wholly predicted pose never can.
     The tolerances belong to the skill annotation, not to the tracker.
     """
     criterion = milestone.pose_relation
@@ -68,7 +89,8 @@ def verify_pose_relation(
     if moving is not None and reference is not None:
         source_id = "|".join(
             f"{pose.role}:{pose.source_time_s!r}:{pose.reference_version}:"
-            f"{pose.evidence.value}:{pose.translation_supported!r}:{pose.rotation_supported!r}"
+            f"{pose.evidence.value}:{pose.direct_translation_observed}:"
+            f"{pose.translation_supported!r}:{pose.rotation_supported!r}"
             for pose in (moving, reference)
         )
         if any(now_s - pose.source_time_s > criterion.max_pose_age_s for pose in (moving, reference)):
@@ -112,9 +134,9 @@ def verify_pose_relation(
     else:
         reference_rotation = required_rotation_axes(reference_point, reference_direction)
         moving_rotation = required_rotation_axes(local_point, local_direction)
-    if not reference.usable(now_s, criterion.max_pose_age_s, False, rotation=reference_rotation):
+    if not _usable_direct_components(reference, now_s, criterion.max_pose_age_s, reference_rotation):
         return update(Verdict.UNKNOWN, "reference pose lacks fresh observed required axes")
-    if not moving.usable(now_s, criterion.max_pose_age_s, False, rotation=moving_rotation):
+    if not _usable_direct_components(moving, now_s, criterion.max_pose_age_s, moving_rotation):
         return update(Verdict.UNKNOWN, "moving pose lacks fresh observed required axes")
 
     actual = inverse(reference.pose) @ moving.pose
