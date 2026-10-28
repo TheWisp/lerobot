@@ -228,6 +228,7 @@ class CausalPoseService:
         ):
             raise ValueError("object support models must contain finite 3D points")
         self.observed: dict[str, tuple[PoseEstimate, SceneTracks, tuple[np.ndarray, ...]]] = {}
+        self.direct_history: dict[str, deque[tuple[PoseEstimate, SceneTracks, tuple[np.ndarray, ...]]]] = {}
         self.candidate_relationships: dict[str, EnvironmentRelationship] = {}
         self.relationships: dict[str, EnvironmentRelationship] = {}
         self._expired_verified_roles: set[str] = set()
@@ -387,6 +388,7 @@ class CausalPoseService:
             self.relationships.pop(item, None)
             self.candidate_relationships.pop(item, None)
             self.observed.pop(item, None)
+            self.direct_history.pop(item, None)
             self._expired_verified_roles.discard(item)
         return role
 
@@ -499,32 +501,7 @@ class CausalPoseService:
                 continue
             pose, advanced = tracked
             source[role] = advanced
-            observed = self.observed.get(role)
-            if observed is None or observed[0].reference_version != relationship.reference_version:
-                continue
-            anchor = observed[0]
-            estimate = PoseEstimate(
-                role,
-                pose,
-                frame.source_time_s,
-                max(frame.available_time_s, time.perf_counter()),
-                Evidence.PREDICTED,
-                relationship.reference_version,
-                anchor.translation_supported,
-                anchor.rotation_supported,
-                estimator="environment_group_motion" if confirmed else "environment_support_hypothesis",
-                last_direct_observation_s=anchor.source_time_s,
-            )
-            previous_version, _ = self.store.snapshot()
-            if self.store.publish((estimate,)) != previous_version:
-                if self.on_layer is not None:
-                    self.on_layer(estimate)
-                self.environment_published += 1
-                self.environment_published_by_role[role] = self.environment_published_by_role.get(role, 0) + 1
-                if not confirmed:
-                    self.environment_candidate_published_by_role[role] = (
-                        self.environment_candidate_published_by_role.get(role, 0) + 1
-                    )
+            self._publish_environment(role, pose, frame, advanced, confirmed=confirmed)
         self.environment_track_total_s += time.perf_counter() - environment_started_s
         # A missing visual fit is not evidence that a stationary object moved.
         # Carry the last direct pose for a bounded interval, with explicit
@@ -539,6 +516,47 @@ class CausalPoseService:
                 and role not in self.candidate_relationships
             ):
                 self._publish_static(role, anchor, frame)
+
+    def _publish_environment(
+        self,
+        role: str,
+        pose: np.ndarray,
+        frame: RGBDFrame,
+        relationship: EnvironmentRelationship,
+        *,
+        confirmed: bool,
+        available_at_s: float | None = None,
+    ) -> None:
+        observed = self.observed.get(role)
+        if observed is None or observed[0].reference_version != relationship.reference_version:
+            return
+        anchor = observed[0]
+        estimate = PoseEstimate(
+            role,
+            pose,
+            frame.source_time_s,
+            max(
+                frame.available_time_s,
+                time.perf_counter(),
+                available_at_s if available_at_s is not None else frame.available_time_s,
+            ),
+            Evidence.PREDICTED,
+            relationship.reference_version,
+            anchor.translation_supported,
+            anchor.rotation_supported,
+            estimator="environment_group_motion" if confirmed else "environment_support_hypothesis",
+            last_direct_observation_s=anchor.source_time_s,
+        )
+        previous_version, _ = self.store.snapshot()
+        if self.store.publish((estimate,)) != previous_version:
+            if self.on_layer is not None:
+                self.on_layer(estimate)
+            self.environment_published += 1
+            self.environment_published_by_role[role] = self.environment_published_by_role.get(role, 0) + 1
+            if not confirmed:
+                self.environment_candidate_published_by_role[role] = (
+                    self.environment_candidate_published_by_role.get(role, 0) + 1
+                )
 
     def _publish_static(self, role: str, anchor: PoseEstimate, frame: RGBDFrame) -> None:
         if self.static_prediction_max_s is None or role in self._expired_verified_roles:
@@ -650,9 +668,31 @@ class CausalPoseService:
                 if last_direct_s is None and current.evidence == Evidence.OBSERVED:
                     last_direct_s = current.source_time_s
                 if last_direct_s is not None and last_direct_s > estimate.source_time_s:
-                    # The full scene estimator will replay all later evidence.
-                    # Until then, replaying only point motion from this older
-                    # proposal would erase the later direct observation.
+                    # A later direct observation remains the pose anchor. An
+                    # earlier view can still verify its environment motion
+                    # if the same measured scene points survive between the
+                    # two source frames. This replays that relationship up to
+                    # the latest scene without rewinding the newer pose.
+                    accepted_at_s = self._reconcile_late_environment_observation(
+                        estimate, scene, result.masks, attached_role, decision_time_s=decision_time_s
+                    )
+                    if accepted_at_s is not None:
+                        historical = replace(
+                            estimate, available_time_s=max(estimate.available_time_s, accepted_at_s)
+                        )
+                        self._count_anchor_outcome(estimate.role, "historical_group_verified")
+                        self._record_anchor_decision(
+                            result,
+                            candidate,
+                            "accepted_historical_group",
+                            accepted=historical,
+                            decided_at_s=accepted_at_s,
+                        )
+                        continue
+                    # A full event-time scene replay is still needed when an
+                    # older result might change intervening point/attachment
+                    # decisions. Replaying only its point motion here would
+                    # erase the later direct observation.
                     self.superseded_proposals += 1
                     self._count_anchor_outcome(estimate.role, "superseded_by_direct")
                     self._record_anchor_decision(result, candidate, "superseded_by_direct")
@@ -780,6 +820,119 @@ class CausalPoseService:
             # until another source supports a newer state.
             if self.history[-1].frame_id > source.frame_id and estimate.role not in self.relationships:
                 self._publish_static(estimate.role, estimate, self.history[-1])
+
+    def _reconcile_late_environment_observation(
+        self,
+        older: PoseEstimate,
+        older_scene: SceneTracks,
+        masks: dict[str, np.ndarray],
+        attached_role: str | None,
+        *,
+        decision_time_s: float | None = None,
+    ) -> float | None:
+        """Backfill a measured two-view group relation, preserving newer direct pose.
+
+        The source-to-newer comparison is symmetric in arrival order: both
+        object poses and both scene point sets are tied to their own camera
+        times. Only a relationship supported by the paired points is carried
+        through the retained later scenes. Other late evidence still needs a
+        full scene-event replay and is left unresolved.
+        """
+        role = older.role
+        later = sorted(
+            (
+                item
+                for item in self.direct_history.get(role, ())
+                if item[0].source_time_s > older.source_time_s
+                and item[0].reference_version == older.reference_version
+            ),
+            key=lambda item: item[1].frame_id,
+        )
+        if (
+            role == attached_role
+            or role in self.relationships
+            or not older.has_direct_translation
+            or older.pose is None
+            or not later
+            or self.observed.get(role) is not later[-1]
+        ):
+            return None
+        newer_pose, newer_scene, _ = later[0]
+        relation = establish_environment_relationship(
+            older_scene,
+            newer_scene,
+            older.pose,
+            newer_pose.pose,
+            tuple(masks.values()),
+            context_radius_m=self.environment_context_radius_m,
+            fit_threshold_m=self.fit_threshold_m,
+            min_motion_m=self.environment_min_motion_m,
+            min_inliers=self.environment_min_inliers,
+            reference_version=older.reference_version,
+            allow_stationary=True,
+            object_center_object_m=self.object_centers_by_role.get(role),
+        )
+        if relation is None:
+            return None
+        later_by_frame = {item[1].frame_id: item[0] for item in later[1:]}
+        latest_pose = None
+        latest_scene_id = self.scene_history[-1].frame_id
+        for scene in self.scene_history:
+            if scene.frame_id <= newer_scene.frame_id:
+                continue
+            if (
+                scene.source_time_s - (relation.last_group_measurement_s or relation.anchor_time_s)
+                > self.environment_prediction_max_s
+            ):
+                return None
+            tracked = relation.track(
+                scene, fit_threshold_m=self.fit_threshold_m, min_inliers=self.environment_min_inliers
+            )
+            if (direct := later_by_frame.get(scene.frame_id)) is not None:
+                if (
+                    tracked is None
+                    or direct.pose is None
+                    or self._pose_disagrees(role, tracked[0], direct.pose)
+                ):
+                    return None
+                _, advanced = tracked
+                current_ids = {int(point_id): index for index, point_id in enumerate(scene.ids)}
+                keep = [int(point_id) for point_id in advanced.ids if int(point_id) in current_ids]
+                if len(keep) < self.environment_min_inliers:
+                    return None
+                relation = EnvironmentRelationship(
+                    np.asarray(keep, dtype=np.int64),
+                    scene.base_xyz[[current_ids[point_id] for point_id in keep]].copy(),
+                    direct.pose,
+                    scene.source_time_s,
+                    direct.reference_version,
+                    scene.source_time_s,
+                )
+                continue
+            if tracked is not None:
+                pose, relation = tracked
+                if scene.frame_id == latest_scene_id:
+                    latest_pose = pose
+        accepted_at_s = time.perf_counter() if decision_time_s is None else decision_time_s
+        self.relationships[role] = relation
+        self.candidate_relationships.pop(role, None)
+        self._expired_verified_roles.discard(role)
+        self.environment_relationships += 1
+        self.environment_relationships_by_role[role] = self.environment_relationships_by_role.get(role, 0) + 1
+        history = list(self.direct_history[role])
+        history.append((older, older_scene, tuple(mask.copy() for mask in masks.values())))
+        history.sort(key=lambda item: item[1].frame_id)
+        self.direct_history[role] = deque(history[-self.history.maxlen :], maxlen=self.history.maxlen)
+        if latest_pose is not None:
+            self._publish_environment(
+                role,
+                latest_pose,
+                self.history[-1],
+                relation,
+                confirmed=True,
+                available_at_s=accepted_at_s,
+            )
+        return accepted_at_s
 
     def _replay_one(self, role: str) -> bool:
         pending = self.pending[role]
@@ -1063,7 +1216,9 @@ class CausalPoseService:
                 )
                 if seed is not None:
                     self.candidate_relationships[role] = seed
-        self.observed[role] = (estimate, scene, tuple(mask.copy() for mask in masks.values()))
+        observation = (estimate, scene, tuple(mask.copy() for mask in masks.values()))
+        self.observed[role] = observation
+        self.direct_history.setdefault(role, deque(maxlen=self.history.maxlen)).append(observation)
 
     def _pose_disagrees(self, role: str, predicted: np.ndarray, observed: np.ndarray) -> bool:
         local_center = self.object_centers_by_role.get(role)

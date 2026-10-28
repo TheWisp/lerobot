@@ -822,6 +822,7 @@ function renderFlashSnapshot(snapshot, mode = 'Live') {
         if (decision) {
             const reasons = {
                 accepted: 'Pose candidate accepted',
+                accepted_historical_group: 'Older pose verified scene motion; newer pose retained',
                 missing_mask: 'No matching object mask',
                 lost_pose: 'No usable direct pose',
                 time_mismatch: 'Pose and camera times differ',

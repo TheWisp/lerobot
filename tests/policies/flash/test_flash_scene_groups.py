@@ -7,7 +7,7 @@ import cv2
 import numpy as np
 import pytest
 
-from lerobot.policies.flash.causal_service import CausalPoseService
+from lerobot.policies.flash.causal_service import CausalPoseService, _Anchor
 from lerobot.policies.flash.perception import LatestPoseStore, RGBDFrame
 from lerobot.policies.flash.scene_groups import (
     EnvironmentRelationship,
@@ -98,6 +98,85 @@ def test_environment_relation_needs_non_object_co_motion_and_tracks_occlusion():
             )
             is None
         )
+
+
+def test_group_bridge_is_same_when_first_direct_pose_arrives_after_second():
+    rng = np.random.default_rng(81)
+    points = rng.uniform((-0.06, -0.06, 0.98), (0.06, 0.06, 1.02), (40, 3))
+    pixels = np.column_stack((rng.integers(12, 84, 40), rng.integers(12, 84, 40)))
+    scenes = [_tracks(index, points + [index * 0.02, 0, 0], pixels) for index in range(3)]
+    rgb = np.zeros((96, 96, 3), dtype=np.uint8)
+    frames = [_camera_frame(rgb, index) for index in range(3)]
+    mask = np.zeros((96, 96), dtype=bool)
+    mask[pixels[:4, 1], pixels[:4, 0]] = True
+
+    def run(order):
+        store = LatestPoseStore()
+        decisions = []
+        service = CausalPoseService(store, image_scale=1.0, on_anchor_decision=decisions.append)
+        service.scene.update = lambda item: scenes[item.frame_id]
+        for kind, index in order:
+            if kind == "frame":
+                service._frame(frames[index])
+            else:
+                estimate = PoseEstimate(
+                    "object",
+                    _pose(0.02 * index),
+                    frames[index].source_time_s,
+                    frames[index].available_time_s,
+                    Evidence.OBSERVED,
+                    "v1",
+                    (True,) * 3,
+                    (True,) * 3,
+                )
+                service._anchor(_Anchor(index, (estimate,), {"object": mask}))
+        return service, store.snapshot()[1]["object"], decisions
+
+    ordered, ordered_pose, _ = run([("frame", 0), ("direct", 0), ("frame", 1), ("direct", 1), ("frame", 2)])
+    reordered, reordered_pose, decisions = run(
+        [("frame", 0), ("frame", 1), ("direct", 1), ("frame", 2), ("direct", 0)]
+    )
+    assert "object" in ordered.relationships
+    assert "object" in reordered.relationships
+    assert ordered_pose.estimator == reordered_pose.estimator == "environment_group_motion"
+    np.testing.assert_allclose(ordered_pose.pose, reordered_pose.pose, atol=1e-6)
+    assert decisions[-1].outcome == "accepted_historical_group"
+    assert reordered_pose.available_time_s >= decisions[-1].decided_at_s
+
+
+def test_late_group_bridge_rejects_intervening_direct_pose_contradiction():
+    rng = np.random.default_rng(82)
+    points = rng.uniform((-0.06, -0.06, 0.98), (0.06, 0.06, 1.02), (40, 3))
+    pixels = np.column_stack((rng.integers(12, 84, 40), rng.integers(12, 84, 40)))
+    scenes = [_tracks(index, points + [index * 0.02, 0, 0], pixels) for index in range(5)]
+    rgb = np.zeros((96, 96, 3), dtype=np.uint8)
+    frames = [_camera_frame(rgb, index) for index in range(5)]
+    mask = np.zeros((96, 96), dtype=bool)
+    mask[pixels[:4, 1], pixels[:4, 0]] = True
+    store = LatestPoseStore()
+    decisions = []
+    service = CausalPoseService(store, image_scale=1.0, on_anchor_decision=decisions.append)
+    service.scene.update = lambda item: scenes[item.frame_id]
+
+    for frame in frames:
+        service._frame(frame)
+    for index, x in ((1, 0.02), (2, 0.055), (3, 0.06), (0, 0.0)):
+        estimate = PoseEstimate(
+            "object",
+            _pose(x),
+            frames[index].source_time_s,
+            frames[index].available_time_s,
+            Evidence.OBSERVED,
+            "v1",
+            (True,) * 3,
+            (True,) * 3,
+        )
+        service._anchor(_Anchor(index, (estimate,), {"object": mask}))
+
+    assert "object" not in service.relationships
+    assert decisions[-1].outcome == "superseded_by_direct"
+    assert len(service.direct_history["object"]) == 3
+    assert store.snapshot()[1]["object"].source_time_s == frames[3].source_time_s
 
 
 def test_unresolved_support_rotation_does_not_rotate_object_frame():
