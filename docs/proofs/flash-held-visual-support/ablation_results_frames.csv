@@ -1,0 +1,237 @@
+dataset,prepared_bundle,rule,frame,accepted,verdict,difference_mm,visual_depth_mm,gripper_depth_mm,reason
+insertion,flash-dowel-ring-20261028-held-visual-v10,baseline,233,True,agree,9.522679115513954,4.083707899473498,3.89233837218318,
+insertion,flash-dowel-ring-20261028-held-visual-v10,baseline,234,True,agree,0.5169092300791057,4.7682641139815685,3.8211607359640576,
+insertion,flash-dowel-ring-20261028-held-visual-v10,baseline,235,True,agree,0.11436133698450737,4.4120138710706245,4.220905825255478,
+insertion,flash-dowel-ring-20261028-held-visual-v10,baseline,237,True,agree,1.0747181213691896,3.5063048460405035,3.471665277632254,
+insertion,flash-dowel-ring-20261028-held-visual-v10,baseline,238,True,agree,0.584866839089911,3.976458858067756,3.7043214786733167,
+insertion,flash-dowel-ring-20261028-held-visual-v10,baseline,239,True,agree,0.43754731808247455,3.3507228347385567,3.52500512096381,
+insertion,flash-dowel-ring-20261028-held-visual-v10,baseline,240,True,agree,1.1691896068835719,2.9667916037056146,2.9884549404893264,
+insertion,flash-dowel-ring-20261028-held-visual-v10,baseline,241,True,agree,1.7593588790150079,3.4038572370443836,2.8985535415341435,
+insertion,flash-dowel-ring-20261028-held-visual-v10,baseline,242,True,agree,2.0761231724868643,2.683431747916249,2.75662755856943,
+insertion,flash-dowel-ring-20261028-held-visual-v10,baseline,247,True,agree,14.049787935165833,3.3942431802613915,9.066080232896477,
+insertion,flash-dowel-ring-20261028-held-visual-v10,baseline,249,True,agree,0.7067477760971522,4.412473218812441,4.229054372689389,
+insertion,flash-dowel-ring-20261028-held-visual-v10,baseline,271,False,ambiguous,20.146461955590308,4.79850098147852,64.09175927734523,"held attachment disagrees by 0.0201 m, 0.6599 rad; image comparison ambiguous"
+insertion,flash-dowel-ring-20261028-held-visual-v10,baseline,284,False,candidate_favored,9.721547782484166,4.257424134141369,4.869801100894305,"held attachment disagrees by 0.0097 m, 0.4646 rad; awaiting another independent image"
+insertion,flash-dowel-ring-20261028-held-visual-v10,baseline,291,True,candidate_favored,6.244577474492616,5.8548960482013195,74.98340831720682,
+insertion,flash-dowel-ring-20261028-held-visual-v10,baseline,475,True,agree,12.912551633902702,7.397111449034747,15.86132476146912,
+insertion,flash-dowel-ring-20261028-held-visual-v10,baseline,476,True,agree,0.4547922110103818,9.309500560637948,7.772685823849867,
+insertion,flash-dowel-ring-20261028-held-visual-v10,baseline,477,True,agree,0.6608478896057014,7.987545726894067,8.93033612473009,
+insertion,flash-dowel-ring-20261028-held-visual-v10,baseline,478,True,agree,0.3461585136078936,8.495800205024407,7.57183556500909,
+insertion,flash-dowel-ring-20261028-held-visual-v10,baseline,479,True,agree,0.1618504429192502,7.920924145910356,7.468753148932495,
+insertion,flash-dowel-ring-20261028-held-visual-v10,baseline,487,True,agree,1.2301274069291273,7.538686020630815,83.10937172635343,
+insertion,flash-dowel-ring-20261028-held-visual-v10,baseline,498,True,agree,9.604552528575244,7.498033645920666,20.028511937006588,
+insertion,flash-dowel-ring-20261028-held-visual-v10,baseline,499,True,agree,1.1635907313625624,5.70316319581066,5.152935209523147,
+insertion,flash-dowel-ring-20261028-held-visual-v10,baseline,500,True,agree,1.037058490819633,8.439642318292071,7.46990867157882,
+insertion,flash-dowel-ring-20261028-held-visual-v10,baseline,501,True,agree,1.425374429997604,5.257413188892738,4.970648299823938,
+insertion,flash-dowel-ring-20261028-held-visual-v10,baseline,502,True,agree,1.886223893436993,7.798164958773235,6.14291247626393,
+insertion,flash-dowel-ring-20261028-held-visual-v10,baseline,503,True,agree,2.388884485804248,7.744912264909968,7.506031746557291,
+insertion,flash-dowel-ring-20261028-held-visual-v10,baseline,504,True,agree,2.3079294431969752,8.742267914554327,7.859231035758361,
+insertion,flash-dowel-ring-20261028-held-visual-v10,baseline,506,True,agree,1.9189023001718688,13.846122850257213,8.250646699127323,
+insertion,flash-dowel-ring-20261028-held-visual-v10,baseline,507,True,agree,0.8055648405261564,9.15770982141696,16.92009196564548,
+insertion,flash-dowel-ring-20261028-held-visual-v10,baseline,508,True,agree,0.44215307231518486,7.026944518739829,7.9336411426898374,
+insertion,flash-dowel-ring-20261028-held-visual-v10,baseline,509,True,agree,0.20304080547694453,7.233415058841397,6.994658785655301,
+insertion,flash-dowel-ring-20261028-held-visual-v10,baseline,510,True,agree,0.2182124566484775,8.346454180006624,7.4656115064797115,
+insertion,flash-dowel-ring-20261028-held-visual-v10,baseline,511,True,agree,0.34122811202007386,14.374018644855141,19.128334553598695,
+insertion,flash-dowel-ring-20261028-held-visual-v10,baseline,512,True,agree,0.5847397758893655,8.405334996501495,7.353402024055045,
+insertion,flash-dowel-ring-20261028-held-visual-v10,baseline,513,True,agree,0.3168760953034822,20.859202031157572,28.02090044747087,
+insertion,flash-dowel-ring-20261028-held-visual-v10,baseline,514,True,agree,0.33433486285854125,17.97173070044427,14.706446045060114,
+insertion,flash-dowel-ring-20261028-held-visual-v10,prior_dominates,233,True,agree,9.522679115513954,4.083707899473498,3.89233837218318,
+insertion,flash-dowel-ring-20261028-held-visual-v10,prior_dominates,234,False,agree,0.5169092300791057,4.7682641139815685,3.8211607359640576,offline ablation withheld correction
+insertion,flash-dowel-ring-20261028-held-visual-v10,prior_dominates,235,False,agree,0.44775700157229087,4.4120138710706245,3.6069251604909933,offline ablation withheld correction
+insertion,flash-dowel-ring-20261028-held-visual-v10,prior_dominates,237,True,agree,0.7927910400361329,3.5063048460405035,3.7300784841803996,
+insertion,flash-dowel-ring-20261028-held-visual-v10,prior_dominates,238,False,agree,0.584866839089911,3.976458858067756,3.7043214786733167,offline ablation withheld correction
+insertion,flash-dowel-ring-20261028-held-visual-v10,prior_dominates,239,True,agree,0.8877720638384874,3.3507228347385567,3.352869130434111,
+insertion,flash-dowel-ring-20261028-held-visual-v10,prior_dominates,240,True,agree,1.1691896068835719,2.9667916037056146,2.9884549404893264,
+insertion,flash-dowel-ring-20261028-held-visual-v10,prior_dominates,241,False,agree,1.7593588790150079,3.4038572370443836,2.8985535415341435,offline ablation withheld correction
+insertion,flash-dowel-ring-20261028-held-visual-v10,prior_dominates,242,True,agree,3.339702626384316,2.683431747916249,3.57551274082496,
+insertion,flash-dowel-ring-20261028-held-visual-v10,prior_dominates,247,True,agree,14.049787935165833,3.3942431802613915,9.066080232896477,
+insertion,flash-dowel-ring-20261028-held-visual-v10,prior_dominates,249,False,agree,0.7067477760971522,4.412473218812441,4.229054372689389,offline ablation withheld correction
+insertion,flash-dowel-ring-20261028-held-visual-v10,prior_dominates,271,False,candidate_favored,19.965550270122176,4.79850098147852,68.05861139609235,"held attachment disagrees by 0.0200 m, 0.6539 rad; awaiting another independent image"
+insertion,flash-dowel-ring-20261028-held-visual-v10,prior_dominates,284,False,candidate_favored,10.388621193200528,4.257424134141369,15.197930415381412,"held attachment disagrees by 0.0104 m, 0.4816 rad; successive visual poses disagree"
+insertion,flash-dowel-ring-20261028-held-visual-v10,prior_dominates,291,False,ambiguous,6.683127334544948,5.8548960482013195,4.807542930421527,"held attachment disagrees by 0.0067 m, 0.5044 rad; image comparison ambiguous"
+insertion,flash-dowel-ring-20261028-held-visual-v10,prior_dominates,475,False,candidate_favored,16.762098223819084,7.397111449034747,17.28075978954351,"held attachment disagrees by 0.0168 m, 0.4758 rad; awaiting another independent image"
+insertion,flash-dowel-ring-20261028-held-visual-v10,prior_dominates,476,True,candidate_favored,16.496628589327806,9.309500560637948,16.400239925920545,
+insertion,flash-dowel-ring-20261028-held-visual-v10,prior_dominates,477,True,agree,0.6608478896057014,7.987545726894067,8.93033612473009,
+insertion,flash-dowel-ring-20261028-held-visual-v10,prior_dominates,478,False,agree,0.3461585136078936,8.495800205024407,7.57183556500909,offline ablation withheld correction
+insertion,flash-dowel-ring-20261028-held-visual-v10,prior_dominates,479,True,agree,0.29486756261094893,7.920924145910356,12.760603307315344,
+insertion,flash-dowel-ring-20261028-held-visual-v10,prior_dominates,487,True,agree,1.2301274069291273,7.538686020630815,83.10937172635343,
+insertion,flash-dowel-ring-20261028-held-visual-v10,prior_dominates,498,True,agree,9.604552528575244,7.498033645920666,20.028511937006588,
+insertion,flash-dowel-ring-20261028-held-visual-v10,prior_dominates,499,True,agree,1.1635907313625624,5.70316319581066,5.152935209523147,
+insertion,flash-dowel-ring-20261028-held-visual-v10,prior_dominates,500,True,agree,1.037058490819633,8.439642318292071,7.46990867157882,
+insertion,flash-dowel-ring-20261028-held-visual-v10,prior_dominates,501,True,agree,1.425374429997604,5.257413188892738,4.970648299823938,
+insertion,flash-dowel-ring-20261028-held-visual-v10,prior_dominates,502,False,agree,1.886223893436993,7.798164958773235,6.14291247626393,offline ablation withheld correction
+insertion,flash-dowel-ring-20261028-held-visual-v10,prior_dominates,503,False,agree,4.145025857704758,7.744912264909968,5.785831983164823,offline ablation withheld correction
+insertion,flash-dowel-ring-20261028-held-visual-v10,prior_dominates,504,False,agree,6.351583171748645,8.742267914554327,6.217494377323418,offline ablation withheld correction
+insertion,flash-dowel-ring-20261028-held-visual-v10,prior_dominates,506,False,agree,7.999443890561701,13.846122850257213,8.409531299492613,offline ablation withheld correction
+insertion,flash-dowel-ring-20261028-held-visual-v10,prior_dominates,507,False,agree,7.46674273995949,9.15770982141696,8.221984296216752,offline ablation withheld correction
+insertion,flash-dowel-ring-20261028-held-visual-v10,prior_dominates,508,True,agree,7.064573404434658,7.026944518739829,9.99692216518739,
+insertion,flash-dowel-ring-20261028-held-visual-v10,prior_dominates,509,False,agree,0.20304080547694453,7.233415058841397,6.994658785655301,offline ablation withheld correction
+insertion,flash-dowel-ring-20261028-held-visual-v10,prior_dominates,510,False,agree,0.29481965330956117,8.346454180006624,7.224772455297145,offline ablation withheld correction
+insertion,flash-dowel-ring-20261028-held-visual-v10,prior_dominates,511,True,agree,0.5237169548672415,14.374018644855141,27.921684914886335,
+insertion,flash-dowel-ring-20261028-held-visual-v10,prior_dominates,512,False,agree,0.5847397758893655,8.405334996501495,7.353402024055045,offline ablation withheld correction
+insertion,flash-dowel-ring-20261028-held-visual-v10,prior_dominates,513,True,agree,0.47069476822255163,20.859202031157572,13.382135993169928,
+insertion,flash-dowel-ring-20261028-held-visual-v10,prior_dominates,514,False,agree,0.33433486285854125,17.97173070044427,14.706446045060114,offline ablation withheld correction
+insertion,flash-dowel-ring-20261028-held-visual-v10,supported_prior_dominates,233,True,agree,9.522679115513954,4.083707899473498,3.89233837218318,
+insertion,flash-dowel-ring-20261028-held-visual-v10,supported_prior_dominates,234,False,agree,0.5169092300791057,4.7682641139815685,3.8211607359640576,offline ablation withheld correction
+insertion,flash-dowel-ring-20261028-held-visual-v10,supported_prior_dominates,235,False,agree,0.44775700157229087,4.4120138710706245,3.6069251604909933,offline ablation withheld correction
+insertion,flash-dowel-ring-20261028-held-visual-v10,supported_prior_dominates,237,True,agree,0.7927910400361329,3.5063048460405035,3.7300784841803996,
+insertion,flash-dowel-ring-20261028-held-visual-v10,supported_prior_dominates,238,False,agree,0.584866839089911,3.976458858067756,3.7043214786733167,offline ablation withheld correction
+insertion,flash-dowel-ring-20261028-held-visual-v10,supported_prior_dominates,239,True,agree,0.8877720638384874,3.3507228347385567,3.352869130434111,
+insertion,flash-dowel-ring-20261028-held-visual-v10,supported_prior_dominates,240,True,agree,1.1691896068835719,2.9667916037056146,2.9884549404893264,
+insertion,flash-dowel-ring-20261028-held-visual-v10,supported_prior_dominates,241,False,agree,1.7593588790150079,3.4038572370443836,2.8985535415341435,offline ablation withheld correction
+insertion,flash-dowel-ring-20261028-held-visual-v10,supported_prior_dominates,242,True,agree,3.339702626384316,2.683431747916249,3.57551274082496,
+insertion,flash-dowel-ring-20261028-held-visual-v10,supported_prior_dominates,247,True,agree,14.049787935165833,3.3942431802613915,9.066080232896477,
+insertion,flash-dowel-ring-20261028-held-visual-v10,supported_prior_dominates,249,False,agree,0.7067477760971522,4.412473218812441,4.229054372689389,offline ablation withheld correction
+insertion,flash-dowel-ring-20261028-held-visual-v10,supported_prior_dominates,271,False,candidate_favored,19.965550270122176,4.79850098147852,68.05861139609235,"held attachment disagrees by 0.0200 m, 0.6539 rad; awaiting another independent image"
+insertion,flash-dowel-ring-20261028-held-visual-v10,supported_prior_dominates,284,False,candidate_favored,10.388621193200528,4.257424134141369,15.197930415381412,"held attachment disagrees by 0.0104 m, 0.4816 rad; successive visual poses disagree"
+insertion,flash-dowel-ring-20261028-held-visual-v10,supported_prior_dominates,291,False,ambiguous,6.683127334544948,5.8548960482013195,4.807542930421527,"held attachment disagrees by 0.0067 m, 0.5044 rad; image comparison ambiguous"
+insertion,flash-dowel-ring-20261028-held-visual-v10,supported_prior_dominates,475,False,candidate_favored,16.762098223819084,7.397111449034747,17.28075978954351,"held attachment disagrees by 0.0168 m, 0.4758 rad; awaiting another independent image"
+insertion,flash-dowel-ring-20261028-held-visual-v10,supported_prior_dominates,476,True,candidate_favored,16.496628589327806,9.309500560637948,16.400239925920545,
+insertion,flash-dowel-ring-20261028-held-visual-v10,supported_prior_dominates,477,True,agree,0.6608478896057014,7.987545726894067,8.93033612473009,
+insertion,flash-dowel-ring-20261028-held-visual-v10,supported_prior_dominates,478,True,agree,0.3461585136078936,8.495800205024407,7.57183556500909,
+insertion,flash-dowel-ring-20261028-held-visual-v10,supported_prior_dominates,479,True,agree,0.1618504429192502,7.920924145910356,7.468753148932495,
+insertion,flash-dowel-ring-20261028-held-visual-v10,supported_prior_dominates,487,True,agree,1.2301274069291273,7.538686020630815,83.10937172635343,
+insertion,flash-dowel-ring-20261028-held-visual-v10,supported_prior_dominates,498,True,agree,9.604552528575244,7.498033645920666,20.028511937006588,
+insertion,flash-dowel-ring-20261028-held-visual-v10,supported_prior_dominates,499,True,agree,1.1635907313625624,5.70316319581066,5.152935209523147,
+insertion,flash-dowel-ring-20261028-held-visual-v10,supported_prior_dominates,500,True,agree,1.037058490819633,8.439642318292071,7.46990867157882,
+insertion,flash-dowel-ring-20261028-held-visual-v10,supported_prior_dominates,501,True,agree,1.425374429997604,5.257413188892738,4.970648299823938,
+insertion,flash-dowel-ring-20261028-held-visual-v10,supported_prior_dominates,502,True,agree,1.886223893436993,7.798164958773235,6.14291247626393,
+insertion,flash-dowel-ring-20261028-held-visual-v10,supported_prior_dominates,503,True,agree,2.388884485804248,7.744912264909968,7.506031746557291,
+insertion,flash-dowel-ring-20261028-held-visual-v10,supported_prior_dominates,504,True,agree,2.3079294431969752,8.742267914554327,7.859231035758361,
+insertion,flash-dowel-ring-20261028-held-visual-v10,supported_prior_dominates,506,True,agree,1.9189023001718688,13.846122850257213,8.250646699127323,
+insertion,flash-dowel-ring-20261028-held-visual-v10,supported_prior_dominates,507,True,agree,0.8055648405261564,9.15770982141696,16.92009196564548,
+insertion,flash-dowel-ring-20261028-held-visual-v10,supported_prior_dominates,508,True,agree,0.44215307231518486,7.026944518739829,7.9336411426898374,
+insertion,flash-dowel-ring-20261028-held-visual-v10,supported_prior_dominates,509,True,agree,0.20304080547694453,7.233415058841397,6.994658785655301,
+insertion,flash-dowel-ring-20261028-held-visual-v10,supported_prior_dominates,510,True,agree,0.2182124566484775,8.346454180006624,7.4656115064797115,
+insertion,flash-dowel-ring-20261028-held-visual-v10,supported_prior_dominates,511,True,agree,0.34122811202007386,14.374018644855141,19.128334553598695,
+insertion,flash-dowel-ring-20261028-held-visual-v10,supported_prior_dominates,512,True,agree,0.5847397758893655,8.405334996501495,7.353402024055045,
+insertion,flash-dowel-ring-20261028-held-visual-v10,supported_prior_dominates,513,True,agree,0.3168760953034822,20.859202031157572,28.02090044747087,
+insertion,flash-dowel-ring-20261028-held-visual-v10,supported_prior_dominates,514,True,agree,0.33433486285854125,17.97173070044427,14.706446045060114,
+insertion,flash-dowel-ring-20261028-held-visual-v10,visual_over_tolerance,233,True,agree,9.522679115513954,4.083707899473498,3.89233837218318,
+insertion,flash-dowel-ring-20261028-held-visual-v10,visual_over_tolerance,234,True,agree,0.5169092300791057,4.7682641139815685,3.8211607359640576,
+insertion,flash-dowel-ring-20261028-held-visual-v10,visual_over_tolerance,235,True,agree,0.11436133698450737,4.4120138710706245,4.220905825255478,
+insertion,flash-dowel-ring-20261028-held-visual-v10,visual_over_tolerance,237,True,agree,1.0747181213691896,3.5063048460405035,3.471665277632254,
+insertion,flash-dowel-ring-20261028-held-visual-v10,visual_over_tolerance,238,True,agree,0.584866839089911,3.976458858067756,3.7043214786733167,
+insertion,flash-dowel-ring-20261028-held-visual-v10,visual_over_tolerance,239,True,agree,0.43754731808247455,3.3507228347385567,3.52500512096381,
+insertion,flash-dowel-ring-20261028-held-visual-v10,visual_over_tolerance,240,True,agree,1.1691896068835719,2.9667916037056146,2.9884549404893264,
+insertion,flash-dowel-ring-20261028-held-visual-v10,visual_over_tolerance,241,True,agree,1.7593588790150079,3.4038572370443836,2.8985535415341435,
+insertion,flash-dowel-ring-20261028-held-visual-v10,visual_over_tolerance,242,True,agree,2.0761231724868643,2.683431747916249,2.75662755856943,
+insertion,flash-dowel-ring-20261028-held-visual-v10,visual_over_tolerance,247,True,agree,14.049787935165833,3.3942431802613915,9.066080232896477,
+insertion,flash-dowel-ring-20261028-held-visual-v10,visual_over_tolerance,249,True,agree,0.7067477760971522,4.412473218812441,4.229054372689389,
+insertion,flash-dowel-ring-20261028-held-visual-v10,visual_over_tolerance,271,False,ambiguous,20.146461955590308,4.79850098147852,64.09175927734523,"held attachment disagrees by 0.0201 m, 0.6599 rad; image comparison ambiguous"
+insertion,flash-dowel-ring-20261028-held-visual-v10,visual_over_tolerance,284,False,candidate_favored,9.721547782484166,4.257424134141369,4.869801100894305,"held attachment disagrees by 0.0097 m, 0.4646 rad; awaiting another independent image"
+insertion,flash-dowel-ring-20261028-held-visual-v10,visual_over_tolerance,291,False,candidate_favored,6.244577474492616,5.8548960482013195,74.98340831720682,offline ablation withheld correction
+insertion,flash-dowel-ring-20261028-held-visual-v10,visual_over_tolerance,475,False,candidate_favored,16.761420486904488,7.397111449034747,14.358318591433095,"held attachment disagrees by 0.0168 m, 0.4487 rad; successive visual poses disagree"
+insertion,flash-dowel-ring-20261028-held-visual-v10,visual_over_tolerance,476,False,candidate_favored,16.511639599685825,9.309500560637948,13.505436149832473,offline ablation withheld correction
+insertion,flash-dowel-ring-20261028-held-visual-v10,visual_over_tolerance,477,False,candidate_favored,16.898167890864922,7.987545726894067,13.616336001826813,offline ablation withheld correction
+insertion,flash-dowel-ring-20261028-held-visual-v10,visual_over_tolerance,478,False,candidate_favored,17.21272901834314,8.495800205024407,13.07142898390914,offline ablation withheld correction
+insertion,flash-dowel-ring-20261028-held-visual-v10,visual_over_tolerance,479,False,candidate_favored,17.095764877863093,7.920924145910356,13.568002891560793,offline ablation withheld correction
+insertion,flash-dowel-ring-20261028-held-visual-v10,visual_over_tolerance,487,False,candidate_favored,17.960366531837455,7.538686020630815,14.591399192523708,offline ablation withheld correction
+insertion,flash-dowel-ring-20261028-held-visual-v10,visual_over_tolerance,498,False,candidate_favored,21.772715746691482,7.498033645920666,23.881807483123634,offline ablation withheld correction
+insertion,flash-dowel-ring-20261028-held-visual-v10,visual_over_tolerance,499,False,candidate_favored,21.203297117361945,5.70316319581066,24.408242763329145,offline ablation withheld correction
+insertion,flash-dowel-ring-20261028-held-visual-v10,visual_over_tolerance,500,False,candidate_favored,20.86094102112753,8.439642318292071,24.615334624640454,offline ablation withheld correction
+insertion,flash-dowel-ring-20261028-held-visual-v10,visual_over_tolerance,501,False,candidate_favored,20.393248995342567,5.257413188892738,25.163724792432618,offline ablation withheld correction
+insertion,flash-dowel-ring-20261028-held-visual-v10,visual_over_tolerance,502,False,candidate_favored,21.143857451280475,7.798164958773235,25.46428417595979,offline ablation withheld correction
+insertion,flash-dowel-ring-20261028-held-visual-v10,visual_over_tolerance,503,False,candidate_favored,23.12716664579126,7.744912264909968,28.761209271458725,"held attachment disagrees by 0.0231 m, 0.5863 rad; successive visual poses disagree"
+insertion,flash-dowel-ring-20261028-held-visual-v10,visual_over_tolerance,504,False,candidate_favored,25.213358037944875,8.742267914554327,26.574659359014262,offline ablation withheld correction
+insertion,flash-dowel-ring-20261028-held-visual-v10,visual_over_tolerance,506,False,candidate_favored,26.45626041442291,13.846122850257213,32.249029461047854,offline ablation withheld correction
+insertion,flash-dowel-ring-20261028-held-visual-v10,visual_over_tolerance,507,False,candidate_favored,25.804198049514635,9.15770982141696,30.338457525186122,offline ablation withheld correction
+insertion,flash-dowel-ring-20261028-held-visual-v10,visual_over_tolerance,508,False,candidate_favored,25.57431234691881,7.026944518739829,31.57085654897646,offline ablation withheld correction
+insertion,flash-dowel-ring-20261028-held-visual-v10,visual_over_tolerance,509,False,candidate_favored,25.48677487495926,7.233415058841397,29.847438691702457,offline ablation withheld correction
+insertion,flash-dowel-ring-20261028-held-visual-v10,visual_over_tolerance,510,False,candidate_favored,25.358054916028408,8.346454180006624,30.35225832707828,offline ablation withheld correction
+insertion,flash-dowel-ring-20261028-held-visual-v10,visual_over_tolerance,511,False,candidate_favored,25.273363962529334,14.374018644855141,30.06410965300012,offline ablation withheld correction
+insertion,flash-dowel-ring-20261028-held-visual-v10,visual_over_tolerance,512,False,candidate_favored,25.76009968044384,8.405334996501495,29.862336131659497,offline ablation withheld correction
+insertion,flash-dowel-ring-20261028-held-visual-v10,visual_over_tolerance,513,False,candidate_favored,25.5234859907069,20.859202031157572,30.35225832707828,offline ablation withheld correction
+insertion,flash-dowel-ring-20261028-held-visual-v10,visual_over_tolerance,514,False,candidate_favored,25.829235018029944,17.97173070044427,31.355615544977095,offline ablation withheld correction
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,baseline,284,False,candidate_favored,23.830970701724976,3.146963850388096,7.0560047311372225,"held attachment disagrees by 0.0238 m, 0.4213 rad; awaiting another independent image"
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,baseline,290,True,candidate_favored,21.704816027248473,3.1369922146111673,8.945748491769068,
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,baseline,291,True,agree,0.3179750509196298,3.407559730079936,3.1905899791793146,
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,baseline,292,True,agree,1.6380301327391766,3.4898287702470334,3.217132028436265,
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,baseline,293,True,agree,0.34486346178941507,3.1263731514988753,3.420178273712943,
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,baseline,294,True,agree,0.237993109814002,2.659016274103032,2.6188431444348237,
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,baseline,295,True,agree,0.8211583130737622,3.260845606259283,3.3786166917741394,
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,baseline,296,True,agree,0.886724704236081,2.9729389896976377,3.3425468800878932,
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,baseline,297,True,agree,0.9340253947868417,3.874354899569466,3.84180443414107,
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,baseline,298,True,agree,0.5027645866157591,3.0980535532953333,3.5295142728942186,
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,baseline,299,True,agree,1.1668954862801162,3.4934899629244787,2.863289979644081,
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,baseline,300,True,agree,0.3879699699127417,2.9757828808195663,2.9067151941867597,
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,baseline,301,True,agree,0.749155770672382,3.004751683899576,3.002614112800652,
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,baseline,302,True,agree,2.631389214369801,4.460248718128458,4.057721180857122,
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,baseline,303,True,agree,0.8124715913457442,61.96162190856554,58.83048207611311,
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,baseline,304,True,agree,2.1828651665461356,57.96135750678335,61.61227581901415,
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,baseline,305,True,agree,2.101609515397865,3.8200709244247997,4.84655648022419,
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,baseline,306,True,agree,1.712882921147358,3.811067928069245,4.935100798510228,
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,baseline,309,True,agree,1.324370337388183,4.8193682729054395,4.815751579837014,
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,baseline,310,True,agree,0.7303897199787392,41.62037052608202,3.804947399917303,
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,baseline,311,True,agree,3.3092745204211838,4.416786874765078,4.16696159591734,
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,baseline,429,False,ambiguous,4.127592391143832,2.1476586220747227,3.4458505211412698,"held attachment disagrees by 0.0041 m, 3.0855 rad; image comparison ambiguous"
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,baseline,430,False,ambiguous,4.549665292208595,2.245735094889979,3.6525424674481948,"held attachment disagrees by 0.0045 m, 3.1149 rad; image comparison ambiguous"
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,prior_dominates,284,False,candidate_favored,23.830970701724976,3.146963850388096,7.0560047311372225,"held attachment disagrees by 0.0238 m, 0.4213 rad; awaiting another independent image"
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,prior_dominates,290,True,candidate_favored,21.704816027248473,3.1369922146111673,8.945748491769068,
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,prior_dominates,291,True,agree,0.3179750509196298,3.407559730079936,3.1905899791793146,
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,prior_dominates,292,True,agree,1.6380301327391766,3.4898287702470334,3.217132028436265,
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,prior_dominates,293,True,agree,0.34486346178941507,3.1263731514988753,3.420178273712943,
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,prior_dominates,294,False,agree,0.237993109814002,2.659016274103032,2.6188431444348237,offline ablation withheld correction
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,prior_dominates,295,True,agree,1.0436997429454429,3.260845606259283,3.4110250576347996,
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,prior_dominates,296,True,agree,0.886724704236081,2.9729389896976377,3.3425468800878932,
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,prior_dominates,297,False,agree,0.9340253947868417,3.874354899569466,3.84180443414107,offline ablation withheld correction
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,prior_dominates,298,True,agree,0.5536746998938119,3.0980535532953333,3.9073954049374526,
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,prior_dominates,299,True,agree,1.1668954862801162,3.4934899629244787,2.863289979644081,
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,prior_dominates,300,False,agree,0.3879699699127417,2.9757828808195663,2.9067151941867597,offline ablation withheld correction
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,prior_dominates,301,True,agree,0.766685927345262,3.004751683899576,3.7651021303691574,
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,prior_dominates,302,True,agree,2.631389214369801,4.460248718128458,4.057721180857122,
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,prior_dominates,303,False,agree,0.8124715913457442,61.96162190856554,58.83048207611311,offline ablation withheld correction
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,prior_dominates,304,False,agree,2.8757014243168375,57.96135750678335,48.953975851557196,offline ablation withheld correction
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,prior_dominates,305,True,agree,3.274823141635614,3.8200709244247997,4.953608490916128,
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,prior_dominates,306,True,agree,1.712882921147358,3.811067928069245,4.935100798510228,
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,prior_dominates,309,False,agree,1.324370337388183,4.8193682729054395,4.815751579837014,offline ablation withheld correction
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,prior_dominates,310,False,agree,1.9173804145891247,41.62037052608202,4.100345532039807,offline ablation withheld correction
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,prior_dominates,311,True,agree,4.2208249412179075,4.416786874765078,4.901956591353995,
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,prior_dominates,429,False,ambiguous,4.127592391143832,2.1476586220747227,3.4458505211412698,"held attachment disagrees by 0.0041 m, 3.0855 rad; image comparison ambiguous"
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,prior_dominates,430,False,ambiguous,4.549665292208595,2.245735094889979,3.6525424674481948,"held attachment disagrees by 0.0045 m, 3.1149 rad; image comparison ambiguous"
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,supported_prior_dominates,284,False,candidate_favored,23.830970701724976,3.146963850388096,7.0560047311372225,"held attachment disagrees by 0.0238 m, 0.4213 rad; awaiting another independent image"
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,supported_prior_dominates,290,True,candidate_favored,21.704816027248473,3.1369922146111673,8.945748491769068,
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,supported_prior_dominates,291,True,agree,0.3179750509196298,3.407559730079936,3.1905899791793146,
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,supported_prior_dominates,292,True,agree,1.6380301327391766,3.4898287702470334,3.217132028436265,
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,supported_prior_dominates,293,True,agree,0.34486346178941507,3.1263731514988753,3.420178273712943,
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,supported_prior_dominates,294,False,agree,0.237993109814002,2.659016274103032,2.6188431444348237,offline ablation withheld correction
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,supported_prior_dominates,295,True,agree,1.0436997429454429,3.260845606259283,3.4110250576347996,
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,supported_prior_dominates,296,True,agree,0.886724704236081,2.9729389896976377,3.3425468800878932,
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,supported_prior_dominates,297,False,agree,0.9340253947868417,3.874354899569466,3.84180443414107,offline ablation withheld correction
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,supported_prior_dominates,298,True,agree,0.5536746998938119,3.0980535532953333,3.9073954049374526,
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,supported_prior_dominates,299,True,agree,1.1668954862801162,3.4934899629244787,2.863289979644081,
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,supported_prior_dominates,300,False,agree,0.3879699699127417,2.9757828808195663,2.9067151941867597,offline ablation withheld correction
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,supported_prior_dominates,301,True,agree,0.766685927345262,3.004751683899576,3.7651021303691574,
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,supported_prior_dominates,302,True,agree,2.631389214369801,4.460248718128458,4.057721180857122,
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,supported_prior_dominates,303,True,agree,0.8124715913457442,61.96162190856554,58.83048207611311,
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,supported_prior_dominates,304,True,agree,2.1828651665461356,57.96135750678335,61.61227581901415,
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,supported_prior_dominates,305,True,agree,2.101609515397865,3.8200709244247997,4.84655648022419,
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,supported_prior_dominates,306,True,agree,1.712882921147358,3.811067928069245,4.935100798510228,
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,supported_prior_dominates,309,False,agree,1.324370337388183,4.8193682729054395,4.815751579837014,offline ablation withheld correction
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,supported_prior_dominates,310,False,agree,1.9173804145891247,41.62037052608202,4.100345532039807,offline ablation withheld correction
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,supported_prior_dominates,311,True,agree,4.2208249412179075,4.416786874765078,4.901956591353995,
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,supported_prior_dominates,429,False,ambiguous,4.127592391143832,2.1476586220747227,3.4458505211412698,"held attachment disagrees by 0.0041 m, 3.0855 rad; image comparison ambiguous"
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,supported_prior_dominates,430,False,ambiguous,4.549665292208595,2.245735094889979,3.6525424674481948,"held attachment disagrees by 0.0045 m, 3.1149 rad; image comparison ambiguous"
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,visual_over_tolerance,284,False,candidate_favored,23.830970701724976,3.146963850388096,7.0560047311372225,"held attachment disagrees by 0.0238 m, 0.4213 rad; awaiting another independent image"
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,visual_over_tolerance,290,True,candidate_favored,21.704816027248473,3.1369922146111673,8.945748491769068,
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,visual_over_tolerance,291,True,agree,0.3179750509196298,3.407559730079936,3.1905899791793146,
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,visual_over_tolerance,292,True,agree,1.6380301327391766,3.4898287702470334,3.217132028436265,
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,visual_over_tolerance,293,True,agree,0.34486346178941507,3.1263731514988753,3.420178273712943,
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,visual_over_tolerance,294,True,agree,0.237993109814002,2.659016274103032,2.6188431444348237,
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,visual_over_tolerance,295,True,agree,0.8211583130737622,3.260845606259283,3.3786166917741394,
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,visual_over_tolerance,296,True,agree,0.886724704236081,2.9729389896976377,3.3425468800878932,
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,visual_over_tolerance,297,True,agree,0.9340253947868417,3.874354899569466,3.84180443414107,
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,visual_over_tolerance,298,True,agree,0.5027645866157591,3.0980535532953333,3.5295142728942186,
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,visual_over_tolerance,299,True,agree,1.1668954862801162,3.4934899629244787,2.863289979644081,
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,visual_over_tolerance,300,True,agree,0.3879699699127417,2.9757828808195663,2.9067151941867597,
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,visual_over_tolerance,301,True,agree,0.749155770672382,3.004751683899576,3.002614112800652,
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,visual_over_tolerance,302,True,agree,2.631389214369801,4.460248718128458,4.057721180857122,
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,visual_over_tolerance,303,False,agree,0.8124715913457442,61.96162190856554,58.83048207611311,offline ablation withheld correction
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,visual_over_tolerance,304,False,agree,2.8757014243168375,57.96135750678335,48.953975851557196,offline ablation withheld correction
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,visual_over_tolerance,305,True,agree,3.274823141635614,3.8200709244247997,4.953608490916128,
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,visual_over_tolerance,306,True,agree,1.712882921147358,3.811067928069245,4.935100798510228,
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,visual_over_tolerance,309,True,agree,1.324370337388183,4.8193682729054395,4.815751579837014,
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,visual_over_tolerance,310,False,agree,0.7303897199787392,41.62037052608202,3.804947399917303,offline ablation withheld correction
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,visual_over_tolerance,311,True,agree,3.219395650406657,4.416786874765078,4.2804759732482776,
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,visual_over_tolerance,429,False,ambiguous,4.127592391143832,2.1476586220747227,3.4458505211412698,"held attachment disagrees by 0.0041 m, 3.0855 rad; image comparison ambiguous"
+pick_place,flash-gamepad-cube-20261028-held-visual-v10,visual_over_tolerance,430,False,ambiguous,4.549665292208595,2.245735094889979,3.6525424674481948,"held attachment disagrees by 0.0045 m, 3.1149 rad; image comparison ambiguous"

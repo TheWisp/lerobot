@@ -59,3 +59,38 @@ compare reference coverage and both proposals by phase, then test a broader
 view-conditioned reference on held-out frames before changing the acceptance
 rule. A physical accuracy claim needs independently checked contact landmarks
 or another ground-truth measurement.
+
+## Counterfactual correction rules
+
+The replay harness [ablate.py](ablate.py) reruns the shared attachment updater
+from the saved pose trace and aligned masks. Its unmodified baseline reproduces
+the recorded attachment matrices, conflict flags and correction flags exactly
+for both demos. The alternative rules withhold an accepted correction when the
+gripper projection dominates on both mask coverage and depth residual, when
+that dominance also passes the configured depth tolerance, or whenever the
+visual residual exceeds that tolerance. The harness saves the
+[summary](ablation_results.json) and [per-frame decisions](ablation_results_frames.csv).
+
+| Demo           | Rule                                           | Conflicted camera frames during annotated hold | Accepted direct corrections | Median visible-surface depth p90 |
+| -------------- | ---------------------------------------------- | ---------------------------------------------: | --------------------------: | -------------------------------: |
+| Dowel / ring   | Current baseline                               |                                             20 |                          34 |                          7.45 mm |
+| Dowel / ring   | Withhold gripper-dominated correction          |                                            205 |                          17 |                          7.01 mm |
+| Dowel / ring   | Withhold only when gripper is within tolerance |                                            205 |                          27 |                          7.64 mm |
+| Dowel / ring   | Require visual residual within tolerance       |                                            244 |                          11 |                         19.24 mm |
+| Gamepad / cube | Current baseline                               |                                              6 |                          20 |                          3.49 mm |
+| Gamepad / cube | Withhold gripper-dominated correction          |                                              6 |                          13 |                          3.49 mm |
+| Gamepad / cube | Withhold only when gripper is within tolerance |                                              6 |                          15 |                          3.49 mm |
+| Gamepad / cube | Require visual residual within tolerance       |                                              6 |                          17 |                          3.49 mm |
+
+The dowel's lower image residual under the first alternative is misleading:
+withholding five early small corrections changes the gripper prior enough that
+the frame-291 visual pose is no longer decisively favored, so the attachment
+remains conflicted until much later. The blanket tolerance rule even rejects
+that frame's 5.85 mm residual although the gripper prediction is off the same
+image by 74.98 mm; its final attachment differs from the baseline by 272 mm.
+These are counterfactual **software** replays, not alternate physical robot
+outcomes. The harness rewinds accepted updater state for each candidate gate;
+it has not been integrated into the runtime. It demonstrates that a single
+instantaneous score or a stricter threshold is not a supported fix. We need
+better view coverage and temporal evidence, then a benchmark with independent
+task-point/axis checks before changing the active policy.
