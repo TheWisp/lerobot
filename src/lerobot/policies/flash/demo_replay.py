@@ -356,6 +356,11 @@ def load_legacy_demo_replay(dataset_root: Path, episode: int, bundle_path: Path)
     )
     result["bundle_path"] = str(bundle)
     _add_saved_extraction_layers(root, bundle, result)
+    report_path = bundle.parent / "preparation-report.json"
+    if report_path.is_file():
+        result["held_pose_comparison"] = json.loads(report_path.read_text(encoding="utf-8")).get(
+            "held_pose_comparison"
+        )
     result["grasp_reference"] = {
         "role": annotation["held_role"],
         "camera_frame_index": annotation["grasp_reference_frame"],

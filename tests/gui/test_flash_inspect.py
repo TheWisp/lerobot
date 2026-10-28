@@ -1657,6 +1657,19 @@ def test_3d_scene_projection_and_surface_pick_edit_the_prepared_keyframe(gui_pag
                 "kind": "demo",
                 "fps": 30,
                 "bundle_path": "/tmp/scene-edit/flash/v1/prepared/prepared/bundle.json",
+                "held_pose_comparison": {
+                    "role": "tool",
+                    "runs": [
+                        {
+                            "first_frame": 0,
+                            "last_frame": 0,
+                            "observed_frames": 1,
+                            "center_gap_median_m": 0.02,
+                            "rotation_gap_median_rad": 0.4,
+                            "gripper_relative_center_scatter_p90_m": 0,
+                        }
+                    ],
+                },
                 "geometry": {
                     "points_object_m": {role: [[0, 0, 1], [0.1, 0, 1], [0, 0.1, 1]] for role in surface},
                     "centers_object_m": {role: [0, 0, 1] for role in surface},
@@ -1761,6 +1774,7 @@ def test_3d_scene_projection_and_surface_pick_edit_the_prepared_keyframe(gui_pag
         "verified group · predicted · 0.00 s old"
         in page.locator("#flash-tracker-content").inner_text().lower()
     )
+    assert "vision versus grasp prediction: 20.0 mm" in page.locator("#flash-tracker-content").inner_text()
     assert "Rejected vision fit" in page.locator("#flash-tracker-content").inner_text()
     page.locator("#flash-tracker-collapse").click()
     page.locator("#flash-tracker-content [data-flash-index]", has_text="Rejected vision fit").hover()

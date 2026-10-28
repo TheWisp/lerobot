@@ -26,6 +26,7 @@ from lerobot.policies.flash.appearance import (
 from lerobot.policies.flash.causal_service import CausalTrackingConfig
 from lerobot.policies.flash.dino_features import DinoPatchExtractor
 from lerobot.policies.flash.geometry import inverse
+from lerobot.policies.flash.held_pose_diagnostics import compare_demo_held_pose
 from lerobot.policies.flash.offline_perception import POSE_TRACE_SELECTION_VERSION, extract_pose_trace
 from lerobot.policies.flash.perception import ObjectReference, ReferenceSnippet, RGBDFrame
 from lerobot.policies.flash.prepared import PreparedFlashSkill
@@ -608,6 +609,17 @@ def prepare(
         raise ValueError("the selected grasp reference has no observed metric pose")
     grasp_held, grasp_evidence = selected.pose, "predicted from selected pre-occlusion frame"
     grip_from_held = inverse(recorded_tips[grasp]) @ grasp_held
+    held_model = next(model.points.points_object_m for model in models if model.points.role == held)
+    held_pose_comparison = compare_demo_held_pose(
+        role=held,
+        estimates=estimates,
+        arm_times_s=times,
+        arm_poses=recorded_tips,
+        grasp_time_s=float(times[grasp]),
+        release_time_s=float(times[release]),
+        grasp_attachment=grip_from_held,
+        object_center_m=held_model.mean(axis=0),
+    )
     roles_version = {reference.role: reference.version for reference in references}
     intervals = []
     for number, (first, last, end_key, demonstrated, start_anchored, carrying) in enumerate(
@@ -741,6 +753,7 @@ def prepare(
         "release_sample": release,
         "start_anchored_until_sample": start_anchor_end,
         "held_contact_pose": "predicted from recorded calibrated fingertip and grasp pose",
+        "held_pose_comparison": held_pose_comparison,
         "intervals": len(intervals),
         "calibration_version": version,
         "reference_masks": mask_paths,

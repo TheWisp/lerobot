@@ -1050,6 +1050,23 @@ function renderFlashDemoSnapshot(snapshot) {
         }
         html += '</div>';
     }
+    const heldComparison = flashReplay.held_pose_comparison;
+    const cameraFrame = snapshot.camera?.frame_id;
+    const observedRun = heldComparison?.runs?.find(run =>
+        cameraFrame >= run.first_frame && cameraFrame <= run.last_frame);
+    if (observedRun) {
+        const centerGap = (observedRun.center_gap_median_m * 1000).toFixed(1);
+        const turnGap = (observedRun.rotation_gap_median_rad * 180 / Math.PI).toFixed(1);
+        const scatter = (observedRun.gripper_relative_center_scatter_p90_m * 1000).toFixed(1);
+        const consistency = observedRun.observed_frames > 1
+            ? `Observed center varied ${scatter} mm relative to the gripper (p90). `
+            : 'Only one observed frame; consistency cannot be assessed. ';
+        html += `<div class="flash-tracker-role"><strong>${_esc(heldComparison.role)} · held-pose check</strong>` +
+            `<div>${observedRun.observed_frames} observed frames · vision versus grasp prediction: ` +
+            `${centerGap} mm at the reference center, ${turnGap}° rotation</div>` +
+            `<small>${consistency}` +
+            `This compares estimates; it does not establish which is correct.</small></div>`;
+    }
     if (demo.phase === 'outside_skill') {
         html += '<div class="flash-tracker-role">No spatial skill sample applies to this part of the recording.</div>';
     } else {
