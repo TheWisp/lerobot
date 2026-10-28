@@ -41,7 +41,7 @@ class Kinematics:
         return result
 
 
-def _recorded_inputs(root, *, version="object-v1", symmetry=False):
+def _recorded_inputs(root, *, version="object-v1", symmetry=False, second_object=False):
     identity = np.eye(4)
     mask = root / "flash/v1/masks/reference_snapshots/episode_000000/view.png"
     mask.parent.mkdir(parents=True)
@@ -57,6 +57,19 @@ def _recorded_inputs(root, *, version="object-v1", symmetry=False):
     )
     model = AppearanceModel(
         ObjectPointModel("object", "object-v1", np.array([[0.0, 0, 0], [0.01, 0, 0], [0, 0.01, 0]])),
+        np.eye(3),
+    )
+    target_reference = ObjectReference(
+        "target",
+        "target-v1",
+        (
+            ReferenceSnippet(
+                "demo/source", 0, 4, "target", identity, mask.relative_to(root).as_posix(), "cal"
+            ),
+        ),
+    )
+    target_model = AppearanceModel(
+        ObjectPointModel("target", "target-v1", np.array([[0.0, 0, 0], [0.01, 0, 0], [0, 0.01, 0]])),
         np.eye(3),
     )
     source_skill = FlashSkill(
@@ -75,7 +88,12 @@ def _recorded_inputs(root, *, version="object-v1", symmetry=False):
     )
     symmetries = (AxialSymmetry("object", [0, 0, 1], [0, 0, 0], identity),) if symmetry else ()
     bundle_path = PreparedFlashSkill(
-        source_skill, (reference,), (model,), {"object": "patterned object"}, "encoder", symmetries
+        source_skill,
+        (reference, target_reference) if second_object else (reference,),
+        (model, target_model) if second_object else (model,),
+        {"object": "patterned object", **({"target": "blue target"} if second_object else {})},
+        "encoder",
+        symmetries,
     ).save(root / "flash/v1/reference_bundles/episode_000000")
     trace = root / "flash/v1/episode_000000.jsonl"
     with trace.open("w") as stream:
@@ -96,7 +114,22 @@ def _recorded_inputs(root, *, version="object-v1", symmetry=False):
                                 "reference_version": version,
                                 "translation_supported": [True, True, True],
                                 "rotation_supported": [True, True, True],
-                            }
+                            },
+                            **(
+                                {
+                                    "target": {
+                                        "pose": identity.tolist(),
+                                        "source_time_s": frame / 30,
+                                        "available_time_s": frame / 30,
+                                        "evidence": "observed",
+                                        "reference_version": "target-v1",
+                                        "translation_supported": [True, True, True],
+                                        "rotation_supported": [True, True, True],
+                                    }
+                                }
+                                if second_object
+                                else {}
+                            ),
                         },
                     }
                 )
@@ -270,6 +303,86 @@ def test_recorded_trial_editor_compiles_candidate_with_explicit_hold_event(tmp_p
         1,
         2,
     ]
+
+
+def test_recorded_trial_editor_gates_a_section_on_its_observed_result(tmp_path, monkeypatch):
+    from lerobot.gui.api import run
+    from lerobot.policies.flash import recorded_trial
+
+    reference_path = _recorded_inputs(tmp_path, second_object=True)
+    profile = tmp_path / "profile.json"
+    profile.write_text(json.dumps({"type": "so107_follower_gravity", "fields": {"arm": "left"}}))
+    calibration = tmp_path / "calibration.json"
+    calibration.write_text(json.dumps({"tool_point": {"offset_m": [0, 0, 0]}}))
+    (tmp_path / "flash/v1/trial_config.json").write_text(
+        json.dumps(
+            {
+                "source_reference_bundle": reference_path.relative_to(tmp_path).as_posix(),
+                "output_root": str(tmp_path.resolve()),
+                "output_repo_id": "trial/recording",
+                "robot_profile": str(profile),
+                "calibration_path": str(calibration),
+                "robot_arm": "left",
+                "max_pose_age_s": 0.8,
+            }
+        )
+    )
+
+    class TrialEpisode(Episode):
+        features = {
+            "observation.state": {"names": ["joint.pos", "gripper.pos"]},
+            "action": {"names": ["joint.pos", "gripper.pos"]},
+        }
+
+    monkeypatch.setattr(recorded_trial, "LeRobotDataset", lambda **kwargs: TrialEpisode())
+    monkeypatch.setattr(recorded_trial, "MOTOR_NAMES", ("joint", "gripper"))
+    monkeypatch.setattr(
+        recorded_trial, "make_calibrated_so107_kinematics", lambda *args, **kwargs: Kinematics()
+    )
+    monkeypatch.setattr(recorded_trial, "SelectedJointKinematics", lambda inner, *args: inner)
+    section = {
+        "first_frame": 0,
+        "last_frame": 2,
+        "mode": "demonstrated",
+        "relation": "ee_to_object",
+        "reference_role": "object",
+        "verify_relation": {
+            "moving_role": "object",
+            "reference_role": "target",
+            "translation_tolerance_mm": 6,
+            "rotation_tolerance_deg": "",
+        },
+    }
+    output = prepare_recorded_trial(tmp_path, 0, "checked", [section])
+    skill = PreparedFlashSkill.load(output).skill
+    assert skill.intervals[0].completion_milestone == "section-1-result"
+    assert skill.milestones[0].pose_relation.translation_tolerance_m == pytest.approx(0.006)
+    assert skill.milestones[0].pose_relation.max_pose_age_s == pytest.approx(0.8)
+    assert json.loads((output.parent / "preparation-report.json").read_text())["result_checks"] == 1
+    monkeypatch.setattr(
+        run,
+        "_flash_tracker_replay",
+        lambda root, episode: {
+            "kind": "rollout",
+            "frames": [
+                {
+                    "frame_index": frame,
+                    "snapshot": {"recorded_at_s": frame / 30, "layers": {}, "accepted": {}},
+                }
+                for frame in range(3)
+            ],
+        },
+    )
+    replay = run._flash_recorded_demo_replay(tmp_path, 0, output)
+    assert replay["prepared_intervals"][0]["verify_relation"] == {
+        "moving_role": "object",
+        "reference_role": "target",
+        "translation_tolerance_mm": pytest.approx(6),
+        "rotation_tolerance_deg": "",
+    }
+    section["verify_relation"]["translation_tolerance_mm"] = ""
+    with pytest.raises(ValueError, match="explicit distance tolerance"):
+        prepare_recorded_trial(tmp_path, 0, "invalid", [section])
 
 
 def test_recorded_demo_replay_keeps_generated_route_endpoint_at_its_recorded_frame(tmp_path, monkeypatch):

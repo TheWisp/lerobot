@@ -69,6 +69,7 @@ def test_pose_milestone_checks_actual_object_relation_and_persists_in_skill(tmp_
     }
     good = verify_pose_relation(restored.milestones[0], poses, pose_version=7, now_s=1.1)
     assert good.verdict == Verdict.TRUE
+    assert good.oldest_source_time_s == 1.0
     published = []
     PoseMilestonePublisher(restored.milestones, published.append, clock=lambda: 1.1)(7, poses)
     assert published == [good]
@@ -84,6 +85,7 @@ def test_pose_milestone_checks_actual_object_relation_and_persists_in_skill(tmp_
     poses["held"] = observed("held", 0.52, version="held-v1", time_s=1.2)
     bad = verify_pose_relation(restored.milestones[0], poses, pose_version=9, now_s=1.2)
     assert bad.verdict == Verdict.FALSE
+    assert bad.oldest_source_time_s == 1.0
     assert "0.0200 m" in bad.reason
 
 

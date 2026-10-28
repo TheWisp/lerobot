@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import json
+from math import radians
 from pathlib import Path
 
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.robots.so107_description.calibrated_kinematics import make_calibrated_so107_kinematics
 from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
 
-from .compiler import ActionEventAnnotation, IntervalAnnotation
+from .compiler import ActionEventAnnotation, IntervalAnnotation, PoseRelationAnnotation
 from .kinematics import SelectedJointKinematics
 from .prepared import PreparedFlashSkill
 from .recorded_demo import prepare_recorded_episode
@@ -120,6 +121,7 @@ def prepare_recorded_trial(
     roles = {item.role: item.version for item in prepared.references}
     annotations = []
     transitions = []
+    relation_checks = []
     for index, item in enumerate(intervals):
         relation = Relation(item["relation"])
         reference = item.get("reference_role") if relation != Relation.EE_TO_START else "__start__"
@@ -141,6 +143,34 @@ def prepare_recorded_trial(
                     event_id, AttachmentAction(action), attachment_role, roles[attachment_role]
                 )
             )
+        check = item.get("verify_relation")
+        completion_milestone = None
+        if check is not None:
+            if not isinstance(check, dict):
+                raise ValueError(f"section {index + 1} result check must specify two objects")
+            moving_role = check.get("moving_role")
+            target_role = check.get("reference_role")
+            if moving_role not in roles or target_role not in roles or moving_role == target_role:
+                raise ValueError(f"section {index + 1} result check needs two distinct tracked objects")
+            if "translation_tolerance_mm" not in check or check["translation_tolerance_mm"] in (None, ""):
+                raise ValueError(f"section {index + 1} result check needs an explicit distance tolerance")
+            try:
+                max_pose_age_s = float(settings["max_pose_age_s"])
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ValueError("trial configuration needs max_pose_age_s for result checks") from exc
+            completion_milestone = f"section-{index + 1}-result"
+            angle = check.get("rotation_tolerance_deg")
+            relation_checks.append(
+                PoseRelationAnnotation(
+                    name=completion_milestone,
+                    frame_index=item["last_frame"],
+                    moving_role=moving_role,
+                    reference_role=target_role,
+                    translation_tolerance_m=float(check["translation_tolerance_mm"]) / 1000,
+                    rotation_tolerance_rad=radians(float(angle)) if angle not in (None, "") else None,
+                    max_pose_age_s=max_pose_age_s,
+                )
+            )
         annotations.append(
             IntervalAnnotation(
                 name=item.get("name") or f"section-{index + 1}",
@@ -153,6 +183,7 @@ def prepare_recorded_trial(
                 allow_predicted_demo_pose=bool(item.get("allow_predicted_demo_pose", False)),
                 events=events,
                 endpoint_requirement=EndpointRequirement(item.get("endpoint_requirement", "required")),
+                completion_milestone=completion_milestone,
             )
         )
     if not annotations:
@@ -172,6 +203,7 @@ def prepare_recorded_trial(
         gripper_joint_name="gripper",
         annotations=tuple(annotations),
         attachment_transitions=tuple(transitions),
+        pose_relation_annotations=tuple(relation_checks),
         symmetry_baseline_frames=symmetry_baseline_frames,
     )
     (output.parent / "preparation-report.json").write_text(
@@ -181,6 +213,7 @@ def prepare_recorded_trial(
                 "source": "recorded_episode",
                 "source_episode": episode,
                 "intervals": len(annotations),
+                "result_checks": len(relation_checks),
             },
             indent=2,
         )

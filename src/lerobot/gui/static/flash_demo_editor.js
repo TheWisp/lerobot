@@ -221,29 +221,42 @@ function _flashEditorRender() {
         panes[key].className = 'flash-editor-pane';
         panes[key].dataset.section = key;
     }
-    const tracking = document.createElement('details');
-    tracking.className = 'flash-editor-tracking';
-    tracking.open = !!state.trackingOpen || ['pose', 'trackers'].includes(requestedSection);
-    tracking.ontoggle = () => { if (tracking.isConnected) state.trackingOpen = tracking.open; };
-    tracking.append(Object.assign(document.createElement('summary'), {textContent: 'Inspect tracking and poses'}),
-        panes.pose, panes.trackers);
-    const settings = document.createElement('details');
-    settings.className = 'flash-editor-settings';
-    settings.open = !!state.settingsOpen || ['objectOptions', 'exactTimes',
-        'advanced', 'setup'].includes(requestedSection);
-    settings.ontoggle = () => { if (settings.isConnected) state.settingsOpen = settings.open; };
-    settings.append(Object.assign(document.createElement('summary'), {textContent: 'More settings'}));
-    if (!state.raw) settings.append(panes.setup);
-    settings.append(panes.objectOptions, panes.exactTimes, panes.advanced);
-    // Keep the ordinary editing path in the same order as the replay workflow.
-    // Reference views belong to the selected object, not a separate destination
-    // that the operator has to find after editing the timeline.
-    if (state.raw) editor.append(panes.setup);
-    for (const key of state.raw
-        ? ['objects', 'events', 'keyframes']
-        : ['keyframes', 'objects', 'events']) editor.append(panes[key]);
-    if (!state.raw) editor.append(tracking);
-    editor.append(settings);
+    const requestedView = ({
+        keyframes: 'motion', events: 'motion', objects: 'objects', references: 'objects',
+        objectOptions: 'objects', pose: 'tracking', trackers: 'tracking',
+        setup: 'source', exactTimes: 'source', advanced: 'source',
+    })[requestedSection];
+    if (requestedView) state.editorView = requestedView;
+    const views = state.raw
+        ? [['source', 'Source'], ['objects', 'Objects'], ['motion', 'Motion']]
+        : [['motion', 'Motion'], ['objects', 'Objects'], ['tracking', 'Tracking'], ['source', 'Source']];
+    if (!views.some(([key]) => key === state.editorView)) state.editorView = state.raw ? 'source' : 'motion';
+    const navigation = document.createElement('nav');
+    navigation.className = 'flash-editor-navigation';
+    navigation.setAttribute('aria-label', 'Demo editing tools');
+    for (const [key, label] of views) {
+        const button = _flashEditorButton(navigation, label, () => {
+            state.editorView = key;
+            _flashEditorRender();
+            editor.scrollTop = 0;
+        });
+        button.classList.toggle('is-selected', state.editorView === key);
+        button.setAttribute('aria-current', state.editorView === key ? 'page' : 'false');
+    }
+    editor.append(navigation);
+    const view = document.createElement('div');
+    view.className = 'flash-editor-view';
+    editor.append(view);
+    if (state.editorView === 'motion') view.append(panes.keyframes, panes.events);
+    if (state.editorView === 'objects') view.append(panes.objects, panes.objectOptions);
+    if (state.editorView === 'tracking') view.append(panes.pose, panes.trackers);
+    if (state.editorView === 'source') view.append(panes.setup, panes.exactTimes, panes.advanced);
+    if (!state.raw && state.editorView !== 'tracking') {
+        const retainedPosePanel = document.createElement('div');
+        retainedPosePanel.hidden = true;
+        retainedPosePanel.append(panes.pose);
+        editor.append(retainedPosePanel);
+    }
 
     const setup = _flashEditorSection(panes.setup, 'Recording and calibration', state.raw
         ? 'The raw frames contain no FLASH object names or camera-to-arm calibration. Supply the calibration used when this demo was recorded.'

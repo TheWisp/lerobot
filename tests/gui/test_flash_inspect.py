@@ -741,6 +741,7 @@ def test_run_flash_lists_demos_and_shows_extracted_pose_overlay(gui_page):
     page.wait_for_function("() => !!document.querySelector('#flash-demo-editor')")
     assert "Edit demo" in page.locator("#flash-demo-editor").inner_text()
     assert page.locator("#flash-demo-editor-frame").inner_text().startswith("Frame 4")
+    page.locator(".flash-editor-navigation").get_by_role("button", name="Objects").click()
     assert page.locator(
         "#flash-demo-editor .flash-editor-pane[data-section='objects'] > section"
     ).first.is_visible()
@@ -757,7 +758,7 @@ def test_run_flash_lists_demos_and_shows_extracted_pose_overlay(gui_page):
     page.get_by_role("button", name="Save mask").click()
     assert "Corrected object mask" in page.locator("#flash-demo-editor-polygon-status").inner_text()
     assert len(page.evaluate("flashDemoEditor.annotation.reference_polygons_by_role.object")) == 3
-    page.locator(".flash-editor-tracking > summary").click()
+    page.locator(".flash-editor-navigation").get_by_role("button", name="Tracking").click()
     assert page.get_by_label("Processing scope", exact=True).input_value() == ""
     assert page.get_by_label("Grow points from later views").is_checked()
     page.get_by_label("Maximum points per object").fill("256")
@@ -1390,16 +1391,11 @@ def test_raw_demo_editor_collects_object_names_and_action_from_visible_controls(
     page.wait_for_function("() => flashReplay?.kind === 'raw_demo'")
     page.locator("#flash-demo-edit-toggle").click()
     assert page.locator("#flash-demo-editor-change-status").inner_text() == "Raw demo · no preparation saved"
-    assert page.locator("#flash-demo-editor > .flash-editor-pane").evaluate_all(
-        "panes => panes.map(pane => pane.dataset.section)"
-    ) == ["setup", "objects", "events", "keyframes"]
-    assert (
-        page.locator(
-            "#flash-demo-editor .flash-editor-pane[data-section='objects'] "
-            "> .flash-editor-pane[data-section='references']"
-        ).count()
-        == 1
-    )
+    assert page.locator(".flash-editor-navigation button").all_inner_texts() == [
+        "Source",
+        "Objects",
+        "Motion",
+    ]
 
     current_section = "setup"
 
@@ -1413,10 +1409,16 @@ def test_raw_demo_editor_collects_object_names_and_action_from_visible_controls(
             "Object options": "objectOptions",
             "Key frames": "keyframes",
         }[name]
-        if current_section in ("advanced", "objectOptions") and not page.locator(
-            ".flash-editor-settings"
-        ).evaluate("el => el.open"):
-            page.locator(".flash-editor-settings > summary").click()
+        view = {
+            "objects": "Objects",
+            "references": "Objects",
+            "objectOptions": "Objects",
+            "events": "Motion",
+            "keyframes": "Motion",
+            "advanced": "Source",
+            "setup": "Source",
+        }[current_section]
+        page.locator(".flash-editor-navigation").get_by_role("button", name=view).click()
 
     def set_field(label, value):
         control = (
@@ -1680,15 +1682,20 @@ def test_3d_scene_projection_and_surface_pick_edit_the_prepared_keyframe(gui_pag
     page.get_by_role("button", name="Edit key frames").click()
     page.wait_for_function("() => !!flashDemoEditor")
     assert not page.locator("#run-sidebar").is_visible()
-    assert page.locator(".flash-editor-navigation").count() == 0
+    assert page.locator(".flash-editor-navigation button").all_inner_texts() == [
+        "Motion",
+        "Objects",
+        "Tracking",
+        "Source",
+    ]
+    assert page.locator("#flash-demo-editor .flash-editor-pane[data-section='keyframes']").is_visible()
+    page.locator(".flash-editor-navigation").get_by_role("button", name="Objects").click()
     assert page.locator(
         "#flash-demo-editor .flash-editor-pane[data-section='objects'] > section"
     ).first.is_visible()
-    assert page.locator("#flash-demo-editor > .flash-editor-pane").evaluate_all(
-        "panes => panes.map(pane => pane.dataset.section)"
-    ) == ["keyframes", "objects", "events"]
     assert page.get_by_label("Held object", exact=True).is_visible()
     assert page.get_by_label("Target object", exact=True).is_visible()
+    page.locator(".flash-editor-navigation").get_by_role("button", name="Motion").click()
     assert page.locator("#flash-demo-editor .flash-editor-pane[data-section='keyframes']").is_visible()
     assert page.get_by_label("Reach", exact=True).is_visible()
     assert page.get_by_role("button", name="Move key frame to playhead").is_visible()
@@ -1697,9 +1704,9 @@ def test_3d_scene_projection_and_surface_pick_edit_the_prepared_keyframe(gui_pag
     page.get_by_label("Path", exact=True).select_option("line")
     assert not page.get_by_label("Lift (mm)").count()
     assert not page.get_by_text("Pose evidence", exact=True).is_visible()
-    page.locator(".flash-editor-tracking > summary").click()
+    page.locator(".flash-editor-navigation").get_by_role("button", name="Tracking").click()
     assert page.get_by_text("Pose evidence", exact=True).is_visible()
-    assert page.locator(".flash-editor-tracking .flash-editor-group").count() == 0
+    page.locator(".flash-editor-navigation").get_by_role("button", name="Motion").click()
     page.get_by_role("button", name="Pick in 3D scene").click()
     box = page.locator(".flash-scene-canvas").bounding_box()
     scale = min(box["width"] / width, box["height"] / height)
@@ -1728,6 +1735,7 @@ def test_3d_scene_projection_and_surface_pick_edit_the_prepared_keyframe(gui_pag
     assert page.evaluate("flashDemoEditor.role") == "tool"
     assert page.evaluate("flashDemoEditor.keypointsDocument.keypoints[0].frame") == "fixture"
     assert "Unsaved edits" in page.locator("#flash-demo-editor-change-status").inner_text()
+    page.locator(".flash-editor-navigation").get_by_role("button", name="Motion").click()
     page.get_by_role("button", name="Preview updated demo").click()
     page.wait_for_function(
         "() => document.querySelector('#flash-demo-editor-status').textContent.includes('captured')"
@@ -1843,15 +1851,15 @@ def test_recorded_motion_editor_marks_contiguous_sections_in_same_replay(gui_pag
     assert page.locator("#flash-recorded-playhead").inner_text().startswith("Frame 2 of 3")
     page.get_by_role("button", name="End section here").click()
     page.get_by_role("button", name="End at last frame").click()
-    assert page.locator(".flash-recorded-section").count() == 2
-    page.locator(".flash-recorded-section").nth(1).locator('[data-field="relation"]').select_option(
-        "held_to_target"
-    )
-    page.locator(".flash-recorded-section").nth(1).locator('[data-field="reference_role"]').select_option(
-        "target"
-    )
-    page.locator(".flash-recorded-section").nth(1).locator('[data-field="held_role"]').select_option("tool")
-    assert "2/2 frames with measured full pose" in page.locator(".flash-recorded-section").nth(1).inner_text()
+    assert page.locator(".flash-recorded-section").count() == 1
+    assert page.locator(".flash-recorded-sections button").count() == 2
+    page.locator(".flash-recorded-section").locator('[data-field="relation"]').select_option("held_to_target")
+    page.locator(".flash-recorded-section").locator('[data-field="reference_role"]').select_option("target")
+    page.locator(".flash-recorded-section").locator('[data-field="held_role"]').select_option("tool")
+    assert "2/2 frames with measured full pose" in page.locator(".flash-recorded-section").inner_text()
+    page.get_by_label("Check final object relationship").check()
+    page.get_by_label("Allowed position difference from demo (mm)").fill("6")
+    page.get_by_label("Allowed position difference from demo (mm)").dispatch_event("change")
     page.get_by_role("button", name="Prepare candidate").click()
     page.wait_for_function(
         "() => !!document.querySelector('#flash-recorded-status')?.textContent.includes('Candidate saved')"
@@ -1859,7 +1867,9 @@ def test_recorded_motion_editor_marks_contiguous_sections_in_same_replay(gui_pag
     assert submissions[0]["intervals"][0]["last_frame"] == submissions[0]["intervals"][1]["first_frame"] == 2
     assert submissions[0]["intervals"][1]["relation"] == "held_to_target"
     assert submissions[0]["intervals"][1]["held_role"] == "tool"
+    assert submissions[0]["intervals"][1]["verify_relation"]["translation_tolerance_mm"] == "6"
     assert page.locator("#flash-recorded-editor").is_visible()
+    page.locator(".flash-recorded-sections button").first.click()
     page.locator(".flash-recorded-section").first.get_by_role("button", name="Remove").click()
     page.evaluate("seekFlashReplay(1)")
     page.get_by_role("button", name="Start here").click()

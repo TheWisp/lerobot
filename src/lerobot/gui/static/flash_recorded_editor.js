@@ -32,6 +32,7 @@ async function toggleFlashRecordedEditor() {
         flashRecordedEditor = {
             source, intervals: (replay.prepared_intervals || []).map(item => ({...item})),
             startFrame: replay.prepared_intervals?.[0]?.first_frame ?? 0,
+            selectedIndex: 0,
             message: '', preparing: false,
         };
         document.getElementById('rerun-viewer').classList.add('flash-demo-editing');
@@ -89,7 +90,16 @@ function _flashRecordedRender() {
     html += `<button type="button" id="flash-recorded-add-here" onclick="flashRecordedAddSection(false)" ${playhead <= nextStart ? 'disabled' : ''}>End section here</button>`;
     html += `<button type="button" onclick="flashRecordedAddSection(true)" ${last <= nextStart ? 'disabled' : ''}>End at last frame</button>`;
     html += '</div>';
+    if (intervals.length) {
+        html += '<nav class="flash-recorded-sections" aria-label="Motion sections">';
+        for (const [index, item] of intervals.entries()) {
+            const label = item.mode === 'connection' ? 'Route' : 'Recorded';
+            html += `<button type="button" class="${index === state.selectedIndex ? 'is-selected' : ''}" onclick="flashRecordedFocus(${index})">${index + 1}. ${label} · ${item.first_frame}–${item.last_frame}${item.verify_relation ? ' ✓' : ''}</button>`;
+        }
+        html += '</nav>';
+    }
     for (const [index, item] of intervals.entries()) {
+        if (index !== state.selectedIndex) continue;
         html += `<section class="flash-recorded-section"><div class="flash-recorded-section-head"><strong>${index + 1}. Frames ${item.first_frame}–${item.last_frame}</strong><button type="button" onclick="flashRecordedRemoveFrom(${index})">Remove</button></div>`;
         html += `<label>How to travel<select data-index="${index}" data-field="mode">${_flashRecordedOptions([
             ['demonstrated', 'Follow recorded motion'], ['connection', 'Plan a route to the end']
@@ -118,6 +128,22 @@ function _flashRecordedRender() {
             ['', 'No hold change'], ['attach', 'Gripper takes an object'], ['detach', 'Gripper releases an object']
         ], item.attachment_action)}</select></label>`;
         if (item.attachment_action) html += `<label>Object<select data-index="${index}" data-field="attachment_role">${_flashRecordedOptions(roles.map(role => [role, role]), item.attachment_role)}</select></label>`;
+        if (roles.length >= 2) {
+            html += `<label class="flash-recorded-check"><input type="checkbox" data-index="${index}" data-field="verify_relation" ${item.verify_relation ? 'checked' : ''}> Check final object relationship</label>`;
+            if (item.verify_relation) {
+                const check = item.verify_relation;
+                html += '<p>Compare the two objects with their relative position in this demo frame.</p>';
+                html += `<label>Moving object<select data-index="${index}" data-check-field="moving_role">${_flashRecordedOptions(roles.map(role => [role, role]), check.moving_role)}</select></label>`;
+                html += `<label>Target object<select data-index="${index}" data-check-field="reference_role">${_flashRecordedOptions(roles.filter(role => role !== check.moving_role).map(role => [role, role]), check.reference_role)}</select></label>`;
+                html += `<label>Allowed position difference from demo (mm)<input type="number" min="0" step="any" placeholder="Choose for this task" data-index="${index}" data-check-field="translation_tolerance_mm" value="${_esc(check.translation_tolerance_mm ?? '')}"></label>`;
+                html += `<label>Allowed rotation difference (degrees; optional)<input type="number" min="0" step="any" placeholder="Any rotation" data-index="${index}" data-check-field="rotation_tolerance_deg" value="${_esc(check.rotation_tolerance_deg ?? '')}"></label>`;
+                const observed = [check.moving_role, check.reference_role].filter(role =>
+                    !(source.observed_frames?.[role] || []).includes(item.last_frame));
+                html += observed.length
+                    ? `<p class="flash-recorded-warning">Frame ${item.last_frame} has no measured full pose for ${_esc(observed.join(' and '))}. Choose an observed end frame or improve tracking before preparing this check.</p>`
+                    : '<p>The run waits for fresh measured poses of both objects before this section counts as complete.</p>';
+            }
+        }
         if (item.relation !== 'ee_to_start') html += `<label class="flash-recorded-check"><input type="checkbox" data-index="${index}" data-field="allow_predicted_demo_pose" ${item.allow_predicted_demo_pose ? 'checked' : ''}> Accept predicted pose where camera observation is missing</label>`;
         html += '</section>';
     }
@@ -134,11 +160,26 @@ function _flashRecordedRender() {
     for (const input of panel.querySelectorAll('[data-field]')) {
         input.addEventListener('change', () => {
             const item = intervals[Number(input.dataset.index)];
-            item[input.dataset.field] = input.type === 'checkbox' ? input.checked : input.value;
+            if (input.dataset.field === 'verify_relation') {
+                item.verify_relation = input.checked ? {
+                    moving_role: roles[0], reference_role: roles[1], translation_tolerance_mm: '',
+                    rotation_tolerance_deg: '',
+                } : null;
+            } else item[input.dataset.field] = input.type === 'checkbox' ? input.checked : input.value;
             if (input.dataset.field === 'reference_role' && item.held_role === item.reference_role)
                 item.held_role = roles.find(role => role !== item.reference_role) || '';
             if (input.dataset.field === 'attachment_action' && item.attachment_action && !item.attachment_role)
                 item.attachment_role = roles[0] || '';
+            state.message = '';
+            _flashRecordedRender();
+        });
+    }
+    for (const input of panel.querySelectorAll('[data-check-field]')) {
+        input.addEventListener('change', () => {
+            const check = intervals[Number(input.dataset.index)].verify_relation;
+            check[input.dataset.checkField] = input.value;
+            if (input.dataset.checkField === 'moving_role' && check.reference_role === check.moving_role)
+                check.reference_role = roles.find(role => role !== check.moving_role) || '';
             state.message = '';
             _flashRecordedRender();
         });
@@ -150,6 +191,16 @@ function _flashRecordedRender() {
             else delete state.symmetryBaselines[input.dataset.symmetry];
         });
     }
+}
+
+function flashRecordedFocus(index) {
+    const state = flashRecordedEditor;
+    if (!state || index < 0 || index >= state.intervals.length) return;
+    state.selectedIndex = index;
+    const frame = state.intervals[index].last_frame;
+    const replayIndex = flashReplay?.frames.findIndex(item => item.frame_index === frame) ?? -1;
+    if (replayIndex >= 0) seekFlashReplay(replayIndex);
+    _flashRecordedRender();
 }
 
 function flashRecordedAddSection(toEnd) {
@@ -164,6 +215,7 @@ function flashRecordedAddSection(toEnd) {
         reference_role: roles[0] || '', held_role: roles[1] || '', endpoint_requirement: 'required',
         attachment_action: '', attachment_role: '', allow_predicted_demo_pose: false,
     });
+    state.selectedIndex = state.intervals.length - 1;
     state.message = '';
     _flashRecordedRender();
 }
@@ -176,6 +228,8 @@ function flashRecordedSetStart() {
 
 function flashRecordedRemoveFrom(index) {
     flashRecordedEditor?.intervals.splice(index);
+    if (flashRecordedEditor)
+        flashRecordedEditor.selectedIndex = Math.min(index, flashRecordedEditor.intervals.length - 1);
     _flashRecordedRender();
 }
 

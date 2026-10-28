@@ -8,6 +8,7 @@ import ctypes
 import gzip
 import json
 import logging
+import math
 import os
 import re
 import secrets
@@ -1282,6 +1283,7 @@ def _flash_recorded_demo_replay(root: Path, episode: int, bundle_path: Path) -> 
     result["skill_sample_count"] = sum(len(item.samples) for item in prepared.skill.intervals)
     result["prepared_intervals"] = []
     transitions = {item.event_id: item for item in prepared.skill.attachment_transitions}
+    milestones = {item.name: item.pose_relation for item in prepared.skill.milestones}
     for interval in prepared.skill.intervals:
         first = interval.samples[0].source_frame_index
         last = interval.samples[-1].source_frame_index
@@ -1303,6 +1305,20 @@ def _flash_recorded_demo_replay(root: Path, episode: int, bundle_path: Path) -> 
                 "allow_predicted_demo_pose": any(
                     sample.reference_evidence == "predicted" or sample.held_evidence == "predicted"
                     for sample in interval.samples
+                ),
+                "verify_relation": (
+                    {
+                        "moving_role": check.moving_role,
+                        "reference_role": check.reference_role,
+                        "translation_tolerance_mm": check.translation_tolerance_m * 1000,
+                        "rotation_tolerance_deg": (
+                            check.rotation_tolerance_rad * 180 / math.pi
+                            if check.rotation_tolerance_rad is not None
+                            else ""
+                        ),
+                    }
+                    if (check := milestones.get(interval.completion_milestone)) is not None
+                    else None
                 ),
             }
         )

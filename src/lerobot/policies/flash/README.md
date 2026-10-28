@@ -126,7 +126,12 @@ The selected motion can start and end anywhere in the episode; setup and
 parking footage do not become mandatory skill motion.
 Each section states whether to follow its recorded motion or plan a route,
 which object relationship must be preserved, and whether a gripper attachment
-changes at its end. **Prepare candidate** checks the whole recording and saves
+changes at its end. A section may also check the measured relation between
+two selected objects at its end against their demonstrated relative position,
+using a task tolerance supplied in the editor.
+The check waits for new observations of both objects after the final motor
+command; a pose seen earlier cannot certify the result. **Prepare candidate**
+checks the selected clip and saves
 a new skill version under the same dataset; **Demos** replays that version on
 the original trial frames with the saved skill poses beside tracker evidence.
 The editor currently uses the recorded SO-107 calibration adapter. Older
@@ -134,7 +139,10 @@ trials lacking a saved reference snapshot remain viewable but cannot be
 prepared from this editor; no object model is inferred from their names.
 The sealed importer remains an adapter for the historical SO-107 recording
 layout and its one-held/one-target annotation; it is not the general demo
-schema. Milestone and recovery editing for regular recordings is still pending.
+schema. Other milestone types and recovery editing for regular recordings are
+still pending. The current insertion recording has no directly observed ring
+pose at the contact endpoint, so its result cannot yet be certified by this
+pose-relation check.
 
 The live trial constructs the configured vision backend through
 [`VisionBackendFactory`](vision_pipeline.py). When `causal_tracking` is configured, the

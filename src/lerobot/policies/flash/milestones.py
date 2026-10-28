@@ -80,9 +80,14 @@ def verify_pose_relation(
     source_time_s = max(
         (pose.source_time_s for pose in (moving, reference) if pose is not None), default=now_s
     )
+    oldest_source_time_s = min(
+        (pose.source_time_s for pose in (moving, reference) if pose is not None), default=now_s
+    )
 
     def update(verdict: Verdict, reason: str) -> MilestoneUpdate:
-        return MilestoneUpdate(milestone.name, verdict, source_id, source_time_s, reason)
+        return MilestoneUpdate(
+            milestone.name, verdict, source_id, source_time_s, reason, oldest_source_time_s
+        )
 
     if moving is None or reference is None:
         return update(Verdict.UNKNOWN, "one or both object poses are missing")

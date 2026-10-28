@@ -31,6 +31,7 @@ class MilestoneUpdate:
     source_id: str
     source_time_s: float
     reason: str = ""
+    oldest_source_time_s: float | None = None
 
 
 @dataclass
@@ -115,6 +116,17 @@ class Progress:
             == Verdict.TRUE
         )
 
+    def completion_satisfied(self) -> bool:
+        """A result check needs fresh evidence for every participant after motion."""
+        name = self.interval.completion_milestone
+        if name is None:
+            return True
+        update = self.milestones.get(name)
+        if update is None or update.verdict != Verdict.TRUE or self.last_receipt_s is None:
+            return False
+        oldest = update.oldest_source_time_s
+        return (update.source_time_s if oldest is None else oldest) >= self.last_receipt_s
+
     def begin(self, now_s: float) -> bool:
         if not self.can_begin():
             return False
@@ -155,7 +167,7 @@ class Progress:
             )
 
     def advance(self, now_s: float) -> bool:
-        if self.phase != Phase.VERIFYING or not self._satisfied(self.interval.completion_milestone):
+        if self.phase != Phase.VERIFYING or not self.completion_satisfied():
             return False
         self.events.append({"type": "interval_complete", "interval": self.interval.name, "at": now_s})
         if self.entry_alignment is not None:

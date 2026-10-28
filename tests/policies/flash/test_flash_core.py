@@ -331,6 +331,34 @@ def test_milestone_requires_fresh_evidence_and_motion_is_not_success():
     assert progress.phase == Phase.SUCCEEDED
 
 
+def test_completion_milestone_needs_both_objects_observed_after_final_command():
+    interaction = Interval(
+        "place",
+        MotionMode.DEMONSTRATED,
+        Relation.EE_TO_OBJECT,
+        "target",
+        (sample(0, (0, 0, 0), (0, 0, 0)), sample(1, (0, 0, 0), (0, 0, 0))),
+        completion_milestone="placed",
+    )
+    progress = Progress(
+        FlashSkill("owner/demo", 0, (interaction,), milestones=(MilestoneSpec("placed", ("held", "target")),))
+    )
+    progress.update_milestone(
+        MilestoneUpdate("placed", Verdict.TRUE, "before", 10.5, oldest_source_time_s=10.5)
+    )
+    assert progress.begin(10)
+    progress.receipt(11, interval_complete=True)
+    assert not progress.advance(11)
+    progress.update_milestone(
+        MilestoneUpdate("placed", Verdict.TRUE, "one-new", 11.2, oldest_source_time_s=10.5)
+    )
+    assert not progress.advance(11.2)
+    progress.update_milestone(
+        MilestoneUpdate("placed", Verdict.TRUE, "both-new", 11.3, oldest_source_time_s=11.1)
+    )
+    assert progress.advance(11.3)
+
+
 def test_target_pose_change_withdraws_previous_milestone_verdict():
     interval = Interval(
         "release",

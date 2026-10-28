@@ -149,7 +149,12 @@ class FlashSession:
             if phase == Phase.VERIFYING
             else None
         )
-        if name is None or self.progress.allows_milestone(name):
+        satisfied = (
+            self.progress.completion_satisfied()
+            if phase == Phase.VERIFYING
+            else self.progress.allows_milestone(name)
+        )
+        if name is None or satisfied:
             self._milestone_wait_key = None
             self._milestone_wait_since_s = None
             return False
