@@ -467,6 +467,28 @@ class HeldAttachmentUpdater:
         first = self.kinematics.forward_kinematics(left)
         return first if alpha == 0 else interpolate(first, self.kinematics.forward_kinematics(right), alpha)
 
+    def _visual_surface_rejection(self, support: SurfaceSupport) -> str | None:
+        """Apply the configured depth requirement to an attachment correction.
+
+        Prefer the same clean interior pixels used by the RGB-D observation
+        filter. If no such filter was supplied, use the projected masked depth
+        support. A small pose change does not make a weak image trustworthy.
+        """
+        tolerance = self.depth_occlusion_tolerance_m
+        if tolerance is None:
+            return None
+        if support.clean_depth_points is not None:
+            count = support.clean_depth_points
+            residual = support.clean_depth_residual_p90_m
+        else:
+            count = support.masked_depth_points
+            residual = support.depth_residual_p90_m
+        if count < self.min_visual_support_points or residual is None or not np.isfinite(residual):
+            return f"held visual surface has {count} supported pixels, needs {self.min_visual_support_points}"
+        if residual > tolerance:
+            return f"held visual surface depth p90 {residual:.4f} m exceeds {tolerance:.4f} m"
+        return None
+
     def activate(
         self,
         grasp_time_s: float,
@@ -597,6 +619,15 @@ class HeldAttachmentUpdater:
                         clean_depth_mask=clean_depth_mask,
                     )
                     self._last_visual_comparison = (frame.frame_id, held.source_time_s, comparison)
+                if comparison is not None:
+                    rejection = self._visual_surface_rejection(comparison.candidate)
+                    if rejection is not None:
+                        prior_supported = self._visual_surface_rejection(comparison.prior) is None
+                        self._pending_visual = None
+                        self._conflicted = not prior_supported
+                        self._visual_ambiguous = prior_supported
+                        self.last_rejection = rejection
+                        return False
                 relative = inverse(prior) @ candidate
                 center = self.object_center_object_m
                 prior_center = prior[:3, :3] @ center + prior[:3, 3]
@@ -654,6 +685,13 @@ class HeldAttachmentUpdater:
                     ):
                         self.last_rejection += "; successive visual poses disagree"
                         return False
+            elif self._last_visual_candidate is not None:
+                rejection = self._visual_surface_rejection(self._last_visual_candidate[2])
+                if rejection is not None:
+                    self._conflicted = True
+                    self._pending_visual = None
+                    self.last_rejection = rejection
+                    return False
             if not self._estimate.update(ee, held):
                 return False
             self._conflicted = False

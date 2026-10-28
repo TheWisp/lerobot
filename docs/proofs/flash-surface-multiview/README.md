@@ -179,3 +179,15 @@ points can be hidden; low forward distance alone is not enough to publish a
 pose. Neither the model nor the live control rule has been changed by this
 audit. It motivates an interval-level attachment check and an admission test
 for new views before either is used for control.
+
+The subsequent shared attachment rule now checks the configured clean-depth
+support for **every** visual correction, including small changes. Repreparing
+the insertion demo from its unchanged pose trace rejects the weak corrections
+at frames 291 and 475; the latter leaves the attachment conflicted instead of
+silently changing the carried pose. This flags uncertainty rather than fixing
+the dowel's missing geometry. A fresh preparation of the separate gamepad
+stacking demo made the same 20 visual corrections and produced numerically
+identical carried skill samples (32 compared). The small-correction regression
+test fails against the previous implementation and passes with the check.
+These results do not establish behavior on every object or a
+physical insertion success.

@@ -47,10 +47,12 @@ point count come from the trial's configuration.
 The updater records a same-frame mask/depth comparison for **every** direct
 held observation, including a small correction and the first observation when
 no gripper prediction exists. Demo playback and live telemetry show the visual
-and gripper projections' supported pixel counts and depth residuals. This is
-diagnostic evidence: it does not yet reject a small correction whose visible
-reference surface fits poorly. The fit is also not an independent measurement
-of the hidden contact point.
+and gripper projections' supported pixel counts and depth residuals. A visual
+correction now needs the configured minimum clean depth support and p90 fit,
+regardless of how small its pose change is. If it fails, a depth-supported
+gripper prediction remains available with a visual-ambiguity label; otherwise
+the attachment is conflicted. Passing this one-view check is not an independent
+measurement of the hidden contact point or a complete pose certificate.
 
 The recorded-demo importer now runs this same correction rule at source time
 when the demo annotation includes `held_attachment` and the aligned masks are

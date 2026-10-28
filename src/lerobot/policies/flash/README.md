@@ -111,7 +111,8 @@ That command is a compatibility entry point; the importer is
    selected pregrasp estimate and recorded gripper motion. When preparation
    has same-frame aligned RGB-D, a supported visual pose and a measured arm
    pose at that image's capture time, it can correct the saved gripper-to-object
-   relation. Small supported corrections apply directly. Larger ones require
+   relation. Small corrections apply only when the visible reference surface
+   meets the configured clean-depth support requirement. Larger ones require
    two agreeing visual observations whose fixed-reference surface fits the
    image better than the gripper prediction. Unresolved disagreements retain
    the previous relation but are labeled `conflicted_prediction` in the
