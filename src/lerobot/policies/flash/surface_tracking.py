@@ -17,6 +17,7 @@ from scipy.spatial.transform import Rotation
 
 from .surface_correspondence import SurfaceMotionConfig, crop_pair, robust_fit, ufm_pairs
 from .surface_grounding import PreparedReferenceSurface, ShapeConfig, WholeSurfaceFit, project
+from .surface_motion import measured_surface_information
 from .surface_observation import (
     SurfaceFrameFilters,
     SurfaceObservationConfig,
@@ -99,6 +100,7 @@ class SurfaceTrackingSession:
         matcher_lock=None,
         fit_kernels=None,
         search_pool=None,
+        information_correspondence_m=None,
     ):
         self.matcher = matcher
         self.matcher_lock = matcher_lock
@@ -107,6 +109,13 @@ class SurfaceTrackingSession:
         self.motion_config = motion_config or SurfaceMotionConfig()
         self.observation_config = observation_config or SurfaceObservationConfig()
         self.shape_config = shape_config or ShapeConfig()
+        self.information_correspondence_m = (
+            self.shape_config.depth_tolerance_m
+            if information_correspondence_m is None
+            else information_correspondence_m
+        )
+        if not np.isfinite(self.information_correspondence_m) or self.information_correspondence_m <= 0:
+            raise ValueError("surface information correspondence distance must be positive")
         self.reference = None
         self.previous = None
         self.pose = np.eye(4)
@@ -298,6 +307,23 @@ class SurfaceTrackingSession:
         )
         all_points = current["all_surface_points"]
         predicted = move(self.reference, self.pose)
+        information_start = time.perf_counter()
+        information = measured_surface_information(
+            self.reference,
+            self.pose,
+            current["obs"]["points"],
+            current["obs"]["normals"],
+            correspondence_distance_m=self.information_correspondence_m,
+        )
+        detail["conditional_surface_information_camera"] = {
+            "pivot_m": information.pivot.tolist(),
+            "twist_basis": information.basis.tolist(),
+            "strength": information.strength.tolist(),
+            "matched_reference_points": information.matched_points,
+            "reference_points": information.reference_points,
+            "correspondence_distance_m": self.information_correspondence_m,
+        }
+        detail["information_ms"] = (time.perf_counter() - information_start) * 1000
         distances = cKDTree(predicted).query(all_points)[0] * 1000
         detail.update(
             surface_median_mm=float(np.median(distances)), surface_p90_mm=float(np.percentile(distances, 90))

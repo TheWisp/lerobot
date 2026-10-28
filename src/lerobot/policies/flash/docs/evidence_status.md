@@ -227,6 +227,18 @@ the gamepad cache-hit rerun also restored complete scene evidence. This repairs
 the evidence available for diagnosis and comparison, not the unresolved
 gamepad ambiguity or the unverified accuracy of a held pose.
 
+The surface backend now also records which rigid-motion directions a proposed
+fit's currently matched depth surface can constrain. An isolated reprocess of
+the 503-frame gamepad demo produced this measurement on 874 of 1,006
+object-frame proposals; after removing this new field, all 503 scene-evidence
+records matched the preceding reprocess exactly. At a narrow grasp view
+(frame 223), only 28 of 2,400 reference surface points matched, versus 92 at
+frame 290. An isolated 591-frame dowel reprocess recorded the measurement on
+1,156 of 1,182 proposals and retained the prior v11 observed/predicted/lost
+counts. These are conditional geometric measurements, not pose accuracy or
+calibrated confidence. The gamepad's frame-429 flipped candidate still has
+matched depth points, so this measurement alone cannot resolve that conflict.
+
 Representative camera frames with projected saved held surface (orange) and
 independent extraction where available (cyan):
 

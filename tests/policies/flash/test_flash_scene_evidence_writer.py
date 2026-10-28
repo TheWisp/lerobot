@@ -9,7 +9,11 @@ import pytest
 from lerobot.policies.flash.demo_scene import scene_evidence_frame, scene_evidence_status
 from lerobot.policies.flash.perception import RGBDFrame
 from lerobot.policies.flash.perception_step import PerceptionResult
-from lerobot.policies.flash.pose_evidence import PoseProposal, VisibleSurfaceSupport
+from lerobot.policies.flash.pose_evidence import (
+    ConditionalSurfaceInformation,
+    PoseProposal,
+    VisibleSurfaceSupport,
+)
 from lerobot.policies.flash.scene_evidence_writer import SceneEvidenceWriter
 from lerobot.policies.flash.trajectory import Evidence, PoseEstimate
 
@@ -66,6 +70,14 @@ def test_preparation_evidence_crosses_into_demo_replay(tmp_path):
         ),
         "full pose unobservable",
         motion_prior,
+        ConditionalSurfaceInformation(
+            (0.1, 0.2, 1.0),
+            tuple(tuple(float(value) for value in row) for row in np.eye(6)),
+            (0.0, 0.0, 0.0, 0.1, 0.2, 0.3),
+            8,
+            20,
+            0.005,
+        ),
     )
     result = PerceptionResult((lost,), {}, 0, 1.0, "calibration", {"object": mask}, proposals=(proposal,))
 
@@ -93,6 +105,7 @@ def test_preparation_evidence_crosses_into_demo_replay(tmp_path):
     assert evidence["proposals"]["object"]["motion_prior_pose"] == motion_prior.tolist()
     assert evidence["proposals"]["object"]["failure"] == "full pose unobservable"
     assert evidence["proposals"]["object"]["visible_support"]["principal_surface_points"] == 12
+    assert evidence["proposals"]["object"]["conditional_surface_information"]["matched_reference_points"] == 8
     assert evidence["estimates"]["object"]["evidence"] == "lost"
     assert evidence["groups"]["object"]["ids"] == [7]
     assert evidence["groups"]["object"]["base_xyz_m"] == [[0.1, 0.2, 1.0]]

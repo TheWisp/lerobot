@@ -315,6 +315,39 @@ def test_visible_patch_direction_uses_robot_base_coordinates():
     )
 
 
+def test_conditional_surface_information_survives_rejected_fit_and_uses_base_frame():
+    first = PerceptionPipeline(local_backend(), (reference(),)).process(frames()[0]).proposals[0]
+    camera_pose = np.eye(4)
+    camera_pose[:3, :3] = np.array([[0, -1, 0], [1, 0, 0], [0, 0, 1]])
+    camera_pose[:3, 3] = [0.2, -0.1, 0.3]
+    rotated_frame = replace(frames()[0], base_from_camera=camera_pose)
+    rotated = PerceptionPipeline(local_backend(), (reference(),)).process(rotated_frame).proposals[0]
+    a = first.conditional_surface_information
+    b = rotated.conditional_surface_information
+    assert a is not None and b is not None
+    assert a.matched_reference_points == b.matched_reference_points > 0
+    np.testing.assert_allclose(a.strength, b.strength, atol=1e-9)
+    np.testing.assert_allclose(
+        b.pivot_base_m,
+        camera_pose[:3, :3] @ np.asarray(a.pivot_base_m) + camera_pose[:3, 3],
+        atol=1e-9,
+    )
+    expected_basis = np.asarray(a.twist_basis_base).copy()
+    expected_basis[:3] = camera_pose[:3, :3] @ expected_basis[:3]
+    expected_basis[3:] = camera_pose[:3, :3] @ expected_basis[3:]
+    np.testing.assert_allclose(b.twist_basis_base, expected_basis, atol=1e-8)
+
+    pipeline = PerceptionPipeline(local_backend(), (reference(),))
+    pipeline.process(frames()[0])
+    with patch(
+        "lerobot.policies.flash.surface_tracking.ufm_pairs",
+        lambda *args: (np.zeros((0, 3)), np.zeros((0, 3))),
+    ):
+        rejected = pipeline.process(frames()[1]).proposals[0]
+    assert rejected.estimate.evidence == Evidence.LOST
+    assert rejected.conditional_surface_information is not None
+
+
 def test_small_patch_fit_cannot_promote_reference_depth_disagreement():
     from lerobot.policies.flash.surface_tracking import SurfaceTrackingSession
 

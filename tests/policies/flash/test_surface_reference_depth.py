@@ -5,6 +5,8 @@ from pathlib import Path
 
 import numpy as np
 
+from lerobot.policies.flash.surface_grounding import ShapeConfig
+from lerobot.policies.flash.surface_motion import measured_surface_information
 from lerobot.policies.flash.surface_observation import SurfaceObservationConfig, move, observation
 from lerobot.policies.flash.surface_tracking import SurfaceTrackingSession, reference_depth_support
 
@@ -63,6 +65,26 @@ def test_recorded_gamepad_grasp_sliver_has_less_lateral_extent_than_fit_error():
             lateral_spread = prepared["diagnostics"]["visible_lateral_spread_mm"]
             fit_error = float(data[f"surface_p90_mm_{frame_index}"])
             assert (lateral_spread <= fit_error) is (frame_index in (223, 246))
+
+
+def test_recorded_gamepad_surface_information_weakens_on_grasp_sliver():
+    fixture = Path(__file__).parent / "fixtures" / "gamepad_reference_depth_20261028.npz"
+    with np.load(fixture) as data:
+        scores = {}
+        for frame_index in (223, 290):
+            depth = data[f"depth_{frame_index}"].astype(np.float32) / 1000
+            mask = data[f"mask_{frame_index}"].astype(bool)
+            measured = observation(depth, mask, data["intrinsics"], asdict(SurfaceObservationConfig()))
+            camera_rotation = data["base_from_camera"][:3, :3]
+            scores[frame_index] = measured_surface_information(
+                data["reference_points_object_m"],
+                data[f"pose_{frame_index}"],
+                move(measured["points"], data["base_from_camera"]),
+                measured["normals"] @ camera_rotation.T,
+                correspondence_distance_m=ShapeConfig().depth_tolerance_m,
+            )
+    assert scores[223].matched_points < scores[290].matched_points
+    assert scores[223].strength[-1] < scores[290].strength[-1]
 
 
 def test_recorded_dowel_full_mask_retains_more_pose_leverage_than_fragment():

@@ -45,6 +45,91 @@ class SurfaceSupport:
     reference_points: int
 
 
+@dataclass(frozen=True)
+class SurfaceInformation:
+    """Local point-to-plane sensitivity conditional on a proposed pose.
+
+    ``basis`` columns are twists [rotation radians, centroid translation metres]
+    that each move the whole reference by one metre RMS to first order.
+    ``strength`` is the squared measured-normal motion for those unit twists,
+    normalized by the *whole* reference, including unseen points. No strength
+    is interpreted as a confidence or automatically accepted pose dimension.
+    """
+
+    pivot: np.ndarray
+    basis: np.ndarray
+    strength: np.ndarray
+    matched_points: int
+    reference_points: int
+
+
+def measured_surface_information(
+    reference: np.ndarray,
+    pose: np.ndarray,
+    observed: np.ndarray,
+    observed_normals: np.ndarray,
+    *,
+    correspondence_distance_m: float,
+) -> SurfaceInformation:
+    """Measure constrained rigid motions using the RGB-D observation's normals.
+
+    The image pipeline has already validated, sampled and differentiated the
+    masked depth surface. Reusing its normals avoids a second local-plane fit.
+    Nearest geometry is only a *conditional* association: a wrong pose can yield
+    a plausible spectrum, so a downstream consumer must still check identity,
+    fit residuals, free space and later frames before using this for control.
+    """
+    points = np.asarray(reference, dtype=float)
+    observed = np.asarray(observed, dtype=float)
+    normals = np.asarray(observed_normals, dtype=float)
+    if (
+        points.ndim != 2
+        or points.shape[1] != 3
+        or observed.ndim != 2
+        or observed.shape[1] != 3
+        or normals.shape != observed.shape
+        or not np.isfinite(points).all()
+        or not np.isfinite(observed).all()
+        or not np.isfinite(normals).all()
+        or not np.isfinite(correspondence_distance_m)
+        or correspondence_distance_m <= 0
+    ):
+        raise ValueError("surface information needs finite 3D points, normals and distance")
+    if np.asarray(pose).shape != (4, 4) or not np.isfinite(pose).all():
+        raise ValueError("surface information needs a finite 4x4 pose")
+    predicted = transform_points(pose, points)
+    center = predicted.mean(0) if len(points) else np.zeros(3)
+    empty = SurfaceInformation(center, np.empty((6, 0)), np.zeros(6), 0, len(points))
+    if len(points) < 3 or len(observed) < 3:
+        return empty
+    norm = np.linalg.norm(normals, axis=1)
+    if not np.allclose(norm, 1, rtol=0, atol=1e-5):
+        raise ValueError("observed surface normals must be unit length")
+    jac = displacement_jacobian(predicted, center)
+    metric = np.einsum("nij,nik->jk", jac, jac) / len(points)
+    values, vectors = np.linalg.eigh(metric)
+    if values[0] <= np.finfo(float).eps * values[-1]:
+        return empty
+    whitening = (vectors / np.sqrt(values)) @ vectors.T
+    distance, indices = cKDTree(observed).query(predicted)
+    reverse_distance, reverse_indices = cKDTree(predicted).query(observed)
+    covered = np.zeros(len(points), bool)
+    covered[reverse_indices[reverse_distance <= correspondence_distance_m]] = True
+    matched = (distance <= correspondence_distance_m) & covered
+    if not matched.any():
+        return empty
+    rows = np.einsum("ni,nij->nj", normals[indices[matched]], jac[matched]) @ whitening
+    information = rows.T @ rows / len(points)
+    strength, directions = np.linalg.eigh(information)
+    return SurfaceInformation(
+        center,
+        whitening @ directions,
+        np.maximum(strength, 0),
+        int(matched.sum()),
+        len(points),
+    )
+
+
 def displacement_jacobian(points: np.ndarray, center: np.ndarray) -> np.ndarray:
     """d(R(p-c)+c+t)/d[rotation, translation], shape N x 3 x 6."""
     relative = points - center

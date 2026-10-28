@@ -9,6 +9,7 @@ from lerobot.policies.flash.surface_motion import (
     PendingMotionCorrection,
     RigidMotionState,
     SurfaceMotionConfig,
+    measured_surface_information,
     surface_support,
 )
 
@@ -46,6 +47,35 @@ def test_observability_does_not_depend_on_object_coordinate_origin():
     second = surface_support(points - pose[:3, 3], pose, points, SurfaceMotionConfig())
     np.testing.assert_allclose(first.sensitivity, second.sensitivity, atol=1e-10)
     np.testing.assert_allclose(first.basis @ first.basis.T, second.basis @ second.basis.T, atol=1e-8)
+
+
+def test_precomputed_depth_normals_report_partial_motion_without_an_axis_label():
+    points = planar_cloud()
+    normals = np.tile([0.0, 0.0, 1.0], (len(points), 1))
+    full = measured_surface_information(points, np.eye(4), points, normals, correspondence_distance_m=0.005)
+    patch = np.linalg.norm(points[:, :2], axis=1) < 0.01
+    small = measured_surface_information(
+        points, np.eye(4), points[patch], normals[patch], correspondence_distance_m=0.005
+    )
+    assert full.matched_points == full.reference_points == len(points)
+    assert small.matched_points < full.matched_points
+    assert full.strength.shape == small.strength.shape == (6,)
+    # Translation within the plane and rotation around its normal do not move
+    # a depth plane, while losing most of the surface weakens the other axes.
+    assert np.count_nonzero(full.strength < 1e-12) == 3
+    assert small.strength[-1] < full.strength[-1]
+    np.testing.assert_allclose(full.basis[[2, 3, 4], -3:], 0, atol=1e-8)
+
+
+def test_conditional_information_rejects_a_pose_with_no_surface_correspondence():
+    points = planar_cloud()
+    pose = np.eye(4)
+    pose[2, 3] = 0.05
+    normals = np.tile([0.0, 0.0, 1.0], (len(points), 1))
+    support = measured_surface_information(points, pose, points, normals, correspondence_distance_m=0.005)
+    assert support.matched_points == 0
+    assert support.basis.shape == (6, 0)
+    np.testing.assert_array_equal(support.strength, np.zeros(6))
 
 
 def test_gripper_carries_accepted_state_and_spans_missing_sample_without_inventing_observation():

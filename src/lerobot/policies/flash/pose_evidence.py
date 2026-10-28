@@ -91,6 +91,46 @@ class VisibleSurfaceSupport:
 
 
 @dataclass(frozen=True)
+class ConditionalSurfaceInformation:
+    """Local pose sensitivity at one proposed fit, not an accepted pose.
+
+    Twist rows are [base-frame rotation radians, reference-centroid translation
+    metres]; columns move the whole reference by one metre RMS. Strengths are
+    sorted weakest to strongest and measure squared visible normal motion for
+    those twists. A wrong correspondence or incomplete reference can still give
+    a plausible spectrum, so no field is a calibrated confidence probability.
+    """
+
+    pivot_base_m: tuple[float, float, float]
+    twist_basis_base: tuple[tuple[float, ...], ...]
+    strength: tuple[float, float, float, float, float, float]
+    matched_reference_points: int
+    reference_points: int
+    correspondence_distance_m: float
+
+    def __post_init__(self) -> None:
+        basis = np.asarray(self.twist_basis_base, dtype=float)
+        pivot = np.asarray(self.pivot_base_m, dtype=float)
+        strength = np.asarray(self.strength, dtype=float)
+        if (
+            pivot.shape != (3,)
+            or basis.shape not in ((6, 6), (6, 0))
+            or strength.shape != (6,)
+            or not np.isfinite(pivot).all()
+            or not np.isfinite(basis).all()
+            or not np.isfinite(strength).all()
+            or np.any(strength < 0)
+            or np.any(np.diff(strength) < -1e-12)
+            or (basis.shape == (6, 0) and np.any(strength != 0))
+            or self.reference_points < 0
+            or not 0 <= self.matched_reference_points <= self.reference_points
+            or not isfinite(self.correspondence_distance_m)
+            or self.correspondence_distance_m <= 0
+        ):
+            raise ValueError("invalid conditional surface information")
+
+
+@dataclass(frozen=True)
 class PoseProposal:
     """Raw fit and support, plus an optional independent motion-only prior.
 
@@ -105,6 +145,7 @@ class PoseProposal:
     visible_support: VisibleSurfaceSupport
     failure: str | None = None
     motion_prior_pose: np.ndarray | None = None
+    conditional_surface_information: ConditionalSurfaceInformation | None = None
 
     def __post_init__(self) -> None:
         if self.frame_id < 0 or not self.calibration_version:

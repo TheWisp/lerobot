@@ -181,6 +181,11 @@ class FlashLiveTelemetry:
                     "estimator": proposal.estimate.estimator,
                     "failure": proposal.failure,
                     "visible_support": asdict(proposal.visible_support),
+                    "conditional_surface_information": (
+                        asdict(proposal.conditional_surface_information)
+                        if proposal.conditional_surface_information is not None
+                        else None
+                    ),
                 }
                 for proposal in source_proposals
             }
@@ -275,6 +280,12 @@ class FlashLiveTelemetry:
             ),
             "visible_support": (
                 asdict(decision.proposal.visible_support) if decision.proposal is not None else None
+            ),
+            "conditional_surface_information": (
+                asdict(decision.proposal.conditional_surface_information)
+                if decision.proposal is not None
+                and decision.proposal.conditional_surface_information is not None
+                else None
             ),
             "backend_failure": decision.proposal.failure if decision.proposal is not None else None,
             "accepted": _estimate_json(decision.accepted) if decision.accepted is not None else None,

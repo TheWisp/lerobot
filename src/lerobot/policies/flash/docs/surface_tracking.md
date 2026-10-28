@@ -201,6 +201,16 @@ The returned matrix describes a rigid pose hypothesis. It does not prove every
 rotation and translation is observable. Uniform or nearly symmetric surfaces
 can support several poses with similar geometry scores.
 
+The shared surface backend also records **conditional surface information** for
+each proposed fit. It measures how much the currently matched RGB-D surface
+would move along each of six rigid-motion directions. Weak directions expose
+pose components the current view cannot check; the count of matched reference
+points shows how much of the saved surface contributes. This is retained even
+when the full pose is rejected, in demo and trial evidence. It is conditional
+on the proposed correspondence and the first-view reference: a wrong fit can
+still look well constrained. It is diagnostic evidence, not a calibrated
+confidence score or an automatic override of vision, group or gripper motion.
+
 ## Acceptance, loss and occlusion fallback
 
 [SurfacePoseBackend](../vision_pipeline.py) makes one shared publication decision:

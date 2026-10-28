@@ -18,7 +18,7 @@ import numpy as np
 
 from .appearance import AppearanceModel, MaskSource, Sam3MaskSource, build_appearance_pose_backend
 from .perception import PoseBackend, RGBDFrame
-from .pose_evidence import VisibleSurfaceSupport
+from .pose_evidence import ConditionalSurfaceInformation, VisibleSurfaceSupport
 from .surface_correspondence import SurfaceMotionConfig
 from .surface_grounding import ShapeConfig
 from .surface_observation import SurfaceObservationConfig, prepare_surface_frame
@@ -185,6 +185,7 @@ class SurfacePoseBackend:
         self.last_candidate_poses = {}
         self.last_motion_prior_poses = {}
         self.last_visible_support = {}
+        self.last_surface_information = {}
         self.references = {}
         self.sessions = {}
         self.reference_camera_from_object = {}
@@ -216,6 +217,7 @@ class SurfacePoseBackend:
         self.last_candidate_poses = {}
         self.last_motion_prior_poses = {}
         self.last_visible_support = {}
+        self.last_surface_information = {}
         self.sessions.clear()
         self.reference_camera_from_object.clear()
         if self.initializer is not None:
@@ -295,6 +297,7 @@ class SurfacePoseBackend:
                     matcher_lock=self._matcher_lock,
                     fit_kernels=self._fit_kernels,
                     search_pool=self._search_pool,
+                    information_correspondence_m=self.config.registration_threshold_m,
                 )
                 self.sessions[role] = session
             jobs.append((role, session, masks.get(role)))
@@ -353,6 +356,7 @@ class SurfacePoseBackend:
         self.last_mask_ms = prepared["mask_ms"]
         self.last_failure, self.last_details = {}, {}
         self.last_candidate_poses, self.last_motion_prior_poses, self.last_visible_support = {}, {}, {}
+        self.last_surface_information = {}
         unregistered = prepared["unregistered"]
 
         def finish_job(job):
@@ -459,6 +463,25 @@ class SurfacePoseBackend:
                 ),
                 principal_surface_split_gap_rad=diagnostics.get("principal_surface_split_gap_rad"),
             )
+            conditional = diagnostics.get("conditional_surface_information_camera")
+            if conditional is not None:
+                camera_basis = np.asarray(conditional["twist_basis"], dtype=float).reshape(6, -1)
+                base_basis = camera_basis.copy()
+                base_rotation = frame.base_from_camera[:3, :3]
+                base_basis[:3] = base_rotation @ camera_basis[:3]
+                base_basis[3:] = base_rotation @ camera_basis[3:]
+                pivot_base = (
+                    base_rotation @ np.asarray(conditional["pivot_m"], dtype=float)
+                    + frame.base_from_camera[:3, 3]
+                )
+                self.last_surface_information[role] = ConditionalSurfaceInformation(
+                    tuple(float(value) for value in pivot_base),
+                    tuple(tuple(float(value) for value in row) for row in base_basis),
+                    tuple(float(value) for value in conditional["strength"]),
+                    int(conditional["matched_reference_points"]),
+                    int(conditional["reference_points"]),
+                    float(conditional["correspondence_distance_m"]),
+                )
             # A full rigid observation needs two independently extended visible
             # directions. If the smaller spread is below the fit's measured
             # mismatch, the image cannot distinguish orientations of this

@@ -26,7 +26,11 @@ from lerobot.policies.flash.pose_disagreement import (
     PoseComparisonVerdict,
     SurfaceSupport,
 )
-from lerobot.policies.flash.pose_evidence import PoseProposal, VisibleSurfaceSupport
+from lerobot.policies.flash.pose_evidence import (
+    ConditionalSurfaceInformation,
+    PoseProposal,
+    VisibleSurfaceSupport,
+)
 from lerobot.policies.flash.trajectory import AttachmentState, Evidence, PoseEstimate
 
 
@@ -112,6 +116,14 @@ def test_live_tracker_layers_are_replayed_with_camera_frame(tmp_path: Path) -> N
             principal_surface_split_gap_rad=0.0,
         ),
         motion_prior_pose=motion_prior,
+        conditional_surface_information=ConditionalSurfaceInformation(
+            (0.1, 0.2, 1.0),
+            tuple(tuple(float(value) for value in row) for row in np.eye(6)),
+            (0.0, 0.0, 0.0, 0.1, 0.2, 0.3),
+            8,
+            20,
+            0.005,
+        ),
     )
     telemetry.proposals((direct,), {"object": mask}, frame_id=9, source_proposals=(source_proposal,))
     telemetry.anchor_decision(
@@ -183,6 +195,8 @@ def test_live_tracker_layers_are_replayed_with_camera_frame(tmp_path: Path) -> N
     assert decisions[1]["raw_pose"][0][3] == pytest.approx(0.1)
     assert decisions[1]["motion_prior_pose"][0][3] == pytest.approx(0.02)
     assert current["raw_proposals"]["object"]["motion_prior_pose"][0][3] == pytest.approx(0.02)
+    assert decisions[1]["conditional_surface_information"]["matched_reference_points"] == 8
+    assert current["raw_proposals"]["object"]["conditional_surface_information"]["reference_points"] == 20
     assert decisions[1]["visible_support"] == {
         "mask_pixels": 30,
         "depth_points": 20,
@@ -221,6 +235,7 @@ def test_live_tracker_layers_are_replayed_with_camera_frame(tmp_path: Path) -> N
     assert replay["frames"][-1]["snapshot"]["accepted"] == current["accepted"]
     assert replay["frames"][-1]["snapshot"]["direct_point_comparisons"] == current["direct_point_comparisons"]
     assert replay["frames"][-1]["snapshot"]["anchor_decisions"] == current["anchor_decisions"]
+    assert replay["frames"][-1]["snapshot"]["raw_proposals"] == current["raw_proposals"]
     assert replay["frames"][-1]["evidence"]["masks_rle"]["object"]
     assert replay["frames"][-1]["evidence"]["image_size"] == [12, 16]
     assert replay["frames"][-1]["evidence"]["groups"]["object"]["pixels"] == [[5, 4], [6, 5]]
