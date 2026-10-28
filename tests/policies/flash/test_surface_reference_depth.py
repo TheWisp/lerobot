@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 
 from lerobot.policies.flash.surface_observation import SurfaceObservationConfig, move, observation
-from lerobot.policies.flash.surface_tracking import reference_depth_support
+from lerobot.policies.flash.surface_tracking import SurfaceTrackingSession, reference_depth_support
 
 
 def test_recorded_gamepad_clean_depth_separates_supported_and_unsupported_carry_frames():
@@ -46,6 +46,44 @@ def test_missing_reference_depth_is_unknown_not_a_perfect_fit():
     )
     assert count == 0
     assert p90_mm is None
+
+
+def test_recorded_gamepad_grasp_sliver_has_less_lateral_extent_than_fit_error():
+    fixture = Path(__file__).parent / "fixtures" / "gamepad_reference_depth_20261028.npz"
+    with np.load(fixture) as data:
+        intrinsics = data["intrinsics"]
+        for frame_index in (223, 246, 290, 300):
+            depth = data[f"depth_{frame_index}"].astype(np.float32) / 1000
+            mask = data[f"mask_{frame_index}"].astype(bool)
+            session = SurfaceTrackingSession(object())
+            prepared = session.prepare(
+                np.zeros((*depth.shape, 3), dtype=np.uint8), depth, mask, intrinsics, frame_index
+            )
+            assert prepared["status"] is None
+            lateral_spread = prepared["diagnostics"]["visible_lateral_spread_mm"]
+            fit_error = float(data[f"surface_p90_mm_{frame_index}"])
+            assert (lateral_spread <= fit_error) is (frame_index in (223, 246))
+
+
+def test_recorded_dowel_full_mask_retains_more_pose_leverage_than_fragment():
+    fixture = Path(__file__).parent / "fixtures" / "dowel_live_visible_shape_20261020.npz"
+    with np.load(fixture) as data:
+        depth = data["depth"].astype(np.float32)
+        if depth.max() > 10:
+            depth /= 1000
+        spread = {}
+        for key in ("full_mask", "fragment_mask"):
+            session = SurfaceTrackingSession(object())
+            prepared = session.prepare(
+                np.zeros((*depth.shape, 3), dtype=np.uint8),
+                depth,
+                data[key].astype(bool),
+                data["intrinsics"],
+                0,
+            )
+            assert prepared["status"] is None
+            spread[key] = prepared["diagnostics"]["visible_lateral_spread_mm"]
+    assert spread["full_mask"] > spread["fragment_mask"]
 
 
 def test_reference_support_counts_depth_pixels_and_uses_front_surface():

@@ -1594,6 +1594,7 @@ def test_3d_scene_projection_and_surface_pick_edit_the_prepared_keyframe(gui_pag
         for role, x in (("tool", -0.4), ("fixture", 0.2))
     }
     snapshot = {
+        "recorded_at_s": 1.0,
         "camera": {
             "frame_id": 0,
             "width": width,
@@ -1688,6 +1689,15 @@ def test_3d_scene_projection_and_surface_pick_edit_the_prepared_keyframe(gui_pag
                 "frame_index": 0,
                 "masks_rle": mask_runs,
                 "groups": {},
+                "estimates": {
+                    "tool": {
+                        "pose": identity,
+                        "evidence": "predicted",
+                        "estimator": "environment_group_motion",
+                        "source_time_s": 1.0,
+                        "last_direct_observation_s": 0.5,
+                    }
+                },
                 "proposals": {
                     "tool": {
                         "evidence": "lost",
@@ -1746,6 +1756,10 @@ def test_3d_scene_projection_and_surface_pick_edit_the_prepared_keyframe(gui_pag
     page.wait_for_function("() => flashSceneMode === '3d' && flashSceneFrameCache?.frameIndex === 0")
     assert (
         "20 clean reference-depth pixels, 2.5 mm p90" in page.locator("#flash-tracker-content").inner_text()
+    )
+    assert (
+        "verified group · predicted · 0.00 s old"
+        in page.locator("#flash-tracker-content").inner_text().lower()
     )
     assert "Rejected vision fit" in page.locator("#flash-tracker-content").inner_text()
     page.locator("#flash-tracker-collapse").click()

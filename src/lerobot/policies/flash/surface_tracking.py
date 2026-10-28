@@ -186,6 +186,14 @@ class SurfaceTrackingSession:
         if len(points) < 3 or np.linalg.matrix_rank(points - points.mean(0)) < 2:
             prepared["status"] = "insufficient_depth"
             return prepared
+        # A small visible sliver can match a reference with a low nearest-surface
+        # residual while leaving its orientation effectively unconstrained.
+        # Measure two independent spans of the *clean connected* observation;
+        # the second is compared with the fit's own error before claiming a
+        # fully observed rigid pose. No object axis or nominal size is assumed.
+        centered = points - points.mean(axis=0)
+        variances = np.linalg.eigvalsh(centered.T @ centered / len(points))
+        detail["visible_lateral_spread_mm"] = float(np.sqrt(max(variances[-2], 0.0)) * 1000)
         detail["preprocess_ms"] = (time.perf_counter() - start) * 1000
         if self.previous is not None:
             start = time.perf_counter()

@@ -127,14 +127,21 @@ async function _flashUpdateSceneFrame() {
                 ? {available: true, masks_rle: liveMasks, groups: liveGroups || {}} : null;
         _flashPaintObservedPhoto({...frame, evidence: frameEvidence}, camera);
         let displaySnapshot = {...selected.snapshot, ...(replay?.geometry || {})};
-        if (kind === 'demo' && frameEvidence?.proposals) {
+        if (kind === 'demo' && frameEvidence?.available) {
+            const layers = Object.fromEntries(Object.entries(displaySnapshot.layers || {})
+                .map(([role, value]) => [role, {...value}]));
+            for (const [role, estimate] of Object.entries(frameEvidence.estimates || {})) {
+                if (estimate.source_time_s == null) continue;
+                layers[role] = {...layers[role], demo_extraction: estimate};
+            }
             displaySnapshot = {
                 ...displaySnapshot,
-                scene_proposals: frameEvidence.proposals,
-                proposals: Object.fromEntries(Object.entries(frameEvidence.proposals).map(([role, proposal]) => [
+                layers,
+                scene_proposals: frameEvidence.proposals || {},
+                proposals: Object.fromEntries(Object.entries(frameEvidence.proposals || {}).map(([role, proposal]) => [
                     role, {evidence: proposal.evidence, source_time_s: selected.snapshot.recorded_at_s},
                 ])),
-                raw_proposals: Object.fromEntries(Object.entries(frameEvidence.proposals)
+                raw_proposals: Object.fromEntries(Object.entries(frameEvidence.proposals || {})
                     .filter(([, proposal]) => proposal.raw_pose && proposal.failure)
                     .map(([role, proposal]) => [role, {
                         pose: proposal.raw_pose, frame_id: selected.frame_index,
@@ -1012,6 +1019,11 @@ function renderFlashDemoSnapshot(snapshot) {
         const depthNote = support?.reference_depth_pixels == null ? ''
             : ` · ${support.reference_depth_pixels} clean reference-depth pixels` +
                 (referenceDepth == null ? '' : `, ${(referenceDepth * 1000).toFixed(1)} mm p90`);
+        const patchSpread = support?.visible_lateral_spread_m;
+        const fitError = support?.depth_residual_p90_m;
+        const patchNote = patchSpread == null || fitError == null ? ''
+            : ` · visible patch ${(patchSpread * 1000).toFixed(1)} mm across vs ${(fitError * 1000).toFixed(1)} mm fit error` +
+                (patchSpread <= fitError ? '; full pose unverified' : '');
         const lastDirect = pose.last_direct_observation_s == null ? ''
             : ` · last direct observation ${Math.max(0, demo.time_s - pose.last_direct_observation_s).toFixed(1)} s ago`;
         const used = snapshot.held_prediction?.role === role ? snapshot.held_prediction : snapshot.accepted?.[role];
@@ -1030,7 +1042,7 @@ function renderFlashDemoSnapshot(snapshot) {
             : 'Per-frame masks and supporting group points were not stored.';
         html += `<div class="flash-tracker-role"><strong>${_esc(role)} · extraction</strong>`;
         html += _flashOverlayRow('layer', role, 'demo_extraction', 'flash-tracker-layer',
-            `<span class="flash-tracker-dot" style="background:${_flashLayerColor(pose.estimator)}"></span>${_esc(detail)}<small>${_esc(predictionNote)}${_esc(originNote + depthNote)}</small>`);
+            `<span class="flash-tracker-dot" style="background:${_flashLayerColor(pose.estimator)}"></span>${_esc(detail)}<small>${_esc(predictionNote)}${_esc(originNote + depthNote + patchNote)}</small>`);
         if (proposal?.failure && proposal.raw_pose) {
             html += _flashOverlayRow('raw_proposal', role, '', 'flash-tracker-layer',
                 `<span class="flash-tracker-dot" style="background:#f472b6"></span>Rejected vision fit` +

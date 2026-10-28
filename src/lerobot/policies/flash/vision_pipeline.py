@@ -409,11 +409,25 @@ class SurfacePoseBackend:
                     if diagnostics.get("reference_depth_p90_mm") is not None
                     else None
                 ),
+                visible_lateral_spread_m=(
+                    float(diagnostics["visible_lateral_spread_mm"]) / 1000
+                    if diagnostics.get("visible_lateral_spread_mm") is not None
+                    else None
+                ),
             )
+            # A full rigid observation needs two independently extended visible
+            # directions. If the smaller spread is below the fit's measured
+            # mismatch, the image cannot distinguish orientations of this
+            # patch at the claimed precision. Retain the raw proposal for
+            # replay, while the scene estimator continues its prior prediction.
+            insufficient_extent = detail["status"] == "fitted" and diagnostics.get(
+                "visible_lateral_spread_mm", 0
+            ) <= diagnostics.get("surface_p90_mm", float("inf"))
             accepted = pose is not None and (
                 detail["status"] == "reference"
                 or (
                     detail["status"] == "fitted"
+                    and not insufficient_extent
                     and diagnostics.get("converged", False)
                     and diagnostics.get("inliers", 0) >= self.config.registration_min_inliers
                     and diagnostics.get("surface_p90_mm", float("inf"))
@@ -430,9 +444,12 @@ class SurfacePoseBackend:
             detail["base_from_object"] = pose.tolist() if pose is not None else None
             self.last_details[role] = detail
             if not accepted:
-                self.last_failure[role] = (
-                    detail["status"] if pose is None else "surface proposal lacks accepted RGB-D support"
-                )
+                if pose is None:
+                    self.last_failure[role] = detail["status"]
+                elif insufficient_extent:
+                    self.last_failure[role] = "visible patch is too narrow for a full rigid pose"
+                else:
+                    self.last_failure[role] = "surface proposal lacks accepted RGB-D support"
             out.append(
                 PoseEstimate(
                     role,

@@ -1,11 +1,13 @@
 """The sealed-demo adapter must preserve event meaning when clocks are sampled."""
 
+import cv2
 import numpy as np
 import pytest
 
 from lerobot.policies.flash.sealed_demo_import import (
     _apply_reference_polygons,
     _endpoint_requirement,
+    _frame,
     _interval_layout,
     _interval_reference,
     _nearest_index,
@@ -15,6 +17,18 @@ from lerobot.policies.flash.sealed_demo_import import (
     explicit_paths_from_prepared_skill,
 )
 from lerobot.policies.flash.skill import EndpointRequirement, Relation
+
+
+def test_sealed_rgbd_frame_uses_recorded_camera_time(tmp_path):
+    (tmp_path / "recording/rgb").mkdir(parents=True)
+    (tmp_path / "recording/depth").mkdir(parents=True)
+    cv2.imwrite(str(tmp_path / "recording/rgb/000007.jpg"), np.zeros((2, 2, 3), np.uint8))
+    cv2.imwrite(str(tmp_path / "recording/depth/000007.png"), np.full((2, 2), 1000, np.uint16))
+
+    frame = _frame(tmp_path, 7, np.eye(3), np.eye(4), "calibration", 1.23)
+
+    assert frame.frame_id == 7
+    assert frame.source_time_s == frame.available_time_s == 1.23
 
 
 def test_prepared_skill_auditor_imports_the_production_legacy_adapter():

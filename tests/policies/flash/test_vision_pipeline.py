@@ -316,6 +316,39 @@ def test_small_patch_fit_cannot_promote_reference_depth_disagreement():
     assert result.proposals[0].visible_support.reference_depth_residual_p90_m == 0.05
 
 
+def test_narrow_visible_patch_remains_a_proposal_instead_of_a_full_pose():
+    from lerobot.policies.flash.surface_tracking import SurfaceTrackingSession
+
+    sequence = frames()
+    supported = PerceptionPipeline(local_backend(), (reference(),))
+    supported.process(sequence[0])
+    with patch("lerobot.policies.flash.surface_tracking.ufm_pairs", synthetic_pairs):
+        clear = supported.process(sequence[1])
+    assert clear.estimates[0].evidence == Evidence.OBSERVED
+
+    uncertain = PerceptionPipeline(local_backend(), (reference(),))
+    uncertain.process(sequence[0])
+    original = SurfaceTrackingSession.finish
+
+    def narrow_patch(self, prepared):
+        result = original(self, prepared)
+        result["diagnostics"]["visible_lateral_spread_mm"] = result["diagnostics"]["surface_p90_mm"] / 2
+        return result
+
+    with (
+        patch("lerobot.policies.flash.surface_tracking.ufm_pairs", synthetic_pairs),
+        patch.object(SurfaceTrackingSession, "finish", narrow_patch),
+    ):
+        result = uncertain.process(sequence[1])
+    assert result.estimates[0].evidence == Evidence.LOST
+    assert result.proposals[0].raw_pose is not None
+    assert result.proposals[0].failure == "visible patch is too narrow for a full rigid pose"
+    assert (
+        result.proposals[0].visible_support.visible_lateral_spread_m
+        < result.proposals[0].visible_support.depth_residual_p90_m
+    )
+
+
 def test_pipeline_rejects_frame_or_camera_discontinuity_instead_of_corrupting_reference():
     pipeline = PerceptionPipeline(local_backend(), (reference(),))
     sequence = frames()

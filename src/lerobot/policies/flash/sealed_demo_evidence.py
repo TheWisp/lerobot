@@ -115,6 +115,8 @@ def rebuild(root: Path, bundle: Path, *, through_frame: int | None = None, devic
                     "evidence": estimate.evidence.value,
                     "estimator": estimate.estimator,
                     "pose": estimate.pose.tolist() if estimate.pose is not None else None,
+                    "source_time_s": estimate.source_time_s,
+                    "last_direct_observation_s": estimate.last_direct_observation_s,
                 }
                 for role, estimate in estimates.items()
             },
@@ -141,7 +143,10 @@ def rebuild(root: Path, bundle: Path, *, through_frame: int | None = None, devic
 
     try:
         extract_pose_trace(
-            (_frame(root, index, intrinsics, base_from_camera, version) for index in range(total)),
+            (
+                _frame(root, index, intrinsics, base_from_camera, version, float(camera_times[index]))
+                for index in range(total)
+            ),
             backend,
             prepared.references,
             causal_tracking=causal_config,

@@ -22,6 +22,7 @@ class VisibleSurfaceSupport:
     surface_fit_converged: bool | None = None
     reference_depth_pixels: int | None = None
     reference_depth_residual_p90_m: float | None = None
+    visible_lateral_spread_m: float | None = None
 
     def __post_init__(self) -> None:
         if self.mask_pixels < 0 or any(
@@ -29,9 +30,13 @@ class VisibleSurfaceSupport:
             for value in (self.depth_points, self.motion_inliers, self.reference_depth_pixels)
         ):
             raise ValueError("visible support counts must be nonnegative")
-        for residual in (self.depth_residual_p90_m, self.reference_depth_residual_p90_m):
-            if residual is not None and (not isfinite(residual) or residual < 0):
-                raise ValueError("visible depth residual must be finite and nonnegative")
+        for measurement in (
+            self.depth_residual_p90_m,
+            self.reference_depth_residual_p90_m,
+            self.visible_lateral_spread_m,
+        ):
+            if measurement is not None and (not isfinite(measurement) or measurement < 0):
+                raise ValueError("visible surface measurement must be finite and nonnegative")
 
 
 @dataclass(frozen=True)

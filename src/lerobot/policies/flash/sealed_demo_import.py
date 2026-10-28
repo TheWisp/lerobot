@@ -47,7 +47,12 @@ from lerobot.robots.so107_description.calibrated_kinematics import make_calibrat
 
 
 def _frame(
-    root: Path, index: int, intrinsics: np.ndarray, base_from_camera: np.ndarray, version: str
+    root: Path,
+    index: int,
+    intrinsics: np.ndarray,
+    base_from_camera: np.ndarray,
+    version: str,
+    source_time_s: float,
 ) -> RGBDFrame:
     rgb = cv2.imread(str(root / "recording" / "rgb" / f"{index:06d}.jpg"), cv2.IMREAD_COLOR)
     depth = cv2.imread(str(root / "recording" / "depth" / f"{index:06d}.png"), cv2.IMREAD_UNCHANGED)
@@ -60,8 +65,8 @@ def _frame(
         intrinsics,
         0.001,  # sealed recording depth PNGs are millimetres
         base_from_camera,
-        index / 30,
-        index / 30,
+        source_time_s,
+        source_time_s,
         version,
     )
 
@@ -366,6 +371,8 @@ def prepare(
         if not np.allclose(calculated, recorded_tips[index], atol=1e-5):
             raise ValueError(f"calibrated fingertip differs from recorded demo at sample {index}")
     camera_times = np.atleast_1d(np.loadtxt(root / "recording" / "times.txt")) - origin_s
+    if len(camera_times) < 2 or not np.all(np.diff(camera_times) > 0):
+        raise ValueError("demo RGB-D frames must have an increasing recorded clock")
     intrinsics = np.loadtxt(root / "recording" / "cam_K.txt").reshape(3, 3)
     keypoints_document = json.loads((keypoints_path or root / "keypoints.json").read_text())
     keypoints = keypoints_document["keypoints"]
@@ -407,7 +414,7 @@ def prepare(
     reference_observations = _reference_observations(
         prompts,
         reference_indices,
-        lambda index: _frame(root, index, intrinsics, base_from_camera, version),
+        lambda index: _frame(root, index, intrinsics, base_from_camera, version, float(camera_times[index])),
         mask_source,
         annotation.get("reference_polygons_by_role", {}),
     )
@@ -474,6 +481,7 @@ def prepare(
         json.dumps(cache_identity, sort_keys=True).encode()
         + intrinsics.tobytes()
         + base_from_camera.tobytes()
+        + camera_times.tobytes()
     ).hexdigest()[:12]
     cache_path = root / "flash" / "v1" / "preparation-cache" / f"{output_name}-{cache_key}.npz"
     cache_hit = cache_path.exists()
@@ -495,8 +503,8 @@ def prepare(
                     row[role] = PoseEstimate(
                         role,
                         cache[f"{role}_poses"][index] if available else None,
-                        index / 30,
-                        index / 30,
+                        float(camera_times[index]),
+                        float(camera_times[index]),
                         evidence,
                         f"{output_name}:{version}",
                         tuple(bool(value) for value in cache[f"{role}_translation_supported"][index])
@@ -543,7 +551,7 @@ def prepare(
         release_camera = _nearest_index(camera_times, times[release])
         estimates = extract_pose_trace(
             (
-                _frame(root, index, intrinsics, base_from_camera, version)
+                _frame(root, index, intrinsics, base_from_camera, version, float(camera_times[index]))
                 for index in range(through_frame + 1)
             ),
             backend,

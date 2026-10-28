@@ -13,7 +13,9 @@ from .perception_step import PerceptionPipeline, PerceptionResult, PerceptionRun
 from .symmetry import AxialSymmetry
 from .trajectory import Evidence, PoseEstimate
 
-POSE_TRACE_SELECTION_VERSION = 3
+# Version 5 also uses each recorded RGB-D timestamp. Earlier sealed-demo
+# traces assumed 30 Hz, which diverges from the recorded camera clock.
+POSE_TRACE_SELECTION_VERSION = 5
 
 
 def extract_pose_trace(

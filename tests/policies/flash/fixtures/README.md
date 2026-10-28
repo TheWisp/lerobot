@@ -90,9 +90,9 @@ pixel-to-depth consumer, and stores no RGB, motor actions or full episode.
 See `docs/proofs/flash-native-acceleration/README.md` for the experiment.
 
 `gamepad_reference_depth_20261028.npz` stores only the prepared gamepad's
-first-view metric reference points, the frame-290/300/430 direct poses, aligned
-depth and SAM3 masks, intrinsics and camera calibration from the `pick_place`
-demo. It contains no RGB or robot commands. All three poses were labeled
+first-view metric reference points, the frame-223/246/290/300/430 direct poses,
+aligned depth and SAM3 masks, intrinsics and camera calibration from the `pick_place`
+demo. It contains no RGB or robot commands. All five poses were labeled
 observed by the earlier surface pipeline. The clean visible reference patch
 agrees with measured depth at 290 and 300, but frame 430 has a large residual;
 the fixture tests that a good current-to-reference patch fit alone does not
@@ -100,3 +100,9 @@ certify the whole transported reference or the hidden contact pose. A large
 residual may also reflect a reference surface that is now occluded. These are
 same-frame support checks, not independent ground truth or a verdict that the
 old pose was wrong.
+
+The gripper mostly hides the gamepad at 223 and 246. The cleaned connected
+surface has less lateral extent than the earlier fit's own 90th-percentile
+error, so it cannot certify a full rigid pose even though the fit passed its
+old point-count and depth-error checks. Frames 290 and 300 provide the
+complementary broader visible patch.

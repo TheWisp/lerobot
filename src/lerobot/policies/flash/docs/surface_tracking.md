@@ -205,18 +205,30 @@ can support several poses with similar geometry scores.
 
 [SurfacePoseBackend](../vision_pipeline.py) makes one shared publication decision:
 
-| Situation                                                                                     | Consumer result                                                                             |
-| --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| Usable initial reference, with required demo registration established                         | `OBSERVED`; initialization defines coordinates rather than independently validating motion. |
-| Later RGB-D proposal, converged surface fit, enough RGB-D inliers, acceptable surface p90 gap | `OBSERVED`.                                                                                 |
-| Geometry-only fit, failed convergence, insufficient inliers or excessive gap                  | `LOST`, with the candidate available to the debugger.                                       |
-| Missing mask/depth or missing initial demo registration                                       | `LOST`; no old pose is relabeled as a new observation.                                      |
+| Situation                                                                                                                                                           | Consumer result                                                                             |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| Usable initial reference, with required demo registration established                                                                                               | `OBSERVED`; initialization defines coordinates rather than independently validating motion. |
+| Later RGB-D proposal, converged surface fit, enough RGB-D inliers, acceptable surface p90 gap, and a clean visible patch wider than its fit error in two directions | `OBSERVED`.                                                                                 |
+| Geometry-only fit, failed convergence, insufficient inliers, excessive gap, or a narrower patch                                                                     | `LOST`, with the candidate available to the debugger.                                       |
+| Missing mask/depth or missing initial demo registration                                                                                                             | `LOST`; no old pose is relabeled as a new observation.                                      |
 
 At the documented defaults, motion fitting needs six supporting RGB-D pairs;
 publication needs at least twelve inliers and a surface p90 gap no larger than
 5 mm. These counts are **pairs of matched pixels lifted to 3D**, not the number
 of pixels in SAM's mask or the total cloud size. The configurable thresholds
 are engineering checks, not mathematical minima or calibrated probabilities.
+
+The visible-patch check compares the smaller of the two independent spatial
+spreads of clean measured points with that frame's own p90 surface mismatch.
+If the patch is narrower than the mismatch, its image cannot support a claimed
+full rigid pose. This does not prove a wider patch has the right pose; it only
+rejects an especially weak observation. The same check applies to any object.
+Prepared-demo extraction uses the camera's recorded timestamp for every frame,
+including cache reload and replay evidence. Frame number divided by nominal
+FPS is not a valid substitute when the camera has irregular intervals.
+In the recorded gamepad-on-cube demo, frame 290 is at 12.84 s, not the
+9.67 s implied by 290/30. The old clock made replay report a fresh pose
+and a last direct observation 3.18 s ago on the same frame.
 
 The displayed median/p90 gap is the current depth-filtered cloud's nearest-point
 distance to the transformed reference. A p90 of 5 mm means 90% of those samples
