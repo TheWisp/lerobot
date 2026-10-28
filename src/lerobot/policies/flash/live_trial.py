@@ -29,7 +29,7 @@ from lerobot.policies.flash.kinematics import SelectedJointKinematics
 from lerobot.policies.flash.live_telemetry import FlashLiveTelemetry
 from lerobot.policies.flash.planner import PlannerLimits
 from lerobot.policies.flash.planning_coordinator import PlanBufferConfig
-from lerobot.policies.flash.prepared import PreparedFlashSkill
+from lerobot.policies.flash.prepared import PreparedFlashSkill, snapshot_prepared_skill
 from lerobot.policies.flash.recording import FlashEpisodeWriter, RecorderWorker
 from lerobot.policies.flash.rgbd_source import LeRobotRGBDSource
 from lerobot.policies.flash.runtime import AttachmentRuntimeLimits, FlashRuntime
@@ -216,6 +216,12 @@ def trial(
             image_writer_processes=0,
             image_writer_threads=4,
         )
+        reference_snapshot = snapshot_prepared_skill(
+            bundle,
+            source_dataset_root=settings["source_dataset_root"],
+            recording_dataset_root=output_root,
+            episode_index=0,
+        )
         tracker_trace_path = output_root / "flash" / "v1" / "tracker_episode_000000.jsonl"
         recorder = RecorderWorker(
             FlashEpisodeWriter(
@@ -232,7 +238,17 @@ def trial(
         )
         config_snapshot = output_root / "flash" / "v1" / "trial_config.json"
         config_snapshot.parent.mkdir(parents=True, exist_ok=True)
-        config_snapshot.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
+        config_snapshot.write_text(
+            json.dumps(
+                {
+                    **settings,
+                    "source_reference_bundle": reference_snapshot.relative_to(output_root).as_posix(),
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
         centers_by_role = {
             model.points.role: model.points.points_object_m.mean(axis=0) for model in bundle.appearance_models
         }

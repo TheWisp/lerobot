@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -187,3 +188,66 @@ class PreparedFlashSkill:
             if manifest.get("vision_pipeline") is not None
             else None,
         )
+
+
+def snapshot_prepared_skill(
+    prepared: PreparedFlashSkill,
+    *,
+    source_dataset_root: str | Path,
+    recording_dataset_root: str | Path,
+    episode_index: int,
+) -> Path:
+    """Keep a trial's reference model and masks beside its ordinary dataset.
+
+    Snippets retain their original source-episode identities and object frames.
+    Only their mask artifact paths change to point at copies in the recording.
+    A future demo compiler can therefore use the trial's pose trace without
+    depending on a mutable reference directory outside that dataset.
+    """
+    if episode_index < 0:
+        raise ValueError("recorded episode index must be nonnegative")
+    source_root = Path(source_dataset_root).expanduser().resolve()
+    recording_root = Path(recording_dataset_root).expanduser().resolve()
+    source_masks = (source_root / "flash" / "v1" / "masks").resolve()
+    episode_name = f"episode_{episode_index:06d}"
+    relative_masks = Path("flash") / "v1" / "masks" / "reference_snapshots" / episode_name
+    bundle_root = recording_root / "flash" / "v1" / "reference_bundles" / episode_name
+    if bundle_root.exists() or (recording_root / relative_masks).exists():
+        raise FileExistsError(f"FLASH reference snapshot already exists for {episode_name}")
+
+    copies = []
+    references = []
+    for role_index, reference in enumerate(prepared.references):
+        snippets = []
+        for view_index, snippet in enumerate(reference.snippets):
+            source = (source_root / snippet.mask_artifact).resolve()
+            if not source.is_relative_to(source_masks) or not source.is_file():
+                raise ValueError(f"missing or unsafe reference mask for {reference.role}")
+            relative = relative_masks / f"role_{role_index:03d}_view_{view_index:03d}.png"
+            copies.append((source, recording_root / relative))
+            snippets.append(
+                ReferenceSnippet(
+                    snippet.repo_id,
+                    snippet.episode,
+                    snippet.frame_index,
+                    snippet.object_role,
+                    snippet.object_from_camera,
+                    relative.as_posix(),
+                    snippet.calibration_version,
+                )
+            )
+        references.append(ObjectReference(reference.role, reference.version, tuple(snippets)))
+
+    for source, destination in copies:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+    snapshot = PreparedFlashSkill(
+        prepared.skill,
+        tuple(references),
+        prepared.appearance_models,
+        prepared.prompts_by_role,
+        prepared.descriptor_model_id,
+        prepared.axial_symmetries,
+        prepared.vision_pipeline,
+    )
+    return snapshot.save(bundle_root)

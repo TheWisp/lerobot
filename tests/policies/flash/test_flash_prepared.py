@@ -9,7 +9,7 @@ from lerobot.policies.flash.appearance import AppearanceModel
 from lerobot.policies.flash.inspect import inspect_skill
 from lerobot.policies.flash.matched_rgbd import ObjectPointModel
 from lerobot.policies.flash.perception import ObjectReference, ReferenceSnippet
-from lerobot.policies.flash.prepared import PreparedFlashSkill
+from lerobot.policies.flash.prepared import PreparedFlashSkill, snapshot_prepared_skill
 from lerobot.policies.flash.skill import FlashSkill, Interval, MotionMode, Relation, SpatialSample
 from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig
 
@@ -69,3 +69,60 @@ def test_prepared_skill_round_trip_keeps_object_frames_and_multiview_provenance(
     manifest.write_text(json.dumps(data))
     with pytest.raises(ValueError, match="inside the bundle"):
         PreparedFlashSkill.load(manifest)
+
+
+def test_trial_snapshot_keeps_reference_frames_and_masks_with_recording(tmp_path):
+    identity = np.eye(4)
+    source_root = tmp_path / "source"
+    recording_root = tmp_path / "recording"
+    mask = source_root / "flash/v1/masks/reference.png"
+    mask.parent.mkdir(parents=True)
+    mask.write_bytes(b"recorded mask bytes")
+    skill = FlashSkill(
+        "demo/source",
+        0,
+        (
+            Interval(
+                "move",
+                MotionMode.DEMONSTRATED,
+                Relation.EE_TO_OBJECT,
+                "item",
+                (SpatialSample(0, identity, identity), SpatialSample(1, identity, identity)),
+                reference_version="item-v1",
+            ),
+        ),
+    )
+    reference = ObjectReference(
+        "item",
+        "item-v1",
+        (ReferenceSnippet("demo/source", 0, 7, "item", identity, "flash/v1/masks/reference.png", "cal-v1"),),
+    )
+    model = AppearanceModel(
+        ObjectPointModel("item", "item-v1", np.array([[0.0, 0, 0], [0.01, 0, 0], [0, 0.01, 0]])),
+        np.eye(3),
+    )
+    prepared = PreparedFlashSkill(skill, (reference,), (model,), {"item": "patterned item"}, "encoder")
+    path = snapshot_prepared_skill(
+        prepared,
+        source_dataset_root=source_root,
+        recording_dataset_root=recording_root,
+        episode_index=0,
+    )
+    mask.unlink()
+    restored = PreparedFlashSkill.load(path)
+    snippet = restored.references[0].snippets[0]
+    assert snippet.repo_id == "demo/source"
+    assert snippet.frame_index == 7
+    assert snippet.object_from_camera.tolist() == identity.tolist()
+    assert (recording_root / snippet.mask_artifact).read_bytes() == b"recorded mask bytes"
+    np.testing.assert_allclose(
+        restored.appearance_models[0].points.points_object_m, model.points.points_object_m
+    )
+    assert restored.skill.source_repo_id == "demo/source"
+    with pytest.raises(FileExistsError, match="already exists"):
+        snapshot_prepared_skill(
+            prepared,
+            source_dataset_root=source_root,
+            recording_dataset_root=recording_root,
+            episode_index=0,
+        )
