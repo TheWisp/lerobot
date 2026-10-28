@@ -174,6 +174,46 @@ symmetry-constrained direct translation can still contribute to that
 prediction. The gamepad demo's cube has 320 `observed` and 183 `predicted`
 frames. Do not read these evidence labels as ground-truth pose errors.
 
+### Prepared-version comparison is not an accuracy result
+
+The same raw insertion demo (591 camera frames) and the same saved object model
+were processed as `flash-dowel-ring-20261028-recorded-clock-v6` and
+`flash-dowel-ring-20261028-depth-audit-v11`. The saved vision and causal
+settings are identical apart from versioned reference-mask paths. The newer
+_code_ compares a disagreeing visual pose and gripper prediction against the
+same RGB-D image. It accepts a visually favored correction after a second
+image, or retains an image-supported gripper prediction with an explicit
+ambiguity label. The old version left a dowel conflict unresolved from frames
+271–475; the new version retains the conflict through 290 and accepts the
+visual correction at 291. The reduction in conflict frames is therefore a
+changed inference decision on the **same demo**, not evidence that a different
+demo is easier or that the new estimate is correct.
+
+| Same source demo | Older conflicted camera frames | Newer conflicted camera frames | Newer ambiguous visual frames |
+| ---------------- | -----------------------------: | -----------------------------: | ----------------------------: |
+| Dowel insertion  |                            205 |                             20 |                             0 |
+| Gamepad stacking |                             51 |                              6 |                            41 |
+
+The gamepad's roughly 177° visual flip at frame 429 remains **unresolved** in
+v11: the gripper prediction stays in use because both poses have some image
+support, and `ambiguous_visual_prediction` replaces the old conflict label.
+Counting only `conflicted` would hide that uncertainty. At dowel frame 291,
+the accepted visual proposal covers more of the saved surface inside the mask
+than the prior (55% versus 45%) and has a much lower raw depth residual, but
+their clean-interior depth residuals are close (5.04 versus 4.82 mm,
+respectively). That image does not independently verify the hidden tip or full
+pose. The apparent 143 mm change in the saved gripper-to-_object-origin_
+transform at that frame is also misleading because this model's origin is far
+from its surface; corresponding model points change by a median 8.1 mm.
+
+The independent [held-trial audit](../../../../../docs/proofs/flash-held-trial-holdout/README.md)
+uses two recorded insertion attempts beyond the demo. One favors rejected
+vision directions late in carry; the other does not establish a general
+winner. The current system therefore has a real, unproven generalization and
+pose-accuracy risk. The viewer must identify the selected preparation and
+show rejected candidates and ambiguous predictions, while algorithm changes
+must be tested on the same held-out frames across preparations and tasks.
+
 Representative camera frames with projected saved held surface (orange) and
 independent extraction where available (cyan):
 
