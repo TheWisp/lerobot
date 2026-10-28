@@ -28,6 +28,27 @@ from lerobot.policies.flash.surface_observation import (
 )
 
 
+class PartialReferenceFit(WholeSurfaceFit):
+    """Ablate the full observed-surface requirement with the same fitter.
+
+    Keep only visible reference-to-observation distance and the projected
+    reference's outside-mask penalty. Newly exposed surfaces absent from the
+    first-view reference cannot drag this fit, but unobserved directions may
+    become unconstrained. This is an offline local fit, not a pose gate.
+    """
+
+    def _residual_with_distances(self, pose, predicted, model_distance, target_distance):
+        full = super()._residual_with_distances(pose, predicted, model_distance, target_distance)
+        reference_count = len(self.reference_queries)
+        target_count = len(self.target_queries)
+        if len(full) != 2 * reference_count + target_count + len(self.mask_outline):
+            raise RuntimeError("whole-surface residual blocks changed; review this ablation")
+        silhouette_start = reference_count + target_count
+        return np.concatenate(
+            (full[:reference_count], full[silhouette_start : silhouette_start + reference_count])
+        )
+
+
 def score_pose(reference: np.ndarray, candidate: np.ndarray, truth: np.ndarray) -> dict:
     distance = np.linalg.norm(move(reference, candidate) - move(reference, truth), axis=1)
     angle = Rotation.from_matrix(candidate[:3, :3] @ truth[:3, :3].T).magnitude()
@@ -100,6 +121,13 @@ def run(
                     "local_only": score_pose(reference, local, truth),
                     "local_cost": local_detail["cost"],
                 }
+            partial = PartialReferenceFit(reference, current, k, shape)
+            partial_pose, partial_detail = partial.refine(truth)
+            row["fixed_partial_fit"] = {
+                **score_pose(reference, partial_pose, truth),
+                "cost": partial_detail["cost"],
+                "cost_at_annotation": partial.score(truth),
+            }
         rows.append(row)
         # Only earlier observations are available to score the next frame.
         if candidate is not None:

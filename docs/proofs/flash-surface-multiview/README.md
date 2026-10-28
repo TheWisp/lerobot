@@ -42,6 +42,27 @@ its coarse PCA branch was not responsible. The annotations, masks and depth
 are imperfect, but the test shows that a low visible-surface gap and a large
 fused map do not certify a correct object frame.
 
+A partial-reference ablation used the same local fitter and annotated
+starting poses, but dropped the residual that requires every newly visible
+depth point to match the first-view surface. It kept the terms for visible
+reference points and their mask boundary. Each case scores six frames at
+five-frame intervals, with the same surface-point error against annotation:
+
+| Labeled object turn                              | Current first-view fit, median / last | Partial first-view fit, median / last | All earlier views, median / last |
+| ------------------------------------------------ | ------------------------------------: | ------------------------------------: | -------------------------------: |
+| [Cracker box](partial_reference_oracle.json)     |                        11.6 / 23.4 mm |                        18.0 / 24.7 mm |                    9.8 / 17.9 mm |
+| [Sugar box](partial_reference_sugar_box.json)    |                        12.3 / 13.6 mm |                        22.8 / 25.7 mm |                     5.6 / 5.1 mm |
+| [Mustard bottle](partial_reference_mustard.json) |                          9.5 / 7.8 mm |                         9.5 / 10.1 mm |                    7.0 / 12.0 mm |
+
+On the cracker box at frame 25 the partial fit grew from the current fit's
+14.6 mm error to 36.0 mm. The one-way fit avoids forcing an unseen backside
+into the old map, but then permits drift along directions the partial view
+does not constrain. It is not a safe standalone replacement. Run
+`benchmarks/flash_surface_multiview_oracle.py CASE --fit-every 5 --output
+OUTPUT.json` to reproduce each side-by-side measurement. This ablation starts
+at annotated poses to test the fitting objective itself; it does not show
+relocalization from an uncertain live prior.
+
 `CandidateSurfaceMap` is therefore experimental and is **not connected to the
 live pose output**. It keeps the initial reference and its landmarks fixed,
 requires repeated accepted views before adding a new measured voxel, bounds

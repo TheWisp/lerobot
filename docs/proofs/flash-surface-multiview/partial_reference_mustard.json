@@ -1,0 +1,399 @@
+[
+  {
+    "frame": 0,
+    "map_points_before": 1293,
+    "measured_points": 1293,
+    "fixed_surface_p90_mm": 7.806255641895632e-15,
+    "earlier_views_p90_mm": 7.806255641895632e-15
+  },
+  {
+    "frame": 1,
+    "map_points_before": 827,
+    "measured_points": 1396,
+    "fixed_surface_p90_mm": 5.653532871780319,
+    "earlier_views_p90_mm": 5.701672531796606
+  },
+  {
+    "frame": 2,
+    "map_points_before": 1441,
+    "measured_points": 1423,
+    "fixed_surface_p90_mm": 9.54594284226553,
+    "earlier_views_p90_mm": 5.200656030265495
+  },
+  {
+    "frame": 3,
+    "map_points_before": 1891,
+    "measured_points": 1372,
+    "fixed_surface_p90_mm": 7.881521715833582,
+    "earlier_views_p90_mm": 2.8495990524980077
+  },
+  {
+    "frame": 4,
+    "map_points_before": 2160,
+    "measured_points": 1402,
+    "fixed_surface_p90_mm": 6.8752628524138535,
+    "earlier_views_p90_mm": 4.060767858871149
+  },
+  {
+    "frame": 5,
+    "map_points_before": 2510,
+    "measured_points": 1440,
+    "fixed_surface_p90_mm": 8.52939687422501,
+    "earlier_views_p90_mm": 2.7445710003443478,
+    "fixed_fit": {
+      "surface_point_error_mm": 9.926046383693157,
+      "rotation_error_deg": 6.078855315456207,
+      "cost": 6.647871256869779,
+      "cost_at_annotation": 12.578985071969418,
+      "used_coarse": false,
+      "local_only": {
+        "surface_point_error_mm": 9.926046383693157,
+        "rotation_error_deg": 6.078855315456207
+      },
+      "local_cost": 6.647871256869779
+    },
+    "earlier_views_fit": {
+      "surface_point_error_mm": 4.033026286353079,
+      "rotation_error_deg": 2.8337598437753035,
+      "cost": 0.5031838667840705,
+      "cost_at_annotation": 0.7917052782121136,
+      "used_coarse": false,
+      "local_only": {
+        "surface_point_error_mm": 4.033026286353079,
+        "rotation_error_deg": 2.8337598437753035
+      },
+      "local_cost": 0.5031838667840705
+    },
+    "fixed_partial_fit": {
+      "surface_point_error_mm": 6.2181035621506116,
+      "rotation_error_deg": 4.831629055177967,
+      "cost": 0.10614049032974121,
+      "cost_at_annotation": 0.5607171630665684
+    }
+  },
+  {
+    "frame": 6,
+    "map_points_before": 2690,
+    "measured_points": 1652,
+    "fixed_surface_p90_mm": 9.940082840832668,
+    "earlier_views_p90_mm": 2.6445561804925775
+  },
+  {
+    "frame": 7,
+    "map_points_before": 2858,
+    "measured_points": 1803,
+    "fixed_surface_p90_mm": 13.225862948972985,
+    "earlier_views_p90_mm": 3.645316908114784
+  },
+  {
+    "frame": 8,
+    "map_points_before": 3159,
+    "measured_points": 1562,
+    "fixed_surface_p90_mm": 12.27133152172899,
+    "earlier_views_p90_mm": 3.048189619963034
+  },
+  {
+    "frame": 9,
+    "map_points_before": 3356,
+    "measured_points": 1669,
+    "fixed_surface_p90_mm": 12.041925289254866,
+    "earlier_views_p90_mm": 2.40527382604182
+  },
+  {
+    "frame": 10,
+    "map_points_before": 3457,
+    "measured_points": 1593,
+    "fixed_surface_p90_mm": 8.761776609401979,
+    "earlier_views_p90_mm": 3.042362751386152,
+    "fixed_fit": {
+      "surface_point_error_mm": 8.19567306883975,
+      "rotation_error_deg": 4.5545075996509805,
+      "cost": 5.608101936877318,
+      "cost_at_annotation": 7.9048918185849,
+      "used_coarse": false,
+      "local_only": {
+        "surface_point_error_mm": 8.19567306883975,
+        "rotation_error_deg": 4.5545075996509805
+      },
+      "local_cost": 5.608101936877318
+    },
+    "earlier_views_fit": {
+      "surface_point_error_mm": 5.715246495309259,
+      "rotation_error_deg": 5.009667613165272,
+      "cost": 0.3581024044569907,
+      "cost_at_annotation": 1.4461295471844262,
+      "used_coarse": false,
+      "local_only": {
+        "surface_point_error_mm": 5.715246495309259,
+        "rotation_error_deg": 5.009667613165272
+      },
+      "local_cost": 0.3581024044569907
+    },
+    "fixed_partial_fit": {
+      "surface_point_error_mm": 12.857825239375556,
+      "rotation_error_deg": 29.05901858859814,
+      "cost": 0.04526681205164247,
+      "cost_at_annotation": 0.625730834239045
+    }
+  },
+  {
+    "frame": 11,
+    "map_points_before": 3708,
+    "measured_points": 1700,
+    "fixed_surface_p90_mm": 13.436384998165256,
+    "earlier_views_p90_mm": 2.410609587436381
+  },
+  {
+    "frame": 12,
+    "map_points_before": 3828,
+    "measured_points": 1729,
+    "fixed_surface_p90_mm": 9.98025097508563,
+    "earlier_views_p90_mm": 3.0680396032932675
+  },
+  {
+    "frame": 13,
+    "map_points_before": 4035,
+    "measured_points": 1618,
+    "fixed_surface_p90_mm": 13.796975747095571,
+    "earlier_views_p90_mm": 2.340873377025673
+  },
+  {
+    "frame": 14,
+    "map_points_before": 4126,
+    "measured_points": 1741,
+    "fixed_surface_p90_mm": 11.859167279809085,
+    "earlier_views_p90_mm": 2.3449201371527555
+  },
+  {
+    "frame": 15,
+    "map_points_before": 4204,
+    "measured_points": 1704,
+    "fixed_surface_p90_mm": 12.889238297349221,
+    "earlier_views_p90_mm": 2.4093373592767784,
+    "fixed_fit": {
+      "surface_point_error_mm": 12.265346525447086,
+      "rotation_error_deg": 5.6294466948113175,
+      "cost": 6.97777649849741,
+      "cost_at_annotation": 12.600526022604289,
+      "used_coarse": false,
+      "local_only": {
+        "surface_point_error_mm": 12.265346525447086,
+        "rotation_error_deg": 5.6294466948113175
+      },
+      "local_cost": 6.97777649849741
+    },
+    "earlier_views_fit": {
+      "surface_point_error_mm": 6.993037146215324,
+      "rotation_error_deg": 4.714169936952092,
+      "cost": 0.297576194232377,
+      "cost_at_annotation": 1.2076128553557997,
+      "used_coarse": false,
+      "local_only": {
+        "surface_point_error_mm": 6.993037146215324,
+        "rotation_error_deg": 4.714169936952092
+      },
+      "local_cost": 0.297576194232377
+    },
+    "fixed_partial_fit": {
+      "surface_point_error_mm": 7.003113583714211,
+      "rotation_error_deg": 8.92274911458125,
+      "cost": 0.07651969430650475,
+      "cost_at_annotation": 0.8283737995459279
+    }
+  },
+  {
+    "frame": 16,
+    "map_points_before": 4287,
+    "measured_points": 1628,
+    "fixed_surface_p90_mm": 10.802839019552726,
+    "earlier_views_p90_mm": 2.2045889582952536
+  },
+  {
+    "frame": 17,
+    "map_points_before": 4330,
+    "measured_points": 1617,
+    "fixed_surface_p90_mm": 13.588917677172605,
+    "earlier_views_p90_mm": 2.3151415872226346
+  },
+  {
+    "frame": 18,
+    "map_points_before": 4383,
+    "measured_points": 1504,
+    "fixed_surface_p90_mm": 13.927244857286235,
+    "earlier_views_p90_mm": 2.4211558673015894
+  },
+  {
+    "frame": 19,
+    "map_points_before": 4485,
+    "measured_points": 1542,
+    "fixed_surface_p90_mm": 12.296192097562843,
+    "earlier_views_p90_mm": 2.2142862767069507
+  },
+  {
+    "frame": 20,
+    "map_points_before": 4528,
+    "measured_points": 1485,
+    "fixed_surface_p90_mm": 12.758678823965969,
+    "earlier_views_p90_mm": 2.2159586821455313,
+    "fixed_fit": {
+      "surface_point_error_mm": 9.083978192652943,
+      "rotation_error_deg": 10.752847565977275,
+      "cost": 9.168489011051427,
+      "cost_at_annotation": 13.594964247583386,
+      "used_coarse": false,
+      "local_only": {
+        "surface_point_error_mm": 9.083978192652943,
+        "rotation_error_deg": 10.752847565977275
+      },
+      "local_cost": 9.168489011051427
+    },
+    "earlier_views_fit": {
+      "surface_point_error_mm": 6.980091562421792,
+      "rotation_error_deg": 10.85738391822841,
+      "cost": 0.4730465388674213,
+      "cost_at_annotation": 1.8084109654309706,
+      "used_coarse": false,
+      "local_only": {
+        "surface_point_error_mm": 6.980091562421792,
+        "rotation_error_deg": 10.85738391822841
+      },
+      "local_cost": 0.4730465388674213
+    },
+    "fixed_partial_fit": {
+      "surface_point_error_mm": 11.997677277467414,
+      "rotation_error_deg": 23.991430583231757,
+      "cost": 0.043883123413020066,
+      "cost_at_annotation": 0.9476254217540865
+    }
+  },
+  {
+    "frame": 21,
+    "map_points_before": 4562,
+    "measured_points": 1459,
+    "fixed_surface_p90_mm": 11.773689953870704,
+    "earlier_views_p90_mm": 2.2991477759764787
+  },
+  {
+    "frame": 22,
+    "map_points_before": 4611,
+    "measured_points": 1514,
+    "fixed_surface_p90_mm": 12.463510655735906,
+    "earlier_views_p90_mm": 2.2360488365323206
+  },
+  {
+    "frame": 23,
+    "map_points_before": 4630,
+    "measured_points": 1436,
+    "fixed_surface_p90_mm": 14.282426115827516,
+    "earlier_views_p90_mm": 2.2986404968145533
+  },
+  {
+    "frame": 24,
+    "map_points_before": 4714,
+    "measured_points": 1507,
+    "fixed_surface_p90_mm": 13.054400764506658,
+    "earlier_views_p90_mm": 2.1946296488852153
+  },
+  {
+    "frame": 25,
+    "map_points_before": 4731,
+    "measured_points": 1554,
+    "fixed_surface_p90_mm": 15.505322860238067,
+    "earlier_views_p90_mm": 2.3222226310348413,
+    "fixed_fit": {
+      "surface_point_error_mm": 11.66213202896179,
+      "rotation_error_deg": 11.464846357399447,
+      "cost": 10.2131347721664,
+      "cost_at_annotation": 17.12953500817354,
+      "used_coarse": false,
+      "local_only": {
+        "surface_point_error_mm": 11.66213202896179,
+        "rotation_error_deg": 11.464846357399447
+      },
+      "local_cost": 10.2131347721664
+    },
+    "earlier_views_fit": {
+      "surface_point_error_mm": 7.869672329568301,
+      "rotation_error_deg": 12.920294294121236,
+      "cost": 0.5828409382067469,
+      "cost_at_annotation": 1.877912911425969,
+      "used_coarse": false,
+      "local_only": {
+        "surface_point_error_mm": 7.869672329568301,
+        "rotation_error_deg": 12.920294294121236
+      },
+      "local_cost": 0.5828409382067469
+    },
+    "fixed_partial_fit": {
+      "surface_point_error_mm": 8.80765080782643,
+      "rotation_error_deg": 22.19377208279109,
+      "cost": 0.050401300533959095,
+      "cost_at_annotation": 0.3550881767040337
+    }
+  },
+  {
+    "frame": 26,
+    "map_points_before": 4848,
+    "measured_points": 1533,
+    "fixed_surface_p90_mm": 13.280768916204675,
+    "earlier_views_p90_mm": 2.2304318281002855
+  },
+  {
+    "frame": 27,
+    "map_points_before": 4879,
+    "measured_points": 1597,
+    "fixed_surface_p90_mm": 13.273402511446273,
+    "earlier_views_p90_mm": 2.271232057101857
+  },
+  {
+    "frame": 28,
+    "map_points_before": 4913,
+    "measured_points": 1615,
+    "fixed_surface_p90_mm": 14.453570463529816,
+    "earlier_views_p90_mm": 2.340809726834514
+  },
+  {
+    "frame": 29,
+    "map_points_before": 4998,
+    "measured_points": 1641,
+    "fixed_surface_p90_mm": 15.553846671228332,
+    "earlier_views_p90_mm": 2.3500756804108724
+  },
+  {
+    "frame": 30,
+    "map_points_before": 5119,
+    "measured_points": 1705,
+    "fixed_surface_p90_mm": 13.395838819600554,
+    "earlier_views_p90_mm": 4.951111582584147,
+    "fixed_fit": {
+      "surface_point_error_mm": 7.806408403687079,
+      "rotation_error_deg": 18.321390338476352,
+      "cost": 10.964533452698102,
+      "cost_at_annotation": 16.479267965625635,
+      "used_coarse": false,
+      "local_only": {
+        "surface_point_error_mm": 7.806408403687079,
+        "rotation_error_deg": 18.321390338476352
+      },
+      "local_cost": 10.964533452698102
+    },
+    "earlier_views_fit": {
+      "surface_point_error_mm": 11.978110677266903,
+      "rotation_error_deg": 13.700641243556701,
+      "cost": 0.37841828015694307,
+      "cost_at_annotation": 2.33518900830814,
+      "used_coarse": false,
+      "local_only": {
+        "surface_point_error_mm": 11.978110677266903,
+        "rotation_error_deg": 13.700641243556701
+      },
+      "local_cost": 0.37841828015694307
+    },
+    "fixed_partial_fit": {
+      "surface_point_error_mm": 10.116306955962745,
+      "rotation_error_deg": 6.9027847578176,
+      "cost": 0.0,
+      "cost_at_annotation": 0.533657908195023
+    }
+  }
+]
