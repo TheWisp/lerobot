@@ -138,6 +138,7 @@ def measure(result_path: Path, sample_rows: list[int]) -> list[dict]:
         proposals = {}
         for name, pose in (
             ("vision_candidate", recorded["candidate_pose"]),
+            ("motion_only_prior", recorded.get("motion_prior_pose")),
             ("gripper_fallback", ee @ np.asarray(recorded["attachment"])),
         ):
             if pose is None:

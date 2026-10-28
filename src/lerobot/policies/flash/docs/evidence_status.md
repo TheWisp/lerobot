@@ -213,6 +213,10 @@ winner. The current system therefore has a real, unproven generalization and
 pose-accuracy risk. The viewer must identify the selected preparation and
 show rejected candidates and ambiguous predictions, while algorithm changes
 must be tested on the same held-out frames across preparations and tasks.
+The subsequent motion-only ablation confirms the risk: at a 0.6 s future
+visible-direction check, the visual candidate is better on the first attempt
+(11.2° median versus 26.8° motion-only), while motion-only is better on the
+second (12.7° versus 14.1° visual). Neither is a hidden-tip accuracy measure.
 
 The preparation path now saves each frame's masks, group evidence, accepted
 pose, rejected raw fit, and partial visible-surface measurements during the

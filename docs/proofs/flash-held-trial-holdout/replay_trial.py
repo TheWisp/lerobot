@@ -198,10 +198,12 @@ for i, row in enumerate(rows):
         if k in diagnostics
     }
     candidate = getattr(inner, "last_candidate_poses", {}).get(role)
+    motion_prior = getattr(inner, "last_motion_prior_poses", {}).get(role)
     result.append(
         {
             "fit_metrics": metrics,
             "candidate_pose": candidate.tolist() if candidate is not None else None,
+            "motion_prior_pose": motion_prior.tolist() if motion_prior is not None else None,
             "mask_pixels": int(mask.sum()) if mask is not None else None,
             "backend_failure": str(failure) if failure else None,
             "row": i,
