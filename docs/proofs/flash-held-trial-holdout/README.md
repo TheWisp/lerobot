@@ -189,3 +189,32 @@ Reproduce from the saved audits with:
 
 Use the `second-trial/` paths for the other attempt. This script's count is a
 measured counterexample, not a tuned runtime threshold.
+
+### A local partial-pose update does not resolve source choice
+
+We also tested a candidate that leaves weakly observed motions near the
+source-time gripper prediction. The [audit](../../../benchmarks/flash_partial_pose_projection_audit.py)
+expresses the raw visual candidate's pose change in the six measured surface
+directions. It weights each direction by the recorded point-to-plane sensitivity,
+an assumed 10 mm whole-object prior uncertainty, and a 5 mm depth error. The
+gripper pose comes from measured joints interpolated to the same camera time;
+the recorded [axis audits](axis_audit_all_held.json.gz) now include that pose.
+All earlier axis-audit fields are unchanged. This is a one-frame shadow
+calculation, not an accepted observation or a control change.
+
+| Attempt  | Future visible-axis check | Gripper only, median | Partial update, median | Raw vision, median | Partial update better than gripper |
+| -------- | ------------------------: | -------------------: | ---------------------: | -----------------: | ---------------------------------: |
+| 20:33:10 |                 99 frames |                18.2° |                  18.6° |              11.2° |                              21/99 |
+| 20:18:38 |                145 frames |                13.7° |                  13.8° |              14.1° |                             47/145 |
+
+These numbers are in [the first result](partial_pose_projection.json) and
+[the second result](second-trial/partial_pose_projection.json). A sweep of
+prior-to-depth uncertainty ratios from 0.2 to 100 did not find a setting that
+improved both attempts' median future-direction agreement. At the extremes,
+the projection reproduced the gripper-only and raw-vision directions as
+expected. The local sensitivity estimates are conditional on a proposed
+correspondence to the incomplete first-view surface; they cannot decide
+whether that correspondence or visual candidate is right. More precise
+weighting alone is therefore not the missing source-selection rule. The
+check measures only a later visible direction from correlated RGB-D frames,
+not hidden-tip or full-pose accuracy.

@@ -188,6 +188,7 @@ def measure(result_path: Path, sample_rows: list[int]) -> list[dict]:
                 "row": row,
                 "camera_frame_id": recorded["frame_id"],
                 "source_time_s": source_time_s,
+                "base_from_gripper": ee.tolist(),
                 "clean_depth_points": len(measured),
                 "pca_spread_mm": spreads_mm.tolist(),
                 "tracked_surface_points": len(tracked_surface),
