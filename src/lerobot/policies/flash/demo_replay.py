@@ -115,6 +115,7 @@ def build_demo_replay(
                 source_time_s=float(arm_times_s[arm_index]),
             )
         }
+        demo_goal = None
         held_prediction = None
         if interval is None:
             detail = {"phase": "outside_skill", "time_s": float(camera_time_s)}
@@ -129,12 +130,19 @@ def build_demo_replay(
                 sample = interval.samples[sample_index]
                 sample_description = "demonstrated_sample"
             if interval.relation != Relation.EE_TO_START:
-                accepted[interval.reference_role] = _pose(
+                reference = _pose(
                     sample.demo_reference,
                     evidence=sample.reference_evidence,
                     estimator="demo_reference",
                     source_time_s=sample.time_s,
                 )
+                if interval.mode == MotionMode.CONNECTION:
+                    # A generated route stores only its endpoint. That future
+                    # target is a motion goal, not this camera frame's object
+                    # observation; keep it out of the current-pose display.
+                    demo_goal = {"role": interval.reference_role, **reference}
+                else:
+                    accepted[interval.reference_role] = reference
             if interval.held_role is not None and sample.demo_held is not None:
                 held_pose = sample.demo_held
                 held_source_time_s = sample.time_s
@@ -184,6 +192,7 @@ def build_demo_replay(
                         **camera_geometry,
                     },
                     "accepted": accepted,
+                    "demo_goal": demo_goal,
                     "held_prediction": held_prediction,
                     "demo": detail,
                 },
@@ -258,6 +267,35 @@ def _add_saved_extraction_layers(root: Path, bundle: Path, result: dict) -> None
                         else None
                     ),
                 }
+                goal = snapshot.get("demo_goal")
+                if goal is not None and goal["role"] == role and evidence != "lost":
+                    snapshot["accepted"][role] = {
+                        "pose": cache[f"{role}_poses"][index].tolist(),
+                        "evidence": evidence,
+                        "estimator": estimator,
+                        "source_time_s": snapshot["recorded_at_s"],
+                        "available_time_s": snapshot["recorded_at_s"],
+                    }
+                held = snapshot.get("held_prediction")
+                if (
+                    held is not None
+                    and held["role"] == role
+                    and evidence == "observed"
+                    and held.get("pose") is not None
+                ):
+                    # Compare the same reference-surface point under both
+                    # transforms. Object-frame origins can be far from the
+                    # object, so their distance is not a useful pose gap.
+                    center = np.asarray(result["geometry"]["centers_object_m"][role], dtype=float)
+                    observed = np.asarray(cache[f"{role}_poses"][index], dtype=float)
+                    predicted = np.asarray(held["pose"], dtype=float)
+                    observed_center = observed[:3, :3] @ center + observed[:3, 3]
+                    predicted_center = predicted[:3, :3] @ center + predicted[:3, 3]
+                    snapshot["demo_pose_review"] = {
+                        "role": role,
+                        "reference_center_gap_m": float(np.linalg.norm(observed_center - predicted_center)),
+                        "source": estimator,
+                    }
     result["extraction_history"] = "recorded_for_prepared_version"
 
 
@@ -358,9 +396,11 @@ def load_legacy_demo_replay(dataset_root: Path, episode: int, bundle_path: Path)
     _add_saved_extraction_layers(root, bundle, result)
     report_path = bundle.parent / "preparation-report.json"
     if report_path.is_file():
-        result["held_pose_comparison"] = json.loads(report_path.read_text(encoding="utf-8")).get(
-            "held_pose_comparison"
-        )
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        result["held_pose_comparison"] = report.get("held_pose_comparison")
+        result["review_status"] = report.get("review_status", "unreviewed")
+    else:
+        result["review_status"] = "unreviewed"
     result["grasp_reference"] = {
         "role": annotation["held_role"],
         "camera_frame_index": annotation["grasp_reference_frame"],

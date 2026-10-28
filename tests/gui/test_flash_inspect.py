@@ -637,6 +637,7 @@ def test_run_flash_lists_demos_and_shows_extracted_pose_overlay(gui_page):
             json={
                 "available": True,
                 "kind": "demo",
+                "review_status": "candidate",
                 "bundle_path": parse_qs(urlsplit(route.request.url).query)["bundle_path"][0],
                 "tracker_candidate": {
                     "candidate_id": "test-tracker",
@@ -677,6 +678,11 @@ def test_run_flash_lists_demos_and_shows_extracted_pose_overlay(gui_page):
                                 },
                             },
                             "held_prediction": None,
+                            "demo_pose_review": {
+                                "role": "object",
+                                "reference_center_gap_m": 0.021,
+                                "source": "surface_rgbd",
+                            },
                             "layers": {
                                 "other": {
                                     "demo_extraction": {
@@ -736,6 +742,8 @@ def test_run_flash_lists_demos_and_shows_extracted_pose_overlay(gui_page):
     assert "Current perception; not saved in skill" in page.locator("#flash-tracker-content").inner_text()
     assert "predicted" in page.locator("#flash-tracker-content").inner_text()
     assert page.get_by_role("button", name="Edit demo in 3D").is_visible()
+    assert "Object poses need review" in page.locator("#flash-demo-review-status").inner_text()
+    assert "21.0 mm apart" in page.locator("#flash-tracker-content").inner_text()
     assert "Demo extraction" not in page.locator("#flash-tracker-content").inner_text()
     drawing = page.evaluate("""() => {
         const context = CanvasRenderingContext2D.prototype;

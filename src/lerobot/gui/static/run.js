@@ -993,15 +993,17 @@ function renderFlashDemoSnapshot(snapshot) {
     document.getElementById('flash-tracker-mode').textContent = 'Demo';
     const demo = snapshot.demo;
     if (!flashCompareSources) {
-        let html = '<div class="flash-tracker-legend">These are the poses saved in the skill and used to transfer the demonstration. A predicted pose is not a measurement of the object in this frame. Use Compare source estimates to inspect alternatives.</div>';
+        let html = '<div class="flash-tracker-legend">One pose per object. This is the pose saved for spatial transfer, or the current perception estimate when no skill pose applies. A prediction is not a measurement. Compare source estimates to inspect alternatives.</div>';
         const roles = new Set([...Object.keys(snapshot.accepted || {}).filter(role => role !== '__gripper__'),
             ...Object.keys(snapshot.layers || {}).filter(role => role !== '__gripper__'),
             ...(snapshot.held_prediction ? [snapshot.held_prediction.role] : [])]);
         for (const role of roles) {
             const held = snapshot.held_prediction?.role === role ? snapshot.held_prediction : null;
-            const skillPose = held || snapshot.accepted?.[role];
+            const endpointGoal = snapshot.demo_goal?.role === role;
+            const skillPose = endpointGoal ? null : held || snapshot.accepted?.[role];
             const extracted = snapshot.layers?.[role]?.demo_extraction;
-            const pose = skillPose || (extracted?.evidence !== 'lost' ? extracted : null);
+            const pose = skillPose || snapshot.accepted?.[role] ||
+                (extracted?.evidence !== 'lost' ? extracted : null);
             if (!pose) continue;
             const origin = held ? 'Gripper-carried prediction' : pose.evidence === 'observed'
                 ? 'Observed pose' : pose.evidence === 'predicted' ? 'Predicted pose' : 'Pose unavailable';
@@ -1009,8 +1011,11 @@ function renderFlashDemoSnapshot(snapshot) {
                 _flashOverlayRow(held ? 'held' : skillPose ? 'accepted' : 'layer', role,
                     skillPose ? '' : 'demo_extraction', 'flash-tracker-selected',
                     `<span class="flash-tracker-dot" style="background:${held ? '#fb923c' : pose.evidence === 'predicted' ? '#fbbf24' : skillPose ? '#34d399' : _flashLayerColor(pose.estimator)}"></span>` +
-                    `${skillPose ? 'Pose used by skill' : 'Current perception; not saved in skill'}` +
+                    `${skillPose ? 'Pose used by skill' : endpointGoal ? 'Current perception; skill stores endpoint goal' : 'Current perception; not saved in skill'}` +
                     `<small>${_esc(origin)} · ${_esc(_flashPoseText(pose, snapshot))}</small>`) +
+                (snapshot.demo_pose_review?.role === role
+                    ? `<small class="flash-demo-pose-review">Current visual fit and saved carried prediction place the reference surface ${_esc((snapshot.demo_pose_review.reference_center_gap_m * 1000).toFixed(1))} mm apart. Neither is verified as the hidden contact pose; review in 3D.</small>`
+                    : '') +
                 '</div>';
         }
         if (demo.phase !== 'outside_skill')
@@ -1138,7 +1143,7 @@ function renderFlashDemoSnapshot(snapshot) {
             html += '<div class="flash-tracker-role">Motion is anchored to the achieved grasp or interval entry; this interval uses no object reference pose.</div>';
         } else {
             const role = demo.reference_role;
-            const pose = snapshot.accepted[role];
+            const pose = snapshot.demo_goal?.role === role ? snapshot.demo_goal : snapshot.accepted[role];
             const constraint = flashReplay.pose_constraints?.[role];
             const graspReference = flashReplay.grasp_reference;
             const evidenceNote = constraint?.orientation_locked_to_baseline
@@ -1147,7 +1152,7 @@ function renderFlashDemoSnapshot(snapshot) {
                     ? `pre-grasp seed from camera frame ${graspReference.camera_frame_index}` : 'source proposal history not saved'}`;
             html += `<div class="flash-tracker-role"><strong>${_esc(role)}</strong>`;
             html += _flashOverlayRow('accepted', role, '', 'flash-tracker-selected',
-                `<span class="flash-tracker-dot" style="background:#34d399"></span>Reference pose used by skill <small>${_esc(evidenceNote)} · sampled at ${pose.source_time_s.toFixed(2)} s</small>`);
+                `<span class="flash-tracker-dot" style="background:#34d399"></span>${snapshot.demo_goal?.role === role ? 'Saved connection endpoint goal' : 'Reference pose used by skill'} <small>${_esc(evidenceNote)} · sampled at ${pose.source_time_s.toFixed(2)} s</small>`);
             html += '</div>';
         }
         if (snapshot.held_prediction) {
@@ -1386,6 +1391,10 @@ function _flashDrawOverlay() {
                     pose, false, 'layer', name);
             });
         }
+        if (compareSources && snapshot.demo_goal) {
+            const goal = snapshot.demo_goal;
+            draw(goal.role, 'recorded_skill_reference', goal, false, 'goal');
+        }
         for (const [role, pose] of Object.entries(snapshot.accepted || {})) {
             if (role === '__gripper__' && !compareSources) continue;
             if (snapshot.held_prediction?.role === role) {
@@ -1578,6 +1587,7 @@ function _flashCreateSceneGrid(kind, imageAlt, depthAvailable = true) {
         toolbar.className = 'flash-scene-toolbar';
         toolbar.innerHTML = `<button type="button" id="flash-scene-toggle" onclick="toggleFlashSceneView()"${kind === 'live' ? ' disabled' : ''}>3D scene</button>` +
             (kind === 'demo' ? '<button type="button" id="flash-scene-edit" onclick="openFlashDemoSceneEditor()">Edit demo in 3D</button>' +
+                '<span id="flash-demo-review-status" class="flash-demo-review-status" hidden></span>' +
                 '<button type="button" id="flash-compare-sources" onclick="toggleFlashCompareSources()" aria-pressed="false">Compare source estimates</button>' : '') +
             '<div id="flash-scene-tools" hidden>' +
             '<select id="flash-scene-object" aria-label="Focus object" onchange="this.value ? flashSceneView?.focus(this.value) : flashSceneView?.frameAll()"><option value="">All objects</option></select>' +
@@ -1630,6 +1640,13 @@ function _flashInstallReplay(replay, imageAlt) {
     setFlashTrackerPanelCollapsed(true);
     flashHighlightedOverlay = null;
     _flashCreateSceneGrid(replay.kind, imageAlt, !!replay.camera_features?.depth);
+    const reviewStatus = document.getElementById('flash-demo-review-status');
+    if (reviewStatus) {
+        const reviewed = replay.review_status === 'accepted';
+        reviewStatus.hidden = reviewed;
+        reviewStatus.textContent = 'Object poses need review';
+        reviewStatus.title = 'The camera frames and robot motion are recorded. Object poses were inferred and this prepared skill has not been accepted as a verified pose trace.';
+    }
     document.getElementById('flash-tracker-replay-controls').hidden = false;
     document.getElementById('flash-tracker-scrub').max = Math.max(0, replay.frames.length - 1);
     document.getElementById('flash-tracker-play').textContent = 'Play';

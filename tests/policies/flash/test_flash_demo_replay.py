@@ -78,8 +78,10 @@ def test_demo_replay_keeps_dense_samples_and_labels_sparse_endpoints() -> None:
     assert frames[0]["demo"]["phase"] == "demonstrated_sample"
     assert frames[1]["accepted"]["object"]["evidence"] == "predicted"
     assert frames[2]["demo"]["phase"] == "connection_endpoint"
-    assert frames[2]["accepted"]["object"]["pose"][0][3] == 0.4
-    assert frames[2]["accepted"]["object"]["source_time_s"] == 2.0
+    assert "object" not in frames[2]["accepted"]
+    assert frames[2]["demo_goal"]["role"] == "object"
+    assert frames[2]["demo_goal"]["pose"][0][3] == 0.4
+    assert frames[2]["demo_goal"]["source_time_s"] == 2.0
     assert frames[2]["accepted"]["__gripper__"]["pose"][0][3] == 0.2
     assert frames[2]["demo"]["camera_arm_delta_s"] == 0.0
     assert frames[2]["camera"]["frame_id"] == 2
@@ -140,4 +142,6 @@ def test_connection_replay_projects_held_object_from_recorded_gripper_at_camera_
     assert np.isclose(middle["held_prediction"]["pose"][0][3], 0.7)
     assert middle["held_prediction"]["source_time_s"] == 1.5
     assert middle["held_prediction"]["estimator"] == "demo_held_recorded_gripper"
-    assert middle["accepted"]["receiver"]["source_time_s"] == 2.0
+    assert "receiver" not in middle["accepted"]
+    assert middle["demo_goal"]["role"] == "receiver"
+    assert middle["demo_goal"]["source_time_s"] == 2.0
