@@ -319,7 +319,11 @@ export function createFlashSceneView(canvas, surfaces) {
         observedCenters = {};
         observedBounds = {};
         for (const [role, ref] of Object.entries(references)) {
-            const used = held?.role === role ? held : snapshot.accepted?.[role];
+            const skillPose = held?.role === role ? held : snapshot.accepted?.[role];
+            const extracted = snapshot.layers?.[role]?.demo_extraction;
+            const perceptionOnly = !skillPose && extracted?.evidence !== 'lost' && !!extracted?.pose;
+            const used = skillPose || (perceptionOnly ? extracted : null);
+            const usedKind = perceptionOnly ? 'layer' : held?.role === role ? 'held' : 'accepted';
             const observedRuns = frameEvidence?.masks_rle?.[role];
             if ((options.showSurface !== false || options.showPoints) && observedRuns?.length) {
                 const observed = makeObservedSurface(observedRuns, depth, rgba, snapshot.camera, options);
@@ -343,7 +347,7 @@ export function createFlashSceneView(canvas, surfaces) {
                     surface.children[0].material.opacity = 0.2;
                 }
                 setPose(surface, used.pose, baseFromCamera);
-                surface.userData = {kind: held?.role === role ? 'held' : 'accepted', role, enabled: true};
+                surface.userData = {kind: usedKind, estimator: perceptionOnly ? 'demo_extraction' : '', role, enabled: true};
                 evidence.add(surface);
             }
             const coords = snapshot.centers_object_m?.[role];
@@ -351,7 +355,7 @@ export function createFlashSceneView(canvas, surfaces) {
                 const axes = makePoseAxes(0.025);
                 axes.children[0].position.fromArray(coords);
                 setPose(axes, used.pose, baseFromCamera);
-                axes.userData = {kind: held?.role === role ? 'held' : 'accepted', role, enabled: true};
+                axes.userData = {kind: usedKind, estimator: perceptionOnly ? 'demo_extraction' : '', role, enabled: true};
                 evidence.add(axes);
             }
             const support = frameEvidence?.groups?.[role];
@@ -361,13 +365,13 @@ export function createFlashSceneView(canvas, surfaces) {
                 points.userData = {kind: 'layer', estimator: 'demo_extraction', role, enabled: true};
                 evidence.add(points);
             }
-            const extracted = snapshot.layers?.[role]?.demo_extraction;
-            if (extracted?.pose) {
+            if (extracted?.pose && !perceptionOnly) {
                 const groupBased = extracted.estimator === 'environment_group_motion';
                 const ghost = makeDashedReference(ref.geometry, groupBased ? groupColor : visionColor);
                 setPose(ghost, extracted.pose, baseFromCamera);
                 ghost.userData = {kind: 'layer', estimator: 'demo_extraction', role,
-                    enabled: groupBased && !!options.showGroup && !support?.base_xyz_m?.length};
+                    enabled: !!options.compareSources ||
+                        (groupBased && !!options.showGroup && !support?.base_xyz_m?.length)};
                 ghost.visible = ghost.userData.enabled;
                 evidence.add(ghost);
             }
@@ -456,7 +460,8 @@ export function createFlashSceneView(canvas, surfaces) {
         if (observedCenters[role]) return observedCenters[role].clone();
         const local = latestSnapshot?.centers_object_m?.[role];
         const pose = latestSnapshot?.held_prediction?.role === role
-            ? latestSnapshot.held_prediction : latestSnapshot?.accepted?.[role];
+            ? latestSnapshot.held_prediction : latestSnapshot?.accepted?.[role] ||
+                latestSnapshot?.layers?.[role]?.demo_extraction;
         if (!local || !pose?.pose || !latestSnapshot.camera?.base_from_camera)
             return null;
         const point = new THREE.Vector3(...local);

@@ -52,6 +52,7 @@ function _flashSceneOptions() {
         showAxes: document.getElementById('flash-scene-axes')?.checked,
         showGroup: document.getElementById('flash-scene-group')?.checked,
         showGripper: document.getElementById('flash-scene-gripper')?.checked,
+        compareSources: flashCompareSources,
     };
 }
 
@@ -186,6 +187,7 @@ async function toggleFlashSceneView() {
         grid.classList.remove('flash-scene-active');
         toggle.textContent = '3D scene';
         tools.hidden = true;
+        _flashDrawOverlay();
         return;
     }
     try {
@@ -217,7 +219,7 @@ async function toggleFlashSceneView() {
                 option.textContent = role;
                 select.append(option);
             }
-            const {createFlashSceneView} = await import('/static/flash_scene_view.js?v=19');
+            const {createFlashSceneView} = await import('/static/flash_scene_view.js?v=21');
             flashSceneView = createFlashSceneView(grid.querySelector('.flash-scene-canvas'), surfaces);
             if (flashDemoEditor) {
                 const point = flashDemoEditor.keypointsDocument.keypoints[flashDemoEditor.keypointIndex];
@@ -238,6 +240,7 @@ async function toggleFlashSceneView() {
 }
 
 async function openFlashDemoSceneEditor() {
+    if (flashSceneMode !== '3d') await toggleFlashSceneView();
     if (!flashDemoEditor) await toggleFlashDemoEditor();
     if (flashDemoEditor) {
         const points = flashDemoEditor.keypointsDocument.keypoints;
@@ -673,6 +676,18 @@ let flashHighlightedOverlay = null;
 let flashTrackPoints = null;
 let flashSelectedTrack = null;
 let flashDemoEditor = null;
+let flashCompareSources = false;
+
+function toggleFlashCompareSources() {
+    flashCompareSources = !flashCompareSources;
+    const button = document.getElementById('flash-compare-sources');
+    if (button) {
+        button.textContent = flashCompareSources ? 'Hide source estimates' : 'Compare source estimates';
+        button.setAttribute('aria-pressed', String(flashCompareSources));
+    }
+    if (flashReplay?.kind === 'demo' && flashSnapshot) renderFlashDemoSnapshot(flashSnapshot);
+    if (flashSceneMode === '3d') void _flashUpdateSceneFrame();
+}
 
 function closeFlashDemoEditor() {
     flashDemoEditor = null;
@@ -692,7 +707,7 @@ function closeFlashDemoEditor() {
     document.getElementById('rerun-viewer')?.classList.remove('flash-demo-editing');
     document.getElementById('tab-run')?.classList.remove('flash-demo-editing');
     const toggle = document.getElementById('flash-demo-edit-toggle');
-    if (toggle) toggle.textContent = flashReplay?.kind === 'raw_demo' ? 'Prepare demo' : 'Edit demo';
+    if (toggle) toggle.textContent = flashReplay?.kind === 'raw_demo' ? 'Prepare demo' : 'Edit on camera';
 }
 
 function toggleFlashTrackerPanel() {
@@ -973,9 +988,40 @@ function renderFlashDemoSnapshot(snapshot) {
     const panel = document.getElementById('flash-tracker-panel');
     const content = document.getElementById('flash-tracker-content');
     panel.hidden = selectedWorkflow !== 'flash';
-    panel.querySelector('.flash-tracker-heading strong').textContent = 'FLASH demo extraction';
+    panel.querySelector('.flash-tracker-heading strong').textContent = flashCompareSources
+        ? 'Demo source estimates' : 'Demo poses';
     document.getElementById('flash-tracker-mode').textContent = 'Demo';
     const demo = snapshot.demo;
+    if (!flashCompareSources) {
+        let html = '<div class="flash-tracker-legend">These are the poses saved in the skill and used to transfer the demonstration. A predicted pose is not a measurement of the object in this frame. Use Compare source estimates to inspect alternatives.</div>';
+        const roles = new Set([...Object.keys(snapshot.accepted || {}).filter(role => role !== '__gripper__'),
+            ...Object.keys(snapshot.layers || {}).filter(role => role !== '__gripper__'),
+            ...(snapshot.held_prediction ? [snapshot.held_prediction.role] : [])]);
+        for (const role of roles) {
+            const held = snapshot.held_prediction?.role === role ? snapshot.held_prediction : null;
+            const skillPose = held || snapshot.accepted?.[role];
+            const extracted = snapshot.layers?.[role]?.demo_extraction;
+            const pose = skillPose || (extracted?.evidence !== 'lost' ? extracted : null);
+            if (!pose) continue;
+            const origin = held ? 'Gripper-carried prediction' : pose.evidence === 'observed'
+                ? 'Observed pose' : pose.evidence === 'predicted' ? 'Predicted pose' : 'Pose unavailable';
+            html += `<div class="flash-tracker-role"><strong>${_esc(role)}</strong>` +
+                _flashOverlayRow(held ? 'held' : skillPose ? 'accepted' : 'layer', role,
+                    skillPose ? '' : 'demo_extraction', 'flash-tracker-selected',
+                    `<span class="flash-tracker-dot" style="background:${held ? '#fb923c' : pose.evidence === 'predicted' ? '#fbbf24' : skillPose ? '#34d399' : _flashLayerColor(pose.estimator)}"></span>` +
+                    `${skillPose ? 'Pose used by skill' : 'Current perception; not saved in skill'}` +
+                    `<small>${_esc(origin)} · ${_esc(_flashPoseText(pose, snapshot))}</small>`) +
+                '</div>';
+        }
+        if (demo.phase !== 'outside_skill')
+            html += `<div class="flash-tracker-role"><strong>${_esc(demo.interval_name)}</strong>` +
+                `<small>${_esc(demo.relation.replaceAll('_', ' '))}</small></div>`;
+        content.innerHTML = html;
+        _flashSelectOverlay(null);
+        _flashBindOverlayRows(content);
+        _flashDrawOverlay();
+        return;
+    }
     const rebuilt = flashReplay.sceneEvidence?.available;
     let html = `<div class="flash-tracker-legend">Demo time ${demo.time_s.toFixed(2)} s · arm reading ${(demo.camera_arm_delta_s * 1000).toFixed(0)} ms from this RGB frame. ${rebuilt ? 'The 3D view shows object surfaces and group points rebuilt from this recording.' : 'The 3D view can project partial reference patches; per-frame masks were not saved.'} Prepared skill poses and extraction estimates are separate.</div>`;
     if (flashReplay.extraction_history !== 'recorded_for_prepared_version' && !rebuilt)
@@ -1298,7 +1344,7 @@ function _flashDrawOverlay() {
         const draw = (role, name, pose, accepted, kind, estimator = '') => {
             const active = emphasized(kind, role, estimator);
             const predicted = pose.evidence === 'predicted';
-            const color = predicted ? '#fbbf24' : _flashLayerColor(name);
+            const color = kind === 'held' ? '#fb923c' : predicted ? '#fbbf24' : _flashLayerColor(name);
             context.globalAlpha = active ? 1 : 0.12;
             const points = snapshot.points_object_m?.[role] || [];
             const projectedPoints = points.map(point => _flashProject(point, pose, camera)).filter(Boolean);
@@ -1333,33 +1379,46 @@ function _flashDrawOverlay() {
             }
             context.globalAlpha = 1;
         };
-        for (const [role, layers] of Object.entries(snapshot.layers || {})) {
+        const compareSources = flashReplay?.kind !== 'demo' || flashCompareSources;
+        if (compareSources) for (const [role, layers] of Object.entries(snapshot.layers || {})) {
             Object.entries(layers).forEach(([name, pose]) => {
                 if (name !== 'candidate_tracker') draw(role, name === 'demo_extraction' ? pose.estimator : name,
                     pose, false, 'layer', name);
             });
         }
         for (const [role, pose] of Object.entries(snapshot.accepted || {})) {
-            if (snapshot.held_prediction?.role === role) draw(role, pose.estimator || 'accepted', pose, false, 'accepted');
+            if (role === '__gripper__' && !compareSources) continue;
+            if (snapshot.held_prediction?.role === role) {
+                if (compareSources) draw(role, pose.estimator || 'accepted', pose, false, 'accepted');
+            }
             else draw(role, pose.estimator || 'accepted', pose, true, 'accepted');
         }
         if (snapshot.held_prediction) {
             const held = snapshot.held_prediction;
             draw(held.role, held.estimator, held, true, 'held');
         }
-        for (const [role, pose] of Object.entries(snapshot.proposals || {})) {
+        if (!compareSources && flashReplay?.kind === 'demo') {
+            for (const [role, layers] of Object.entries(snapshot.layers || {})) {
+                if (role === '__gripper__' || snapshot.accepted?.[role] ||
+                    snapshot.held_prediction?.role === role) continue;
+                const pose = layers.demo_extraction;
+                if (pose?.pose && pose.evidence !== 'lost')
+                    draw(role, pose.estimator, pose, true, 'layer', 'demo_extraction');
+            }
+        }
+        if (compareSources) for (const [role, pose] of Object.entries(snapshot.proposals || {})) {
             const aligned = snapshot.proposal_frame_id != null
                 ? snapshot.proposal_frame_id === camera.frame_id
                 : pose.source_time_s === camera.source_time_s;
             if (aligned) draw(role, 'appearance_rgbd', pose, false, 'proposal');
         }
-        for (const [role, raw] of Object.entries(snapshot.raw_proposals || {})) {
+        if (compareSources) for (const [role, raw] of Object.entries(snapshot.raw_proposals || {})) {
             if (snapshot.proposals?.[role]?.evidence !== 'lost' || !raw.pose ||
                 raw.frame_id !== camera.frame_id ||
                 (camera.calibration_version && raw.calibration_version !== camera.calibration_version)) continue;
             draw(role, 'raw_proposal', {pose: raw.pose}, false, 'raw_proposal');
         }
-        for (const [role, mask] of Object.entries(snapshot.observed_masks || {})) {
+        if (compareSources) for (const [role, mask] of Object.entries(snapshot.observed_masks || {})) {
             if (mask.frame_id !== camera.frame_id) continue;
             const active = emphasized('mask', role);
             context.globalAlpha = active ? 1 : 0.12;
@@ -1378,11 +1437,11 @@ function _flashDrawOverlay() {
         }
         // Review candidates stay visible when they closely overlap the saved
         // surface. Hovering their row still isolates them from all other layers.
-        for (const [role, layers] of Object.entries(snapshot.layers || {})) {
+        if (compareSources) for (const [role, layers] of Object.entries(snapshot.layers || {})) {
             if (layers.candidate_tracker) draw(role, 'candidate_tracker', layers.candidate_tracker,
                 false, 'layer', 'candidate_tracker');
         }
-        _flashDrawPointTracks(context, pixel);
+        if (compareSources) _flashDrawPointTracks(context, pixel);
     });
 }
 
@@ -1518,12 +1577,11 @@ function _flashCreateSceneGrid(kind, imageAlt, depthAvailable = true) {
         const toolbar = document.createElement('div');
         toolbar.className = 'flash-scene-toolbar';
         toolbar.innerHTML = `<button type="button" id="flash-scene-toggle" onclick="toggleFlashSceneView()"${kind === 'live' ? ' disabled' : ''}>3D scene</button>` +
+            (kind === 'demo' ? '<button type="button" id="flash-scene-edit" onclick="openFlashDemoSceneEditor()">Edit demo in 3D</button>' +
+                '<button type="button" id="flash-compare-sources" onclick="toggleFlashCompareSources()" aria-pressed="false">Compare source estimates</button>' : '') +
             '<div id="flash-scene-tools" hidden>' +
             '<select id="flash-scene-object" aria-label="Focus object" onchange="this.value ? flashSceneView?.focus(this.value) : flashSceneView?.frameAll()"><option value="">All objects</option></select>' +
             '<button type="button" onclick="flashSceneView?.reset()">Align to camera</button>' +
-            (kind === 'demo'
-                ? '<button type="button" id="flash-scene-edit" onclick="openFlashDemoSceneEditor()">Edit key frames</button>'
-                : '') +
             '<details class="flash-scene-layer-menu"><summary>Layers</summary><div class="flash-scene-layer-options">' +
             (hasMeasuredSurface
                 ? '<label title="Current frame, using this frame’s mask and measured depth"><input type="checkbox" id="flash-scene-surface" checked onchange="_flashUpdateSceneFrame()">Measured surface</label>' +
@@ -1563,6 +1621,7 @@ function _flashInstallReplay(replay, imageAlt) {
     clearInterval(flashReplayTimer);
     flashReplayTimer = null;
     flashReplay = replay;
+    flashCompareSources = false;
     flashTrackPoints = null;
     flashSelectedTrack = null;
     document.getElementById('flash-track-tools').hidden = true;
@@ -1576,7 +1635,7 @@ function _flashInstallReplay(replay, imageAlt) {
     document.getElementById('flash-tracker-play').textContent = 'Play';
     const editToggle = document.getElementById('flash-demo-edit-toggle');
     editToggle.hidden = !['demo', 'raw_demo', 'rollout', 'recorded_demo'].includes(replay.kind);
-    editToggle.textContent = replay.kind === 'raw_demo' ? 'Prepare demo' : ['rollout', 'recorded_demo'].includes(replay.kind) ? 'Mark motion' : 'Edit demo';
+    editToggle.textContent = replay.kind === 'raw_demo' ? 'Prepare demo' : ['rollout', 'recorded_demo'].includes(replay.kind) ? 'Mark motion' : 'Edit on camera';
     _flashRenderTimeline();
 }
 
@@ -1688,6 +1747,7 @@ async function loadFlashDemoReplay(datasetRoot, episodeIndex, bundlePath, candid
         _clearFlashPreparedSkills();
         _flashInstallReplay({ ...result, datasetRoot, episode: episodeIndex }, 'Original aligned demo RGB frame');
         const replay = flashReplay;
+        if (candidateId) toggleFlashCompareSources();
         for (const card of document.querySelectorAll('#run-flash-demos .flash-recording-card')) {
             if (card.dataset.datasetRoot !== datasetRoot || Number(card.dataset.episode) !== episodeIndex) continue;
             const select = card.querySelector('.flash-recording-version');
@@ -1721,6 +1781,7 @@ async function previewFlashDemoTrackerCandidate(candidateId) {
     replay.frames = result.frames;
     replay.geometry = result.geometry;
     replay.tracker_candidate = result.tracker_candidate || null;
+    if (candidateId && !flashCompareSources) toggleFlashCompareSources();
     flashTrackPoints = null;
     flashSelectedTrack = null;
     document.getElementById('flash-track-tools').hidden = true;
@@ -1868,43 +1929,54 @@ async function _loadFlashRecordings() {
 function seekFlashReplay(index) {
     if (!flashReplay?.frames?.length) return;
     flashSceneRequest++;
-    const selected = flashReplay.frames[Math.max(0, Math.min(index, flashReplay.frames.length - 1))];
+    const replay = flashReplay;
+    const selected = replay.frames[Math.max(0, Math.min(index, replay.frames.length - 1))];
     const scrub = document.getElementById('flash-tracker-scrub');
     scrub.value = String(index);
-    const demo = flashReplay.kind === 'demo' || flashReplay.kind === 'raw_demo';
-    document.getElementById('flash-tracker-frame').textContent = demo
-        ? `${selected.snapshot.demo.time_s.toFixed(1)} s · ${index + 1}/${flashReplay.frames.length}`
-        : `${index + 1} / ${flashReplay.frames.length}`;
+    const demo = replay.kind === 'demo' || replay.kind === 'raw_demo';
     const image = document.querySelector('#rerun-viewer .flash-replay-grid img');
     const grid = image.closest('.flash-replay-grid');
     grid.classList.add('flash-frame-loading');
-    image.dataset.loadedFrame = '';
     const url = demo
-        ? `/api/run/flash/demo/frame?${new URLSearchParams({ dataset_root: flashReplay.datasetRoot, frame_index: String(selected.frame_index) })}`
-        : `/api/datasets/${encodeURIComponent(flashReplay.datasetId)}/episodes/${flashReplay.episode}` +
-            `/frame/${selected.frame_index}?camera=${encodeURIComponent(flashReplay.camera_features?.rgb || 'observation.images.overhead')}`;
-    image.onload = () => {
-        if (flashReplay.frames[Number(scrub.value)] !== selected) return;
-        image.dataset.loadedFrame = String(selected.frame_index);
+        ? `/api/run/flash/demo/frame?${new URLSearchParams({ dataset_root: replay.datasetRoot, frame_index: String(selected.frame_index) })}`
+        : `/api/datasets/${encodeURIComponent(replay.datasetId)}/episodes/${replay.episode}` +
+            `/frame/${selected.frame_index}?camera=${encodeURIComponent(replay.camera_features?.rgb || 'observation.images.overhead')}`;
+    // Keep the previous complete image and its overlay visible while the next
+    // frame loads. Changing the displayed img.src first produced black flashes
+    // during ordinary playback, and drawing the next pose before the image
+    // arrived briefly paired evidence from two different camera frames.
+    const nextImage = new Image();
+    nextImage.alt = image.alt;
+    nextImage.onload = () => {
+        if (flashReplay !== replay || replay.frames[Number(scrub.value)] !== selected) return;
+        nextImage.dataset.loadedFrame = String(selected.frame_index);
+        image.replaceWith(nextImage);
+        grid.classList.add('flash-frame-ready');
+        document.getElementById('flash-tracker-frame').textContent = demo
+            ? `${selected.snapshot.demo.time_s.toFixed(1)} s · ${Number(scrub.value) + 1}/${replay.frames.length}`
+            : `${Number(scrub.value) + 1} / ${replay.frames.length}`;
+        if (replay.kind === 'demo') renderFlashDemoSnapshot({ ...selected.snapshot, ...replay.geometry });
+        else if (replay.kind === 'raw_demo') renderFlashRawSnapshot(selected.snapshot);
+        else renderFlashSnapshot(replay.kind === 'recorded_demo'
+            ? {...selected.snapshot, ...replay.geometry} : selected.snapshot, 'Recording');
         _flashDrawOverlay();
         if (flashSceneMode === '3d') void _flashUpdateSceneFrame();
         else grid.classList.remove('flash-frame-loading');
+        if (flashDemoEditor) {
+            if (_flashEditorFollowPlayhead()) _flashEditorRender();
+            else _flashEditorUpdateFrame();
+        }
+        if (flashRecordedEditor) _flashRecordedUpdateFrame();
     };
-    image.onerror = () => {
-        if (flashReplay.frames[Number(scrub.value)] !== selected) return;
+    nextImage.onerror = () => {
+        if (flashReplay !== replay || replay.frames[Number(scrub.value)] !== selected) return;
+        const previous = replay.frames.findIndex(frame => String(frame.frame_index) === image.dataset.loadedFrame);
+        if (previous >= 0) scrub.value = String(previous);
+        grid.classList.remove('flash-frame-loading');
         const status = document.getElementById('flash-scene-status');
-        if (status) status.textContent = `Frame ${selected.frame_index} could not be loaded`;
+        if (status) status.textContent = `Frame ${selected.frame_index} could not be loaded; showing the previous frame`;
     };
-    image.src = url;
-    if (flashReplay.kind === 'demo') renderFlashDemoSnapshot({ ...selected.snapshot, ...flashReplay.geometry });
-    else if (flashReplay.kind === 'raw_demo') renderFlashRawSnapshot(selected.snapshot);
-    else renderFlashSnapshot(flashReplay.kind === 'recorded_demo'
-        ? {...selected.snapshot, ...flashReplay.geometry} : selected.snapshot, 'Recording');
-    if (flashDemoEditor) {
-        if (_flashEditorFollowPlayhead()) _flashEditorRender();
-        else _flashEditorUpdateFrame();
-    }
-    if (flashRecordedEditor) _flashRecordedUpdateFrame();
+    nextImage.src = url;
 }
 
 function toggleFlashReplay() {

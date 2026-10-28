@@ -596,6 +596,12 @@ def test_run_flash_view_demo_uses_data_view_without_inspection_or_robot_launch(g
 def test_run_flash_lists_demos_and_shows_extracted_pose_overlay(gui_page):
     page = gui_page
     identity = np.eye(4).tolist()
+    ok, encoded_frame = cv2.imencode(".png", np.zeros((480, 640, 3), dtype=np.uint8))
+    assert ok
+    page.route(
+        "**/api/run/flash/demo/frame?*",
+        lambda route: route.fulfill(body=encoded_frame.tobytes(), content_type="image/png"),
+    )
     page.route(
         "**/api/run/flash/recordings",
         lambda route: route.fulfill(
@@ -672,17 +678,29 @@ def test_run_flash_lists_demos_and_shows_extracted_pose_overlay(gui_page):
                             },
                             "held_prediction": None,
                             "layers": {
-                                "object": {
-                                    "candidate_tracker": {
+                                "other": {
+                                    "demo_extraction": {
                                         "pose": identity,
-                                        "evidence": "candidate",
-                                        "estimator": "trackeverything",
+                                        "evidence": "observed",
+                                        "estimator": "surface_rgbd",
                                         "source_time_s": 1.0,
                                     }
-                                }
-                            }
-                            if "candidate_id" in parse_qs(urlsplit(route.request.url).query)
-                            else {},
+                                },
+                                **(
+                                    {
+                                        "object": {
+                                            "candidate_tracker": {
+                                                "pose": identity,
+                                                "evidence": "candidate",
+                                                "estimator": "trackeverything",
+                                                "source_time_s": 1.0,
+                                            }
+                                        }
+                                    }
+                                    if "candidate_id" in parse_qs(urlsplit(route.request.url).query)
+                                    else {}
+                                ),
+                            },
                             "demo": {
                                 "phase": "demonstrated_sample",
                                 "time_s": 1.0,
@@ -714,8 +732,11 @@ def test_run_flash_lists_demos_and_shows_extracted_pose_overlay(gui_page):
     assert page.locator("#run-terminal-container").is_hidden()
     assert page.locator("#overlays-panel-run").is_hidden()
     assert "active" in page.locator('.tab[data-tab="run"]').get_attribute("class").split()
-    assert "Reference pose used by skill" in page.locator("#flash-tracker-content").inner_text()
+    assert "Pose used by skill" in page.locator("#flash-tracker-content").inner_text()
+    assert "Current perception; not saved in skill" in page.locator("#flash-tracker-content").inner_text()
     assert "predicted" in page.locator("#flash-tracker-content").inner_text()
+    assert page.get_by_role("button", name="Edit demo in 3D").is_visible()
+    assert "Demo extraction" not in page.locator("#flash-tracker-content").inner_text()
     drawing = page.evaluate("""() => {
         const context = CanvasRenderingContext2D.prototype;
         const originalDash = context.setLineDash, originalText = context.fillText;
@@ -728,6 +749,8 @@ def test_run_flash_lists_demos_and_shows_extracted_pose_overlay(gui_page):
     }""")
     assert [5, 4] in drawing["dashed"]
     assert "object · predicted" in drawing["labels"]
+    page.get_by_role("button", name="Compare source estimates").click()
+    assert "Reference pose used by skill" in page.locator("#flash-tracker-content").inner_text()
     assert (
         "no mask here does not mean segmentation was lost"
         in page.locator("#flash-tracker-content").inner_text()
@@ -1010,6 +1033,12 @@ def test_run_flash_subtab_launches_selected_prepared_skill(gui_page):
 
 def test_run_flash_tracker_panel_reuses_view_for_recorded_layers(gui_page):
     page = gui_page
+    ok, encoded_frame = cv2.imencode(".png", np.zeros((48, 64, 3), dtype=np.uint8))
+    assert ok
+    page.route(
+        "**/episodes/0/frame/*",
+        lambda route: route.fulfill(body=encoded_frame.tobytes(), content_type="image/png"),
+    )
     page.route(
         "**/api/run/flash/telemetry/replay?*",
         lambda route: route.fulfill(
@@ -1396,6 +1425,12 @@ def test_flash_replay_shows_which_camera_pose_planned_the_command(gui_page):
 @pytest.mark.skipif(importlib.util.find_spec("playwright") is None, reason="Playwright is not installed")
 def test_raw_demo_editor_collects_object_names_and_action_from_visible_controls(gui_page):
     page = gui_page
+    ok, encoded_frame = cv2.imencode(".png", np.zeros((480, 640, 3), dtype=np.uint8))
+    assert ok
+    page.route(
+        "**/api/run/flash/demo/frame?*",
+        lambda route: route.fulfill(body=encoded_frame.tobytes(), content_type="image/png"),
+    )
     submitted = []
     raw_frames = [
         {
@@ -1504,6 +1539,10 @@ def test_raw_demo_editor_collects_object_names_and_action_from_visible_controls(
             "(element, value) => { element.value = String(value); "
             'element.dispatchEvent(new Event("input", {bubbles: true})); }',
             index,
+        )
+        page.wait_for_function(
+            "index => document.querySelector('#rerun-viewer .flash-replay-grid img')?.dataset.loadedFrame === String(index)",
+            arg=index,
         )
 
     set_field("Arm side", "left")
@@ -1770,6 +1809,8 @@ def test_3d_scene_projection_and_surface_pick_edit_the_prepared_keyframe(gui_pag
     page.locator("#run-flash-demos .flash-recording").click()
     page.locator("#flash-scene-toggle").click()
     page.wait_for_function("() => flashSceneMode === '3d' && flashSceneFrameCache?.frameIndex === 0")
+    assert "Demo extraction" not in page.locator("#flash-tracker-content").inner_text()
+    page.get_by_role("button", name="Compare source estimates").click()
     assert (
         "20 clean reference-depth pixels, 2.5 mm p90" in page.locator("#flash-tracker-content").inner_text()
     )
@@ -1813,7 +1854,7 @@ def test_3d_scene_projection_and_surface_pick_edit_the_prepared_keyframe(gui_pag
     page.get_by_role("button", name="Align to camera").click()
     assert "flash-scene-orbit" not in page.locator(".flash-replay-grid").get_attribute("class")
 
-    page.get_by_role("button", name="Edit key frames").click()
+    page.get_by_role("button", name="Edit demo in 3D").click()
     page.wait_for_function("() => !!flashDemoEditor")
     assert not page.locator("#run-sidebar").is_visible()
     assert page.locator(".flash-editor-navigation button").all_inner_texts() == [
@@ -1968,7 +2009,12 @@ def test_recorded_motion_editor_marks_contiguous_sections_in_same_replay(gui_pag
 
     page.route("**/api/run/flash/recorded/prepare", capture)
     page.route("**/api/run/flash/recordings", lambda route: route.fulfill(json=[]))
-    page.route("**/episodes/0/frame/*", lambda route: route.fulfill(status=404))
+    ok, encoded_frame = cv2.imencode(".png", np.zeros((48, 64, 3), dtype=np.uint8))
+    assert ok
+    page.route(
+        "**/episodes/0/frame/*",
+        lambda route: route.fulfill(body=encoded_frame.tobytes(), content_type="image/png"),
+    )
     page.evaluate("switchTab('run')")
     page.evaluate("() => selectWorkflow('flash')")
     page.evaluate("""() => {
@@ -2018,6 +2064,8 @@ def test_recorded_motion_editor_marks_contiguous_sections_in_same_replay(gui_pag
 
 def test_prepared_recording_reuses_tracker_replay_view(gui_page):
     page = gui_page
+    ok, encoded_frame = cv2.imencode(".png", np.zeros((48, 64, 3), dtype=np.uint8))
+    assert ok
     page.route(
         "**/api/run/flash/demo/replay?*",
         lambda route: route.fulfill(
@@ -2058,7 +2106,10 @@ def test_prepared_recording_reuses_tracker_replay_view(gui_page):
             }
         ),
     )
-    page.route("**/episodes/0/frame/*", lambda route: route.fulfill(status=404))
+    page.route(
+        "**/episodes/0/frame/*",
+        lambda route: route.fulfill(body=encoded_frame.tobytes(), content_type="image/png"),
+    )
     page.evaluate("switchTab('run'); selectWorkflow('flash')")
     page.evaluate("datasets['/tmp/trial'] = {id: 'trial', root: '/tmp/trial'}")
     page.evaluate(
