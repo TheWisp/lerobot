@@ -1,0 +1,178 @@
+{
+  "measurements": [
+    {
+      "row": 340,
+      "camera_frame_id": 404,
+      "source_time_s": 45064.870984903,
+      "clean_depth_points": 1744,
+      "pca_spread_mm": [
+        4.4432115005269,
+        9.942041175000499,
+        13.534163494202174
+      ],
+      "dominant_spread_excess_mm": 3.5921223192016747,
+      "backend_failure": "surface proposal lacks accepted RGB-D support",
+      "fit_metrics": {
+        "surface_p90_mm": 3.351821560904755,
+        "visible_lateral_spread_mm": 4.924822206384152,
+        "inliers": 362.0,
+        "converged": 1.0,
+        "reference_depth_pixels": 415.0,
+        "reference_depth_p90_mm": 7.1889008169651945,
+        "rgb_rotation_deg": 2.729168653336597,
+        "surface_correction_deg": 2.2527412406426297,
+        "final_rotation_deg": 1.4456000772815303
+      },
+      "proposals": {
+        "vision_candidate": {
+          "axis_gap_3d_deg": 31.63400263557838,
+          "axis_gap_mask_2d_deg": 7.133357360653452,
+          "projected_endpoints_xy": [
+            [
+              277.12413058452853,
+              126.41793506942176
+            ],
+            [
+              172.06155741300842,
+              220.2831532997681
+            ]
+          ],
+          "mask_fraction": 0.4722222222222222,
+          "clean_depth_residual_p90_mm": 5.554420032188013
+        },
+        "gripper_fallback": {
+          "axis_gap_3d_deg": 35.576655060194945,
+          "axis_gap_mask_2d_deg": 0.5117452003527767,
+          "projected_endpoints_xy": [
+            [
+              270.14818192028395,
+              142.63904967879984
+            ],
+            [
+              177.28224201517327,
+              247.2361664623472
+            ]
+          ],
+          "mask_fraction": 0.11731843575418995,
+          "clean_depth_residual_p90_mm": 4.52098636518492
+        }
+      }
+    },
+    {
+      "row": 417,
+      "camera_frame_id": 481,
+      "source_time_s": 45067.472856287,
+      "clean_depth_points": 1801,
+      "pca_spread_mm": [
+        4.072394111995487,
+        7.339335200564305,
+        28.03718269697944
+      ],
+      "dominant_spread_excess_mm": 20.697847496415136,
+      "backend_failure": "visible patch is too narrow for a full rigid pose",
+      "fit_metrics": {
+        "surface_p90_mm": 5.0780773934574155,
+        "visible_lateral_spread_mm": 4.389859246757167,
+        "inliers": 166.0,
+        "converged": 1.0,
+        "reference_depth_pixels": 498.0,
+        "reference_depth_p90_mm": 9.300418440479863,
+        "rgb_rotation_deg": 2.176309215380739,
+        "surface_correction_deg": 6.801265807572889,
+        "final_rotation_deg": 7.735818858631772
+      },
+      "proposals": {
+        "vision_candidate": {
+          "axis_gap_3d_deg": 10.396466544142319,
+          "axis_gap_mask_2d_deg": 3.9589916190729637,
+          "projected_endpoints_xy": [
+            [
+              267.31952241473675,
+              210.7454471089623
+            ],
+            [
+              301.7508131927391,
+              286.5362963125141
+            ]
+          ],
+          "mask_fraction": 0.3623853211009174,
+          "clean_depth_residual_p90_mm": 5.843968607077981
+        },
+        "gripper_fallback": {
+          "axis_gap_3d_deg": 16.363178800425246,
+          "axis_gap_mask_2d_deg": 24.087075876221927,
+          "projected_endpoints_xy": [
+            [
+              263.65046006724856,
+              211.54385941497566
+            ],
+            [
+              269.8293866996821,
+              293.6460962138243
+            ]
+          ],
+          "mask_fraction": 0.1534090909090909,
+          "clean_depth_residual_p90_mm": 3.1078356856744405
+        }
+      }
+    },
+    {
+      "row": 511,
+      "camera_frame_id": 565,
+      "source_time_s": 45072.447123617,
+      "clean_depth_points": 1310,
+      "pca_spread_mm": [
+        4.216112846864916,
+        4.747567184668697,
+        26.003741685541463
+      ],
+      "dominant_spread_excess_mm": 21.256174500872767,
+      "backend_failure": "visible patch is too narrow for a full rigid pose",
+      "fit_metrics": {
+        "surface_p90_mm": 5.581339606150257,
+        "visible_lateral_spread_mm": 4.449526357867609,
+        "inliers": 127.0,
+        "converged": 1.0,
+        "reference_depth_pixels": 362.0,
+        "reference_depth_p90_mm": 14.594674947562822,
+        "rgb_rotation_deg": 18.810197527933653,
+        "surface_correction_deg": 4.6396138607919655,
+        "final_rotation_deg": 18.643308198664727
+      },
+      "proposals": {
+        "vision_candidate": {
+          "axis_gap_3d_deg": 3.0104769928658137,
+          "axis_gap_mask_2d_deg": 4.001413749214853,
+          "projected_endpoints_xy": [
+            [
+              266.9916539540631,
+              255.0161632433928
+            ],
+            [
+              315.15849256871024,
+              266.234853521757
+            ]
+          ],
+          "mask_fraction": 0.1903114186851211,
+          "clean_depth_residual_p90_mm": 4.912326499130461
+        },
+        "gripper_fallback": {
+          "axis_gap_3d_deg": 32.47437971671332,
+          "axis_gap_mask_2d_deg": 84.34935774520613,
+          "projected_endpoints_xy": [
+            [
+              279.4305292553232,
+              239.11065217636397
+            ],
+            [
+              274.8510822198674,
+              314.8707179774299
+            ]
+          ],
+          "mask_fraction": 0.010416666666666666,
+          "clean_depth_residual_p90_mm": 3.0307665569801467
+        }
+      }
+    }
+  ]
+}
