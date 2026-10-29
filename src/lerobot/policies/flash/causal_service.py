@@ -25,7 +25,7 @@ from .pose_disagreement import (
     free_space_support,
 )
 from .pose_evidence import PoseProposal
-from .registration import transform_points
+from .registration import transform_points, unproject_pixels
 from .scene_groups import (
     EnvironmentRelationship,
     ScenePointTracker,
@@ -227,6 +227,9 @@ class CausalPoseService:
             role: np.asarray(points, dtype=float).copy()
             for role, points in (object_points_by_role or {}).items()
         }
+        # A first directly observed RGB-D surface can test a later stationary
+        # prediction even when the reference did not ship a reconstructed model.
+        self.static_support_points_by_role = dict(self.object_points_by_role)
         self.axial_symmetries = {item.role: item for item in axial_symmetries}
         if len(self.axial_symmetries) != len(axial_symmetries):
             raise ValueError("at most one axial symmetry per role")
@@ -416,6 +419,8 @@ class CausalPoseService:
             self.observed.pop(item, None)
             self.direct_history.pop(item, None)
             self._expired_verified_roles.discard(item)
+            if item not in self.object_points_by_role:
+                self.static_support_points_by_role.pop(item, None)
         return role
 
     def _submit(self, item: RGBDFrame | _Anchor) -> None:
@@ -698,6 +703,10 @@ class CausalPoseService:
             candidate = estimate
             self._count_anchor_outcome(estimate.role, "received")
             if estimate.pose is None or estimate.evidence == Evidence.LOST:
+                if self._invalidate_contradicted_static(result, estimate, source, decision_time_s):
+                    self._count_anchor_outcome(estimate.role, "stationary_prior_contradicted")
+                    self._record_anchor_decision(result, candidate, "stationary_prior_contradicted")
+                    continue
                 self._count_anchor_outcome(estimate.role, "lost_pose")
                 self._record_anchor_decision(result, candidate, "lost_pose")
                 continue
@@ -792,6 +801,7 @@ class CausalPoseService:
             accepted_at_s = time.perf_counter() if decision_time_s is None else decision_time_s
             estimate = replace(estimate, available_time_s=max(estimate.available_time_s, accepted_at_s))
             self._count_anchor_outcome(estimate.role, "direct_accepted")
+            self._remember_static_support(estimate, source, mask)
             self._record_anchor_decision(
                 result, candidate, "accepted", accepted=estimate, decided_at_s=accepted_at_s
             )
@@ -1419,6 +1429,93 @@ class CausalPoseService:
         counts[verdict.value] = counts.get(verdict.value, 0) + 1
         if self.on_free_space_comparison is not None:
             self.on_free_space_comparison(estimate.role, comparison)
+
+    def _remember_static_support(self, estimate: PoseEstimate, frame: RGBDFrame, mask: np.ndarray) -> None:
+        if estimate.role in self.static_support_points_by_role or estimate.pose is None:
+            return
+        depth = frame.metric_depth()
+        visible = np.flatnonzero(mask.ravel() & np.isfinite(depth.ravel()) & (depth.ravel() > 0))
+        if len(visible) < self.tracker_kwargs["min_inliers"]:
+            return
+        # Bound the diagnostic to the same configured point budget as scene
+        # tracking. Sampling is deterministic and spread over the whole mask.
+        if len(visible) > self.scene.max_points:
+            visible = visible[np.linspace(0, len(visible) - 1, self.scene.max_points, dtype=int)]
+        xy = np.column_stack(np.unravel_index(visible, mask.shape)[::-1])
+        camera_points = unproject_pixels(frame.depth, frame.intrinsics, xy, frame.depth_m_per_unit)
+        base_points = transform_points(frame.base_from_camera, camera_points)
+        self.static_support_points_by_role[estimate.role] = transform_points(
+            inverse(estimate.pose), base_points
+        )
+
+    def _invalidate_contradicted_static(
+        self,
+        result: _Anchor,
+        estimate: PoseEstimate,
+        source: RGBDFrame,
+        decision_time_s: float | None,
+    ) -> bool:
+        """Withdraw a stale static guess only when measured free space rules it out.
+
+        A failed pose fit alone does not establish motion. The independently
+        segmented object must still have depth, and the old measured surface
+        must project in front of reliable current depth at its predicted pose.
+        """
+        role = estimate.role
+        current = self.store.snapshot()[1].get(role)
+        observed = self.observed.get(role)
+        points = self.static_support_points_by_role.get(role)
+        mask = result.masks.get(role)
+        if (
+            current is None
+            or current.estimator != "stationary_prior"
+            or current.pose is None
+            or current.source_time_s < source.source_time_s
+            or observed is None
+            or current.last_direct_observation_s != observed[0].source_time_s
+            or current.reference_version != estimate.reference_version
+            or points is None
+            or mask is None
+            or mask.shape != source.depth.shape
+        ):
+            return False
+        depth = source.metric_depth()
+        if np.count_nonzero(mask & np.isfinite(depth) & (depth > 0)) < self.tracker_kwargs["min_inliers"]:
+            return False
+        support = free_space_support(
+            source,
+            points,
+            current.pose,
+            depth_tolerance_m=self.fit_threshold_m,
+            max_local_depth_span_m=self.max_pose_disagreement_translation_m,
+        )
+        if (
+            support.valid_depth_pixels < self.tracker_kwargs["min_inliers"]
+            or support.median_signed_gap_m is None
+            or support.median_signed_gap_m <= self.max_pose_disagreement_translation_m
+        ):
+            return False
+        self.active.pop(role, None)
+        self.pending.pop(role, None)
+        self.motion_history.pop(role, None)
+        self.observed.pop(role, None)
+        self.candidate_relationships.pop(role, None)
+        lost = replace(
+            current,
+            pose=None,
+            available_time_s=max(
+                current.available_time_s, time.perf_counter() if decision_time_s is None else decision_time_s
+            ),
+            evidence=Evidence.LOST,
+            translation_supported=(False,) * 3,
+            rotation_supported=(False,) * 3,
+            direct_translation_observed=False,
+            estimator="stationary_prior_contradicted",
+        )
+        self.store.revise(lost)
+        if self.on_layer is not None:
+            self.on_layer(lost)
+        return True
 
     def _observe_environment(
         self, estimate: PoseEstimate, scene: SceneTracks, masks: dict[str, np.ndarray]

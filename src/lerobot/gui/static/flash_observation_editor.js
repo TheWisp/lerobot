@@ -98,7 +98,9 @@ function _flashObservationRender() {
     const required = selected?.required ?? false;
     const turn = selected?.allowed_turn;
     const evidence = frame?.snapshot.accepted || {};
-    const evidenceText = [moving, reference].map(role => `${role}: ${evidence[role]?.evidence || 'lost'}`).join(' · ');
+    const evidenceText = [moving, reference].map(role =>
+        `${role}: ${evidence[role]?.evidence || frame?.snapshot.pose_status?.[role]?.evidence || 'unavailable'}`
+    ).join(' · ');
     const relationStatus = selected
         ? (evidence[moving]?.evidence === 'observed' && evidence[reference]?.evidence === 'observed'
             ? 'Both poses measured in this frame.' : 'Relative arrangement is unverified in this frame.')

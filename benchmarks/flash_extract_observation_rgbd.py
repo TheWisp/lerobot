@@ -20,7 +20,7 @@ import numpy as np
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.policies.flash.causal_service import CausalTrackingConfig
 from lerobot.policies.flash.observation_dataset import camera_feature_keys
-from lerobot.policies.flash.offline_perception import extract_pose_trace
+from lerobot.policies.flash.offline_perception import POSE_TRACE_SELECTION_VERSION, extract_pose_trace
 from lerobot.policies.flash.perception import ObjectReference, ReferenceSnippet, RGBDFrame
 from lerobot.policies.flash.scene_evidence_writer import SceneEvidenceWriter
 from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig, build_vision_backend
@@ -75,6 +75,7 @@ def extract(
         source_path.read_bytes()
         + bundle_path.read_bytes()
         + json.dumps({role: str(path) for role, path in directories.items()}, sort_keys=True).encode()
+        + str(POSE_TRACE_SELECTION_VERSION).encode()
     ).hexdigest()
     writer = SceneEvidenceWriter(
         destination, total_frames=len(episode_rows), roles=tuple(directories), source_sha256=identity

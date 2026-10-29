@@ -83,7 +83,13 @@ def test_import_preserves_invalid_depth_and_source_clock(tmp_path):
     for frame_id in range(3):
         evidence = {
             "frame_index": frame_id,
-            "estimates": {"object": {"pose": pose, "evidence": "observed", "estimator": "test"}},
+            "estimates": {
+                "object": {
+                    "pose": None if frame_id == 2 else pose,
+                    "evidence": "lost" if frame_id == 2 else "observed",
+                    "estimator": "stationary_prior_contradicted" if frame_id == 2 else "test",
+                }
+            },
             "masks_rle": {"object": [[0, 64 * 64]]},
             "groups": {},
             "proposals": {},
@@ -93,6 +99,11 @@ def test_import_preserves_invalid_depth_and_source_clock(tmp_path):
     replay = load_observation_replay(root)
     assert replay["evidence_available"]
     assert replay["frames"][1]["snapshot"]["accepted"]["object"]["evidence"] == "observed"
+    assert "object" not in replay["frames"][2]["snapshot"]["accepted"]
+    assert replay["frames"][2]["snapshot"]["pose_status"]["object"] == {
+        "evidence": "lost",
+        "estimator": "stationary_prior_contradicted",
+    }
     assert replay["frames"][1]["snapshot"]["observed_masks"]["object"]["boundary_xy"]
     assert replay["geometry"]["points_object_m"]["object"]
     for frame_id in range(3):

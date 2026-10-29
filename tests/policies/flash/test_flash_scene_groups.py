@@ -340,6 +340,38 @@ def test_unverified_group_loss_uses_only_configured_bounded_stationary_prior():
     assert confirmed_store.snapshot()[1]["object"].source_time_s == 0
 
 
+@pytest.mark.parametrize("old_surface_depth_mm,expected", [(1200, Evidence.LOST), (900, Evidence.PREDICTED)])
+def test_visible_moving_object_invalidates_only_depth_contradicted_static_prior(
+    old_surface_depth_mm, expected
+):
+    """A failed direct fit cannot leave an object at a measured empty location."""
+    rgb = np.zeros((80, 80, 3), dtype=np.uint8)
+    camera = np.array([[100.0, 0, 40.0], [0, 100.0, 40.0], [0, 0, 1.0]])
+    first_depth = np.full((80, 80), 1200, dtype=np.uint16)
+    first_depth[25:45, 15:35] = 1000
+    first_mask = np.zeros((80, 80), dtype=bool)
+    first_mask[25:45, 15:35] = True
+    moved_depth = np.full((80, 80), old_surface_depth_mm, dtype=np.uint16)
+    moved_depth[25:45, 45:65] = 1000
+    moved_mask = np.zeros((80, 80), dtype=bool)
+    moved_mask[25:45, 45:65] = True
+    frames = [
+        RGBDFrame(i, rgb, depth, camera, 0.001, np.eye(4), i / 30, i / 30, "camera")
+        for i, depth in enumerate((first_depth, moved_depth))
+    ]
+    observed = PoseEstimate("object", np.eye(4), 0, 0, Evidence.OBSERVED, "v1", (True,) * 3, (True,) * 3)
+    lost = PoseEstimate("object", None, 1 / 30, 1 / 30, Evidence.LOST, "v1", (False,) * 3, (False,) * 3)
+    service = CausalPoseService(LatestPoseStore(), static_prediction_max_s=1.0)
+    service.process_offline(frames[0], (observed,), {"object": first_mask})
+    result = service.process_offline(frames[1], (lost,), {"object": moved_mask})["object"]
+    assert result.evidence == expected
+    if expected == Evidence.LOST:
+        assert result.estimator == "stationary_prior_contradicted"
+        assert "object" not in service.observed
+    else:
+        assert result.estimator == "stationary_prior"
+
+
 def test_causal_service_uses_verified_scene_motion_when_object_points_disappear():
     rng = np.random.default_rng(12)
     patch = rng.integers(0, 255, (56, 56, 3), dtype=np.uint8)

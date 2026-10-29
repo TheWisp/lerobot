@@ -1574,6 +1574,26 @@ def test_flash_replay_shows_which_camera_pose_planned_the_command(gui_page):
 
 @pytest.mark.requires_playwright
 @pytest.mark.skipif(importlib.util.find_spec("playwright") is None, reason="Playwright is not installed")
+def test_flash_replay_explains_when_depth_rules_out_a_stationary_prediction(gui_page):
+    page = gui_page
+    page.evaluate("switchTab('run')")
+    page.evaluate("() => selectWorkflow('flash')")
+    page.evaluate(
+        """() => renderFlashSnapshot({
+            camera: {frame_id: 1},
+            accepted: {},
+            observed_masks: {object: {frame_id: 1, runs: [[0, 2]]}},
+            pose_status: {object: {evidence: 'lost', estimator: 'stationary_prior_contradicted'}}
+        }, 'Recording')"""
+    )
+    assert (
+        "unknown — measured depth contradicts the old position"
+        in page.locator("#flash-tracker-content").inner_text()
+    )
+
+
+@pytest.mark.requires_playwright
+@pytest.mark.skipif(importlib.util.find_spec("playwright") is None, reason="Playwright is not installed")
 def test_raw_demo_editor_collects_object_names_and_action_from_visible_controls(gui_page):
     page = gui_page
     ok, encoded_frame = cv2.imencode(".png", np.zeros((480, 640, 3), dtype=np.uint8))

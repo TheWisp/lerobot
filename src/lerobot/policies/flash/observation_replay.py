@@ -69,6 +69,7 @@ def load_observation_replay(root: Path, episode: int = 0) -> dict:
             if frame_evidence["frame_index"] != frame_id:
                 raise ValueError("observation evidence and RGB-D episode are out of sequence")
         accepted = {}
+        pose_status = {}
         masks = {}
         groups = {}
         proposals = {}
@@ -78,6 +79,10 @@ def load_observation_replay(root: Path, episode: int = 0) -> dict:
                 role: {**estimate, "pose": estimate["pose"]}
                 for role, estimate in frame_evidence["estimates"].items()
                 if estimate["pose"] is not None
+            }
+            pose_status = {
+                role: {"evidence": estimate["evidence"], "estimator": estimate["estimator"]}
+                for role, estimate in frame_evidence["estimates"].items()
             }
             for role, runs in frame_evidence["masks_rle"].items():
                 binary = np.zeros(height * width, dtype=np.uint8)
@@ -137,6 +142,7 @@ def load_observation_replay(root: Path, episode: int = 0) -> dict:
                         "calibration_version": "camera-frame",
                     },
                     "accepted": accepted,
+                    "pose_status": pose_status,
                     "observed_masks": masks,
                     "scene_support": {"frame_id": frame_id, "groups": groups},
                     "proposals": proposals,

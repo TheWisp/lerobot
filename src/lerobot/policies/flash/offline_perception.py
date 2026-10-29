@@ -13,9 +13,9 @@ from .perception_step import PerceptionPipeline, PerceptionResult, PerceptionRun
 from .symmetry import AxialSymmetry
 from .trajectory import Evidence, PoseEstimate
 
-# Version 7 retains direct position evidence when an annotated support plane
-# supplies predicted orientation. Earlier caches treated that position as prediction.
-POSE_TRACE_SELECTION_VERSION = 7
+# Version 8 withdraws a stationary prediction when current aligned depth
+# independently shows free space behind its previously measured surface.
+POSE_TRACE_SELECTION_VERSION = 8
 
 
 def extract_pose_trace(

@@ -701,6 +701,8 @@ function toggleFlashCompareSources() {
         button.setAttribute('aria-pressed', String(flashCompareSources));
     }
     if (flashReplay?.kind === 'demo' && flashSnapshot) renderFlashDemoSnapshot(flashSnapshot);
+    if (flashReplay?.kind === 'observation_demo' && flashSnapshot)
+        renderFlashSnapshot(flashSnapshot, 'Observation');
     if (flashSceneMode === '3d') void _flashUpdateSceneFrame();
 }
 
@@ -925,6 +927,7 @@ function renderFlashSnapshot(snapshot, mode = 'Live') {
         ...Object.keys(snapshot.raw_proposals || {}),
         ...Object.keys(snapshot.layers || {}),
         ...Object.keys(snapshot.accepted || {}),
+        ...Object.keys(snapshot.pose_status || {}),
         ...Object.keys(snapshot.observed_masks || {}),
         ...Object.keys(snapshot.scene_support?.groups || {}),
         ...(snapshot.held_visual_evidence ? [snapshot.held_visual_evidence.role] : []),
@@ -982,7 +985,13 @@ function renderFlashSnapshot(snapshot, mode = 'Live') {
         if (held && accepted) html += _flashOverlayRow('accepted', role, '', 'flash-tracker-layer',
             `Independent estimate <small>${_esc(_flashLayerName(accepted.estimator || 'unspecified'))}: ${_esc(_flashPoseText(accepted, snapshot))}</small>`);
         const planningPose = held || accepted;
-        const selectedText = `${held ? 'Planner prediction (rigid grasp)' : 'Accepted estimator pose'}: ${planningPose ? _esc(_flashLayerName(planningPose.estimator || 'unspecified')) + '<small>' + _esc(_flashPoseText(planningPose, snapshot)) + (held && !held.last_direct_observation_s ? ' · unverified after grasp' : '') + '</small>' : 'none'}`;
+        const lostStatus = snapshot.pose_status?.[role];
+        const unavailable = lostStatus?.evidence === 'lost'
+            ? (lostStatus.estimator === 'stationary_prior_contradicted'
+                ? 'unknown — measured depth contradicts the old position'
+                : `unknown — ${_flashLayerName(lostStatus.estimator || 'unverified')}`)
+            : 'none';
+        const selectedText = `${held ? 'Planner prediction (rigid grasp)' : 'Accepted estimator pose'}: ${planningPose ? _esc(_flashLayerName(planningPose.estimator || 'unspecified')) + '<small>' + _esc(_flashPoseText(planningPose, snapshot)) + (held && !held.last_direct_observation_s ? ' · unverified after grasp' : '') + '</small>' : _esc(unavailable)}`;
         html += planningPose
             ? _flashOverlayRow(held ? 'held' : 'accepted', role, '', 'flash-tracker-selected', selectedText)
             : `<div class="flash-tracker-selected">${selectedText}</div>`;
@@ -1472,7 +1481,7 @@ function _flashDrawOverlay() {
             }
             context.globalAlpha = 1;
         };
-        const compareSources = flashReplay?.kind !== 'demo' || flashCompareSources;
+        const compareSources = !['demo', 'observation_demo'].includes(flashReplay?.kind) || flashCompareSources;
         if (compareSources) for (const [role, layers] of Object.entries(snapshot.layers || {})) {
             Object.entries(layers).forEach(([name, pose]) => {
                 if (name !== 'candidate_tracker') draw(role, name === 'demo_extraction' ? pose.estimator : name,
@@ -1509,13 +1518,14 @@ function _flashDrawOverlay() {
                 : pose.source_time_s === camera.source_time_s;
             if (aligned) draw(role, 'appearance_rgbd', pose, false, 'proposal');
         }
-        if (compareSources) for (const [role, raw] of Object.entries(snapshot.raw_proposals || {})) {
+        if (compareSources || flashHighlightedOverlay?.kind === 'raw_proposal')
+            for (const [role, raw] of Object.entries(snapshot.raw_proposals || {})) {
             if (snapshot.proposals?.[role]?.evidence !== 'lost' || !raw.pose ||
                 raw.frame_id !== camera.frame_id ||
                 (camera.calibration_version && raw.calibration_version !== camera.calibration_version)) continue;
             draw(role, 'raw_proposal', {pose: raw.pose}, false, 'raw_proposal');
         }
-        if (compareSources) for (const [role, mask] of Object.entries(snapshot.observed_masks || {})) {
+        if (compareSources || flashReplay?.kind === 'observation_demo') for (const [role, mask] of Object.entries(snapshot.observed_masks || {})) {
             if (mask.frame_id !== camera.frame_id) continue;
             const active = emphasized('mask', role);
             context.globalAlpha = active ? 1 : 0.12;
@@ -1678,7 +1688,7 @@ function _flashCreateSceneGrid(kind, imageAlt, depthAvailable = true) {
             (['demo', 'observation_demo'].includes(kind) ? '<button type="button" id="flash-scene-edit" onclick="openFlashDemoSceneEditor()">' +
                 (kind === 'observation_demo' ? 'Edit relationships' : 'Edit demo in 3D') + '</button>' +
                 '<span id="flash-demo-review-status" class="flash-demo-review-status" hidden></span>' +
-                (kind === 'demo' ? '<button type="button" id="flash-compare-sources" onclick="toggleFlashCompareSources()" aria-pressed="false">Compare source estimates</button>' : '') : '') +
+                '<button type="button" id="flash-compare-sources" onclick="toggleFlashCompareSources()" aria-pressed="false">Compare source estimates</button>' : '') +
             '<div id="flash-scene-tools" hidden>' +
             '<select id="flash-scene-object" aria-label="Focus object" onchange="this.value ? flashSceneView?.focus(this.value) : flashSceneView?.frameAll()"><option value="">All objects</option></select>' +
             '<button type="button" onclick="flashSceneView?.reset()">Align to camera</button>' +
