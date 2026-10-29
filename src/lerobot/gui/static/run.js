@@ -1977,7 +1977,7 @@ async function loadFlashRawDemoReplay(datasetRoot, episodeIndex) {
 
 async function loadFlashObservationReplay(datasetRoot, episodeIndex) {
     const status = document.getElementById('run-flash-status');
-    if (status) status.textContent = 'Loading perception-only RGB-D episode…';
+    if (status) status.textContent = 'Loading RGB-D episode…';
     try {
         const query = new URLSearchParams({dataset_root: datasetRoot, episode: String(episodeIndex)});
         const response = await fetch(`/api/run/flash/observation/replay?${query}`);
@@ -1996,8 +1996,10 @@ async function loadFlashObservationReplay(datasetRoot, episodeIndex) {
         seekFlashReplay(0);
         toggleFlashReplay();
         if (status) status.textContent = result.evidence_available
-            ? 'Perception-only episode: vision and scene groups are recorded; no robot action or gripper prediction.'
-            : 'Perception-only episode: RGB-D is available; run object tracking to add pose and group evidence.';
+            ? `Vision and scene groups are recorded. ${result.robot_actions_available
+                ? 'Robot actions are preserved; gripper fallback is not extracted by this pass.'
+                : 'This episode has no robot actions or gripper prediction.'}`
+            : 'RGB-D is available; run object tracking to add pose and group evidence.';
     } catch (error) {
         if (status) status.textContent = `Cannot inspect RGB-D observation: ${error.message}`;
         showToast('Cannot inspect RGB-D observation', error.message, 'error');
@@ -2043,7 +2045,9 @@ async function _loadFlashRecordings() {
             const versions = recording.prepared_versions || [];
             const viewedVersion = versions.find(version => version.bundle_path === recording.bundle_path);
             meta.textContent = recording.kind === 'observation_demo'
-                ? `RGB-D observation · ${recording.evidence_available ? 'tracked poses and scene groups' : 'tracking not processed'} · no robot actions`
+                ? `RGB-D ${recording.robot_actions_available ? 'robot recording' : 'observation'} · ` +
+                    `${recording.evidence_available ? 'tracked poses and scene groups' : 'tracking not processed'} · ` +
+                    `${recording.robot_actions_available ? 'actions recorded; gripper fallback not extracted' : 'no robot actions'}`
                 : recording.bundle_path
                 ? `${skills.length} FLASH skill(s) · viewing: ${recording.prepared_skill}` +
                     `${viewedVersion?.candidate ? ' · review candidate' : ''} · Play with extracted poses`
@@ -2059,6 +2063,16 @@ async function _loadFlashRecordings() {
                 ? loadFlashTrackerReplay(recording.dataset_root, recording.episode, true)
                 : loadFlashRawDemoReplay(recording.dataset_root, recording.episode);
             card.append(button);
+            if (recording.kind !== 'observation_demo' && recording.observation_source) {
+                const sceneButton = document.createElement('button');
+                sceneButton.type = 'button';
+                sceneButton.className = 'flash-recording';
+                sceneButton.textContent = recording.observation_evidence_available
+                    ? 'View RGB-D scene tracking'
+                    : 'Track objects in RGB-D';
+                sceneButton.onclick = () => loadFlashObservationReplay(recording.dataset_root, recording.episode);
+                card.append(sceneButton);
+            }
             if (versions.length > 1) {
                 const select = document.createElement('select');
                 select.className = 'flash-recording-version';

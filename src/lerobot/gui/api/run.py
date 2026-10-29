@@ -1668,8 +1668,8 @@ async def flash_observation_process(req: FlashObservationProcessRequest) -> dict
 
             root = Path(req.dataset_root).expanduser().resolve()
             source = json.loads((root / "flash" / "v1" / "source.json").read_text(encoding="utf-8"))
-            if source.get("status") != "perception_only" or req.episode < 0:
-                raise ValueError("select a local RGB-D observation episode")
+            if source.get("status") not in {"perception_only", "robot_recording"} or req.episode < 0:
+                raise ValueError("select a registered local RGB-D episode")
             if not req.prompts_by_role or any(
                 re.fullmatch(r"[A-Za-z][A-Za-z0-9 _-]{0,39}", role) is None
                 or not isinstance(prompt, str)
@@ -2106,7 +2106,9 @@ def _flash_recordings(source_paths: tuple[Path, ...]) -> list[dict]:
                 source = json.loads(observation_source.read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 source = {}
-            if source.get("status") == "perception_only":
+            if source.get("status") in {"perception_only", "robot_recording"}:
+                features = json.loads(info_path.read_text(encoding="utf-8")).get("features", {})
+                has_robot_actions = "action" in features and "observation.state" in features
                 for episode in range(episode_count):
                     evidence_root = extension / "observation-evidence" / f"episode_{episode:06d}"
                     try:
@@ -2126,14 +2128,25 @@ def _flash_recordings(source_paths: tuple[Path, ...]) -> list[dict]:
                         )
                     except (OSError, ValueError):
                         evidence_available = False
-                    demos[episode] = {
-                        "kind": "observation_demo",
-                        "dataset_root": str(dataset_root.resolve()),
-                        "episode": episode,
-                        "modified_at_s": observation_source.stat().st_mtime,
-                        "source": source.get("source"),
-                        "evidence_available": evidence_available,
+                    observation_view = {
+                        "observation_source": True,
+                        "robot_actions_available": has_robot_actions,
+                        "observation_evidence_available": evidence_available,
                     }
+                    if episode in demos:
+                        # Keep the robot timeline editor when a dataset also
+                        # carries the shared RGB-D scene-evidence extension.
+                        demos[episode].update(observation_view)
+                    else:
+                        demos[episode] = {
+                            "kind": "observation_demo",
+                            "dataset_root": str(dataset_root.resolve()),
+                            "episode": episode,
+                            "modified_at_s": observation_source.stat().st_mtime,
+                            "source": source.get("source"),
+                            "evidence_available": evidence_available,
+                            **observation_view,
+                        }
         raw_arm = dataset_root / "showservo_demo.npz"
         if episode_count > 0 and raw_arm.is_file() and (dataset_root / "recording" / "times.txt").is_file():
             demos.setdefault(

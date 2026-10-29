@@ -1,7 +1,7 @@
-"""Replay an RGB-D-only LeRobot episode in the FLASH review surface.
+"""Replay a LeRobot RGB-D episode in the FLASH review surface.
 
-An observation episode can carry masks, scene groups and pose evidence without
-claiming robot motion or an executable spatial skill.
+An RGB-D episode can carry masks, scene groups and pose evidence whether or
+not robot actions were recorded. Vision evidence alone is not an executable skill.
 """
 
 from __future__ import annotations
@@ -17,16 +17,26 @@ import numpy as np
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
 from .observation_annotations import load_annotations
-from .observation_dataset import camera_feature_keys, scene_from_camera
+from .observation_dataset import (
+    camera_feature_keys,
+    depth_scale_m,
+    robot_actions_available,
+    scene_from_camera,
+    source_time_s,
+)
 
 
 def load_observation_replay(root: Path, episode: int = 0) -> dict:
     root = root.expanduser().resolve()
     source = json.loads((root / "flash" / "v1" / "source.json").read_text(encoding="utf-8"))
-    if source.get("status") != "perception_only":
-        raise ValueError("this dataset is not an observation-only FLASH import")
+    if source.get("status") not in {"perception_only", "robot_recording"}:
+        raise ValueError("this dataset has no registered RGB-D source")
     dataset = LeRobotDataset(source["repo_id"], root=root)
+    has_robot_actions = robot_actions_available(dataset.meta.features)
+    if source["status"] == "robot_recording" and not has_robot_actions:
+        raise ValueError("robot recording needs both measured state and action features")
     rgb_key, depth_key = camera_feature_keys(dataset.meta.features, source)
+    scale_m = depth_scale_m(source)
     indices = [
         index for index in range(dataset.num_frames) if int(dataset[index]["episode_index"]) == episode
     ]
@@ -74,7 +84,7 @@ def load_observation_replay(root: Path, episode: int = 0) -> dict:
             pass
     for frame_id, row_index in enumerate(indices):
         row = dataset[row_index]
-        time_s = float(row["flash.source_time_s"].item())
+        time_s = source_time_s(row, dataset.meta.features, source)
         scene_pose, calibration_version = scene_from_camera(row, dataset.meta.features, source)
         frame_evidence = None
         if evidence_available:
@@ -115,7 +125,7 @@ def load_observation_replay(root: Path, episode: int = 0) -> dict:
                 boundary = max(contours, key=cv2.contourArea).reshape(-1, 2).tolist() if contours else []
                 masks[role] = {"frame_id": frame_id, "runs": runs, "boundary_xy": boundary}
                 if role not in geometry["points_object_m"] and role in accepted and point_limit:
-                    depth = row[depth_key].numpy().squeeze().astype(np.float64) / 1000
+                    depth = row[depth_key].numpy().squeeze().astype(np.float64) * scale_m
                     valid = np.flatnonzero((binary != 0) & np.isfinite(depth) & (depth > 0))
                     if len(valid):
                         valid = valid[np.linspace(0, len(valid) - 1, min(len(valid), point_limit), dtype=int)]
@@ -232,7 +242,7 @@ def load_observation_replay(root: Path, episode: int = 0) -> dict:
         "evidence_available": evidence_available,
         "processing": observation if evidence_available else None,
         "processing_config": processing_config,
-        "robot_actions_available": False,
+        "robot_actions_available": has_robot_actions,
         "gripper_prediction_available": False,
         "annotations": annotations,
         "annotation_warning": annotation_warning,

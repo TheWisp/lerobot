@@ -1,4 +1,4 @@
-"""Review annotations for RGB-D episodes without robot actions.
+"""Review object relationships in RGB-D episodes, independent of robot actions.
 
 These are human intent, not inferred motion or an executable robot skill. Pose
 evidence stays in the separately versioned observation sidecar.
@@ -21,8 +21,8 @@ def _path(root: Path, episode: int) -> Path:
 def source_identity(root: Path) -> str:
     source = root / "flash" / "v1" / "source.json"
     metadata = json.loads(source.read_text(encoding="utf-8"))
-    if metadata.get("status") != "perception_only":
-        raise ValueError("this dataset is not an RGB-D-only observation")
+    if metadata.get("status") not in {"perception_only", "robot_recording"}:
+        raise ValueError("this dataset has no registered RGB-D source")
     return hashlib.sha256(source.read_bytes()).hexdigest()
 
 

@@ -1,8 +1,9 @@
-"""Run an observation-only LeRobot RGB-D episode through FLASH perception.
+"""Run a LeRobot RGB-D episode through FLASH perception, with or without robot actions.
 
 This uses the same surface backend, causal scene estimator, and evidence writer
 as a prepared FLASH demo. An identity camera frame is used for coordinates when
-the source has no camera-to-robot calibration; no gripper pose is inferred.
+the source has no camera-to-robot calibration. This pass never infers a grasp
+from robot actions; it measures vision and scene-group evidence only.
 Masks are explicit inputs so either an annotation or a segmentation model may
 supply them without changing the tracker.
 """
@@ -24,7 +25,13 @@ from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
 from .appearance import Sam3MaskSource
 from .causal_service import CausalTrackingConfig
-from .observation_dataset import camera_feature_keys, scene_from_camera
+from .observation_dataset import (
+    camera_feature_keys,
+    depth_scale_m,
+    robot_actions_available,
+    scene_from_camera,
+    source_time_s,
+)
 from .offline_perception import POSE_TRACE_SELECTION_VERSION, extract_pose_trace
 from .perception import ObjectReference, ReferenceSnippet, RGBDFrame
 from .scene_evidence_writer import SCENE_EVIDENCE_CAPTURE_VERSION, SceneEvidenceWriter
@@ -81,8 +88,8 @@ def _extract_to_directory(
     root = dataset_root.expanduser().resolve()
     source_path = root / "flash" / "v1" / "source.json"
     source = json.loads(source_path.read_text(encoding="utf-8"))
-    if source.get("status") != "perception_only":
-        raise ValueError("select an observation-only RGB-D episode")
+    if source.get("status") not in {"perception_only", "robot_recording"}:
+        raise ValueError("select a registered RGB-D episode")
     bundle_path = config_bundle.expanduser().resolve()
     bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
     try:
@@ -101,7 +108,11 @@ def _extract_to_directory(
     if set(seeds) - set(prompts):
         raise ValueError("each SAM3 seed point needs an object prompt")
     dataset = LeRobotDataset(source["repo_id"], root=root)
+    has_robot_actions = robot_actions_available(dataset.meta.features)
+    if source["status"] == "robot_recording" and not has_robot_actions:
+        raise ValueError("robot recording needs both measured state and action features")
     rgb_key, depth_key = camera_feature_keys(dataset.meta.features, source)
+    scale_m = depth_scale_m(source)
     mask_source = (
         RecordedMaskSource(directories)
         if directories
@@ -149,7 +160,11 @@ def _extract_to_directory(
                     role,
                     np.eye(4),
                     str(prompt),
-                    "source-world" if source.get("camera_pose_feature") else "camera-frame",
+                    "source-world"
+                    if source.get("camera_pose_feature")
+                    else "fixed-scene-camera"
+                    if source.get("fixed_scene_from_camera")
+                    else "camera-frame",
                 ),
             ),
         )
@@ -161,17 +176,17 @@ def _extract_to_directory(
             row = dataset[row_index]
             rgb = (row[rgb_key].numpy().transpose(1, 2, 0) * 255).clip(0, 255).astype(np.uint8)
             depth = row[depth_key].numpy().squeeze().astype(np.float32)
-            source_time_s = float(row["flash.source_time_s"].item())
+            frame_time_s = source_time_s(row, dataset.meta.features, source)
             scene_pose, calibration_version = scene_from_camera(row, dataset.meta.features, source)
             yield RGBDFrame(
                 frame_id,
                 rgb,
                 depth,
                 intrinsics,
-                0.001,
+                scale_m,
                 scene_pose,
-                source_time_s,
-                source_time_s,
+                frame_time_s,
+                frame_time_s,
                 calibration_version,
             )
 
@@ -194,8 +209,10 @@ def _extract_to_directory(
                 "episode": episode,
                 "source_metadata_sha256": hashlib.sha256(source_path.read_bytes()).hexdigest(),
                 "evidence_identity": identity,
-                "coordinate_frame": "world" if source.get("camera_pose_feature") else "camera",
-                "robot_actions_available": False,
+                "coordinate_frame": "world"
+                if source.get("camera_pose_feature") or source.get("fixed_scene_from_camera")
+                else "camera",
+                "robot_actions_available": has_robot_actions,
                 "gripper_prediction_available": False,
                 "roles": list(roles),
                 "mask_source": "recorded" if directories else "sam3",

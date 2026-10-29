@@ -2317,6 +2317,9 @@ def test_unprepared_regular_robot_demo_opens_timeline_editor_and_3d_scene(gui_pa
                     "skills": [],
                     "prepared_versions": [],
                     "bundle_path": None,
+                    "observation_source": True,
+                    "observation_evidence_available": True,
+                    "robot_actions_available": True,
                 }
             ]
         ),
@@ -2369,6 +2372,34 @@ def test_unprepared_regular_robot_demo_opens_timeline_editor_and_3d_scene(gui_pa
             }
         ),
     )
+    page.route(
+        "**/api/run/flash/observation/replay?*",
+        lambda route: route.fulfill(
+            json={
+                "available": True,
+                "kind": "observation_demo",
+                "fps": 10,
+                "frames": [
+                    {
+                        "frame_index": 0,
+                        "snapshot": {
+                            "camera": camera,
+                            "accepted": {},
+                            "observed_masks": {},
+                            "scene_support": {"groups": {}},
+                            "demo": {"phase": "observation", "time_s": 0},
+                        },
+                    }
+                ],
+                "source_episode": 0,
+                "camera_features": {"rgb": "observation.images.rgb", "depth": "observation.images.depth"},
+                "evidence_available": True,
+                "robot_actions_available": True,
+                "gripper_prediction_available": False,
+                "annotations": {"schema_version": 1, "keyframes": []},
+            }
+        ),
+    )
     ok, encoded_frame = cv2.imencode(".png", np.zeros((48, 64, 3), dtype=np.uint8))
     assert ok
     page.route(
@@ -2393,3 +2424,6 @@ def test_unprepared_regular_robot_demo_opens_timeline_editor_and_3d_scene(gui_pa
     page.get_by_role("button", name="3D scene").click()
     page.wait_for_function("() => flashSceneMode === '3d' && flashSceneFrameCache?.frameIndex === 0")
     assert page.locator("#flash-scene-status").inner_text().startswith("Recorded RGB-D")
+    page.get_by_role("button", name="View RGB-D scene tracking").click()
+    page.wait_for_function("() => flashReplay?.kind === 'observation_demo'")
+    assert "Robot actions are preserved" in page.locator("#run-flash-status").inner_text()
