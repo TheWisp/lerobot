@@ -291,16 +291,20 @@ async def test_record_argv_carries_the_depth_processing_flags():
             },
         },
     )
-    argv = await _capture_argv(
-        start_record,
-        RecordRequest(
-            robot=profile,
-            teleop=TELEOP_PROFILE,
-            repo_id="test/contract-depth",
-            single_task="Do the thing.",
-            num_episodes=1,
-        ),
-    )
+    # The endpoint refuses a robot whose camera SDK is not installed, before it
+    # builds argv. That guard is its own contract; this test is about the flag
+    # surface, and CI has neither SDK, so stand in for the guard alone.
+    with patch("lerobot.gui.api.run._refuse_if_deps_missing"):
+        argv = await _capture_argv(
+            start_record,
+            RecordRequest(
+                robot=profile,
+                teleop=TELEOP_PROFILE,
+                repo_id="test/contract-depth",
+                single_task="Do the thing.",
+                num_episodes=1,
+            ),
+        )
     cfg = _parse(RecordConfig, argv)
     front, top = cfg.robot.cameras["front"], cfg.robot.cameras["top"]
     assert (front.enable_hole_filling, front.enable_temporal, front.enable_spatial) == (False, False, True)
