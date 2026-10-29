@@ -64,6 +64,7 @@ async function toggleFlashObservationEditor() {
     if (flashObservationEditor) { closeFlashObservationEditor(); return; }
     const replay = flashReplay;
     if (replay?.kind !== 'observation_demo') return;
+    closeFlashObservationTracking();
     if (flashReplayTimer) toggleFlashReplay();
     const roles = _flashObservationRoles(replay);
     if (!replay.evidence_available || roles.length < 2 || !replay.annotations) {
@@ -275,5 +276,193 @@ async function flashObservationSave() {
     } finally {
         state.saving = false;
         if (flashObservationEditor === state) _flashObservationRender();
+    }
+}
+
+// Reprocess observation-only episodes in the same camera view used for review.
+let flashObservationTracking = null;
+let flashObservationProcessing = null;
+
+function closeFlashObservationTracking() {
+    flashObservationTracking = null;
+    document.getElementById('flash-observation-tracking')?.remove();
+    document.getElementById('rerun-viewer')?.classList.remove('flash-demo-editing');
+    document.getElementById('tab-run')?.classList.remove('flash-demo-editing');
+}
+
+async function toggleFlashObservationTracking() {
+    if (flashObservationTracking) { closeFlashObservationTracking(); return; }
+    const replay = flashReplay;
+    if (replay?.kind !== 'observation_demo') return;
+    closeFlashObservationEditor();
+    if (flashReplayTimer) toggleFlashReplay();
+    seekFlashReplay(0);
+    try {
+        const response = await fetch('/api/run/flash/observation/defaults');
+        const defaults = await response.json();
+        if (!response.ok) throw new Error(defaults.detail || 'Cannot load tracking parameters');
+        const prompts = replay.processing?.prompts_by_role || {};
+        const seeds = replay.processing?.seed_points_by_role || {};
+        const objects = Object.entries(prompts).map(([role, prompt]) => ({role, prompt, seed: seeds[role] || null}));
+        flashObservationTracking = {
+            replay, objects: objects.length ? objects : [{role: '', prompt: '', seed: null}],
+            config: replay.processing_config || defaults, picking: null, busy: false, message: '',
+        };
+        const panel = document.createElement('aside');
+        panel.id = 'flash-observation-tracking';
+        panel.className = 'flash-demo-editor';
+        panel.setAttribute('aria-label', 'Track objects in RGB-D observation');
+        document.getElementById('rerun-viewer').append(panel);
+        document.getElementById('rerun-viewer').classList.add('flash-demo-editing');
+        document.getElementById('tab-run').classList.add('flash-demo-editing');
+        _flashObservationTrackingRender();
+    } catch (error) { showToast('Cannot open object tracking', error.message, 'error'); }
+}
+
+function _flashObservationTrackingRender() {
+    const state = flashObservationTracking;
+    if (!state) return;
+    const attribute = value => _esc(value).replaceAll('"', '&quot;').replaceAll("'", '&#39;');
+    const objects = state.objects.map((object, index) =>
+        `<section class="flash-observation-object"><strong>Object ${index + 1}</strong>` +
+        `<label>Name<input aria-label="Object ${index + 1} name" value="${attribute(object.role)}" oninput="flashObservationTrackingSet(${index}, 'role', this.value)"></label>` +
+        `<label>What it looks like<input aria-label="Object ${index + 1} description" value="${attribute(object.prompt)}" oninput="flashObservationTrackingSet(${index}, 'prompt', this.value)"></label>` +
+        `<button type="button" onclick="flashObservationTrackingPick(${index})">${state.picking === index ? 'Click the object in the image…' : 'Click object in first frame'}</button>` +
+        (object.seed ? `<span class="flash-observation-seed">Seed: ${object.seed.map(value => Math.round(value)).join(', ')}</span>` : '') +
+        `<button type="button" onclick="flashObservationTrackingRemove(${index})" ${state.objects.length === 1 ? 'disabled' : ''}>Remove</button></section>`
+    ).join('');
+    document.getElementById('flash-observation-tracking').innerHTML =
+        '<h3>Track objects <button type="button" class="flash-recorded-close" onclick="closeFlashObservationTracking()" aria-label="Close tracking setup">×</button></h3>' +
+        '<p>Name what to follow. A click helps identify it in the first frame; tracking then follows the RGB-D video. This episode has no robot actions.</p>' +
+        objects + '<button type="button" onclick="flashObservationTrackingAdd()">Add object</button>' +
+        '<details><summary>Tracking parameters</summary><p>Shared surface and scene-tracking settings, saved with this processing pass.</p>' +
+        `<textarea id="flash-observation-config" aria-label="Tracking parameters JSON" rows="12" spellcheck="false" onchange="flashObservationTrackingConfig(this.value)">${_esc(JSON.stringify(state.config, null, 2))}</textarea></details>` +
+        `<section class="flash-editor-footer"><button type="button" id="flash-observation-process" onclick="flashObservationTrackingStart()" ${state.busy || _isRunning ? 'disabled' : ''}>Process tracking</button>` +
+        `<p class="flash-editor-status" id="flash-observation-tracking-message" role="status">${_esc(state.message)}</p></section>`;
+}
+
+function flashObservationTrackingSet(index, field, value) {
+    const object = flashObservationTracking?.objects[index];
+    if (object) object[field] = value;
+}
+
+function flashObservationTrackingConfig(value) {
+    const state = flashObservationTracking;
+    if (!state) return;
+    try { state.config = JSON.parse(value); state.message = 'Parameters updated.'; }
+    catch (error) { state.message = `Invalid tracking parameters: ${error.message}`; }
+    document.getElementById('flash-observation-tracking-message').textContent = state.message;
+}
+
+function flashObservationTrackingAdd() {
+    flashObservationTracking.objects.push({role: '', prompt: '', seed: null});
+    _flashObservationTrackingRender();
+}
+
+function flashObservationTrackingRemove(index) {
+    if (flashObservationTracking?.objects.length > 1) {
+        flashObservationTracking.objects.splice(index, 1);
+        flashObservationTracking.picking = null;
+        _flashObservationTrackingRender();
+    }
+}
+
+function flashObservationTrackingPick(index) {
+    const state = flashObservationTracking;
+    if (!state) return;
+    state.picking = index;
+    if (flashSceneMode === '3d') void toggleFlashSceneView();
+    seekFlashReplay(0);
+    state.message = 'Click the object in the camera image, not in the 3D scene.';
+    _flashObservationTrackingRender();
+}
+
+function flashObservationTrackingClick(event) {
+    const state = flashObservationTracking;
+    if (!state || state.picking === null ||
+        (event.target !== event.currentTarget && !event.target.matches('.flash-replay-grid > img, .flash-pose-canvas'))) return false;
+    const camera = state.replay.frames[0]?.snapshot.camera;
+    const image = document.querySelector('#rerun-viewer .flash-replay-grid > img');
+    if (!camera || !image) return false;
+    const bounds = image.getBoundingClientRect();
+    const scale = Math.min(bounds.width / camera.width, bounds.height / camera.height);
+    const left = bounds.left + (bounds.width - camera.width * scale) / 2;
+    const top = bounds.top + (bounds.height - camera.height * scale) / 2;
+    const x = (event.clientX - left) / scale;
+    const y = (event.clientY - top) / scale;
+    if (x < 0 || y < 0 || x >= camera.width || y >= camera.height) return false;
+    state.objects[state.picking].seed = [x, y];
+    state.picking = null;
+    state.message = 'Object click saved for the first frame.';
+    _flashObservationTrackingRender();
+    return true;
+}
+
+async function flashObservationTrackingStart() {
+    const state = flashObservationTracking;
+    if (!state || state.busy) return;
+    let config;
+    try { config = JSON.parse(document.getElementById('flash-observation-config').value); }
+    catch (error) { state.message = `Invalid tracking parameters: ${error.message}`; _flashObservationTrackingRender(); return; }
+    const prompts = {}, seeds = {};
+    for (const object of state.objects) {
+        const role = object.role.trim(), prompt = object.prompt.trim();
+        if (!role || !prompt || prompts[role]) {
+            state.message = 'Give each object a distinct name and a visual description.';
+            _flashObservationTrackingRender();
+            return;
+        }
+        prompts[role] = prompt;
+        if (object.seed) seeds[role] = object.seed;
+    }
+    state.busy = true;
+    state.message = 'Starting RGB-D tracking…';
+    _flashObservationTrackingRender();
+    try {
+        const response = await fetch('/api/run/flash/observation/process', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({dataset_root: state.replay.datasetRoot, episode: state.replay.episode,
+                prompts_by_role: prompts, seed_points_by_role: seeds, ...config}),
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.detail || 'Cannot start RGB-D tracking');
+        flashObservationProcessing = {
+            datasetRoot: state.replay.datasetRoot, episode: state.replay.episode, jobId: result.job_id,
+        };
+        state.message = 'Tracking is running. The previous replay stays available until this pass completes.';
+        document.getElementById('flash-observation-tracking-message').textContent = state.message;
+        await pollRunStatus();
+    } catch (error) {
+        state.busy = false;
+        state.message = error.message;
+        _flashObservationTrackingRender();
+    }
+}
+
+async function flashObservationProcessComplete() {
+    const job = flashObservationProcessing;
+    if (!job) return;
+    const response = await fetch(`/api/run/flash/observation/process-status?job_id=${encodeURIComponent(job.jobId)}`);
+    const status = await response.json();
+    if (!response.ok) {
+        flashObservationProcessing = null;
+        showToast('Tracking status unavailable', status.detail || 'Reload the recording to inspect the saved evidence.', 'error');
+        return;
+    }
+    if (status.status === 'running') return;
+    flashObservationProcessing = null;
+    if (status.status !== 'complete') {
+        const message = `RGB-D tracking stopped without replacing the previous replay: ${status.reason || 'unknown error'}`;
+        if (flashObservationTracking) {
+            flashObservationTracking.busy = false;
+            flashObservationTracking.message = message;
+            _flashObservationTrackingRender();
+        }
+        showToast('Tracking did not finish', message, 'error');
+        return;
+    }
+    await _loadFlashRecordings();
+    if (flashReplay?.datasetRoot === job.datasetRoot && flashReplay?.episode === job.episode) {
+        await loadFlashObservationReplay(job.datasetRoot, job.episode);
     }
 }

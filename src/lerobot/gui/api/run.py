@@ -280,6 +280,13 @@ class FlashObservationAnnotationRequest(FlashDatasetInspectRequest):
     annotation: dict[str, Any]
 
 
+class FlashObservationProcessRequest(FlashDatasetInspectRequest):
+    prompts_by_role: dict[str, str]
+    seed_points_by_role: dict[str, tuple[float, float]] = Field(default_factory=dict)
+    vision_pipeline: dict[str, Any]
+    causal_tracking: dict[str, Any]
+
+
 class FlashTrackerImportRequest(FlashDatasetInspectRequest):
     bundle_path: str
     tracker: str
@@ -355,6 +362,7 @@ _flash_telemetry_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gu
 _flash_config_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gui-flash-config")
 _flash_candidate_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gui-flash-candidate")
 _flash_tracker_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gui-flash-tracker")
+_flash_observation_job: dict | None = None
 _active_config: dict | None = None
 _debug_process: asyncio.subprocess.Process | None = None  # optional model debug alongside teleop
 _debug_output_path: Path | None = None  # log file for debug model output
@@ -544,6 +552,12 @@ async def _wait_for_exit() -> None:
         await asyncio.gather(*_stream_tasks, return_exceptions=True)
     rc = proc.returncode
     _note_exit(_active_command, rc, list(_output_lines))
+    if _active_command == "flash_observation" and _flash_observation_job is not None:
+        _flash_observation_job.update(
+            status="complete" if rc == 0 else "failed",
+            returncode=rc,
+            reason=_last_failure["reason"] if rc and _last_failure else None,
+        )
     _append_output(f"\n--- Process exited with code {rc} ---")
     # Only clear if this is still the same process (not replaced by a new launch)
     if _active_process is proc:
@@ -1603,6 +1617,113 @@ async def flash_observation_replay(dataset_root: str, episode: int = 0) -> dict:
         )
     except (OSError, KeyError, TypeError, ValueError) as exc:
         raise HTTPException(400, f"Cannot replay RGB-D observation: {exc}") from exc
+
+
+@router.get("/flash/observation/defaults")
+async def flash_observation_defaults() -> dict:
+    """Publish editable tracking settings without binding them to a robot rig."""
+
+    def build() -> dict:
+        from lerobot.policies.flash.observation_processing import default_processing_config
+
+        return default_processing_config()
+
+    return await asyncio.get_running_loop().run_in_executor(_flash_config_pool, build)
+
+
+@router.get("/flash/observation/process-status")
+async def flash_observation_process_status(job_id: str) -> dict:
+    job = _flash_observation_job
+    if job is None or job["job_id"] != job_id:
+        raise HTTPException(404, "RGB-D tracking job is unavailable")
+    return dict(job)
+
+
+@router.post("/flash/observation/process")
+async def flash_observation_process(req: FlashObservationProcessRequest) -> dict:
+    """Process named objects from an RGB-D episode in a separate worker."""
+    async with _launch_lock:
+        global _flash_observation_job
+        _ensure_no_active_process()
+
+        def prepare() -> tuple[Path, Path, dict]:
+            from dataclasses import asdict
+
+            from lerobot.policies.flash.causal_service import CausalTrackingConfig
+            from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig
+
+            root = Path(req.dataset_root).expanduser().resolve()
+            source = json.loads((root / "flash" / "v1" / "source.json").read_text(encoding="utf-8"))
+            if source.get("status") != "perception_only" or req.episode < 0:
+                raise ValueError("select a local RGB-D observation episode")
+            if not req.prompts_by_role or any(
+                re.fullmatch(r"[A-Za-z][A-Za-z0-9 _-]{0,39}", role) is None
+                or not isinstance(prompt, str)
+                or not prompt.strip()
+                for role, prompt in req.prompts_by_role.items()
+            ):
+                raise ValueError("name at least one object and give it a segmentation prompt")
+            if set(req.seed_points_by_role) - set(req.prompts_by_role):
+                raise ValueError("each clicked point must belong to a named object")
+            if any(
+                not all(math.isfinite(value) and value >= 0 for value in point)
+                for point in req.seed_points_by_role.values()
+            ):
+                raise ValueError("clicked image points must have finite nonnegative coordinates")
+            vision = VisionPipelineConfig.from_dict(req.vision_pipeline)
+            if vision.backend != "surface":
+                raise ValueError("RGB-D observation tracking requires the surface backend")
+            causal = CausalTrackingConfig.from_config(req.causal_tracking)
+            config = {"vision_pipeline": vision.to_dict(), "causal_tracking": asdict(causal)}
+            encoded = json.dumps(config, sort_keys=True, separators=(",", ":")).encode()
+            directory = root / "flash" / "v1" / "observation-inputs"
+            directory.mkdir(parents=True, exist_ok=True)
+            path = directory / f"{hashlib.sha256(encoded).hexdigest()}.json"
+            if path.exists():
+                if path.read_bytes() != encoded:
+                    raise ValueError("saved tracking parameters do not match their content hash")
+            else:
+                path.write_bytes(encoded)
+            return root, path, config
+
+        try:
+            root, config_path, config = await asyncio.get_running_loop().run_in_executor(
+                _flash_config_pool, prepare
+            )
+        except (OSError, KeyError, TypeError, ValueError) as exc:
+            raise HTTPException(400, f"Cannot start RGB-D tracking: {exc}") from exc
+        args = [
+            os.environ.get("LEROBOT_FLASH_TRACKING_PYTHON", sys.executable),
+            "-u",
+            "-m",
+            "lerobot.policies.flash.observation_processing",
+            str(root),
+            str(config_path),
+            "--episode",
+            str(req.episode),
+        ]
+        for role, prompt in req.prompts_by_role.items():
+            args.extend(("--prompt", f"{role}={prompt.strip()}"))
+        for role, (x, y) in req.seed_points_by_role.items():
+            args.extend(("--seed", f"{role}={x},{y}"))
+        job_id = secrets.token_hex(12)
+        _flash_observation_job = {
+            "job_id": job_id,
+            "status": "running",
+            "dataset_root": str(root),
+            "episode": req.episode,
+        }
+        try:
+            await _launch_subprocess(args, command="flash_observation", config={**config, **req.model_dump()})
+        except BaseException:
+            _flash_observation_job = None
+            raise
+        return {
+            "status": "started",
+            "command": "flash_observation",
+            "pid": _active_process.pid,
+            "job_id": job_id,
+        }
 
 
 @router.post("/flash/observation/annotations")

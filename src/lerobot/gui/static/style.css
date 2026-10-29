@@ -711,7 +711,9 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .flash-demo-editor p { margin: 4px 0 10px; color: #a7b5c8; line-height: 1.4; }
 .flash-demo-editor section { border-top: 1px solid #31516c; padding: 10px 0; }
 .flash-demo-editor label { display: block; margin: 7px 0; color: #bdd0e0; }
-.flash-demo-editor input:not([type="checkbox"]), .flash-demo-editor select { display: block; width: 100%; box-sizing: border-box; margin-top: 3px; padding: 5px; background: #0b1522; border: 1px solid #31516c; border-radius: 3px; color: #fff; }
+.flash-demo-editor input:not([type="checkbox"]), .flash-demo-editor select, .flash-demo-editor textarea { display: block; width: 100%; box-sizing: border-box; margin-top: 3px; padding: 5px; background: #0b1522; border: 1px solid #31516c; border-radius: 3px; color: #fff; }
+.flash-observation-object { border-top: 1px solid #31516c; padding: 8px 0; }
+.flash-observation-seed { color: #8bd5ff; font-size: 12px; }
 .flash-demo-editor button { margin: 4px 5px 4px 0; padding: 5px 8px; background: #224868; color: #fff; border: 1px solid #4d7798; border-radius: 3px; cursor: pointer; }
 .flash-demo-editor button:disabled { opacity: .5; cursor: default; }
 .flash-recorded-close { float: right; margin: -4px 0 !important; font-size: 18px; }

@@ -1387,6 +1387,7 @@ function _flashDrawPointTracks(context, pixel) {
 }
 
 function _flashSelectPointAt(event) {
+    if (flashObservationTrackingClick(event)) return;
     if (flashDemoEditor?.drawing || !flashTrackPoints?.available || !document.getElementById('flash-track-visible')?.checked) return;
     const at = _flashRawTrackFrame();
     if (at === undefined || at === null) return;
@@ -1557,6 +1558,7 @@ function startFlashTelemetry() {
     const generation = ++flashTelemetryGeneration;
     closeFlashRecordedEditor();
     closeFlashObservationEditor();
+    closeFlashObservationTracking();
     closeFlashDemoEditor();
     flashSceneRequest++;
     flashSceneFrameCache = null;
@@ -1685,6 +1687,7 @@ function _flashCreateSceneGrid(kind, imageAlt, depthAvailable = true) {
         const toolbar = document.createElement('div');
         toolbar.className = 'flash-scene-toolbar';
         toolbar.innerHTML = `<button type="button" id="flash-scene-toggle" onclick="toggleFlashSceneView()"${kind === 'live' ? ' disabled' : ''}>3D scene</button>` +
+            (kind === 'observation_demo' ? '<button type="button" id="flash-observation-track" onclick="toggleFlashObservationTracking()">Track objects</button>' : '') +
             (['demo', 'observation_demo'].includes(kind) ? '<button type="button" id="flash-scene-edit" onclick="openFlashDemoSceneEditor()">' +
                 (kind === 'observation_demo' ? 'Edit relationships' : 'Edit demo in 3D') + '</button>' +
                 '<span id="flash-demo-review-status" class="flash-demo-review-status" hidden></span>' +
@@ -1727,6 +1730,7 @@ function _flashInstallReplay(replay, imageAlt) {
     flashSceneMode = 'camera';
     closeFlashRecordedEditor();
     closeFlashObservationEditor();
+    closeFlashObservationTracking();
     closeFlashDemoEditor();
     stopFlashTelemetry();
     stopObsStreamViewer();
@@ -4242,6 +4246,7 @@ async function pollRunStatus() {
         const status = await res.json();
         _reportRunFailure(status.last_error);
         updateRunUI(status.running, status.command);
+        await flashObservationProcessComplete(status);
         if (status.running && status.command === 'flash_tracking' && selectedWorkflow === 'flash' && flashUiMode !== 'tracking') await showFlashTracking();
         if (status.running && status.command === 'flash' && selectedWorkflow === 'flash') startFlashTelemetry();
         else if (!status.running) stopFlashTelemetry();
@@ -4275,7 +4280,7 @@ async function pollRunStatus() {
         // If running but no SSE, reconnect
         if (status.running && !runEventSource) {
             connectOutputSSE();
-            if (status.command !== 'flash_prepare' && status.command !== 'flash') startObsStreamViewer();
+            if (!['flash_prepare', 'flash_observation', 'flash'].includes(status.command)) startObsStreamViewer();
         }
     } catch (e) {
         console.error('Status poll failed:', e);

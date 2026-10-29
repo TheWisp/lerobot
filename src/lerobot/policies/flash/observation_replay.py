@@ -59,6 +59,20 @@ def load_observation_replay(root: Path, episode: int = 0) -> dict:
     point_limit = None
     if evidence_available:
         point_limit = int(observation["surface_reference_max_points_per_view"])
+    processing_config = None
+    if evidence_available and observation.get("config_bundle"):
+        config_path = Path(observation["config_bundle"])
+        if not config_path.is_absolute():
+            config_path = root / config_path
+        try:
+            saved_config = json.loads(config_path.read_text(encoding="utf-8"))
+            if "vision_pipeline" in saved_config and "causal_tracking" in saved_config:
+                processing_config = {
+                    "vision_pipeline": saved_config["vision_pipeline"],
+                    "causal_tracking": saved_config["causal_tracking"],
+                }
+        except (OSError, ValueError, TypeError):
+            pass
     for frame_id, row_index in enumerate(indices):
         row = dataset[row_index]
         time_s = float(row["flash.source_time_s"].item())
@@ -199,6 +213,8 @@ def load_observation_replay(root: Path, episode: int = 0) -> dict:
         "camera_features": {"rgb": rgb_key, "depth": depth_key},
         "geometry": geometry,
         "evidence_available": evidence_available,
+        "processing": observation if evidence_available else None,
+        "processing_config": processing_config,
         "robot_actions_available": False,
         "gripper_prediction_available": False,
         "annotations": annotations,

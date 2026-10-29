@@ -76,6 +76,7 @@ function flashTrackingError(error) {
 }
 
 async function showFlashTracking() {
+    closeFlashObservationTracking();
     clearInterval(flashReplayTimer); flashReplayTimer = null;
     stopFlashTelemetry();
     flashUiMode = 'tracking';
