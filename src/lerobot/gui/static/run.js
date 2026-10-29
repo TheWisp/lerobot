@@ -834,11 +834,18 @@ function _flashLayerColor(estimator) {
     return '#58a6ff';
 }
 
-function _flashPoseText(pose, snapshot) {
+function _flashPoseText(pose, snapshot, role = null, source = 'primary') {
     if (!pose) return 'No estimate';
     const age = Number(snapshot.recorded_at_s) - Number(pose.source_time_s);
     const freshness = Number.isFinite(age) ? ` · ${Math.max(0, age).toFixed(2)} s old` : '';
-    const xyz = pose.pose ? ` · ${pose.pose.slice(0, 3).map((row, i) => (row[3] * 1000).toFixed(0)).join(', ')} mm` : '';
+    const local = source === 'reprocessed'
+        ? snapshot.reprocessed_scene_geometry?.centers_object_m?.[role]
+        : snapshot.centers_object_m?.[role];
+    const world = pose.pose && local ? pose.pose.slice(0, 3).map(row =>
+        row[0] * local[0] + row[1] * local[1] + row[2] * local[2] + row[3]) : null;
+    const xyz = world ? ` · surface centre ${world.map(value => (value * 1000).toFixed(0)).join(', ')} mm`
+        : pose.pose ? ` · frame origin ${pose.pose.slice(0, 3).map(row => (row[3] * 1000).toFixed(0)).join(', ')} mm`
+            : '';
     const evidence = pose.evidence === 'ambiguous_visual_prediction'
         ? 'gripper prediction; visual fit ambiguous' : pose.evidence || 'unknown';
     return `${evidence}${freshness}${xyz}`;
@@ -988,7 +995,7 @@ function renderFlashSnapshot(snapshot, mode = 'Live') {
         }
         const proposal = snapshot.proposals?.[role];
         if (proposal) html += _flashOverlayRow('proposal', role, '', 'flash-tracker-layer',
-            `<span class="flash-tracker-dot" style="background:#58a6ff"></span>Direct proposal <small>${_esc(_flashPoseText(proposal, snapshot))}</small>`);
+            `<span class="flash-tracker-dot" style="background:#58a6ff"></span>Direct proposal <small>${_esc(_flashPoseText(proposal, snapshot, role))}</small>`);
         const raw = snapshot.raw_proposals?.[role];
         if (raw?.pose && proposal?.evidence === 'lost') {
             const shown = raw.frame_id === snapshot.camera?.frame_id &&
@@ -1002,7 +1009,7 @@ function renderFlashSnapshot(snapshot, mode = 'Live') {
             role, expandedSurfaceRoles.has(role));
         for (const [name, pose] of Object.entries(snapshot.layers?.[role] || {})) {
             html += _flashOverlayRow('layer', role, name, 'flash-tracker-layer',
-                `<span class="flash-tracker-dot" style="background:${_flashLayerColor(name)}"></span>${_esc(_flashLayerName(name))}<small>${_esc(_flashPoseText(pose, snapshot))}</small>`);
+                `<span class="flash-tracker-dot" style="background:${_flashLayerColor(name)}"></span>${_esc(_flashLayerName(name))}<small>${_esc(_flashPoseText(pose, snapshot, role, name === 'reprocessed_scene' ? 'reprocessed' : 'primary'))}</small>`);
         }
         const reprocessed = snapshot.reprocessed_scene_status?.[role];
         if (reprocessed?.evidence === 'lost') html +=
@@ -1016,7 +1023,7 @@ function renderFlashSnapshot(snapshot, mode = 'Live') {
         const accepted = snapshot.accepted?.[role];
         const held = snapshot.held_prediction?.role === role ? snapshot.held_prediction : null;
         if (held && accepted) html += _flashOverlayRow('accepted', role, '', 'flash-tracker-layer',
-            `Independent estimate <small>${_esc(_flashLayerName(accepted.estimator || 'unspecified'))}: ${_esc(_flashPoseText(accepted, snapshot))}</small>`);
+            `Independent estimate <small>${_esc(_flashLayerName(accepted.estimator || 'unspecified'))}: ${_esc(_flashPoseText(accepted, snapshot, role))}</small>`);
         const planningPose = held || accepted;
         const lostStatus = snapshot.pose_status?.[role];
         const unavailable = lostStatus?.evidence === 'lost'
@@ -1024,7 +1031,7 @@ function renderFlashSnapshot(snapshot, mode = 'Live') {
                 ? 'unknown — measured depth contradicts the old position'
                 : `unknown — ${_flashLayerName(lostStatus.estimator || 'unverified')}`)
             : 'none';
-        const selectedText = `${held ? 'Planner prediction (rigid grasp)' : 'Accepted estimator pose'}: ${planningPose ? _esc(_flashLayerName(planningPose.estimator || 'unspecified')) + '<small>' + _esc(_flashPoseText(planningPose, snapshot)) + (held && !held.last_direct_observation_s ? ' · unverified after grasp' : '') + '</small>' : _esc(unavailable)}`;
+        const selectedText = `${held ? 'Planner prediction (rigid grasp)' : 'Accepted estimator pose'}: ${planningPose ? _esc(_flashLayerName(planningPose.estimator || 'unspecified')) + '<small>' + _esc(_flashPoseText(planningPose, snapshot, role)) + (held && !held.last_direct_observation_s ? ' · unverified after grasp' : '') + '</small>' : _esc(unavailable)}`;
         html += planningPose
             ? _flashOverlayRow(held ? 'held' : 'accepted', role, '', 'flash-tracker-selected', selectedText)
             : `<div class="flash-tracker-selected">${selectedText}</div>`;
@@ -1138,7 +1145,7 @@ function renderFlashDemoSnapshot(snapshot) {
                     skillPose ? '' : 'demo_extraction', 'flash-tracker-selected',
                     `<span class="flash-tracker-dot" style="background:${held ? '#fb923c' : pose.evidence === 'predicted' ? '#fbbf24' : skillPose ? '#34d399' : _flashLayerColor(pose.estimator)}"></span>` +
                     `${skillPose ? 'Pose used by skill' : endpointGoal ? 'Current perception; skill stores endpoint goal' : 'Current perception; not saved in skill'}` +
-                    `<small>${_esc(origin)} · ${_esc(_flashPoseText(pose, snapshot))}</small>`) +
+                    `<small>${_esc(origin)} · ${_esc(_flashPoseText(pose, snapshot, role))}</small>`) +
                 (snapshot.demo_pose_review?.role === role
                     ? `<small class="flash-demo-pose-review">Current visual fit and saved carried prediction place the reference surface ${_esc((snapshot.demo_pose_review.reference_center_gap_m * 1000).toFixed(1))} mm apart. Neither is verified as the hidden contact pose; review in 3D.</small>`
                     : '') +
@@ -1212,7 +1219,7 @@ function renderFlashDemoSnapshot(snapshot) {
             ? ` · ${(Math.hypot(...worldCenter(pose).map((value, i) => value - worldCenter(used)[i])) * 1000).toFixed(1)} mm from skill pose`
             : '';
         const detail = pose.evidence === 'lost' ? `Lost${lastDirect}`
-            : `${_flashLayerName(pose.estimator)} · ${_flashPoseText(pose, snapshot)}${lastDirect}${separation}`;
+            : `${_flashLayerName(pose.estimator)} · ${_flashPoseText(pose, snapshot, role)}${lastDirect}${separation}`;
         const predictionNote = pose.evidence === 'predicted' && pose.estimator === 'appearance_rgbd'
             ? 'Visual evidence contributed, but the full pose remained predicted. ' : '';
         const originNote = rebuilt

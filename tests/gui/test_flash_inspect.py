@@ -2448,6 +2448,7 @@ def test_unprepared_regular_robot_demo_opens_timeline_editor_and_3d_scene(gui_pa
     page.get_by_role("button", name="regular-robot-demo · episode 0").click()
     page.wait_for_function("() => flashReplay?.kind === 'recorded_demo'")
     assert "Reprocessed RGB-D scene pose" in page.locator("#flash-tracker-content").inner_text()
+    assert "surface centre 3, 3, 850 mm" in page.locator("#flash-tracker-content").inner_text()
     assert "Reprocessed visible mask" in page.locator("#flash-tracker-content").inner_text()
     assert "Reprocessed scene support" in page.locator("#flash-tracker-content").inner_text()
     assert page.locator("#flash-demo-edit-toggle").inner_text() == "Mark motion"
