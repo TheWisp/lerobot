@@ -958,7 +958,10 @@ function renderFlashSnapshot(snapshot, mode = 'Live') {
         return;
     }
     flashOverlayRows = [];
-    let html = '<div class="flash-tracker-legend">Hover a row to highlight it. Solid outline: measured control pose · amber dashed outline: predicted control pose · thin outlines: other estimates · purple: frame-aligned visible mask.</div>' + _flashCommandEvidence(snapshot);
+    const legend = flashReplay?.kind === 'observation_demo'
+        ? 'Hover a row to highlight it. Solid outline: observed scene pose · amber dashed outline: predicted scene pose · thin outlines: other estimates · purple: visible mask in this camera frame.'
+        : 'Hover a row to highlight it. Solid outline: measured control pose · amber dashed outline: predicted control pose · thin outlines: other estimates · purple: frame-aligned visible mask.';
+    let html = `<div class="flash-tracker-legend">${legend}</div>` + _flashCommandEvidence(snapshot);
     if (snapshot.demo_section) {
         const section = snapshot.demo_section;
         html += `<div class="flash-tracker-role"><strong>Recorded motion · ${_esc(section.name)}</strong>` +
