@@ -72,8 +72,8 @@
     "sha256_16": "8d07c468d16edca6"
   },
   "flash_scene_view.js": {
-    "sha256_16": "c47f72f5748b8cab",
-    "v": "21"
+    "sha256_16": "bb1e83a76fe3facc",
+    "v": "22"
   },
   "flash_surface_cloud.js": {
     "v": "1",
@@ -128,8 +128,8 @@
     "v": "27"
   },
   "run.js": {
-    "v": "162",
-    "sha256_16": "412f27e427ad49c7"
+    "v": "164",
+    "sha256_16": "86e317e034a408d7"
   },
   "style.css": {
     "v": "169",

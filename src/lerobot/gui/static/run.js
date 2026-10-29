@@ -127,7 +127,8 @@ async function _flashUpdateSceneFrame() {
             : Object.keys(liveMasks).length || Object.keys(liveGroups || {}).length
                 ? {available: true, masks_rle: liveMasks, groups: liveGroups || {}} : null;
         _flashPaintObservedPhoto({...frame, evidence: frameEvidence}, camera);
-        let displaySnapshot = {...selected.snapshot, ...(replay?.geometry || {})};
+        let displaySnapshot = {...selected.snapshot, ...(replay?.geometry || {}),
+            reprocessed_scene_geometry: replay?.reprocessed_scene_geometry};
         if (kind === 'demo' && frameEvidence?.available) {
             const layers = Object.fromEntries(Object.entries(displaySnapshot.layers || {})
                 .map(([role, value]) => [role, {...value}]));
@@ -220,8 +221,12 @@ async function toggleFlashSceneView() {
                 option.textContent = role;
                 select.append(option);
             }
-            const {createFlashSceneView} = await import('/static/flash_scene_view.js?v=21');
-            flashSceneView = createFlashSceneView(grid.querySelector('.flash-scene-canvas'), surfaces);
+            const {createFlashSceneView} = await import('/static/flash_scene_view.js?v=22');
+            const reprocessed = Object.fromEntries(Object.entries(
+                flashReplay?.reprocessed_scene_geometry?.points_object_m || {}).map(([role, points]) => [
+                role, {positions_object_m: points.flat(), colors_rgb: points.map(() => [180, 190, 200]), indices: []},
+            ]));
+            flashSceneView = createFlashSceneView(grid.querySelector('.flash-scene-canvas'), surfaces, reprocessed);
             if (flashDemoEditor) {
                 const point = flashDemoEditor.keypointsDocument.keypoints[flashDemoEditor.keypointIndex];
                 flashSceneView.setTurnPreview(point ? _flashEditorTurnForPoint(flashDemoEditor, point) || null : null);
@@ -806,6 +811,7 @@ function _flashLayerName(estimator) {
         recorded_skill_reference: 'Saved reference in this skill',
         recorded_skill_held: 'Saved held pose in this skill',
         recorded_ee: 'Recorded gripper pose',
+        reprocessed_scene: 'Reprocessed RGB-D scene pose',
     })[estimator] || estimator.replaceAll('_', ' ');
 }
 
@@ -818,6 +824,8 @@ function _flashLayerColor(estimator) {
     if (estimator === 'recorded_ee') return '#58a6ff';
     if (estimator === 'recorded_skill_reference') return '#d8b4fe';
     if (estimator === 'recorded_skill_held') return '#fb923c';
+    if (estimator === 'reprocessed_scene') return '#34d399';
+    if (estimator === 'reprocessed_raw') return '#f472b6';
     if (estimator === 'object_point_motion') return '#fbbf24';
     if (estimator === 'environment_group_motion') return '#34d399';
     if (estimator === 'environment_support_hypothesis') return '#a3e635';
@@ -928,8 +936,12 @@ function renderFlashSnapshot(snapshot, mode = 'Live') {
         ...Object.keys(snapshot.layers || {}),
         ...Object.keys(snapshot.accepted || {}),
         ...Object.keys(snapshot.pose_status || {}),
+        ...Object.keys(snapshot.reprocessed_scene_status || {}),
         ...Object.keys(snapshot.observed_masks || {}),
+        ...Object.keys(snapshot.reprocessed_observed_masks || {}),
         ...Object.keys(snapshot.scene_support?.groups || {}),
+        ...Object.keys(snapshot.reprocessed_scene_support?.groups || {}),
+        ...Object.keys(snapshot.reprocessed_raw_proposals || {}),
         ...(snapshot.held_visual_evidence ? [snapshot.held_visual_evidence.role] : []),
     ])].sort();
     if (!roles.length) {
@@ -952,8 +964,13 @@ function renderFlashSnapshot(snapshot, mode = 'Live') {
         if (mask && snapshot.camera && mask.frame_id === snapshot.camera.frame_id) {
             html += _flashOverlayRow('mask', role, '', 'flash-tracker-layer',
                 '<span class="flash-tracker-dot" style="background:#d48bff"></span>Visible mask <small>Measured pixels in this camera frame</small>');
-        } else {
+        } else if (!snapshot.reprocessed_observed_masks?.[role]) {
             html += '<div class="flash-tracker-layer flash-tracker-unavailable">Visible mask <small>No mask for this camera frame</small></div>';
+        }
+        const reprocessedMask = snapshot.reprocessed_observed_masks?.[role];
+        if (reprocessedMask?.frame_id === snapshot.camera?.frame_id) {
+            html += _flashOverlayRow('reprocessed_mask', role, '', 'flash-tracker-layer',
+                '<span class="flash-tracker-dot" style="background:#34d399"></span>Reprocessed visible mask <small>Measured pixels in this camera frame</small>');
         }
         const support = snapshot.scene_support && snapshot.camera &&
             snapshot.scene_support.frame_id === snapshot.camera.frame_id
@@ -961,6 +978,13 @@ function renderFlashSnapshot(snapshot, mode = 'Live') {
         if (support?.ids?.length) {
             html += _flashOverlayRow('group', role, '', 'flash-tracker-layer',
                 `<span class="flash-tracker-dot" style="background:#b0dc74"></span>Scene support <small>${support.ids.length} ${support.verified ? 'verified' : 'candidate'} tracked points</small>`);
+        }
+        const reprocessedSupport = snapshot.reprocessed_scene_support?.frame_id === snapshot.camera?.frame_id
+            ? snapshot.reprocessed_scene_support?.groups?.[role] : null;
+        if (reprocessedSupport?.ids?.length) {
+            html += _flashOverlayRow('reprocessed_group', role, '', 'flash-tracker-layer',
+                `<span class="flash-tracker-dot" style="background:#34d399"></span>Reprocessed scene support ` +
+                `<small>${reprocessedSupport.ids.length} ${reprocessedSupport.verified ? 'verified' : 'candidate'} tracked points</small>`);
         }
         const proposal = snapshot.proposals?.[role];
         if (proposal) html += _flashOverlayRow('proposal', role, '', 'flash-tracker-layer',
@@ -980,6 +1004,15 @@ function renderFlashSnapshot(snapshot, mode = 'Live') {
             html += _flashOverlayRow('layer', role, name, 'flash-tracker-layer',
                 `<span class="flash-tracker-dot" style="background:${_flashLayerColor(name)}"></span>${_esc(_flashLayerName(name))}<small>${_esc(_flashPoseText(pose, snapshot))}</small>`);
         }
+        const reprocessed = snapshot.reprocessed_scene_status?.[role];
+        if (reprocessed?.evidence === 'lost') html +=
+            `<div class="flash-tracker-layer flash-tracker-unavailable">Reprocessed RGB-D scene pose ` +
+            `<small>Unknown · ${_esc(_flashLayerName(reprocessed.estimator || 'unverified'))}</small></div>`;
+        const reprocessedRaw = snapshot.reprocessed_raw_proposals?.[role];
+        if (reprocessedRaw?.pose && reprocessed?.evidence === 'lost') html +=
+            _flashOverlayRow('reprocessed_raw_proposal', role, '', 'flash-tracker-layer',
+                `<span class="flash-tracker-dot" style="background:#f472b6"></span>Reprocessed rejected fit ` +
+                `<small>${_esc(reprocessedRaw.failure || 'Not accepted by vision')}</small>`);
         const accepted = snapshot.accepted?.[role];
         const held = snapshot.held_prediction?.role === role ? snapshot.held_prediction : null;
         if (held && accepted) html += _flashOverlayRow('accepted', role, '', 'flash-tracker-layer',
@@ -1449,7 +1482,9 @@ function _flashDrawOverlay() {
             const predicted = pose.evidence === 'predicted';
             const color = kind === 'held' ? '#fb923c' : predicted ? '#fbbf24' : _flashLayerColor(name);
             context.globalAlpha = active ? 1 : 0.12;
-            const points = snapshot.points_object_m?.[role] || [];
+            const geometry = ['reprocessed_scene', 'reprocessed_raw'].includes(name)
+                ? snapshot.reprocessed_scene_geometry : snapshot;
+            const points = geometry?.points_object_m?.[role] || [];
             const projectedPoints = points.map(point => _flashProject(point, pose, camera)).filter(Boolean);
             if (projectedPoints.length >= 3) {
                 outline(_flashHull(projectedPoints), color,
@@ -1465,7 +1500,7 @@ function _flashDrawOverlay() {
                     context.globalAlpha = previousAlpha;
                 }
             }
-            const center = snapshot.centers_object_m?.[role] || [0, 0, 0];
+            const center = geometry?.centers_object_m?.[role] || [0, 0, 0];
             const projected = _flashProject(center, pose, camera);
             if (!projected) { context.globalAlpha = 1; return; }
             const [x, y] = pixel(projected);
@@ -1533,6 +1568,13 @@ function _flashDrawOverlay() {
             outline(mask.boundary_xy || [], '#d48bff', flashHighlightedOverlay && active ? 5 : 2);
             context.globalAlpha = 1;
         }
+        if (compareSources) for (const [role, mask] of Object.entries(snapshot.reprocessed_observed_masks || {})) {
+            if (mask.frame_id !== camera.frame_id) continue;
+            const active = emphasized('reprocessed_mask', role);
+            context.globalAlpha = active ? 0.75 : 0.12;
+            outline(mask.boundary_xy || [], '#34d399', flashHighlightedOverlay && active ? 5 : 2);
+            context.globalAlpha = 1;
+        }
         if (flashHighlightedOverlay?.kind === 'group' && snapshot.scene_support?.frame_id === camera.frame_id) {
             const support = snapshot.scene_support.groups?.[flashHighlightedOverlay.role];
             if (support) {
@@ -1543,6 +1585,23 @@ function _flashDrawOverlay() {
                 }
             }
         }
+        if (flashHighlightedOverlay?.kind === 'reprocessed_group' &&
+            snapshot.reprocessed_scene_support?.frame_id === camera.frame_id) {
+            const support = snapshot.reprocessed_scene_support.groups?.[flashHighlightedOverlay.role];
+            if (support) {
+                context.fillStyle = '#34d399';
+                for (const point of support.pixels || []) {
+                    const [x, y] = pixel(point);
+                    context.fillRect(x - 2, y - 2, 4, 4);
+                }
+            }
+        }
+        if (compareSources || flashHighlightedOverlay?.kind === 'reprocessed_raw_proposal')
+            for (const [role, raw] of Object.entries(snapshot.reprocessed_raw_proposals || {})) {
+                if (snapshot.reprocessed_scene_status?.[role]?.evidence !== 'lost' || !raw.pose ||
+                    raw.frame_id !== camera.frame_id) continue;
+                draw(role, 'reprocessed_raw', raw, false, 'reprocessed_raw_proposal');
+            }
         // Review candidates stay visible when they closely overlap the saved
         // surface. Hovering their row still isolates them from all other layers.
         if (compareSources) for (const [role, layers] of Object.entries(snapshot.layers || {})) {
@@ -2154,8 +2213,8 @@ function seekFlashReplay(index) {
         else if (replay.kind === 'raw_demo') renderFlashRawSnapshot(selected.snapshot);
         else if (replay.kind === 'observation_demo') renderFlashSnapshot(
             {...selected.snapshot, ...replay.geometry}, 'Observation');
-        else renderFlashSnapshot(replay.kind === 'recorded_demo'
-            ? {...selected.snapshot, ...replay.geometry} : selected.snapshot, 'Recording');
+        else renderFlashSnapshot({...selected.snapshot, ...replay.geometry,
+            reprocessed_scene_geometry: replay.reprocessed_scene_geometry}, 'Recording');
         _flashDrawOverlay();
         if (flashSceneMode === '3d') void _flashUpdateSceneFrame();
         else grid.classList.remove('flash-frame-loading');

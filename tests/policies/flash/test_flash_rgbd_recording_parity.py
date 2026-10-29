@@ -9,14 +9,15 @@ import pytest
 
 from lerobot.configs.video import DepthEncoderConfig
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
-from lerobot.gui.api.run import _flash_recordings
+from lerobot.gui.api.run import _flash_recordings, _flash_scene_on_motor_replay, _flash_tracker_replay
 from lerobot.policies.flash import observation_processing
 from lerobot.policies.flash.observation_dataset import register_rgbd_dataset
 from lerobot.policies.flash.observation_replay import load_observation_replay
+from lerobot.policies.flash.recording_scene_replay import attach_scene_evidence
 from lerobot.policies.flash.trajectory import Evidence, PoseEstimate
 
 
-def _episode(root, *, with_actions):
+def _episode(root, *, with_actions, robot_base_frame=False):
     features = {
         "observation.images.rgb": {
             "dtype": "image",
@@ -71,7 +72,9 @@ def _episode(root, *, with_actions):
         repo_id=repo_id,
         camera_intrinsics=np.array([[100, 0, 32], [0, 100, 32], [0, 0, 1]], dtype=float),
         depth_unit="millimetres",
-        stationary_camera=True,
+        stationary_camera=not robot_base_frame,
+        fixed_scene_from_camera=np.eye(4) if robot_base_frame else None,
+        scene_frame="robot_base" if robot_base_frame else None,
     )
     return mask_dir
 
@@ -172,6 +175,15 @@ def test_registration_requires_explicit_camera_geometry_and_does_not_overwrite(t
             depth_unit="metres",
             stationary_camera=True,
         )
+    with pytest.raises(ValueError, match="uses its camera frame"):
+        register_rgbd_dataset(
+            root,
+            repo_id="local/video_rgbd",
+            camera_intrinsics=np.eye(3),
+            depth_unit="millimetres",
+            stationary_camera=True,
+            scene_frame="robot_base",
+        )
     with pytest.raises(FileExistsError):
         register_rgbd_dataset(
             root,
@@ -186,6 +198,46 @@ def test_registration_requires_explicit_camera_geometry_and_does_not_overwrite(t
         )
 
 
+def test_motor_replay_keeps_uncalibrated_scene_separate(tmp_path):
+    extension = tmp_path / "flash/v1"
+    sidecar = extension / "observation-evidence/episode_000000"
+    sidecar.mkdir(parents=True)
+    (sidecar / "manifest.json").write_text("{}")
+    (extension / "source.json").write_text(
+        json.dumps({"status": "robot_recording", "coordinate_frame": "camera"})
+    )
+    original = {"frames": [{"frame_index": 0, "snapshot": {"accepted": {"object": {"pose": "recorded"}}}}]}
+    replay = _flash_scene_on_motor_replay(tmp_path, 0, [], original)
+    assert replay["frames"] == original["frames"]
+    assert "not calibrated into the robot base" in replay["scene_evidence"]["reason"]
+
+
+def test_motor_replay_rejects_different_camera_calibration():
+    camera = {
+        "frame_id": 4,
+        "source_time_s": 1.0,
+        "base_from_camera": np.eye(4).tolist(),
+        "intrinsics": np.eye(3).tolist(),
+    }
+    changed_camera = {**camera, "base_from_camera": np.eye(4).tolist()}
+    changed_camera["base_from_camera"][0][3] = 0.01
+    motor = {"frames": [{"frame_index": 0, "snapshot": {"camera": camera, "accepted": {}}}]}
+    scene = {
+        "evidence_available": True,
+        "frames": [
+            {
+                "frame_index": 0,
+                "source_camera_frame_id": 4,
+                "snapshot": {"camera": changed_camera, "scene_support": {"groups": {}}, "accepted": {}},
+            }
+        ],
+    }
+    with pytest.raises(ValueError, match="disagree on base_from_camera"):
+        attach_scene_evidence(
+            motor, [{"frame_index": 0, "camera_frame_id": 4, "camera_source_time_s": 1.0}], scene
+        )
+
+
 def test_robot_trace_advances_vision_only_for_distinct_camera_captures(tmp_path, monkeypatch):
     monkeypatch.setattr(
         observation_processing,
@@ -193,7 +245,7 @@ def test_robot_trace_advances_vision_only_for_distinct_camera_captures(tmp_path,
         lambda _config, masks, *, local_reference: _MeasuredBackend(masks),
     )
     root = tmp_path / "robot"
-    masks = _episode(root, with_actions=True)
+    masks = _episode(root, with_actions=True, robot_base_frame=True)
     trace = root / "flash/v1/episode_000000.jsonl"
     ticks = [
         {
@@ -201,6 +253,11 @@ def test_robot_trace_advances_vision_only_for_distinct_camera_captures(tmp_path,
             "frame_index": index,
             "camera_frame_id": camera_id,
             "camera_source_time_s": capture_time,
+            "poses": {
+                "object": {"pose": np.eye(4).tolist(), "evidence": "predicted", "estimator": "recorded"}
+            }
+            if index == 0
+            else {},
         }
         for index, (camera_id, capture_time) in enumerate(((41, 20.0), (41, 20.0), (43, 20.1)))
     ]
@@ -217,6 +274,23 @@ def test_robot_trace_advances_vision_only_for_distinct_camera_captures(tmp_path,
     assert [frame["source_row_index"] for frame in replay["frames"]] == [0, 2]
     assert [frame["snapshot"]["camera"]["source_time_s"] for frame in replay["frames"]] == [20.0, 20.1]
     assert [frame["evidence"]["frame_index"] for frame in replay["frames"]] == [0, 1]
+    motor = _flash_tracker_replay(root, 0)
+    assert motor["scene_evidence"] == {
+        "available": True,
+        "camera_frames": 2,
+        "motor_frames_aligned": 3,
+        "source": "offline_rgbd_reprocessing",
+    }
+    assert [frame["scene_evidence_frame_index"] for frame in motor["frames"]] == [0, 0, 1]
+    assert [frame["snapshot"]["camera"]["frame_id"] for frame in motor["frames"]] == [41, 41, 43]
+    assert motor["frames"][1]["snapshot"]["reprocessed_observed_masks"]["object"]["frame_id"] == 41
+    assert "observed_masks" not in motor["frames"][1]["snapshot"]
+    assert motor["frames"][0]["snapshot"]["accepted"]["object"]["estimator"] == "recorded"
+    assert "reprocessed_scene" in motor["frames"][0]["snapshot"]["layers"]["object"]
+    assert "geometry" not in motor
+    assert motor["reprocessed_scene_geometry"]["points_object_m"]["object"]
+    assert motor["frames"][0]["snapshot"]["reprocessed_scene_support"]["frame_id"] == 41
+    assert "scene_support" not in motor["frames"][0]["snapshot"]
 
     # The trace is part of the evidence identity. A changed camera join cannot
     # silently keep showing overlays from the previous selection of frames.

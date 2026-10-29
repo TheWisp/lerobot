@@ -109,6 +109,7 @@ def register_rgbd_dataset(
     camera_pose_feature: str | None = None,
     fixed_scene_from_camera: np.ndarray | None = None,
     stationary_camera: bool = False,
+    scene_frame: str | None = None,
     source_name: str = "local RGB-D recording",
 ) -> Path:
     """Register existing LeRobot data for the shared RGB-D scene pipeline.
@@ -147,6 +148,10 @@ def register_rgbd_dataset(
         raise ValueError("camera pose feature is missing from the dataset")
     if sum((camera_pose_feature is not None, fixed_scene_from_camera is not None, stationary_camera)) != 1:
         raise ValueError("declare a camera trajectory, a fixed scene transform, or a stationary camera")
+    if scene_frame not in {None, "robot_base", "world"}:
+        raise ValueError("scene frame must be robot_base or world")
+    if stationary_camera and scene_frame is not None:
+        raise ValueError("a stationary camera without a transform uses its camera frame")
     fixed_pose = None
     if fixed_scene_from_camera is not None:
         fixed_pose, _ = scene_from_camera(
@@ -171,6 +176,7 @@ def register_rgbd_dataset(
         "camera_pose_feature": camera_pose_feature,
         "fixed_scene_from_camera": fixed_pose.tolist() if fixed_pose is not None else None,
         "camera_motion_assumption": "stationary" if camera_pose_feature is None else None,
+        "coordinate_frame": scene_frame or ("camera" if stationary_camera else "world"),
     }
     destination.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     return destination
@@ -251,6 +257,11 @@ def main() -> None:
     camera.add_argument("--camera-pose-feature", help="Per-frame 4x4 scene-from-camera feature")
     camera.add_argument("--fixed-scene-from-camera", type=Path, help="Fixed 4x4 transform text file")
     camera.add_argument("--stationary-camera", action="store_true", help="Use the camera as the scene frame")
+    parser.add_argument(
+        "--scene-frame",
+        choices=("robot_base", "world"),
+        help="Name the frame of a supplied fixed or moving camera transform",
+    )
     parser.add_argument("--source-name", default="local RGB-D recording")
     args = parser.parse_args()
     print(
@@ -267,6 +278,7 @@ def main() -> None:
                 np.loadtxt(args.fixed_scene_from_camera) if args.fixed_scene_from_camera is not None else None
             ),
             stationary_camera=args.stationary_camera,
+            scene_frame=args.scene_frame,
             source_name=args.source_name,
         )
     )

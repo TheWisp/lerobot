@@ -20,10 +20,13 @@ function setPose(group, baseFromObject, baseFromCamera) {
 function makeReference(data) {
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.Float32BufferAttribute(data.positions_object_m, 3));
-    geometry.setIndex(data.indices);
+    if (data.indices.length) geometry.setIndex(data.indices);
     const group = new THREE.Group();
-    group.add(new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({
+    group.add(data.indices.length ? new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({
         color: visionColor, side: THREE.DoubleSide, transparent: true, opacity: 0.32,
+        depthTest: true, depthWrite: false,
+    })) : new THREE.Points(geometry, new THREE.PointsMaterial({
+        color: visionColor, size: 0.003, sizeAttenuation: true, transparent: true, opacity: 0.7,
         depthTest: true, depthWrite: false,
     })));
     return {group, geometry};
@@ -218,7 +221,7 @@ function disposeEvidence(item, references) {
     });
 }
 
-export function createFlashSceneView(canvas, surfaces) {
+export function createFlashSceneView(canvas, surfaces, reprocessedSurfaces = {}) {
     const scene = new THREE.Scene();
     scene.background = null;
     scene.add(new THREE.HemisphereLight(0xffffff, 0x243244, 1.2));
@@ -246,7 +249,11 @@ export function createFlashSceneView(canvas, surfaces) {
     const raycaster = new THREE.Raycaster();
     const evidence = new THREE.Group();
     scene.add(evidence);
-    const references = Object.fromEntries(Object.entries(surfaces).map(([role, data]) => [role, makeReference(data)]));
+    const primaryReferences = Object.fromEntries(Object.entries(surfaces).map(([role, data]) => [role, makeReference(data)]));
+    const reprocessedReferences = Object.fromEntries(Object.entries(reprocessedSurfaces).map(([role, data]) => [role, makeReference(data)]));
+    const references = {...reprocessedReferences, ...primaryReferences};
+    const referenceBuffers = {...primaryReferences, ...Object.fromEntries(Object.entries(reprocessedReferences)
+        .map(([role, ref]) => [`reprocessed:${role}`, ref]))};
 
     function draw() {
         const width = canvas.clientWidth, height = canvas.clientHeight;
@@ -311,7 +318,7 @@ export function createFlashSceneView(canvas, surfaces) {
         while (evidence.children.length) {
             const item = evidence.children[0];
             evidence.remove(item);
-            disposeEvidence(item, references);
+            disposeEvidence(item, referenceBuffers);
         }
         turnGroup = null;
         const baseFromCamera = snapshot.camera.base_from_camera;
@@ -319,6 +326,8 @@ export function createFlashSceneView(canvas, surfaces) {
         observedCenters = {};
         observedBounds = {};
         for (const [role, ref] of Object.entries(references)) {
+            const primaryRef = primaryReferences[role];
+            const reprocessedRef = reprocessedReferences[role];
             const skillPose = held?.role === role ? held : snapshot.accepted?.[role];
             const extracted = snapshot.layers?.[role]?.demo_extraction;
             const perceptionOnly = !skillPose && extracted?.evidence !== 'lost' && !!extracted?.pose;
@@ -337,8 +346,8 @@ export function createFlashSceneView(canvas, surfaces) {
                 observed.children[0].userData.role = role;
                 evidence.add(observed);
             }
-            if ((options.showProjection || !frameEvidence?.available) && used?.pose) {
-                const surface = ref.group.clone();
+            if ((options.showProjection || !frameEvidence?.available) && used?.pose && primaryRef) {
+                const surface = primaryRef.group.clone();
                 // A clone shares the buffers, but owns its material for this frame.
                 surface.children.forEach(child => { child.material = child.material.clone(); });
                 if (held?.role === role) surface.children[0].material.color.setHex(gripperColor);
@@ -351,7 +360,7 @@ export function createFlashSceneView(canvas, surfaces) {
                 evidence.add(surface);
             }
             const coords = snapshot.centers_object_m?.[role];
-            if (coords && used?.pose && options.showAxes !== false) {
+            if (coords && used?.pose && primaryRef && options.showAxes !== false) {
                 const axes = makePoseAxes(0.025);
                 axes.children[0].position.fromArray(coords);
                 setPose(axes, used.pose, baseFromCamera);
@@ -362,10 +371,11 @@ export function createFlashSceneView(canvas, surfaces) {
             if (support?.base_xyz_m?.length && options.showGroup) {
                 const points = makeGroupSupport(support.base_xyz_m, baseFromCamera,
                     support.verified, support.measured_this_frame !== false);
-                points.userData = {kind: 'layer', estimator: 'demo_extraction', role, enabled: true};
+                points.userData = {kind: snapshot.reprocessed_scene_support ? 'reprocessed_group' : 'layer',
+                    estimator: snapshot.reprocessed_scene_support ? '' : 'demo_extraction', role, enabled: true};
                 evidence.add(points);
             }
-            if (extracted?.pose && !perceptionOnly) {
+            if (extracted?.pose && !perceptionOnly && primaryRef) {
                 const groupBased = extracted.estimator === 'environment_group_motion';
                 const ghost = makeDashedReference(ref.geometry, groupBased ? groupColor : visionColor);
                 setPose(ghost, extracted.pose, baseFromCamera);
@@ -376,19 +386,30 @@ export function createFlashSceneView(canvas, surfaces) {
                 evidence.add(ghost);
             }
             const rejected = snapshot.raw_proposals?.[role];
-            if (rejected?.pose) {
+            if (rejected?.pose && primaryRef) {
                 const ghost = makeDashedReference(ref.geometry, 0xf472b6);
                 setPose(ghost, rejected.pose, baseFromCamera);
                 ghost.userData = {kind: 'raw_proposal', role, enabled: false};
                 ghost.visible = false;
                 evidence.add(ghost);
             }
-            if (held?.role === role && held.pose) {
+            if (held?.role === role && held.pose && primaryRef) {
                 const ghost = makeDashedReference(ref.geometry, gripperColor);
                 setPose(ghost, held.pose, baseFromCamera);
                 ghost.userData = {kind: 'held', role, enabled: !!options.showGripper};
                 ghost.visible = ghost.userData.enabled;
                 evidence.add(ghost);
+            }
+            const reprocessedPose = snapshot.layers?.[role]?.reprocessed_scene;
+            if (reprocessedRef && reprocessedPose?.pose && options.showProjection) {
+                const surface = reprocessedRef.group.clone();
+                surface.children.forEach(child => {
+                    child.material = child.material.clone();
+                    child.material.color.setHex(0x34d399);
+                });
+                setPose(surface, reprocessedPose.pose, baseFromCamera);
+                surface.userData = {kind: 'layer', estimator: 'reprocessed_scene', role, enabled: true};
+                evidence.add(surface);
             }
         }
         if (options.showGripper && snapshot.accepted?.__gripper__?.pose) {
@@ -436,7 +457,7 @@ export function createFlashSceneView(canvas, surfaces) {
     }
 
     function highlight(source) {
-        const selected = ['layer', 'accepted', 'held', 'raw_proposal'].includes(source?.kind) ? source : null;
+        const selected = ['layer', 'accepted', 'held', 'raw_proposal', 'reprocessed_group'].includes(source?.kind) ? source : null;
         for (const item of evidence.children) {
             const match = selected && item.userData.kind === selected.kind &&
                 item.userData.role === selected.role &&
@@ -458,10 +479,14 @@ export function createFlashSceneView(canvas, surfaces) {
         // Camera navigation follows the visible measured surface. The accepted
         // pose is evidence to inspect, and may be the very thing that is wrong.
         if (observedCenters[role]) return observedCenters[role].clone();
-        const local = latestSnapshot?.centers_object_m?.[role];
-        const pose = latestSnapshot?.held_prediction?.role === role
+        const primaryLocal = latestSnapshot?.centers_object_m?.[role];
+        const primaryPose = latestSnapshot?.held_prediction?.role === role
             ? latestSnapshot.held_prediction : latestSnapshot?.accepted?.[role] ||
                 latestSnapshot?.layers?.[role]?.demo_extraction;
+        const sceneLocal = latestSnapshot?.reprocessed_scene_geometry?.centers_object_m?.[role];
+        const scenePose = latestSnapshot?.layers?.[role]?.reprocessed_scene;
+        const local = primaryLocal && primaryPose?.pose ? primaryLocal : sceneLocal;
+        const pose = primaryLocal && primaryPose?.pose ? primaryPose : scenePose;
         if (!local || !pose?.pose || !latestSnapshot.camera?.base_from_camera)
             return null;
         const point = new THREE.Vector3(...local);
@@ -591,7 +616,7 @@ export function createFlashSceneView(canvas, surfaces) {
             disposeEvidence(item, references);
         }
         if (context) { context.geometry.dispose(); context.material.dispose(); }
-        for (const ref of Object.values(references)) {
+        for (const ref of Object.values(referenceBuffers)) {
             ref.geometry.dispose();
             ref.group.children.forEach(child => child.material.dispose());
         }

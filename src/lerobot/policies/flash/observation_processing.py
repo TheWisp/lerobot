@@ -208,9 +208,12 @@ def _extract_to_directory(
                 "source_row_indices": [sample.row_index for sample in camera_samples],
                 "source_camera_frame_ids": [sample.camera_frame_id for sample in camera_samples],
                 "evidence_identity": identity,
-                "coordinate_frame": "world"
-                if source.get("camera_pose_feature") or source.get("fixed_scene_from_camera")
-                else "camera",
+                "coordinate_frame": source.get("coordinate_frame")
+                or (
+                    "world"
+                    if source.get("camera_pose_feature") or source.get("fixed_scene_from_camera")
+                    else "camera"
+                ),
                 "robot_actions_available": has_robot_actions,
                 "gripper_prediction_available": False,
                 "roles": list(roles),

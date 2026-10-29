@@ -1157,6 +1157,36 @@ def _flash_source_events(path: Path, camera_ids: set[int]) -> tuple[dict[int, di
     return events, incomplete
 
 
+def _flash_scene_on_motor_replay(root: Path, episode: int, ticks: list[dict], replay: dict) -> dict:
+    """Add optional offline RGB-D evidence without losing the original motor replay."""
+    extension = root.expanduser().resolve() / "flash" / "v1"
+    source_path = extension / "source.json"
+    sidecar = extension / "observation-evidence" / f"episode_{episode:06d}" / "manifest.json"
+    if not source_path.is_file() or not sidecar.is_file():
+        return replay
+    try:
+        source = json.loads(source_path.read_text(encoding="utf-8"))
+        if source.get("status") != "robot_recording":
+            return replay
+        if source.get("coordinate_frame") != "robot_base":
+            replay["scene_evidence"] = {
+                "available": False,
+                "reason": "RGB-D scene evidence is not calibrated into the robot base frame",
+            }
+            return replay
+        from lerobot.policies.flash.observation_replay import load_observation_replay
+        from lerobot.policies.flash.recording_scene_replay import attach_scene_evidence
+
+        scene = load_observation_replay(root, episode)
+        if not scene["evidence_available"]:
+            replay["scene_evidence"] = {"available": False, "reason": "RGB-D evidence is stale or incomplete"}
+            return replay
+        return attach_scene_evidence(replay, ticks, scene)
+    except (OSError, KeyError, TypeError, ValueError) as exc:
+        replay["scene_evidence"] = {"available": False, "reason": str(exc)}
+        return replay
+
+
 def _flash_tracker_replay(root: Path, episode: int) -> dict:
     info_path = root.expanduser().resolve() / "meta" / "info.json"
     camera_features = None
@@ -1277,37 +1307,47 @@ def _flash_tracker_replay(root: Path, episode: int) -> dict:
             frames.append(replay_frame)
         if not frames:
             raise HTTPException(404, "No tracker snapshot has a recorded camera frame")
-        return {
-            "available": True,
-            "kind": "rollout",
-            "layer_history": True,
-            "mask_evidence_incomplete": mask_evidence_incomplete,
-            "group_evidence_incomplete": group_evidence_incomplete,
-            "camera_features": camera_features,
-            "frames": frames,
-        }
+        return _flash_scene_on_motor_replay(
+            root,
+            episode,
+            ticks,
+            {
+                "available": True,
+                "kind": "rollout",
+                "layer_history": True,
+                "mask_evidence_incomplete": mask_evidence_incomplete,
+                "group_evidence_incomplete": group_evidence_incomplete,
+                "camera_features": camera_features,
+                "frames": frames,
+            },
+        )
     # Older trials recorded the accepted planner pose at motor ticks, but not
     # every rejected/direct/group layer. Show only what those traces establish.
-    return {
-        "available": True,
-        "kind": "rollout",
-        "layer_history": False,
-        "camera_features": camera_features,
-        "frames": [
-            {
-                "frame_index": tick["frame_index"],
-                "snapshot": {
-                    "recorded_at_s": tick.get("observed_at_s") or tick.get("scheduled_s"),
-                    "camera": None,
-                    "centers_object_m": {},
-                    "proposals": {},
-                    "layers": {},
-                    "accepted": tick.get("poses", {}),
-                },
-            }
-            for tick in ticks
-        ],
-    }
+    return _flash_scene_on_motor_replay(
+        root,
+        episode,
+        ticks,
+        {
+            "available": True,
+            "kind": "rollout",
+            "layer_history": False,
+            "camera_features": camera_features,
+            "frames": [
+                {
+                    "frame_index": tick["frame_index"],
+                    "snapshot": {
+                        "recorded_at_s": tick.get("observed_at_s") or tick.get("scheduled_s"),
+                        "camera": None,
+                        "centers_object_m": {},
+                        "proposals": {},
+                        "layers": {},
+                        "accepted": tick.get("poses", {}),
+                    },
+                }
+                for tick in ticks
+            ],
+        },
+    )
 
 
 def _flash_recorded_demo_replay(root: Path, episode: int, bundle_path: Path) -> dict:

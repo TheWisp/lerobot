@@ -2341,14 +2341,44 @@ def test_unprepared_regular_robot_demo_opens_timeline_editor_and_3d_scene(gui_pa
                 "kind": "rollout",
                 "layer_history": True,
                 "camera_features": {"rgb": "observation.images.rgb", "depth": "observation.images.depth"},
+                "reprocessed_scene_geometry": {
+                    "points_object_m": {"object": [[0, 0, 0.85], [0.01, 0, 0.85], [0, 0.01, 0.85]]},
+                    "centers_object_m": {"object": [0.003, 0.003, 0.85]},
+                },
                 "frames": [
                     {
                         "frame_index": index,
+                        "evidence": {"available": True, "masks_rle": {}, "groups": {}},
                         "snapshot": {
                             "camera": {**camera, "frame_id": index, "source_time_s": index / 30},
                             "recorded_at_s": index / 30,
                             "proposals": {},
-                            "layers": {},
+                            "reprocessed_observed_masks": {
+                                "object": {
+                                    "frame_id": index,
+                                    "boundary_xy": [[28, 20], [36, 20], [36, 28], [28, 28]],
+                                }
+                            },
+                            "reprocessed_scene_support": {
+                                "frame_id": index,
+                                "groups": {
+                                    "object": {
+                                        "ids": [1, 2],
+                                        "pixels": [[30, 22], [33, 24]],
+                                        "verified": True,
+                                    },
+                                },
+                            },
+                            "layers": {
+                                "object": {
+                                    "reprocessed_scene": {
+                                        "pose": np.eye(4).tolist(),
+                                        "evidence": "observed",
+                                        "estimator": "reprocessed_scene",
+                                        "source_time_s": index / 30,
+                                    }
+                                }
+                            },
                             "accepted": {},
                         },
                     }
@@ -2417,13 +2447,16 @@ def test_unprepared_regular_robot_demo_opens_timeline_editor_and_3d_scene(gui_pa
     page.evaluate("_loadFlashRecordings()")
     page.get_by_role("button", name="regular-robot-demo · episode 0").click()
     page.wait_for_function("() => flashReplay?.kind === 'recorded_demo'")
+    assert "Reprocessed RGB-D scene pose" in page.locator("#flash-tracker-content").inner_text()
+    assert "Reprocessed visible mask" in page.locator("#flash-tracker-content").inner_text()
+    assert "Reprocessed scene support" in page.locator("#flash-tracker-content").inner_text()
     assert page.locator("#flash-demo-edit-toggle").inner_text() == "Mark motion"
     page.locator("#flash-demo-edit-toggle").click()
     page.locator("#flash-recorded-editor").wait_for(state="visible")
     page.locator("#flash-demo-edit-toggle").click()
     page.get_by_role("button", name="3D scene").click()
     page.wait_for_function("() => flashSceneMode === '3d' && flashSceneFrameCache?.frameIndex === 0")
-    assert page.locator("#flash-scene-status").inner_text().startswith("Recorded RGB-D")
+    assert page.locator("#flash-scene-status").inner_text().startswith("Recorded RGB-D evidence")
     page.get_by_role("button", name="View RGB-D scene tracking").click()
     page.wait_for_function("() => flashReplay?.kind === 'observation_demo'")
     assert "Robot actions are preserved" in page.locator("#run-flash-status").inner_text()
