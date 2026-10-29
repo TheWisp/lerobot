@@ -28,6 +28,7 @@ import numpy as np
 
 from lerobot.configs.video import DepthEncoderConfig
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
+from lerobot.policies.flash.geometry import transform
 
 
 def _image(row: dict, feature: str, *, channels: int) -> np.ndarray:
@@ -73,6 +74,7 @@ def import_episode(
     depth_feature: str,
     camera_intrinsics: np.ndarray,
     camera_pose_feature: str | None = None,
+    pose_camera_from_rgbd_camera: np.ndarray | None = None,
     mask_feature: str | None = None,
     mask_channels: dict[str, int] | None = None,
     mask_threshold: float = 0.5,
@@ -92,6 +94,9 @@ def import_episode(
         or not np.allclose(intrinsics[2], [0, 0, 1])
     ):
         raise ValueError("camera intrinsics must describe the depth grid in pixels")
+    pose_basis = transform(pose_camera_from_rgbd_camera) if pose_camera_from_rgbd_camera is not None else None
+    if pose_basis is not None and camera_pose_feature is None:
+        raise ValueError("camera-frame alignment needs a source camera pose feature")
     masks = dict(mask_channels or {})
     if bool(mask_feature) != bool(masks) or len(set(masks.values())) != len(masks):
         raise ValueError("choose a mask feature and distinct channels for each named object")
@@ -147,6 +152,12 @@ def import_episode(
     }
     if camera_pose_feature:
         output_features["flash.world_from_camera"] = {"dtype": "float64", "shape": (16,), "names": None}
+        if pose_basis is not None:
+            output_features["flash.source_world_from_pose_camera"] = {
+                "dtype": "float64",
+                "shape": (16,),
+                "names": None,
+            }
     depth_encoder = DepthEncoderConfig(depth_min=0.0)
     result = LeRobotDataset.create(
         repo_id=repo_id,
@@ -184,16 +195,15 @@ def import_episode(
             "flash.source_frame_index": np.asarray([source_frame], dtype=np.int64),
         }
         if camera_pose_feature:
-            pose = np.asarray(row[camera_pose_feature], dtype=np.float64).reshape(4, 4)
-            rotation = pose[:3, :3]
-            if (
-                not np.isfinite(pose).all()
-                or not np.allclose(pose[3], [0, 0, 0, 1], atol=1e-6)
-                or not np.allclose(rotation @ rotation.T, np.eye(3), atol=1e-4)
-                or not np.isclose(np.linalg.det(rotation), 1, atol=1e-4)
-            ):
-                raise ValueError(f"frame {index}: invalid world-from-camera transform")
-            output["flash.world_from_camera"] = pose.reshape(16)
+            try:
+                raw_pose = transform(np.asarray(row[camera_pose_feature], dtype=np.float64).reshape(4, 4))
+            except ValueError as exc:
+                raise ValueError(f"frame {index}: invalid world-from-camera transform") from exc
+            if pose_basis is not None:
+                output["flash.source_world_from_pose_camera"] = raw_pose.reshape(16)
+            output["flash.world_from_camera"] = (
+                raw_pose @ pose_basis if pose_basis is not None else raw_pose
+            ).reshape(16)
         result.add_frame(output)
         if mask_feature:
             channels = _image(row, mask_feature, channels=3)
@@ -219,6 +229,10 @@ def import_episode(
         "depth_unit": "millimetres",
         "source_time_feature": "flash.source_time_s",
         "camera_pose_feature": "flash.world_from_camera" if camera_pose_feature else None,
+        "source_camera_pose_feature": (
+            "flash.source_world_from_pose_camera" if pose_basis is not None else None
+        ),
+        "pose_camera_from_rgbd_camera": pose_basis.tolist() if pose_basis is not None else None,
         "camera_motion_assumption": None if camera_pose_feature else "stationary",
         "coordinate_frame": "world" if camera_pose_feature else "camera",
         "rgb_depth_alignment": "same_rays_area_downsample"
@@ -252,6 +266,11 @@ def main() -> None:
     parser.add_argument("--depth-feature", required=True)
     parser.add_argument("--camera-intrinsics", required=True, type=Path)
     parser.add_argument("--camera-pose-feature")
+    parser.add_argument(
+        "--pose-camera-from-rgbd-camera",
+        type=Path,
+        help="Explicit 4x4 transform from RGB-D pixel/depth axes to the source pose's camera axes",
+    )
     parser.add_argument("--mask-feature")
     parser.add_argument("--mask", action="append", default=[], metavar="ROLE=CHANNEL")
     parser.add_argument("--mask-threshold", type=float, default=0.5)
@@ -277,6 +296,11 @@ def main() -> None:
             depth_feature=args.depth_feature,
             camera_intrinsics=np.loadtxt(args.camera_intrinsics),
             camera_pose_feature=args.camera_pose_feature,
+            pose_camera_from_rgbd_camera=(
+                np.loadtxt(args.pose_camera_from_rgbd_camera)
+                if args.pose_camera_from_rgbd_camera is not None
+                else None
+            ),
             mask_feature=args.mask_feature,
             mask_channels=masks,
             mask_threshold=args.mask_threshold,
