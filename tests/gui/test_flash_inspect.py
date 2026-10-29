@@ -2300,3 +2300,96 @@ def test_prepared_recording_reuses_tracker_replay_view(gui_page):
     assert "Recorded gripper pose" in page.locator("#flash-tracker-content").inner_text()
     assert page.locator("#flash-demo-edit-toggle").is_visible()
     assert page.locator("#flash-timeline-markers .flash-timeline-marker").count() == 1
+
+
+def test_unprepared_regular_robot_demo_opens_timeline_editor_and_3d_scene(gui_page):
+    page = gui_page
+    root = "/tmp/regular-robot-demo"
+    page.route(
+        "**/api/run/flash/recordings",
+        lambda route: route.fulfill(
+            json=[
+                {
+                    "kind": "recorded_source_demo",
+                    "dataset_root": root,
+                    "episode": 0,
+                    "modified_at_s": 1,
+                    "skills": [],
+                    "prepared_versions": [],
+                    "bundle_path": None,
+                }
+            ]
+        ),
+    )
+    camera = {
+        "frame_id": 0,
+        "source_time_s": 0,
+        "width": 64,
+        "height": 48,
+        "intrinsics": [[90, 0, 32], [0, 90, 24], [0, 0, 1]],
+        "base_from_camera": np.eye(4).tolist(),
+        "calibration_version": "test-camera",
+    }
+    page.route(
+        "**/api/run/flash/telemetry/replay?*",
+        lambda route: route.fulfill(
+            json={
+                "available": True,
+                "kind": "rollout",
+                "layer_history": True,
+                "camera_features": {"rgb": "observation.images.rgb", "depth": "observation.images.depth"},
+                "frames": [
+                    {
+                        "frame_index": index,
+                        "snapshot": {
+                            "camera": {**camera, "frame_id": index, "source_time_s": index / 30},
+                            "recorded_at_s": index / 30,
+                            "proposals": {},
+                            "layers": {},
+                            "accepted": {},
+                        },
+                    }
+                    for index in range(2)
+                ],
+            }
+        ),
+    )
+    page.route(
+        "**/api/run/flash/recorded/source?*",
+        lambda route: route.fulfill(
+            json={
+                "episode": 0,
+                "frame_count": 2,
+                "ready": True,
+                "reason": None,
+                "roles": ["object"],
+                "observed_frames": {"object": [0, 1]},
+                "pose_counts": {"object": {"observed": 2, "predicted": 0}},
+                "symmetry_roles": [],
+            }
+        ),
+    )
+    ok, encoded_frame = cv2.imencode(".png", np.zeros((48, 64, 3), dtype=np.uint8))
+    assert ok
+    page.route(
+        "**/episodes/0/frame/*",
+        lambda route: route.fulfill(body=encoded_frame.tobytes(), content_type="image/png"),
+    )
+    page.route(
+        "**/episodes/0/depth-frame/*",
+        lambda route: route.fulfill(
+            body=np.full((48, 64), 850, dtype=np.uint16).tobytes(), content_type="application/octet-stream"
+        ),
+    )
+    page.evaluate("switchTab('run'); selectWorkflow('flash')")
+    page.evaluate(f"datasets[{json.dumps(root)}] = {{id: 'regular', root: {json.dumps(root)}}}")
+    page.evaluate("_loadFlashRecordings()")
+    page.get_by_role("button", name="regular-robot-demo · episode 0").click()
+    page.wait_for_function("() => flashReplay?.kind === 'recorded_demo'")
+    assert page.locator("#flash-demo-edit-toggle").inner_text() == "Mark motion"
+    page.locator("#flash-demo-edit-toggle").click()
+    page.locator("#flash-recorded-editor").wait_for(state="visible")
+    page.locator("#flash-demo-edit-toggle").click()
+    page.get_by_role("button", name="3D scene").click()
+    page.wait_for_function("() => flashSceneMode === '3d' && flashSceneFrameCache?.frameIndex === 0")
+    assert page.locator("#flash-scene-status").inner_text().startswith("Recorded RGB-D")

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from math import radians
+from math import isfinite, radians
 from pathlib import Path
 
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
@@ -19,25 +19,84 @@ from .skill import AttachmentAction, AttachmentTransition, EndpointRequirement, 
 from .trajectory import Evidence
 
 
+def _local_file(root: Path, relative: str, directory: Path, label: str) -> Path:
+    if not isinstance(relative, str) or not relative or Path(relative).is_absolute():
+        raise ValueError(f"{label} must be a dataset-local path")
+    path = (root / relative).resolve()
+    if not path.is_relative_to(directory.resolve()) or not path.is_file():
+        raise ValueError(f"{label} is missing or outside its dataset extension")
+    return path
+
+
+def recorded_repo_id(root: Path, episode: int) -> str:
+    """Read the dataset identity without requiring preparation-time rig assets."""
+    extension = root / "flash" / "v1"
+    source_path = extension / "recorded-sources" / f"episode_{episode:06d}.json"
+    if source_path.is_file():
+        source = json.loads(source_path.read_text(encoding="utf-8"))
+        if source.get("schema_version") != 1 or source.get("episode") != episode:
+            raise ValueError("recorded demo source has an invalid schema or episode")
+        repo_id = source.get("repo_id")
+    else:
+        repo_id = json.loads((extension / "trial_config.json").read_text(encoding="utf-8")).get(
+            "output_repo_id"
+        )
+    if not isinstance(repo_id, str) or not repo_id:
+        raise ValueError("recorded demo needs its dataset identity")
+    return repo_id
+
+
 def _source(root: Path, episode: int) -> tuple[dict, Path, PreparedFlashSkill]:
+    """Read a portable recorded-demo source or the older trial configuration."""
     if episode < 0:
         raise ValueError("episode must be nonnegative")
     extension = root / "flash" / "v1"
-    settings = json.loads((extension / "trial_config.json").read_text(encoding="utf-8"))
-    relative = settings.get("source_reference_bundle")
-    if not isinstance(relative, str) or not relative:
-        raise ValueError(
-            "this recording has no saved object references; its motion can be viewed but not prepared"
+    source_path = extension / "recorded-sources" / f"episode_{episode:06d}.json"
+    if source_path.is_file():
+        source = json.loads(source_path.read_text(encoding="utf-8"))
+        if source.get("schema_version") != 1 or source.get("episode") != episode:
+            raise ValueError("recorded demo source has an invalid schema or episode")
+        robot = source.get("robot")
+        if not isinstance(robot, dict) or robot.get("type") != "so107_follower_gravity":
+            raise ValueError("recorded demo needs a supported robot kinematics adapter")
+        if not isinstance(robot.get("arm"), str) or not robot["arm"]:
+            raise ValueError("recorded demo needs its measured robot arm")
+        age = source.get("max_pose_age_s")
+        if isinstance(age, bool) or not isinstance(age, (int, float)) or not isfinite(age) or age <= 0:
+            raise ValueError("recorded demo needs a finite positive maximum pose age")
+        if not isinstance(source.get("repo_id"), str) or not source["repo_id"]:
+            raise ValueError("recorded demo needs its dataset identity")
+        calibration = _local_file(root, robot.get("calibration"), extension / "robot", "robot calibration")
+        bundle_path = _local_file(
+            root, source.get("reference_bundle"), extension / "reference_bundles", "reference snapshot"
         )
-    bundle_path = (root / relative).resolve()
-    if not bundle_path.is_relative_to(extension / "reference_bundles"):
-        raise ValueError("reference snapshot must be inside this trial dataset")
-    if not bundle_path.is_file():
-        raise ValueError("this trial's reference snapshot is missing")
-    if not settings.get("output_root") or Path(settings["output_root"]).expanduser().resolve() != root:
-        raise ValueError("trial configuration belongs to another dataset")
-    if not settings.get("output_repo_id"):
-        raise ValueError("trial configuration has no dataset identity")
+        settings = {
+            "output_repo_id": source["repo_id"],
+            "robot_type": robot["type"],
+            "robot_arm": robot["arm"],
+            "calibration_path": str(calibration),
+            "max_pose_age_s": age,
+        }
+    else:
+        settings = json.loads((extension / "trial_config.json").read_text(encoding="utf-8"))
+        relative = settings.get("source_reference_bundle")
+        if not isinstance(relative, str) or not relative:
+            raise ValueError(
+                "this recording has no saved object references; its motion can be viewed but not prepared"
+            )
+        bundle_path = (root / relative).resolve()
+        if not bundle_path.is_relative_to(extension / "reference_bundles"):
+            raise ValueError("reference snapshot must be inside this trial dataset")
+        if not bundle_path.is_file():
+            raise ValueError("this trial's reference snapshot is missing")
+        if not settings.get("output_root") or Path(settings["output_root"]).expanduser().resolve() != root:
+            raise ValueError("trial configuration belongs to another dataset")
+        if not settings.get("output_repo_id"):
+            raise ValueError("trial configuration has no dataset identity")
+        profile = json.loads(Path(settings["robot_profile"]).expanduser().read_text(encoding="utf-8"))
+        settings["robot_type"] = profile.get("type")
+        if profile["fields"]["arm"] != settings["robot_arm"]:
+            raise ValueError("trial robot arm and saved profile differ")
     return settings, bundle_path, PreparedFlashSkill.load(bundle_path)
 
 
@@ -98,18 +157,15 @@ def prepare_recorded_trial(
 ) -> Path:
     """Compile explicitly marked intervals into a candidate FLASH skill.
 
-    SO-107 is an initial rig adapter; the compiler and sidecar format remain
+    SO-107 is the initial rig adapter; the compiler and sidecar format remain
     robot independent. This adapter reads calibration and robot identity from
-    the trial's own saved configuration, never from the running GUI.
+    the dataset's own saved source, never from the running GUI.
     """
     root = Path(dataset_root).expanduser().resolve()
     settings, bundle_path, prepared = _source(root, episode)
-    profile = json.loads(Path(settings["robot_profile"]).expanduser().read_text(encoding="utf-8"))
-    if profile.get("type") != "so107_follower_gravity":
-        raise ValueError("this editor currently needs an SO-107 gravity trial")
-    arm = profile["fields"]["arm"]
-    if arm != settings["robot_arm"]:
-        raise ValueError("trial robot arm and saved profile differ")
+    if settings["robot_type"] != "so107_follower_gravity":
+        raise ValueError("this editor currently needs an SO-107 gravity recording")
+    arm = settings["robot_arm"]
     calibration = json.loads(Path(settings["calibration_path"]).expanduser().read_text(encoding="utf-8"))
     arm_names = tuple(joint for joint in MOTOR_NAMES if joint != "gripper")
     kinematics = SelectedJointKinematics(

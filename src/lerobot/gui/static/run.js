@@ -59,7 +59,7 @@ function _flashSceneOptions() {
 async function _flashUpdateSceneFrame() {
     const kind = flashReplay?.kind || (flashTelemetryTimer ? 'live' : null);
     const recorded = ['rollout', 'recorded_demo', 'observation_demo'].includes(kind);
-    if (flashSceneMode !== '3d' || !flashSceneView || !['demo', 'observation_demo', 'rollout', 'live'].includes(kind)) return;
+    if (flashSceneMode !== '3d' || !flashSceneView || !['demo', 'observation_demo', 'rollout', 'recorded_demo', 'live'].includes(kind)) return;
     const image = document.querySelector('#rerun-viewer .flash-replay-grid img');
     const index = Number(document.getElementById('flash-tracker-scrub').value);
     const selected = kind === 'live'
@@ -176,7 +176,7 @@ async function _flashUpdateSceneFrame() {
 
 async function toggleFlashSceneView() {
     const kind = flashReplay?.kind || (flashTelemetryTimer ? 'live' : null);
-    if (!['demo', 'observation_demo', 'rollout', 'live'].includes(kind)) return;
+    if (!['demo', 'observation_demo', 'rollout', 'recorded_demo', 'live'].includes(kind)) return;
     const grid = document.querySelector('#rerun-viewer .flash-replay-grid');
     const toggle = document.getElementById('flash-scene-toggle');
     const tools = document.getElementById('flash-scene-tools');
@@ -1636,7 +1636,7 @@ function stopFlashTelemetry() {
     flashTelemetryTimer = null;
 }
 
-async function loadFlashTrackerReplay(datasetRoot, episodeIndex) {
+async function loadFlashTrackerReplay(datasetRoot, episodeIndex, asDemo = false) {
     const root = datasetRoot || _val('run-flash-root');
     const episode = episodeIndex ?? Number(_val('run-flash-episode'));
     if (!root || !Number.isInteger(episode) || episode < 0) {
@@ -1652,7 +1652,9 @@ async function loadFlashTrackerReplay(datasetRoot, episodeIndex) {
             dataset = Object.values(datasets).find(item => item.root === root);
         }
         if (!dataset) return;
-        _flashInstallReplay({ ...result, datasetId: dataset.id, datasetRoot: root, episode }, 'Recorded overhead camera');
+        _flashInstallReplay({ ...result, kind: asDemo ? 'recorded_demo' : result.kind,
+            prepared_intervals: asDemo ? [] : result.prepared_intervals,
+            datasetId: dataset.id, datasetRoot: root, episode }, 'Recorded overhead camera');
         const firstTrackedFrame = result.frames.findIndex(frame =>
             frame.snapshot?.camera && Object.keys(frame.snapshot?.accepted || {}).length);
         seekFlashReplay(Math.max(0, firstTrackedFrame));
@@ -2016,8 +2018,8 @@ async function _loadFlashRecordings() {
         if (generation !== flashRecordingsGeneration) return;
         list.replaceChildren();
         demosList.replaceChildren();
-        const demos = recordings.filter(recording => ['demo', 'observation_demo'].includes(recording.kind));
-        const rollouts = recordings.filter(recording => !['demo', 'observation_demo'].includes(recording.kind));
+        const demos = recordings.filter(recording => ['demo', 'observation_demo', 'recorded_source_demo'].includes(recording.kind));
+        const rollouts = recordings.filter(recording => !['demo', 'observation_demo', 'recorded_source_demo'].includes(recording.kind));
         if (!demos.length) demosList.textContent = 'No FLASH demos in your dataset sources.';
         if (!rollouts.length) list.textContent = 'No FLASH rollouts in your dataset sources.';
         for (const recording of demos) {
@@ -2045,12 +2047,16 @@ async function _loadFlashRecordings() {
                 : recording.bundle_path
                 ? `${skills.length} FLASH skill(s) · viewing: ${recording.prepared_skill}` +
                     `${viewedVersion?.candidate ? ' · review candidate' : ''} · Play with extracted poses`
+                : recording.kind === 'recorded_source_demo'
+                ? 'Recorded robot demo · mark motion in playback'
                 : 'Raw SO-107 RGB-D demo · prepare objects and action in playback';
             button.append(label, meta);
             button.onclick = () => recording.kind === 'observation_demo'
                 ? loadFlashObservationReplay(recording.dataset_root, recording.episode)
                 : recording.bundle_path ? loadFlashDemoReplay(recording.dataset_root, recording.episode,
                     card.querySelector('.flash-recording-version')?.value || recording.bundle_path)
+                : recording.kind === 'recorded_source_demo'
+                ? loadFlashTrackerReplay(recording.dataset_root, recording.episode, true)
                 : loadFlashRawDemoReplay(recording.dataset_root, recording.episode);
             card.append(button);
             if (versions.length > 1) {

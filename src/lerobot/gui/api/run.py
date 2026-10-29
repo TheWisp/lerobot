@@ -1161,14 +1161,28 @@ def _flash_tracker_replay(root: Path, episode: int) -> dict:
     info_path = root.expanduser().resolve() / "meta" / "info.json"
     camera_features = None
     if info_path.is_file():
+        from lerobot.policies.flash.observation_dataset import camera_feature_keys
+
         features = json.loads(info_path.read_text(encoding="utf-8")).get("features", {})
-        for depth_key, feature in features.items():
-            if not feature.get("info", {}).get("is_depth_map") or not depth_key.endswith("_depth"):
-                continue
-            rgb_key = depth_key.removesuffix("_depth")
-            if rgb_key in features:
-                camera_features = {"rgb": rgb_key, "depth": depth_key}
-                break
+        source_path = (
+            root.expanduser().resolve() / "flash" / "v1" / "recorded-sources" / f"episode_{episode:06d}.json"
+        )
+        source = json.loads(source_path.read_text(encoding="utf-8")) if source_path.is_file() else {}
+        try:
+            rgb_key, depth_key = camera_feature_keys(features, source)
+            camera_features = {"rgb": rgb_key, "depth": depth_key}
+        except ValueError:
+            if source.get("rgb_feature") or source.get("depth_feature"):
+                raise
+            # Older FLASH recordings may have several RGB views and no
+            # selected camera in their source metadata.
+            for depth_key, feature in features.items():
+                if not feature.get("info", {}).get("is_depth_map") or not depth_key.endswith("_depth"):
+                    continue
+                rgb_key = depth_key.removesuffix("_depth")
+                if rgb_key in features:
+                    camera_features = {"rgb": rgb_key, "depth": depth_key}
+                    break
     extension = root.expanduser().resolve() / "flash" / "v1"
     trace_path = extension / f"episode_{episode:06d}.jsonl"
     if not trace_path.is_file():
@@ -1299,6 +1313,7 @@ def _flash_tracker_replay(root: Path, episode: int) -> dict:
 def _flash_recorded_demo_replay(root: Path, episode: int, bundle_path: Path) -> dict:
     """Show saved motion sections on the trial's own camera and tracker frames."""
     from lerobot.policies.flash.prepared import PreparedFlashSkill
+    from lerobot.policies.flash.recorded_trial import recorded_repo_id
 
     root = root.expanduser().resolve()
     bundle_path = bundle_path.expanduser().resolve()
@@ -1308,8 +1323,7 @@ def _flash_recorded_demo_replay(root: Path, episode: int, bundle_path: Path) -> 
     prepared = PreparedFlashSkill.load(bundle_path)
     if prepared.skill.source_episode != episode:
         raise ValueError("prepared skill belongs to a different episode")
-    settings = json.loads((root / "flash" / "v1" / "trial_config.json").read_text(encoding="utf-8"))
-    if prepared.skill.source_repo_id != settings.get("output_repo_id"):
+    if prepared.skill.source_repo_id != recorded_repo_id(root, episode):
         raise ValueError("prepared skill belongs to a different recording")
     result = _flash_tracker_replay(root, episode)
     result["kind"] = "recorded_demo"
@@ -2063,6 +2077,29 @@ def _flash_recordings(source_paths: tuple[Path, ...]) -> list[dict]:
         if not isinstance(episode_count, int) or episode_count < 0:
             continue
         demos: dict[int, dict] = {}
+        for source_path in (extension / "recorded-sources").glob("episode_*.json"):
+            try:
+                episode = int(source_path.stem.removeprefix("episode_"))
+                source = json.loads(source_path.read_text(encoding="utf-8"))
+                if (
+                    not 0 <= episode < episode_count
+                    or source.get("schema_version") != 1
+                    or source.get("episode") != episode
+                    or not (extension / f"episode_{episode:06d}.jsonl").is_file()
+                ):
+                    continue
+            except (OSError, ValueError, TypeError):
+                continue
+            demos[episode] = {
+                "kind": "recorded_source_demo",
+                "dataset_root": str(dataset_root.resolve()),
+                "episode": episode,
+                "modified_at_s": source_path.stat().st_mtime,
+                "skills": [],
+                "prepared_versions": [],
+                "bundle_path": None,
+                "prepared_skill": None,
+            }
         observation_source = extension / "source.json"
         if observation_source.is_file():
             try:
@@ -2099,16 +2136,19 @@ def _flash_recordings(source_paths: tuple[Path, ...]) -> list[dict]:
                     }
         raw_arm = dataset_root / "showservo_demo.npz"
         if episode_count > 0 and raw_arm.is_file() and (dataset_root / "recording" / "times.txt").is_file():
-            demos[0] = {
-                "kind": "demo",
-                "dataset_root": str(dataset_root.resolve()),
-                "episode": 0,
-                "modified_at_s": raw_arm.stat().st_mtime,
-                "skills": [],
-                "prepared_versions": [],
-                "bundle_path": None,
-                "prepared_skill": None,
-            }
+            demos.setdefault(
+                0,
+                {
+                    "kind": "demo",
+                    "dataset_root": str(dataset_root.resolve()),
+                    "episode": 0,
+                    "modified_at_s": raw_arm.stat().st_mtime,
+                    "skills": [],
+                    "prepared_versions": [],
+                    "bundle_path": None,
+                    "prepared_skill": None,
+                },
+            )
         skill_paths = list((extension / "prepared").glob("*/bundle.json"))
         skill_paths += list((extension / "skills").glob("*.json"))
         skill_paths.sort(key=lambda path: path.stat().st_mtime)
@@ -2189,6 +2229,8 @@ def _flash_recordings(source_paths: tuple[Path, ...]) -> list[dict]:
             try:
                 episode = int(trace.stem.removeprefix("episode_"))
             except ValueError:
+                continue
+            if episode in demos and demos[episode]["kind"] == "recorded_source_demo":
                 continue
             detail = episodes.get(str(episode), {})
             found.append(

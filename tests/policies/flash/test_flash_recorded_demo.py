@@ -5,6 +5,7 @@ import json
 import numpy as np
 import pytest
 
+from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.policies.flash.appearance import AppearanceModel
 from lerobot.policies.flash.compiler import IntervalAnnotation
 from lerobot.policies.flash.matched_rgbd import ObjectPointModel
@@ -240,6 +241,141 @@ def test_recorded_trial_requires_a_portable_reference_snapshot(tmp_path):
     assert not inspection["ready"]
     assert inspection["pose_counts"]["object"]["observed"] == 3
     assert "reference" in inspection["reason"] or "trial_config" in inspection["reason"]
+
+
+def test_regular_recorded_demo_uses_dataset_local_source_without_trial_config(tmp_path, monkeypatch):
+    from lerobot.gui.api.run import _flash_recorded_demo_replay, _flash_recordings
+    from lerobot.policies.flash import recorded_trial
+
+    dataset = LeRobotDataset.create(
+        repo_id="trial/recording",
+        fps=30,
+        features={
+            "observation.state": {"dtype": "float32", "shape": (2,), "names": ["joint.pos", "gripper.pos"]},
+            "action": {"dtype": "float32", "shape": (2,), "names": ["joint.pos", "gripper.pos"]},
+        },
+        root=tmp_path / "dataset",
+        robot_type="so107_follower_gravity",
+    )
+    for index in range(3):
+        dataset.add_frame(
+            {
+                "task": "move an object",
+                "observation.state": np.array([index, 0], dtype=np.float32),
+                "action": np.array([index, 1], dtype=np.float32),
+            }
+        )
+    dataset.save_episode()
+    dataset.finalize()
+    root = dataset.root
+    reference_path = _recorded_inputs(root)
+    robot_dir = root / "flash/v1/robot"
+    robot_dir.mkdir()
+    calibration = robot_dir / "calibration.json"
+    calibration.write_text(json.dumps({"tool_point": {"offset_m": [0, 0, 0]}}))
+    source_dir = root / "flash/v1/recorded-sources"
+    source_dir.mkdir()
+    source = {
+        "schema_version": 1,
+        "episode": 0,
+        "repo_id": "trial/recording",
+        "reference_bundle": reference_path.relative_to(root).as_posix(),
+        "robot": {
+            "type": "so107_follower_gravity",
+            "arm": "left",
+            "calibration": calibration.relative_to(root).as_posix(),
+        },
+        "max_pose_age_s": 0.2,
+    }
+    source_path = source_dir / "episode_000000.json"
+    source_path.write_text(json.dumps(source))
+    monkeypatch.setattr(recorded_trial, "MOTOR_NAMES", ("joint", "gripper"))
+    monkeypatch.setattr(
+        recorded_trial, "make_calibrated_so107_kinematics", lambda *args, **kwargs: Kinematics()
+    )
+    monkeypatch.setattr(recorded_trial, "SelectedJointKinematics", lambda inner, *args: inner)
+
+    assert inspect_recorded_trial(root, 0)["ready"]
+    listing = _flash_recordings((tmp_path,))
+    assert [(item["kind"], item["episode"]) for item in listing] == [("recorded_source_demo", 0)]
+    output = prepare_recorded_trial(
+        root,
+        0,
+        "generic-candidate",
+        [
+            {
+                "first_frame": 0,
+                "last_frame": 2,
+                "mode": "demonstrated",
+                "relation": "ee_to_object",
+                "reference_role": "object",
+            }
+        ],
+    )
+    skill = PreparedFlashSkill.load(output).skill
+    assert skill.source_repo_id == "trial/recording"
+    assert skill.intervals[0].held_role is None
+    assert not skill.attachment_transitions
+    replay = _flash_recorded_demo_replay(root, 0, output)
+    assert replay["kind"] == "recorded_demo"
+    assert replay["prepared_intervals"][0]["reference_role"] == "object"
+
+    source["reference_bundle"] = "../outside/bundle.json"
+    source_path.write_text(json.dumps(source))
+    inspection = inspect_recorded_trial(root, 0)
+    assert not inspection["ready"] and "reference snapshot" in inspection["reason"]
+
+
+def test_recorded_demo_replay_selects_rgbd_from_dataset_metadata(tmp_path):
+    from lerobot.gui.api.run import _flash_tracker_replay
+
+    extension = tmp_path / "flash/v1"
+    source_dir = extension / "recorded-sources"
+    source_dir.mkdir(parents=True)
+    (source_dir / "episode_000000.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "episode": 0,
+                "repo_id": "trial/recording",
+                "rgb_feature": "observation.images.overhead",
+                "depth_feature": "observation.images.depth",
+            }
+        )
+    )
+    (extension / "episode_000000.jsonl").write_text(
+        json.dumps(
+            {
+                "episode_index": 0,
+                "frame_index": 0,
+                "camera_source_time_s": None,
+                "poses": {},
+            }
+        )
+        + "\n"
+    )
+    meta = tmp_path / "meta"
+    meta.mkdir()
+    (meta / "info.json").write_text(
+        json.dumps(
+            {
+                "features": {
+                    "observation.images.overhead": {"dtype": "video", "shape": [48, 64, 3]},
+                    "observation.images.wrist": {"dtype": "video", "shape": [48, 64, 3]},
+                    "observation.images.depth": {
+                        "dtype": "video",
+                        "shape": [48, 64, 1],
+                        "info": {"is_depth_map": True},
+                    },
+                }
+            }
+        )
+    )
+    replay = _flash_tracker_replay(tmp_path, 0)
+    assert replay["camera_features"] == {
+        "rgb": "observation.images.overhead",
+        "depth": "observation.images.depth",
+    }
 
 
 def test_recorded_trial_editor_compiles_candidate_with_explicit_hold_event(tmp_path, monkeypatch):

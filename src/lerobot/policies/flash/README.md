@@ -408,6 +408,19 @@ tilted direction fails. This is a task constraint, not evidence that an
 unobserved pose component has become known. The compiler and verifier require
 only orientation axes that can change the selected feature. The current planner still uses
 the full pose to generate its motion; this check alone does not adapt a path.
+
+A recorded robot episode with a FLASH pose trace can be edited without a
+trial-specific launch config. Its dataset-local
+`flash/v1/recorded-sources/episode_000000.json` names the episode and repo ID,
+a prepared reference snapshot under `flash/v1/reference_bundles/`, the SO-107
+arm and a calibration copy under `flash/v1/robot/`, plus a maximum pose age for
+result checks. Run → FLASH lists it with demos, opens its existing recording
+and 3D scene views, and compiles marked motion through the same
+`prepare_recorded_episode` path as a FLASH rollout. The sealed demo importer
+remains available for older `showservo_demo.npz` recordings. An ordinary
+LeRobot recording without pose evidence and registered object references still
+needs those inputs prepared before it can become an executable spatial skill.
+
 Held-to-target intervals also name the held role; skill inspection reports a
 missing role or a missing matching attach event before live integration. It
 also counts observed and predicted demo poses and warns when a held interval
