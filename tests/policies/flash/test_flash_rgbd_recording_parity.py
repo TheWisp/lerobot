@@ -11,7 +11,7 @@ from lerobot.configs.video import DepthEncoderConfig
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.gui.api.run import _flash_recordings, _flash_scene_on_motor_replay, _flash_tracker_replay
 from lerobot.policies.flash import observation_processing
-from lerobot.policies.flash.observation_dataset import register_rgbd_dataset
+from lerobot.policies.flash.observation_dataset import episode_camera_samples, register_rgbd_dataset
 from lerobot.policies.flash.observation_replay import load_observation_replay
 from lerobot.policies.flash.recording_scene_replay import attach_scene_evidence
 from lerobot.policies.flash.trajectory import Evidence, PoseEstimate
@@ -210,6 +210,22 @@ def test_motor_replay_keeps_uncalibrated_scene_separate(tmp_path):
     replay = _flash_scene_on_motor_replay(tmp_path, 0, [], original)
     assert replay["frames"] == original["frames"]
     assert "not calibrated into the robot base" in replay["scene_evidence"]["reason"]
+
+
+def test_camera_sample_index_does_not_decode_rgbd_rows(tmp_path, monkeypatch):
+    root = tmp_path / "observation"
+    _episode(root, with_actions=False)
+    dataset = LeRobotDataset("local/video_rgbd", root=root)
+    source = json.loads((root / "flash/v1/source.json").read_text())
+
+    def reject_decoding(_self, _index):
+        raise AssertionError("indexing the episode must not decode RGB-D frames")
+
+    monkeypatch.setattr(LeRobotDataset, "__getitem__", reject_decoding)
+    samples, trace_sha = episode_camera_samples(root, dataset, source, 0)
+    assert trace_sha is None
+    assert [sample.row_index for sample in samples] == [0, 1, 2]
+    assert [sample.source_time_s for sample in samples] == pytest.approx([0.0, 0.1, 0.2])
 
 
 def test_motor_replay_rejects_different_camera_calibration():

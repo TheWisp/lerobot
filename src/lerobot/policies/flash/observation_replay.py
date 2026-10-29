@@ -61,8 +61,7 @@ def load_observation_replay(root: Path, episode: int = 0) -> dict:
         and observation.get("source_camera_frame_ids", [sample.camera_frame_id for sample in samples])
         == [sample.camera_frame_id for sample in samples]
     )
-    first = dataset[samples[0].row_index]
-    height, width = first[depth_key].numpy().squeeze().shape
+    height, width = dataset.meta.features[depth_key]["shape"][:2]
     intrinsics = source["camera_intrinsics"]
     frames = []
     geometry = {"points_object_m": {}, "centers_object_m": {}}
@@ -84,9 +83,12 @@ def load_observation_replay(root: Path, episode: int = 0) -> dict:
         except (OSError, ValueError, TypeError):
             pass
     for frame_id, sample in enumerate(samples):
-        row = dataset[sample.row_index]
+        # The saved evidence already contains each mask and pose. Loading an
+        # image-backed LeRobot row here decodes both RGB and depth; fixed-camera
+        # replay only needs depth once per role to build display geometry.
+        row = dataset[sample.row_index] if source.get("camera_pose_feature") else None
         time_s = sample.source_time_s
-        scene_pose, calibration_version = scene_from_camera(row, dataset.meta.features, source)
+        scene_pose, calibration_version = scene_from_camera(row or {}, dataset.meta.features, source)
         frame_evidence = None
         if evidence_available:
             with gzip.open(sidecar / f"{frame_id:06d}.json.gz", "rt", encoding="utf-8") as stream:
@@ -126,6 +128,8 @@ def load_observation_replay(root: Path, episode: int = 0) -> dict:
                 boundary = max(contours, key=cv2.contourArea).reshape(-1, 2).tolist() if contours else []
                 masks[role] = {"frame_id": frame_id, "runs": runs, "boundary_xy": boundary}
                 if role not in geometry["points_object_m"] and role in accepted and point_limit:
+                    if row is None:
+                        row = dataset[sample.row_index]
                     depth = row[depth_key].numpy().squeeze().astype(np.float64) * scale_m
                     valid = np.flatnonzero((binary != 0) & np.isfinite(depth) & (depth > 0))
                     if len(valid):

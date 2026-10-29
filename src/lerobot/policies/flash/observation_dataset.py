@@ -25,14 +25,23 @@ def episode_camera_samples(
     root: Path, dataset, source: dict, episode: int
 ) -> tuple[list[CameraSample], str | None]:
     """Use capture IDs in FLASH motor traces; never advance vision on a reused image."""
-    rows = [index for index in range(dataset.num_frames) if int(dataset[index]["episode_index"]) == episode]
-    if not rows:
+    first, count = dataset.episode_rows(episode)
+    if not count:
         raise ValueError(f"episode {episode} is empty")
+    rows = range(first, first + count)
     trace_path = root / "flash" / "v1" / f"episode_{episode:06d}.jsonl"
     if source.get("status") != "robot_recording" or not trace_path.is_file():
+        key = source.get(
+            "source_time_feature",
+            "flash.source_time_s" if "flash.source_time_s" in dataset.meta.features else "timestamp",
+        )
+        if key not in dataset.meta.features:
+            raise ValueError(f"recorded camera time feature {key!r} is missing")
+        times = np.asarray(dataset.episode_column(key, episode), dtype=np.float64)
+        if times.shape != (count, 1) or not np.isfinite(times).all():
+            raise ValueError("recorded camera time must be one finite value per frame")
         samples = [
-            CameraSample(index, source_time_s(dataset[index], dataset.meta.features, source), None)
-            for index in rows
+            CameraSample(index, float(time_s), None) for index, time_s in zip(rows, times[:, 0], strict=True)
         ]
         if any(
             later.source_time_s <= earlier.source_time_s
@@ -67,19 +76,6 @@ def episode_camera_samples(
             raise ValueError("camera capture IDs and times must advance together")
         samples.append(CameraSample(row_index, float(capture_time), camera_id))
     return samples, hashlib.sha256(raw_trace).hexdigest()
-
-
-def source_time_s(row: dict, features: dict, source: dict) -> float:
-    """Use the recorded camera clock when supplied, otherwise the episode clock."""
-    key = source.get(
-        "source_time_feature", "flash.source_time_s" if "flash.source_time_s" in features else "timestamp"
-    )
-    if key not in features:
-        raise ValueError(f"recorded camera time feature {key!r} is missing")
-    value = np.asarray(row[key], dtype=np.float64).reshape(-1)
-    if value.size != 1 or not np.isfinite(value[0]):
-        raise ValueError("recorded camera time must be one finite value per frame")
-    return float(value[0])
 
 
 def depth_scale_m(source: dict) -> float:
