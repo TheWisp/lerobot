@@ -3,10 +3,70 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import math
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+
+
+@dataclass(frozen=True)
+class CameraSample:
+    """One captured RGB-D frame and its source row in an ordinary episode."""
+
+    row_index: int
+    source_time_s: float
+    camera_frame_id: int | None
+
+
+def episode_camera_samples(
+    root: Path, dataset, source: dict, episode: int
+) -> tuple[list[CameraSample], str | None]:
+    """Use capture IDs in FLASH motor traces; never advance vision on a reused image."""
+    rows = [index for index in range(dataset.num_frames) if int(dataset[index]["episode_index"]) == episode]
+    if not rows:
+        raise ValueError(f"episode {episode} is empty")
+    trace_path = root / "flash" / "v1" / f"episode_{episode:06d}.jsonl"
+    if source.get("status") != "robot_recording" or not trace_path.is_file():
+        samples = [
+            CameraSample(index, source_time_s(dataset[index], dataset.meta.features, source), None)
+            for index in rows
+        ]
+        if any(
+            later.source_time_s <= earlier.source_time_s
+            for earlier, later in zip(samples, samples[1:], strict=False)
+        ):
+            raise ValueError("recorded camera times must be strictly increasing")
+        return samples, None
+    raw_trace = trace_path.read_bytes()
+    ticks = [json.loads(line) for line in raw_trace.splitlines() if line.strip()]
+    if len(ticks) != len(rows):
+        raise ValueError("motor trace and dataset episode have different frame counts")
+    samples: list[CameraSample] = []
+    for frame_index, (row_index, tick) in enumerate(zip(rows, ticks, strict=True)):
+        camera_id = tick.get("camera_frame_id")
+        capture_time = tick.get("camera_source_time_s")
+        if tick.get("episode_index") != episode or tick.get("frame_index") != frame_index:
+            raise ValueError("motor trace and dataset frame indices do not align")
+        if (
+            isinstance(camera_id, bool)
+            or not isinstance(camera_id, int)
+            or camera_id < 0
+            or isinstance(capture_time, bool)
+            or not isinstance(capture_time, (int, float))
+            or not math.isfinite(capture_time)
+        ):
+            raise ValueError("motor trace needs a valid camera capture ID and time on every row")
+        if samples and camera_id == samples[-1].camera_frame_id:
+            if capture_time != samples[-1].source_time_s:
+                raise ValueError("reused camera frame has a different capture time")
+            continue
+        if samples and (camera_id < samples[-1].camera_frame_id or capture_time <= samples[-1].source_time_s):
+            raise ValueError("camera capture IDs and times must advance together")
+        samples.append(CameraSample(row_index, float(capture_time), camera_id))
+    return samples, hashlib.sha256(raw_trace).hexdigest()
 
 
 def source_time_s(row: dict, features: dict, source: dict) -> float:
@@ -61,6 +121,8 @@ def register_rgbd_dataset(
     features = info["features"]
     source = {"rgb_feature": rgb_feature, "depth_feature": depth_feature}
     rgb_key, depth_key = camera_feature_keys(features, source)
+    if "shape" not in features[rgb_key] or "shape" not in features[depth_key]:
+        raise ValueError("registered RGB-D camera features need image dimensions")
     depth_scale_m({"depth_unit": depth_unit})
     declared_depth_unit = features[depth_key].get("info", {}).get("depth_unit")
     known_units = {"mm": "millimetres", "m": "metres"}
@@ -133,7 +195,9 @@ def camera_feature_keys(features: dict, source: dict) -> tuple[str, str]:
     if requested_depth is None and len(depth) != 1:
         raise ValueError("choose one aligned depth image feature in the observation source metadata")
     rgb_key, depth_key = requested_rgb or rgb[0], requested_depth or depth[0]
-    if tuple(features[rgb_key]["shape"][:2]) != tuple(features[depth_key]["shape"][:2]):
+    rgb_shape = features[rgb_key].get("shape")
+    depth_shape = features[depth_key].get("shape")
+    if rgb_shape is not None and depth_shape is not None and tuple(rgb_shape[:2]) != tuple(depth_shape[:2]):
         raise ValueError("RGB and depth features have different image sizes")
     return rgb_key, depth_key
 

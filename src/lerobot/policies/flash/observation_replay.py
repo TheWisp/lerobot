@@ -20,9 +20,9 @@ from .observation_annotations import load_annotations
 from .observation_dataset import (
     camera_feature_keys,
     depth_scale_m,
+    episode_camera_samples,
     robot_actions_available,
     scene_from_camera,
-    source_time_s,
 )
 
 
@@ -37,11 +37,7 @@ def load_observation_replay(root: Path, episode: int = 0) -> dict:
         raise ValueError("robot recording needs both measured state and action features")
     rgb_key, depth_key = camera_feature_keys(dataset.meta.features, source)
     scale_m = depth_scale_m(source)
-    indices = [
-        index for index in range(dataset.num_frames) if int(dataset[index]["episode_index"]) == episode
-    ]
-    if not indices:
-        raise ValueError(f"observation episode {episode} is empty")
+    samples, source_trace_sha256 = episode_camera_samples(root, dataset, source, episode)
     sidecar = root / "flash" / "v1" / "observation-evidence" / f"episode_{episode:06d}"
     manifest_path = sidecar / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.is_file() else None
@@ -53,14 +49,19 @@ def load_observation_replay(root: Path, episode: int = 0) -> dict:
         manifest
         and observation
         and manifest.get("complete")
-        and manifest.get("total_frames") == len(indices)
+        and manifest.get("total_frames") == len(samples)
         and observation.get("evidence_identity")
         and manifest.get("source_sha256") == observation["evidence_identity"]
         and isinstance(observation.get("surface_reference_max_points_per_view"), int)
         and observation.get("source_metadata_sha256")
         == hashlib.sha256((root / "flash" / "v1" / "source.json").read_bytes()).hexdigest()
+        and observation.get("source_trace_sha256") == source_trace_sha256
+        and observation.get("source_row_indices", [sample.row_index for sample in samples])
+        == [sample.row_index for sample in samples]
+        and observation.get("source_camera_frame_ids", [sample.camera_frame_id for sample in samples])
+        == [sample.camera_frame_id for sample in samples]
     )
-    first = dataset[indices[0]]
+    first = dataset[samples[0].row_index]
     height, width = first[depth_key].numpy().squeeze().shape
     intrinsics = source["camera_intrinsics"]
     frames = []
@@ -82,9 +83,9 @@ def load_observation_replay(root: Path, episode: int = 0) -> dict:
                 }
         except (OSError, ValueError, TypeError):
             pass
-    for frame_id, row_index in enumerate(indices):
-        row = dataset[row_index]
-        time_s = source_time_s(row, dataset.meta.features, source)
+    for frame_id, sample in enumerate(samples):
+        row = dataset[sample.row_index]
+        time_s = sample.source_time_s
         scene_pose, calibration_version = scene_from_camera(row, dataset.meta.features, source)
         frame_evidence = None
         if evidence_available:
@@ -170,6 +171,8 @@ def load_observation_replay(root: Path, episode: int = 0) -> dict:
         frames.append(
             {
                 "frame_index": frame_id,
+                "source_row_index": sample.row_index,
+                "source_camera_frame_id": sample.camera_frame_id,
                 "evidence": {"available": True, **frame_evidence} if frame_evidence else None,
                 "snapshot": {
                     "recorded_at_s": time_s,
@@ -233,7 +236,11 @@ def load_observation_replay(root: Path, episode: int = 0) -> dict:
     return {
         "available": True,
         "kind": "observation_demo",
-        "fps": float(dataset.fps),
+        "fps": (
+            float(1.0 / np.median(np.diff([sample.source_time_s for sample in samples])))
+            if len(samples) > 1
+            else float(dataset.fps)
+        ),
         "frames": frames,
         "source_episode": episode,
         "source": source.get("source"),

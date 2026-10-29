@@ -184,3 +184,47 @@ def test_registration_requires_explicit_camera_geometry_and_does_not_overwrite(t
         register_rgbd_dataset(
             root, repo_id="local/video_rgbd", camera_intrinsics=np.eye(3), depth_unit="unknown"
         )
+
+
+def test_robot_trace_advances_vision_only_for_distinct_camera_captures(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        observation_processing,
+        "build_vision_backend",
+        lambda _config, masks, *, local_reference: _MeasuredBackend(masks),
+    )
+    root = tmp_path / "robot"
+    masks = _episode(root, with_actions=True)
+    trace = root / "flash/v1/episode_000000.jsonl"
+    ticks = [
+        {
+            "episode_index": 0,
+            "frame_index": index,
+            "camera_frame_id": camera_id,
+            "camera_source_time_s": capture_time,
+        }
+        for index, (camera_id, capture_time) in enumerate(((41, 20.0), (41, 20.0), (43, 20.1)))
+    ]
+    trace.write_text("\n".join(json.dumps(tick) for tick in ticks) + "\n")
+    config = tmp_path / "tracking.json"
+    config.write_text(json.dumps(observation_processing.default_processing_config()))
+    evidence = observation_processing.extract(root, {"object": masks}, config)
+    report = json.loads((evidence / "observation.json").read_text())
+    assert report["frames"] == 2
+    assert report["source_row_indices"] == [0, 2]
+    assert report["source_camera_frame_ids"] == [41, 43]
+    replay = load_observation_replay(root)
+    assert replay["evidence_available"]
+    assert [frame["source_row_index"] for frame in replay["frames"]] == [0, 2]
+    assert [frame["snapshot"]["camera"]["source_time_s"] for frame in replay["frames"]] == [20.0, 20.1]
+    assert [frame["evidence"]["frame_index"] for frame in replay["frames"]] == [0, 1]
+
+    # The trace is part of the evidence identity. A changed camera join cannot
+    # silently keep showing overlays from the previous selection of frames.
+    ticks[2]["camera_frame_id"] = 44
+    trace.write_text("\n".join(json.dumps(tick) for tick in ticks) + "\n")
+    assert not load_observation_replay(root)["evidence_available"]
+    ticks[2]["camera_frame_id"] = 43
+    ticks[1]["camera_source_time_s"] = 20.01
+    trace.write_text("\n".join(json.dumps(tick) for tick in ticks) + "\n")
+    with pytest.raises(ValueError, match="reused camera frame"):
+        load_observation_replay(root)

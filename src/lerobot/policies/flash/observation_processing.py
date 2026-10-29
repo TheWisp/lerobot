@@ -28,9 +28,9 @@ from .causal_service import CausalTrackingConfig
 from .observation_dataset import (
     camera_feature_keys,
     depth_scale_m,
+    episode_camera_samples,
     robot_actions_available,
     scene_from_camera,
-    source_time_s,
 )
 from .offline_perception import POSE_TRACE_SELECTION_VERSION, extract_pose_trace
 from .perception import ObjectReference, ReferenceSnippet, RGBDFrame
@@ -124,15 +124,12 @@ def _extract_to_directory(
         )
     )
     roles = tuple(directories or prompts)
-    episode_rows = [
-        index for index in range(dataset.num_frames) if int(dataset[index]["episode_index"]) == episode
-    ]
-    if not episode_rows:
-        raise ValueError(f"episode {episode} is empty")
+    camera_samples, source_trace_sha256 = episode_camera_samples(root, dataset, source, episode)
     intrinsics = np.asarray(source["camera_intrinsics"], dtype=np.float64)
     destination = output or root / "flash" / "v1" / "observation-evidence" / f"episode_{episode:06d}"
     identity = hashlib.sha256(
         source_path.read_bytes()
+        + (source_trace_sha256 or "").encode()
         + bundle_path.read_bytes()
         + json.dumps(
             {
@@ -145,7 +142,7 @@ def _extract_to_directory(
         + f":pose:{POSE_TRACE_SELECTION_VERSION}:scene:{SCENE_EVIDENCE_CAPTURE_VERSION}".encode()
     ).hexdigest()
     writer = SceneEvidenceWriter(
-        destination, total_frames=len(episode_rows), roles=roles, source_sha256=identity
+        destination, total_frames=len(camera_samples), roles=roles, source_sha256=identity
     )
     backend = build_vision_backend(vision_config, mask_source, local_reference=True)
     references = tuple(
@@ -172,11 +169,10 @@ def _extract_to_directory(
     )
 
     def frames():
-        for frame_id, row_index in enumerate(episode_rows):
-            row = dataset[row_index]
+        for frame_id, sample in enumerate(camera_samples):
+            row = dataset[sample.row_index]
             rgb = (row[rgb_key].numpy().transpose(1, 2, 0) * 255).clip(0, 255).astype(np.uint8)
             depth = row[depth_key].numpy().squeeze().astype(np.float32)
-            frame_time_s = source_time_s(row, dataset.meta.features, source)
             scene_pose, calibration_version = scene_from_camera(row, dataset.meta.features, source)
             yield RGBDFrame(
                 frame_id,
@@ -185,8 +181,8 @@ def _extract_to_directory(
                 intrinsics,
                 scale_m,
                 scene_pose,
-                frame_time_s,
-                frame_time_s,
+                sample.source_time_s,
+                sample.source_time_s,
                 calibration_version,
             )
 
@@ -208,6 +204,9 @@ def _extract_to_directory(
                 "dataset_root": str(root),
                 "episode": episode,
                 "source_metadata_sha256": hashlib.sha256(source_path.read_bytes()).hexdigest(),
+                "source_trace_sha256": source_trace_sha256,
+                "source_row_indices": [sample.row_index for sample in camera_samples],
+                "source_camera_frame_ids": [sample.camera_frame_id for sample in camera_samples],
                 "evidence_identity": identity,
                 "coordinate_frame": "world"
                 if source.get("camera_pose_feature") or source.get("fixed_scene_from_camera")
