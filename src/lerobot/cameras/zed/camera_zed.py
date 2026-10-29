@@ -383,11 +383,12 @@ class ZEDCamera(Camera):
         age_ms = (time.perf_counter() - timestamp) * 1e3
         if age_ms <= max_age_ms:
             return left, right, depth
-        # The SDK's grab occasionally pauses for about half a second (seen on
-        # a ZED-M at HD720 with neural depth, three of five recording starts,
-        # no error returned). The control loop must neither wait on it nor
-        # lose the episode over it: hand out the frame in hand, say so, and
-        # give up only once the pause is well past what a hiccup takes.
+        # The read cycle occasionally stalls for several frames' worth (seen on
+        # a ZED-M at HD720 with neural depth as a recording starts; the grab
+        # itself was a small part of it, the rest in the retrieves and the
+        # conversion, no error returned). The control loop must neither wait
+        # on it nor lose the episode over it: hand out the frame in hand, say
+        # so, and give up only once the stall is well past what a hiccup takes.
         if age_ms > STALE_GIVE_UP * max_age_ms:
             raise TimeoutError(
                 f"{self} latest frame is too old: {age_ms:.1f} ms (max allowed: {max_age_ms} ms, gave up at "

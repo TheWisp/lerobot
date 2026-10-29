@@ -257,3 +257,51 @@ async def test_teleoperate_argv_parses_with_the_null_teleoperator():
     )
     config = _parse(TeleoperateConfig, argv)
     assert config.teleop.type == "no_input"
+
+
+@pytest.mark.asyncio
+async def test_record_argv_carries_the_depth_processing_flags():
+    """What the Robots tab writes under a camera must land on the driver's
+    config, through the real parser: the RealSense's `enable_*` filters and
+    the ZED's `fill_holes` are the only way the recording's processing is
+    chosen, and nothing between the profile and the driver is typed."""
+    from lerobot.scripts.lerobot_record import RecordConfig
+
+    profile = dict(
+        ROBOT_PROFILE,
+        cameras={
+            "front": {
+                "type": "intelrealsense",
+                "serial_number_or_name": "233522074606",
+                "width": 640,
+                "height": 480,
+                "fps": 30,
+                "use_depth": True,
+                "enable_hole_filling": False,
+                "enable_temporal": False,
+            },
+            "top": {
+                "type": "zed",
+                "serial_number": 11975257,
+                "width": 1280,
+                "height": 720,
+                "fps": 30,
+                "use_depth": True,
+                "fill_holes": True,
+            },
+        },
+    )
+    argv = await _capture_argv(
+        start_record,
+        RecordRequest(
+            robot=profile,
+            teleop=TELEOP_PROFILE,
+            repo_id="test/contract-depth",
+            single_task="Do the thing.",
+            num_episodes=1,
+        ),
+    )
+    cfg = _parse(RecordConfig, argv)
+    front, top = cfg.robot.cameras["front"], cfg.robot.cameras["top"]
+    assert (front.enable_hole_filling, front.enable_temporal, front.enable_spatial) == (False, False, True)
+    assert top.fill_holes is True
