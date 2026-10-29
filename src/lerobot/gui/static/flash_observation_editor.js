@@ -73,7 +73,7 @@ async function toggleFlashObservationEditor() {
         return;
     }
     flashObservationEditor = {
-        annotation: structuredClone(replay.annotations), roles,
+        replay, annotation: structuredClone(replay.annotations), roles,
         selected: null, addingNew: false, lastFrameIndex: null,
         pickingTurn: false, saving: false, message: '',
     };
@@ -113,7 +113,10 @@ function _flashObservationRender() {
         `${key.required ? ' · required' : ' · review'}${key.allowed_turn ? ' · turn allowed' : ''}</button>`).join('');
     document.getElementById('flash-observation-editor').innerHTML =
         '<h3>Object relationships <button type="button" class="flash-recorded-close" onclick="closeFlashObservationEditor()" aria-label="Close editor">×</button></h3>' +
-        '<p>Mark the relationship at this frame. Robot actions are unavailable in this RGB-D recording.</p>' +
+        '<p>Mark the relationship at this frame. ' +
+        (state.replay.robot_actions_available
+            ? 'Robot actions are recorded separately; this editor uses the RGB-D scene.'
+            : 'This recording has no robot actions.') + '</p>' +
         `<p id="flash-observation-frame">Frame ${frame?.frame_index ?? 0}</p>` +
         `<p>${_esc(evidenceText)}. A predicted pose is not a fresh camera measurement.</p>` +
         (relationStatus ? `<p ${relationStatus.startsWith('Both poses') ? '' : 'class="flash-recorded-warning"'}>${relationStatus}</p>` : '') +
@@ -269,7 +272,7 @@ async function flashObservationSave() {
         if (flashObservationEditor !== state) return;
         state.annotation = result;
         flashReplay.annotations = structuredClone(result);
-        state.message = 'Annotations saved. They describe object relationships; this episode has no robot actions.';
+        state.message = 'Object relationships saved.';
         _flashRenderTimeline();
     } catch (error) {
         state.message = error.message;
@@ -333,7 +336,10 @@ function _flashObservationTrackingRender() {
     ).join('');
     document.getElementById('flash-observation-tracking').innerHTML =
         '<h3>Track objects <button type="button" class="flash-recorded-close" onclick="closeFlashObservationTracking()" aria-label="Close tracking setup">×</button></h3>' +
-        '<p>Name what to follow. A click helps identify it in the first frame; tracking then follows the RGB-D video. This episode has no robot actions.</p>' +
+        '<p>Name what to follow. A click helps identify it in the first frame; tracking then follows the RGB-D video.' +
+        (state.replay.robot_actions_available
+            ? ' Robot actions are recorded separately and do not affect this vision pass.'
+            : ' This recording has no robot actions.') + '</p>' +
         objects + '<button type="button" onclick="flashObservationTrackingAdd()">Add object</button>' +
         '<details><summary>Tracking parameters</summary><p>Shared surface and scene-tracking settings, saved with this processing pass.</p>' +
         `<textarea id="flash-observation-config" aria-label="Tracking parameters JSON" rows="12" spellcheck="false" onchange="flashObservationTrackingConfig(this.value)">${_esc(JSON.stringify(state.config, null, 2))}</textarea></details>` +
