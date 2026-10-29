@@ -19,15 +19,15 @@ from lerobot.policies.flash.trajectory import Evidence, PoseEstimate
 def _episode(root, *, with_actions):
     features = {
         "observation.images.rgb": {
-            "dtype": "video",
+            "dtype": "image",
             "shape": (64, 64, 3),
             "names": ["height", "width", "channels"],
         },
         "observation.images.depth": {
-            "dtype": "video",
+            "dtype": "image",
             "shape": (64, 64, 1),
             "names": ["height", "width", "channels"],
-            "info": {"is_depth_map": True},
+            "info": {"is_depth_map": True, "depth_unit": "mm"},
         },
     }
     if with_actions:
@@ -163,6 +163,14 @@ def test_registration_requires_explicit_camera_geometry_and_does_not_overwrite(t
     with pytest.raises(ValueError, match="declare a camera trajectory"):
         register_rgbd_dataset(
             root, repo_id="local/video_rgbd", camera_intrinsics=np.eye(3), depth_unit="millimetres"
+        )
+    with pytest.raises(ValueError, match="depth unit conflicts"):
+        register_rgbd_dataset(
+            root,
+            repo_id="local/video_rgbd",
+            camera_intrinsics=np.eye(3),
+            depth_unit="metres",
+            stationary_camera=True,
         )
     with pytest.raises(FileExistsError):
         register_rgbd_dataset(
