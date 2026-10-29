@@ -26,6 +26,7 @@ def import_rgbd(
     task: str,
     source: str,
     source_frame_offset: int = 0,
+    world_from_camera_path: Path | None = None,
 ) -> Path:
     recording = recording.expanduser().resolve()
     destination = destination.expanduser().resolve()
@@ -41,6 +42,20 @@ def import_rgbd(
     depth_paths = sorted((recording / "depth").glob("*"))
     if len(rgb_paths) != len(times) or len(depth_paths) != len(times):
         raise ValueError("RGB, depth and timestamp counts differ")
+    camera_poses = None
+    if world_from_camera_path is not None:
+        camera_poses = np.loadtxt(world_from_camera_path, dtype=np.float64)
+        if camera_poses.shape != (len(times), 16):
+            raise ValueError("camera trajectory must contain one row of 16 values per RGB-D frame")
+        camera_poses = camera_poses.reshape(-1, 4, 4)
+        rotations = camera_poses[:, :3, :3]
+        if (
+            not np.isfinite(camera_poses).all()
+            or not np.allclose(camera_poses[:, 3, :], [0, 0, 0, 1], atol=1e-6)
+            or not np.allclose(rotations @ rotations.transpose(0, 2, 1), np.eye(3), atol=1e-4)
+            or not np.allclose(np.linalg.det(rotations), 1, atol=1e-4)
+        ):
+            raise ValueError("camera trajectory must contain finite rigid world-from-camera transforms")
 
     def frame(index: int) -> tuple[np.ndarray, np.ndarray]:
         rgb = cv2.imread(str(rgb_paths[index]), cv2.IMREAD_COLOR)
@@ -71,6 +86,8 @@ def import_rgbd(
         "flash.source_time_s": {"dtype": "float64", "shape": (1,), "names": None},
         "flash.source_frame_index": {"dtype": "int64", "shape": (1,), "names": None},
     }
+    if camera_poses is not None:
+        features["flash.world_from_camera"] = {"dtype": "float64", "shape": (16,), "names": None}
     dataset = LeRobotDataset.create(
         repo_id=repo_id,
         fps=nominal_fps,
@@ -83,15 +100,16 @@ def import_rgbd(
     )
     for index in range(len(times)):
         rgb, depth = (first_rgb, first_depth) if index == 0 else frame(index)
-        dataset.add_frame(
-            {
-                "task": task,
-                "observation.images.rgb": rgb,
-                "observation.images.depth": depth[:, :, None],
-                "flash.source_time_s": np.asarray([times[index]], dtype=np.float64),
-                "flash.source_frame_index": np.asarray([source_frame_offset + index], dtype=np.int64),
-            }
-        )
+        row = {
+            "task": task,
+            "observation.images.rgb": rgb,
+            "observation.images.depth": depth[:, :, None],
+            "flash.source_time_s": np.asarray([times[index]], dtype=np.float64),
+            "flash.source_frame_index": np.asarray([source_frame_offset + index], dtype=np.int64),
+        }
+        if camera_poses is not None:
+            row["flash.world_from_camera"] = camera_poses[index].reshape(16)
+        dataset.add_frame(row)
     dataset.save_episode()
     dataset.finalize()
     extension = destination / "flash" / "v1"
@@ -109,6 +127,9 @@ def import_rgbd(
                 "camera_intrinsics": intrinsics.tolist(),
                 "rgb_feature": "observation.images.rgb",
                 "depth_feature": "observation.images.depth",
+                "camera_pose_feature": "flash.world_from_camera" if camera_poses is not None else None,
+                "coordinate_frame": "world" if camera_poses is not None else "stationary_camera",
+                "camera_motion_assumption": None if camera_poses is not None else "stationary",
                 "status": "perception_only",
                 "missing_for_spatial_skill": [
                     "camera_to_robot_transform",
@@ -132,6 +153,11 @@ def main() -> None:
     parser.add_argument("--task", required=True)
     parser.add_argument("--source", required=True)
     parser.add_argument("--source-frame-offset", type=int, default=0)
+    parser.add_argument(
+        "--world-from-camera-path",
+        type=Path,
+        help="Text file with one row-major 4×4 world-from-camera transform (16 values) per frame",
+    )
     args = parser.parse_args()
     print(import_rgbd(**vars(args)))
 

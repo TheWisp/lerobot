@@ -17,7 +17,7 @@ from lerobot.gui.api.run import (
     flash_observation_annotations,
 )
 from lerobot.policies.flash.observation_annotations import save_annotations
-from lerobot.policies.flash.observation_dataset import camera_feature_keys
+from lerobot.policies.flash.observation_dataset import camera_feature_keys, scene_from_camera
 from lerobot.policies.flash.observation_replay import load_observation_replay
 
 
@@ -62,6 +62,40 @@ def test_import_preserves_invalid_depth_and_source_clock(tmp_path):
     assert len(replay["frames"]) == 3
     assert not replay["robot_actions_available"]
     assert not replay["gripper_prediction_available"]
+
+    # A moving RGB-D camera must carry its scene pose in the same ordinary
+    # episode, so the shared group tracker does not mistake ego motion for
+    # object motion. Replay consumes that saved feature, not the input file.
+    camera_poses = np.repeat(np.eye(4)[None, :, :], 3, axis=0)
+    camera_poses[:, 0, 3] = [0.0, 0.01, 0.02]
+    pose_path = recording / "world_from_camera.txt"
+    np.savetxt(pose_path, camera_poses.reshape(3, 16))
+    moving_root = import_rgbd(
+        recording,
+        tmp_path / "moving_camera_dataset",
+        repo_id="local/external_rgbd_moving_camera_test",
+        task="test",
+        source="synthetic moving RGB-D source",
+        world_from_camera_path=pose_path,
+    )
+    moving_dataset = LeRobotDataset("local/external_rgbd_moving_camera_test", root=moving_root)
+    moving_source = json.loads((moving_root / "flash/v1/source.json").read_text())
+    assert moving_source["camera_pose_feature"] == "flash.world_from_camera"
+    assert not moving_source["camera_motion_assumption"]
+    assert np.allclose(moving_dataset[2]["flash.world_from_camera"].reshape(4, 4), camera_poses[2])
+    moving_replay = load_observation_replay(moving_root)
+    assert moving_replay["frames"][2]["snapshot"]["camera"]["base_from_camera"][0][3] == pytest.approx(0.02)
+    assert moving_replay["frames"][2]["snapshot"]["camera"]["calibration_version"] == "source-world"
+    np.savetxt(pose_path, np.ones((3, 16)))
+    with pytest.raises(ValueError, match="rigid world-from-camera"):
+        import_rgbd(
+            recording,
+            tmp_path / "bad_camera_dataset",
+            repo_id="local/external_rgbd_bad_camera_test",
+            task="test",
+            source="invalid camera trajectory",
+            world_from_camera_path=pose_path,
+        )
 
     sidecar = root / "flash" / "v1" / "observation-evidence" / "episode_000000"
     sidecar.mkdir(parents=True)
@@ -223,3 +257,5 @@ def test_observation_camera_names_come_from_metadata():
         "observation.images.range": {"dtype": "video", "shape": [64, 64, 1], "info": {"is_depth_map": True}},
     }
     assert camera_feature_keys(features, {}) == ("observation.images.top", "observation.images.range")
+    with pytest.raises(ValueError, match="needs a recorded camera pose"):
+        scene_from_camera({}, features, {"camera_motion_assumption": "moving"})

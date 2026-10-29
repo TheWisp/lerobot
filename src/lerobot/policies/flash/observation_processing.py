@@ -24,7 +24,7 @@ from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
 from .appearance import Sam3MaskSource
 from .causal_service import CausalTrackingConfig
-from .observation_dataset import camera_feature_keys
+from .observation_dataset import camera_feature_keys, scene_from_camera
 from .offline_perception import POSE_TRACE_SELECTION_VERSION, extract_pose_trace
 from .perception import ObjectReference, ReferenceSnippet, RGBDFrame
 from .scene_evidence_writer import SCENE_EVIDENCE_CAPTURE_VERSION, SceneEvidenceWriter
@@ -141,7 +141,17 @@ def _extract_to_directory(
         ObjectReference(
             role,
             f"observation-episode-{episode}:{role}",
-            (ReferenceSnippet(source["repo_id"], episode, 0, role, np.eye(4), str(prompt), "camera-frame"),),
+            (
+                ReferenceSnippet(
+                    source["repo_id"],
+                    episode,
+                    0,
+                    role,
+                    np.eye(4),
+                    str(prompt),
+                    "source-world" if source.get("camera_pose_feature") else "camera-frame",
+                ),
+            ),
         )
         for role, prompt in (directories or prompts).items()
     )
@@ -152,16 +162,17 @@ def _extract_to_directory(
             rgb = (row[rgb_key].numpy().transpose(1, 2, 0) * 255).clip(0, 255).astype(np.uint8)
             depth = row[depth_key].numpy().squeeze().astype(np.float32)
             source_time_s = float(row["flash.source_time_s"].item())
+            scene_pose, calibration_version = scene_from_camera(row, dataset.meta.features, source)
             yield RGBDFrame(
                 frame_id,
                 rgb,
                 depth,
                 intrinsics,
                 0.001,
-                np.eye(4),
+                scene_pose,
                 source_time_s,
                 source_time_s,
-                "camera-frame",
+                calibration_version,
             )
 
     try:
@@ -183,7 +194,7 @@ def _extract_to_directory(
                 "episode": episode,
                 "source_metadata_sha256": hashlib.sha256(source_path.read_bytes()).hexdigest(),
                 "evidence_identity": identity,
-                "coordinate_frame": "camera",
+                "coordinate_frame": "world" if source.get("camera_pose_feature") else "camera",
                 "robot_actions_available": False,
                 "gripper_prediction_available": False,
                 "roles": list(roles),

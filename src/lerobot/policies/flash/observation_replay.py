@@ -17,7 +17,7 @@ import numpy as np
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
 from .observation_annotations import load_annotations
-from .observation_dataset import camera_feature_keys
+from .observation_dataset import camera_feature_keys, scene_from_camera
 
 
 def load_observation_replay(root: Path, episode: int = 0) -> dict:
@@ -53,7 +53,6 @@ def load_observation_replay(root: Path, episode: int = 0) -> dict:
     first = dataset[indices[0]]
     height, width = first[depth_key].numpy().squeeze().shape
     intrinsics = source["camera_intrinsics"]
-    identity = np.eye(4).tolist()
     frames = []
     geometry = {"points_object_m": {}, "centers_object_m": {}}
     point_limit = None
@@ -76,6 +75,7 @@ def load_observation_replay(root: Path, episode: int = 0) -> dict:
     for frame_id, row_index in enumerate(indices):
         row = dataset[row_index]
         time_s = float(row["flash.source_time_s"].item())
+        scene_pose, calibration_version = scene_from_camera(row, dataset.meta.features, source)
         frame_evidence = None
         if evidence_available:
             with gzip.open(sidecar / f"{frame_id:06d}.json.gz", "rt", encoding="utf-8") as stream:
@@ -130,7 +130,8 @@ def load_observation_replay(root: Path, episode: int = 0) -> dict:
                             axis=1,
                         )
                         pose = np.asarray(accepted[role]["pose"], dtype=float)
-                        points_object = (points_camera - pose[:3, 3]) @ pose[:3, :3]
+                        points_scene = points_camera @ scene_pose[:3, :3].T + scene_pose[:3, 3]
+                        points_object = (points_scene - pose[:3, 3]) @ pose[:3, :3]
                         geometry["points_object_m"][role] = points_object.round(6).tolist()
                         geometry["centers_object_m"][role] = points_object.mean(axis=0).round(6).tolist()
             groups = frame_evidence["groups"]
@@ -168,8 +169,8 @@ def load_observation_replay(root: Path, episode: int = 0) -> dict:
                         "width": width,
                         "height": height,
                         "intrinsics": intrinsics,
-                        "base_from_camera": identity,
-                        "calibration_version": "camera-frame",
+                        "base_from_camera": scene_pose.tolist(),
+                        "calibration_version": calibration_version,
                     },
                     "accepted": accepted,
                     "pose_status": pose_status,
