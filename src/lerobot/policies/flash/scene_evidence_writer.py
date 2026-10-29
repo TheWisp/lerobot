@@ -13,7 +13,7 @@ from .perception import RGBDFrame
 from .perception_step import PerceptionResult
 from .trajectory import PoseEstimate
 
-SCENE_EVIDENCE_CAPTURE_VERSION = 5
+SCENE_EVIDENCE_CAPTURE_VERSION = 6
 
 
 def _mask_runs(mask: np.ndarray) -> list[list[int]]:
@@ -35,6 +35,7 @@ class SceneEvidenceWriter:
         self.manifest_path = self.directory / "manifest.json"
         self.manifest = {
             "schema_version": 1,
+            "capture_version": SCENE_EVIDENCE_CAPTURE_VERSION,
             "source_sha256": source_sha256,
             "total_frames": total_frames,
             "frames_completed": 0,
@@ -60,6 +61,9 @@ class SceneEvidenceWriter:
             raise ValueError("scene evidence frames must match the prepared source order")
         data = {
             "frame_index": index,
+            "source_time_s": frame.source_time_s,
+            "available_time_s": frame.available_time_s,
+            "calibration_version": frame.calibration_version,
             "image_size": list(frame.depth.shape),
             "masks_rle": {role: _mask_runs(mask) for role, mask in result.masks.items()},
             "groups": {
@@ -82,6 +86,9 @@ class SceneEvidenceWriter:
                     "rotation_supported": estimate.rotation_supported,
                     "direct_translation_observed": estimate.direct_translation_observed,
                     "source_time_s": estimate.source_time_s,
+                    "source_frame_id": estimate.source_frame_id,
+                    "available_time_s": estimate.available_time_s,
+                    "reference_version": estimate.reference_version,
                     "last_direct_observation_s": estimate.last_direct_observation_s,
                 }
                 for role, estimate in estimates.items()
@@ -93,6 +100,12 @@ class SceneEvidenceWriter:
                     "translation_supported": proposal.estimate.translation_supported,
                     "rotation_supported": proposal.estimate.rotation_supported,
                     "direct_translation_observed": proposal.estimate.direct_translation_observed,
+                    "source_time_s": proposal.estimate.source_time_s,
+                    "source_frame_id": proposal.estimate.source_frame_id,
+                    "available_time_s": proposal.estimate.available_time_s,
+                    "reference_version": proposal.estimate.reference_version,
+                    "frame_id": proposal.frame_id,
+                    "calibration_version": proposal.calibration_version,
                     "raw_pose": proposal.raw_pose.tolist() if proposal.raw_pose is not None else None,
                     "motion_prior_pose": (
                         proposal.motion_prior_pose.tolist()

@@ -27,7 +27,7 @@ from .causal_service import CausalTrackingConfig
 from .observation_dataset import camera_feature_keys
 from .offline_perception import POSE_TRACE_SELECTION_VERSION, extract_pose_trace
 from .perception import ObjectReference, ReferenceSnippet, RGBDFrame
-from .scene_evidence_writer import SceneEvidenceWriter
+from .scene_evidence_writer import SCENE_EVIDENCE_CAPTURE_VERSION, SceneEvidenceWriter
 from .vision_pipeline import VisionPipelineConfig, build_vision_backend
 
 
@@ -131,7 +131,7 @@ def _extract_to_directory(
             },
             sort_keys=True,
         ).encode()
-        + str(POSE_TRACE_SELECTION_VERSION).encode()
+        + f":pose:{POSE_TRACE_SELECTION_VERSION}:scene:{SCENE_EVIDENCE_CAPTURE_VERSION}".encode()
     ).hexdigest()
     writer = SceneEvidenceWriter(
         destination, total_frames=len(episode_rows), roles=roles, source_sha256=identity

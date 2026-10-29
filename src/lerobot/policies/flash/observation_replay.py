@@ -95,7 +95,15 @@ def load_observation_replay(root: Path, episode: int = 0) -> dict:
                 if estimate["pose"] is not None
             }
             pose_status = {
-                role: {"evidence": estimate["evidence"], "estimator": estimate["estimator"]}
+                role: {
+                    "evidence": estimate["evidence"],
+                    "estimator": estimate["estimator"],
+                    "source_time_s": estimate.get("source_time_s", time_s),
+                    "source_frame_id": estimate.get("source_frame_id"),
+                    "available_time_s": estimate.get("available_time_s"),
+                    "reference_version": estimate.get("reference_version"),
+                    "last_direct_observation_s": estimate.get("last_direct_observation_s"),
+                }
                 for role, estimate in frame_evidence["estimates"].items()
             }
             for role, runs in frame_evidence["masks_rle"].items():
@@ -127,14 +135,22 @@ def load_observation_replay(root: Path, episode: int = 0) -> dict:
                         geometry["centers_object_m"][role] = points_object.mean(axis=0).round(6).tolist()
             groups = frame_evidence["groups"]
             proposals = {
-                role: {"evidence": proposal["evidence"], "source_time_s": time_s}
+                role: {
+                    "evidence": proposal["evidence"],
+                    "source_time_s": proposal.get("source_time_s", time_s),
+                    "source_frame_id": proposal.get("source_frame_id"),
+                    "available_time_s": proposal.get("available_time_s"),
+                    "reference_version": proposal.get("reference_version"),
+                }
                 for role, proposal in frame_evidence["proposals"].items()
             }
             raw_proposals = {
                 role: {
                     "pose": proposal["raw_pose"],
-                    "frame_id": frame_id,
-                    "calibration_version": "camera-frame",
+                    "frame_id": proposal.get("frame_id", frame_id),
+                    "calibration_version": proposal.get(
+                        "calibration_version", frame_evidence.get("calibration_version", "camera-frame")
+                    ),
                     "failure": proposal["failure"],
                 }
                 for role, proposal in frame_evidence["proposals"].items()

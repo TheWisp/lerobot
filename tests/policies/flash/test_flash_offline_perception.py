@@ -1,5 +1,7 @@
 """Recorded extraction must use the same group bridge as a live estimator."""
 
+from dataclasses import replace
+
 import numpy as np
 
 import lerobot.policies.flash.offline_perception as offline_perception
@@ -92,6 +94,39 @@ def test_demo_group_bridge_uses_live_scene_estimator(monkeypatch):
     assert with_group[2]["target"].estimator == "environment_group_motion"
     np.testing.assert_allclose(with_group[2]["target"].pose[:3, 3], [0.04, 0, 1], atol=0.005)
     assert with_group[2]["target"].last_direct_observation_s == frames[1].source_time_s
+    assert with_group[2]["target"].available_time_s == frames[2].available_time_s
+
+
+def test_offline_extraction_does_not_publish_backend_wall_clock_as_recorded_availability():
+    mask = np.zeros((96, 96), dtype=bool)
+    mask[40:56, 40:56] = True
+    reference = ObjectReference(
+        "target", "v1", (ReferenceSnippet("demo", 0, 0, "target", np.eye(4), "mask.png", "camera-v1"),)
+    )
+
+    class WallClockBackend(_RecordedBackend):
+        def update(self, frame):
+            return tuple(
+                replace(estimate, available_time_s=1_000_000.0) for estimate in super().update(frame)
+            )
+
+    vision_results = []
+    scene_rows = []
+    frames = [_frame(index) for index in range(2)]
+    trace = offline_perception.extract_pose_trace(
+        frames,
+        WallClockBackend(mask),
+        (reference,),
+        causal_tracking=CausalTrackingConfig(8, 8, 12, 0.1, 0.005),
+        on_vision_result=vision_results.append,
+        on_frame_evidence=lambda frame, result, groups, estimates: scene_rows.append((result, estimates)),
+    )
+    for index, frame in enumerate(frames):
+        assert vision_results[index].estimates[0].available_time_s == frame.available_time_s
+        assert vision_results[index].proposals[0].estimate.available_time_s == frame.available_time_s
+        assert scene_rows[index][0].proposals[0].estimate.available_time_s == frame.available_time_s
+        assert scene_rows[index][1]["target"].available_time_s == frame.available_time_s
+        assert trace[index]["target"].available_time_s == frame.available_time_s
 
 
 def test_demo_attachment_disables_environment_bridge(monkeypatch):

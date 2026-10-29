@@ -57,6 +57,21 @@ def extract_pose_trace(
     with PerceptionRunner(pipeline) as runner:
         while (item := runner.process_next(lambda: next(source, None))) is not None:
             frame, result = item
+            # Backend compute happens during this later extraction, not on the
+            # recorded camera clock. In a source-order pass each proposal is
+            # available at this frame's recorded availability; wall-clock
+            # completion time would mix incompatible clocks in the demo trace.
+            estimates = tuple(
+                replace(estimate, available_time_s=frame.available_time_s) for estimate in result.estimates
+            )
+            normalized = {estimate.role: estimate for estimate in estimates}
+            result = replace(
+                result,
+                estimates=estimates,
+                proposals=tuple(
+                    replace(proposal, estimate=normalized[proposal.role]) for proposal in result.proposals
+                ),
+            )
             if on_vision_result is not None:
                 on_vision_result(result)
             proposals = result.estimates

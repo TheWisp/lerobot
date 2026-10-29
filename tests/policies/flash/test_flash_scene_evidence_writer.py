@@ -47,12 +47,13 @@ def test_preparation_evidence_crosses_into_demo_replay(tmp_path):
         "object",
         None,
         1.0,
-        1.0,
+        1.2,
         Evidence.LOST,
         "reference",
         (False,) * 3,
         (False,) * 3,
         estimator="surface_rgbd",
+        source_frame_id=0,
     )
     mask = np.zeros((4, 4), bool)
     mask[1:3, 1:3] = True
@@ -121,6 +122,15 @@ def test_preparation_evidence_crosses_into_demo_replay(tmp_path):
         == 30
     )
     assert evidence["estimates"]["object"]["evidence"] == "lost"
+    assert evidence["source_time_s"] == 1.0
+    assert evidence["available_time_s"] == 1.0
+    assert evidence["calibration_version"] == "calibration"
+    assert evidence["estimates"]["object"]["source_frame_id"] == 0
+    assert evidence["estimates"]["object"]["available_time_s"] == 1.2
+    assert evidence["estimates"]["object"]["reference_version"] == "reference"
+    assert evidence["proposals"]["object"]["frame_id"] == 0
+    assert evidence["proposals"]["object"]["available_time_s"] == 1.2
+    assert evidence["proposals"]["object"]["calibration_version"] == "calibration"
     assert evidence["groups"]["object"]["ids"] == [7]
     assert evidence["groups"]["object"]["base_xyz_m"] == [[0.1, 0.2, 1.0]]
     assert json.loads((bundle_dir / "scene-evidence/manifest.json").read_text())["complete"] is True

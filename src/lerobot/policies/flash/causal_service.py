@@ -183,6 +183,7 @@ class CausalPoseService:
         on_direct_observation_with_frame: Callable[[PoseEstimate, RGBDFrame, np.ndarray], None] | None = None,
         on_anchor_decision: Callable[[AnchorDecision], None] | None = None,
         on_scene_support: Callable[[int, dict[str, dict]], None] | None = None,
+        decision_clock: Callable[[], float] = time.perf_counter,
     ) -> None:
         if history_frames < 2 or queue_frames < 2:
             raise ValueError("causal pose history and queue need at least two frames")
@@ -241,6 +242,8 @@ class CausalPoseService:
         self.on_direct_observation_with_frame = on_direct_observation_with_frame
         self.on_anchor_decision = on_anchor_decision
         self.on_scene_support = on_scene_support
+        self._live_decision_clock = decision_clock
+        self._offline_decision_time_s: float | None = None
         if any(
             center.shape != (3,) or not np.isfinite(center).all()
             for center in self.object_centers_by_role.values()
@@ -304,6 +307,13 @@ class CausalPoseService:
         with self._lock:
             return self._error
 
+    def decision_clock(self) -> float:
+        return (
+            self._offline_decision_time_s
+            if self._offline_decision_time_s is not None
+            else self._live_decision_clock()
+        )
+
     def start(self) -> None:
         if self._started:
             raise RuntimeError("causal pose service already started")
@@ -355,21 +365,29 @@ class CausalPoseService:
         """
         if self._started:
             raise RuntimeError("offline pose processing cannot share a running worker")
-        self.set_attached_role(attached_role)
-        self._frame(frame)
-        self._anchor(
-            _Anchor(
-                frame.frame_id,
-                estimates,
-                masks,
-                frame.source_time_s,
-                frame.calibration_version,
-                proposals,
-            ),
-            decision_time_s=frame.available_time_s,
-        )
-        self._drain_pending()
-        return self.store.snapshot()[1]
+        # Offline extraction is a source-order simulation: all work for this
+        # image completes before the next recorded image is considered. Use
+        # its recorded availability, not the wall clock of the later rebuild.
+        prior_time_s = self._offline_decision_time_s
+        self._offline_decision_time_s = frame.available_time_s
+        try:
+            self.set_attached_role(attached_role)
+            self._frame(frame)
+            self._anchor(
+                _Anchor(
+                    frame.frame_id,
+                    estimates,
+                    masks,
+                    frame.source_time_s,
+                    frame.calibration_version,
+                    proposals,
+                ),
+                decision_time_s=frame.available_time_s,
+            )
+            self._drain_pending()
+            return self.store.snapshot()[1]
+        finally:
+            self._offline_decision_time_s = prior_time_s
 
     def set_attached_role(self, role: str | None) -> None:
         """Withdraw support assumptions when an object is grasped or released."""
@@ -509,7 +527,9 @@ class CausalPoseService:
         self.scene_update_total_s += time.perf_counter() - scene_started_s
         self.scene_history.append(scene)
         self.frames += 1
-        self.max_processing_lag_s = max(self.max_processing_lag_s, time.perf_counter() - frame.source_time_s)
+        self.max_processing_lag_s = max(
+            self.max_processing_lag_s, self.decision_clock() - frame.source_time_s
+        )
         self.latest_processed_source_time_s = frame.source_time_s
         object_motion_roles: set[str] = set()
         object_started_s = time.perf_counter()
@@ -597,7 +617,7 @@ class CausalPoseService:
             frame.source_time_s,
             max(
                 frame.available_time_s,
-                time.perf_counter(),
+                self.decision_clock(),
                 available_at_s if available_at_s is not None else frame.available_time_s,
             ),
             Evidence.PREDICTED,
@@ -645,7 +665,7 @@ class CausalPoseService:
                     role,
                     anchor.pose,
                     frame.source_time_s,
-                    max(frame.available_time_s, time.perf_counter()),
+                    max(frame.available_time_s, self.decision_clock()),
                     Evidence.PREDICTED,
                     anchor.reference_version,
                     anchor.translation_supported,
@@ -798,7 +818,7 @@ class CausalPoseService:
                 continue
             if estimate.has_direct_translation and estimate.role != attached_role:
                 self._observe_environment(estimate, scene, result.masks)
-            accepted_at_s = time.perf_counter() if decision_time_s is None else decision_time_s
+            accepted_at_s = self.decision_clock() if decision_time_s is None else decision_time_s
             estimate = replace(estimate, available_time_s=max(estimate.available_time_s, accepted_at_s))
             self._count_anchor_outcome(estimate.role, "direct_accepted")
             self._remember_static_support(estimate, source, mask)
@@ -1003,7 +1023,7 @@ class CausalPoseService:
                 pose, relation = tracked
                 if scene.frame_id == latest_scene_id:
                     latest_pose = pose
-        accepted_at_s = time.perf_counter() if decision_time_s is None else decision_time_s
+        accepted_at_s = self.decision_clock() if decision_time_s is None else decision_time_s
         self.relationships[role] = relation
         self.candidate_relationships.pop(role, None)
         self._expired_verified_roles.discard(role)
@@ -1098,6 +1118,7 @@ class CausalPoseService:
             object_points_by_role=self.object_points_by_role,
             axial_symmetries=tuple(self.axial_symmetries.values()),
             on_anchor_decision=decisions.append,
+            decision_clock=self.decision_clock,
         )
         shadow.scene.update = lambda frame: next(
             scene for scene in self.scene_history if scene.frame_id == frame.frame_id
@@ -1175,7 +1196,7 @@ class CausalPoseService:
             self._expired_verified_roles.add(role)
         else:
             self._expired_verified_roles.discard(role)
-        result = replace(result, available_time_s=max(result.available_time_s, time.perf_counter()))
+        result = replace(result, available_time_s=max(result.available_time_s, self.decision_clock()))
         self.store.revise(result)
         if self.on_layer is not None:
             self.on_layer(result)
@@ -1203,7 +1224,7 @@ class CausalPoseService:
             previous = self.anchor_decisions_by_source.get(key)
             if previous is None or previous.outcome.removeprefix("replayed_") == decision.outcome:
                 continue
-            decided_at_s = time.perf_counter()
+            decided_at_s = self.decision_clock()
             changed = replace(
                 decision,
                 outcome=f"replayed_{decision.outcome}",
@@ -1277,7 +1298,7 @@ class CausalPoseService:
             result.calibration_version,
             candidate,
             outcome,
-            time.perf_counter() if decided_at_s is None else decided_at_s,
+            self.decision_clock() if decided_at_s is None else decided_at_s,
             accepted,
             next((proposal for proposal in result.proposals if proposal.role == candidate.role), None),
         )
@@ -1504,7 +1525,8 @@ class CausalPoseService:
             current,
             pose=None,
             available_time_s=max(
-                current.available_time_s, time.perf_counter() if decision_time_s is None else decision_time_s
+                current.available_time_s,
+                self.decision_clock() if decision_time_s is None else decision_time_s,
             ),
             evidence=Evidence.LOST,
             translation_supported=(False,) * 3,
@@ -1631,7 +1653,7 @@ class CausalPoseService:
             role,
             pose,
             motion.source_time_s,
-            max(motion.available_time_s, time.perf_counter()),
+            max(motion.available_time_s, self.decision_clock()),
             # The current RGB-D frame measures point motion. It does not
             # independently recognize the object's absolute pose or identity;
             # those still come from the older anchor and can drift or be

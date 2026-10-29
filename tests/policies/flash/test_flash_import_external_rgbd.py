@@ -83,16 +83,35 @@ def test_import_preserves_invalid_depth_and_source_clock(tmp_path):
     for frame_id in range(3):
         evidence = {
             "frame_index": frame_id,
+            "source_time_s": float(times[frame_id]),
+            "available_time_s": float(times[frame_id] + 0.02),
+            "calibration_version": "observation-camera",
             "estimates": {
                 "object": {
                     "pose": None if frame_id == 2 else pose,
                     "evidence": "lost" if frame_id == 2 else "observed",
                     "estimator": "stationary_prior_contradicted" if frame_id == 2 else "test",
+                    "source_time_s": float(times[frame_id]),
+                    "source_frame_id": frame_id,
+                    "available_time_s": float(times[frame_id] + 0.02),
+                    "reference_version": "observation-object-v1",
                 }
             },
             "masks_rle": {"object": [[0, 64 * 64]]},
             "groups": {},
-            "proposals": {},
+            "proposals": {
+                "object": {
+                    "evidence": "lost" if frame_id == 2 else "observed",
+                    "source_time_s": float(times[frame_id]),
+                    "source_frame_id": frame_id,
+                    "available_time_s": float(times[frame_id] + 0.02),
+                    "reference_version": "observation-object-v1",
+                    "frame_id": frame_id,
+                    "calibration_version": "observation-camera",
+                    "raw_pose": pose,
+                    "failure": "test proposal" if frame_id == 2 else None,
+                }
+            },
         }
         with gzip.open(sidecar / f"{frame_id:06d}.json.gz", "wt") as stream:
             json.dump(evidence, stream)
@@ -100,10 +119,18 @@ def test_import_preserves_invalid_depth_and_source_clock(tmp_path):
     assert replay["evidence_available"]
     assert replay["frames"][1]["snapshot"]["accepted"]["object"]["evidence"] == "observed"
     assert "object" not in replay["frames"][2]["snapshot"]["accepted"]
-    assert replay["frames"][2]["snapshot"]["pose_status"]["object"] == {
-        "evidence": "lost",
-        "estimator": "stationary_prior_contradicted",
-    }
+    lost_status = replay["frames"][2]["snapshot"]["pose_status"]["object"]
+    assert lost_status["evidence"] == "lost"
+    assert lost_status["estimator"] == "stationary_prior_contradicted"
+    assert lost_status["source_frame_id"] == 2
+    assert lost_status["available_time_s"] == pytest.approx(0.13)
+    assert lost_status["reference_version"] == "observation-object-v1"
+    assert replay["frames"][1]["snapshot"]["accepted"]["object"]["available_time_s"] == pytest.approx(0.06)
+    assert replay["frames"][1]["snapshot"]["proposals"]["object"]["source_frame_id"] == 1
+    assert (
+        replay["frames"][2]["snapshot"]["raw_proposals"]["object"]["calibration_version"]
+        == "observation-camera"
+    )
     assert replay["frames"][1]["snapshot"]["observed_masks"]["object"]["boundary_xy"]
     assert replay["geometry"]["points_object_m"]["object"]
     for frame_id in range(3):
