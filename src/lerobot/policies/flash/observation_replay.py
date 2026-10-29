@@ -16,6 +16,7 @@ import numpy as np
 
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
+from .geometry import transform
 from .observation_annotations import load_annotations
 from .observation_dataset import (
     camera_feature_keys,
@@ -95,6 +96,12 @@ def load_observation_replay(root: Path, episode: int = 0) -> dict:
                 frame_evidence = json.load(stream)
             if frame_evidence["frame_index"] != frame_id:
                 raise ValueError("observation evidence and RGB-D episode are out of sequence")
+            if frame_evidence.get("base_from_camera") is not None:
+                # The perception pass may use a reviewed camera-pose revision.
+                # Replay must project its saved object/scene poses through that
+                # same transform, while the dataset's original pose stays intact.
+                scene_pose = transform(frame_evidence["base_from_camera"])
+                calibration_version = frame_evidence["calibration_version"]
         accepted = {}
         pose_status = {}
         masks = {}

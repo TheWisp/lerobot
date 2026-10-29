@@ -14,6 +14,7 @@ Example::
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 
@@ -105,6 +106,7 @@ def compare_pose_to_background(
         ),
         "source_delta_translation_m": float(np.linalg.norm(correction[:3, 3])),
         "source_delta_rotation_deg": float(np.degrees(angle)),
+        "candidate_world_from_camera": np.linalg.inv(fitted_camera_from_world).tolist(),
     }
     return result
 
@@ -113,16 +115,21 @@ def audit(root: Path, mask_directories: dict[str, Path], *, episode: int = 0) ->
     """Measure source camera-pose consistency on an ordinary RGB-D episode."""
     root = root.expanduser().resolve()
     source = json.loads((root / "flash/v1/source.json").read_text(encoding="utf-8"))
+    source_metadata_sha256 = hashlib.sha256((root / "flash/v1/source.json").read_bytes()).hexdigest()
     if source.get("camera_pose_feature") is None:
         raise ValueError("camera-pose audit needs a measured moving-camera trajectory")
     if not mask_directories:
         raise ValueError("camera-pose audit needs object exclusion masks")
     dataset = LeRobotDataset(source["repo_id"], root=root, depth_output_unit="m", video_backend="pyav")
     samples, _ = episode_camera_samples(root, dataset, source, episode)
+    recorded_pose_trace = np.asarray(
+        dataset.episode_column(source["camera_pose_feature"], episode), dtype=np.float64
+    )
     rgb_key, depth_key = camera_feature_keys(dataset.meta.features, source)
     intrinsics = np.asarray(source["camera_intrinsics"], dtype=np.float64)
     tracker = ScenePointTracker(image_scale=1.0)
     anchor: dict[int, np.ndarray] = {}
+    masks_digest = hashlib.sha256()
     entries = []
     for frame_id, sample in enumerate(samples):
         row = dataset[sample.row_index]
@@ -134,8 +141,10 @@ def audit(root: Path, mask_directories: dict[str, Path], *, episode: int = 0) ->
         )
         tracks = tracker.update(frame)
         excluded = np.zeros(depth.shape, dtype=bool)
-        for role, directory in mask_directories.items():
-            mask = cv2.imread(str(directory / f"{frame_id:06d}.png"), cv2.IMREAD_UNCHANGED)
+        for role, directory in sorted(mask_directories.items()):
+            path = directory / f"{frame_id:06d}.png"
+            masks_digest.update(role.encode() + b"\0" + path.read_bytes())
+            mask = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
             if mask is None or mask.shape != depth.shape:
                 raise ValueError(f"{role}: mask {frame_id} is missing or not depth-aligned")
             excluded |= mask != 0
@@ -153,6 +162,9 @@ def audit(root: Path, mask_directories: dict[str, Path], *, episode: int = 0) ->
     return {
         "schema": "flash-camera-pose-audit-v1",
         "source": str(root),
+        "source_metadata_sha256": source_metadata_sha256,
+        "recorded_pose_trace_sha256": hashlib.sha256(recorded_pose_trace.tobytes()).hexdigest(),
+        "mask_sha256": masks_digest.hexdigest(),
         "episode": episode,
         "reference_frame": 0,
         "initial_background_tracks": len(anchor),

@@ -125,6 +125,7 @@ def test_preparation_evidence_crosses_into_demo_replay(tmp_path):
     assert evidence["source_time_s"] == 1.0
     assert evidence["available_time_s"] == 1.0
     assert evidence["calibration_version"] == "calibration"
+    assert evidence["base_from_camera"] == np.eye(4).tolist()
     assert evidence["estimates"]["object"]["source_frame_id"] == 0
     assert evidence["estimates"]["object"]["available_time_s"] == 1.2
     assert evidence["estimates"]["object"]["reference_version"] == "reference"

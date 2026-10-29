@@ -120,6 +120,12 @@ def test_import_preserves_invalid_depth_and_source_clock(tmp_path):
             "source_time_s": float(times[frame_id]),
             "available_time_s": float(times[frame_id] + 0.02),
             "calibration_version": "observation-camera",
+            "base_from_camera": (
+                np.array(
+                    [[1, 0, 0, frame_id * 0.01], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]],
+                    dtype=float,
+                ).tolist()
+            ),
             "estimates": {
                 "object": {
                     "pose": None if frame_id == 2 else pose,
@@ -151,6 +157,8 @@ def test_import_preserves_invalid_depth_and_source_clock(tmp_path):
             json.dump(evidence, stream)
     replay = load_observation_replay(root)
     assert replay["evidence_available"]
+    assert replay["frames"][1]["snapshot"]["camera"]["base_from_camera"][0][3] == pytest.approx(0.01)
+    assert replay["frames"][1]["snapshot"]["camera"]["calibration_version"] == "observation-camera"
     assert replay["frames"][1]["snapshot"]["accepted"]["object"]["evidence"] == "observed"
     assert "object" not in replay["frames"][2]["snapshot"]["accepted"]
     lost_status = replay["frames"][2]["snapshot"]["pose_status"]["object"]

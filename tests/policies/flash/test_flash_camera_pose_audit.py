@@ -28,6 +28,8 @@ def test_camera_pose_audit_checks_a_pnp_candidate_on_unseen_background_points():
     assert result["pnp"]["heldout_fit"]["median_px"] < 0.3
     assert result["pnp"]["heldout_source"]["median_px"] > 5
     assert result["pnp"]["source_delta_translation_m"] == pytest.approx(0.03, abs=0.005)
+    candidate = np.asarray(result["pnp"]["candidate_world_from_camera"])
+    assert np.linalg.norm(candidate[:3, 3] - np.linalg.inv(true_camera_from_world)[:3, 3]) < 0.005
 
 
 def test_camera_pose_audit_reports_insufficient_tracks_without_inventing_a_pose():

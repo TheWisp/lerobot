@@ -25,7 +25,9 @@ from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
 from .appearance import Sam3MaskSource
 from .causal_service import CausalTrackingConfig
+from .geometry import transform
 from .observation_dataset import (
+    CameraSample,
     camera_feature_keys,
     depth_scale_m,
     episode_camera_samples,
@@ -75,6 +77,79 @@ class RecordedMaskSource:
         return result
 
 
+def _camera_pose_candidates(
+    audit_path: Path,
+    root: Path,
+    source_path: Path,
+    mask_directories: dict[str, Path],
+    episode: int,
+    samples: list[CameraSample],
+    recorded_pose_trace_sha256: str,
+) -> tuple[list[np.ndarray | None], list[dict]]:
+    """Load a controlled camera-pose comparison, never a production calibration.
+
+    The audit's alternative must beat the source on held-out RGB tracks. It
+    remains a hypothesis: neither those tracks nor a low surface residual are
+    independent ground truth for a robot action.
+    """
+    audit = json.loads(audit_path.read_text(encoding="utf-8"))
+    if (
+        audit.get("schema") != "flash-camera-pose-audit-v1"
+        or audit.get("source") != str(root)
+        or audit.get("episode") != episode
+        or audit.get("source_metadata_sha256") != hashlib.sha256(source_path.read_bytes()).hexdigest()
+        or audit.get("recorded_pose_trace_sha256") != recorded_pose_trace_sha256
+        or not isinstance(audit.get("frames"), list)
+        or len(audit["frames"]) != len(samples)
+    ):
+        raise ValueError("camera-pose audit does not match this recorded episode")
+    mask_hash = hashlib.sha256()
+    for frame_id in range(len(samples)):
+        for role, directory in sorted(mask_directories.items()):
+            mask_hash.update(role.encode() + b"\0" + (directory / f"{frame_id:06d}.png").read_bytes())
+    if audit.get("mask_sha256") != mask_hash.hexdigest():
+        raise ValueError("camera-pose audit masks no longer match the selected masks")
+    candidates = []
+    selections = []
+    for frame_id, (sample, entry) in enumerate(zip(samples, audit["frames"], strict=True)):
+        audited_time = entry.get("time_s") if isinstance(entry, dict) else None
+        if (
+            not isinstance(audited_time, (int, float))
+            or entry.get("frame") != frame_id
+            or not np.isclose(audited_time, sample.source_time_s, atol=1e-6)
+        ):
+            raise ValueError("camera-pose audit frame times no longer match this episode")
+        fit = entry.get("pnp")
+        if fit is None:
+            candidates.append(None)
+            selections.append({"frame": frame_id, "selected": "source", "reason": "no candidate"})
+            continue
+        source_error = fit.get("heldout_source") or {}
+        fit_error = fit.get("heldout_fit") or {}
+        source_median = source_error.get("median_px")
+        fit_median = fit_error.get("median_px")
+        useful = (
+            isinstance(source_median, (int, float))
+            and isinstance(fit_median, (int, float))
+            and np.isfinite(source_median)
+            and np.isfinite(fit_median)
+            and fit_median < source_median
+            and isinstance(fit.get("training_inliers"), (int, float))
+            and fit["training_inliers"] >= 6
+        )
+        candidates.append(transform(fit["candidate_world_from_camera"]) if useful else None)
+        selections.append(
+            {
+                "frame": frame_id,
+                "selected": "background_rgb_candidate" if useful else "source",
+                "source_heldout_median_px": source_median,
+                "candidate_heldout_median_px": fit_median,
+                "training_inliers": fit.get("training_inliers"),
+            }
+        )
+    return candidates, selections
+
+
 def _extract_to_directory(
     dataset_root: Path,
     mask_directories: dict[str, Path],
@@ -84,6 +159,7 @@ def _extract_to_directory(
     output: Path | None = None,
     prompts_by_role: dict[str, str] | None = None,
     seed_points_by_role: dict[str, tuple[float, float]] | None = None,
+    camera_pose_audit: Path | None = None,
 ) -> Path:
     root = dataset_root.expanduser().resolve()
     source_path = root / "flash" / "v1" / "source.json"
@@ -125,12 +201,37 @@ def _extract_to_directory(
     )
     roles = tuple(directories or prompts)
     camera_samples, source_trace_sha256 = episode_camera_samples(root, dataset, source, episode)
+    audit_path = camera_pose_audit.expanduser().resolve() if camera_pose_audit is not None else None
+    if audit_path is not None and (not directories or source.get("camera_pose_feature") is None):
+        raise ValueError("camera-pose comparison needs saved masks and a moving-camera source")
+    candidate_poses, camera_selections = (
+        _camera_pose_candidates(
+            audit_path,
+            root,
+            source_path,
+            directories,
+            episode,
+            camera_samples,
+            hashlib.sha256(
+                np.asarray(
+                    dataset.episode_column(source["camera_pose_feature"], episode), dtype=np.float64
+                ).tobytes()
+            ).hexdigest(),
+        )
+        if audit_path is not None
+        else (None, None)
+    )
+    audit_sha256 = hashlib.sha256(audit_path.read_bytes()).hexdigest() if audit_path is not None else None
+    revised_calibration_version = (
+        f"background-rgb-candidate:{audit_sha256[:12]}" if audit_sha256 is not None else None
+    )
     intrinsics = np.asarray(source["camera_intrinsics"], dtype=np.float64)
     destination = output or root / "flash" / "v1" / "observation-evidence" / f"episode_{episode:06d}"
     identity = hashlib.sha256(
         source_path.read_bytes()
         + (source_trace_sha256 or "").encode()
         + bundle_path.read_bytes()
+        + (audit_path.read_bytes() if audit_path is not None else b"")
         + json.dumps(
             {
                 "mask_directories": {role: str(path) for role, path in directories.items()},
@@ -157,7 +258,9 @@ def _extract_to_directory(
                     role,
                     np.eye(4),
                     str(prompt),
-                    "source-world"
+                    revised_calibration_version
+                    if revised_calibration_version is not None
+                    else "source-world"
                     if source.get("camera_pose_feature")
                     else "fixed-scene-camera"
                     if source.get("fixed_scene_from_camera")
@@ -174,6 +277,10 @@ def _extract_to_directory(
             rgb = (row[rgb_key].numpy().transpose(1, 2, 0) * 255).clip(0, 255).astype(np.uint8)
             depth = row[depth_key].numpy().squeeze().astype(np.float32)
             scene_pose, calibration_version = scene_from_camera(row, dataset.meta.features, source)
+            if candidate_poses is not None and candidate_poses[frame_id] is not None:
+                scene_pose = candidate_poses[frame_id]
+            if revised_calibration_version is not None:
+                calibration_version = revised_calibration_version
             yield RGBDFrame(
                 frame_id,
                 rgb,
@@ -216,6 +323,8 @@ def _extract_to_directory(
                 ),
                 "robot_actions_available": has_robot_actions,
                 "gripper_prediction_available": False,
+                "camera_pose_comparison": camera_selections,
+                "camera_pose_audit_sha256": audit_sha256,
                 "roles": list(roles),
                 "mask_source": "recorded" if directories else "sam3",
                 "prompts_by_role": prompts,
@@ -244,14 +353,20 @@ def extract(
     output: Path | None = None,
     prompts_by_role: dict[str, str] | None = None,
     seed_points_by_role: dict[str, tuple[float, float]] | None = None,
+    camera_pose_audit: Path | None = None,
 ) -> Path:
     """Publish a complete pass while preserving the previous evidence on failure."""
     root = dataset_root.expanduser().resolve()
+    if camera_pose_audit is not None and output is None:
+        raise ValueError("camera-pose comparison needs an explicit output sidecar")
     destination = (
         (output or root / "flash" / "v1" / "observation-evidence" / f"episode_{episode:06d}")
         .expanduser()
         .resolve()
     )
+    normal_destination = (root / "flash" / "v1" / "observation-evidence" / f"episode_{episode:06d}").resolve()
+    if camera_pose_audit is not None and destination == normal_destination:
+        raise ValueError("camera-pose comparison cannot replace normal observation evidence")
     destination.parent.mkdir(parents=True, exist_ok=True)
     staging = Path(tempfile.mkdtemp(prefix=f".{destination.name}-pending-", dir=destination.parent))
     backup = None
@@ -264,6 +379,7 @@ def extract(
             output=staging,
             prompts_by_role=prompts_by_role,
             seed_points_by_role=seed_points_by_role,
+            camera_pose_audit=camera_pose_audit,
         )
         if destination.exists():
             backup = Path(tempfile.mkdtemp(prefix=f".{destination.name}-previous-", dir=destination.parent))
@@ -294,6 +410,11 @@ def main() -> None:
     parser.add_argument("--prompt", action="append", default=[], metavar="ROLE=TEXT")
     parser.add_argument("--seed", action="append", default=[], metavar="ROLE=X,Y")
     parser.add_argument("--output", type=Path, help="Write a separate evidence sidecar for comparison")
+    parser.add_argument(
+        "--camera-pose-audit",
+        type=Path,
+        help="Diagnostic only: compare held-out RGB camera candidates without replacing source data",
+    )
     args = parser.parse_args()
     masks = {}
     for entry in args.mask:
@@ -326,6 +447,7 @@ def main() -> None:
             output=args.output,
             prompts_by_role=prompts,
             seed_points_by_role=seeds,
+            camera_pose_audit=args.camera_pose_audit,
         )
     )
 

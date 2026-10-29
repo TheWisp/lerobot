@@ -13,7 +13,7 @@ from .perception import RGBDFrame
 from .perception_step import PerceptionResult
 from .trajectory import PoseEstimate
 
-SCENE_EVIDENCE_CAPTURE_VERSION = 6
+SCENE_EVIDENCE_CAPTURE_VERSION = 7
 
 
 def _mask_runs(mask: np.ndarray) -> list[list[int]]:
@@ -64,6 +64,7 @@ class SceneEvidenceWriter:
             "source_time_s": frame.source_time_s,
             "available_time_s": frame.available_time_s,
             "calibration_version": frame.calibration_version,
+            "base_from_camera": frame.base_from_camera.tolist(),
             "image_size": list(frame.depth.shape),
             "masks_rle": {role: _mask_runs(mask) for role, mask in result.masks.items()},
             "groups": {
