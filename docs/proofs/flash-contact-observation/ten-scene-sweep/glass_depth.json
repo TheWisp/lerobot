@@ -1,0 +1,12 @@
+{
+  "dataset": "/home/feit/.cache/huggingface/lerobot/demos/flash_benchmark_caryx_032",
+  "frame": 173,
+  "source_jar_mask_pixels": 1768,
+  "nearby_table_pixels": 1089,
+  "jar_nonzero_depth_fraction": 1.0,
+  "jar_depth_minus_table_median_absolute_mm": 2.1187395642027127,
+  "jar_depth_minus_table_p90_absolute_mm": 8.928984628345448,
+  "jar_pixels_within_5mm_of_table_plane_fraction": 0.709841628959276,
+  "outside_table_median_absolute_mm": 1.5819538208826316,
+  "plane_fit_support_fraction": 1.0
+}

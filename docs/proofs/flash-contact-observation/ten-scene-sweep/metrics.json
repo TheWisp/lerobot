@@ -1,0 +1,536 @@
+[
+  {
+    "dataset": "/home/feit/.cache/huggingface/lerobot/demos/flash_benchmark_caryx_000",
+    "source": "CaryxAI/everyday-manipulation-3d episode 0",
+    "frames": 455,
+    "mask_source": "recorded",
+    "evidence_name": "observation-evidence",
+    "evidence_identity": "fa02833622e8a2ff8211f31b432150550134570b5152a8afeb147669e53a2767",
+    "config_bundle": "flash/v1/observation-config.json",
+    "pose_accuracy_ground_truth_available": false,
+    "roles": {
+      "object_a": {
+        "mask_visible_frames": 455,
+        "estimated_mask_present_frames_when_source_visible": 455,
+        "mask_iou_median_vs_supplied": 1.0,
+        "observed": 1,
+        "predicted": 7,
+        "lost": 447,
+        "available_fraction_when_mask_visible": 0.017582417582417582,
+        "depth_valid_fraction_median_within_mask": 1.0,
+        "longest_consecutive_lost_while_visible": 447,
+        "first_lost_while_visible": 8,
+        "first_observed_frame": 0,
+        "initial_reference": {
+          "raw_mask_depth_p90_mm": 0.0,
+          "mask_pixels": 2359,
+          "filtered_depth_points": 1627
+        },
+        "lost_with_raw_pose_candidate": 447,
+        "lost_candidate_raw_mask_depth_p90_mm_median": 26.396074806781208,
+        "accepted_surface_depth_p90_mm_median": 0.0,
+        "estimators": {
+          "surface_rgbd": 448,
+          "object_point_motion": 7
+        },
+        "rejection_reasons": {
+          "surface proposal lacks accepted RGB-D support": 274,
+          "visible patch is too narrow for a full rigid pose": 173
+        }
+      }
+    }
+  },
+  {
+    "dataset": "/home/feit/.cache/huggingface/lerobot/demos/flash_benchmark_caryx_002",
+    "source": "CaryxAI/everyday-manipulation-3d episode 2",
+    "frames": 389,
+    "mask_source": "recorded",
+    "evidence_name": "observation-evidence",
+    "evidence_identity": "5a94a59847550c7451b335619e804739db20744d3035e985dfd15e4e3ad29e6f",
+    "config_bundle": "flash/v1/observation-config.json",
+    "pose_accuracy_ground_truth_available": false,
+    "roles": {
+      "object_a": {
+        "mask_visible_frames": 389,
+        "estimated_mask_present_frames_when_source_visible": 389,
+        "mask_iou_median_vs_supplied": 1.0,
+        "observed": 1,
+        "predicted": 147,
+        "lost": 241,
+        "available_fraction_when_mask_visible": 0.38046272493573263,
+        "depth_valid_fraction_median_within_mask": 1.0,
+        "longest_consecutive_lost_while_visible": 241,
+        "first_lost_while_visible": 148,
+        "first_observed_frame": 0,
+        "initial_reference": {
+          "raw_mask_depth_p90_mm": 74.52727474988278,
+          "mask_pixels": 1287,
+          "filtered_depth_points": 666
+        },
+        "lost_with_raw_pose_candidate": 231,
+        "lost_candidate_raw_mask_depth_p90_mm_median": 27.564825053346105,
+        "accepted_surface_depth_p90_mm_median": 74.52727474988278,
+        "estimators": {
+          "surface_rgbd": 242,
+          "environment_support_hypothesis": 147
+        },
+        "rejection_reasons": {
+          "visible patch is too narrow for a full rigid pose": 211,
+          "surface proposal lacks accepted RGB-D support": 20,
+          "insufficient_depth": 10
+        }
+      }
+    }
+  },
+  {
+    "dataset": "/home/feit/.cache/huggingface/lerobot/demos/flash_benchmark_caryx_003",
+    "source": "CaryxAI/everyday-manipulation-3d episode 3",
+    "frames": 323,
+    "mask_source": "recorded",
+    "evidence_name": "observation-evidence",
+    "evidence_identity": "914a6807a1af747a2e15fab633d47d2197f78327fcf8188aac08239a301b42ac",
+    "config_bundle": "flash/v1/observation-config.json",
+    "pose_accuracy_ground_truth_available": false,
+    "roles": {
+      "object_a": {
+        "mask_visible_frames": 323,
+        "estimated_mask_present_frames_when_source_visible": 323,
+        "mask_iou_median_vs_supplied": 1.0,
+        "observed": 1,
+        "predicted": 37,
+        "lost": 285,
+        "available_fraction_when_mask_visible": 0.11764705882352941,
+        "depth_valid_fraction_median_within_mask": 1.0,
+        "longest_consecutive_lost_while_visible": 284,
+        "first_lost_while_visible": 37,
+        "first_observed_frame": 0,
+        "initial_reference": {
+          "raw_mask_depth_p90_mm": 157.84430955559867,
+          "mask_pixels": 1757,
+          "filtered_depth_points": 637
+        },
+        "lost_with_raw_pose_candidate": 284,
+        "lost_candidate_raw_mask_depth_p90_mm_median": 126.93257161661623,
+        "accepted_surface_depth_p90_mm_median": 157.84430955559867,
+        "estimators": {
+          "surface_rgbd": 286,
+          "object_point_motion": 1,
+          "environment_support_hypothesis": 36
+        },
+        "rejection_reasons": {
+          "visible patch is too narrow for a full rigid pose": 247,
+          "surface proposal lacks accepted RGB-D support": 37,
+          "insufficient_depth": 1
+        }
+      }
+    }
+  },
+  {
+    "dataset": "/home/feit/.cache/huggingface/lerobot/demos/flash_benchmark_caryx_007",
+    "source": "CaryxAI/everyday-manipulation-3d episode 7",
+    "frames": 200,
+    "mask_source": "recorded",
+    "evidence_name": "observation-evidence",
+    "evidence_identity": "5fb724ff9b8040a398e352d980bb546a262e3535f621d51c0a69ee675bee8206",
+    "config_bundle": "flash/v1/observation-config.json",
+    "pose_accuracy_ground_truth_available": false,
+    "roles": {
+      "object_a": {
+        "mask_visible_frames": 119,
+        "estimated_mask_present_frames_when_source_visible": 119,
+        "mask_iou_median_vs_supplied": 1.0,
+        "observed": 1,
+        "predicted": 7,
+        "lost": 111,
+        "available_fraction_when_mask_visible": 0.06722689075630252,
+        "depth_valid_fraction_median_within_mask": 1.0,
+        "longest_consecutive_lost_while_visible": 111,
+        "first_lost_while_visible": 58,
+        "first_observed_frame": 50,
+        "initial_reference": {
+          "raw_mask_depth_p90_mm": 0.0,
+          "mask_pixels": 651,
+          "filtered_depth_points": 232
+        },
+        "lost_with_raw_pose_candidate": 111,
+        "lost_candidate_raw_mask_depth_p90_mm_median": 101.366508422102,
+        "accepted_surface_depth_p90_mm_median": 0.0,
+        "estimators": {
+          "surface_rgbd": 112,
+          "environment_support_hypothesis": 7
+        },
+        "rejection_reasons": {
+          "surface proposal lacks accepted RGB-D support": 81,
+          "visible patch is too narrow for a full rigid pose": 30
+        }
+      },
+      "object_b": {
+        "mask_visible_frames": 200,
+        "estimated_mask_present_frames_when_source_visible": 200,
+        "mask_iou_median_vs_supplied": 1.0,
+        "observed": 25,
+        "predicted": 50,
+        "lost": 125,
+        "available_fraction_when_mask_visible": 0.375,
+        "depth_valid_fraction_median_within_mask": 1.0,
+        "longest_consecutive_lost_while_visible": 119,
+        "first_lost_while_visible": 32,
+        "first_observed_frame": 0,
+        "initial_reference": {
+          "raw_mask_depth_p90_mm": 0.0,
+          "mask_pixels": 3095,
+          "filtered_depth_points": 2194
+        },
+        "lost_with_raw_pose_candidate": 125,
+        "lost_candidate_raw_mask_depth_p90_mm_median": 7.623975379053825,
+        "accepted_surface_depth_p90_mm_median": 3.943720932896731,
+        "estimators": {
+          "surface_rgbd": 150,
+          "environment_group_motion": 47,
+          "environment_support_hypothesis": 3
+        },
+        "rejection_reasons": {
+          "surface proposal lacks accepted RGB-D support": 107,
+          "visible patch is too narrow for a full rigid pose": 18
+        }
+      }
+    }
+  },
+  {
+    "dataset": "/home/feit/.cache/huggingface/lerobot/demos/flash_benchmark_caryx_014",
+    "source": "CaryxAI/everyday-manipulation-3d episode 14",
+    "frames": 194,
+    "mask_source": "recorded",
+    "evidence_name": "observation-evidence",
+    "evidence_identity": "21f6018494f9ec83efc22ae7a749d2e783bcd226e15dfdb6ea0f5c70897bcfdf",
+    "config_bundle": "flash/v1/observation-config.json",
+    "pose_accuracy_ground_truth_available": false,
+    "roles": {
+      "object_a": {
+        "mask_visible_frames": 194,
+        "estimated_mask_present_frames_when_source_visible": 194,
+        "mask_iou_median_vs_supplied": 1.0,
+        "observed": 43,
+        "predicted": 47,
+        "lost": 104,
+        "available_fraction_when_mask_visible": 0.4639175257731959,
+        "depth_valid_fraction_median_within_mask": 1.0,
+        "longest_consecutive_lost_while_visible": 92,
+        "first_lost_while_visible": 40,
+        "first_observed_frame": 0,
+        "initial_reference": {
+          "raw_mask_depth_p90_mm": 0.0,
+          "mask_pixels": 332,
+          "filtered_depth_points": 119
+        },
+        "lost_with_raw_pose_candidate": 104,
+        "lost_candidate_raw_mask_depth_p90_mm_median": 8.127980036513494,
+        "accepted_surface_depth_p90_mm_median": 2.927558851685985,
+        "estimators": {
+          "surface_rgbd": 147,
+          "environment_support_hypothesis": 8,
+          "environment_group_motion": 39
+        },
+        "rejection_reasons": {
+          "visible patch is too narrow for a full rigid pose": 21,
+          "surface proposal lacks accepted RGB-D support": 83
+        }
+      }
+    }
+  },
+  {
+    "dataset": "/home/feit/.cache/huggingface/lerobot/demos/flash_benchmark_caryx_015",
+    "source": "CaryxAI/everyday-manipulation-3d episode 15",
+    "frames": 318,
+    "mask_source": "recorded",
+    "evidence_name": "observation-evidence",
+    "evidence_identity": "13be10f75db7dffd07f2c40145c90cbc241f2b2fa243968642b46ca299fbe5e3",
+    "config_bundle": "flash/v1/observation-config.json",
+    "pose_accuracy_ground_truth_available": false,
+    "roles": {
+      "object_a": {
+        "mask_visible_frames": 318,
+        "estimated_mask_present_frames_when_source_visible": 318,
+        "mask_iou_median_vs_supplied": 1.0,
+        "observed": 1,
+        "predicted": 67,
+        "lost": 250,
+        "available_fraction_when_mask_visible": 0.2138364779874214,
+        "depth_valid_fraction_median_within_mask": 1.0,
+        "longest_consecutive_lost_while_visible": 245,
+        "first_lost_while_visible": 34,
+        "first_observed_frame": 0,
+        "initial_reference": {
+          "raw_mask_depth_p90_mm": 0.0,
+          "mask_pixels": 1004,
+          "filtered_depth_points": 39
+        },
+        "lost_with_raw_pose_candidate": 250,
+        "lost_candidate_raw_mask_depth_p90_mm_median": 452.57612079378606,
+        "accepted_surface_depth_p90_mm_median": 0.0,
+        "estimators": {
+          "surface_rgbd": 251,
+          "object_point_motion": 67
+        },
+        "rejection_reasons": {
+          "surface proposal lacks accepted RGB-D support": 131,
+          "visible patch is too narrow for a full rigid pose": 119
+        }
+      }
+    }
+  },
+  {
+    "dataset": "/home/feit/.cache/huggingface/lerobot/demos/flash_benchmark_caryx_032",
+    "source": "CaryxAI/everyday-manipulation-3d episode 32",
+    "frames": 174,
+    "mask_source": "recorded",
+    "evidence_name": "observation-evidence",
+    "evidence_identity": "ca2077c6da1d4c477f54715fda91d9baf4c7bbb3b7e097a4724c57d843612e39",
+    "config_bundle": "flash/v1/observation-config.json",
+    "pose_accuracy_ground_truth_available": false,
+    "roles": {
+      "object_a": {
+        "mask_visible_frames": 174,
+        "estimated_mask_present_frames_when_source_visible": 174,
+        "mask_iou_median_vs_supplied": 1.0,
+        "observed": 153,
+        "predicted": 21,
+        "lost": 0,
+        "available_fraction_when_mask_visible": 1.0,
+        "depth_valid_fraction_median_within_mask": 1.0,
+        "longest_consecutive_lost_while_visible": 0,
+        "first_lost_while_visible": null,
+        "first_observed_frame": 0,
+        "initial_reference": {
+          "raw_mask_depth_p90_mm": 0.0,
+          "mask_pixels": 855,
+          "filtered_depth_points": 531
+        },
+        "lost_with_raw_pose_candidate": 0,
+        "lost_candidate_raw_mask_depth_p90_mm_median": null,
+        "accepted_surface_depth_p90_mm_median": 2.9635896446594483,
+        "estimators": {
+          "surface_rgbd": 153,
+          "environment_group_motion": 13,
+          "environment_support_hypothesis": 7,
+          "object_point_motion": 1
+        },
+        "rejection_reasons": {}
+      },
+      "object_b": {
+        "mask_visible_frames": 174,
+        "estimated_mask_present_frames_when_source_visible": 174,
+        "mask_iou_median_vs_supplied": 1.0,
+        "observed": 1,
+        "predicted": 49,
+        "lost": 124,
+        "available_fraction_when_mask_visible": 0.28735632183908044,
+        "depth_valid_fraction_median_within_mask": 1.0,
+        "longest_consecutive_lost_while_visible": 124,
+        "first_lost_while_visible": 50,
+        "first_observed_frame": 0,
+        "initial_reference": {
+          "raw_mask_depth_p90_mm": 0.0,
+          "mask_pixels": 866,
+          "filtered_depth_points": 427
+        },
+        "lost_with_raw_pose_candidate": 122,
+        "lost_candidate_raw_mask_depth_p90_mm_median": 18.48980444333091,
+        "accepted_surface_depth_p90_mm_median": 0.0,
+        "estimators": {
+          "surface_rgbd": 125,
+          "object_point_motion": 22,
+          "environment_support_hypothesis": 27
+        },
+        "rejection_reasons": {
+          "surface proposal lacks accepted RGB-D support": 38,
+          "visible patch is too narrow for a full rigid pose": 84,
+          "insufficient_depth": 2
+        }
+      }
+    }
+  },
+  {
+    "dataset": "/home/feit/.cache/huggingface/lerobot/demos/flash_benchmark_caryx_041",
+    "source": "CaryxAI/everyday-manipulation-3d episode 41",
+    "frames": 565,
+    "mask_source": "recorded",
+    "evidence_name": "observation-evidence",
+    "evidence_identity": "16439902a3ebeb439b86e0d50d39f878c913127fd5d73f7c72a73d0508867bca",
+    "config_bundle": "flash/v1/observation-config.json",
+    "pose_accuracy_ground_truth_available": false,
+    "roles": {
+      "object_a": {
+        "mask_visible_frames": 518,
+        "estimated_mask_present_frames_when_source_visible": 518,
+        "mask_iou_median_vs_supplied": 1.0,
+        "observed": 23,
+        "predicted": 95,
+        "lost": 400,
+        "available_fraction_when_mask_visible": 0.2277992277992278,
+        "depth_valid_fraction_median_within_mask": 1.0,
+        "longest_consecutive_lost_while_visible": 94,
+        "first_lost_while_visible": 21,
+        "first_observed_frame": 0,
+        "initial_reference": {
+          "raw_mask_depth_p90_mm": 95.5581507046187,
+          "mask_pixels": 390,
+          "filtered_depth_points": 87
+        },
+        "lost_with_raw_pose_candidate": 369,
+        "lost_candidate_raw_mask_depth_p90_mm_median": 29.885445864024263,
+        "accepted_surface_depth_p90_mm_median": 4.1878775119424425,
+        "estimators": {
+          "surface_rgbd": 423,
+          "object_point_motion": 20,
+          "environment_support_hypothesis": 50,
+          "environment_group_motion": 25
+        },
+        "rejection_reasons": {
+          "visible patch is too narrow for a full rigid pose": 226,
+          "surface proposal lacks accepted RGB-D support": 143,
+          "insufficient_depth": 31
+        }
+      }
+    }
+  },
+  {
+    "dataset": "/home/feit/.cache/huggingface/lerobot/demos/flash_benchmark_caryx_053",
+    "source": "CaryxAI/everyday-manipulation-3d episode 53",
+    "frames": 139,
+    "mask_source": "recorded",
+    "evidence_name": "observation-evidence",
+    "evidence_identity": "57c37b0fc04702949e854a279fba26dd574f4ba3a0fc30e88a13a3b0825bc7d9",
+    "config_bundle": "flash/v1/observation-config.json",
+    "pose_accuracy_ground_truth_available": false,
+    "roles": {
+      "object_a": {
+        "mask_visible_frames": 139,
+        "estimated_mask_present_frames_when_source_visible": 139,
+        "mask_iou_median_vs_supplied": 1.0,
+        "observed": 41,
+        "predicted": 93,
+        "lost": 5,
+        "available_fraction_when_mask_visible": 0.9640287769784173,
+        "depth_valid_fraction_median_within_mask": 1.0,
+        "longest_consecutive_lost_while_visible": 5,
+        "first_lost_while_visible": 39,
+        "first_observed_frame": 0,
+        "initial_reference": {
+          "raw_mask_depth_p90_mm": 0.0,
+          "mask_pixels": 2324,
+          "filtered_depth_points": 1827
+        },
+        "lost_with_raw_pose_candidate": 5,
+        "lost_candidate_raw_mask_depth_p90_mm_median": 5.914410255095341,
+        "accepted_surface_depth_p90_mm_median": 2.340482903532753,
+        "estimators": {
+          "surface_rgbd": 46,
+          "environment_group_motion": 37,
+          "environment_support_hypothesis": 40,
+          "object_point_motion": 16
+        },
+        "rejection_reasons": {
+          "surface proposal lacks accepted RGB-D support": 5
+        }
+      },
+      "object_b": {
+        "mask_visible_frames": 139,
+        "estimated_mask_present_frames_when_source_visible": 139,
+        "mask_iou_median_vs_supplied": 1.0,
+        "observed": 55,
+        "predicted": 84,
+        "lost": 0,
+        "available_fraction_when_mask_visible": 1.0,
+        "depth_valid_fraction_median_within_mask": 1.0,
+        "longest_consecutive_lost_while_visible": 0,
+        "first_lost_while_visible": null,
+        "first_observed_frame": 0,
+        "initial_reference": {
+          "raw_mask_depth_p90_mm": 0.0,
+          "mask_pixels": 7116,
+          "filtered_depth_points": 3311
+        },
+        "lost_with_raw_pose_candidate": 0,
+        "lost_candidate_raw_mask_depth_p90_mm_median": null,
+        "accepted_surface_depth_p90_mm_median": 3.2856452162744336,
+        "estimators": {
+          "surface_rgbd": 55,
+          "environment_group_motion": 84
+        },
+        "rejection_reasons": {}
+      }
+    }
+  },
+  {
+    "dataset": "/home/feit/.cache/huggingface/lerobot/demos/flash_benchmark_caryx_090",
+    "source": "CaryxAI/everyday-manipulation-3d episode 90",
+    "frames": 245,
+    "mask_source": "recorded",
+    "evidence_name": "observation-evidence",
+    "evidence_identity": "075322600ff29bf2294d2c9e1c547166390c74fd05a7202a746f8822c2a7d0b6",
+    "config_bundle": "flash/v1/observation-config.json",
+    "pose_accuracy_ground_truth_available": false,
+    "roles": {
+      "object_a": {
+        "mask_visible_frames": 245,
+        "estimated_mask_present_frames_when_source_visible": 245,
+        "mask_iou_median_vs_supplied": 1.0,
+        "observed": 72,
+        "predicted": 166,
+        "lost": 7,
+        "available_fraction_when_mask_visible": 0.9714285714285714,
+        "depth_valid_fraction_median_within_mask": 1.0,
+        "longest_consecutive_lost_while_visible": 7,
+        "first_lost_while_visible": 50,
+        "first_observed_frame": 0,
+        "initial_reference": {
+          "raw_mask_depth_p90_mm": 0.0,
+          "mask_pixels": 1609,
+          "filtered_depth_points": 1125
+        },
+        "lost_with_raw_pose_candidate": 7,
+        "lost_candidate_raw_mask_depth_p90_mm_median": 6.849754926227535,
+        "accepted_surface_depth_p90_mm_median": 3.005153917920382,
+        "estimators": {
+          "surface_rgbd": 79,
+          "environment_group_motion": 86,
+          "environment_support_hypothesis": 73,
+          "object_point_motion": 7
+        },
+        "rejection_reasons": {
+          "surface proposal lacks accepted RGB-D support": 7
+        }
+      },
+      "object_b": {
+        "mask_visible_frames": 245,
+        "estimated_mask_present_frames_when_source_visible": 245,
+        "mask_iou_median_vs_supplied": 1.0,
+        "observed": 1,
+        "predicted": 54,
+        "lost": 190,
+        "available_fraction_when_mask_visible": 0.22448979591836735,
+        "depth_valid_fraction_median_within_mask": 1.0,
+        "longest_consecutive_lost_while_visible": 190,
+        "first_lost_while_visible": 55,
+        "first_observed_frame": 0,
+        "initial_reference": {
+          "raw_mask_depth_p90_mm": 163.3685138602265,
+          "mask_pixels": 2166,
+          "filtered_depth_points": 257
+        },
+        "lost_with_raw_pose_candidate": 190,
+        "lost_candidate_raw_mask_depth_p90_mm_median": 540.0119903677396,
+        "accepted_surface_depth_p90_mm_median": 163.3685138602265,
+        "estimators": {
+          "surface_rgbd": 191,
+          "environment_support_hypothesis": 54
+        },
+        "rejection_reasons": {
+          "visible patch is too narrow for a full rigid pose": 168,
+          "surface proposal lacks accepted RGB-D support": 22
+        }
+      }
+    }
+  }
+]

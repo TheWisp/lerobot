@@ -1,0 +1,65 @@
+{
+  "method": "Existing flash_camera_pose_audit on the imported camera poses; background RGB features anchored at first frame, excludes supplied object masks. This is a consistency diagnostic, not ground-truth camera pose.",
+  "episodes": [
+    {
+      "episode": 0,
+      "frames_with_at_least_12_background_tracks_first_90": 71,
+      "median_background_reprojection_error_px": 0.8553754515932288,
+      "p90_background_reprojection_error_px": 1.7343727536327411
+    },
+    {
+      "episode": 2,
+      "frames_with_at_least_12_background_tracks_first_90": 90,
+      "median_background_reprojection_error_px": 5.83579970043005,
+      "p90_background_reprojection_error_px": 7.7908895774379525
+    },
+    {
+      "episode": 3,
+      "frames_with_at_least_12_background_tracks_first_90": 90,
+      "median_background_reprojection_error_px": 1.130733977076436,
+      "p90_background_reprojection_error_px": 2.377294704394677
+    },
+    {
+      "episode": 7,
+      "frames_with_at_least_12_background_tracks_first_90": 90,
+      "median_background_reprojection_error_px": 0.654509994058418,
+      "p90_background_reprojection_error_px": 1.3860429638889173
+    },
+    {
+      "episode": 14,
+      "frames_with_at_least_12_background_tracks_first_90": 90,
+      "median_background_reprojection_error_px": 0.973976290086606,
+      "p90_background_reprojection_error_px": 2.631654099357376
+    },
+    {
+      "episode": 15,
+      "frames_with_at_least_12_background_tracks_first_90": 90,
+      "median_background_reprojection_error_px": 0.722946565216644,
+      "p90_background_reprojection_error_px": 1.22303000958385
+    },
+    {
+      "episode": 32,
+      "frames_with_at_least_12_background_tracks_first_90": 90,
+      "median_background_reprojection_error_px": 1.265627995324826,
+      "p90_background_reprojection_error_px": 1.6667893202226869
+    },
+    {
+      "episode": 41,
+      "frames_with_at_least_12_background_tracks_first_90": 47,
+      "median_background_reprojection_error_px": 0.7751498574567711,
+      "p90_background_reprojection_error_px": 1.904181615150623
+    },
+    {
+      "episode": 53,
+      "frames_with_at_least_12_background_tracks_first_90": 90,
+      "median_background_reprojection_error_px": 2.089682476333363,
+      "p90_background_reprojection_error_px": 3.450531904548398
+    },
+    {
+      "episode": 90,
+      "frames_with_at_least_12_background_tracks_first_90": 90,
+      "median_background_reprojection_error_px": 0.8759314622814781,
+      "p90_background_reprojection_error_px": 1.0427889099399152
+    }
+  ]
+}
