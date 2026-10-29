@@ -67,6 +67,24 @@ def _camera_with_one_aligned_grab(depth_2d: np.ndarray) -> RealSenseCamera:
     return cam
 
 
+def test_depth_processing_names_the_filters_that_run():
+    """The recording's camera block carries this, so it must say what the grab
+    loop does, not what was configured: the filters run on the aligned path only."""
+    cam = RealSenseCamera(
+        RealSenseCameraConfig(serial_number_or_name="0", use_depth=True, enable_temporal=False)
+    )
+    assert cam.depth_processing == {
+        "decimation": True,
+        "spatial": True,
+        "temporal": False,
+        "hole_filling": True,
+    }
+    depth_only = RealSenseCamera(
+        RealSenseCameraConfig(serial_number_or_name="0", use_rgb=False, use_depth=True)
+    )
+    assert not any(depth_only.depth_processing.values())
+
+
 def test_aligned_depth_is_cached_channel_last():
     cam = _camera_with_one_aligned_grab(np.full((H, W), 443, np.uint16))
 

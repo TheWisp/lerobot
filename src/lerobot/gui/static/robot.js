@@ -600,6 +600,10 @@ function renderCamerasSection() {
                         Stereo split${cam.stereo_split ? ` &rarr; ${esc(role)}_l, ${esc(role)}_r` : ''}
                     </label>` : ''}
                 </div>
+                ${hasDepth && cam.use_depth ? `<div class="cam-config" title="What the driver does to the depth map before it is published. Whatever is on is baked into the recording; the dataset's camera block says which.">
+                    <span class="cam-config-row-label">Depth processing</span>
+                    ${depthProcessingControls(role, cam)}
+                </div>` : ''}
             </div>`;
         }
     }
@@ -963,6 +967,28 @@ function removeCameraRole(role) {
     _updateDirtyState();
 }
 
+// The drivers' own depth processing, by config flag, with the config's
+// default: what runs in the grab thread is baked into the recording, and the
+// depth feature's camera block records it. The RealSense's hole filling and
+// the ZED's fill mode share a label because they are the same guess.
+const DEPTH_PROCESSING_FLAGS = {
+    intelrealsense: [
+        ['enable_decimation', 'Decimate', true],
+        ['enable_spatial', 'Smooth (spatial)', true],
+        ['enable_temporal', 'Smooth (temporal)', true],
+        ['enable_hole_filling', 'Fill holes', true],
+    ],
+    zed: [['fill_holes', 'Fill holes', false]],
+};
+const DEPTH_PROCESSING_KEYS = new Set(Object.values(DEPTH_PROCESSING_FLAGS).flat().map(([key]) => key));
+
+function depthProcessingControls(role, cam) {
+    const flags = DEPTH_PROCESSING_FLAGS[cam.type] || [];
+    return flags.map(([key, label, dflt]) => `<label>
+        <input type="checkbox"${(cam[key] ?? dflt) ? ' checked' : ''} onchange="updateCameraConfig('${esc(role)}', '${key}', this.checked)">
+        ${label}</label>`).join('');
+}
+
 function updateCameraConfig(role, key, value) {
     if (!currentProfile?.data?.cameras?.[role]) return;
     if (key === 'stereo_split') {
@@ -980,6 +1006,9 @@ function updateCameraConfig(role, key, value) {
         _rerender();  // renderCamerasSection() only BUILDS html; _rerender() paints it
     } else if (key === 'use_depth') {
         currentProfile.data.cameras[role][key] = value === 'true';
+        _rerender();  // the processing row follows the depth switch
+    } else if (DEPTH_PROCESSING_KEYS.has(key)) {
+        currentProfile.data.cameras[role][key] = value === true;  // a checkbox's `checked`
     } else if (key === 'depth_mode') {
         currentProfile.data.cameras[role][key] = value;
     } else if (key === 'fourcc') {

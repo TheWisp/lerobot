@@ -74,6 +74,7 @@ def test_block_goes_to_the_colour_feature_and_its_aligned_depth(tmp_path):
         intrinsics=CameraIntrinsics(W, H, 100.0, 101.0, 63.5, 47.5),
         serial_number="0042",
         device_name="Fake D435",
+        depth_processing={"spatial": False, "hole_filling": True},
     )
     wrist = SimpleNamespace(intrinsics=None)  # a UVC camera without a calibration
     far = SimpleNamespace(
@@ -87,9 +88,11 @@ def test_block_goes_to_the_colour_feature_and_its_aligned_depth(tmp_path):
     block = reloaded.features["observation.images.top"]["info"]["camera"]
     assert block["intrinsics"]["fx"] == 100.0 and block["serial"] == "0042" and block["model"] == "Fake D435"
     assert block["source"] == "device" and "aligned_to" not in block
+    assert "depth_processing" not in block  # the colour pixels were not filtered
     depth_block = reloaded.features["observation.images.top_depth"]["info"]["camera"]
     assert depth_block["aligned_to"] == "observation.images.top"
     assert depth_block["intrinsics"] == block["intrinsics"]
+    assert depth_block["depth_processing"] == {"spatial": False, "hole_filling": True}
     assert reloaded.features["observation.images.top_depth"]["info"]["is_depth_map"] is True  # siblings kept
     assert "camera" not in reloaded.features["observation.images.wrist"].get("info", {})
     assert "camera" not in reloaded.features["observation.images.far_depth"]["info"]

@@ -258,6 +258,13 @@ class ZEDCamera(Camera):
             depth = cv2.rotate(depth, self.rotation)
         return depth[..., np.newaxis]
 
+    @property
+    def depth_processing(self) -> dict[str, Any]:
+        """What the SDK does to the depth map before this driver publishes it:
+        the mode that computes it and whether unmeasured pixels are filled. A
+        recording carries this next to the depth's intrinsics."""
+        return {"depth_mode": self.config.depth_mode, "fill_holes": bool(self.config.fill_holes)}
+
     def _read_loop(self) -> None:
         """Grab on the SDK's own cadence and cache the latest set under one lock.
 

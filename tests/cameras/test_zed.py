@@ -311,7 +311,21 @@ def test_attach_writes_both_eyes_and_the_depth_aligned_to_the_left(fake_sdk, tmp
     depth_block = features["observation.images.top_depth"]["info"]["camera"]
     assert depth_block["aligned_to"] == "observation.images.top_l"
     assert depth_block["intrinsics"]["fx"] == FX and depth_block["serial"] == str(SERIAL)
+    assert depth_block["depth_processing"] == {"depth_mode": "neural_light", "fill_holes": False}
+    assert "depth_processing" not in features["observation.images.top_l"]["info"]["camera"]
     assert "aligned_to" not in features["observation.images.top_r"]["info"]["camera"]
+
+
+def test_fill_holes_reaches_the_sdk_and_the_camera_block(fake_sdk):
+    """The one processing flag the ZED has: the SDK is asked for it and the
+    recording is told it ran."""
+    cam = ZEDCamera(_config(fill_holes=True, depth_mode="neural"))
+    cam.connect()
+    try:
+        assert cam._runtime.enable_fill_mode is True
+        assert cam.depth_processing == {"depth_mode": "neural", "fill_holes": True}
+    finally:
+        cam.disconnect()
 
 
 def _install(monkeypatch, sl):

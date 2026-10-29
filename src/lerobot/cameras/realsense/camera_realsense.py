@@ -187,6 +187,21 @@ class RealSenseCamera(Camera):
         """Checks if the camera pipeline is started and streams are active."""
         return self.rs_pipeline is not None and self.rs_profile is not None
 
+    @property
+    def depth_processing(self) -> dict[str, bool]:
+        """What the grab thread does to a depth map before publishing it, by
+        filter. A recording carries this next to the depth's intrinsics so a
+        consumer knows whether a 0 is the sensor's own hole or one a filter
+        left. The filters run only on the aligned colour+depth path; a
+        depth-only stream is published as the sensor gives it."""
+        filtered = bool(self.use_rgb and self.use_depth)
+        return {
+            "decimation": filtered and self.enable_decimation,
+            "spatial": filtered and self.enable_spatial,
+            "temporal": filtered and self.enable_temporal,
+            "hole_filling": filtered and self.enable_hole_filling,
+        }
+
     @check_if_already_connected
     def connect(self, warmup: bool = True) -> None:
         """

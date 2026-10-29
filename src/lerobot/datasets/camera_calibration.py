@@ -53,7 +53,9 @@ def camera_info_block(cam: Any, intrinsics: Any = None) -> dict[str, Any] | None
 def _feature_blocks(cam_key: str, cam: Any) -> list[tuple[str, dict[str, Any], str | None]]:
     """``(feature key, block, aligned_to)`` for every feature this camera
     publishes: its colour feature, or both eyes of a stereo camera, and the
-    depth feature, which shares the left (or only) colour feature's geometry."""
+    depth feature, which shares the left (or only) colour feature's geometry
+    and, when the driver says what it did to the pixels (``depth_processing``),
+    carries that too, so a reader knows whether a hole is the sensor's own."""
     block = camera_info_block(cam)
     if block is None:
         return []
@@ -69,7 +71,11 @@ def _feature_blocks(cam_key: str, cam: Any) -> list[tuple[str, dict[str, Any], s
     else:
         colour_key = f"{OBS_IMAGES}.{cam_key}"
         out = [(colour_key, block, None)]
-    out.append((f"{OBS_IMAGES}.{cam_key}_depth", block, colour_key))
+    depth_block = block
+    processing = getattr(cam, "depth_processing", None)
+    if processing:
+        depth_block = dict(block, depth_processing=dict(processing))
+    out.append((f"{OBS_IMAGES}.{cam_key}_depth", depth_block, colour_key))
     return out
 
 
