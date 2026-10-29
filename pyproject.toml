@@ -646,6 +646,7 @@ default.extend-ignore-identifiers-re = [
     "2nd",
     "pn",
     "PN",  # uppercase: occurs in "PNGs" (file format) in async-video docs
+    "Pn",  # OpenCV's solvePnPRansac and the standard PnP camera-pose abbreviation
     "ser",
     "ein",
     "thw",
