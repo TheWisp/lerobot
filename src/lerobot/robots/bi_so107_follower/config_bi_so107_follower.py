@@ -139,3 +139,20 @@ class BiSO107FollowerConfig(RobotConfig):
             ),
         },
     )
+
+    # What a depth-enabled RealSense contributes. The default is what every
+    # existing dataset and checkpoint was produced with: the depth map is
+    # consumed in the camera's grab thread to draw the depth-edge overlay
+    # into the RGB, and nothing else of it survives. A policy trained on
+    # overlaid frames must not be run against a profile that records depth.
+    record_depth: bool = field(
+        default=False,
+        metadata={
+            "description": (
+                "For RealSense cameras with depth enabled: store the aligned "
+                "depth map as its own <camera>_depth stream and keep the RGB "
+                "clean (true), or burn the depth-edge overlay into the RGB and "
+                "discard the depth map (false, the historical behaviour)."
+            ),
+        },
+    )

@@ -96,6 +96,40 @@ const VideoMode = (() => {
 window.VideoMode = VideoMode;
 document.addEventListener('DOMContentLoaded', () => VideoMode.bind());
 
+// How each depth tile maps distance to colour. The stored values are never
+// touched: the page only tells the server which display mapping to render.
+// Auto spans the episode's own 1st..99th percentile; Fixed takes a range in
+// metres, seeded from the dataset's percentiles. Kept per dataset
+// and camera in localStorage, like the playback mode.
+const DepthView = (() => {
+    const MODES = ['auto', 'fixed'];
+    const KEY = (ds, cam) => `depthView:${ds}:${cam}`;
+    function schema(ds, cam) { return datasets[ds]?.features_schema?.[cam] || null; }
+    function isDepth(ds, cam) { return !!schema(ds, cam)?.is_depth_map; }
+    function seed(ds, cam) {
+        const hint = schema(ds, cam)?.depth_range_hint;
+        return hint && hint.length === 2 ? { lo: +hint[0].toFixed(2), hi: +hint[1].toFixed(2) } : { lo: 0.2, hi: 1.0 };
+    }
+    function get(ds, cam) {
+        const s = { mode: 'auto', ...seed(ds, cam) };
+        try {
+            const v = JSON.parse(localStorage.getItem(KEY(ds, cam)) || 'null');
+            if (v && MODES.includes(v.mode)) return { ...s, ...v };
+        } catch (e) { /* no storage: the seed stands */ }
+        return s;
+    }
+    function set(ds, cam, v) { try { localStorage.setItem(KEY(ds, cam), JSON.stringify(v)); } catch (e) { /* no storage */ } }
+    function spec(ds, cam) { const v = get(ds, cam); return v.mode === 'auto' ? '' : `${v.mode}:${v.lo}:${v.hi}`; }
+    // The `depth=` query for a request carrying these cameras; '' when every
+    // depth tile is on Auto, which is what the server renders unasked.
+    function query(ds, cams) {
+        const items = [];
+        for (const cam of cams) { if (!isDepth(ds, cam)) continue; const s = spec(ds, cam); if (s) items.push(`${cam}=${s}`); }
+        return items.length ? `depth=${encodeURIComponent(items.join(';'))}` : '';
+    }
+    return { isDepth, get, set, query };
+})();
+
 let _chunkPlayer = null;   // the Low Bandwidth player for the episode in hand, or null on the JPEG path
 let _chunkPlayerKey = null;  // `${dataset}::${episode}` the player was opened for
 
@@ -112,6 +146,7 @@ function _openChunkPlayer(datasetId, epIdx, length) {
     const maskId = (cam) => `mask-${cam.replace(/\./g, '-')}`;
     _chunkPlayer = window.ChunkPlayer.create({
         datasetId, fps, length, cameras: ds.camera_keys,
+        query: DepthView.query(datasetId, ds.camera_keys),
         tiles: (cam) => document.getElementById(tileId(cam)),
         // The chunk's rows for this frame, at the camera's encoded resolution, drawn
         // by the mask layer with its own palette and label visibility.
@@ -929,7 +964,9 @@ function renderCameraGrid() {
         // the loadAllFrames call that follows, and the URDF iframe drops its own
         // per-episode caches when that call's frame message names a new episode.
         // So it keeps its parsed meshes, its orbit camera and its ghost toggle
-        // instead of cold-booting once per episode click.
+        // instead of cold-booting once per episode click. The depth chips'
+        // numbers are per episode, though: ask again for this one.
+        _refreshDepthAutoRanges(grid);
         return;
     }
 
@@ -964,6 +1001,7 @@ function renderCameraGrid() {
                     <div class="camera-chip camera-title" title="${camName}">${camName}</div>
                     <button class="camera-chip obs-cam-zoom" data-zoom="${cam}" type="button"
                             title="Enlarge this camera (click again to restore)">⤢</button>
+                    ${DepthView.isDepth(currentDataset, cam) ? _depthChipHtml(currentDataset, cam) : ''}
                 </div>
             </div>
         `;
@@ -982,7 +1020,99 @@ function renderCameraGrid() {
     grid.innerHTML = html;
     grid.dataset.tileSig = sig;
     _installCameraZoom(grid);
+    _installDepthControls(grid);
+    _refreshDepthAutoRanges(grid);
     _probeAndAttachUrdfViz(currentDataset, currentEpisode);
+}
+
+// The depth tile's display-mapping control: a mode select beside the enlarge
+// button, and a near/far range in metres that only shows for Fixed.
+// The episode's own range per depth camera, in metres, once the server has said.
+let _depthAuto = {};
+
+function _depthChipHtml(ds, cam) {
+    return DepthChip.render(cam, DepthView.get(ds, cam), _depthAuto[cam] || null, datasets[ds]?.features_schema?.[cam]?.depth_range_hint);
+}
+
+let _depthRedrawing = false;
+function _redrawDepthChip(grid, cam) {
+    // Replacing the chip blurs a focused box inside it, and the browser fires
+    // that box's native change during the replacement, which lands back here.
+    // The first redraw already carries the value; the re-entrant one is dropped.
+    if (_depthRedrawing) return;
+    const el = grid.querySelector(`.depth-chip[data-depth-cam="${CSS.escape(cam)}"]`);
+    if (!el || !el.isConnected) return;
+    _depthRedrawing = true;
+    try { el.outerHTML = _depthChipHtml(currentDataset, cam); } finally { _depthRedrawing = false; }
+}
+
+// Auto mode has numbers too: the episode's 1st and 99th percentile, which only
+// the server knows. Asked once per episode, after the grid is drawn.
+let _depthAutoGen = 0;   // which grid render the refresh in flight belongs to
+async function _refreshDepthAutoRanges(grid) {
+    const ds = currentDataset, ep = currentEpisode, gen = ++_depthAutoGen;
+    _depthAuto = {};
+    for (const el of grid.querySelectorAll('.depth-chip[data-depth-cam]')) {
+        const cam = el.dataset.depthCam;
+        try {
+            const r = await fetch(`/api/datasets/${encodeURIComponent(ds)}/episodes/${ep}/depth-range?camera=${encodeURIComponent(cam)}`);
+            if (gen !== _depthAutoGen) return;   // the grid was drawn again; that render asks for itself
+            if (!r.ok) continue;
+            const body = await r.json();
+            if (body.lo_m != null && body.hi_m != null) _depthAuto[cam] = { lo: body.lo_m, hi: body.hi_m };
+        } catch (e) { /* the chip shows the seed */ }
+        if (gen !== _depthAutoGen) return;
+        _redrawDepthChip(grid, cam);
+    }
+}
+
+// Delegated to the grid and installed once, for the same reason as the zoom
+// control: the grid outlives its tiles.
+function _installDepthControls(grid) {
+    if (grid.dataset.depthWired) return;
+    grid.dataset.depthWired = '1';
+    const stateOf = (el) => {
+        const cam = el.closest('[data-depth-cam]')?.dataset.depthCam;
+        return cam && currentDataset ? [cam, DepthView.get(currentDataset, cam)] : [null, null];
+    };
+    // A thumb being dragged: the numbers and the strip follow it live; the
+    // request waits for the drop.
+    grid.addEventListener('input', (ev) => {
+        const el = ev.target;
+        if (!el.dataset.depthKnob) return;
+        const [cam, v] = stateOf(el);
+        if (!cam) return;
+        const next = DepthChip.applyEdit(v, el.dataset.depthKnob, el.value);
+        el.value = next[el.dataset.depthKnob];
+        const chip = el.closest('.depth-chip');
+        for (const edge of ['lo', 'hi']) {
+            chip.querySelector(`.depth-num[data-depth-edge="${edge}"]`).value = next[edge].toFixed(2);
+            const knob = chip.querySelector(`.depth-knob[data-depth-knob="${edge}"]`);
+            if (knob) knob.value = next[edge];
+        }
+        const hint = datasets[currentDataset]?.features_schema?.[cam]?.depth_range_hint;
+        chip.querySelector('.depth-strip').style.background = DepthChip.gradient(next.lo, next.hi, DepthChip.span(hint, next.lo, next.hi));
+    });
+    grid.addEventListener('change', (ev) => {
+        const el = ev.target;
+        const [cam, v] = stateOf(el);
+        if (!cam) return;
+        let next;
+        if (el.classList.contains('depth-mode')) next = { ...v, mode: el.value };
+        else if (el.dataset.depthEdge || el.dataset.depthKnob) next = DepthChip.applyEdit(v, el.dataset.depthEdge || el.dataset.depthKnob, el.value);
+        else return;
+        DepthView.set(currentDataset, cam, next);
+        _redrawDepthChip(grid, cam);
+        // The mapping rides on the request, so the tiles are simply asked again:
+        // the player reopens with the new query, the still path refetches.
+        if (_chunkPlayer) {
+            const frame = currentFrame;
+            _openChunkPlayer(currentDataset, currentEpisode, totalFrames);
+            _chunkPlayer.seek(frame);
+        } else {
+            loadAllFrames(currentFrame);
+        }
+    });
 }
 
 // Enlarge one camera to fill the grid (click again to restore) — the control the run tab
@@ -1108,7 +1238,7 @@ async function _probeAndAttachUrdfViz(datasetId, episodeIdx) {
     // script). Bump the version any time this seams (URL param contract or
     // postMessage protocol) changes so an old cached iframe doesn't stick.
     const ghostInit = _urdfGhostPref() ? '&ghost=on' : '';
-    iframe.src = `/static/urdf_viz.html?mode=dataset&v=8${ghostInit}`;
+    iframe.src = `/static/urdf_viz.html?mode=dataset&v=10${ghostInit}`;
     // Fast path: iframe.onload fires when the document is parsed, which is
     // usually before the module script has registered its message listener
     // but in practice fast enough for an idle main thread. Belt:
@@ -1168,8 +1298,10 @@ function loadAllFrames(idx) {
     // treatment, or a muted label, made no visible difference at all.
     const composited = !!window.MaskOverlay?.compositedActive?.();
     for (const cam of ds.camera_keys) {
+        const dq = DepthView.query(currentDataset, [cam]);
         const url = `/api/datasets/${encodeURIComponent(currentDataset)}/episodes/${currentEpisode}/frame/${currentFrame}?camera=${encodeURIComponent(cam)}`
-            + (composited ? `&masks=composited&mv=${window.MaskOverlay?.maskVersion?.() ?? 0}` : "");
+            + (composited ? `&masks=composited&mv=${window.MaskOverlay?.maskVersion?.() ?? 0}` : "")
+            + (dq ? `&${dq}` : "");
         const imgId = `frame-${cam.replace(/\./g, '-')}`;
         const img = document.getElementById(imgId);
         if (img) {

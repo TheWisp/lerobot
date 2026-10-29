@@ -568,8 +568,10 @@ function renderCamerasSection() {
     if (cameraEntries.length > 0) {
         for (const [role, cam] of cameraEntries) {
             const camType = cam.type || 'unknown';
-            const camId = cam.index_or_path ?? cam.serial_number_or_name ?? '?';
+            const camId = cam.index_or_path ?? cam.serial_number_or_name ?? cam.serial_number ?? '?';
             const isRealsense = camType === 'intelrealsense';
+            const isZed = camType === 'zed';
+            const hasDepth = isRealsense || isZed;  // the camera computes depth itself
             html += `<div class="camera-assigned">
                 <div class="cam-header">
                     <span class="cam-role">${esc(role)}</span>
@@ -580,21 +582,28 @@ function renderCamerasSection() {
                     <label>Width<input type="number" value="${cam.width || ''}" placeholder="auto" onchange="updateCameraConfig('${esc(role)}', 'width', this.value)"></label>
                     <label>Height<input type="number" value="${cam.height || ''}" placeholder="auto" onchange="updateCameraConfig('${esc(role)}', 'height', this.value)"></label>
                     <label>FPS<input type="number" value="${cam.fps || ''}" placeholder="auto" onchange="updateCameraConfig('${esc(role)}', 'fps', this.value)"></label>
-                    ${!isRealsense ? `<label>Format<select onchange="updateCameraConfig('${esc(role)}', 'fourcc', this.value)">
+                    ${!hasDepth ? `<label>Format<select onchange="updateCameraConfig('${esc(role)}', 'fourcc', this.value)">
                         <option value="" ${!cam.fourcc ? 'selected' : ''}>auto</option>
                         <option value="MJPG" ${cam.fourcc === 'MJPG' ? 'selected' : ''}>MJPG</option>
                         <option value="YUYV" ${cam.fourcc === 'YUYV' ? 'selected' : ''}>YUYV</option>
                         <option value="H264" ${cam.fourcc === 'H264' ? 'selected' : ''}>H264</option>
                     </select></label>` : ''}
-                    ${isRealsense ? `<label>Depth<select onchange="updateCameraConfig('${esc(role)}', 'use_depth', this.value)">
+                    ${hasDepth ? `<label>Depth<select onchange="updateCameraConfig('${esc(role)}', 'use_depth', this.value)">
                         <option value="false" ${!cam.use_depth ? 'selected' : ''}>off</option>
                         <option value="true" ${cam.use_depth ? 'selected' : ''}>on</option>
+                    </select></label>` : ''}
+                    ${isZed ? `<label title="The SDK's depth mode. The neural modes run on the GPU.">Depth mode<select onchange="updateCameraConfig('${esc(role)}', 'depth_mode', this.value)">
+                        ${['neural_light', 'neural', 'neural_plus', 'ultra', 'quality', 'performance', 'none'].map(m => `<option value="${m}" ${(cam.depth_mode || 'neural_light') === m ? 'selected' : ''}>${m}</option>`).join('')}
                     </select></label>` : ''}
                     ${!isRealsense ? `<label class="cam-stereo" title="Side-by-side stereo cameras (ZED and similar) have no single-eye mode. Split publishes each eye as its own channel, ${esc(role)}_l and ${esc(role)}_r.">
                         <input type="checkbox" ${cam.stereo_split ? 'checked' : ''} onchange="updateCameraConfig('${esc(role)}', 'stereo_split', this.checked)">
                         Stereo split${cam.stereo_split ? ` &rarr; ${esc(role)}_l, ${esc(role)}_r` : ''}
                     </label>` : ''}
                 </div>
+                ${hasDepth && cam.use_depth ? `<div class="cam-config" title="What the driver does to the depth map before it is published. Whatever is on is baked into the recording; the dataset's camera block says which.">
+                    <span class="cam-config-row-label">Depth processing</span>
+                    ${depthProcessingControls(role, cam)}
+                </div>` : ''}
             </div>`;
         }
     }
@@ -641,7 +650,7 @@ function renderCameraPreview() {
     const assignedRoles = {};
     const cameras = currentProfile?.data?.cameras || {};
     for (const [role, cam] of Object.entries(cameras)) {
-        const camId = String(cam.index_or_path ?? cam.serial_number_or_name ?? '');
+        const camId = String(cam.index_or_path ?? cam.serial_number_or_name ?? cam.serial_number ?? '');
         if (camId) assignedRoles[camId] = role;
     }
 
@@ -863,7 +872,7 @@ async function assignCameraRole(cameraIndex, role) {
     // Find the old role this physical camera was assigned to
     let oldRole = null;
     for (const [r, c] of Object.entries(currentProfile.data.cameras)) {
-        if (String(c.index_or_path ?? c.serial_number_or_name ?? '') === camId && r !== role) {
+        if (String(c.index_or_path ?? c.serial_number_or_name ?? c.serial_number ?? '') === camId && r !== role) {
             oldRole = r;
             break;
         }
@@ -871,7 +880,7 @@ async function assignCameraRole(cameraIndex, role) {
 
     // Find the physical camera currently occupying the target role
     const targetConfig = currentProfile.data.cameras[role] || null;
-    const targetId = targetConfig ? String(targetConfig.index_or_path ?? targetConfig.serial_number_or_name ?? '') : '';
+    const targetId = targetConfig ? String(targetConfig.index_or_path ?? targetConfig.serial_number_or_name ?? targetConfig.serial_number ?? '') : '';
 
     // Auto-swap: if both cameras had roles, move the displaced camera to the old role
     if (oldRole && targetConfig && targetId) {
@@ -887,6 +896,11 @@ async function assignCameraRole(cameraIndex, role) {
             oldRoleConfig.type = 'intelrealsense';
             oldRoleConfig.serial_number_or_name = targetConfig.serial_number_or_name;
             delete oldRoleConfig.index_or_path;
+        } else if (targetConfig.type === 'zed') {
+            oldRoleConfig.type = 'zed';
+            oldRoleConfig.serial_number = targetConfig.serial_number;
+            delete oldRoleConfig.index_or_path;
+            delete oldRoleConfig.serial_number_or_name;
         }
         currentProfile.data.cameras[oldRole] = oldRoleConfig;
     } else if (oldRole) {
@@ -905,6 +919,22 @@ async function assignCameraRole(cameraIndex, role) {
         camConfig.type = 'intelrealsense';
         camConfig.serial_number_or_name = String(cam.id);
         delete camConfig.index_or_path;
+    } else if (cam.type === 'ZED') {
+        camConfig.type = 'zed';
+        camConfig.serial_number = Number(cam.id);
+        delete camConfig.index_or_path;
+        delete camConfig.serial_number_or_name;
+        delete camConfig.fourcc;
+        // Both eyes by default: that is what the UVC path published, so the
+        // channel names a dataset or checkpoint already uses stay the same.
+        if (camConfig.stereo_split === undefined) camConfig.stereo_split = true;
+        // A ZED is sized per eye at one of the SDK's resolutions. A size kept
+        // from a UVC role (a whole side-by-side frame, say) would be refused at
+        // connect, so it is dropped and the detected profile fills in below.
+        const ZED_EYE_SIZES = new Set(['2208x1242', '1920x1080', '1920x1200', '1280x720', '960x600', '672x376']);
+        if (!ZED_EYE_SIZES.has(`${camConfig.width}x${camConfig.height}`)) {
+            delete camConfig.width; delete camConfig.height; delete camConfig.fps;
+        }
     }
     // Only fill in settings from detected defaults if not already configured
     const profile = cam.default_stream_profile || {};
@@ -937,6 +967,28 @@ function removeCameraRole(role) {
     _updateDirtyState();
 }
 
+// The drivers' own depth processing, by config flag, with the config's
+// default: what runs in the grab thread is baked into the recording, and the
+// depth feature's camera block records it. The RealSense's hole filling and
+// the ZED's fill mode share a label because they are the same guess.
+const DEPTH_PROCESSING_FLAGS = {
+    intelrealsense: [
+        ['enable_decimation', 'Decimate', true],
+        ['enable_spatial', 'Smooth (spatial)', true],
+        ['enable_temporal', 'Smooth (temporal)', true],
+        ['enable_hole_filling', 'Fill holes', true],
+    ],
+    zed: [['fill_holes', 'Fill holes', false]],
+};
+const DEPTH_PROCESSING_KEYS = new Set(Object.values(DEPTH_PROCESSING_FLAGS).flat().map(([key]) => key));
+
+function depthProcessingControls(role, cam) {
+    const flags = DEPTH_PROCESSING_FLAGS[cam.type] || [];
+    return flags.map(([key, label, dflt]) => `<label>
+        <input type="checkbox"${(cam[key] ?? dflt) ? ' checked' : ''} onchange="updateCameraConfig('${esc(role)}', '${key}', this.checked)">
+        ${label}</label>`).join('');
+}
+
 function updateCameraConfig(role, key, value) {
     if (!currentProfile?.data?.cameras?.[role]) return;
     if (key === 'stereo_split') {
@@ -944,8 +996,9 @@ function updateCameraConfig(role, key, value) {
         const on = value === true || value === 'true';
         // Width means ONE EYE when split, and the device is opened at twice it.
         // Carrying the whole-frame width across would ask for a 5120-wide device
-        // and fail at connect with an error that never mentions stereo.
-        if (on !== !!cam.stereo_split && cam.width) {
+        // and fail at connect with an error that never mentions stereo. A ZED
+        // through its SDK is sized per eye either way, so its width stays.
+        if (cam.type !== 'zed' && on !== !!cam.stereo_split && cam.width) {
             cam.width = on ? Math.floor(cam.width / 2) : cam.width * 2;
         }
         if (on) cam.stereo_split = true;
@@ -953,6 +1006,11 @@ function updateCameraConfig(role, key, value) {
         _rerender();  // renderCamerasSection() only BUILDS html; _rerender() paints it
     } else if (key === 'use_depth') {
         currentProfile.data.cameras[role][key] = value === 'true';
+        _rerender();  // the processing row follows the depth switch
+    } else if (DEPTH_PROCESSING_KEYS.has(key)) {
+        currentProfile.data.cameras[role][key] = value === true;  // a checkbox's `checked`
+    } else if (key === 'depth_mode') {
+        currentProfile.data.cameras[role][key] = value;
     } else if (key === 'fourcc') {
         if (value) currentProfile.data.cameras[role][key] = value;
         else delete currentProfile.data.cameras[role][key];

@@ -36,7 +36,8 @@ from pydantic import BaseModel, Field
 from lerobot.datasets.dataset_tools import check_episode_video_duration
 from lerobot.datasets.utils import DEFAULT_DATA_PATH
 from lerobot.gui.config_paths import gui_config_dir
-from lerobot.utils.constants import HF_LEROBOT_HOME
+from lerobot.gui.depth_display import AUTO, depth_range_hint_m, mapping_for, parse_depth_spec, render_kwargs
+from lerobot.utils.constants import HF_LEROBOT_HOME, OBS_IMAGES
 from lerobot.utils.feature_utils import camera_keys_from_features, camera_name, flags_features
 
 if TYPE_CHECKING:
@@ -600,6 +601,30 @@ def _prefetch_episode(
         prefetch_decoder_cache.clear()
 
 
+def _decode_depth_frames(dataset, vid_key: str, video_path, timestamps: list[float], tolerance_s: float):
+    """Decode a depth video the way the dataset reader does.
+
+    Depth streams hold 12-bit quantized codes in ``gray12le``; torchcodec
+    would convert them to 8-bit RGB and lose both the low bits and the
+    physical scale. Returns float millimetres, ``(N, 1, H, W)``, which the
+    JPEG funnel colours.
+    """
+    from lerobot.configs.video import encoder_config_from_video_info
+    from lerobot.datasets.depth_utils import dequantize_depth
+    from lerobot.datasets.video_utils import decode_video_frames
+
+    codes = decode_video_frames(video_path, timestamps, tolerance_s, backend="pyav", is_depth=True)
+    enc = encoder_config_from_video_info(dataset.meta.features[vid_key].get("info"))
+    return dequantize_depth(
+        codes,
+        depth_min=enc.depth_min,
+        depth_max=enc.depth_max,
+        shift=enc.shift,
+        use_log=enc.use_log,
+        output_unit="mm",
+    )
+
+
 def _prefetch_single_episode(
     dataset_id: str,
     dataset,
@@ -620,6 +645,9 @@ def _prefetch_single_episode(
     from lerobot.gui.frame_cache import encode_frame_to_jpeg
 
     ep = dataset.meta.episodes[episode_idx]
+    # Depth tiles are rendered with the episode's own range, the auto mapping:
+    # what a plain frame request, variant "", is served from.
+    auto_kwargs = {k: render_kwargs(dataset, episode_idx, k, AUTO) for k in dataset.meta.depth_keys}
 
     cached_count = 0
     decoded_count = 0
@@ -667,18 +695,21 @@ def _prefetch_single_episode(
                     video_path = dataset.root / dataset.meta.get_video_file_path(episode_idx, vid_key)
 
                     t1 = time.perf_counter()
-                    frames = decode_video_frames_torchcodec(
-                        video_path,
-                        timestamps,
-                        tolerance_s,
-                        decoder_cache=prefetch_decoder_cache,
-                    )
+                    if vid_key in dataset.meta.depth_keys:
+                        frames = _decode_depth_frames(dataset, vid_key, video_path, timestamps, tolerance_s)
+                    else:
+                        frames = decode_video_frames_torchcodec(
+                            video_path,
+                            timestamps,
+                            tolerance_s,
+                            decoder_cache=prefetch_decoder_cache,
+                        )
                     t2 = time.perf_counter()
                     total_decode_ms += (t2 - t1) * 1000
 
                     # JPEG-encode each frame and cache it
                     for k, fi in enumerate(uncached_frames):
-                        cam_jpeg = encode_frame_to_jpeg(frames[k])
+                        cam_jpeg = encode_frame_to_jpeg(frames[k], **auto_kwargs.get(vid_key, {}))
                         _app_state.frame_cache.put(dataset_id, episode_idx, fi, vid_key, cam_jpeg)
 
                     t3 = time.perf_counter()
@@ -1353,6 +1384,11 @@ class FeatureSchema(BaseModel):
     mask_treatments: dict | None = None
     mask_background: dict | None = None
     mask_encoding: str | None = None
+    # A one-channel image feature stored as depth (``info.is_depth_map``). Its
+    # tile carries the display-mapping control, seeded by the hint: the
+    # dataset's 2nd..98th percentile of valid depth, in metres.
+    is_depth_map: bool = False
+    depth_range_hint: list[float] | None = None
     # How the per-frame cell is coded, and the discriminator for "this is a
     # mask column" on the client -- the same key the server uses. Carried
     # because the generic column controls must not offer editing or deletion
@@ -1684,6 +1720,8 @@ def _build_features_schema(
     task_synthesis: bool = False,
     stats: dict | None = None,
     per_episode_source: dict[str, str] | None = None,
+    depth_keys: set[str] | None = None,
+    depth_output_unit: str = "mm",
 ) -> dict[str, FeatureSchema]:
     """Convert ``ds.meta.features`` into the JSON-friendly FeatureSchema dict.
 
@@ -1735,7 +1773,15 @@ def _build_features_schema(
         # initial fill would otherwise look like uniform-per-episode and
         # mis-coerce range edits to the whole episode.
         is_per_ep = bool(ft["per_episode"]) if "per_episode" in ft else name in per_episode
+        # Depth is whatever the metadata says is depth, legacy spellings included.
+        if depth_keys is not None:
+            is_depth = name in depth_keys
+        else:
+            info = ft.get("info") or ft.get("video_info") or {}
+            is_depth = bool(info.get("is_depth_map") or info.get("video.is_depth_map"))
         out[name] = FeatureSchema(
+            is_depth_map=is_depth,
+            depth_range_hint=depth_range_hint_m(stats, name, depth_output_unit) if is_depth else None,
             dtype=str(ft.get("dtype", "")),
             shape=shape_list,
             names=names,
@@ -1839,6 +1885,8 @@ def _dataset_info_from(
             task_synthesis=task_synthesis,
             stats=getattr(dataset.meta, "stats", None),
             per_episode_source=per_episode_source,
+            depth_keys=set(dataset.meta.depth_keys),
+            depth_output_unit=getattr(dataset, "_depth_output_unit", "mm"),
         ),
         errors=errors or [],
         warnings=warnings_out,
@@ -2930,6 +2978,7 @@ async def get_frame(
     frame_idx: int,
     camera: str | None = None,
     masks: str = "",
+    depth: str = "",
 ) -> Response:
     """Get a single frame as JPEG.
 
@@ -3004,6 +3053,20 @@ async def get_frame(
                 specs[cam] = spec
                 variants[cam] = f"m{recipe_fingerprint(spec)}"
 
+    # Depth display mapping, per camera. Like a mask recipe, a mapping other
+    # than auto is a variant of the tile; auto stays "" and shares the
+    # prefetched pixels, which are rendered with the same episode range.
+    try:
+        depth_specs = parse_depth_spec(depth)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    depth_kwargs: dict[str, dict] = {}
+    for cam in camera_keys:
+        if cam in dataset.meta.depth_keys:
+            mapping = mapping_for(depth_specs, cam)
+            depth_kwargs[cam] = render_kwargs(dataset, episode_idx, cam, mapping)
+            if mapping.variant:
+                variants[cam] = variants.get(cam, "") + mapping.variant
     variant = variants.get(camera_key, "")
 
     # Check if this camera is already cached (cheap lock-protected dict lookup).
@@ -3042,7 +3105,7 @@ async def get_frame(
                         frame = _composite_if_asked(
                             item[cam], specs.get(cam), dataset, dataset_id, episode_idx, frame_idx, cam
                         )
-                        cam_jpeg = encode_frame_to_jpeg(frame)
+                        cam_jpeg = encode_frame_to_jpeg(frame, **depth_kwargs.get(cam, {}))
                         _app_state.frame_cache.put(
                             dataset_id, episode_idx, frame_idx, cam, cam_jpeg, variants.get(cam, "")
                         )
@@ -3061,7 +3124,7 @@ async def get_frame(
                         frame_idx,
                         camera_key,
                     )
-                    primary = encode_frame_to_jpeg(frame)
+                    primary = encode_frame_to_jpeg(frame, **depth_kwargs.get(camera_key, {}))
                     _app_state.frame_cache.put(
                         dataset_id, episode_idx, frame_idx, camera_key, primary, variant
                     )
@@ -3077,13 +3140,16 @@ async def get_frame(
                 video_path = dataset.root / dataset.meta.get_video_file_path(episode_idx, camera_key)
 
                 t0 = time.perf_counter()
-                frames = decode_video_frames_torchcodec(video_path, [timestamp], tolerance_s)
+                if camera_key in dataset.meta.depth_keys:
+                    frames = _decode_depth_frames(dataset, camera_key, video_path, [timestamp], tolerance_s)
+                else:
+                    frames = decode_video_frames_torchcodec(video_path, [timestamp], tolerance_s)
                 t1 = time.perf_counter()
 
                 # Beyond the data length there is no row to composite from, so
                 # this path always serves stored pixels.
-                primary = encode_frame_to_jpeg(frames[0])
-                _app_state.frame_cache.put(dataset_id, episode_idx, frame_idx, camera_key, primary)
+                primary = encode_frame_to_jpeg(frames[0], **depth_kwargs.get(camera_key, {}))
+                _app_state.frame_cache.put(dataset_id, episode_idx, frame_idx, camera_key, primary, variant)
                 t2 = time.perf_counter()
 
             decode_ms = (t1 - t0) * 1000
@@ -3328,6 +3394,152 @@ async def get_urdf_viz_dataset_meta(dataset_id: str, episode_idx: int) -> dict:
         # frontend skips polyline rendering in that case.
         "ee_link": spec.ee_link,
     }
+
+
+def _depth_cameras(dataset) -> list[dict[str, Any]]:
+    """The dataset's depth cameras with what the visualizer needs to place
+    their pixels: the intrinsics the recording carries, and the mount
+    transform when this machine's click-target calibration names the camera.
+    Either may be missing; the page says so instead of guessing."""
+    from lerobot.gui.depth_display import invalid_below_mm
+
+    # Written by the click-target calibration (the archived experiment, commit
+    # 4ff508355), keyed by the camera's short name as that tool spells it;
+    # the full feature key is accepted too.
+    extrinsics_by_name: dict[str, dict] = {}
+    path = gui_config_dir() / "click_target_extrinsics.json"
+    if path.exists():
+        try:
+            fit = json.loads(path.read_text())
+            if fit.get("cam_key") and fit.get("T_base_camera"):
+                extrinsics_by_name[str(fit["cam_key"])] = {
+                    "parent": "base",
+                    "T_parent_camera": fit["T_base_camera"],
+                    "source": "click_target_file",
+                    "rmse_m": fit.get("rmse_m"),
+                }
+        except (OSError, ValueError) as e:
+            logger.warning("click_target_extrinsics.json unreadable: %s", e)
+    out = []
+    for key in dataset.meta.depth_keys:
+        feature = dataset.meta.features[key]
+        block = (feature.get("info") or {}).get("camera") or {}
+        shape = [int(x) for x in feature.get("shape") or []]
+        name = key.split(".")[-1]
+        name = name[: -len("_depth")] if name.endswith("_depth") else name
+        color_key = block.get("aligned_to")
+        if color_key is None:
+            twin = f"{OBS_IMAGES}.{name}"
+            color_key = twin if twin in dataset.meta.features else None
+        out.append(
+            {
+                "name": name,
+                "depth_key": key,
+                "color_key": color_key,
+                "height": shape[0] if shape else None,
+                "width": shape[1] if len(shape) > 1 else None,
+                "intrinsics": block.get("intrinsics"),
+                "extrinsics": extrinsics_by_name.get(name)
+                or extrinsics_by_name.get(key)
+                or (extrinsics_by_name.get(color_key) if color_key else None),
+                "invalid_below_mm": invalid_below_mm(feature),
+            }
+        )
+    return out
+
+
+@router.get("/{dataset_id:path}/episodes/{episode_idx}/urdf-viz/cameras")
+async def get_urdf_viz_depth_cameras(dataset_id: str, episode_idx: int) -> dict:
+    """The depth cameras the visualizer can draw as point clouds, see ``_depth_cameras``."""
+    dataset_id = unquote(dataset_id)
+    if dataset_id not in _app_state.datasets:
+        raise HTTPException(status_code=404, detail=f"Dataset not found: {dataset_id}")
+    return {"cameras": _depth_cameras(_app_state.datasets[dataset_id])}
+
+
+@router.get("/{dataset_id:path}/episodes/{episode_idx}/depth-range")
+async def get_depth_range(dataset_id: str, episode_idx: int, camera: str) -> dict:
+    """The distances the Auto mapping colours this episode's depth camera with,
+    in metres: the episode's 1st and 99th percentile from the recorded
+    statistics (the dataset's when the episode has none). ``null`` ends mean
+    neither exists and each frame is stretched on its own; the tile then has
+    no numbers to show for Auto."""
+    from lerobot.gui.depth_display import MM_PER_M, episode_auto_range_mm
+
+    if _app_state is None or dataset_id not in _app_state.datasets:
+        raise HTTPException(status_code=404, detail=f"Dataset not found: {dataset_id}")
+    dataset = _app_state.datasets[dataset_id]
+    if camera not in dataset.meta.depth_keys:
+        raise HTTPException(status_code=404, detail=f"{camera} is not a depth camera of this dataset")
+    if episode_idx < 0 or episode_idx >= dataset.meta.total_episodes:
+        raise HTTPException(status_code=404, detail=f"Episode not found: {episode_idx}")
+    rng = episode_auto_range_mm(dataset, episode_idx, camera)
+    if rng is None:
+        return {"camera": camera, "lo_m": None, "hi_m": None}
+    return {"camera": camera, "lo_m": round(rng[0] / MM_PER_M, 3), "hi_m": round(rng[1] / MM_PER_M, 3)}
+
+
+#: The frame cache variant under which a depth frame's raw bytes are kept.
+DEPTH_BYTES_VARIANT = "depth-u16-gz"
+
+
+@router.get("/{dataset_id:path}/episodes/{episode_idx}/frame/{frame_idx}/depth")
+async def get_frame_depth(dataset_id: str, episode_idx: int, frame_idx: int, camera: str) -> Response:
+    """One frame of a depth camera as raw little-endian uint16 millimetres,
+    row-major at the stored size, gzip on the wire. A pixel at or below the
+    quantizer's floor, where a stored "no measurement" comes back, is 0, so a
+    consumer only has to test for zero. Decoded through the pyav depth path,
+    one video, not the whole multi-camera item."""
+    import gzip
+
+    import numpy as np
+
+    from lerobot.gui.depth_display import invalid_below_mm
+
+    dataset_id = unquote(dataset_id)
+    if dataset_id not in _app_state.datasets:
+        raise HTTPException(status_code=404, detail=f"Dataset not found: {dataset_id}")
+    dataset = _app_state.datasets[dataset_id]
+    if camera not in dataset.meta.depth_keys:
+        raise HTTPException(status_code=400, detail=f"Not a depth camera: {camera}")
+    if episode_idx < 0 or episode_idx >= dataset.meta.total_episodes:
+        raise HTTPException(status_code=404, detail=f"Episode not found: {episode_idx}")
+    ep = dataset.meta.episodes[episode_idx]
+    if frame_idx < 0 or frame_idx >= int(ep["length"]):
+        raise HTTPException(status_code=404, detail=f"Frame not found: {frame_idx}")
+    fps = float(dataset.meta.fps)
+    timestamp = float(ep[f"videos/{camera}/from_timestamp"]) + frame_idx / fps
+    video_path = dataset.root / dataset.meta.get_video_file_path(episode_idx, camera)
+    floor = invalid_below_mm(dataset.meta.features[camera])
+
+    def _decode() -> tuple[bytes, int, int]:
+        mm = _decode_depth_frames(dataset, camera, video_path, [timestamp], 1 / fps * 0.7)
+        arr = np.asarray(mm).reshape(-1, *np.asarray(mm).shape[-2:])[0]
+        arr = np.where(arr > floor, arr, 0.0)
+        depth = np.ascontiguousarray(np.rint(arr).clip(0, 65535).astype("<u2"))
+        return gzip.compress(depth.tobytes(), compresslevel=1), depth.shape[0], depth.shape[1]
+
+    # The bytes join the frame cache beside the camera's JPEGs: a frame's depth
+    # never changes, and a scrub back or a second viewer should not decode
+    # from the keyframe again. The size is the feature's.
+    shape = [int(x) for x in dataset.meta.features[camera]["shape"]]
+    cached = _app_state.frame_cache.get(dataset_id, episode_idx, frame_idx, camera, DEPTH_BYTES_VARIANT)
+    if cached is not None:
+        body, h, w = cached, shape[0], shape[1]
+    else:
+        body, h, w = await asyncio.get_event_loop().run_in_executor(_decode_pool(), _decode)
+        _app_state.frame_cache.put(dataset_id, episode_idx, frame_idx, camera, body, DEPTH_BYTES_VARIANT)
+    return Response(
+        content=body,
+        media_type="application/octet-stream",
+        headers={
+            "Content-Encoding": "gzip",
+            "Cache-Control": "no-store",
+            "X-Depth-Height": str(h),
+            "X-Depth-Width": str(w),
+            "X-Depth-Unit": "mm",
+        },
+    )
 
 
 @router.get("/{dataset_id:path}/episodes/{episode_idx}/urdf-viz")
@@ -3753,6 +3965,7 @@ async def get_frames_batch(
     start: int = 0,
     count: int = 10,
     camera: str | None = None,
+    depth: str = "",
 ) -> dict[str, Any]:
     """Get multiple frames as base64-encoded JPEGs.
 
@@ -3801,6 +4014,20 @@ async def get_frames_batch(
 
     from lerobot.gui.frame_cache import encode_frame_to_jpeg
 
+    try:
+        depth_specs = parse_depth_spec(depth)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    depth_kwargs: dict[str, dict] = {}
+    variants: dict[str, str] = {}
+    for cam in camera_keys:
+        if cam in dataset.meta.depth_keys:
+            mapping = mapping_for(depth_specs, cam)
+            depth_kwargs[cam] = render_kwargs(dataset, episode_idx, cam, mapping)
+            if mapping.variant:
+                variants[cam] = mapping.variant
+    variant = variants.get(camera_key, "")
+
     # Calculate episode start index (cumulative sum, not per-file offset)
     episode_start = _get_episode_start_index(dataset_id, episode_idx)
 
@@ -3817,7 +4044,7 @@ async def get_frames_batch(
         # (different camera) may have already populated all cameras via
         # the side-effect cache writes below. If it did, skip the redundant
         # decode entirely.
-        cached = _app_state.frame_cache.get(dataset_id, episode_idx, i, camera_key)
+        cached = _app_state.frame_cache.get(dataset_id, episode_idx, i, camera_key, variant)
         if cached is not None:
             return cached
 
@@ -3826,20 +4053,20 @@ async def get_frames_batch(
         primary: bytes | None = None
         for cam in camera_keys:
             if cam in item:
-                cam_jpeg = encode_frame_to_jpeg(item[cam])
-                _app_state.frame_cache.put(dataset_id, episode_idx, i, cam, cam_jpeg)
+                cam_jpeg = encode_frame_to_jpeg(item[cam], **depth_kwargs.get(cam, {}))
+                _app_state.frame_cache.put(dataset_id, episode_idx, i, cam, cam_jpeg, variants.get(cam, ""))
                 if cam == camera_key:
                     primary = cam_jpeg
         if primary is None:
-            primary = encode_frame_to_jpeg(item[camera_key])
-            _app_state.frame_cache.put(dataset_id, episode_idx, i, camera_key, primary)
+            primary = encode_frame_to_jpeg(item[camera_key], **depth_kwargs.get(camera_key, {}))
+            _app_state.frame_cache.put(dataset_id, episode_idx, i, camera_key, primary, variant)
         return primary
 
     loop = asyncio.get_event_loop()
     frames = []
     for i in range(start, min(start + count, ep_length)):
         # Check cache first (cheap)
-        jpeg_bytes = _app_state.frame_cache.get(dataset_id, episode_idx, i, camera_key)
+        jpeg_bytes = _app_state.frame_cache.get(dataset_id, episode_idx, i, camera_key, variant)
         if jpeg_bytes is None:
             # Decode-encode work is multi-ms per miss; push off the event loop.
             jpeg_bytes = await loop.run_in_executor(_decode_pool(), _decode_one_frame, i)

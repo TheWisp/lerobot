@@ -52,6 +52,9 @@ class BiOpenArmFollower(BimanualMixin, Robot):
         for name, cam_cfg in config.cameras.items():
             if getattr(cam_cfg, "stereo_split", False):
                 self._top_level_cam_keys.update(stereo_channel_keys(name))
+            if getattr(cam_cfg, "use_depth", False):
+                # A depth stream is as top-level as the camera that made it.
+                self._top_level_cam_keys.add(f"{name}_depth")
         _collisions = self._top_level_cam_keys & set(
             config.left_arm_config.cameras
         ) | self._top_level_cam_keys & set(config.right_arm_config.cameras)
@@ -138,6 +141,19 @@ class BiOpenArmFollower(BimanualMixin, Robot):
             )
         except Exception:
             logger.exception("%s: Cartesian-IK kinematics unavailable; Cartesian teleop disabled", self.name)
+
+    @property
+    def camera_feature_names(self) -> dict[str, str]:
+        """The name each camera's features carry: top-level cameras keep their
+        key, per-arm cameras take the arm's prefix, the way ``get_observation``
+        publishes them. Lets the recorder attach a camera's calibration to the
+        features it actually produced."""
+        names = {}
+        for key in self.left_arm.cameras:
+            names[key] = key if key in self._top_level_cam_keys else f"left_{key}"
+        for key in self.right_arm.cameras:
+            names[key] = f"right_{key}"
+        return names
 
     @property
     def _motors_ft(self) -> dict[str, type]:

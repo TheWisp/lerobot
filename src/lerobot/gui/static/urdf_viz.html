@@ -10,26 +10,44 @@
   #status { position: absolute; top: 4px; right: 6px; color: #9cf; font-size: 11px;
             font-family: monospace; background: rgba(0,0,0,0.6); padding: 1px 5px;
             border-radius: 3px; pointer-events: none; }
-  /* Outlined-when-off, filled-when-on — the standard Material/Tailwind/
-     Bootstrap toggle-button pattern. The cyan border in the off state is
-     what tells the user "this is a control", and switching from outlined
-     to filled is the on-state signal. */
-  #ghost-toggle { position: absolute; bottom: 6px; right: 6px;
-                  font-size: 11px; font-family: monospace;
-                  color: #4dd0ff; background: rgba(10, 22, 34, 0.7);
-                  padding: 4px 10px; border-radius: 12px;
-                  border: 1px solid #4dd0ff; cursor: pointer; user-select: none;
-                  letter-spacing: 0.02em;
-                  transition: background 0.1s, color 0.1s; }
-  #ghost-toggle:hover { background: rgba(77, 208, 255, 0.18); }
-  #ghost-toggle.on { color: #0a1622; background: #4dd0ff; font-weight: 600; }
-  #ghost-toggle.on:hover { background: #7be0ff; }
-  #ghost-toggle:focus-visible { outline: 2px solid #4dd0ff; outline-offset: 1px; }
+  /* The tile's controls, one row at bottom-left: "scene" and "action" are
+     on/off pills (the outline-when-off, fill-when-on toggle the main app's
+     camera pills use); "view" is a split button, the button recentres on its
+     camera and the arrow beside it picks which camera. */
+  #tile-controls { position: absolute; bottom: 6px; left: 6px; display: flex; gap: 6px; align-items: stretch; }
+  .tile-toggle, .tile-btn { font-size: 11px; font-family: monospace;
+                 color: #4dd0ff; background: rgba(10, 22, 34, 0.7);
+                 padding: 4px 10px; border-radius: 12px;
+                 border: 1px solid #4dd0ff; cursor: pointer; user-select: none;
+                 letter-spacing: 0.02em;
+                 transition: background 0.1s, color 0.1s; }
+  .tile-toggle:hover, .tile-btn:hover { background: rgba(77, 208, 255, 0.18); }
+  .tile-toggle.on { color: #0a1622; background: #4dd0ff; font-weight: 600; }
+  .tile-toggle.on:hover { background: #7be0ff; }
+  .tile-toggle:focus-visible, .tile-btn:focus-visible { outline: 2px solid #4dd0ff; outline-offset: 1px; }
+  .tile-toggle[hidden], #view-group[hidden] { display: none; }
+  #view-group { position: relative; display: inline-flex; }
+  #view-btn { border-radius: 12px 0 0 12px; }
+  #view-arrow { border-radius: 0 12px 12px 0; border-left: 0; padding: 4px 7px; }
+  #view-menu { position: absolute; bottom: calc(100% + 4px); left: 0; display: flex; flex-direction: column;
+               background: rgba(10, 22, 34, 0.95); border: 1px solid #4dd0ff; border-radius: 8px; padding: 3px; }
+  #view-menu[hidden] { display: none; }
+  #view-menu button { font-size: 11px; font-family: monospace; color: #4dd0ff; background: none; border: 0;
+                      padding: 4px 10px; text-align: left; cursor: pointer; white-space: nowrap; border-radius: 6px; }
+  #view-menu button:hover, #view-menu button.current { background: rgba(77, 208, 255, 0.18); }
 </style>
 </head>
 <body>
 <div id="status">starting…</div>
-<button id="ghost-toggle" title="Overlay the commanded action as a translucent robot on top of the recorded state">show action</button>
+<div id="tile-controls">
+  <button id="cloud-toggle" class="tile-toggle" hidden title="Draw the scene the depth camera saw as a point cloud beside the robot, back-projected through the intrinsics the dataset carries">scene</button>
+  <button id="ghost-toggle" class="tile-toggle" title="Overlay the commanded action as a translucent robot on top of the recorded state">action</button>
+  <span id="view-group" hidden>
+    <button id="view-btn" class="tile-btn" title="Look through this camera. The cloud then matches the photo by construction, so any offset of the robot model from it is the mount calibration. Drag to orbit away again.">view</button>
+    <button id="view-arrow" class="tile-btn" title="Which camera the view button looks through" aria-haspopup="menu">&#9662;</button>
+    <div id="view-menu" hidden role="menu"></div>
+  </span>
+</div>
 <script type="importmap">
 {
   "imports": {
@@ -691,6 +709,7 @@ async function _refreshDatasetFrame() {
     await _fetchSource('state');
   }
   if (needCache) _redrawDatasetTrajectory();
+  if (_cloudOn) await _updateClouds();
   // Force-render here too (in addition to in _redrawDatasetTrajectory)
   // so the state-only path (overlay off) still gets a guaranteed paint
   // and doesn't rely on possibly-throttled rAF.
@@ -734,6 +753,284 @@ window.__urdfTileState = () => ({
   applied: window.__urdfApplied ? window.__urdfApplied.frame : null,
   appliedAgoMs: _appliedAt === null ? null : Math.round(performance.now() - _appliedAt),
   drainError: _drainError,
+});
+
+// ── depth point cloud (dataset mode) ──────────────────────────────────────
+// One THREE.Points per depth camera whose recording carries intrinsics. The
+// vertex shader back-projects every pixel of the depth texture through the
+// pinhole model and the camera-to-base transform; the fragment shader colours
+// it from the JPEG the tile fetches the same way the data tab does. Nothing is
+// unpacked in JavaScript beyond a uint16-to-float copy: per frame the page
+// uploads two textures. Without a mount transform the cloud is drawn as if the
+// camera sat at the base looking along +x, and the status says so.
+let _cloudOn = PARAMS.get('cloud') === 'on';
+let _clouds = null;      // [{cam, points, depthTex, rgbTex}] for _cloudsFor
+let _cloudsFor = null;   // {dataset, episode}
+const CLOUD_VERT = `
+  uniform sampler2D depthTex;
+  uniform vec2 size;
+  uniform vec4 K;            // fx, fy, cx, cy in pixels of the stored frame
+  uniform mat4 camToWorld;   // optical frame -> the viewer's Y-up world
+  uniform float pointSize;
+  varying vec2 vUv;
+  varying float vValid;
+  void main() {
+    vec2 pix = position.xy;   // the pixel this vertex stands for, see _initClouds
+    vUv = (pix + 0.5) / size;
+    float z = texture2D(depthTex, vUv).r * 0.001;   // millimetres -> metres; 0 = no measurement
+    vValid = z > 0.0 ? 1.0 : 0.0;
+    vec3 p = vec3((pix.x - K.z) * z / K.x, (pix.y - K.w) * z / K.y, z);
+    gl_Position = projectionMatrix * modelViewMatrix * (camToWorld * vec4(p, 1.0));
+    gl_PointSize = pointSize;
+  }`;
+const CLOUD_FRAG = `
+  uniform sampler2D rgbTex;
+  varying vec2 vUv;
+  varying float vValid;
+  void main() {
+    if (vValid < 0.5) discard;
+    gl_FragColor = vec4(texture2D(rgbTex, vUv).rgb, 1.0);
+  }`;
+// The viewer draws the URDF base frame Z-up as Y-up: (x, y, z) -> (x, z, -y).
+const Z_UP_TO_VIEWER = new THREE.Matrix4().set(1, 0, 0, 0, 0, 0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1);
+// A camera at the base origin looking along +x, y left, z up: what an optical
+// frame becomes when no mount transform is known.
+const OPTICAL_AT_BASE = new THREE.Matrix4().set(0, 0, 1, 0, -1, 0, 0, 0, 0, -1, 0, 0, 0, 0, 0, 1);
+
+function _camToWorld(cam) {
+  const T = new THREE.Matrix4();
+  if (cam.extrinsics && cam.extrinsics.T_parent_camera) {
+    const r = cam.extrinsics.T_parent_camera;
+    T.set(r[0][0], r[0][1], r[0][2], r[0][3], r[1][0], r[1][1], r[1][2], r[1][3],
+          r[2][0], r[2][1], r[2][2], r[2][3], r[3][0], r[3][1], r[3][2], r[3][3]);
+  } else {
+    T.copy(OPTICAL_AT_BASE);
+  }
+  const M = new THREE.Matrix4().multiplyMatrices(Z_UP_TO_VIEWER, T);
+  // The mount calibration is relative to ONE arm's base: the click-target
+  // fit forward-kinematics a single arm and fits the camera into that arm's
+  // frame. The viewer places each arm at its own offset, so the cloud is
+  // anchored to the chosen arm's base; "world" means the viewer's origin.
+  const idx = ANCHOR_ARM;
+  const arm = idx >= 0 ? _arms[idx] : null;
+  if (arm) M.premultiply(new THREE.Matrix4().makeTranslation(arm.basePos.x, arm.basePos.y, arm.basePos.z));
+  return M;
+}
+
+// The arm whose base the mount calibration is relative to: the click-target
+// tool forward-kinematics the right arm by default.
+const ANCHOR_ARM = 1;
+
+// The optical frame looks down +z with +y down; a three.js camera looks down
+// -z with +y up. A half turn about x maps one onto the other.
+const OPTICAL_TO_THREE_CAMERA = new THREE.Matrix4().makeRotationX(Math.PI);
+
+function _placeMarker(c) {
+  const M = c.points.material.uniforms.camToWorld.value;
+  c.marker.matrix.copy(M).multiply(OPTICAL_TO_THREE_CAMERA);
+  c.marker.matrixWorldNeedsUpdate = true;
+  c.marker.updateMatrixWorld(true);
+  c.helper.update();
+}
+
+// Re-place every cloud and marker after the anchor changed, and keep the
+// through-the-camera view on the camera if it is active.
+function _placeClouds() {
+  for (const c of _clouds || []) {
+    c.points.material.uniforms.camToWorld.value = _camToWorld(c.cam);
+    _placeMarker(c);
+  }
+  const viewed = _viewedCloud();
+  if (_povSaved && viewed) _lookThroughCamera(viewed, true);
+  renderer.render(scene, camera);
+}
+
+let _povSaved = null;   // the orbit view to go back to, while looking through the camera
+
+function _lookThroughCamera(c, keepSaved = false) {
+  const M = c.points.material.uniforms.camToWorld.value;
+  const pos = new THREE.Vector3().setFromMatrixPosition(M);
+  const fwd = new THREE.Vector3(0, 0, 1).transformDirection(M);
+  const up = new THREE.Vector3(0, -1, 0).transformDirection(M);
+  if (!keepSaved) {
+    _povSaved = { pos: camera.position.clone(), target: controls.target.clone(), fov: camera.fov, up: camera.up.clone() };
+  }
+  camera.position.copy(pos);
+  camera.up.copy(up);
+  // The vertical field of view the intrinsics imply; the tile's aspect decides the rest.
+  camera.fov = 2 * Math.atan(c.cam.height / (2 * c.cam.intrinsics.fy)) * 180 / Math.PI;
+  camera.updateProjectionMatrix();
+  controls.target.copy(pos.clone().add(fwd.multiplyScalar(0.5)));
+  controls.update();
+  renderer.render(scene, camera);
+}
+
+function _leaveCameraView() {
+  if (!_povSaved) return;
+  camera.position.copy(_povSaved.pos);
+  camera.up.copy(_povSaved.up);
+  camera.fov = _povSaved.fov;
+  camera.updateProjectionMatrix();
+  controls.target.copy(_povSaved.target);
+  controls.update();
+  _povSaved = null;
+  renderer.render(scene, camera);
+}
+
+function _disposeClouds() {
+  for (const c of _clouds || []) {
+    scene.remove(c.points); scene.remove(c.helper); scene.remove(c.marker);
+    c.points.geometry.dispose(); c.points.material.dispose(); c.helper.dispose();
+    c.depthTex.dispose(); if (c.rgbTex) c.rgbTex.dispose();
+  }
+  _clouds = null; _cloudsFor = null;
+}
+
+async function _initClouds() {
+  _disposeClouds();
+  const { dataset, episode } = _datasetCtx;
+  const r = await fetch(`/api/datasets/${encodeURIComponent(dataset)}/episodes/${episode}/urdf-viz/cameras`);
+  const cams = r.ok ? (await r.json()).cameras : [];
+  const drawable = cams.filter((c) => c.intrinsics && c.color_key && c.width && c.height);
+  const toggle = document.getElementById('cloud-toggle');
+  toggle.hidden = drawable.length === 0;
+  _setViewCameras(drawable.map((c) => c.name));
+  if (drawable.length === 0) {
+    if (cams.length) {
+      const c = cams[0];
+      const why = !c.intrinsics ? 'no intrinsics in the dataset' : !c.color_key ? 'no colour feature to colour it from' : 'no frame size';
+      setStatus(`depth camera ${c.name}: ${why}: no point cloud`);
+    }
+    _cloudsFor = { dataset, episode };
+    _clouds = [];
+    return;
+  }
+  _clouds = drawable.map((cam) => {
+    const w = cam.width, h = cam.height, n = w * h;
+    // One vertex per pixel. The pixel coordinates ride in the 'position'
+    // attribute three.js declares for every material, two components wide;
+    // the shader reads them as position.xy and computes the real position.
+    const pix = new Float32Array(n * 2);
+    for (let v = 0, k = 0; v < h; v++) for (let u = 0; u < w; u++) { pix[k++] = u; pix[k++] = v; }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(pix, 2));
+    geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 20);
+    const depthTex = new THREE.DataTexture(new Float32Array(n), w, h, THREE.RedFormat, THREE.FloatType);
+    depthTex.minFilter = THREE.NearestFilter; depthTex.magFilter = THREE.NearestFilter; depthTex.flipY = false;
+    const i = cam.intrinsics;
+    const material = new THREE.ShaderMaterial({
+      uniforms: {
+        depthTex: { value: depthTex }, rgbTex: { value: null }, size: { value: new THREE.Vector2(w, h) },
+        K: { value: new THREE.Vector4(i.fx, i.fy, i.cx, i.cy) }, camToWorld: { value: _camToWorld(cam) },
+        pointSize: { value: 2.0 },
+      },
+      vertexShader: CLOUD_VERT, fragmentShader: CLOUD_FRAG,
+    });
+    const points = new THREE.Points(geometry, material);
+    points.frustumCulled = false;
+    points.visible = _cloudOn;
+    scene.add(points);
+    // The calibrated camera pose, drawn as a small frustum so the mount
+    // calibration can be judged against where the camera really is.
+    const marker = new THREE.PerspectiveCamera(2 * Math.atan(h / (2 * i.fy)) * 180 / Math.PI, w / h, 0.03, 0.2);
+    marker.matrixAutoUpdate = false;
+    const helper = new THREE.CameraHelper(marker);
+    helper.visible = _cloudOn;
+    scene.add(marker); scene.add(helper);
+    const c = { cam, points, depthTex, rgbTex: null, marker, helper };
+    _placeMarker(c);
+    return c;
+  });
+  _cloudsFor = { dataset, episode };
+  if (!drawable.every((c) => c.extrinsics)) setStatus('point cloud in camera frame: no mount calibration for this camera');
+}
+
+let _cloudsInit = null;   // the _initClouds in flight, shared by concurrent callers
+
+// The clouds for the episode in hand, built once even when the first frame
+// message and init() ask at the same time: both await the same promise, and a
+// caller whose episode changed meanwhile asks again.
+async function _ensureClouds() {
+  for (let tries = 0; tries < 3; tries++) {
+    const { dataset, episode } = _datasetCtx;
+    if (_cloudsFor && _cloudsFor.dataset === dataset && _cloudsFor.episode === episode) return;
+    if (!_cloudsInit) _cloudsInit = _initClouds().finally(() => { _cloudsInit = null; });
+    await _cloudsInit;
+  }
+}
+
+async function _updateClouds() {
+  if (MODE !== 'dataset' || !_datasetCtx) return;
+  await _ensureClouds();
+  if (!_cloudOn) return;   // the toggle's visibility is settled; nothing to draw
+  const { dataset, episode, frame } = _datasetCtx;
+  const base = `/api/datasets/${encodeURIComponent(dataset)}/episodes/${episode}/frame/${frame}`;
+  await Promise.all((_clouds || []).map(async (c) => {
+    const [depthResp, rgbResp] = await Promise.all([
+      fetch(`${base}/depth?camera=${encodeURIComponent(c.cam.depth_key)}`),
+      fetch(`${base}?camera=${encodeURIComponent(c.cam.color_key)}`),
+    ]);
+    if (!depthResp.ok || !rgbResp.ok) return;
+    const [buf, blob] = await Promise.all([depthResp.arrayBuffer(), rgbResp.blob()]);
+    const mm = new Uint16Array(buf);
+    const data = c.depthTex.image.data;
+    if (mm.length !== data.length) return;   // a frame of another size: leave the last one
+    for (let k = 0; k < mm.length; k++) data[k] = mm[k];
+    c.depthTex.needsUpdate = true;
+    const bitmap = await createImageBitmap(blob);
+    const tex = new THREE.Texture(bitmap);
+    tex.flipY = false; tex.minFilter = THREE.LinearFilter; tex.generateMipmaps = false; tex.needsUpdate = true;
+    if (c.rgbTex) c.rgbTex.dispose();
+    c.rgbTex = tex;
+    c.points.material.uniforms.rgbTex.value = tex;
+  }));
+}
+
+document.getElementById('cloud-toggle').addEventListener('click', async () => {
+  _cloudOn = !_cloudOn;
+  document.getElementById('cloud-toggle').classList.toggle('on', _cloudOn);
+  for (const c of _clouds || []) { c.points.visible = _cloudOn; c.helper.visible = _cloudOn; }
+  if (_cloudOn) await _updateClouds();
+  renderer.render(scene, camera);
+});
+// The camera the view button looks through: the first drawable one until
+// the arrow's menu picks another. Kept across episodes while the name exists.
+let _viewCam = null;
+function _setViewCameras(names) {
+  const group = document.getElementById('view-group');
+  group.hidden = names.length === 0;
+  if (!names.includes(_viewCam)) _viewCam = names[0] || null;
+  document.getElementById('view-btn').textContent = _viewCam ? `view: ${_viewCam}` : 'view';
+  const menu = document.getElementById('view-menu');
+  menu.innerHTML = names.map((n) => `<button type="button" role="menuitem" data-view-cam="${n}" class="${n === _viewCam ? 'current' : ''}">${n}</button>`).join('');
+  menu.hidden = true;
+}
+function _viewedCloud() {
+  return (_clouds || []).find((c) => c.cam.name === _viewCam) || null;
+}
+// The button recentres on its camera every time; it is not a toggle.
+document.getElementById('view-btn').addEventListener('click', () => {
+  const c = _viewedCloud();
+  if (c) _lookThroughCamera(c, !!_povSaved);
+});
+document.getElementById('view-arrow').addEventListener('click', (e) => {
+  e.stopPropagation();
+  const menu = document.getElementById('view-menu');
+  menu.hidden = !menu.hidden;
+});
+document.getElementById('view-menu').addEventListener('click', (e) => {
+  const item = e.target.closest('[data-view-cam]');
+  if (!item) return;
+  _viewCam = item.dataset.viewCam;
+  _setViewCameras(Array.from(e.currentTarget.querySelectorAll('[data-view-cam]')).map((b) => b.dataset.viewCam));
+});
+document.addEventListener('click', () => { document.getElementById('view-menu').hidden = true; });
+// Dragging the orbit while looking through a camera leaves that view: the
+// user keeps the viewpoint they are at, with the tile's own lens again.
+controls.addEventListener('start', () => {
+  if (!_povSaved) return;
+  camera.fov = _povSaved.fov; camera.up.copy(_povSaved.up); camera.updateProjectionMatrix();
+  _povSaved = null;
 });
 
 window.addEventListener('message', (e) => {
@@ -863,6 +1160,14 @@ async function init() {
   } else if (_datasetCtx) {
     await _refreshDatasetFrame();
     if (_ghostOn) for (const arm of _arms) await _ensureGhost(arm);
+  }
+  if (MODE === 'dataset' && _datasetCtx) {
+    // Shows the cloud toggle when the recording can be drawn in 3D. The
+    // first frame message can arrive before the arms are loaded, and the
+    // cloud's anchor and frustum depend on them, so they are placed again now.
+    await _updateClouds();
+    document.getElementById('cloud-toggle').classList.toggle('on', _cloudOn);
+    _placeClouds();
   }
   _setGhostVisible(_ghostOn);
 
