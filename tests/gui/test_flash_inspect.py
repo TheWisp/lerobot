@@ -34,6 +34,39 @@ from lerobot.policies.flash.inspect import inspect_dataset, inspect_skill
 from lerobot.policies.flash.skill import FlashSkill, Interval, MotionMode, Relation, SpatialSample
 
 
+def test_flash_camera_image_stays_inside_overlay_for_portrait_and_landscape_frames(gui_page):
+    page = gui_page
+    page.evaluate("""() => {
+        for (const [width, height, frameWidth, frameHeight] of [
+            [800, 500, 192, 256], [320, 500, 640, 480],
+        ]) {
+            const grid = document.createElement('div');
+            grid.className = 'flash-replay-grid';
+            grid.style.cssText = `position:relative;width:${width}px;height:${height}px`;
+            const image = document.createElement('img');
+            image.src = `data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg"
+                width="${frameWidth}" height="${frameHeight}"/>`;
+            const overlay = document.createElement('canvas');
+            overlay.className = 'flash-pose-canvas';
+            grid.append(image, overlay);
+            document.body.append(grid);
+        }
+    }""")
+    page.wait_for_function(
+        "() => [...document.querySelectorAll('body > .flash-replay-grid img')].every(img => img.complete)"
+    )
+    for grid in page.locator("body > .flash-replay-grid").all():
+        box = grid.bounding_box()
+        image = grid.locator("img").bounding_box()
+        overlay = grid.locator("canvas").bounding_box()
+        for child in (image, overlay):
+            assert np.allclose(
+                [child[key] for key in ("x", "y", "width", "height")],
+                [box[key] for key in ("x", "y", "width", "height")],
+                atol=0.5,
+            )
+
+
 def test_flash_inspect_subprocess_returns_spatial_intervals(tmp_path):
     identity = np.eye(4).tolist()
     path = tmp_path / "skill.json"

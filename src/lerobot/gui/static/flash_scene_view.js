@@ -146,9 +146,9 @@ function makeContext(depth, rgb, camera) {
         positions.set([(u - cx) * depthM / fx, -(v - cy) * depthM / fy, -depthM], id * 3);
         const gray = (0.299 * rgb[pixel * 4] + 0.587 * rgb[pixel * 4 + 1] +
             0.114 * rgb[pixel * 4 + 2]) / 255;
-        // Keep observed geometry readable without competing with the tracked patch.
+        // Desaturate the surrounding scene so measured object surfaces stand out.
         for (let channel = 0; channel < 3; channel++)
-            colors[id * 3 + channel] = 0.02 + 0.12 * gray;
+            colors[id * 3 + channel] = 0.12 + 0.25 * gray + 0.28 * rgb[pixel * 4 + channel] / 255;
     }
     const add = (a, b, c) => {
         const min = Math.min(z[a], z[b], z[c]), max = Math.max(z[a], z[b], z[c]);
@@ -164,9 +164,9 @@ function makeContext(depth, rgb, camera) {
     geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
     geometry.setIndex(triangles);
     // Coarse single-view depth has holes and stretched silhouettes when orbited.
-    // Keep it as faint spatial context; sharp geometry belongs to measured masks.
+    // Keep it desaturated; sharp geometry belongs to measured masks.
     return new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({
-        vertexColors: true, side: THREE.DoubleSide, transparent: true, opacity: 0.18,
+        vertexColors: true, side: THREE.DoubleSide, transparent: true, opacity: 0.75,
         depthWrite: false,
     }));
 }
@@ -287,6 +287,7 @@ export function createFlashSceneView(canvas, surfaces, reprocessedSurfaces = {})
 
     function setCameraAligned(value) {
         cameraAligned = value;
+        if (context) context.visible = !value;
         canvas.parentElement.classList.toggle('flash-scene-orbit', !value);
     }
 
@@ -313,6 +314,7 @@ export function createFlashSceneView(canvas, surfaces, reprocessedSurfaces = {})
         }
         if (options.showDepthScene) {
             context = makeContext(depth, rgba, snapshot.camera);
+            context.visible = !cameraAligned;
             scene.add(context);
         }
         while (evidence.children.length) {
@@ -325,7 +327,15 @@ export function createFlashSceneView(canvas, surfaces, reprocessedSurfaces = {})
         const held = snapshot.held_prediction;
         observedCenters = {};
         observedBounds = {};
-        for (const [role, ref] of Object.entries(references)) {
+        // A current mask is independently measured. It must remain inspectable
+        // even if no reference model or accepted pose exists for that role.
+        const roles = new Set([...Object.keys(references), ...Object.keys(frameEvidence?.masks_rle || {}),
+            ...Object.keys(frameEvidence?.groups || {})]);
+        const selector = canvas.parentElement.querySelector('#flash-scene-object');
+        for (const role of roles) {
+            if (selector && ![...selector.options].some(option => option.value === role))
+                selector.add(new Option(role, role));
+            const ref = references[role];
             const primaryRef = primaryReferences[role];
             const reprocessedRef = reprocessedReferences[role];
             const skillPose = held?.role === role ? held : snapshot.accepted?.[role];
@@ -503,7 +513,7 @@ export function createFlashSceneView(canvas, surfaces, reprocessedSurfaces = {})
 
     function frameAll() {
         const bounds = new THREE.Box3();
-        for (const role of Object.keys(references)) {
+        for (const role of new Set([...Object.keys(references), ...Object.keys(observedBounds)])) {
             if (observedBounds[role]) {
                 bounds.union(observedBounds[role]);
                 continue;
@@ -513,7 +523,7 @@ export function createFlashSceneView(canvas, surfaces, reprocessedSurfaces = {})
             if (predicted) bounds.union(new THREE.Box3().setFromObject(predicted));
         }
         if (bounds.isEmpty()) {
-            for (const role of Object.keys(references)) {
+            for (const role of new Set([...Object.keys(references), ...Object.keys(observedCenters)])) {
                 const center = objectCenter(role);
                 if (center) bounds.expandByPoint(center);
             }
@@ -536,12 +546,12 @@ export function createFlashSceneView(canvas, surfaces, reprocessedSurfaces = {})
 
     function focus(role) {
         const center = objectCenter(role);
-        if (!center || !references[role]) return false;
+        if (!center || (!references[role] && !observedBounds[role])) return false;
         focusedRole = role;
         lastFocusCenter = center.clone();
-        references[role].geometry.computeBoundingSphere();
-        const radius = observedBounds[role]?.getBoundingSphere(new THREE.Sphere()).radius ||
-            references[role].geometry.boundingSphere.radius;
+        references[role]?.geometry.computeBoundingSphere();
+        const radius = observedBounds[role]?.getBoundingSphere(new THREE.Sphere()).radius ??
+            references[role]?.geometry.boundingSphere.radius ?? 0.01;
         const distance = viewingDistance(radius);
         controls.target.copy(center);
         camera.position.copy(center).add(new THREE.Vector3(0.15, 0.12, 1).normalize().multiplyScalar(distance));
