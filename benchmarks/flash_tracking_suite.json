@@ -1,0 +1,298 @@
+{
+  "schema": "flash-tracking-suite-v1",
+  "name": "FLASH visible RGB-D tracking baseline",
+  "cases": [
+    {
+      "id": "ycb-bleach0",
+      "kind": "ycb_annotated_pose",
+      "domain": "YCBInEOAT",
+      "artifact_root": "~/.cache/flash-failure-sweep-20261029/bleach0",
+      "expected_frames": 181,
+      "tags": [
+        "rigid",
+        "depth-holes"
+      ],
+      "source_root": "~/.cache/ycbineoat/bleach0",
+      "start_frame": 241,
+      "roles": [
+        "object"
+      ]
+    },
+    {
+      "id": "ycb-bleach_hard_00_03_chaitanya",
+      "kind": "ycb_annotated_pose",
+      "domain": "YCBInEOAT",
+      "artifact_root": "~/.cache/flash-failure-sweep-20261029/bleach_hard_00_03_chaitanya",
+      "expected_frames": 181,
+      "tags": [
+        "rigid",
+        "timestamp-gap"
+      ],
+      "source_root": "~/.cache/ycbineoat/bleach_hard_00_03_chaitanya",
+      "start_frame": 130,
+      "roles": [
+        "object"
+      ]
+    },
+    {
+      "id": "ycb-cracker_box_reorient",
+      "kind": "ycb_annotated_pose",
+      "domain": "YCBInEOAT",
+      "artifact_root": "~/.cache/flash-failure-sweep-20261029/cracker_box_reorient",
+      "expected_frames": 181,
+      "tags": [
+        "rigid",
+        "reorientation"
+      ],
+      "source_root": "~/.cache/ycbineoat/cracker_box_reorient",
+      "start_frame": 97,
+      "roles": [
+        "object"
+      ]
+    },
+    {
+      "id": "ycb-cracker_box_yalehand0",
+      "kind": "ycb_annotated_pose",
+      "domain": "YCBInEOAT",
+      "artifact_root": "~/.cache/flash-failure-sweep-20261029/cracker_box_yalehand0",
+      "expected_frames": 181,
+      "tags": [
+        "rigid",
+        "depth-holes"
+      ],
+      "source_root": "~/.cache/ycbineoat/cracker_box_yalehand0",
+      "start_frame": 573,
+      "roles": [
+        "object"
+      ]
+    },
+    {
+      "id": "ycb-mustard0",
+      "kind": "ycb_annotated_pose",
+      "domain": "YCBInEOAT",
+      "artifact_root": "~/.cache/flash-failure-sweep-20261029/mustard0",
+      "expected_frames": 181,
+      "tags": [
+        "rigid",
+        "reorientation"
+      ],
+      "source_root": "~/.cache/ycbineoat/mustard0",
+      "start_frame": 278,
+      "roles": [
+        "object"
+      ]
+    },
+    {
+      "id": "ycb-mustard_easy_00_02",
+      "kind": "ycb_annotated_pose",
+      "domain": "YCBInEOAT",
+      "artifact_root": "~/.cache/flash-failure-sweep-20261029/mustard_easy_00_02",
+      "expected_frames": 181,
+      "tags": [
+        "rigid",
+        "reorientation"
+      ],
+      "source_root": "~/.cache/ycbineoat/mustard_easy_00_02",
+      "start_frame": 254,
+      "roles": [
+        "object"
+      ]
+    },
+    {
+      "id": "ycb-sugar_box1",
+      "kind": "ycb_annotated_pose",
+      "domain": "YCBInEOAT",
+      "artifact_root": "~/.cache/flash-failure-sweep-20261029/sugar_box1",
+      "expected_frames": 181,
+      "tags": [
+        "rigid",
+        "stationary-control"
+      ],
+      "source_root": "~/.cache/ycbineoat/sugar_box1",
+      "start_frame": 363,
+      "roles": [
+        "object"
+      ]
+    },
+    {
+      "id": "ycb-sugar_box_yalehand0",
+      "kind": "ycb_annotated_pose",
+      "domain": "YCBInEOAT",
+      "artifact_root": "~/.cache/flash-failure-sweep-20261029/sugar_box_yalehand0",
+      "expected_frames": 181,
+      "tags": [
+        "rigid",
+        "occlusion"
+      ],
+      "source_root": "~/.cache/ycbineoat/sugar_box_yalehand0",
+      "start_frame": 410,
+      "roles": [
+        "object"
+      ]
+    },
+    {
+      "id": "ycb-tomato_soup_can_yalehand0",
+      "kind": "ycb_annotated_pose",
+      "domain": "YCBInEOAT",
+      "artifact_root": "~/.cache/flash-failure-sweep-20261029/tomato_soup_can_yalehand0",
+      "expected_frames": 181,
+      "tags": [
+        "rigid",
+        "approximate-symmetry"
+      ],
+      "source_root": "~/.cache/ycbineoat/tomato_soup_can_yalehand0",
+      "start_frame": 563,
+      "roles": [
+        "object"
+      ]
+    },
+    {
+      "id": "caryx-000",
+      "kind": "lerobot_rgbd",
+      "domain": "CaryxAI/everyday-manipulation-3d",
+      "artifact_root": "~/.cache/huggingface/lerobot/demos/flash_benchmark_caryx_000",
+      "expected_frames": 455,
+      "tags": [
+        "deformable",
+        "negative-control"
+      ],
+      "roles": [
+        "object_a"
+      ]
+    },
+    {
+      "id": "caryx-002",
+      "kind": "lerobot_rgbd",
+      "domain": "CaryxAI/everyday-manipulation-3d",
+      "artifact_root": "~/.cache/huggingface/lerobot/demos/flash_benchmark_caryx_002",
+      "expected_frames": 389,
+      "tags": [
+        "rigid",
+        "scattered-depth"
+      ],
+      "roles": [
+        "object_a"
+      ]
+    },
+    {
+      "id": "caryx-003",
+      "kind": "lerobot_rgbd",
+      "domain": "CaryxAI/everyday-manipulation-3d",
+      "artifact_root": "~/.cache/huggingface/lerobot/demos/flash_benchmark_caryx_003",
+      "expected_frames": 323,
+      "tags": [
+        "rigid",
+        "transparent-or-reflective"
+      ],
+      "roles": [
+        "object_a"
+      ]
+    },
+    {
+      "id": "caryx-007",
+      "kind": "lerobot_rgbd",
+      "domain": "CaryxAI/everyday-manipulation-3d",
+      "artifact_root": "~/.cache/huggingface/lerobot/demos/flash_benchmark_caryx_007",
+      "expected_frames": 200,
+      "tags": [
+        "rigid",
+        "small-object",
+        "multi-object"
+      ],
+      "roles": [
+        "object_a",
+        "object_b"
+      ]
+    },
+    {
+      "id": "caryx-014",
+      "kind": "lerobot_rgbd",
+      "domain": "CaryxAI/everyday-manipulation-3d",
+      "artifact_root": "~/.cache/huggingface/lerobot/demos/flash_benchmark_caryx_014",
+      "expected_frames": 194,
+      "tags": [
+        "rigid",
+        "narrow-object"
+      ],
+      "roles": [
+        "object_a"
+      ]
+    },
+    {
+      "id": "caryx-015",
+      "kind": "lerobot_rgbd",
+      "domain": "CaryxAI/everyday-manipulation-3d",
+      "artifact_root": "~/.cache/huggingface/lerobot/demos/flash_benchmark_caryx_015",
+      "expected_frames": 318,
+      "tags": [
+        "deformable",
+        "negative-control"
+      ],
+      "roles": [
+        "object_a"
+      ]
+    },
+    {
+      "id": "caryx-032",
+      "kind": "lerobot_rgbd",
+      "domain": "CaryxAI/everyday-manipulation-3d",
+      "artifact_root": "~/.cache/huggingface/lerobot/demos/flash_benchmark_caryx_032",
+      "expected_frames": 174,
+      "tags": [
+        "rigid",
+        "transparent",
+        "multi-object"
+      ],
+      "roles": [
+        "object_a",
+        "object_b"
+      ]
+    },
+    {
+      "id": "caryx-041",
+      "kind": "lerobot_rgbd",
+      "domain": "CaryxAI/everyday-manipulation-3d",
+      "artifact_root": "~/.cache/huggingface/lerobot/demos/flash_benchmark_caryx_041",
+      "expected_frames": 565,
+      "tags": [
+        "rigid",
+        "narrow-object"
+      ],
+      "roles": [
+        "object_a"
+      ]
+    },
+    {
+      "id": "caryx-053",
+      "kind": "lerobot_rgbd",
+      "domain": "CaryxAI/everyday-manipulation-3d",
+      "artifact_root": "~/.cache/huggingface/lerobot/demos/flash_benchmark_caryx_053",
+      "expected_frames": 139,
+      "tags": [
+        "rigid",
+        "stationary-control",
+        "multi-object"
+      ],
+      "roles": [
+        "object_a",
+        "object_b"
+      ]
+    },
+    {
+      "id": "caryx-090",
+      "kind": "lerobot_rgbd",
+      "domain": "CaryxAI/everyday-manipulation-3d",
+      "artifact_root": "~/.cache/huggingface/lerobot/demos/flash_benchmark_caryx_090",
+      "expected_frames": 245,
+      "tags": [
+        "rigid",
+        "name-detection",
+        "multi-object"
+      ],
+      "roles": [
+        "object_a",
+        "object_b"
+      ]
+    }
+  ]
+}
