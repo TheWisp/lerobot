@@ -1575,14 +1575,16 @@ function _flashDrawOverlay() {
             if (mask.frame_id !== camera.frame_id) continue;
             const active = emphasized('mask', role);
             context.globalAlpha = active ? 1 : 0.12;
-            outline(mask.boundary_xy || [], '#d48bff', flashHighlightedOverlay && active ? 5 : 2);
+            for (const contour of mask.contours_xy || [mask.boundary_xy || []])
+                outline(contour, '#d48bff', flashHighlightedOverlay && active ? 5 : 2);
             context.globalAlpha = 1;
         }
         if (compareSources) for (const [role, mask] of Object.entries(snapshot.reprocessed_observed_masks || {})) {
             if (mask.frame_id !== camera.frame_id) continue;
             const active = emphasized('reprocessed_mask', role);
             context.globalAlpha = active ? 0.75 : 0.12;
-            outline(mask.boundary_xy || [], '#34d399', flashHighlightedOverlay && active ? 5 : 2);
+            for (const contour of mask.contours_xy || [mask.boundary_xy || []])
+                outline(contour, '#34d399', flashHighlightedOverlay && active ? 5 : 2);
             context.globalAlpha = 1;
         }
         if (flashHighlightedOverlay?.kind === 'group' && snapshot.scene_support?.frame_id === camera.frame_id) {
@@ -2078,10 +2080,12 @@ async function loadFlashObservationReplay(datasetRoot, episodeIndex) {
 async function _loadFlashRecordings() {
     const list = document.getElementById('run-flash-recordings');
     const demosList = document.getElementById('run-flash-demos');
-    if (!list || !demosList) return;
+    const examplesList = document.getElementById('run-flash-examples');
+    if (!list || !demosList || !examplesList) return;
     const generation = ++flashRecordingsGeneration;
     list.textContent = 'Loading rollouts…';
     demosList.textContent = 'Loading demos…';
+    examplesList.textContent = 'Loading RGB-D examples…';
     try {
         const response = await fetch('/api/run/flash/recordings');
         if (!response.ok) throw new Error(`Recordings returned ${response.status}`);
@@ -2089,9 +2093,13 @@ async function _loadFlashRecordings() {
         if (generation !== flashRecordingsGeneration) return;
         list.replaceChildren();
         demosList.replaceChildren();
+        examplesList.replaceChildren();
         const demos = recordings.filter(recording => ['demo', 'observation_demo', 'recorded_source_demo'].includes(recording.kind));
+        const examples = demos.filter(recording => recording.kind === 'observation_demo' && !recording.robot_actions_available);
+        const robotDemos = demos.filter(recording => !examples.includes(recording));
         const rollouts = recordings.filter(recording => !['demo', 'observation_demo', 'recorded_source_demo'].includes(recording.kind));
-        if (!demos.length) demosList.textContent = 'No FLASH demos in your dataset sources.';
+        if (!robotDemos.length) demosList.textContent = 'No robot demos in your dataset sources.';
+        if (!examples.length) examplesList.textContent = 'No RGB-D examples in your dataset sources.';
         if (!rollouts.length) list.textContent = 'No FLASH rollouts in your dataset sources.';
         for (const recording of demos) {
             const card = document.createElement('div');
@@ -2106,24 +2114,21 @@ async function _loadFlashRecordings() {
             const interaction = recording.interaction;
             const title = interaction?.held_role && interaction?.target_role
                 ? `${interaction.held_role} → ${interaction.target_role}`
-                : recording.dataset_root.split('/').pop();
-            label.textContent = `${title} · episode ${recording.episode}`;
+                : recording.dataset_root.split('/').pop().replace(/^flash_/, '').replaceAll('_', ' ');
+            label.textContent = recording.episode ? `${title} · episode ${recording.episode}` : title;
             const meta = document.createElement('span');
             meta.className = 'flash-recording-meta';
-            const skills = recording.skills || [];
             const versions = recording.prepared_versions || [];
-            const viewedVersion = versions.find(version => version.bundle_path === recording.bundle_path);
             meta.textContent = recording.kind === 'observation_demo'
-                ? `RGB-D ${recording.robot_actions_available ? 'robot recording' : 'observation'} · ` +
-                    `${recording.evidence_available ? 'tracked poses and scene groups' : 'tracking not processed'} · ` +
-                    `${recording.robot_actions_available ? 'actions recorded; gripper fallback not extracted' : 'no robot actions'}`
+                ? recording.robot_actions_available ? 'Robot recording' : ''
                 : recording.bundle_path
-                ? `${skills.length} FLASH skill(s) · viewing: ${recording.prepared_skill}` +
-                    `${viewedVersion?.candidate ? ' · review candidate' : ''} · Play with extracted poses`
+                ? `Viewing: ${recording.prepared_skill}` +
+                    `${versions.find(version => version.bundle_path === recording.bundle_path)?.candidate ? ' · review candidate' : ''}`
                 : recording.kind === 'recorded_source_demo'
-                ? 'Recorded robot demo · mark motion in playback'
-                : 'Raw SO-107 RGB-D demo · prepare objects and action in playback';
-            button.append(label, meta);
+                ? 'Robot recording'
+                : 'Raw demo';
+            button.append(label);
+            if (meta.textContent) button.append(meta);
             button.onclick = () => recording.kind === 'observation_demo'
                 ? loadFlashObservationReplay(recording.dataset_root, recording.episode)
                 : recording.bundle_path ? loadFlashDemoReplay(recording.dataset_root, recording.episode,
@@ -2159,7 +2164,7 @@ async function _loadFlashRecordings() {
                 select.onchange = () => loadFlashDemoReplay(recording.dataset_root, recording.episode, select.value);
                 card.append(select);
             }
-            demosList.append(card);
+            (examples.includes(recording) ? examplesList : demosList).append(card);
         }
         for (const recording of rollouts) {
             const button = document.createElement('button');
@@ -2167,18 +2172,12 @@ async function _loadFlashRecordings() {
             button.className = 'flash-recording';
             button.title = `${recording.dataset_root}\n${recording.reason || ''}`;
             const label = document.createElement('strong');
-            label.textContent = recording.dataset_root.split('/').pop();
             const meta = document.createElement('span');
             const when = new Date(recording.modified_at_s * 1000).toLocaleString();
-            meta.textContent = `${when} · episode ${recording.episode} · ${recording.outcome}` +
-                (recording.frames == null ? '' : ` · ${recording.frames} frames`);
+            label.textContent = when;
+            meta.textContent = `${recording.outcome} · ${recording.dataset_root.split('/').pop().replace(/^flash_/, '').replaceAll('_', ' ')}`;
             button.append(label, meta);
-            if (recording.reason && recording.outcome !== 'success') {
-                const reason = document.createElement('span');
-                reason.className = 'flash-recording-reason';
-                reason.textContent = recording.reason;
-                button.append(reason);
-            }
+            // The full failure reason is available on hover and in the replay.
             button.onclick = () => loadFlashTrackerReplay(recording.dataset_root, recording.episode);
             list.append(button);
         }
@@ -2186,6 +2185,7 @@ async function _loadFlashRecordings() {
         if (generation === flashRecordingsGeneration) {
             list.textContent = `Cannot list rollouts: ${error.message}`;
             demosList.textContent = `Cannot list demos: ${error.message}`;
+            examplesList.textContent = `Cannot list RGB-D examples: ${error.message}`;
         }
     }
 }
@@ -3446,12 +3446,14 @@ function renderRunForm() {
     html += `<div id="run-section-flash" style="${selectedWorkflow === 'flash' ? '' : 'display:none'}">`;
     html += '<div class="flash-library"><div class="flash-library-tabs" role="tablist" aria-label="FLASH recordings">';
     html += `<button type="button" class="flash-library-tab ${flashLibraryTab === 'demos' ? 'active' : ''}" data-tab="demos" role="tab" aria-selected="${flashLibraryTab === 'demos'}" onclick="selectFlashLibraryTab('demos')">Demos</button>`;
+    html += `<button type="button" class="flash-library-tab ${flashLibraryTab === 'examples' ? 'active' : ''}" data-tab="examples" role="tab" aria-selected="${flashLibraryTab === 'examples'}" onclick="selectFlashLibraryTab('examples')">Examples</button>`;
     html += `<button type="button" class="flash-library-tab ${flashLibraryTab === 'rollouts' ? 'active' : ''}" data-tab="rollouts" role="tab" aria-selected="${flashLibraryTab === 'rollouts'}" onclick="selectFlashLibraryTab('rollouts')">Rollouts</button>`;
     html += '<button type="button" class="flash-library-refresh" onclick="_loadFlashRecordings()" aria-label="Refresh FLASH recordings" title="Refresh recordings">↻</button></div>';
     html += '<div id="run-flash-demos" class="flash-recordings">Loading demos…</div>';
+    html += '<div id="run-flash-examples" class="flash-recordings">Loading RGB-D examples…</div>';
     html += '<div id="run-flash-recordings" class="flash-recordings">Loading rollouts…</div>';
-    html += '<button type="button" class="flash-live-entry" onclick="showFlashLiveSetup()">Set up live trial →</button></div>';
-    html += '<button type="button" class="flash-live-entry flash-tracking-entry" onclick="showFlashTracking()">Live tracking · camera only →</button>';
+    html += '<button type="button" class="flash-live-entry" onclick="showFlashLiveSetup()">Set up live trial →</button>';
+    html += '<button type="button" class="flash-live-entry flash-tracking-entry" onclick="showFlashTracking()">Live tracking · camera only →</button></div>';
     html += '<button type="button" class="flash-review-return" onclick="showFlashReview()">← Back to recordings</button>';
     html += flashTrackingForm();
     html += '<details class="flash-manual-setup" id="run-flash-manual-setup"><summary>Open another dataset or run a live trial</summary>';

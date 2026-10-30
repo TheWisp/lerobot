@@ -16,7 +16,7 @@ import lerobot.gui.api.run as run_api
 from lerobot.gui.api.run import _flash_recordings, _flash_tracker_replay
 from lerobot.policies.flash.causal_service import AnchorDecision
 from lerobot.policies.flash.execution import MotorTick, PlanEvidence
-from lerobot.policies.flash.live_telemetry import FlashLiveTelemetry, live_frame_path
+from lerobot.policies.flash.live_telemetry import FlashLiveTelemetry, _mask_contours, live_frame_path
 from lerobot.policies.flash.perception import RGBDFrame
 from lerobot.policies.flash.pose_disagreement import (
     FreeSpaceComparison,
@@ -48,6 +48,13 @@ def _estimate(source_s: float, estimator: str, evidence: Evidence) -> PoseEstima
         (True, True, True),
         estimator=estimator,
     )
+
+
+def test_mask_display_keeps_disconnected_regions() -> None:
+    mask = np.zeros((24, 24), dtype=np.uint8)
+    mask[2:8, 3:9] = 1
+    mask[13:22, 14:23] = 1
+    assert len(_mask_contours(mask)) == 2
 
 
 def test_live_tracker_layers_are_replayed_with_camera_frame(tmp_path: Path) -> None:

@@ -688,7 +688,9 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .flash-scene-active img { display: block; filter: blur(1px) brightness(.78) saturate(.85); pointer-events: none; }
 .flash-scene-active.flash-scene-orbit img, .flash-scene-active.flash-scene-orbit .flash-scene-photo, .flash-scene-active .flash-pose-canvas { display: none; }
 .flash-scene-active .flash-demo-mask, .flash-scene-active .flash-demo-polygon { display: none; }
-.flash-frame-loading:not(.flash-frame-ready) > img, .flash-frame-loading:not(.flash-frame-ready) .flash-pose-canvas, .flash-frame-loading:not(.flash-frame-ready) .flash-scene-photo, .flash-frame-loading:not(.flash-frame-ready) .flash-scene-canvas { visibility: hidden; }
+.flash-frame-loading:not(.flash-frame-ready) > img, .flash-frame-loading:not(.flash-frame-ready) .flash-pose-canvas { visibility: hidden; }
+/* A new RGB image must never be paired with the preceding frame's 3D evidence. */
+.flash-frame-loading .flash-scene-photo, .flash-frame-loading .flash-scene-canvas { visibility: hidden; }
 .flash-scene-toolbar { position: absolute; top: 12px; left: 12px; z-index: 5; display: flex; align-items: center; gap: 8px; max-width: calc(100% - 24px); padding: 6px; border-radius: 6px; background: #101b2add; color: #e6edf3; font-size: 12px; }
 .flash-scene-toolbar button { color: #e6edf3; background: #224868; border: 1px solid #4d7798; border-radius: 4px; padding: 5px 9px; cursor: pointer; }
 .flash-scene-toolbar .flash-demo-review-status { color: #ffcf79; white-space: nowrap; font-weight: 600; }
@@ -753,16 +755,20 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 #tab-run.flash-reviewing.flash-demo-editing #rerun-viewer > .flash-tracker-panel { display: none; }
 #tab-run.flash-reviewing .flash-tracker-heading { cursor: default; }
 #tab-run.flash-reviewing .flash-tracker-replay-controls { min-height: 52px; }
-#tab-run.flash-reviewing .run-form { padding: 10px; }
-#tab-run.flash-reviewing #run-section-flash { height: 100%; }
-.flash-library { display: flex; flex-direction: column; min-height: 0; height: 100%; }
+#tab-run.flash-reviewing .run-form { padding: 10px; min-height: 0; overflow: hidden; }
+#tab-run.flash-reviewing #run-section-flash { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.flash-library { display: flex; flex: 1; flex-direction: column; min-height: 0; }
 .flash-library-tabs { display: flex; border-bottom: 1px solid #31516c; margin-bottom: 8px; flex-shrink: 0; }
 .flash-library-tabs button { background: none; border: 0; color: #a7b5c8; cursor: pointer; padding: 8px 10px; font: inherit; }
 .flash-library-tabs button.active { color: #e6edf3; border-bottom: 2px solid #4fc3f7; }
 .flash-library-tabs .flash-library-refresh { margin-left: auto; font-size: 17px; }
-#tab-run.flash-reviewing .flash-recordings { flex: 1; max-height: none; overflow-y: auto; }
+#tab-run.flash-reviewing .flash-recordings { flex: 1; min-height: 0; max-height: none; overflow-y: auto; margin-bottom: 8px; }
+#run-section-flash[data-library-tab="demos"] #run-flash-examples,
 #run-section-flash[data-library-tab="demos"] #run-flash-recordings,
-#run-section-flash[data-library-tab="rollouts"] #run-flash-demos { display: none; }
+#run-section-flash[data-library-tab="examples"] #run-flash-demos,
+#run-section-flash[data-library-tab="examples"] #run-flash-recordings,
+#run-section-flash[data-library-tab="rollouts"] #run-flash-demos,
+#run-section-flash[data-library-tab="rollouts"] #run-flash-examples { display: none; }
 .flash-live-entry, .flash-review-return { padding: 8px 10px; background: transparent; color: #8bd5ff; border: 1px solid #31516c; border-radius: 4px; cursor: pointer; text-align: left; }
 .flash-live-entry { margin-top: 8px; }
 #flash-tracking-setup, #flash-surface-view { display: none; }

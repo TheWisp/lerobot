@@ -1246,7 +1246,7 @@ def test_run_flash_tracker_panel_reuses_view_for_recorded_layers(gui_page):
     page.evaluate("datasets['/tmp/tracker-run'] = {id: '/tmp/tracker-run', root: '/tmp/tracker-run'}")
     page.wait_for_function("() => document.querySelectorAll('.flash-recording').length === 1")
     page.get_by_role("tab", name="Rollouts").click()
-    assert page.locator(".flash-recording-reason").inner_text() == "IK failed"
+    assert "IK failed" in page.locator(".flash-recording").get_attribute("title")
     page.locator(".flash-recording").click()
     page.wait_for_function("() => document.querySelector('#flash-tracker-mode').textContent === 'Recording'")
     panel = page.locator("#flash-tracker-panel")
@@ -2453,7 +2453,7 @@ def test_unprepared_regular_robot_demo_opens_timeline_editor_and_3d_scene(gui_pa
     page.evaluate("switchTab('run'); selectWorkflow('flash')")
     page.evaluate(f"datasets[{json.dumps(root)}] = {{id: 'regular', root: {json.dumps(root)}}}")
     page.evaluate("_loadFlashRecordings()")
-    page.get_by_role("button", name="regular-robot-demo · episode 0").click()
+    page.get_by_role("button", name="regular-robot-demo").click()
     page.wait_for_function("() => flashReplay?.kind === 'recorded_demo'")
     assert "Reprocessed RGB-D scene pose" in page.locator("#flash-tracker-content").inner_text()
     assert "surface centre 3, 3, 850 mm" in page.locator("#flash-tracker-content").inner_text()

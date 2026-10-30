@@ -131,9 +131,17 @@ def load_observation_replay(root: Path, episode: int = 0) -> dict:
                 for start, length in runs:
                     binary[start : start + length] = 1
                 binary = binary.reshape(height, width)
-                contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                boundary = max(contours, key=cv2.contourArea).reshape(-1, 2).tolist() if contours else []
-                masks[role] = {"frame_id": frame_id, "runs": runs, "boundary_xy": boundary}
+                contours, _ = cv2.findContours(binary, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+                boundaries = [
+                    contour.reshape(-1, 2).tolist()
+                    for contour in sorted(contours, key=cv2.contourArea, reverse=True)
+                ]
+                masks[role] = {
+                    "frame_id": frame_id,
+                    "runs": runs,
+                    "contours_xy": boundaries,
+                    "boundary_xy": boundaries[0] if boundaries else [],
+                }
                 if role not in geometry["points_object_m"] and role in accepted and point_limit:
                     if row is None:
                         row = dataset[sample.row_index]

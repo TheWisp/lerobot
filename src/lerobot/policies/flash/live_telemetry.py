@@ -31,13 +31,15 @@ def live_frame_path(live_path: Path, frame_id: int, kind: str) -> Path:
     return live_path.with_suffix(".frames") / f"{frame_id:08d}.{extension}"
 
 
+def _mask_contours(mask: np.ndarray) -> list[list[list[int]]]:
+    contours, _ = cv2.findContours(np.asarray(mask, dtype=np.uint8), cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+    return [contour[:, 0, :].tolist() for contour in sorted(contours, key=cv2.contourArea, reverse=True)]
+
+
 def _mask_boundary(mask: np.ndarray) -> list[list[int]]:
-    contours, _ = cv2.findContours(
-        np.asarray(mask, dtype=np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-    )
-    if not contours:
-        return []
-    return max(contours, key=cv2.contourArea)[:, 0, :].tolist()
+    """Keep the older single-outline field for saved-trace readers."""
+    contours = _mask_contours(mask)
+    return contours[0] if contours else []
 
 
 def _mask_runs(mask: np.ndarray) -> list[list[int]]:
@@ -429,7 +431,8 @@ class FlashLiveTelemetry:
             "observed_masks": {
                 role: {
                     "frame_id": mask_frame_id,
-                    "boundary_xy": _mask_boundary(mask),
+                    "contours_xy": (contours := _mask_contours(mask)),
+                    "boundary_xy": contours[0] if contours else [],
                     **(
                         {"runs": _mask_runs(mask)}
                         if frame is not None and mask_frame_id == frame.frame_id
