@@ -194,6 +194,19 @@ class DebugGroupFallback:
         self.service = None
         self._lock = Lock()
         self._last_frame_id = -1
+        self._published: dict[str, tuple] = {}
+
+    def _remember(self, service, estimate) -> None:
+        frame_id = estimate.source_frame_id
+        if frame_id is None:
+            return
+        frame = next((item for item in reversed(service.history) if item.frame_id == frame_id), None)
+        if frame is None:
+            return
+        with self._lock:
+            previous = self._published.get(estimate.role)
+            if previous is None or frame_id >= previous[0].source_frame_id:
+                self._published[estimate.role] = estimate, frame
 
     def submit_frame(self, frame: RGBDFrame) -> None:
         with self._lock:
@@ -205,7 +218,11 @@ class DebugGroupFallback:
         if self.service is None:
             # The click/name reference is initialized by this very result.
             # Seed in source order before the capture thread starts forwarding.
-            service = build_causal_pose_service(self.store, self.config)
+            service = build_causal_pose_service(
+                self.store,
+                self.config,
+                on_layer=lambda estimate: self._remember(service, estimate),
+            )
             service.process_offline(frame, result.estimates, result.masks, proposals=result.proposals)
             service.start()
             with self._lock:
@@ -226,6 +243,18 @@ class DebugGroupFallback:
     def estimates(self) -> dict:
         return self.store.snapshot()[1]
 
+    def latest_frame(self) -> tuple[RGBDFrame | None, dict]:
+        """One image and only estimates that actually came from that image."""
+        with self._lock:
+            if not self._published:
+                return None, {}
+            frame_id = max(item.source_frame_id for item, _ in self._published.values())
+            selected = {
+                role: item for role, item in self._published.items() if item[0].source_frame_id == frame_id
+            }
+            frame = next(iter(selected.values()))[1]
+            return frame, {role: item for role, (item, _) in selected.items()}
+
     def close(self) -> None:
         with self._lock:
             service, self.service = self.service, None
@@ -233,6 +262,8 @@ class DebugGroupFallback:
             service.close()
         self.store = LatestPoseStore()
         self._last_frame_id = -1
+        with self._lock:
+            self._published.clear()
 
 
 def group_display(detail: dict, estimate, frame: RGBDFrame, reference_detail: dict | None = None) -> dict:
@@ -585,6 +616,21 @@ def run(directory: Path, config: dict) -> None:
                         "contours": [c[:, 0].tolist() for c in contours],
                     }
                 last_objects = objects
+                group_frame, group_at_frame = group.latest_frame() if group is not None else (None, {})
+                group_objects = (
+                    {
+                        role: {
+                            "name": tracked_names[role],
+                            **group_display(
+                                output.details[role], estimate, group_frame, reference_details.get(role)
+                            ),
+                        }
+                        for role, estimate in group_at_frame.items()
+                        if role in tracked_names
+                    }
+                    if group_frame is not None
+                    else {}
+                )
                 trace_ms = None
                 if trace is not None and not trace.complete:
                     if time.monotonic() < trace.end_s:
@@ -599,6 +645,8 @@ def run(directory: Path, config: dict) -> None:
                     "tracking",
                     objects=objects,
                     frame=image_snapshot(frame),
+                    group_frame=image_snapshot(group_frame) if group_frame is not None else None,
+                    group_objects=group_objects,
                     timings={
                         "mask_ms": mask_ms,
                         "total_ms": elapsed * 1000,

@@ -386,6 +386,49 @@ def test_live_group_toggle_reaches_the_worker_configuration(gui_page):
 
 @pytest.mark.requires_playwright
 @pytest.mark.skipif(importlib.util.find_spec("playwright") is None, reason="Playwright not installed")
+def test_group_pose_is_drawn_on_its_own_camera_frame(gui_page):
+    import base64
+
+    import cv2
+    import numpy as np
+
+    page = gui_page
+    _, png = cv2.imencode(".png", np.zeros((80, 100, 3), np.uint8))
+    image = "data:image/png;base64," + base64.b64encode(png).decode()
+
+    def frame(index):
+        return {"frame_id": index, "captured_s": 1.0, "width": 100, "height": 80, "image": image}
+
+    config = flash_tracking.TrackingStart(group_fallback=True).model_dump()
+    packet = {
+        "running": True,
+        "server_time_s": 1.1,
+        "config": config,
+        "preview": frame(43),
+        "estimate": {
+            "status": "tracking",
+            "frame": frame(40),
+            "objects": {"object": {"name": "object"}},
+            "group_frame": frame(42),
+            "group_objects": {
+                "object": {"name": "object", "group_current_frame": True, "group_reference_px": [[40, 40]]}
+            },
+        },
+    }
+    page.route("**/api/run/flash/tracking/state", lambda route: route.fulfill(json=packet))
+    page.evaluate("switchTab('run'); selectWorkflow('flash')")
+    page.get_by_role("button", name="Live tracking · camera only →").click()
+    page.wait_for_function("document.getElementById('flash-surface-group')?.dataset.frameId === '42'")
+    result = page.evaluate("""() => ({
+        direct: document.getElementById('flash-surface-estimate').dataset.frameId,
+        group: document.getElementById('flash-surface-group').dataset.frameId,
+        color: Array.from(document.getElementById('flash-surface-group').getContext('2d').getImageData(40,40,1,1).data).slice(0,3),
+    })""")
+    assert result == {"direct": "40", "group": "42", "color": [255, 191, 77]}
+
+
+@pytest.mark.requires_playwright
+@pytest.mark.skipif(importlib.util.find_spec("playwright") is None, reason="Playwright not installed")
 def test_object_inspection_removes_pose_but_scene_toggle_restores_it(gui_page):
     page = gui_page
     page.route("**/api/run/flash/tracking/state", lambda route: route.fulfill(json={"running": False}))

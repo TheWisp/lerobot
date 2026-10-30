@@ -103,6 +103,8 @@ def test_debugger_group_bridge_consumes_camera_frames_between_vision_results():
         assert bridge.service.frames == 3
         assert pose.evidence == Evidence.PREDICTED
         np.testing.assert_allclose(pose.pose[0, 3], 0.04, atol=0.005)
+        image, matching = bridge.latest_frame()
+        assert image.frame_id == matching["object"].source_frame_id == 2
     finally:
         bridge.close()
 
@@ -191,6 +193,8 @@ def test_debugger_group_bridge_keeps_moving_target_after_direct_loss(monkeypatch
         assert bridge.service.error is None
         assert pose.estimator == "environment_group_motion"
         np.testing.assert_allclose(pose.pose[:3, 3], [0.04, 0, 1], atol=0.005)
+        image, matching = bridge.latest_frame()
+        assert image.frame_id == matching["target"].source_frame_id == 2
     finally:
         bridge.close()
 

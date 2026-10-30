@@ -31,9 +31,9 @@ function flashTrackingForm() {
             <label>Fit sample budget per surface<input type="number" id="flash-sampling-budget" step="1" onchange="flashTrackingSamplingChanged()"></label>
             <p class="form-hint">Smaller objects get finer spacing, limited by available depth pixels. The fit budget limits computation; the full measured cloud still checks distances and the outline. Apply changes by closing and reopening the camera.</p>
         </details>
-        <label><input type="checkbox" id="flash-detection-correction" onchange="flashTrackingCorrectionChanged()">Correct name-seeded masks with fresh detections</label>
+        <label><input type="checkbox" id="flash-detection-correction" disabled onchange="flashTrackingCorrectionChanged()">Correct name-seeded masks with fresh detections</label>
         <p class="form-hint">Checks run in the perception worker, away from robot control. Click-seeded objects are never re-detected from their labels.</p>
-        <label><input type="checkbox" id="flash-group-fallback" onchange="flashTrackingGroupChanged()">Use scene/group pose fallback</label>
+        <label><input type="checkbox" id="flash-group-fallback" disabled onchange="flashTrackingGroupChanged()">Use scene/group pose fallback</label>
         <p class="form-hint">Runs the same scene estimator as demo processing and Test on every camera frame. Apply by opening or reopening the camera. No gripper prediction is available in this camera-only view.</p>
         <details><summary>Camera & tracking parameters</summary><p class="form-hint">Applied when opening the camera. Shared with demo extraction and live inference.</p><textarea id="flash-tracking-config" rows="15" spellcheck="false" onchange="flashTrackingSamplingSync()"></textarea></details>
         <button type="button" class="btn-small secondary" onclick="flashTrackingSave()">Save diagnostic snapshot</button>
@@ -115,6 +115,7 @@ async function showFlashTracking() {
             <div class="flash-surface-grid">
                 <figure><figcaption>Live camera</figcaption><canvas id="flash-surface-preview"></canvas></figure>
                 <figure><figcaption id="flash-surface-caption">Fitted poses · source image</figcaption><canvas id="flash-surface-estimate" aria-label="Fitted poses and frozen image for object selection"></canvas></figure>
+                <figure id="flash-surface-group-panel" style="display:none"><figcaption id="flash-surface-group-caption">Scene/group choice</figcaption><canvas id="flash-surface-group" aria-label="Scene/group pose on its matching camera image"></canvas></figure>
                 <figure><figcaption id="flash-surface-local-caption">Object close-up · select an object to zoom</figcaption><canvas id="flash-surface-local"></canvas></figure>
                 <figure><figcaption id="flash-surface-cloud-caption">3D object view · left drag orbit · right drag pan · scroll zoom</figcaption><canvas id="flash-surface-cloud"></canvas></figure>
                 <figure class="flash-surface-diagnostics"><figcaption id="flash-surface-diagnostics-caption">Fit diagnostics</figcaption><p id="flash-surface-metrics"></p><p>Surface agreement is not calibrated confidence. Scene/group prediction is labeled separately from a direct observation.</p></figure>
@@ -144,6 +145,8 @@ async function showFlashTracking() {
         const config = document.getElementById('flash-tracking-config');
         if (!config.value) config.value = JSON.stringify(flashTrackingDefaults, null, 2);
         flashTrackingSamplingSync();
+        document.getElementById('flash-detection-correction').disabled = false;
+        document.getElementById('flash-group-fallback').disabled = false;
         document.getElementById('flash-tracking-open').disabled = _isRunning;
     } catch (error) { flashTrackingError(error); }
     if (!flashTrackingTimer) flashTrackingPoll();
@@ -327,6 +330,7 @@ function flashTrackingDrawSceneEstimates(ctx, packet) {
         for (const contour of object.contours || []) {
             for (const point of contour) { x = Math.min(x, point[0]); y = Math.min(y, point[1]); }
         }
+        if (!Number.isFinite(x) && object.group_anchors_px?.length) [x,y] = object.group_anchors_px[0];
         if (!Number.isFinite(x)) continue;
         ctx.font = `bold ${18/scale}px sans-serif`;
         ctx.lineWidth = 3/scale;
@@ -383,6 +387,13 @@ function flashTrackingRender() {
     flashTrackingPaint('flash-surface-preview', data.preview);
     const crop = flashTrackingObjectCrop(estimate);
     flashTrackingPaint('flash-surface-estimate', packet.frame, ctx => flashTrackingDrawSceneEstimates(ctx, packet));
+    const showGroup = !!data.config?.group_fallback;
+    document.getElementById('flash-surface-group-panel').style.display = showGroup ? '' : 'none';
+    const groupFrame = showGroup ? packet.group_frame : null;
+    flashTrackingPaint('flash-surface-group', groupFrame,
+        ctx => flashTrackingDrawSceneEstimates(ctx, {objects:packet.group_objects || {}}));
+    document.getElementById('flash-surface-group-caption').textContent = groupFrame
+        ? `Scene/group choice · frame ${groupFrame.frame_id}` : 'Scene/group choice · waiting for a matching frame';
     flashTrackingPaint('flash-surface-local', crop ? estimate.frame : null,
         ctx => flashTrackingDrawEstimate(ctx, estimate), crop);
     document.getElementById('flash-surface-local-caption').textContent = crop

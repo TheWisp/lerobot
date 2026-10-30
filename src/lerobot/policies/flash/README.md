@@ -220,8 +220,9 @@ The camera-only debugger now has an optional scene/group fallback using the
 same `CausalPoseService` as demo extraction and Test. When enabled, it forwards
 every captured frame to the scene worker and submits each slower surface result
 with its source frame, just as Test does. It displays direct fits and the
-scene-selected estimate with separate provenance; projected group points appear
-only on the matching camera frame. The debugger has no motor/gripper attachment
+scene-selected estimate with separate provenance. The group view shows its own
+camera frame, so a later scene prediction never borrows the direct fit's older
+image. The debugger has no motor/gripper attachment
 and starts from a local clicked/named surface, not a prepared multi-view model.
 Its shared causal defaults come from `default_causal_tracking_config`, and the
 resolved setting is saved in a diagnostic trace. The fallback is off by default

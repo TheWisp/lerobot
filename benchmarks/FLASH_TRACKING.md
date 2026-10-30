@@ -80,8 +80,8 @@ disagree with its prepared version. The debugger can exercise the same group
 estimator with **Use scene/group pose fallback** enabled before opening the
 camera: it forwards every camera frame and slower vision proposals. It has no
 motor-backed gripper attachment or prepared multi-view reference. The group
-overlay appears only when its source frame matches the displayed RGB-D frame;
-the diagnostics still report the latest group pose and frame when they differ.
+pose is shown in a separate view on its own source RGB-D frame; the direct fit
+keeps its own source frame. The diagnostics report both frame IDs and provenance.
 A fresh rig-demo
 benchmark entry must point to the newly prepared evidence; changing code while
 scoring the old directory cannot change its results.
