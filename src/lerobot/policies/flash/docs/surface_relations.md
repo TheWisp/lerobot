@@ -1,6 +1,10 @@
 # FLASH: demo extraction and interaction editing
 
-Status: proposed
+Status: superseded by [architecture.md](architecture.md)
+
+These are historical editor mockups and design exploration. The architecture
+contains the current contract; screenshots here are neither implemented behavior
+nor a second specification.
 
 **Teach through a timeline of keyframes and editable surface relationships.**
 Review the extracted demonstration and test its adaptations in the same 3D scene.

@@ -1,5 +1,9 @@
 # Tracking evidence used by FLASH
 
+This is an audit across recorded revisions, not a second design or a live
+performance claim. The [implementation map](../README.md) names the current
+route; code determines behavior after the audit's revision.
+
 The runnable FLASH path and the research adapters have different contracts.
 The [surface tracker reference](surface_tracking.md) describes the shared
 SAM3/UFM/depth backend used by the camera debugger and available to demo

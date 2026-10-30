@@ -1,6 +1,10 @@
 # Visible surface tracking benchmark
 
-Status: protocol in progress. The harness, ten point frontends, six labelled public development clips, three exact-motion controls, supplied-query growth and nested-budget studies, two frozen same-dataset holdouts, an unlabelled real-sensor DexYCB stress clip, two labelled synthetic LSFOdyssey RGB-D clips, a common timed rigid fit, three local unlabelled moving-object comparisons, and paced 30 Hz consumer probes with cached and live SAM3 masks are documented in the [implementation and evidence](../../../../../docs/proofs/flash-visible-surface-benchmark/README.md). The remaining phases below are not yet claimed as complete.
+This is a research protocol and result index, not the FLASH system design or a
+decision to replace the current tracker. The [architecture](architecture.md)
+holds the intended interface; measured results belong in the linked proofs.
+
+The harness, ten point frontends, six labelled public development clips, three exact-motion controls, supplied-query growth and nested-budget studies, two frozen same-dataset holdouts, an unlabelled real-sensor DexYCB stress clip, two labelled synthetic LSFOdyssey RGB-D clips, a common timed rigid fit, three local unlabelled moving-object comparisons, and paced 30 Hz consumer probes with cached and live SAM3 masks are documented in the [implementation and evidence](../../../../../docs/proofs/flash-visible-surface-benchmark/README.md). The remaining phases below are not yet claimed as complete.
 
 FLASH needs points that remain attached to the same physical surface as an object moves. Dots staying inside a segmentation mask, a smooth gizmo, or a high inference FPS do not establish this. The comparison must identify point drift, distinguish it from depth and fitting errors, and measure how quickly usable updates reach the consumer.
 

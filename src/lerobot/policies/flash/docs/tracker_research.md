@@ -1,6 +1,13 @@
 # Model free tracking for FLASH
 
-Research reviewed on 2026-10-19. This is a component selection proposal, not a new tracker benchmark. The local host reports an RTX 5090 with 32 GB of GPU memory; published results on other hardware are not local performance estimates.
+This is a dated research survey, not the current tracker selection or system
+design. See [architecture.md](architecture.md) for the intended interface and
+[README.md](../README.md) for what is implemented.
+
+Research reviewed on 2026-10-19. This records the component selection proposal
+at that time; it is not a new tracker benchmark. The local host reported an RTX
+5090 with 32 GB of GPU memory; published results on other hardware are not local
+performance estimates.
 
 **Recommendation:** retain current upstream Point2Pose and the sealed local configuration as distinct complete-system baselines. Compare BundleSDF for geometric tracking accuracy. For a new tracker, evaluate a shared causal point frontend, beginning with TAPNext++, together with measured RGB-D, persistent partial object maps and explicit object/environment relationships. Compare SAM2.1 against SAM3.1 for segmentation and recovery. Treat VGGT-family inference and generated shape as optional supporting evidence until their incremental benefit is measured.
 

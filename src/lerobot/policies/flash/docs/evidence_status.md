@@ -1,6 +1,8 @@
 # FLASH evidence from recorded data
 
-Audited 2026-10-20. This distinguishes preparation, offline pose replay,
+This is a dated evidence record, not the current system design or an assertion
+that the newest code reproduces every result. The audit began 2026-10-20 and
+later entries carry their own dates. It distinguishes preparation, offline pose replay,
 physical execution and independently verified task success. The local datasets
 listed here are not in git.
 

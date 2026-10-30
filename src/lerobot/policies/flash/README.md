@@ -1,8 +1,53 @@
-# FLASH implementation status
+# FLASH: current implementation
 
-For the live camera tracker, read [RGB-D surface tracking](docs/surface_tracking.md):
-its frame-by-frame mechanism, fixed reference, acceptance rules, shared consumers,
-configuration and debugging views.
+This is the implementation map. The [architecture](docs/architecture.md) is
+the current proposed design; it does not claim every feature is built.
+[Surface tracking](docs/surface_tracking.md), [pose flow](docs/pose_flow.md)
+and [attachment policy](docs/attachment_policy.md) explain implemented paths.
+The [benchmark](../../../../benchmarks/FLASH_TRACKING.md) and
+[dated proofs](../../../../docs/proofs/flash-contact-observation/README.md)
+record measurements. Older [rollout evidence](docs/evidence_status.md),
+[tracker research](docs/tracker_research.md) and
+[editor mockups](docs/surface_relations.md) are historical material.
+
+When a new experiment changes our conclusion, append its measurements to the
+relevant proof and revise the architecture or this implementation map only where
+the conclusion changes. Do not create another summary document for each round.
+
+## Perception at a glance
+
+The following is a code audit through `b41ab` (2026-10-29). It describes the
+surface-backend route; a prepared bundle can instead select the older appearance
+backend. Replay displays recorded results rather than silently rerunning a new
+tracker.
+
+```text
+Aligned RGB-D frame → SAM3 mask → measured 3D surface
+                               ↘ neighboring-image matches propose motion
+Saved object surface + proposed motion → fit to current depth and outline
+                                      → accepted/rejected visual pose
+                                      → optional scene-group point prediction
+                                      → optional gripper attachment prediction
+                                      → one timestamped pose decision
+                                      → keyframe policy and separate robot loop
+```
+
+The GUI data overlay and FLASH use the same SAM3 adapter. Detection seeds a
+text-named object and retries after the tracker reports loss; the periodic
+memory reset copies the current mask. A confident wrong mask can therefore
+persist. An optional detector check can re-seed a confidently overlapping
+text-named mask from the same frame; demo processing checks more often than
+Test, whose perception process is separate from robot control. It is off by
+default until pose quality is established, because improved mask overlap alone
+does not establish a better manipulation pose. A clicked object's name cannot
+independently re-detect it. The surface backend keeps the first partial
+reference fixed: image matches propose motion, while depth and projected
+outline choose the final fit. Good overlap
+does not certify the hidden side or the object's full orientation. Scene-group
+and gripper estimates are predictions with separate provenance; they do not
+turn missing image evidence into an observation. Demo extraction and Test share
+the perception components, but may run on different frame schedules; neither
+model inference nor an evidence wait belongs in the fixed-rate robot loop.
 
 FLASH lives at **Run → FLASH**. The Run panel inspects a regular local LeRobot
 dataset episode and discovers spatial skill annotations and prepared references
@@ -463,11 +508,12 @@ The [recorded-evidence audit](docs/evidence_status.md) separates demo extraction
 offline pose checks, visually successful sealed-prototype runs and the
 interrupted physical trials of this redesign.
 
-The next architecture milestone is the [scene-estimator contract](docs/architecture.md#one-scene-estimator-several-evidence-sources), independent of which tracker is best on a particular view. The current code has one publisher when causal tracking is enabled, but it still treats a backend's candidate `PoseEstimate` as an accepted six-axis observation. In particular, the RGB-D backend keeps its own previous candidate for shape-continuity checks, and the scene service has no general rule for comparing a new candidate with visible depth, point motion, a group prediction and unresolved symmetry at the same source time. Candidate dispositions are recorded. Delayed direct poses within retained history are replayed in source order in a bounded shadow calculation, but this is not yet a full event replay across all evidence types.
+The [scene-estimator contract](docs/architecture.md#one-scene-estimator-several-evidence-sources) is not fully implemented. The current code has one publisher when causal tracking is enabled, but it still treats a backend's candidate `PoseEstimate` as an accepted six-axis observation. In particular, the RGB-D backend keeps its own previous candidate for shape-continuity checks, and the scene service has no general rule for comparing a new candidate with visible depth, point motion, a group prediction and unresolved symmetry at the same source time. Candidate dispositions are recorded. Delayed direct poses within retained history are replayed in source order in a bounded shadow calculation, but this is not yet a full event replay across all evidence types.
 
-Implementation should proceed in this order:
+The [architecture](docs/architecture.md) defines the intended scene-estimator
+contract. This implementation map describes the present gap without defining
+a second roadmap.
 
-1. Introduce typed source-frame evidence for identity, visible geometry, relative motion and relationship hypotheses. Allow a producer to abstain or constrain only an observable subspace; retain source/calibration/reference versions and raw support.
-2. Move candidate acceptance and event-time replay into the scene-estimator owner. Keep a bounded event history, compare proposals to the state at their original frame, replay later measurements as well as motion, publish one versioned belief, and record each decision. Source-order replay of retained direct poses is implemented; other evidence and conflicting alternatives still need this treatment. Backends must not maintain a private notion of what the scene accepted.
-3. Make the policy check the accepted belief at its contact points against the active interval's requirements. Unknown or conflicting dimensions must lead to a declared observation/recovery choice, not a fabricated pose or a model-name-specific override.
-4. Run the same recorded disagreement, occlusion, moved-support and held-slip cases against alternate backends before another physical insertion claim. Report both pose error and source-to-decision age; a better mask alone is insufficient.
+The [tracking benchmark](../../../../benchmarks/FLASH_TRACKING.md) scores saved
+scene evidence without changing the perception path. Its baseline uses supplied
+masks and does not measure success on the rig's own demonstrations.

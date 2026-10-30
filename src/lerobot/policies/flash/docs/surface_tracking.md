@@ -2,7 +2,9 @@
 
 This is the implementation reference for `vision_pipeline.backend = "surface"`,
 including the **Run → FLASH → Live tracking** camera debugger. The mechanism is
-verified against revision `68db02b2d`. The broader
+originally verified against revision `68db02b2d`; the
+[current pipeline map](../README.md#perception-at-a-glance) covers `b41ab` and its known
+failure mechanisms. The broader
 [FLASH architecture](architecture.md) describes capabilities beyond this backend.
 
 **The tracker uses RGB matching to propose how an object moved, then corrects
@@ -43,6 +45,13 @@ A text prompt or click selects an instance through the SAM3 adapter. The mask
 is an estimate of object membership, not a certificate that every enclosed
 pixel belongs to that object. Selection in the debugger starts a new reference;
 clicks are bound to the exact frozen image, not a later preview frame.
+
+The adapter propagates masks using video memory. Text detection runs on seeding
+and low-score recovery; clicked objects are not re-detected by their names.
+The periodic memory rebuild seeds from the existing confident mask, so it does
+not independently repair a confident error. This differs from the full SAM3
+paper's detection-based corrections and delayed track confirmation. Neither
+causal propagation nor persistence makes every mask pixel reliable depth.
 
 For a pixel `(u, v)` with measured depth `z`, calibrated intrinsics give:
 

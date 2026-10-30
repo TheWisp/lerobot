@@ -1,6 +1,11 @@
 # Held-object pose under occlusion: evidence and next experiment
 
-Audited 2026-10-20. This is a plan for the shared object estimator in
+Status: superseded by [architecture.md](architecture.md)
+
+This is a dated investigation of the October attempts. Its measurements remain
+historical evidence; its proposed sequence does not define the current system.
+
+Audited 2026-10-20. This was a plan for the shared object estimator in
 [the FLASH architecture](architecture.md#common-object-estimation-and-relationships),
 not a dowel-specific controller rule. The local recordings cited here are
 ordinary LeRobot episodes under

@@ -2,15 +2,31 @@
 
 Status: proposed
 
-The [implementation reference](../README.md) describes what currently runs;
-this document defines the intended contracts. The
-[RGB-D surface tracker reference](surface_tracking.md) describes the implemented
-SAM3/UFM/depth mechanism and its limits. The first recorded RGB-D matcher
-result and its limits are in [the replay note](rgbd_replay.md).
+This is the single current FLASH system design. The [implementation map](../README.md)
+describes what runs; dated results belong in [proofs](../../../../../docs/proofs/README.md).
+Neither a research result nor a mockup silently changes the contract here.
 
 FLASH is imitation learning with an explicit 3D representation of objects, relationships and actions. Its initial form performs direct imitation: retain how a demonstration accomplishes an interaction, and adapt the motion to the live scene. Teaching, testing and collecting robot data should be one workflow: record an interaction, try it in a changed scene, intervene when needed, and retain the whole experience. The sealed prototype demonstrated useful spatial adaptation, but its uncertain object estimates, execution rules and recording paths became entangled. More demonstrations need to improve what the robot can do, while producing ordinary LeRobot data augmented with 3D information for future learned models.
 
 **Proposal.** Represent a skill with keyframes that specify important spatial relationships, intervals that specify how to move between them, and milestones that check the result. Grasp and placement intervals preserve the demonstrated local motion and timing; transport intervals interpolate or plan between adapted keyframes at a comparable speed, taking longer when the path is longer. A shared perception service estimates objects and their relationships; the FLASH policy continuously adapts future motion and manages progress, exceptions and recovery. LeRobot owns hardware, action scheduling, recording and human takeover. Additional demonstrations enrich reference views, execution alternatives and estimates of task variation. Each of these contributions is evaluated separately.
+
+```text
+Ordinary LeRobot demo + editable keyframes/intervals/milestones
+            ↓
+Shared perception: measured RGB-D → object evidence → scene estimate
+                                           ↑ group/gripper predictions when supported
+            ↓
+Policy: adapt relative goals, verify progress, recover or report failure
+            ↓
+Fixed-rate LeRobot robot loop (30 Hz rig target) → ordinary rollout dataset + evidence
+            ↓
+Same scene/timeline view for Demo/Edit, Test and Replay
+```
+
+The perception worker can be slower than the robot loop. Every estimate and
+decision carries its source time; a predicted pose is never labelled as a new
+measurement. The diagram is the intended contract, not a claim that every part
+is implemented.
 
 ## Scope
 
@@ -130,7 +146,7 @@ Keyframes encode what matters and relative to which entity. A keyframe may carry
 
 Each interval declares its motion source, timing mode, recorded robot/gripper actions, continuous constraints, entry/completion milestones, unknown-evidence policy and permitted recovery transitions. Demonstrated intervals preserve local timing and style; generated connections use a distance-dependent duration with a reference speed derived from the selected demo interval or explicitly chosen by the operator. The skill stores the source of that speed. Human annotation selects keyframes, boundaries and modes. Optional labels such as grasp, push or place do not select a motion mode, reference participant or progress transition. A demonstration need not contain a grasp or release. ([R4](#r4), [R5](#r5), [R7](#r7).)
 
-Interaction permissions apply equally to robot-object and object-object relationships. A changing contact, such as pushing or sliding, does not establish rigid attachment. Grasp state is a separate estimator condition that may enable gripper-based pose fallback when vision is unusable; trustworthy visual evidence supplies corrections. It cannot substitute for timeline annotations or override visual measurements merely because the gripper was commanded closed. Any supported relationship can constrain planning, with its actual motion and uncertainty preserved. The [timeline extraction contract](surface_relations.md#demo-extraction-from-the-timeline) defines the prepared geometry, evidence and annotations independently of named task stages. ([R2](#r2), [R4](#r4), [R6](#r6).)
+Interaction permissions apply equally to robot-object and object-object relationships. A changing contact, such as pushing or sliding, does not establish rigid attachment. Grasp state is a separate estimator condition that may enable gripper-based pose fallback when vision is unusable; trustworthy visual evidence supplies corrections. It cannot substitute for timeline annotations or override visual measurements merely because the gripper was commanded closed. Any supported relationship can constrain planning, with its actual motion and uncertainty preserved. Extraction stores measured object surfaces and their source frames, the annotated keyframe relations, and the motion and timing of each interval. These records do not require named task stages. ([R2](#r2), [R4](#r4), [R6](#r6).)
 
 For example, transporting an object may require an upright orientation while permitting translation to change. Insertion may require a functional point and an axis to align with a target opening while leaving axial rotation free. An intermediate waypoint can be a soft preference. Calling it a clearance waypoint does not establish collision avoidance. No behavior depends on an object's name. ([C1](#c1), [C2](#c2).)
 
@@ -154,9 +170,7 @@ must include both the saved pose and its supporting observation.
 
 The perception service has three replaceable functions: associate objects across observations/episodes, estimate motion within a recording, and check/refine geometry against RGB-D. Point2Pose, segmentation and motion groups are candidate implementations rather than authorities baked into the controller. Cached demo results include pipeline, calibration and reference versions. ([O1](#o1), [O2](#o2), [R6](#r6).)
 
-The [tracker research and selection proposal](tracker_research.md) compares complete pose trackers with SAM, causal point tracking and VGGT-family components. Model choices remain replaceable behind these functions; their evaluation includes contact accuracy and result age, not segmentation quality alone.
-
-The [held-pose evidence plan](held_pose_plan.md) audits the recent physical attempts and specifies the next partial-observation benchmark, fusion rules and trade-offs. It is an implementation and evaluation sequence for the shared estimator below, not an additional held-object tracker.
+The dated [tracker research](tracker_research.md) compares complete pose trackers with SAM, causal point tracking and VGGT-family components. Model choices remain replaceable behind these functions; their evaluation includes contact accuracy and result age, not segmentation quality alone. The [held-pose experiments](../../../../../docs/proofs/flash-held-trial-holdout/README.md) record why partial observation and gripper prediction must remain distinct evidence sources.
 
 #### One scene estimator, several evidence sources
 
@@ -286,12 +300,12 @@ The estimator retains a full pose hypothesis for prediction, surface validation 
 
 Object symmetry and task freedom are distinct inputs to the same optimization. Object symmetry describes indistinguishable or geometrically equivalent states, including an axis and optional end exchange. Task freedom states which changes preserve the interaction. A cylindrical object's two ends need not be interchangeable for every task. The policy evaluates allowed combinations for reachability, continuity, collision constraints and observation quality; a changed coordinate-frame hypothesis must transform the whole relation consistently.
 
-The [surface relationship proposal](surface_relations.md) refines this design
-around persistent object-relative regions and demonstrated relationships.
 Permitted contact sliding is established by observed local geometry and
-annotation; keyframes validate its continuing consequences. The proposal
-replaces the need for object-specific axis and end-exchange planning rules
-while retaining the distinction between visual ambiguity and task permission.
+annotation; a point-centered turn and sliding over a marked surface region are
+the initial authoring tools. A permission persists through its relationship's
+lifetime, and later keyframes check its consequences. The policy must still
+distinguish a visually ambiguous fit from an operator-permitted adaptation;
+geometry alone cannot grant permission. ([R4](#r4), [R7](#r7).)
 
 #### Interval timing
 
@@ -414,7 +428,9 @@ A future learned spatial action module can consume the explicit 3D data directly
 
 ### Inspection and evaluation
 
-The viewer shows raw RGB/depth, segmentation, correspondences, per-source pose proposals, the accepted estimate, predicted versus observed dimensions, relationship assumptions, active constraints, available plans and commanded/measured motion. Selecting a rejected update shows its input timestamp and the rejection reason. Demo/Edit, Test and Replay use the same contextual RGB-D scene renderer, overlay controls and timeline layout. Replay is exactly the Test view with recorded input and a playback clock; it cannot send robot commands. The [shared scene-view contract](surface_relations.md#one-scene-view-for-demoedit-test-and-replay) specifies keyframe/rule authoring, matched surfaces, optional overlays and source-time alignment. Deployment is a separate future workflow. Future explicit promotion of a replay to a demo adds authoring annotations while preserving the original recording, outcome and provenance. Overlay visibility is independent of policy behavior and recording. Motion layers distinguish permitted placements, demonstrated motion and published robot plans; a missing extracted trajectory cannot be replaced with an invented path. This is part of the data workflow. ([R2](#r2), [R3](#r3), [R9](#r9).)
+The viewer shows raw RGB/depth, segmentation, correspondences, per-source pose proposals, the accepted estimate, predicted versus observed dimensions, relationship assumptions, active constraints, available plans and commanded/measured motion. Selecting a rejected update shows its input timestamp and the rejection reason. Demo/Edit, Test and Replay use the same contextual RGB-D scene renderer, overlay controls and timeline layout. Replay is exactly the Test view with recorded input and a playback clock; it cannot send robot commands. Deployment is a separate future workflow. Future explicit promotion of a replay to a demo adds authoring annotations while preserving the original recording, outcome and provenance. Overlay visibility is independent of policy behavior and recording. Motion layers distinguish permitted placements, demonstrated motion and published robot plans; a missing extracted trajectory cannot be replaced with an invented path. This is part of the data workflow. ([R2](#r2), [R3](#r3), [R9](#r9).)
+
+The scene keeps this frame's measured surface distinct from the estimated accumulated surface. The measured patch remains sharp over softened surroundings; unknown geometry remains open. Orbiting hides any flat RGB backdrop that could look like 3D geometry, and **Camera** restores the capture view. Keyframes and allowed point turns or surface slides are edited directly in this scene; playback stays below it. A permitted region, a candidate pose, and a computed motion path use different visual layers. Vision, group and gripper proposals can be revealed separately, each with its source time and acceptance decision. Selecting a group prediction reveals its supporting points; selecting a gripper prediction reveals the attachment link and its predicted object surface. Hover isolates a source without altering the controller. A missing recorded layer says **Not recorded**, while recomputed evidence is labelled **Recomputed**. The [actual-scene mockup](assets/surface_relations/scene_editor.png) and [adaptation tools](assets/surface_relations/adaptation_tools.png) illustrate this contract; they are not evidence that these controls already work. ([R2](#r2), [R4](#r4), [R9](#r9).)
 
 Validation separates questions that the prototype conflated:
 
