@@ -11,12 +11,14 @@ import sys
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import asdict
 from pathlib import Path
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from lerobot.policies.flash.causal_service import CausalTrackingConfig, default_causal_tracking_config
 from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig
 
 router = APIRouter(prefix="/api/run/flash/tracking", tags=["flash-tracking"])
@@ -32,6 +34,8 @@ class TrackingStart(BaseModel):
     fps: int = Field(default=30, gt=0)
     preview_fps: int = Field(default=10, gt=0)
     vision_pipeline: VisionPipelineConfig = Field(default_factory=VisionPipelineConfig)
+    group_fallback: bool = False
+    causal_tracking: dict = Field(default_factory=lambda: asdict(default_causal_tracking_config()))
 
     @model_validator(mode="before")
     @classmethod
@@ -54,6 +58,8 @@ class TrackingStart(BaseModel):
                 values["vision_pipeline"] = VisionPipelineConfig.from_dict(values["vision_pipeline"])
             except TypeError as exc:
                 raise ValueError(str(exc)) from exc
+        if "causal_tracking" in values:
+            CausalTrackingConfig.from_config(values["causal_tracking"])
         return values
 
 

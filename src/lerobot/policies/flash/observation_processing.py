@@ -24,7 +24,7 @@ import numpy as np
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
 from .appearance import Sam3MaskSource
-from .causal_service import CausalTrackingConfig
+from .causal_service import CausalTrackingConfig, default_causal_tracking_config
 from .geometry import transform
 from .observation_dataset import (
     CameraSample,
@@ -49,15 +49,7 @@ def default_processing_config() -> dict:
     """
     return {
         "vision_pipeline": VisionPipelineConfig().to_dict(),
-        "causal_tracking": asdict(
-            CausalTrackingConfig(
-                history_frames=120,
-                queue_frames=60,
-                min_inliers=12,
-                max_frame_gap_s=0.1,
-                fit_threshold_m=0.005,
-            )
-        ),
+        "causal_tracking": asdict(default_causal_tracking_config()),
     }
 
 

@@ -33,6 +33,8 @@ function flashTrackingForm() {
         </details>
         <label><input type="checkbox" id="flash-detection-correction" onchange="flashTrackingCorrectionChanged()">Correct name-seeded masks with fresh detections</label>
         <p class="form-hint">Checks run in the perception worker, away from robot control. Click-seeded objects are never re-detected from their labels.</p>
+        <label><input type="checkbox" id="flash-group-fallback" onchange="flashTrackingGroupChanged()">Use scene/group pose fallback</label>
+        <p class="form-hint">Runs the same scene estimator as demo processing and Test on every camera frame. Apply by opening or reopening the camera. No gripper prediction is available in this camera-only view.</p>
         <details><summary>Camera & tracking parameters</summary><p class="form-hint">Applied when opening the camera. Shared with demo extraction and live inference.</p><textarea id="flash-tracking-config" rows="15" spellcheck="false" onchange="flashTrackingSamplingSync()"></textarea></details>
         <button type="button" class="btn-small secondary" onclick="flashTrackingSave()">Save diagnostic snapshot</button>
         <label for="flash-trace-seconds">RGB-D trace length (seconds)</label>
@@ -50,6 +52,17 @@ function flashTrackingSamplingSync() {
             budget:p.shape.max_fit_points};
         for (const [key,value] of Object.entries(values)) document.getElementById('flash-sampling-' + key).value = value ?? '';
         document.getElementById('flash-detection-correction').checked = !!p.detection_correction?.enabled;
+        document.getElementById('flash-group-fallback').checked = !!JSON.parse(document.getElementById('flash-tracking-config').value).group_fallback;
+    } catch (error) { flashTrackingError(error); }
+}
+
+function flashTrackingGroupChanged() {
+    try {
+        const field = document.getElementById('flash-tracking-config'), config = JSON.parse(field.value);
+        config.group_fallback = document.getElementById('flash-group-fallback').checked;
+        field.value = JSON.stringify(config, null, 2);
+        if (flashTrackingSnapshot?.running)
+            document.getElementById('flash-tracking-message').textContent = 'Close and reopen the camera to apply the group setting';
     } catch (error) { flashTrackingError(error); }
 }
 
@@ -104,9 +117,9 @@ async function showFlashTracking() {
                 <figure><figcaption id="flash-surface-caption">Fitted poses · source image</figcaption><canvas id="flash-surface-estimate" aria-label="Fitted poses and frozen image for object selection"></canvas></figure>
                 <figure><figcaption id="flash-surface-local-caption">Object close-up · select an object to zoom</figcaption><canvas id="flash-surface-local"></canvas></figure>
                 <figure><figcaption id="flash-surface-cloud-caption">3D object view · left drag orbit · right drag pan · scroll zoom</figcaption><canvas id="flash-surface-cloud"></canvas></figure>
-                <figure class="flash-surface-diagnostics"><figcaption id="flash-surface-diagnostics-caption">Fit diagnostics</figcaption><p id="flash-surface-metrics"></p><p>Surface agreement is not calibrated confidence. This view uses vision only.</p></figure>
+                <figure class="flash-surface-diagnostics"><figcaption id="flash-surface-diagnostics-caption">Fit diagnostics</figcaption><p id="flash-surface-metrics"></p><p>Surface agreement is not calibrated confidence. Scene/group prediction is labeled separately from a direct observation.</p></figure>
             </div>
-            <div class="flash-surface-legend"><label><input type="checkbox" id="flash-surface-mask" checked onchange="flashTrackingRender()">Cyan: observed mask / depth</label><label><input type="checkbox" id="flash-surface-reference" checked onchange="flashTrackingRender()">White: fitted reference</label><label><input type="checkbox" id="flash-surface-axes" checked onchange="flashTrackingRender()">A / B / C and axes</label><label><input type="checkbox" id="flash-surface-follow" onchange="flashTrackingDrawCloud()">Follow scene pose</label><button type="button" onclick="flashTrackingCloudViewer?.reset()">Reset 3D view</button></div>
+            <div class="flash-surface-legend"><label><input type="checkbox" id="flash-surface-mask" checked onchange="flashTrackingRender()">Cyan: observed mask / depth</label><label><input type="checkbox" id="flash-surface-reference" checked onchange="flashTrackingRender()">White: direct fit · amber: scene/group choice</label><label><input type="checkbox" id="flash-surface-axes" checked onchange="flashTrackingRender()">A / B / C and axes</label><label><input type="checkbox" id="flash-surface-follow" onchange="flashTrackingDrawCloud()">Follow scene pose</label><button type="button" onclick="flashTrackingCloudViewer?.reset()">Reset 3D view</button></div>
             <p class="form-hint">A / B / C and the axes stay attached to the initial partial surface. They do not mark the object's center of mass.</p>`;
         document.getElementById('run-main').prepend(view);
         document.getElementById('flash-surface-estimate').onclick = event => {
@@ -219,7 +232,7 @@ function flashTrackingObjectCrop(estimate) {
     const frame = estimate.frame;
     if (!frame) return null;
     const observed = (estimate.contours || []).flat();
-    const points = observed.length ? observed : (estimate.reference_px || []);
+    const points = observed.length ? observed : (estimate.group_reference_px || estimate.reference_px || []);
     let left = Infinity, right = -Infinity, top = Infinity, bottom = -Infinity;
     for (const [x,y] of points) {
         if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
@@ -251,8 +264,15 @@ function flashTrackingDrawEstimate(ctx, estimate) {
     if (visible('flash-surface-reference')) {
         ctx.fillStyle = 'white';
         for (const [x,y] of estimate.reference_px || []) ctx.fillRect(x-1/scale,y-1/scale,2/scale,2/scale);
+        if (estimate.group_current_frame && estimate.group_reference_px) {
+            ctx.fillStyle = '#ffbf4d';
+            for (const [x,y] of estimate.group_reference_px) ctx.fillRect(x-1.5/scale,y-1.5/scale,3/scale,3/scale);
+        }
     }
-    if (visible('flash-surface-axes') && estimate.anchors_px) flashTrackingDrawAxes(ctx, estimate.anchors_px, estimate.axes_px);
+    if (visible('flash-surface-axes') && (estimate.anchors_px || estimate.group_anchors_px))
+        flashTrackingDrawAxes(ctx,
+            estimate.group_current_frame && estimate.group_anchors_px || estimate.anchors_px,
+            estimate.group_current_frame && estimate.group_axes_px || estimate.axes_px);
 }
 
 function flashTrackingFocusedEstimate() {
@@ -266,7 +286,7 @@ function flashTrackingFocusedEstimate() {
 
 function flashTrackingRenderObjectList(tracks) {
     const list = document.getElementById('flash-tracked-objects');
-    const signature = JSON.stringify(tracks.map(({role,name,status,accepted}) => [role,name,status,accepted]));
+    const signature = JSON.stringify(tracks.map(({role,name,status,accepted,group_evidence,group_estimator}) => [role,name,status,accepted,group_evidence,group_estimator]));
     if (list.dataset.signature !== signature) {
         list.replaceChildren();
         for (const track of tracks) {
@@ -274,7 +294,8 @@ function flashTrackingRenderObjectList(tracks) {
             button.type = 'button'; button.dataset.role = track.role;
             const label = document.createElement('span'), status = document.createElement('small');
             label.textContent = track.name;
-            status.textContent = track.status === 'reference' ? 'reference' :
+            status.textContent = track.group_evidence === 'predicted' ? `predicted · ${track.group_estimator}` :
+                track.status === 'reference' ? 'reference' :
                 track.accepted === true ? 'fit passes' :
                 track.status === 'fitted' ? 'candidate' : (track.status || 'initializing');
             button.append(label,status);
@@ -373,7 +394,8 @@ function flashTrackingRender() {
     document.getElementById('flash-surface-diagnostics-caption').textContent = objects.length ? `Fit diagnostics · ${estimate.object_name}` : 'Fit diagnostics';
     const d = estimate.diagnostics || {}, t = estimate.timings || {};
     const fmt = value => Number.isFinite(value) ? value.toFixed(1) : '—';
-    document.getElementById('flash-surface-metrics').textContent = `Pose proposal: ${estimate.accepted === true ? 'accepted' : 'unverified candidate'} · Camera ${fmt(data.preview?.capture_fps)} fps · Processing ${fmt(t.processed_fps)} fps · SAM ${fmt(t.mask_ms)} ms · RGB match ${fmt(d.match_ms)} ms · Surface fit ${fmt(d.fit_ms)} ms · Prepare ${fmt(d.preprocess_ms)} ms\nSurface gap median / p90: ${fmt(d.surface_median_mm)} / ${fmt(d.surface_p90_mm)} mm · ${d.surface_points ?? '—'} measured samples at ${fmt(d.sample_spacing_mm)} mm · Fit samples ${d.fit_reference_points ?? '—'} / ${d.fit_target_points ?? '—'} · ${d.inliers ?? '—'} RGB-D matches\nRotation this update: RGB ${fmt(d.rgb_rotation_deg)}° · surface correction ${fmt(d.surface_correction_deg)}° · final ${fmt(d.final_rotation_deg)}°\nDepth pixels withheld: boundary ${d.boundary_count ?? '—'}, discontinuity ${d.edge_count ?? '—'} · Fixed reference frame ${d.reference_frame_id ?? '—'}`;
+    const groupStatus = estimate.group_evidence ? `\nScene choice: ${estimate.group_evidence} · ${estimate.group_estimator || 'no pose'} · source frame ${estimate.group_frame_id ?? '—'}${estimate.group_current_frame ? '' : ' (different from displayed fit frame)'}` : '';
+    document.getElementById('flash-surface-metrics').textContent = `Pose proposal: ${estimate.accepted === true ? 'accepted' : 'unverified candidate'} · Camera ${fmt(data.preview?.capture_fps)} fps · Processing ${fmt(t.processed_fps)} fps · SAM ${fmt(t.mask_ms)} ms · RGB match ${fmt(d.match_ms)} ms · Surface fit ${fmt(d.fit_ms)} ms · Prepare ${fmt(d.preprocess_ms)} ms\nSurface gap median / p90: ${fmt(d.surface_median_mm)} / ${fmt(d.surface_p90_mm)} mm · ${d.surface_points ?? '—'} measured samples at ${fmt(d.sample_spacing_mm)} mm · Fit samples ${d.fit_reference_points ?? '—'} / ${d.fit_target_points ?? '—'} · ${d.inliers ?? '—'} RGB-D matches\nRotation this update: RGB ${fmt(d.rgb_rotation_deg)}° · surface correction ${fmt(d.surface_correction_deg)}° · final ${fmt(d.final_rotation_deg)}°\nDepth pixels withheld: boundary ${d.boundary_count ?? '—'}, discontinuity ${d.edge_count ?? '—'} · Fixed reference frame ${d.reference_frame_id ?? '—'}${groupStatus}`;
     flashTrackingDrawCloud();
 }
 
@@ -392,7 +414,14 @@ function flashTrackingDrawAxes(ctx, anchors, axes) {
 
 function flashTrackingDrawCloud() {
     if (!flashTrackingCloudViewer) return;
-    const e = flashTrackingFocusedEstimate();
+    const measured = flashTrackingFocusedEstimate();
+    const e = measured.group_current_frame && measured.group_reference_m ? {
+        ...measured,
+        reference_m: measured.group_reference_m,
+        anchors_m: measured.group_anchors_m,
+        axes_m: measured.group_axes_m,
+        camera_from_reference: measured.group_camera_from_reference,
+    } : measured;
     if (!e.reference_m?.length || !e.camera_from_reference) {
         flashTrackingCloudViewer.update(null);
         return;

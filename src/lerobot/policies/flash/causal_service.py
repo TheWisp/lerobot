@@ -145,6 +145,21 @@ class CausalTrackingConfig:
             raise ValueError("invalid causal tracking configuration")
 
 
+def default_causal_tracking_config() -> CausalTrackingConfig:
+    """Prototype scene-estimator preset shared by demo processing and the debugger.
+
+    A prepared skill still stores its own resolved settings; live tests use
+    those settings rather than silently substituting this preset.
+    """
+    return CausalTrackingConfig(
+        history_frames=120,
+        queue_frames=60,
+        min_inliers=12,
+        max_frame_gap_s=0.1,
+        fit_threshold_m=0.005,
+    )
+
+
 class CausalPoseService:
     """Consume each camera frame, replaying delayed anchors on retained frames.
 

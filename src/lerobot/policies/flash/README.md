@@ -216,6 +216,17 @@ not use that translation to certify an orientation-dependent contact. The
 current insertion recording directly measures the ring centre near contact,
 but its ring orientation and carried dowel tip are not independently verified.
 
+The camera-only debugger now has an optional scene/group fallback using the
+same `CausalPoseService` as demo extraction and Test. When enabled, it forwards
+every captured frame to the scene worker and submits each slower surface result
+with its source frame, just as Test does. It displays direct fits and the
+scene-selected estimate with separate provenance; projected group points appear
+only on the matching camera frame. The debugger has no motor/gripper attachment
+and starts from a local clicked/named surface, not a prepared multi-view model.
+Its shared causal defaults come from `default_causal_tracking_config`, and the
+resolved setting is saved in a diagnostic trace. The fallback is off by default
+so a raw surface fit remains inspectable.
+
 The live trial constructs the configured vision backend through
 [`VisionBackendFactory`](vision_pipeline.py). When `causal_tracking` is configured, the
 scene estimator also uses frame-to-frame object and environment point motion;

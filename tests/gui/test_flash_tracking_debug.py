@@ -322,6 +322,13 @@ def test_debugger_exports_the_common_configuration_and_migrates_old_payloads():
     from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig
 
     assert VisionPipelineConfig.from_dict(saved["vision_pipeline"]) == request.vision_pipeline
+    from lerobot.policies.flash.observation_processing import default_processing_config
+
+    assert saved["causal_tracking"] == default_processing_config()["causal_tracking"]
+    assert saved["group_fallback"] is False
+    assert flash_tracking.TrackingStart(group_fallback=True).model_dump()["group_fallback"] is True
+    with pytest.raises(ValidationError, match="causal tracking keys differ"):
+        flash_tracking.TrackingStart(group_fallback=True, causal_tracking={"history_frames": 8})
     with pytest.raises(ValidationError):
         flash_tracking.TrackingStart(vision_pipeline={"unknown_setting": 1})
     with pytest.raises(ValidationError, match="only once"):
@@ -352,6 +359,29 @@ def test_live_detection_correction_toggle_reaches_the_worker_configuration(gui_p
     request = flash_tracking.TrackingStart.model_validate(submitted[0])
     assert request.vision_pipeline.detection_correction.enabled is True
     assert request.vision_pipeline.detection_correction.control(offline=False)["interval_frames"] == 60
+
+
+@pytest.mark.requires_playwright
+@pytest.mark.skipif(importlib.util.find_spec("playwright") is None, reason="Playwright not installed")
+def test_live_group_toggle_reaches_the_worker_configuration(gui_page):
+    page = gui_page
+    submitted = []
+    page.route("**/api/run/flash/tracking/state", lambda route: route.fulfill(json={"running": False}))
+    page.route(
+        "**/api/run/flash/tracking/start",
+        lambda route: (
+            submitted.append(route.request.post_data_json),
+            route.fulfill(json={"status": "starting"}),
+        ),
+    )
+    page.evaluate("switchTab('run'); selectWorkflow('flash')")
+    page.get_by_role("button", name="Live tracking · camera only →").click()
+    page.locator("#flash-group-fallback").check()
+    page.get_by_role("button", name="Open camera").click()
+    page.wait_for_function(
+        "() => document.getElementById('flash-tracking-message').textContent.includes('Opening')"
+    )
+    assert flash_tracking.TrackingStart.model_validate(submitted[0]).group_fallback is True
 
 
 @pytest.mark.requires_playwright

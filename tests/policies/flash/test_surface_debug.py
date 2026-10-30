@@ -8,10 +8,18 @@ import cv2
 import numpy as np
 import pytest
 
+from lerobot.policies.flash.causal_service import CausalTrackingConfig
 from lerobot.policies.flash.perception import RGBDFrame
+from lerobot.policies.flash.perception_step import PerceptionResult
 from lerobot.policies.flash.surface_observation import SurfaceObservationConfig, observation
 from lerobot.policies.flash.surface_tracking import SurfaceTrackingSession
-from lerobot.policies.flash.tracking_debug_worker import RGBDTrace, seed_frame
+from lerobot.policies.flash.tracking_debug_worker import (
+    DebugGroupFallback,
+    RGBDTrace,
+    group_display,
+    seed_frame,
+)
+from lerobot.policies.flash.trajectory import Evidence, PoseEstimate
 
 
 def frame(number):
@@ -38,6 +46,185 @@ def test_click_is_bound_to_frozen_image_not_newest_camera_frame():
         seed_frame({"point": [4, 5], "frame_id": 8}, None, latest)
     with pytest.raises(ValueError, match="outside"):
         seed_frame({"point": [11, 5], "frame_id": 8}, old, latest)
+
+
+def test_debugger_group_bridge_consumes_camera_frames_between_vision_results():
+    import time
+
+    image = np.random.default_rng(4).integers(0, 255, (96, 96), dtype=np.uint8)
+    frames = []
+    for index in range(3):
+        rgb = cv2.warpAffine(image, np.float32([[1, 0, 2 * index], [0, 1, 0]]), (96, 96))
+        frames.append(
+            RGBDFrame(
+                index,
+                np.repeat(rgb[:, :, None], 3, axis=2),
+                np.full((96, 96), 1000, np.uint16),
+                np.array([[100, 0, 48], [0, 100, 48], [0, 0, 1]], float),
+                0.001,
+                np.eye(4),
+                index / 30,
+                index / 30,
+                "camera-v1",
+            )
+        )
+    mask = np.zeros((96, 96), bool)
+    mask[20:76, 20:76] = True
+    direct = PoseEstimate(
+        "object",
+        np.eye(4),
+        0.0,
+        0.0,
+        Evidence.OBSERVED,
+        "object-v1",
+        (True,) * 3,
+        (True,) * 3,
+    )
+    result = PerceptionResult(
+        (direct,),
+        {},
+        0,
+        0.0,
+        "camera-v1",
+        {"object": mask},
+    )
+    bridge = DebugGroupFallback(CausalTrackingConfig(8, 8, 12, 0.1, 0.005))
+    try:
+        bridge.submit_result(frames[0], result)
+        for item in frames[1:]:
+            bridge.submit_frame(item)
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            pose = bridge.estimates().get("object")
+            if pose is not None and pose.source_frame_id == 2:
+                break
+            time.sleep(0.01)
+        assert bridge.service.error is None
+        assert bridge.service.frames == 3
+        assert pose.evidence == Evidence.PREDICTED
+        np.testing.assert_allclose(pose.pose[0, 3], 0.04, atol=0.005)
+    finally:
+        bridge.close()
+
+
+def test_debugger_group_bridge_keeps_moving_target_after_direct_loss(monkeypatch):
+    import time
+
+    import lerobot.policies.flash.tracking_debug_worker as debugger
+    from lerobot.policies.flash.scene_groups import SceneTracks
+
+    rng = np.random.default_rng(8)
+    points = rng.uniform((-0.08, -0.08, 0.98), (0.08, 0.08, 1.02), (48, 3))
+    pixels = np.column_stack((rng.integers(12, 84, len(points)), rng.integers(12, 84, len(points))))
+    base_time = time.perf_counter()
+    scene = [
+        SceneTracks(
+            index, base_time + index / 30, np.arange(len(points)), pixels, points + [index * 0.02, 0, 0]
+        )
+        for index in range(3)
+    ]
+    build = debugger.build_causal_pose_service
+
+    def with_scene(*args, **kwargs):
+        service = build(*args, **kwargs)
+        service.scene.update = lambda frame: scene[frame.frame_id]
+        return service
+
+    monkeypatch.setattr(debugger, "build_causal_pose_service", with_scene)
+    mask = np.zeros((96, 96), bool)
+    mask[pixels[:4, 1], pixels[:4, 0]] = True
+    bridge = DebugGroupFallback(CausalTrackingConfig(8, 8, 12, 0.1, 0.005))
+
+    def camera_frame(index):
+        return RGBDFrame(
+            index,
+            np.zeros((96, 96, 3), np.uint8),
+            np.full((96, 96), 1000, np.uint16),
+            np.array([[100, 0, 48], [0, 100, 48], [0, 0, 1]], float),
+            0.001,
+            np.eye(4),
+            base_time + index / 30,
+            base_time + index / 30,
+            "camera-v1",
+        )
+
+    def result(index):
+        pose = np.eye(4)
+        pose[0, 3] = index * 0.02
+        pose[2, 3] = 1.0
+        direct = PoseEstimate(
+            "target",
+            pose,
+            base_time + index / 30,
+            base_time + index / 30,
+            Evidence.OBSERVED,
+            "target-v1",
+            (True,) * 3,
+            (True,) * 3,
+        )
+        return PerceptionResult(
+            (direct,),
+            {},
+            index,
+            base_time + index / 30,
+            "camera-v1",
+            {"target": mask.copy()},
+        )
+
+    try:
+        bridge.submit_result(camera_frame(0), result(0))
+        bridge.submit_frame(camera_frame(1))
+        bridge.submit_result(camera_frame(1), result(1))
+        deadline = time.monotonic() + 2
+        while (
+            bridge.service.anchor_outcomes_by_role.get("target", {}).get("direct_accepted", 0) < 2
+            and time.monotonic() < deadline
+        ):
+            time.sleep(0.01)
+        bridge.submit_frame(camera_frame(2))
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            pose = bridge.estimates().get("target")
+            if pose is not None and pose.source_frame_id == 2:
+                break
+            time.sleep(0.01)
+        assert bridge.service.error is None
+        assert pose.estimator == "environment_group_motion"
+        np.testing.assert_allclose(pose.pose[:3, 3], [0.04, 0, 1], atol=0.005)
+    finally:
+        bridge.close()
+
+
+def test_group_projection_uses_saved_reference_when_direct_fit_is_lost():
+    source = frame(8)
+    source.intrinsics[:] = [[100, 0, 5], [0, 100, 4], [0, 0, 1]]
+    accepted = {
+        "accepted": True,
+        "camera_from_reference": np.eye(4).tolist(),
+        "camera_from_object": np.eye(4).tolist(),
+        "reference_m": [[0, 0, 1]],
+        "anchors_m": [[0, 0, 1]],
+        "axes_m": [[0.01, 0, 1]],
+    }
+    predicted = np.eye(4)
+    predicted[0, 3] = 0.02
+    pose = PoseEstimate(
+        "object",
+        predicted,
+        8.0,
+        8.0,
+        Evidence.PREDICTED,
+        "object-v1",
+        (True,) * 3,
+        (True,) * 3,
+        estimator="environment_group_motion",
+        source_frame_id=8,
+    )
+    missing = {"accepted": False, "reference_version": "object-v1"}
+    display = group_display(missing, pose, source, accepted)
+    assert display["group_estimator"] == "environment_group_motion"
+    np.testing.assert_allclose(display["group_reference_px"], [[7, 4]])
+    assert group_display(missing, pose, frame(9), accepted)["group_current_frame"] is False
 
 
 def test_diagnostic_trace_preserves_aligned_depth_mask_and_pose(tmp_path, monkeypatch):

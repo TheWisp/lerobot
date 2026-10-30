@@ -60,7 +60,7 @@ all three after their processes restart. Their **inputs and settings differ**:
 | YCB / Caryx benchmark rerun        | Supplied masks; first observed view is the local reference        | Yes                  | No                                                    |
 | Saved rig-demo rows in this report | Saved SAM3 masks and prepared reference from the older extraction | Yes, as saved        | Demo attachment interval, without live motor feedback |
 | Fresh demo preparation             | SAM3; prepared appearance and surface reference                   | Yes                  | Demo attachment interval, without live motor feedback |
-| Live tracking debugger             | SAM3; local reference made from the clicked frame                 | No                   | No                                                    |
+| Live tracking debugger             | SAM3; local reference made from the clicked/named frame           | Optional             | No                                                    |
 | Live FLASH run                     | SAM3; prepared appearance and surface reference                   | Yes                  | Yes, updated from motor and vision evidence           |
 
 The two saved rig-demo traces were prepared with pose-trace selection version 6;
@@ -76,8 +76,13 @@ candidate configuration; prepare a **new version** of the rig demo using that
 change and review its pose/mask replay; test the raw surface behavior in the live
 debugger with matching vision settings; then test a live FLASH attempt using the
 new prepared version. The live launcher rejects vision or scene settings that
-disagree with its prepared version. The debugger cannot validate group fallback
-or gripper attachment because it does not run those layers. A fresh rig-demo
+disagree with its prepared version. The debugger can exercise the same group
+estimator with **Use scene/group pose fallback** enabled before opening the
+camera: it forwards every camera frame and slower vision proposals. It has no
+motor-backed gripper attachment or prepared multi-view reference. The group
+overlay appears only when its source frame matches the displayed RGB-D frame;
+the diagnostics still report the latest group pose and frame when they differ.
+A fresh rig-demo
 benchmark entry must point to the newly prepared evidence; changing code while
 scoring the old directory cannot change its results.
 

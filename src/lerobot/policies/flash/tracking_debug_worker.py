@@ -16,14 +16,15 @@ import time
 import traceback
 from pathlib import Path
 from queue import Empty, Queue
-from threading import Event, Thread
+from threading import Event, Lock, Thread
 
 import cv2
 import numpy as np
 
 from .appearance import Sam3MaskSource
-from .perception import LatestRGBDFrameStore, ObjectReference, ReferenceSnippet, RGBDFrame
-from .perception_step import PerceptionPipeline, PerceptionRunner
+from .causal_service import CausalTrackingConfig, build_causal_pose_service
+from .perception import LatestPoseStore, LatestRGBDFrameStore, ObjectReference, ReferenceSnippet, RGBDFrame
+from .perception_step import PerceptionPipeline, PerceptionResult, PerceptionRunner
 from .surface_tracking import load_ufm
 from .vision_pipeline import VisionPipelineConfig, build_vision_backend
 
@@ -68,7 +69,17 @@ class RGBDTrace:
                 role: {
                     key: value
                     for key, value in detail.items()
-                    if key in ("status", "accepted", "camera_from_reference", "diagnostics")
+                    if key
+                    in (
+                        "status",
+                        "accepted",
+                        "camera_from_reference",
+                        "diagnostics",
+                        "group_evidence",
+                        "group_estimator",
+                        "group_frame_id",
+                        "group_pose",
+                    )
                 }
                 for role, detail in details.items()
             },
@@ -174,6 +185,100 @@ def replace_debug_pipeline(previous, config, source, matcher, frame):
     return pipeline, PerceptionRunner(pipeline)
 
 
+class DebugGroupFallback:
+    """The live scene estimator, fed every camera frame and delayed vision anchors."""
+
+    def __init__(self, config: CausalTrackingConfig):
+        self.config = config
+        self.store = LatestPoseStore()
+        self.service = None
+        self._lock = Lock()
+        self._last_frame_id = -1
+
+    def submit_frame(self, frame: RGBDFrame) -> None:
+        with self._lock:
+            if self.service is not None and frame.frame_id > self._last_frame_id:
+                self.service.submit_frame(frame)
+                self._last_frame_id = frame.frame_id
+
+    def submit_result(self, frame: RGBDFrame, result: PerceptionResult) -> None:
+        if self.service is None:
+            # The click/name reference is initialized by this very result.
+            # Seed in source order before the capture thread starts forwarding.
+            service = build_causal_pose_service(self.store, self.config)
+            service.process_offline(frame, result.estimates, result.masks, proposals=result.proposals)
+            service.start()
+            with self._lock:
+                self._last_frame_id = frame.frame_id
+                self.service = service
+        else:
+            self.service.submit_anchor(
+                frame.frame_id,
+                result.estimates,
+                result.masks,
+                source_time_s=result.source_time_s,
+                calibration_version=result.calibration_version,
+                proposals=result.proposals,
+            )
+        if self.service.error is not None:
+            raise RuntimeError("scene/group tracking failed") from self.service.error
+
+    def estimates(self) -> dict:
+        return self.store.snapshot()[1]
+
+    def close(self) -> None:
+        with self._lock:
+            service, self.service = self.service, None
+        if service is not None:
+            service.close()
+        self.store = LatestPoseStore()
+        self._last_frame_id = -1
+
+
+def group_display(detail: dict, estimate, frame: RGBDFrame, reference_detail: dict | None = None) -> dict:
+    """Expose scene choice and project it only on its own source RGB-D frame."""
+    if estimate is None:
+        return {"group_evidence": "unavailable"}
+    display = {
+        "group_evidence": estimate.evidence.value,
+        "group_estimator": estimate.estimator,
+        "group_frame_id": estimate.source_frame_id,
+        "group_pose": estimate.pose.tolist() if estimate.pose is not None else None,
+        "group_current_frame": estimate.source_frame_id == frame.frame_id,
+    }
+    if detail.get("reference_version") != estimate.reference_version:
+        return display
+    if not display["group_current_frame"] or estimate.pose is None:
+        return display
+    reference_detail = (
+        detail if detail.get("accepted") is True and "camera_from_reference" in detail else reference_detail
+    )
+    if reference_detail is None or "camera_from_object" not in reference_detail:
+        return display
+    direct_ref = np.asarray(reference_detail["camera_from_reference"], dtype=float)
+    direct_object = np.asarray(reference_detail["camera_from_object"], dtype=float)
+    reference_from_object = np.linalg.inv(direct_ref) @ direct_object
+    camera_from_reference = (
+        np.linalg.inv(frame.base_from_camera) @ estimate.pose @ np.linalg.inv(reference_from_object)
+    )
+    delta = camera_from_reference @ np.linalg.inv(direct_ref)
+    display["group_camera_from_reference"] = camera_from_reference.tolist()
+    for key in ("reference_m", "anchors_m", "axes_m"):
+        if key not in reference_detail:
+            continue
+        points = np.asarray(reference_detail[key], dtype=float)
+        if points.size == 0:
+            continue
+        moved = points @ delta[:3, :3].T + delta[:3, 3]
+        if not np.isfinite(moved).all() or np.any(moved[:, 2] <= 0):
+            continue
+        projected = moved @ frame.intrinsics.T
+        projected = projected[:, :2] / projected[:, 2:3]
+        display[f"group_{key}"] = moved.tolist()
+        display[f"group_{key.removesuffix('_m')}_px"] = projected.tolist()
+    return display
+
+
 def run(directory: Path, config: dict) -> None:
     import pyrealsense2 as rs
 
@@ -202,8 +307,14 @@ def run(directory: Path, config: dict) -> None:
     tracking = False
     tracked_names: dict[str, str] = {}
     last_objects: dict[str, dict] = {}
+    reference_details: dict[str, dict] = {}
     prepared_mask_ms: float | None = None
     trace: RGBDTrace | None = None
+    group = (
+        DebugGroupFallback(CausalTrackingConfig.from_config(config["causal_tracking"]))
+        if config.get("group_fallback")
+        else None
+    )
 
     def state(status, **kwargs):
         write_snapshot(
@@ -219,6 +330,8 @@ def run(directory: Path, config: dict) -> None:
                         "name": name,
                         "status": last_objects.get(role, {}).get("status"),
                         "accepted": last_objects.get(role, {}).get("accepted"),
+                        "group_evidence": last_objects.get(role, {}).get("group_evidence"),
+                        "group_estimator": last_objects.get(role, {}).get("group_estimator"),
                     }
                     for role, name in tracked_names.items()
                 ],
@@ -284,6 +397,8 @@ def run(directory: Path, config: dict) -> None:
                         "camera_native",
                     )
                     latest.publish(frame)
+                    if group is not None:
+                        group.submit_frame(frame)
                     frame_id += 1
                     if captured_s - last_preview_s >= 1 / config["preview_fps"]:
                         write_snapshot(
@@ -321,6 +436,8 @@ def run(directory: Path, config: dict) -> None:
                     if command["action"] in {"freeze", "clear", "select"} and trace is not None:
                         trace.finish()
                     if command["action"] == "freeze":
+                        if group is not None:
+                            group.close()
                         frozen = seed_frame({}, None, latest.snapshot())
                         tracking = False
                         last_publication_s = None
@@ -335,6 +452,8 @@ def run(directory: Path, config: dict) -> None:
                             frozen = seed_frame({}, None, latest.snapshot())
                         state("frozen", frame=image_snapshot(frozen))
                     elif command["action"] == "clear":
+                        if group is not None:
+                            group.close()
                         tracking = False
                         if source is not None:
                             click_sequence = max(click_sequence, source.next_click_sequence)
@@ -344,6 +463,7 @@ def run(directory: Path, config: dict) -> None:
                         frozen = source = session = None
                         tracked_names.clear()
                         last_objects.clear()
+                        reference_details.clear()
                         state("preview")
                     elif command["action"] == "record":
                         if not tracking:
@@ -391,6 +511,8 @@ def run(directory: Path, config: dict) -> None:
                             session.add_reference(debug_reference(role, selected))
                             tracked_names[role] = label
                         else:
+                            if group is not None:
+                                group.close()
                             if source is not None:
                                 click_sequence = max(click_sequence, source.next_click_sequence)
                             source, click_sequence = new_selection(adapter, label, point, click_sequence)
@@ -404,6 +526,7 @@ def run(directory: Path, config: dict) -> None:
                             tracked_names.clear()
                             tracked_names["object"] = label
                             last_objects.clear()
+                            reference_details.clear()
                             last_frame_id = -1
                         frozen = None
                         tracking = True
@@ -433,6 +556,9 @@ def run(directory: Path, config: dict) -> None:
                     stop.wait(0.002)
                     continue
                 frame, output = item
+                if group is not None:
+                    group.submit_result(frame, output)
+                group_estimates = group.estimates() if group is not None else {}
                 skipped = max(0, frame.frame_id - last_frame_id - 1) if last_frame_id >= 0 else 0
                 last_frame_id = frame.frame_id
                 mask_ms = prepared_mask_ms if prepared_mask_ms is not None else session.backend.last_mask_ms
@@ -441,11 +567,20 @@ def run(directory: Path, config: dict) -> None:
                 for role, name in tracked_names.items():
                     mask = output.masks.get(role, np.zeros(frame.depth.shape, bool))
                     result = dict(output.details[role])
+                    if result.get("accepted") is True and "camera_from_reference" in result:
+                        reference_details[role] = result
                     contours, _ = cv2.findContours(
                         mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
                     )
                     objects[role] = {
                         **result,
+                        **(
+                            group_display(
+                                result, group_estimates.get(role), frame, reference_details.get(role)
+                            )
+                            if group
+                            else {}
+                        ),
                         "name": name,
                         "contours": [c[:, 0].tolist() for c in contours],
                     }
@@ -453,7 +588,7 @@ def run(directory: Path, config: dict) -> None:
                 trace_ms = None
                 if trace is not None and not trace.complete:
                     if time.monotonic() < trace.end_s:
-                        trace_ms = trace.save(frame, output.masks, output.details)
+                        trace_ms = trace.save(frame, output.masks, objects)
                     else:
                         trace.finish()
                 publication_s = time.perf_counter()
@@ -476,6 +611,8 @@ def run(directory: Path, config: dict) -> None:
                 )
             except Exception as exc:
                 tracking = False
+                if group is not None:
+                    group.close()
                 runner.close(commit_pending=False)
                 runner = source = session = None
                 tracked_names.clear()
@@ -492,6 +629,8 @@ def run(directory: Path, config: dict) -> None:
             trace.finish()
         if runner is not None:
             runner.close(commit_pending=False)
+        if group is not None:
+            group.close()
         if capture:
             capture.join(timeout=2)
         if camera and camera.is_connected:
