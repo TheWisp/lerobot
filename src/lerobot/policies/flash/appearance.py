@@ -38,6 +38,7 @@ class Sam3MaskSource:
         device: str = "cuda",
         resolution: int | None = None,
         seed_points_by_role: dict[str, tuple[float, float]] | None = None,
+        detection_correction: dict | None = None,
         click_sequence_start: int = 1,
         adapter_factory: Callable[..., object] | None = None,
     ) -> None:
@@ -56,6 +57,7 @@ class Sam3MaskSource:
         self.resolution = resolution
         self.adapter_factory = adapter_factory
         self.seed_points_by_role = dict(seed_points_by_role or {})
+        self.detection_correction = dict(detection_correction) if detection_correction is not None else None
         # reset() preserves clicked instances across scrubs. Reusing an adapter
         # for a new selection must continue its monotonically increasing events.
         if click_sequence_start < 1:
@@ -147,9 +149,10 @@ class Sam3MaskSource:
             text_prompts = [
                 prompt for role, prompt in self.prompts.items() if role not in self.seed_points_by_role
             ]
-            self._adapter.set_control(
-                {"prompt": " . ".join(text_prompts), "text_detection": bool(text_prompts)}
-            )
+            control = {"prompt": " . ".join(text_prompts), "text_detection": bool(text_prompts)}
+            if self.detection_correction is not None:
+                control["detection_correction"] = self.detection_correction
+            self._adapter.set_control(control)
             for sequence, (role, (x, y)) in enumerate(
                 self.seed_points_by_role.items(), start=self.click_sequence_start
             ):

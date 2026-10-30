@@ -425,7 +425,10 @@ def prepare(
     ).hexdigest()[:12]
     vision_config = VisionPipelineConfig.from_settings(annotation, backend="appearance")
     mask_source = Sam3MaskSource(
-        prompts, camera_id="flash-demo-preparation", resolution=vision_config.sam_resolution
+        prompts,
+        camera_id="flash-demo-preparation",
+        resolution=vision_config.sam_resolution,
+        detection_correction=vision_config.detection_correction.control(offline=True),
     )
     reference_observations = _reference_observations(
         prompts,

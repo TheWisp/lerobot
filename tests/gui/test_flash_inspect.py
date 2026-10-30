@@ -1752,6 +1752,9 @@ def test_raw_demo_editor_collects_object_names_and_action_from_visible_controls(
     section("Advanced")
     page.get_by_role("button", name="Apply SO-107 starter parameters").click()
     set_field("Vision pipeline (demo and run)", "surface")
+    set_field("Demo detection check (processed frames)", 12)
+    set_field("Test detection check (processed frames)", 48)
+    set_field("Correct name-seeded masks with fresh detections", "On")
     section("Key frames")
     seek(1)
     page.get_by_role("button", name="Add key frame at current time").click()
@@ -1769,6 +1772,11 @@ def test_raw_demo_editor_collects_object_names_and_action_from_visible_controls(
         "() => document.querySelector('#flash-demo-editor-status').textContent.includes('captured test request')"
     )
     assert submitted[0]["annotation"]["vision_pipeline"]["backend"] == "surface"
+    assert submitted[0]["annotation"]["vision_pipeline"]["detection_correction"] == {
+        "enabled": True,
+        "offline_interval_frames": 12,
+        "runtime_interval_frames": 48,
+    }
     assert submitted[0]["tracking_config_path"] == "/tmp/trial.json"
     assert submitted[0].get("bundle_path") is None
     assert submitted[0]["annotation"]["prompts_by_role"] == {

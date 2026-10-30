@@ -60,6 +60,7 @@ def rebuild(root: Path, bundle: Path, *, through_frame: int | None = None, devic
             camera_id="flash-demo-evidence",
             device=device,
             resolution=config.sam_resolution,
+            detection_correction=config.detection_correction.control(offline=True),
         ),
         models=prepared.appearance_models,
         extractor=DinoPatchExtractor(model_id=prepared.descriptor_model_id, device=device),

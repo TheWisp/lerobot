@@ -31,6 +31,8 @@ function flashTrackingForm() {
             <label>Fit sample budget per surface<input type="number" id="flash-sampling-budget" step="1" onchange="flashTrackingSamplingChanged()"></label>
             <p class="form-hint">Smaller objects get finer spacing, limited by available depth pixels. The fit budget limits computation; the full measured cloud still checks distances and the outline. Apply changes by closing and reopening the camera.</p>
         </details>
+        <label><input type="checkbox" id="flash-detection-correction" onchange="flashTrackingCorrectionChanged()">Correct name-seeded masks with fresh detections</label>
+        <p class="form-hint">Checks run in the perception worker, away from robot control. Click-seeded objects are never re-detected from their labels.</p>
         <details><summary>Camera & tracking parameters</summary><p class="form-hint">Applied when opening the camera. Shared with demo extraction and live inference.</p><textarea id="flash-tracking-config" rows="15" spellcheck="false" onchange="flashTrackingSamplingSync()"></textarea></details>
         <button type="button" class="btn-small secondary" onclick="flashTrackingSave()">Save diagnostic snapshot</button>
         <label for="flash-trace-seconds">RGB-D trace length (seconds)</label>
@@ -47,6 +49,18 @@ function flashTrackingSamplingSync() {
             max:p.observation.surface_spacing_m * 1000, across:p.observation.samples_across_object,
             budget:p.shape.max_fit_points};
         for (const [key,value] of Object.entries(values)) document.getElementById('flash-sampling-' + key).value = value ?? '';
+        document.getElementById('flash-detection-correction').checked = !!p.detection_correction?.enabled;
+    } catch (error) { flashTrackingError(error); }
+}
+
+function flashTrackingCorrectionChanged() {
+    try {
+        const field = document.getElementById('flash-tracking-config'), config = JSON.parse(field.value);
+        config.vision_pipeline.detection_correction = {
+            ...(config.vision_pipeline.detection_correction || {}),
+            enabled: document.getElementById('flash-detection-correction').checked,
+        };
+        field.value = JSON.stringify(config, null, 2);
     } catch (error) { flashTrackingError(error); }
 }
 

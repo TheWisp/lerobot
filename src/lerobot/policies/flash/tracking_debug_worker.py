@@ -362,6 +362,13 @@ def run(directory: Path, config: dict) -> None:
                             adapter = Sam3TrackByDetectionAdapter(
                                 device="cuda", resolution=config["vision_pipeline"]["sam_resolution"]
                             )
+                            adapter.set_control(
+                                {
+                                    "detection_correction": VisionPipelineConfig.from_dict(
+                                        config["vision_pipeline"]
+                                    ).detection_correction.control(offline=False)
+                                }
+                            )
                         label = command.get("prompt", "").strip() or "selected object"
                         point = command.get("point")
                         prepared_mask_ms = None

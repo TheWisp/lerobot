@@ -29,6 +29,44 @@ from .trajectory import Evidence, PoseEstimate
 
 
 @dataclass(frozen=True)
+class DetectionCorrectionConfig:
+    """Independent text detection checks; the robot loop never waits for these.
+
+    The same acceptance rule is used offline and live. Only the check cadence
+    differs, and each detection is compared with tracking on its source frame.
+    """
+
+    enabled: bool = False
+    offline_interval_frames: int = 16
+    runtime_interval_frames: int = 60
+    min_detector_score: float = 0.8
+    min_tracker_score: float = 0.8
+    min_mask_overlap: float = 0.5
+
+    def __post_init__(self) -> None:
+        if type(self.enabled) is not bool:
+            raise ValueError("detector correction enabled must be a boolean")
+        if any(
+            type(n) is not int or n < 1 for n in (self.offline_interval_frames, self.runtime_interval_frames)
+        ):
+            raise ValueError("detector correction intervals must be positive frame counts")
+        if any(
+            not np.isfinite(value) or not 0 <= value <= 1
+            for value in (self.min_detector_score, self.min_tracker_score, self.min_mask_overlap)
+        ):
+            raise ValueError("detector correction scores and overlap must be in [0, 1]")
+
+    def control(self, *, offline: bool) -> dict:
+        return {
+            "enabled": self.enabled,
+            "interval_frames": self.offline_interval_frames if offline else self.runtime_interval_frames,
+            "min_detector_score": self.min_detector_score,
+            "min_tracker_score": self.min_tracker_score,
+            "min_mask_overlap": self.min_mask_overlap,
+        }
+
+
+@dataclass(frozen=True)
 class VisionPipelineConfig:
     backend: str = "surface"
     sam_resolution: int | None = 504
@@ -43,6 +81,7 @@ class VisionPipelineConfig:
     surface_reference_max_points_per_view: int = 15000
     compiled_surface_fit: bool = True
     reuse_surface_search: bool = True
+    detection_correction: DetectionCorrectionConfig = field(default_factory=DetectionCorrectionConfig)
     observation: SurfaceObservationConfig = field(default_factory=SurfaceObservationConfig)
     shape: ShapeConfig = field(default_factory=ShapeConfig)
     motion: SurfaceMotionConfig = field(default_factory=SurfaceMotionConfig)
@@ -116,6 +155,7 @@ class VisionPipelineConfig:
     def from_dict(cls, values: dict):
         values = dict(values)
         for key, kind in (
+            ("detection_correction", DetectionCorrectionConfig),
             ("observation", SurfaceObservationConfig),
             ("shape", ShapeConfig),
             ("motion", SurfaceMotionConfig),
@@ -658,6 +698,7 @@ class VisionBackendFactory:
                 device=self.device,
                 resolution=self.config.sam_resolution,
                 seed_points_by_role=self.seed_points_by_role,
+                detection_correction=self.config.detection_correction.control(offline=False),
             ),
             models=self.models,
             extractor=DinoPatchExtractor(model_id=self.dino_model_id, device=self.device),

@@ -835,6 +835,19 @@ function _flashEditorRender() {
     _flashEditorField(advanced, 'Vision pipeline (demo and run)', a.vision_pipeline?.backend || 'appearance', value => {
         a.vision_pipeline = {...(a.vision_pipeline || {}), backend: value};
     }, ['appearance', 'surface']);
+    const correction = a.vision_pipeline?.detection_correction || {};
+    _flashEditorField(advanced, 'Correct name-seeded masks with fresh detections',
+        correction.enabled ? 'On' : 'Off', value => {
+            a.vision_pipeline = {...(a.vision_pipeline || {}),
+                detection_correction: {...(a.vision_pipeline?.detection_correction || {}), enabled: value === 'On'}};
+        }, ['Off', 'On']);
+    for (const [key, label, fallback] of [
+        ['offline_interval_frames', 'Demo detection check (processed frames)', 16],
+        ['runtime_interval_frames', 'Test detection check (processed frames)', 60],
+    ]) _flashEditorField(advanced, label, correction[key] ?? fallback, value => {
+        a.vision_pipeline = {...(a.vision_pipeline || {}),
+            detection_correction: {...(a.vision_pipeline?.detection_correction || {}), [key]: value}};
+    }, null, 'number');
     for (const [key, label] of [
         ['max_demo_pose_gap_frames', 'Maximum demo pose gap (frames)'],
         ['connection_speed_m_s', 'Connection speed (m/s)'],

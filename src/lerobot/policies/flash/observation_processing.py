@@ -197,6 +197,7 @@ def _extract_to_directory(
             camera_id=rgb_key,
             resolution=vision_config.sam_resolution,
             seed_points_by_role=seeds,
+            detection_correction=vision_config.detection_correction.control(offline=True),
         )
     )
     roles = tuple(directories or prompts)

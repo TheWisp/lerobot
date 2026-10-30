@@ -330,6 +330,32 @@ def test_debugger_exports_the_common_configuration_and_migrates_old_payloads():
 
 @pytest.mark.requires_playwright
 @pytest.mark.skipif(importlib.util.find_spec("playwright") is None, reason="Playwright not installed")
+def test_live_detection_correction_toggle_reaches_the_worker_configuration(gui_page):
+    page = gui_page
+    submitted = []
+    page.route("**/api/run/flash/tracking/state", lambda route: route.fulfill(json={"running": False}))
+
+    def capture(route):
+        submitted.append(route.request.post_data_json)
+        route.fulfill(json={"status": "starting"})
+
+    page.route("**/api/run/flash/tracking/start", capture)
+    page.evaluate("switchTab('run'); selectWorkflow('flash')")
+    page.get_by_role("button", name="Live tracking · camera only →").click()
+    page.locator("#flash-detection-correction").wait_for()
+    page.locator("#flash-detection-correction").check()
+    page.get_by_role("button", name="Open camera").click()
+    page.wait_for_function(
+        "() => document.getElementById('flash-tracking-message').textContent.includes('Opening')"
+    )
+    assert len(submitted) == 1
+    request = flash_tracking.TrackingStart.model_validate(submitted[0])
+    assert request.vision_pipeline.detection_correction.enabled is True
+    assert request.vision_pipeline.detection_correction.control(offline=False)["interval_frames"] == 60
+
+
+@pytest.mark.requires_playwright
+@pytest.mark.skipif(importlib.util.find_spec("playwright") is None, reason="Playwright not installed")
 def test_object_inspection_removes_pose_but_scene_toggle_restores_it(gui_page):
     page = gui_page
     page.route("**/api/run/flash/tracking/state", lambda route: route.fulfill(json={"running": False}))

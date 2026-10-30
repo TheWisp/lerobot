@@ -612,9 +612,33 @@ class Sam3TrackByDetectionAdapter(ConceptMaskAdapter):
         # it holds. The ~0.9 GB saved is not worth a broken tracker.
         self._det_threshold = 0.5
         self._tracks: dict[str | None, dict] = {}  # per-camera tracker state (session + masks)
+        self._detection_correction: dict | None = None
         # Per-concept detector text features (deterministic per string -> lifetime cache);
         # lets _detect_many skip the text encoder entirely on seed/recover.
         self._text_cache: dict[str, tuple] = {}
+
+    def set_control(self, control: dict) -> None:
+        super().set_control(control)
+        if "detection_correction" not in control:
+            return
+        value = control["detection_correction"]
+        if not isinstance(value, dict):
+            raise ValueError("detection correction must be a settings object")
+        interval = value.get("interval_frames")
+        if type(value.get("enabled")) is not bool or type(interval) is not int or interval < 1:
+            raise ValueError("detection correction needs a boolean enabled and positive interval_frames")
+        for key in ("min_detector_score", "min_tracker_score", "min_mask_overlap"):
+            threshold = value.get(key)
+            if (
+                not isinstance(threshold, (int, float))
+                or not np.isfinite(threshold)
+                or not 0 <= threshold <= 1
+            ):
+                raise ValueError(f"detection correction {key} must be in [0, 1]")
+        if value != self._detection_correction:
+            self._detection_correction = dict(value)
+            for track in self._tracks.values():
+                track["since_correction"] = 0
 
     def reset(self) -> None:
         """Discontinuity — scrub, episode change, wrap. Drop the memory bank, which describes
@@ -681,7 +705,7 @@ class Sam3TrackByDetectionAdapter(ConceptMaskAdapter):
         return best
 
     def _detect_many(
-        self, frame_rgb: np.ndarray, concepts: list[str], h: int, w: int
+        self, frame_rgb: np.ndarray, concepts: list[str], h: int, w: int, *, details: dict | None = None
     ) -> dict[str, np.ndarray | None]:
         """Seed masks for ``concepts`` on ONE frame with ONE vision encode.
 
@@ -748,7 +772,75 @@ class Sam3TrackByDetectionAdapter(ConceptMaskAdapter):
             # a length mismatch is a contract break, not something to truncate.
             for concept, res in zip(concepts, results, strict=True):
                 out[concept] = self._select_instances(res, h, w)
+                if details is not None:
+                    masks = res.get("masks", [])
+                    scores = res.get("scores", [])
+                    selected_index = (
+                        max(
+                            range(len(masks)),
+                            key=lambda index: int(
+                                np.asarray(
+                                    masks[index].cpu() if hasattr(masks[index], "cpu") else masks[index]
+                                ).sum()
+                            ),
+                        )
+                        if len(masks)
+                        else None
+                    )
+                    details[concept] = {
+                        "instances": len(masks),
+                        "score": (
+                            float(scores[selected_index])
+                            if selected_index is not None and len(scores) > selected_index
+                            else None
+                        ),
+                    }
         return out
+
+    def _correct_text_masks(self, track: dict, frame_rgb: np.ndarray, pv, h: int, w: int) -> None:
+        """Check an independent detection on the current frame before re-prompting.
+
+        A label given to a clicked object is never a text concept. Never use it
+        to re-detect that object, even if it happens to name another visible one.
+        """
+        policy = self._detection_correction
+        # A multi-instance concept is a union, so a single detector instance
+        # cannot establish which member of that union should be replaced.
+        if not policy or not policy["enabled"] or self._seed_multi:
+            return
+        clicked = set(self._click_names.get(self._cam, []))
+        concepts = [
+            c
+            for c in self._parse_concepts()
+            if c not in clicked
+            and c in track["masks"]
+            and track["scores"].get(c, 0.0) >= policy["min_tracker_score"]
+        ]
+        if not concepts:
+            return
+        details: dict = {}
+        detected = self._detect_many(frame_rgb, concepts, h, w, details=details)
+        seeds = {
+            c: mask for c, mask in track["masks"].items() if track["scores"].get(c, 0.0) >= self.LOST_THRESH
+        }
+        changed = []
+        for concept in concepts:
+            candidate = detected.get(concept)
+            info = details.get(concept, {})
+            if candidate is None or info.get("instances") != 1 or info.get("score") is None:
+                continue
+            if info["score"] < policy["min_detector_score"]:
+                continue
+            current = track["masks"][concept]
+            union = np.logical_or(current, candidate).sum()
+            overlap = float(np.logical_and(current, candidate).sum() / union) if union else 0.0
+            if overlap < policy["min_mask_overlap"]:
+                continue
+            seeds[concept] = candidate
+            changed.append(concept)
+        if changed:
+            self._seed(track, seeds, pv, h, w)
+            logger.info("text correction[%s]: re-seeded %s", self._cam or "?", changed)
 
     # ---------------- Tier 2: geometric video tracker ----------------
     def _pv(self, frame):
@@ -855,6 +947,7 @@ class Sam3TrackByDetectionAdapter(ConceptMaskAdapter):
                 track["session"] = None
                 return
             track["session"], track["objs"], track["since_flush"] = sess, objs, 0
+            track["since_correction"] = 0
             self._read_output(track, out, h, w)
             if old is not None:
                 del old  # free the previous session's memory bank
@@ -1166,6 +1259,7 @@ class Sam3TrackByDetectionAdapter(ConceptMaskAdapter):
                 "masks": {},
                 "scores": {},
                 "since_flush": 0,
+                "since_correction": 0,
                 # RECOVER_EVERY so the FIRST frame after a reset/scrub probes immediately;
                 # a failed probe resets it, throttling subsequent attempts (below).
                 "since_recover": self.RECOVER_EVERY,
@@ -1283,6 +1377,16 @@ class Sam3TrackByDetectionAdapter(ConceptMaskAdapter):
                         track["objs"], track["masks"], track["scores"] = {}, {}, {}
                         track["since_flush"] = 0
 
+        policy = getattr(self, "_detection_correction", None)
+        if policy and policy["enabled"] and track["session"] is not None and track["since_flush"] > 0:
+            track["since_correction"] = track.get("since_correction", 0) + 1
+            if track["since_correction"] >= policy["interval_frames"]:
+                track["since_correction"] = 0
+                # A low-score text track already has the ordinary recovery path.
+                # Do not issue a second detector pass for it on this frame.
+                text = self._parse_concepts()
+                if all(track["scores"].get(c, 0.0) >= self.LOST_THRESH for c in text):
+                    self._correct_text_masks(track, frame_rgb.numpy(), pv, h, w)
         return self._live_masks(track), h, w
 
 

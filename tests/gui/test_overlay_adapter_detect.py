@@ -51,9 +51,9 @@ def _adapter_with_masks(masks):
     }
     # The batched decode post-processes ALL concepts of one call together, so
     # the mock returns one result per requested target size.
-    det_proc.post_process_instance_segmentation.side_effect = lambda fwd, threshold, target_sizes: [
-        {"masks": masks}
-    ] * len(target_sizes)
+    det_proc.post_process_instance_segmentation.side_effect = lambda fwd, threshold, target_sizes: (
+        [{"masks": masks}] * len(target_sizes)
+    )
     a.det_proc = det_proc
     a.det = MagicMock(return_value=MagicMock())
     # Real tensors where the batching path concatenates/expands: text features
@@ -202,6 +202,115 @@ def test_segment_does_not_override_the_flag():
     ad._seed_multi = False
     ad.segment(np.zeros((20, 40, 3), np.uint8))
     assert seen == [True, False]  # each call saw the current policy — neither changed it
+
+
+def test_detection_correction_reseeds_only_a_confident_name_seeded_track():
+    ad = _adapter_with_masks([])
+    ad._cam = "cam"
+    ad.prompt = "glass jar"
+    ad._text_detection = True
+    ad._click_names["cam"] = ["clicked object"]
+    ad._detection_correction = {
+        "enabled": True,
+        "interval_frames": 2,
+        "min_detector_score": 0.8,
+        "min_tracker_score": 0.8,
+        "min_mask_overlap": 0.5,
+    }
+    current = np.zeros((20, 40), dtype=bool)
+    current[2:14, 2:12] = True
+    clicked = np.zeros_like(current)
+    clicked[3:13, 25:35] = True
+    candidate = np.roll(current, 1, axis=1)
+    track = {
+        "masks": {"glass jar": current, "clicked object": clicked},
+        "scores": {"glass jar": 0.95, "clicked object": 0.95},
+    }
+    calls = []
+
+    def detect(frame, concepts, h, w, *, details):
+        calls.append(tuple(concepts))
+        details["glass jar"] = {"instances": 1, "score": 0.9}
+        return {"glass jar": candidate}
+
+    ad._detect_many = detect
+    ad._seed = lambda track, seeds, pv, h, w: calls.append(
+        {key: value.copy() for key, value in seeds.items()}
+    )
+    ad._correct_text_masks(track, np.zeros((20, 40, 3), np.uint8), None, 20, 40)
+    assert calls[0] == ("glass jar",)
+    np.testing.assert_array_equal(calls[1]["glass jar"], candidate)
+    np.testing.assert_array_equal(calls[1]["clicked object"], clicked)
+
+    # A click-only selection has a user label, but it has no text identity to re-detect.
+    calls.clear()
+    ad._text_detection = False
+    ad._correct_text_masks(track, np.zeros((20, 40, 3), np.uint8), None, 20, 40)
+    assert calls == []
+    ad._text_detection = True
+    ad._click_names["cam"] = ["glass jar"]
+    ad._correct_text_masks(track, np.zeros((20, 40, 3), np.uint8), None, 20, 40)
+    assert calls == []  # even an accidental name collision cannot turn a click into a text seed
+
+
+@pytest.mark.parametrize("instances,score,shift", [(2, 0.9, 1), (1, 0.5, 1), (1, 0.9, 20)])
+def test_detection_correction_rejects_ambiguous_or_distant_matches(instances, score, shift):
+    ad = _adapter_with_masks([])
+    ad._cam = "cam"
+    ad.prompt = "jar"
+    ad._text_detection = True
+    ad._detection_correction = {
+        "enabled": True,
+        "interval_frames": 2,
+        "min_detector_score": 0.8,
+        "min_tracker_score": 0.8,
+        "min_mask_overlap": 0.5,
+    }
+    current = np.zeros((20, 40), bool)
+    current[2:14, 2:12] = True
+    track = {"masks": {"jar": current}, "scores": {"jar": 0.95}}
+    ad._detect_many = lambda frame, concepts, h, w, *, details: (
+        details.update(jar={"instances": instances, "score": score}),
+        {"jar": np.roll(current, shift, axis=1)},
+    )[1]
+    ad._seed = lambda *args: pytest.fail("uncertain detection must not replace an existing track")
+    ad._correct_text_masks(track, np.zeros((20, 40, 3), np.uint8), None, 20, 40)
+
+
+def test_detection_correction_checks_at_configured_processed_frame_cadence():
+    ad = _adapter_with_masks([])
+    ad._cam = "cam"
+    ad.prompt = "jar"
+    ad._colors = {}
+    ad._signs = {}
+    ad._tracks = {
+        "cam": {
+            "session": object(),
+            "shape": (20, 40),
+            "objs": {},
+            "masks": {"jar": np.ones((20, 40), bool)},
+            "scores": {"jar": 0.95},
+            "since_flush": 0,
+            "since_correction": 0,
+            "since_recover": 0,
+        }
+    }
+    ad._detection_correction = {
+        "enabled": True,
+        "interval_frames": 2,
+        "min_detector_score": 0.8,
+        "min_tracker_score": 0.8,
+        "min_mask_overlap": 0.5,
+    }
+    ad._pv = lambda frame: None
+    ad._apply_clicks = lambda *args: False
+    ad.trk = lambda **kwargs: object()
+    ad._read_output = lambda *args: None
+    checks = []
+    ad._correct_text_masks = lambda *args: checks.append(ad._tracks["cam"]["since_flush"])
+    for _ in range(5):
+        ad._infer_masks(np.zeros((20, 40, 3), np.uint8))
+    assert checks == [2, 4]
 
 
 if __name__ == "__main__":

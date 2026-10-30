@@ -120,7 +120,7 @@ def test_sam3_mask_source_shares_one_adapter_and_resets_on_discontinuity():
             self.calls.append(("camera", camera_id))
 
         def set_control(self, settings):
-            self.calls.append(("prompt", settings["prompt"]))
+            self.calls.append(("control", settings))
 
         def reset(self):
             self.calls.append(("reset",))
@@ -136,7 +136,19 @@ def test_sam3_mask_source_shares_one_adapter_and_resets_on_discontinuity():
         made.append(adapter)
         return adapter
 
-    source = Sam3MaskSource({"held": "tool", "target": "ring"}, camera_id="overhead", adapter_factory=factory)
+    correction = {
+        "enabled": True,
+        "interval_frames": 16,
+        "min_detector_score": 0.8,
+        "min_tracker_score": 0.8,
+        "min_mask_overlap": 0.5,
+    }
+    source = Sam3MaskSource(
+        {"held": "tool", "target": "ring"},
+        camera_id="overhead",
+        detection_correction=correction,
+        adapter_factory=factory,
+    )
     xy = np.array([[10.0, 10.0]])
     assert set(source.masks(frame(1, xy, 1.0))) == {"held", "target"}
     source.masks(frame(2, xy, 2.0))
@@ -146,6 +158,10 @@ def test_sam3_mask_source_shares_one_adapter_and_resets_on_discontinuity():
     assert len(made) == 1
     assert made[0].calls.count(("segment",)) == 4
     assert made[0].calls.count(("reset",)) == 2
+    assert (
+        "control",
+        {"prompt": "tool . ring", "text_detection": True, "detection_correction": correction},
+    ) in made[0].calls
 
 
 def test_appearance_factory_can_cross_spawn_boundary_without_loaded_models():
