@@ -3,6 +3,26 @@
   "name": "FLASH visible RGB-D tracking baseline",
   "cases": [
     {
+      "id": "flash-demo-dowel-ring",
+      "kind": "flash_prepared_demo",
+      "domain": "FLASH rig demonstrations (diagnostic; no independent labels)",
+      "artifact_root": "~/.cache/huggingface/lerobot/demos/insertion",
+      "evidence_dir": "~/.cache/huggingface/lerobot/demos/insertion/flash/v1/prepared/flash-dowel-ring-20261028-depth-audit-v11/scene-evidence",
+      "expected_frames": 713,
+      "tags": ["rigid", "manipulation", "occlusion", "diagnostic-only"],
+      "roles": ["dowel", "ring"]
+    },
+    {
+      "id": "flash-demo-gamepad-cube",
+      "kind": "flash_prepared_demo",
+      "domain": "FLASH rig demonstrations (diagnostic; no independent labels)",
+      "artifact_root": "~/.cache/huggingface/lerobot/demos/pick_place",
+      "evidence_dir": "~/.cache/huggingface/lerobot/demos/pick_place/flash/v1/prepared/flash-gamepad-cube-20261028-depth-audit-v11/scene-evidence",
+      "expected_frames": 628,
+      "tags": ["rigid", "manipulation", "occlusion", "diagnostic-only"],
+      "roles": ["gamepad", "cube"]
+    },
+    {
       "id": "ycb-bleach0",
       "kind": "ycb_annotated_pose",
       "domain": "YCBInEOAT",

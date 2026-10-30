@@ -145,10 +145,21 @@ def _pose_accuracy(rows: list[dict], role: str, provenance: dict) -> dict:
 
 
 def score_case(case: dict) -> dict:
-    if case["kind"] not in {"ycb_annotated_pose", "lerobot_rgbd"}:
+    if case["kind"] not in {"ycb_annotated_pose", "lerobot_rgbd", "flash_prepared_demo"}:
         raise ValueError(f"unsupported case kind: {case['kind']}")
     root = _path(case["artifact_root"])
-    if case["kind"] == "ycb_annotated_pose":
+    observation = None
+    if case["kind"] == "flash_prepared_demo":
+        evidence_dir = _path(case["evidence_dir"])
+        provenance = None
+        observation = None
+        manifest, rows = _read_evidence(evidence_dir)
+        capture = {
+            "input_sha256": manifest["source_sha256"],
+            "bundle_sha256": hashlib.sha256((evidence_dir.parent / "bundle.json").read_bytes()).hexdigest(),
+            "mask_source": "prepared_demo_trace",
+        }
+    elif case["kind"] == "ycb_annotated_pose":
         evidence_dir = _path(case["evidence_dir"]) if "evidence_dir" in case else root / "evidence"
         provenance = json.loads((root / "provenance.json").read_text())
         capture = {
@@ -186,12 +197,13 @@ def score_case(case: dict) -> dict:
         if timing_path.exists()
         else None
     )
-    manifest, rows = _read_evidence(evidence_dir)
+    if case["kind"] != "flash_prepared_demo":
+        manifest, rows = _read_evidence(evidence_dir)
     if provenance is not None and len(rows) != provenance["count"]:
         raise ValueError("YCB source and evidence frame counts differ")
     if provenance is not None and len(provenance["names"]) != len(rows):
         raise ValueError("YCB source image list differs from evidence frame count")
-    if provenance is None and observation["frames"] != len(rows):
+    if observation is not None and observation["frames"] != len(rows):
         raise ValueError("LeRobot observation and evidence frame counts differ")
     if case.get("expected_frames") is not None and len(rows) != case["expected_frames"]:
         raise ValueError("case frame count differs from frozen suite")
@@ -204,22 +216,25 @@ def score_case(case: dict) -> dict:
         ious, depth_residuals = [], []
         longest_loss = loss_run = 0
         frame_states = []
+        mask_present_frames = 0
         for index, row in enumerate(rows):
             size = tuple(row["image_size"])
-            reference_mask = _reference_mask(case, role, index, provenance)
-            if reference_mask.shape != size:
-                raise ValueError(f"reference mask size differs: {case['id']} frame {index}")
-            if not reference_mask.any():
-                frame_states.append("not_visible_in_reference")
-                loss_run = 0
-                continue
             estimated_mask = _mask(row["masks_rle"].get(role, []), size)
-            ious.append(
-                float(
-                    np.count_nonzero(estimated_mask & reference_mask)
-                    / np.count_nonzero(estimated_mask | reference_mask)
+            mask_present_frames += bool(estimated_mask.any())
+            if case["kind"] != "flash_prepared_demo":
+                reference_mask = _reference_mask(case, role, index, provenance)
+                if reference_mask.shape != size:
+                    raise ValueError(f"reference mask size differs: {case['id']} frame {index}")
+                if not reference_mask.any():
+                    frame_states.append("not_visible_in_reference")
+                    loss_run = 0
+                    continue
+                ious.append(
+                    float(
+                        np.count_nonzero(estimated_mask & reference_mask)
+                        / np.count_nonzero(estimated_mask | reference_mask)
+                    )
                 )
-            )
             estimate = row["estimates"][role]
             state = estimate["evidence"]
             if state not in {"observed", "predicted", "lost"}:
@@ -239,7 +254,12 @@ def score_case(case: dict) -> dict:
             longest_loss = max(longest_loss, loss_run)
         visible = sum(states.values())
         result = {
-            "reference_visible_frames": visible,
+            "reference_visible_frames": visible if case["kind"] != "flash_prepared_demo" else None,
+            "frames_scored": visible,
+            "visibility_basis": "all_frames_no_visibility_labels"
+            if case["kind"] == "flash_prepared_demo"
+            else "supplied_reference_mask",
+            "mask_present_frames": mask_present_frames,
             "states": dict(states),
             "direct_observation_fraction": states["observed"] / visible if visible else None,
             "pose_available_fraction": (states["observed"] + states["predicted"]) / visible
@@ -257,7 +277,11 @@ def score_case(case: dict) -> dict:
         result["pose_accuracy"] = (
             _pose_accuracy(rows, role, provenance)
             if provenance is not None
-            else {"status": "unavailable_no_pose_labels"}
+            else {
+                "status": "unavailable_no_independent_pose_labels"
+                if case["kind"] == "flash_prepared_demo"
+                else "unavailable_no_pose_labels"
+            }
         )
         results[role] = result
     return {
@@ -319,6 +343,7 @@ def compare_results(baseline: dict, candidate: dict) -> list[dict]:
                 "role": role,
                 "status": "compared",
                 "visible_frames": new_role["reference_visible_frames"],
+                "frames_scored": new_role["frames_scored"],
                 "observed_frames_before": before.count("observed"),
                 "observed_frames_after": after.count("observed"),
                 "available_frames_before": sum(s in {"observed", "predicted"} for s in before),
@@ -350,30 +375,32 @@ def markdown(results: dict) -> str:
         f"# {results['suite']}",
         "",
         "Observed = accepted image/depth pose; predicted = fallback pose; lost = no pose.",
-        "Mask IoU is agreement with supplied masks, not segmentation truth. Pose error is conditional on a published pose.",
+        "External mask IoU is agreement with supplied masks, not segmentation truth. Pose error is conditional on a published pose.",
+        "FLASH demo rows have no independent visibility, mask, or pose labels: their counts cover every frame and measure availability only.",
         "",
     ]
     scored = [case for case in results["cases"] if case["status"] == "scored"]
-    if scored and all(
+    external = [case for case in scored if case["kind"] != "flash_prepared_demo"]
+    if external and all(
         case["capture"]["mask_source"] == "recorded" or case["capture"]["mask_source"].startswith("supplied")
-        for case in scored
+        for case in external
     ):
         lines.insert(
-            4, "These traces feed supplied masks into perception, so mask IoU 1.00 does not test SAM3."
+            5, "External traces feed supplied masks into perception, so mask IoU 1.00 does not test SAM3."
         )
     domains = sorted({case["domain"] for case in results["cases"]})
     for domain in domains:
         lines += [
             f"## {domain}",
             "",
-            "| Case / role | Visible frames | Observed / predicted / lost | Mask IoU median | Labeled pose error |",
-            "| --- | ---: | ---: | ---: | ---: |",
+            "| Case / role | Frames scored | Mask present | Observed / predicted / lost | Mask IoU median | Labeled pose error |",
+            "| --- | ---: | ---: | ---: | ---: | ---: |",
         ]
         for case in results["cases"]:
             if case["domain"] != domain:
                 continue
             if case["status"] != "scored":
-                lines.append(f"| {case['id']} | missing local artifact | — | — | — |")
+                lines.append(f"| {case['id']} | missing local artifact | — | — | — | — |")
                 continue
             for role, metrics in case["roles"].items():
                 state = metrics["states"]
@@ -385,12 +412,17 @@ def markdown(results: dict) -> str:
                     else "no labeled pose score"
                 )
                 iou = metrics["mask_iou_median_vs_supplied"]
+                frame_label = (
+                    str(metrics["reference_visible_frames"])
+                    if metrics["reference_visible_frames"] is not None
+                    else f"{metrics['frames_scored']} (visibility unlabeled)"
+                )
                 lines.append(
-                    f"| {case['id']} / {role} | {metrics['reference_visible_frames']} | "
+                    f"| {case['id']} / {role} | {frame_label} | {metrics['mask_present_frames']} | "
                     f"{state.get('observed', 0)} / {state.get('predicted', 0)} / {state.get('lost', 0)} | "
                     f"{iou:.2f} | {error} |"
                     if iou is not None
-                    else f"| {case['id']} / {role} | {metrics['reference_visible_frames']} | "
+                    else f"| {case['id']} / {role} | {frame_label} | {metrics['mask_present_frames']} | "
                     f"{state.get('observed', 0)} / {state.get('predicted', 0)} / {state.get('lost', 0)} | — | {error} |"
                 )
         lines.append("")

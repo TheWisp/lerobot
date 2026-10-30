@@ -1,12 +1,16 @@
 # FLASH RGB-D tracking benchmark
 
 This is the current, versioned entry point for measuring FLASH tracking changes.
-The [suite](flash_tracking_suite.json) freezes **nine YCBInEOAT clips** and
-**ten Caryx clips** selected in the earlier failure audit. Raw datasets and
+The [suite](flash_tracking_suite.json) freezes **nine YCBInEOAT clips**,
+**ten Caryx clips**, and **our two rig demonstrations** (dowel insertion and
+gamepad stacking). The rig cases are a diagnostic tier without independent
+visibility, mask, or pose labels. Raw datasets and
 per-frame evidence remain in the local cache; the [baseline report](flash_tracking_baseline.md)
 and [machine-readable baseline](flash_tracking_baseline.json) are saved here.
 All existing cases are development cases: they were examined during research.
 Add a genuinely unseen holdout before claiming generalization.
+The dated [failure ledger](../docs/proofs/flash-contact-observation/FAILURE_LEDGER.md)
+explains why some cases fail; it is evidence, not the current pipeline specification.
 
 Each case uses the normal `SceneEvidenceWriter` output. The scorer checks that
 all frames are present, then reports, per visible object and per clip:
@@ -20,9 +24,16 @@ all frames are present, then reports, per visible object and per clip:
   rotation in degrees. The point sample and random seed are fixed by the scorer.
   It is first-frame-relative; initialization is excluded. Error is reported only
   on frames with a published pose, beside the fraction of frames covered.
+- For the rig demonstrations, counts of observed, predicted, and lost poses,
+  and frames with a saved object mask. These count **all** 713 insertion or 628
+  stacking frames because object visibility was not independently annotated.
+  A saved mask or accepted depth residual is not proof that the mask or pose is
+  correct. These cases can detect coverage regressions, but cannot establish
+  pose accuracy or physical task success.
 
-The current runs **feed supplied masks into perception**, so their 1.00 mask
-agreement is expected and says nothing about SAM3. YCB annotations are evaluation
+The external runs **feed supplied masks into perception**, so their 1.00 mask
+agreement is expected and says nothing about SAM3. The rig demo traces have no
+independent mask agreement score. YCB annotations are evaluation
 labels, not input to tracking or independent sensor ground truth. Caryx has no
 object-pose labels; pose accuracy there is unknown. The two domains have different
 cameras and conditions, so the report does not merge them into one success rate.
@@ -30,6 +41,13 @@ The rotation metric does not factor out shape symmetry. The earlier Caryx camera
 convention audit remains a caveat for pose interpretation on that domain.
 Offline wall time from new reruns includes model initialization and is not live
 robot FPS. Frame-time and memory profiling still need separate instrumentation.
+
+This suite does **not** yet test the complete path from selecting/segmenting an
+object through tracking and task execution. A full-path evaluation needs fresh
+SAM3 output scored against separately annotated masks and object identity, then
+pose coverage and error on the same frames, plus independently checked contact
+or task outcomes for rig runs. The saved demonstration masks alone cannot serve
+as both predictions and truth.
 
 The scorer reproduces the earlier YCB state counts and conditional point errors.
 As an end-to-end check, the current runner processed all 181 frames of the moving

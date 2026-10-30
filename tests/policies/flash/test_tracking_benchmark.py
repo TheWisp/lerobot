@@ -95,6 +95,34 @@ def test_availability_mask_agreement_and_accuracy_are_distinct(tmp_path):
     assert "no labeled pose score" in markdown(result)
 
 
+def test_prepared_demo_reports_coverage_without_inventing_visibility_or_accuracy(tmp_path):
+    suite, evidence = _case(tmp_path)
+    (evidence / "manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "complete": True,
+                "frames_completed": 2,
+                "total_frames": 2,
+                "roles": ["object"],
+                "source_sha256": "source",
+            }
+        )
+    )
+    (evidence.parent / "bundle.json").write_text("{}")
+    suite["cases"][0].update(kind="flash_prepared_demo", evidence_dir=str(evidence))
+    result = score_suite(suite)
+    role = result["cases"][0]["roles"]["object"]
+    assert role["states"] == {"observed": 1, "lost": 1}
+    assert role["reference_visible_frames"] is None
+    assert role["frames_scored"] == 2
+    assert role["visibility_basis"] == "all_frames_no_visibility_labels"
+    assert role["mask_present_frames"] == 2
+    assert role["mask_iou_median_vs_supplied"] is None
+    assert role["pose_accuracy"]["status"] == "unavailable_no_independent_pose_labels"
+    assert "visibility unlabeled" in markdown(result)
+
+
 @pytest.mark.parametrize(
     "complete,contradictory,match",
     [(False, False, "incomplete evidence"), (True, True, "pose/state contradiction")],
