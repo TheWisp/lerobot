@@ -110,9 +110,11 @@ def test_prepared_demo_reports_coverage_without_inventing_visibility_or_accuracy
         )
     )
     (evidence.parent / "bundle.json").write_text("{}")
+    (evidence.parent / "preparation-report.json").write_text(json.dumps({"pose_trace_selection_version": 6}))
     suite["cases"][0].update(kind="flash_prepared_demo", evidence_dir=str(evidence))
     result = score_suite(suite)
     role = result["cases"][0]["roles"]["object"]
+    assert result["cases"][0]["capture"]["prepared_pose_trace_selection_version"] == 6
     assert role["states"] == {"observed": 1, "lost": 1}
     assert role["reference_visible_frames"] is None
     assert role["frames_scored"] == 2

@@ -18,6 +18,7 @@
         "input_sha256": "1cc0000cc85b54170ff1bb072c211a58dfc3cfc52f86261fc81a8a4a0bad7728",
         "bundle_sha256": "389534fadaedaf79e3aad03b51ebd96524eb6605afb30236374cf8cbfcd3057d",
         "mask_source": "prepared_demo_trace",
+        "prepared_pose_trace_selection_version": 6,
         "offline_wall_s_including_initialization": null
       },
       "roles": {
@@ -1525,6 +1526,7 @@
         "input_sha256": "2afbb82a6c99cdcffbf4bbfbc5acfeeb9d0c878f910229f25ae258b408cc2074",
         "bundle_sha256": "9ff11c082ab339b98ee61b020dcc3d0b771aa7418972c4285c2af9ab78dc1f46",
         "mask_source": "prepared_demo_trace",
+        "prepared_pose_trace_selection_version": 6,
         "offline_wall_s_including_initialization": null
       },
       "roles": {

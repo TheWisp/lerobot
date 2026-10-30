@@ -154,10 +154,13 @@ def score_case(case: dict) -> dict:
         provenance = None
         observation = None
         manifest, rows = _read_evidence(evidence_dir)
+        report_path = evidence_dir.parent / "preparation-report.json"
+        report = json.loads(report_path.read_text()) if report_path.is_file() else {}
         capture = {
             "input_sha256": manifest["source_sha256"],
             "bundle_sha256": hashlib.sha256((evidence_dir.parent / "bundle.json").read_bytes()).hexdigest(),
             "mask_source": "prepared_demo_trace",
+            "prepared_pose_trace_selection_version": report.get("pose_trace_selection_version"),
         }
     elif case["kind"] == "ycb_annotated_pose":
         evidence_dir = _path(case["evidence_dir"]) if "evidence_dir" in case else root / "evidence"

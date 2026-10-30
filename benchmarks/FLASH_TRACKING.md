@@ -49,6 +49,38 @@ pose coverage and error on the same frames, plus independently checked contact
 or task outcomes for rig runs. The saved demonstration masks alone cannot serve
 as both predictions and truth.
 
+## What transfers to FLASH
+
+The benchmark, demo preparation, and live run call the same surface tracker and
+scene/group pose estimator. A change to those shared algorithms is available to
+all three after their processes restart. Their **inputs and settings differ**:
+
+| Path                               | Masks and object reference                                        | Scene/group fallback | Gripper attachment                                    |
+| ---------------------------------- | ----------------------------------------------------------------- | -------------------- | ----------------------------------------------------- |
+| YCB / Caryx benchmark rerun        | Supplied masks; first observed view is the local reference        | Yes                  | No                                                    |
+| Saved rig-demo rows in this report | Saved SAM3 masks and prepared reference from the older extraction | Yes, as saved        | Demo attachment interval, without live motor feedback |
+| Fresh demo preparation             | SAM3; prepared appearance and surface reference                   | Yes                  | Demo attachment interval, without live motor feedback |
+| Live tracking debugger             | SAM3; local reference made from the clicked frame                 | No                   | No                                                    |
+| Live FLASH run                     | SAM3; prepared appearance and surface reference                   | Yes                  | Yes, updated from motor and vision evidence           |
+
+The two saved rig-demo traces were prepared with pose-trace selection version 6;
+the current extractor is version 8. **Scoring a saved trace does not rerun the
+tracker.** The frozen YCB configuration also differs from the rig demo in SAM3
+resolution (504 versus 448), group image scale (1.0 versus 0.5), and static
+prediction age (unlimited versus 4.5 s). A benchmark gain is therefore a reason
+to test a candidate on the rig, not evidence that the rig behavior already
+improved.
+
+To carry a change through: rerun the affected external benchmark cases with a
+candidate configuration; prepare a **new version** of the rig demo using that
+change and review its pose/mask replay; test the raw surface behavior in the live
+debugger with matching vision settings; then test a live FLASH attempt using the
+new prepared version. The live launcher rejects vision or scene settings that
+disagree with its prepared version. The debugger cannot validate group fallback
+or gripper attachment because it does not run those layers. A fresh rig-demo
+benchmark entry must point to the newly prepared evidence; changing code while
+scoring the old directory cannot change its results.
+
 The scorer reproduces the earlier YCB state counts and conditional point errors.
 As an end-to-end check, the current runner processed all 181 frames of the moving
 cracker-box case and produced the same 28 observed, 87 predicted, 66 lost states
