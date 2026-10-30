@@ -1,0 +1,198 @@
+{
+  "model": "robbyant/lingbot-depth-pretrain-vitl-14-v0.5",
+  "model_revision": "79204ed6b837f4fdd192cf563e59481fecfa0295",
+  "torch": "2.10.0+cu128",
+  "gpu": "NVIDIA GeForce RTX 5090",
+  "precision": "official infer bfloat16 autocast",
+  "parameters": 321161858,
+  "source_revision": "f3a237e434ae987bc38281476d6cfb5df3e4d739",
+  "input": "whole RGB image and whole sensor depth in metres; no SAM input to model",
+  "hole_conditioning": "raw zeros",
+  "resize": "official infer internal token resize at resolution_level=9; original RGB/depth supplied",
+  "holdout": "25% of 8x8 image tiles, RNG 42, intersected with mask eroded by 3x3 and valid raw depth; set to zero before inference",
+  "caveat": "Withheld sensor readings are not ground truth for true holes or transparency.",
+  "cases": [
+    {
+      "case": "box_holes",
+      "source": "/home/feit/.cache/ycbineoat/cracker_box_yalehand0/rgb/1582752387428843439.png",
+      "rgb_shape": [
+        480,
+        640,
+        3
+      ],
+      "network_shape": [
+        480,
+        640
+      ],
+      "missing_mask_percent": 71.14657706845863,
+      "forward_median_ms": 61.41719297738746,
+      "forward_p90_ms": 61.782598099671304,
+      "torch_peak_allocated_mb": 2995.165696,
+      "invalid_prediction_pixels": 0,
+      "invalid_prediction_object_pixels": 0,
+      "withheld_invalid_predictions": 0,
+      "change_on_measured_mask": {
+        "median_mm": 21.159379959106445,
+        "p90_mm": 29.787723541259766,
+        "count": 4122
+      },
+      "withheld_model": {
+        "median_mm": 18.262788772583008,
+        "p90_mm": 28.999774932861328,
+        "count": 1066
+      },
+      "withheld_nearest": {
+        "median_mm": 1.999974250793457,
+        "p90_mm": 5.9999823570251465,
+        "count": 1066
+      },
+      "input_sha256": "3372fde4d6b10fecc2ef318f4d95c15ca2acf4e7c4a19fd735aa4e7a441976d3"
+    },
+    {
+      "case": "sugar_control",
+      "source": "/home/feit/.cache/ycbineoat/sugar_box1/rgb/1579910609375910769.png",
+      "rgb_shape": [
+        480,
+        640,
+        3
+      ],
+      "network_shape": [
+        480,
+        640
+      ],
+      "missing_mask_percent": 0.0,
+      "forward_median_ms": 62.05060554202646,
+      "forward_p90_ms": 62.15239611919969,
+      "torch_peak_allocated_mb": 2989.197824,
+      "invalid_prediction_pixels": 9,
+      "invalid_prediction_object_pixels": 0,
+      "withheld_invalid_predictions": 0,
+      "change_on_measured_mask": {
+        "median_mm": 4.714548587799072,
+        "p90_mm": 17.985807418823242,
+        "count": 5713
+      },
+      "withheld_model": {
+        "median_mm": 7.807165145874023,
+        "p90_mm": 15.393316268920898,
+        "count": 1248
+      },
+      "withheld_nearest": {
+        "median_mm": 0.9999871253967285,
+        "p90_mm": 3.000020980834961,
+        "count": 1248
+      },
+      "input_sha256": "01f03099890edcccfd72b32c49cad320bd93472a1763909a97174ac624d93019"
+    },
+    {
+      "case": "dowel",
+      "source": "/home/feit/.cache/huggingface/lerobot/demos/insertion/recording/rgb/000280.jpg",
+      "rgb_shape": [
+        480,
+        848,
+        3
+      ],
+      "network_shape": [
+        480,
+        848
+      ],
+      "missing_mask_percent": 5.00161342368506,
+      "forward_median_ms": 73.76601651776582,
+      "forward_p90_ms": 74.01627068175003,
+      "torch_peak_allocated_mb": 3002.654208,
+      "invalid_prediction_pixels": 0,
+      "invalid_prediction_object_pixels": 0,
+      "withheld_invalid_predictions": 0,
+      "change_on_measured_mask": {
+        "median_mm": 11.27341365814209,
+        "p90_mm": 65.86542510986328,
+        "count": 2944
+      },
+      "withheld_model": {
+        "median_mm": 12.930885314941406,
+        "p90_mm": 34.38153076171875,
+        "count": 710
+      },
+      "withheld_nearest": {
+        "median_mm": 0.0,
+        "p90_mm": 1.0000169277191162,
+        "count": 710
+      },
+      "input_sha256": "41f0151c9d8a1b5c309016fb62b0ad54a38b06ac5ba33473d87a15ec8f0a4216"
+    },
+    {
+      "case": "dish",
+      "source": "/tmp/flash_case_retest_20261029/dish_000.npz",
+      "rgb_shape": [
+        256,
+        192,
+        3
+      ],
+      "network_shape": [
+        256,
+        192
+      ],
+      "missing_mask_percent": 0.0,
+      "forward_median_ms": 78.18899751873687,
+      "forward_p90_ms": 78.50003340281546,
+      "torch_peak_allocated_mb": 2987.869696,
+      "invalid_prediction_pixels": 0,
+      "invalid_prediction_object_pixels": 0,
+      "withheld_invalid_predictions": 0,
+      "change_on_measured_mask": {
+        "median_mm": 5.961894989013672,
+        "p90_mm": 24.13743782043457,
+        "count": 2193
+      },
+      "withheld_model": {
+        "median_mm": 4.028081893920898,
+        "p90_mm": 8.709275245666504,
+        "count": 289
+      },
+      "withheld_nearest": {
+        "median_mm": 6.999969482421875,
+        "p90_mm": 24.999977111816406,
+        "count": 289
+      },
+      "input_sha256": "7d5d5b167596c38fef47d5bce81af2c4d3a532d3b72b82f318e42b1b02d236f8"
+    },
+    {
+      "case": "mug",
+      "source": "/tmp/mug_000_audit.npz",
+      "rgb_shape": [
+        256,
+        192,
+        3
+      ],
+      "network_shape": [
+        256,
+        192
+      ],
+      "missing_mask_percent": 0.0,
+      "forward_median_ms": 78.27529852511361,
+      "forward_p90_ms": 78.41448560357094,
+      "torch_peak_allocated_mb": 2987.869696,
+      "invalid_prediction_pixels": 0,
+      "invalid_prediction_object_pixels": 0,
+      "withheld_invalid_predictions": 0,
+      "change_on_measured_mask": {
+        "median_mm": 4.520595073699951,
+        "p90_mm": 16.916730880737305,
+        "count": 1287
+      },
+      "withheld_model": {
+        "median_mm": 9.405792236328125,
+        "p90_mm": 19.164690017700195,
+        "count": 222
+      },
+      "withheld_nearest": {
+        "median_mm": 2.0000338554382324,
+        "p90_mm": 24.89997100830078,
+        "count": 222
+      },
+      "input_sha256": "da58fea507191ac940dab226745fbd85596a9af624b0284a2d1b73bee5438bdd"
+    }
+  ],
+  "mask": "apply_mask=False to inspect all inferred depth; no output mask filter used",
+  "attention": "official native SDPA; batch-one nested lists unwrapped through original Block.forward; depth token masking retained; xFormers parity not benchmarked"
+}

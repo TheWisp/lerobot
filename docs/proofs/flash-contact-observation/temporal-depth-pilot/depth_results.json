@@ -1,0 +1,180 @@
+{
+  "model": "depth-anything/prompt-depth-anything-vits",
+  "model_revision": "bdc8715134ff95362ffd0402748c6f08071bc1e4",
+  "torch": "2.10.0+cu128",
+  "gpu": "NVIDIA GeForce RTX 5090",
+  "precision": "float32",
+  "parameters": 25083073,
+  "source_revision": "9161547ca7151e14fcc8f490ad3cc02fa9437483",
+  "input": "whole RGB image and whole sensor depth in metres; no SAM input to model",
+  "resize": "RGB down to multiples of 14, maximum side 630; depth unchanged; output bilinear to original grid",
+  "holdout": "25% of 8x8 image tiles, RNG 42, intersected with mask eroded by 3x3 and valid raw depth; set to zero before inference",
+  "caveat": "Withheld sensor readings are not ground truth for true holes or transparency.",
+  "cases": [
+    {
+      "case": "box_holes",
+      "source": "/home/feit/.cache/ycbineoat/cracker_box_yalehand0/rgb/1582752387428843439.png",
+      "rgb_shape": [
+        480,
+        640,
+        3
+      ],
+      "network_shape": [
+        462,
+        630
+      ],
+      "missing_mask_percent": 71.14657706845863,
+      "forward_median_ms": 9.435450017917901,
+      "forward_p90_ms": 9.458007605280727,
+      "torch_peak_allocated_mb": 264.887296,
+      "change_on_measured_mask": {
+        "median_mm": 381.9114074707031,
+        "p90_mm": 453.87591552734375,
+        "count": 4122
+      },
+      "withheld_model": {
+        "median_mm": 434.6499938964844,
+        "p90_mm": 493.12152099609375,
+        "count": 1066
+      },
+      "withheld_nearest": {
+        "median_mm": 1.999974250793457,
+        "p90_mm": 5.9999823570251465,
+        "count": 1066
+      },
+      "input_sha256": "3372fde4d6b10fecc2ef318f4d95c15ca2acf4e7c4a19fd735aa4e7a441976d3"
+    },
+    {
+      "case": "sugar_control",
+      "source": "/home/feit/.cache/ycbineoat/sugar_box1/rgb/1579910609375910769.png",
+      "rgb_shape": [
+        480,
+        640,
+        3
+      ],
+      "network_shape": [
+        462,
+        630
+      ],
+      "missing_mask_percent": 0.0,
+      "forward_median_ms": 9.44871996762231,
+      "forward_p90_ms": 9.45972652407363,
+      "torch_peak_allocated_mb": 264.612864,
+      "change_on_measured_mask": {
+        "median_mm": 511.7660217285156,
+        "p90_mm": 577.75439453125,
+        "count": 5713
+      },
+      "withheld_model": {
+        "median_mm": 499.560302734375,
+        "p90_mm": 544.7194213867188,
+        "count": 1248
+      },
+      "withheld_nearest": {
+        "median_mm": 0.9999871253967285,
+        "p90_mm": 3.000020980834961,
+        "count": 1248
+      },
+      "input_sha256": "01f03099890edcccfd72b32c49cad320bd93472a1763909a97174ac624d93019"
+    },
+    {
+      "case": "dowel",
+      "source": "/home/feit/.cache/huggingface/lerobot/demos/insertion/recording/rgb/000280.jpg",
+      "rgb_shape": [
+        480,
+        848,
+        3
+      ],
+      "network_shape": [
+        350,
+        630
+      ],
+      "missing_mask_percent": 5.00161342368506,
+      "forward_median_ms": 8.175305498298258,
+      "forward_p90_ms": 8.180232474114746,
+      "torch_peak_allocated_mb": 283.902976,
+      "change_on_measured_mask": {
+        "median_mm": 5.027115345001221,
+        "p90_mm": 50.233856201171875,
+        "count": 2944
+      },
+      "withheld_model": {
+        "median_mm": 208.052978515625,
+        "p90_mm": 249.87547302246094,
+        "count": 710
+      },
+      "withheld_nearest": {
+        "median_mm": 0.0,
+        "p90_mm": 1.0000169277191162,
+        "count": 710
+      },
+      "input_sha256": "41f0151c9d8a1b5c309016fb62b0ad54a38b06ac5ba33473d87a15ec8f0a4216"
+    },
+    {
+      "case": "dish",
+      "source": "/tmp/flash_case_retest_20261029/dish_000.npz",
+      "rgb_shape": [
+        256,
+        192,
+        3
+      ],
+      "network_shape": [
+        252,
+        182
+      ],
+      "missing_mask_percent": 0.0,
+      "forward_median_ms": 3.6676060408353806,
+      "forward_p90_ms": 3.6793911596760154,
+      "torch_peak_allocated_mb": 145.459712,
+      "change_on_measured_mask": {
+        "median_mm": 113.2466812133789,
+        "p90_mm": 226.47909545898438,
+        "count": 2193
+      },
+      "withheld_model": {
+        "median_mm": 413.3020324707031,
+        "p90_mm": 476.0756530761719,
+        "count": 289
+      },
+      "withheld_nearest": {
+        "median_mm": 6.999969482421875,
+        "p90_mm": 24.999977111816406,
+        "count": 289
+      },
+      "input_sha256": "7d5d5b167596c38fef47d5bce81af2c4d3a532d3b72b82f318e42b1b02d236f8"
+    },
+    {
+      "case": "mug",
+      "source": "/tmp/mug_000_audit.npz",
+      "rgb_shape": [
+        256,
+        192,
+        3
+      ],
+      "network_shape": [
+        252,
+        182
+      ],
+      "missing_mask_percent": 0.0,
+      "forward_median_ms": 3.6675954470410943,
+      "forward_p90_ms": 3.677700099069625,
+      "torch_peak_allocated_mb": 145.459712,
+      "change_on_measured_mask": {
+        "median_mm": 10.545611381530762,
+        "p90_mm": 26.119220733642578,
+        "count": 1287
+      },
+      "withheld_model": {
+        "median_mm": 306.8308410644531,
+        "p90_mm": 356.2962951660156,
+        "count": 222
+      },
+      "withheld_nearest": {
+        "median_mm": 2.0000338554382324,
+        "p90_mm": 24.89997100830078,
+        "count": 222
+      },
+      "input_sha256": "da58fea507191ac940dab226745fbd85596a9af624b0284a2d1b73bee5438bdd"
+    }
+  ]
+}

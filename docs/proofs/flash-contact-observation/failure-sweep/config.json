@@ -1,0 +1,72 @@
+{
+  "vision_pipeline": {
+    "backend": "surface",
+    "sam_resolution": 504,
+    "min_similarity": 0.75,
+    "registration_threshold_m": 0.005,
+    "registration_min_inliers": 12,
+    "registration_trials": 100,
+    "visible_shape_fallback": false,
+    "parallel_surface_objects": true,
+    "pipeline_surface_frames": true,
+    "surface_object_workers": 2,
+    "surface_reference_max_points_per_view": 15000,
+    "compiled_surface_fit": true,
+    "reuse_surface_search": true,
+    "observation": {
+      "mask_margin_px": 2,
+      "depth_span_m": 0.01,
+      "depth_neighborhood_px": 3,
+      "normal_bilateral_diameter_px": 5,
+      "normal_bilateral_sigma_px": 2.0,
+      "huber_m": 0.005,
+      "surface_spacing_m": 0.003,
+      "samples_across_object": 64,
+      "min_surface_spacing_m": 0.001,
+      "component_gap_m": 0.01,
+      "validation_tile_px": 4
+    },
+    "shape": {
+      "depth_tolerance_m": 0.005,
+      "surface_spacing_m": 0.003,
+      "mask_boundary_tolerance_px": 2.0,
+      "max_surface_distance_m": 0.03,
+      "max_evaluations": 50,
+      "solver_tolerance": 1e-05,
+      "max_fit_points": 2048,
+      "nn_queries_per_worker": 512,
+      "batch_jacobian": true,
+      "batch_query_workers": 8
+    },
+    "motion": {
+      "crop_min_px": 160,
+      "crop_max_px": 480,
+      "crop_extent_multiplier": 2.5,
+      "input_size_px": 320,
+      "grid_step_px": 4,
+      "covisibility_min": 0.5,
+      "min_ransac_pairs": 6,
+      "ransac_distance_m": 0.006,
+      "ransac_confidence": 0.99,
+      "refinement_steps": 2,
+      "connected_dilation_px": 7
+    }
+  },
+  "causal_tracking": {
+    "history_frames": 120,
+    "queue_frames": 60,
+    "min_inliers": 12,
+    "max_frame_gap_s": 0.1,
+    "fit_threshold_m": 0.005,
+    "image_scale": 1.0,
+    "depth_support_radius_px": 1,
+    "scene_max_points": 800,
+    "environment_context_radius_m": 0.25,
+    "environment_min_motion_m": 0.008,
+    "environment_prediction_max_s": 1.0,
+    "environment_min_inliers": 12,
+    "static_prediction_max_s": null,
+    "max_pose_disagreement_translation_m": 0.01,
+    "max_pose_disagreement_rotation_rad": 0.15
+  }
+}
