@@ -15,6 +15,7 @@ import traceback
 from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass, field, replace
+from math import isfinite
 from queue import Empty, Full
 from threading import Event
 
@@ -88,6 +89,29 @@ class PoseProcessMetrics:
     last_source_time_s: float | None = None
     last_failures: dict[str, str] = field(default_factory=dict)
     failure_counts: dict[str, int] = field(default_factory=dict)
+    # Bounded aggregates for results delivered to the scene owner. Stages can
+    # overlap under frame pipelining, so their means must not be added as a
+    # purported end-to-end latency.
+    timing_samples: dict[str, int] = field(default_factory=dict)
+    timing_mean_ms: dict[str, float] = field(default_factory=dict)
+    timing_max_ms: dict[str, float] = field(default_factory=dict)
+
+    def record_timing(self, result: _Result) -> None:
+        def record(stage: str, value: object) -> None:
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not isfinite(value):
+                return
+            if value < 0:
+                return
+            count = self.timing_samples.get(stage, 0) + 1
+            mean = self.timing_mean_ms.get(stage, 0.0)
+            self.timing_samples[stage] = count
+            self.timing_mean_ms[stage] = mean + (float(value) - mean) / count
+            self.timing_max_ms[stage] = max(self.timing_max_ms.get(stage, 0.0), float(value))
+
+        record("mask", result.mask_ms)
+        for role, detail in result.details.items():
+            for stage in ("preprocess_ms", "matcher_wait_ms", "match_ms", "fit_ms"):
+                record(f"{role}.{stage}", detail.get(stage))
 
 
 class PoseProcessError(RuntimeError):
@@ -206,6 +230,7 @@ class PoseProcess:
                 if self.on_result is not None:
                     self.on_result(message)
                 self.metrics.delivered += 1
+                self.metrics.record_timing(message)
                 self.metrics.last_failures = message.failures
                 for role, reason in message.failures.items():
                     key = f"{role}: {reason}"

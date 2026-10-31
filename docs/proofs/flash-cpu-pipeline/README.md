@@ -98,6 +98,20 @@ preceding CPU fit; the debugger reports publication intervals and source age
 separately. There is no unbounded pending-frame queue. CPU scaling alone still
 does not deliver ten updates/s for this three-object live workload.
 
+On 2026-10-31, a separate camera-only check used the current cluttered tray
+with a clicked dowel, ring and gamepad, the default surface settings and the
+optional scene/group estimator enabled. Forty status samples over ten seconds
+showed median processing rates of 10.68 updates/s for the dowel alone and
+4.35 updates/s for all three objects. Median image ages were 173 and 386 ms,
+respectively; camera capture stayed near 30 Hz. In the three-object sample,
+the reported SAM mask stage took a median 87 ms and the complete vision update
+201 ms. The last packet's per-object image-match stages were 48–80 ms and fits
+53–60 ms. These stages overlap under pipelining and cannot be summed. This
+confirms the remaining multi-object throughput gap on a different scene; it
+does not measure pose accuracy during motion or robot-loop timing. The new
+`trial_report.json` stage aggregates let the next physical trial retain the
+same diagnosis without a separate debugger session.
+
 ## UFM image-pair batching check (2026-10-31)
 
 A temporary opt-in implementation sent three objects' 320-pixel image pairs

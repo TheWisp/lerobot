@@ -64,6 +64,19 @@ class EchoMaskBackend(EchoBackend):
         return super().update(frame)
 
 
+class TimingBackend(EchoBackend):
+    def update(self, frame):
+        self.last_mask_ms = 20.0 + frame.frame_id
+        self.last_details = {
+            self.reference.role: {
+                "preprocess_ms": 4.0,
+                "match_ms": 10.0 + frame.frame_id,
+                "fit_ms": 30.0,
+            }
+        }
+        return super().update(frame)
+
+
 def echo_factory():
     return EchoBackend()
 
@@ -78,6 +91,10 @@ def failing_factory():
 
 def occluded_factory():
     return OccludedBackend()
+
+
+def timing_factory():
+    return TimingBackend()
 
 
 def setup():
@@ -150,6 +167,34 @@ def test_pose_worker_only_emits_proposals_when_scene_estimator_owns_state():
         assert [result.estimates[0].evidence for result in proposals] == [Evidence.OBSERVED, Evidence.LOST]
         assert [result.frame_id for result in proposals] == [1, 2]
         assert worker.metrics.last_source_time_s == hidden.source_time_s
+    finally:
+        worker.close()
+
+
+def test_spawned_pose_worker_reports_per_stage_costs_for_delivered_frames():
+    reference, first = setup()
+    received = []
+    worker = PoseProcess(timing_factory, (reference,), None, on_result=received.append)
+    try:
+        worker.start(timeout_s=10)
+        for frame_id in (1, 2):
+            frame = replace(
+                first,
+                frame_id=frame_id,
+                source_time_s=float(frame_id),
+                available_time_s=float(frame_id),
+            )
+            assert worker.submit(frame)
+            poll_until(worker, lambda expected=frame_id: worker.metrics.delivered == expected)
+        assert [result.mask_ms for result in received] == [21.0, 22.0]
+        assert worker.metrics.timing_samples == {
+            "mask": 2,
+            "item.preprocess_ms": 2,
+            "item.match_ms": 2,
+            "item.fit_ms": 2,
+        }
+        assert worker.metrics.timing_mean_ms["mask"] == pytest.approx(21.5)
+        assert worker.metrics.timing_max_ms["item.match_ms"] == pytest.approx(12.0)
     finally:
         worker.close()
 

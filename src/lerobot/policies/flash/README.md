@@ -507,6 +507,11 @@ The executable core already separates:
   The GUI trial subprocess also saves its final camera, perception, planner
   and outcome diagnostics in the dataset's `flash/v1/trial_report.json`, so a
   failed attempt can be investigated after its console output disappears.
+  Its perception report gives bounded sample counts, means and maxima for
+  mask, per-object preprocessing, image matching, fit and matcher wait on
+  delivered vision results. These stages can overlap across frames, so their
+  means are not an additive end-to-end latency breakdown; the report also
+  counts submitted, superseded and delivered results.
 
 The annotation points to a source LeRobot dataset episode. Dense transform
 samples are derived geometry; the original RGB-D, robot observations and

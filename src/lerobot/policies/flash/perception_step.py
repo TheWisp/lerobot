@@ -19,6 +19,7 @@ class PerceptionResult:
     masks: dict[str, np.ndarray]
     details: dict[str, dict] = field(default_factory=dict)
     proposals: tuple[PoseProposal, ...] = ()
+    mask_ms: float | None = None
 
 
 class PerceptionPipeline:
@@ -97,6 +98,7 @@ class PerceptionPipeline:
             {role: mask.copy() for role, mask in masks.items()},
             dict(getattr(self.backend, "last_details", {})),
             proposals,
+            getattr(self.backend, "last_mask_ms", None),
         )
 
 
