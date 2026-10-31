@@ -68,12 +68,12 @@
     "v": "12"
   },
   "flash_recorded_editor.js": {
-    "v": "6",
-    "sha256_16": "8d07c468d16edca6"
+    "v": "7",
+    "sha256_16": "6b49cca3de945348"
   },
   "flash_scene_view.js": {
-    "sha256_16": "cbca75ec7f45f77e",
-    "v": "27"
+    "sha256_16": "ed6a1b02bdf8c237",
+    "v": "28"
   },
   "flash_surface_cloud.js": {
     "v": "1",
@@ -128,8 +128,8 @@
     "v": "27"
   },
   "run.js": {
-    "sha256_16": "391f20ecfd99b1ba",
-    "v": "180"
+    "sha256_16": "0bfd4bcc35ff5ed8",
+    "v": "181"
   },
   "style.css": {
     "sha256_16": "129ce1a360ad9a1f",

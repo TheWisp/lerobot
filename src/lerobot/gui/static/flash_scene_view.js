@@ -346,11 +346,13 @@ export function createFlashSceneView(canvas, surfaces, reprocessedSurfaces = {})
             const ref = references[role];
             const primaryRef = primaryReferences[role];
             const reprocessedRef = reprocessedReferences[role];
-            const skillPose = held?.role === role ? held : acceptedOnCamera(snapshot, role);
+            const accepted = acceptedOnCamera(snapshot, role);
+            const useHeld = held?.role === role && (snapshot.demo || !accepted?.pose);
+            const skillPose = useHeld ? held : accepted;
             const extracted = snapshot.layers?.[role]?.demo_extraction;
             const perceptionOnly = !skillPose && extracted?.evidence !== 'lost' && !!extracted?.pose;
             const used = skillPose || (perceptionOnly ? extracted : null);
-            const usedKind = perceptionOnly ? 'layer' : held?.role === role ? 'held' : 'accepted';
+            const usedKind = perceptionOnly ? 'layer' : useHeld ? 'held' : 'accepted';
             const observedRuns = frameEvidence?.masks_rle?.[role];
             if ((options.showSurface !== false || options.showPoints) && observedRuns?.length) {
                 const observed = makeObservedSurface(observedRuns, depth, rgba, snapshot.camera, options);
@@ -368,7 +370,7 @@ export function createFlashSceneView(canvas, surfaces, reprocessedSurfaces = {})
                 const surface = primaryRef.group.clone();
                 // A clone shares the buffers, but owns its material for this frame.
                 surface.children.forEach(child => { child.material = child.material.clone(); });
-                if (held?.role === role) surface.children[0].material.color.setHex(gripperColor);
+                if (useHeld) surface.children[0].material.color.setHex(gripperColor);
                 else if (used.evidence === 'predicted') {
                     surface.children[0].material.color.setHex(0xfbbf24);
                     surface.children[0].material.opacity = 0.2;
@@ -411,7 +413,8 @@ export function createFlashSceneView(canvas, surfaces, reprocessedSurfaces = {})
                 ghost.visible = false;
                 evidence.add(ghost);
             }
-            if (held?.role === role && held.pose && primaryRef) {
+            if (held?.role === role && held.pose && primaryRef &&
+                usedKind !== 'held' && skillPose?.estimator !== 'gripper_motion') {
                 const ghost = makeDashedReference(ref.geometry, gripperColor);
                 setPose(ghost, held.pose, baseFromCamera);
                 ghost.userData = {kind: 'held', role, enabled: !!options.showGripper};
@@ -499,9 +502,9 @@ export function createFlashSceneView(canvas, surfaces, reprocessedSurfaces = {})
         if (observedCenters[role]) return observedCenters[role].clone();
         const primaryLocal = latestSnapshot?.centers_object_m?.[role];
         const held = heldOnCamera(latestSnapshot);
-        const primaryPose = held?.role === role
-            ? held : acceptedOnCamera(latestSnapshot, role) ||
-                latestSnapshot?.layers?.[role]?.demo_extraction;
+        const accepted = acceptedOnCamera(latestSnapshot, role);
+        const primaryPose = held?.role === role && (latestSnapshot?.demo || !accepted?.pose)
+            ? held : accepted || latestSnapshot?.layers?.[role]?.demo_extraction;
         const sceneLocal = latestSnapshot?.reprocessed_scene_geometry?.centers_object_m?.[role];
         const scenePose = latestSnapshot?.layers?.[role]?.reprocessed_scene;
         const local = primaryLocal && primaryPose?.pose ? primaryLocal : sceneLocal;

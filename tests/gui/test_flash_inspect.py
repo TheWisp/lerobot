@@ -107,7 +107,7 @@ def test_flash_camera_replay_uses_source_dataset_row_after_repeated_capture(gui_
 
 def test_flash_3d_scene_shows_measured_object_without_saved_pose_or_surface(gui_page):
     result = gui_page.evaluate("""async () => {
-        const {createFlashSceneView} = await import('/static/flash_scene_view.js?v=23');
+        const {createFlashSceneView} = await import('/static/flash_scene_view.js?v=28');
         const host = document.createElement('div');
         host.style.cssText = 'position:relative;width:640px;height:480px';
         const canvas = document.createElement('canvas');
@@ -138,6 +138,45 @@ def test_flash_3d_scene_shows_measured_object_without_saved_pose_or_surface(gui_
     assert result["picked"] == "sample"
     assert result["focused"] and result["framed"]
     assert result["projectionError"] < 1e-6
+
+
+@pytest.mark.requires_playwright
+@pytest.mark.skipif(importlib.util.find_spec("playwright") is None, reason="Playwright is not installed")
+def test_flash_3d_scene_focuses_current_scene_pose_before_gripper_prediction(gui_page):
+    result = gui_page.evaluate("""async () => {
+        const {createFlashSceneView} = await import('/static/flash_scene_view.js?v=28');
+        const host = document.createElement('div');
+        host.style.cssText = 'position:relative;width:640px;height:480px';
+        const canvas = document.createElement('canvas');
+        canvas.style.cssText = 'width:100%;height:100%';
+        host.append(canvas); document.body.append(host);
+        const view = createFlashSceneView(canvas, {object: {
+            positions_object_m: [-0.01, 0, 0, 0.01, 0, 0, 0, 0.01, 0], indices: [0, 1, 2],
+        }});
+        const matrix = x => [[1, 0, 0, x], [0, 1, 0, 0], [0, 0, 1, 1], [0, 0, 0, 1]];
+        const identity = matrix(0);
+        const pose = (x, estimator, evidence) => ({role: 'object', pose: matrix(x),
+            estimator, evidence, source_time_s: 1, source_frame_id: 3});
+        const snapshot = {camera: {frame_id: 3, source_time_s: 1, width: 64, height: 48,
+            intrinsics: [[50, 0, 32], [0, 50, 24], [0, 0, 1]], base_from_camera: identity},
+            centers_object_m: {object: [0, 0, 0]},
+            accepted: {object: pose(0.3, 'visible_shape_rgbd', 'observed')},
+            held_prediction: pose(0.7, 'gripper_motion', 'predicted'),
+            held_prediction_at_camera: pose(0.7, 'gripper_motion', 'predicted')};
+        view.update(new Uint16Array(64 * 48).fill(1000),
+            new Uint8ClampedArray(64 * 48 * 4), snapshot,
+            {showProjection: true, showDepthScene: false, showAxes: false});
+        const focused = view.focus('object');
+        const rect = canvas.getBoundingClientRect();
+        const acceptedX = view.projectCameraXYZ([0.3, 0, 1])[0];
+        const gripperX = view.projectCameraXYZ([0.7, 0, 1])[0];
+        view.dispose(); host.remove();
+        return {focused, centerX: rect.left + rect.width / 2, acceptedX, gripperX};
+    }""")
+    assert result["focused"]
+    assert abs(result["acceptedX"] - result["centerX"]) + 10 < abs(result["gripperX"] - result["centerX"]), (
+        result
+    )
 
 
 def test_flash_inspect_subprocess_returns_spatial_intervals(tmp_path):
@@ -1812,6 +1851,33 @@ def test_flash_replay_draws_held_pose_at_displayed_camera_time(gui_page):
     assert 0.7 not in result
     assert "Gripper prediction on this camera frame" in page.locator("#flash-tracker-content").inner_text()
     assert "Latest motor-time prediction" in page.locator("#flash-tracker-content").inner_text()
+
+
+@pytest.mark.requires_playwright
+@pytest.mark.skipif(importlib.util.find_spec("playwright") is None, reason="Playwright is not installed")
+def test_flash_replay_uses_current_scene_pose_before_gripper_comparison(gui_page):
+    page = gui_page
+    page.evaluate("switchTab('run')")
+    page.evaluate("() => selectWorkflow('flash')")
+    selected = page.evaluate(
+        """() => {
+            const pose = (x, estimator, evidence) => ({role: 'object',
+                pose: [[1, 0, 0, x], [0, 1, 0, 0], [0, 0, 1, 1], [0, 0, 0, 1]],
+                source_time_s: 2.5, source_frame_id: 9, estimator, evidence});
+            renderFlashSnapshot({recorded_at_s: 3.0,
+                camera: {frame_id: 9, source_time_s: 2.5, width: 100, height: 100,
+                    intrinsics: [[100, 0, 50], [0, 100, 50], [0, 0, 1]],
+                    base_from_camera: [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]},
+                accepted: {object: pose(0.3, 'visible_shape_rgbd', 'observed')},
+                held_prediction: pose(0.7, 'gripper_motion', 'predicted'),
+                held_prediction_at_camera: pose(0.7, 'gripper_motion', 'predicted'),
+            }, 'Recording');
+            const row = document.querySelector('#flash-tracker-content .flash-tracker-selected[data-flash-index]');
+            return {kind: flashOverlayRows[Number(row.dataset.flashIndex)].kind, text: row.innerText};
+        }"""
+    )
+    assert selected["kind"] == "accepted"
+    assert "Accepted estimator pose" in selected["text"]
 
 
 @pytest.mark.requires_playwright
