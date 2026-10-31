@@ -64,17 +64,17 @@ def _summary(rows: list[dict]) -> dict:
     return {
         "frames": len(rows),
         "registration_source": "same_prepared_pose_trace",
-        "first_view_measured_p90_median_m": middle("first_view", "measured_to_reference_p90_m"),
-        "combined_views_measured_p90_median_m": middle("combined_views", "measured_to_reference_p90_m"),
-        "first_view_reverse_p90_median_m": middle("first_view", "reference_to_depth_p90_m"),
-        "combined_views_reverse_p90_median_m": middle("combined_views", "reference_to_depth_p90_m"),
-        "first_view_front_p90_median_m": middle("first_view", "reference_in_front_p90_m"),
-        "combined_views_front_p90_median_m": middle("combined_views", "reference_in_front_p90_m"),
-        "first_view_behind_p90_median_m": middle("first_view", "reference_behind_p90_m"),
-        "combined_views_behind_p90_median_m": middle("combined_views", "reference_behind_p90_m"),
+        "saved_views_measured_p90_median_m": middle("saved_views", "measured_to_reference_p90_m"),
+        "with_candidate_measured_p90_median_m": middle("with_candidate", "measured_to_reference_p90_m"),
+        "saved_views_reverse_p90_median_m": middle("saved_views", "reference_to_depth_p90_m"),
+        "with_candidate_reverse_p90_median_m": middle("with_candidate", "reference_to_depth_p90_m"),
+        "saved_views_front_p90_median_m": middle("saved_views", "reference_in_front_p90_m"),
+        "with_candidate_front_p90_median_m": middle("with_candidate", "reference_in_front_p90_m"),
+        "saved_views_behind_p90_median_m": middle("saved_views", "reference_behind_p90_m"),
+        "with_candidate_behind_p90_median_m": middle("with_candidate", "reference_behind_p90_m"),
         "measured_gap_improved_frames": sum(
-            row["combined_views"]["measured_to_reference_p90_m"]
-            < row["first_view"]["measured_to_reference_p90_m"]
+            row["with_candidate"]["measured_to_reference_p90_m"]
+            < row["saved_views"]["measured_to_reference_p90_m"]
             for row in rows
         ),
     }
@@ -89,7 +89,7 @@ def review_reference_view_candidates(
     base_from_camera: np.ndarray,
     max_points_per_view: int,
 ) -> tuple[list[dict], list[dict]]:
-    """Compare first-view geometry with first-plus-candidate geometry.
+    """Compare saved geometry with saved-plus-candidate geometry.
 
     Both registration and cross-frame scoring use the supplied pose trace.
     Scores expose internal agreement and possible contradictions but cannot
@@ -128,8 +128,6 @@ def review_reference_view_candidates(
         ) or len(set(indices)) != len(indices):
             raise ValueError(f"{role}: candidate frames must be distinct source frames in this demo")
         first = models[role]
-        if len(first.view_points_object_m) != 1:
-            raise ValueError("view-candidate review currently needs a single active reference view")
         for index in indices:
             estimate = frame_estimates[index].get(role)
             source = measured(role, index)
@@ -164,9 +162,10 @@ def review_reference_view_candidates(
                 points = move(source.points_camera_m, object_from_camera)
                 points = points[spatial_sample(points, max_points_per_view)]
                 combined = RegisteredSurfaceModel(
-                    role, first.reference_version, (first.view_points_object_m[0], points)
+                    role, first.reference_version, (*first.view_points_object_m, points)
                 )
-                prepared = PreparedSurfaceAgreement.build(combined)
+                saved_prepared = PreparedSurfaceAgreement.build(first)
+                combined_prepared = PreparedSurfaceAgreement.build(combined)
                 for other, estimates in sorted(frame_estimates.items()):
                     if other == index:
                         continue
@@ -184,20 +183,29 @@ def review_reference_view_candidates(
                     if frame is None or len(frame.points_camera_m) < 3:
                         continue
                     camera_from_object = camera_from_base @ other_estimate.pose
-                    first_score, combined_score = registered_surface_agreement(
+                    _, saved_score = registered_surface_agreement(
+                        first,
+                        camera_from_object,
+                        frame.points_camera_m,
+                        frame.clean_depth_pixels,
+                        frame.depth_m,
+                        intrinsics,
+                        prepared=saved_prepared,
+                    )
+                    _, combined_score = registered_surface_agreement(
                         combined,
                         camera_from_object,
                         frame.points_camera_m,
                         frame.clean_depth_pixels,
                         frame.depth_m,
                         intrinsics,
-                        prepared=prepared,
+                        prepared=combined_prepared,
                     )
                     rows.append(
                         {
                             "frame_index": other,
-                            "first_view": _agreement(first_score),
-                            "combined_views": _agreement(combined_score),
+                            "saved_views": _agreement(saved_score),
+                            "with_candidate": _agreement(combined_score),
                         }
                     )
                 item["status"] = "registration_hypothesis"

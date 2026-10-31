@@ -20,7 +20,10 @@ from lerobot.policies.flash.sealed_reference_view_review import (
 )
 from lerobot.policies.flash.surface_grounding import ShapeConfig
 from lerobot.policies.flash.surface_observation import SurfaceObservationConfig, observation
-from lerobot.policies.flash.surface_reference import RegisteredSurfaceModel
+from lerobot.policies.flash.surface_reference import (
+    RegisteredSurfaceModel,
+    registered_surface_agreement,
+)
 from lerobot.policies.flash.trajectory import Evidence, PoseEstimate
 
 
@@ -99,18 +102,54 @@ def test_candidate_review_keeps_first_reference_and_separates_depth_directions(r
     assert len(summaries) == len(details) == 2
     assert all(item["status"] == "registration_hypothesis" for item in summaries)
     assert all(item["cross_frame"]["frames"] == 3 for item in summaries)
-    assert all("combined_views" in row for item in details for row in item["comparisons"])
+    assert all("with_candidate" in row for item in details for row in item["comparisons"])
     # A closer patch at frame 430 can coexist with a geometrically wrong
     # projected surface. Both directions must remain visible to the reviewer.
     at_430 = next(row for row in details[0]["comparisons"] if row["frame_index"] == 430)
-    assert at_430["combined_views"]["reference_to_depth_p90_m"] > 0.1
-    for comparison in (at_430["first_view"], at_430["combined_views"]):
+    assert at_430["with_candidate"]["reference_to_depth_p90_m"] > 0.1
+    for comparison in (at_430["saved_views"], at_430["with_candidate"]):
         assert comparison["reference_in_front_p90_m"] is not None
         assert comparison["reference_behind_p90_m"] is not None
         assert comparison["reference_in_front_p90_m"] >= 0
         assert comparison["reference_behind_p90_m"] >= 0
     np.testing.assert_array_equal(model.view_points_object_m[0], original)
     assert len(model.view_points_object_m) == 1
+
+
+def test_candidate_review_accepts_existing_multiple_registered_views(recorded_views):
+    intrinsics, base_from_camera, model, estimates, measured = recorded_views
+    second = model.view_points_object_m[0].copy()
+    second[:, 0] -= 0.03
+    multi = RegisteredSurfaceModel("object", "recorded", (model.view_points_object_m[0], second))
+    summaries, details = review_reference_view_candidates(
+        estimates,
+        (multi,),
+        {"object": [290]},
+        lambda role, index: measured[index],
+        intrinsics,
+        base_from_camera,
+        256,
+    )
+    assert summaries[0]["status"] == "registration_hypothesis"
+    assert details[0]["comparisons"]
+    assert len(multi.view_points_object_m) == 2
+    # The baseline must include every saved view, not only the primary one.
+    rows = details[0]["comparisons"]
+    assert all("saved_views" in row and "with_candidate" in row for row in rows)
+    other = rows[0]["frame_index"]
+    camera_from_object = np.linalg.inv(base_from_camera) @ estimates[other]["object"].pose
+    first_score, saved_score = registered_surface_agreement(
+        multi,
+        camera_from_object,
+        measured[other].points_camera_m,
+        measured[other].clean_depth_pixels,
+        measured[other].depth_m,
+        intrinsics,
+    )
+    assert saved_score.reference_to_depth_p90_m > first_score.reference_to_depth_p90_m
+    assert rows[0]["saved_views"]["reference_to_depth_p90_m"] == pytest.approx(
+        saved_score.reference_to_depth_p90_m
+    )
 
 
 def test_independent_view_fit_reports_alternatives_without_using_the_pose_trace(recorded_views):
@@ -267,3 +306,14 @@ def test_old_prepared_demo_rebuilds_first_view_from_saved_mask_without_mutating_
     assert result["candidate"]["cross_frame"]["frames"] == 2
     assert "independent_fits" in result
     assert sorted(path.relative_to(root) for path in root.rglob("*") if path.is_file()) == original_files
+
+    second = ReferenceSnippet(
+        "test/demo", 0, 1, "object", identity, "flash/v1/masks/object.png", "calibration"
+    )
+    prepared.references = (ObjectReference("object", "v1", (*reference.snippets, second)),)
+    points = np.array([[x, y, 1.0] for x in np.linspace(-0.05, 0.05, 8) for y in np.linspace(-0.05, 0.05, 8)])
+    prepared.surface_models = (RegisteredSurfaceModel("object", "v1", (points, points.copy())),)
+    reviewed_again = review_sealed_reference_view(root, bundle, 0, "object", 1)
+    assert reviewed_again["replacing_saved_view"] is True
+    assert reviewed_again["saved_view_count"] == 1
+    assert reviewed_again["candidate"]["status"] == "registration_hypothesis"

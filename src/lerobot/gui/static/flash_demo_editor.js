@@ -82,6 +82,7 @@ function _flashEditorSetReferenceFrame(frameIndex) {
     if (_flashEditorReferenceFrame(role) !== Number(frameIndex)) {
         (annotation.reference_frames_by_role ||= {})[role] = Number(frameIndex);
         if (annotation.reference_polygons_by_role) delete annotation.reference_polygons_by_role[role];
+        if (annotation.additional_reference_views_by_role) delete annotation.additional_reference_views_by_role[role];
         flashDemoEditor.message = `${role} reference changed; review its new mask.`;
         flashDemoEditor.referenceReview = null;
         flashDemoEditor.referenceReviewCandidateIndex = null;
@@ -120,6 +121,31 @@ async function _flashEditorReviewCurrentView() {
             document.getElementById('flash-reference-review-result')?.scrollIntoView({block: 'center'});
         }
     }
+}
+
+function _flashEditorAddReviewedView(fitIndex) {
+    const state = flashDemoEditor;
+    const review = state?.referenceReview;
+    const data = review?.result;
+    const fits = [...(data?.independent_fits || []), ...(data?.gripper_motion_fits || [])];
+    const fit = fits[fitIndex];
+    if (!fit || state.referenceReviewCandidateIndex !== fitIndex || fit.converged !== true ||
+        !fit.object_from_camera || !data.mask_sha256 ||
+        !data.source_bundle || !data.source_reference_version ||
+        review.role !== state.role || _flashEditorReferenceFrame(review.role) !== data.base_reference_frame_index ||
+        review.frameIndex === data.base_reference_frame_index) {
+        showToast('View not added', 'Choose a converged fit from a saved reference with a valid mask.', 'warning');
+        return;
+    }
+    const views = ((state.annotation.additional_reference_views_by_role ||= {})[review.role] ||= []);
+    const spec = {frame_index: review.frameIndex, object_from_camera: fit.object_from_camera,
+        source_bundle: data.source_bundle, source_reference_version: data.source_reference_version,
+        mask_sha256: data.mask_sha256};
+    const oldIndex = views.findIndex(view => view.frame_index === review.frameIndex);
+    if (oldIndex < 0) views.push(spec);
+    else views[oldIndex] = spec;
+    state.message = `Frame ${review.frameIndex} added for ${review.role}. Preview a new version to evaluate it.`;
+    _flashEditorRender();
 }
 
 function _flashEditorUpdateStatus() {
@@ -501,6 +527,18 @@ function _flashEditorRender() {
         references.append(row);
     }
     if (!state.raw) {
+        const extraViews = a.additional_reference_views_by_role?.[state.role] || [];
+        for (const view of extraViews) {
+            const row = document.createElement('div');
+            row.className = 'flash-editor-moment';
+            row.append(Object.assign(document.createElement('span'),
+                {textContent: `Additional view · frame ${view.frame_index}`}));
+            _flashEditorButton(row, 'Remove', () => {
+                a.additional_reference_views_by_role[state.role] = extraViews.filter(item => item !== view);
+                _flashEditorRender();
+            });
+            references.append(row);
+        }
         _flashEditorButton(references, 'Go to appearance view', () =>
             _flashEditorJump(_flashEditorReferenceFrame(state.role)));
         const review = _flashEditorButton(references,
@@ -509,7 +547,7 @@ function _flashEditorRender() {
         review.disabled = !state.role || state.referenceReviewRunning ||
             !state.preparationReport?.pose_trace_cache;
         const explanation = document.createElement('p');
-        explanation.textContent = 'Uses the saved demo. This check does not add the view or include unsaved edits.';
+        explanation.textContent = 'Check a saved frame, preview a fitted alignment, then add it to a new prepared version. Unsaved mask edits are not included.';
         references.append(explanation);
         if (state.referenceReview) {
             const result = state.referenceReview;
@@ -528,15 +566,15 @@ function _flashEditorRender() {
             else {
                 const score = candidate.cross_frame;
                 const mm = value => value == null ? 'unavailable' : `${(value * 1000).toFixed(2)} mm`;
-                message.textContent = `Checked on ${score.frames} other observed frames. Saved view → with this view:`;
+                message.textContent = `Checked on ${score.frames} other observed frames. Saved views → with this view:`;
                 const surface = document.createElement('p');
-                surface.textContent = `Measured points to surface: ${mm(score.first_view_measured_p90_median_m)} → ${mm(score.combined_views_measured_p90_median_m)}`;
+                surface.textContent = `Measured points to surface: ${mm(score.saved_views_measured_p90_median_m)} → ${mm(score.with_candidate_measured_p90_median_m)}`;
                 box.append(surface);
                 const front = document.createElement('p');
-                front.textContent = `Surface closer than measured depth: ${mm(score.first_view_front_p90_median_m)} → ${mm(score.combined_views_front_p90_median_m)}`;
+                front.textContent = `Surface closer than measured depth: ${mm(score.saved_views_front_p90_median_m)} → ${mm(score.with_candidate_front_p90_median_m)}`;
                 box.append(front);
                 const behind = document.createElement('p');
-                behind.textContent = `Surface farther than measured depth: ${mm(score.first_view_behind_p90_median_m)} → ${mm(score.combined_views_behind_p90_median_m)}`;
+                behind.textContent = `Surface farther than measured depth: ${mm(score.saved_views_behind_p90_median_m)} → ${mm(score.with_candidate_behind_p90_median_m)}`;
                 box.append(behind);
                 const caveat = document.createElement('p');
                 caveat.textContent = 'A farther surface may be hidden. A closer surface conflicts more strongly. The same estimated poses placed and checked this view, so neither value proves accuracy.';
@@ -566,8 +604,8 @@ function _flashEditorRender() {
                         : `Independent geometry fits · ${fits.length} proposals`}));
                 independent.append(Object.assign(document.createElement('p'), {textContent:
                     gripperFits.length
-                        ? 'Geometry starts from this frame’s mask and depth. Gripper motion starts from the selected pre-grasp pose and recorded motor movement; its second proposal is refined against this frame. Pink previews are unverified; no view is added.'
-                        : 'Fitted from this frame’s mask and depth, without the saved pose. Pink preview is unverified; no view is added.'}));
+                        ? 'Geometry starts from this frame’s mask and depth. Gripper motion starts from the selected pre-grasp pose and recorded motor movement; its second proposal is refined against this frame. Review the pink preview before adding a converged fit.'
+                        : 'Fitted from this frame’s mask and depth, without the saved pose. Review the pink preview before adding a converged fit.'}));
                 if (result.result?.independent_fit_error)
                     independent.append(Object.assign(document.createElement('p'),
                         {textContent: result.result.independent_fit_error}));
@@ -585,9 +623,16 @@ function _flashEditorRender() {
                         _flashEditorJump(result.frameIndex);
                         for (const choice of independent.querySelectorAll('button[data-fit-index]'))
                             choice.textContent = Number(choice.dataset.fitIndex) === index ? 'Showing fit' : 'Preview fit';
+                        for (const choice of independent.querySelectorAll('button[data-add-fit-index]'))
+                            choice.disabled = Number(choice.dataset.addFitIndex) !== index;
                         _flashDrawOverlay();
                     });
                     button.dataset.fitIndex = index;
+                    if (fit.converged === true && fit.object_from_camera && result.result?.mask_sha256) {
+                        const add = _flashEditorButton(row, 'Add this view', () => _flashEditorAddReviewedView(index));
+                        add.disabled = state.referenceReviewCandidateIndex !== index;
+                        add.dataset.addFitIndex = index;
+                    }
                     independent.append(row);
                 });
                 box.append(independent);
@@ -629,6 +674,11 @@ function _flashEditorRender() {
     if (roles.length) {
         _flashEditorField(objects, 'Object', state.role, role => { _flashEditorMaskRole(role); _flashEditorRender(); }, roles);
         _flashEditorField(objects, 'Segmentation prompt', a.prompts_by_role[state.role], value => {
+            if (a.prompts_by_role[state.role] !== value) {
+                delete a.additional_reference_views_by_role?.[state.role];
+                state.referenceReview = null;
+                state.referenceReviewCandidateIndex = null;
+            }
             a.prompts_by_role[state.role] = value;
         });
         const actionRoles = objects;
@@ -643,6 +693,7 @@ function _flashEditorRender() {
             delete a.axial_symmetry_roles?.[state.role];
             delete a.reference_polygons_by_role?.[state.role];
             delete a.reference_frames_by_role?.[state.role];
+            delete a.additional_reference_views_by_role?.[state.role];
             state.role = Object.keys(a.prompts_by_role)[0] || '';
             if (!a.prompts_by_role[a.held_role]) a.held_role = state.role;
             if (!a.prompts_by_role[a.target_role]) a.target_role = '';
@@ -696,6 +747,9 @@ function _flashEditorRender() {
                     showToast('Mask needs three points', 'Click at least three vertices.', 'warning'); return;
                 }
                 (a.reference_polygons_by_role ||= {})[state.role] = [...state.vertices];
+                delete a.additional_reference_views_by_role?.[state.role];
+                state.referenceReview = null;
+                state.referenceReviewCandidateIndex = null;
                 state.drawing = false; state.vertices = [];
                 _flashEditorRender();
             });
@@ -713,6 +767,9 @@ function _flashEditorRender() {
             if (a.reference_polygons_by_role?.[state.role]?.length) {
                 _flashEditorButton(maskTools, 'Use automatic mask', () => {
                     delete a.reference_polygons_by_role[state.role];
+                    delete a.additional_reference_views_by_role?.[state.role];
+                    state.referenceReview = null;
+                    state.referenceReviewCandidateIndex = null;
                     _flashEditorRender();
                 });
             }

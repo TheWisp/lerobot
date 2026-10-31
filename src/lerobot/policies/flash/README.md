@@ -61,13 +61,19 @@ The demo editor keeps the current key frame and grasp/release timing beside
 playback. Raw demo setup also shows object naming. Object corrections, tracker
 experiments and numeric settings are optional.
 In **Objects → Clear views**, **Check this view** compares a selected frame
-against the saved first reference across other observed demo frames. It shows
+against the saved reference views across other observed demo frames. It shows
 how well measured points fit the saved surface and separates projected surface
 that falls in front of measured depth from surface behind it. The latter may
 simply be hidden; neither score alone establishes a correct pose. The check
 uses the prepared pose trace to place and check the candidate, so it cannot
-independently prove its accuracy. It does not modify the skill or include
-unsaved edits. Older sealed
+independently prove its accuracy. The independent geometry and gripper-seeded
+fits can also be previewed. A reviewer may add a converged fit as an additional
+RGB-D reference view, then prepare a new demo version. Preparation rechecks
+the exact reviewed mask, source frame, calibration and shared object frame;
+changing the primary reference clears the additional views. The saved views
+feed appearance matching and the registered surface model. Adding a view does
+not change the saved motion or itself prove the new alignment is correct.
+The check does not modify the skill or include unsaved edits. Older sealed
 preparations can rebuild their first surface from the saved reference mask.
 The same signed depth gaps are recorded with live surface evidence and shown in
 the camera-only debugger. Live acceptance still uses the absolute gap: a large
@@ -290,10 +296,11 @@ the current masked depth, using the first registered view and all registered
 views separately. It measures both visible depth points to the saved surface
 and the saved surface back to reliable depth pixels. A low one-way distance can
 hide a wrong pose; these numbers are diagnostics, not confidence probabilities.
-The sealed-demo importer currently registers one view per object, so its two
-readouts coincide. The saved surfaces do not yet alter pose acceptance or
-control; registering additional views and validating their effect on fitting
-remain necessary before that switch.
+The sealed-demo importer starts with one view per object and can add reviewed
+views as above. The saved surfaces do not yet alter pose acceptance or control;
+the current surface fit still starts from the first live observed surface.
+The additional views improve the reference evidence and diagnostics, but their
+effect on live fitting needs independent validation before that switch.
 The 3D demo viewer draws every registered snippet in the saved object frame,
 with separate triangles for each measured view. This is display geometry;
 showing several views does not establish that their registration is correct.

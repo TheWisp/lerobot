@@ -1115,14 +1115,14 @@ def test_run_flash_lists_demos_and_shows_extracted_pose_overlay(gui_page):
                     "status": "registration_hypothesis",
                     "cross_frame": {
                         "frames": 8,
-                        "first_view_measured_p90_median_m": 0.002,
-                        "combined_views_measured_p90_median_m": 0.001,
-                        "first_view_reverse_p90_median_m": 0.003,
-                        "combined_views_reverse_p90_median_m": 0.009,
-                        "first_view_front_p90_median_m": 0.0,
-                        "combined_views_front_p90_median_m": 0.0,
-                        "first_view_behind_p90_median_m": 0.003,
-                        "combined_views_behind_p90_median_m": 0.009,
+                        "saved_views_measured_p90_median_m": 0.002,
+                        "with_candidate_measured_p90_median_m": 0.001,
+                        "saved_views_reverse_p90_median_m": 0.003,
+                        "with_candidate_reverse_p90_median_m": 0.009,
+                        "saved_views_front_p90_median_m": 0.0,
+                        "with_candidate_front_p90_median_m": 0.0,
+                        "saved_views_behind_p90_median_m": 0.003,
+                        "with_candidate_behind_p90_median_m": 0.009,
                     },
                 },
                 "largest_front_conflicts": [],
@@ -1145,8 +1145,21 @@ def test_run_flash_lists_demos_and_shows_extracted_pose_overlay(gui_page):
                         "measured_to_reference_p90_m": 0.006,
                         "reference_to_depth_p90_m": 0.009,
                         "projected_points_xy": [[21, 20], [31, 20], [31, 30], [21, 30]],
-                    }
+                    },
+                    {
+                        "seed": "gripper_motion",
+                        "converged": True,
+                        "fit_cost": 0.1,
+                        "measured_to_reference_p90_m": 0.002,
+                        "reference_to_depth_p90_m": 0.003,
+                        "object_from_camera": np.eye(4).tolist(),
+                        "projected_points_xy": [[22, 20], [32, 20], [32, 30], [22, 30]],
+                    },
                 ],
+                "source_bundle": "flash/v1/prepared/new-skill/bundle.json",
+                "source_reference_version": "new-skill:calibration",
+                "base_reference_frame_index": 4,
+                "mask_sha256": "reviewed-mask-hash",
             }
         )
 
@@ -1196,6 +1209,22 @@ def test_run_flash_lists_demos_and_shows_extracted_pose_overlay(gui_page):
             if (data[i] === 255 && data[i + 1] === 77 && data[i + 2] === 109 && data[i + 3]) return true;
         return false;
     }""")
+    assert page.get_by_role("button", name="Add this view").is_disabled()
+    page.locator("button[data-fit-index='2']").click()
+    page.get_by_role("button", name="Add this view").click()
+    added = page.evaluate("flashDemoEditor.annotation.additional_reference_views_by_role.object")
+    assert added == [
+        {
+            "frame_index": 5,
+            "object_from_camera": np.eye(4).tolist(),
+            "source_bundle": "flash/v1/prepared/new-skill/bundle.json",
+            "source_reference_version": "new-skill:calibration",
+            "mask_sha256": "reviewed-mask-hash",
+        }
+    ]
+    assert (
+        page.locator("#flash-demo-editor-change-status").inner_text() == "Unsaved edits · preview to review"
+    )
     page.locator("#flash-reference-review-result details summary").first.click()
     page.locator("#flash-reference-review-result").get_by_role("button", name="Frame 4").click()
     assert page.evaluate("_flashEditorCurrentFrame().frame_index") == 4

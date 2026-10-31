@@ -27,7 +27,7 @@ from lerobot.policies.flash.appearance import (
 )
 from lerobot.policies.flash.causal_service import CausalTrackingConfig
 from lerobot.policies.flash.dino_features import DinoPatchExtractor
-from lerobot.policies.flash.geometry import inverse
+from lerobot.policies.flash.geometry import inverse, transform
 from lerobot.policies.flash.held_pose_diagnostics import _arm_pose_at, compare_demo_held_pose
 from lerobot.policies.flash.offline_perception import POSE_TRACE_SELECTION_VERSION, extract_pose_trace
 from lerobot.policies.flash.perception import (
@@ -41,6 +41,7 @@ from lerobot.policies.flash.runtime import AttachmentRuntimeLimits
 from lerobot.policies.flash.scene_evidence_writer import (
     SCENE_EVIDENCE_CAPTURE_VERSION,
     SceneEvidenceWriter,
+    read_scene_evidence_mask,
 )
 from lerobot.policies.flash.skill import (
     AttachmentAction,
@@ -329,6 +330,75 @@ def _reference_observations(
     return observations
 
 
+def _additional_reference_views(
+    root: Path,
+    role: str,
+    specs: list[dict],
+    *,
+    primary_frame_index: int,
+    calibration_version: str,
+    repo_id: str,
+    episode: int,
+    output_name: str,
+    frame_count: int,
+    frame_loader,
+) -> tuple[ReferenceAppearanceFrame, ...]:
+    """Use only manually chosen alignments and their exact reviewed masks."""
+    if not isinstance(specs, list):
+        raise ValueError(f"{role}: additional reference views must be a list")
+    prepared_root = (root / "flash" / "v1" / "prepared").resolve()
+    seen = {primary_frame_index}
+    views = []
+    for spec in specs:
+        if not isinstance(spec, dict) or set(spec) != {
+            "frame_index",
+            "object_from_camera",
+            "source_bundle",
+            "source_reference_version",
+            "mask_sha256",
+        }:
+            raise ValueError(f"{role}: additional reference view has invalid fields")
+        index = spec["frame_index"]
+        if type(index) is not int or not 0 <= index < frame_count or index in seen:
+            raise ValueError(f"{role}: additional reference frames must be distinct demo frames")
+        seen.add(index)
+        source = Path(spec["source_bundle"])
+        if source.is_absolute():
+            raise ValueError("reference-view source must be relative to its dataset")
+        bundle = (root / source).resolve()
+        if not bundle.is_relative_to(prepared_root) or bundle.name != "bundle.json":
+            raise ValueError("reference-view source must be a prepared version in this dataset")
+        manifest = json.loads(bundle.read_text(encoding="utf-8"))
+        source_reference = next((item for item in manifest["references"] if item["role"] == role), None)
+        if source_reference is None or source_reference["version"] != spec["source_reference_version"]:
+            raise ValueError(f"{role}: reviewed reference version has changed")
+        first = source_reference["snippets"][0]
+        if (
+            first["frame_index"] != primary_frame_index
+            or first["calibration_version"] != calibration_version
+            or first["repo_id"] != repo_id
+            or first["episode"] != episode
+            or not np.allclose(transform(first["object_from_camera"]), np.eye(4))
+        ):
+            raise ValueError(f"{role}: reviewed view belongs to another primary object frame")
+        frame = frame_loader(index)
+        mask = read_scene_evidence_mask(
+            bundle.parent / "scene-evidence",
+            index,
+            role,
+            image_shape=frame.depth.shape,
+            calibration_version=calibration_version,
+        )
+        digest = hashlib.sha256(mask.astype(np.uint8).tobytes()).hexdigest()
+        if digest != spec["mask_sha256"]:
+            raise ValueError(f"{role}: reviewed mask has changed; check the view again")
+        pose = transform(spec["object_from_camera"])
+        mask_rel = f"flash/v1/masks/{output_name}-{role}-{index:06d}.png"
+        snippet = ReferenceSnippet(repo_id, episode, index, role, pose, mask_rel, calibration_version)
+        views.append(ReferenceAppearanceFrame(snippet, frame, mask))
+    return tuple(views)
+
+
 def prepare(
     root: Path, annotation_path: Path, *, output_name: str, keypoints_path: Path | None = None
 ) -> tuple[Path, dict]:
@@ -441,6 +511,10 @@ def prepare(
     extractor = DinoPatchExtractor(model_id=annotation["descriptor_model_id"])
     references, models, surface_models = [], [], []
     mask_paths = {}
+    masks_to_write: list[tuple[str, np.ndarray]] = []
+    additional_views = annotation.get("additional_reference_views_by_role", {})
+    if not isinstance(additional_views, dict) or set(additional_views) - set(prompts):
+        raise ValueError("additional reference views must name prepared object roles")
     for role in prompts:
         role_frame_index = reference_indices[role]
         reference_frame, reference_mask = reference_observations[role]
@@ -454,8 +528,24 @@ def prepare(
             mask_rel,
             version,
         )
-        reference = ObjectReference(role, f"{output_name}:{version}", (snippet,))
-        views = (ReferenceAppearanceFrame(snippet, reference_frame, reference_mask),)
+        views = (
+            ReferenceAppearanceFrame(snippet, reference_frame, reference_mask),
+            *_additional_reference_views(
+                root,
+                role,
+                additional_views.get(role, []),
+                primary_frame_index=role_frame_index,
+                calibration_version=version,
+                repo_id=annotation["repo_id"],
+                episode=annotation["episode"],
+                output_name=output_name,
+                frame_count=len(camera_times),
+                frame_loader=lambda index: _frame(
+                    root, index, intrinsics, base_from_camera, version, float(camera_times[index])
+                ),
+            ),
+        )
+        reference = ObjectReference(role, f"{output_name}:{version}", tuple(view.snippet for view in views))
         model = build_appearance_model(reference, views, extractor)
         surface_model = build_registered_surface_model(
             reference,
@@ -467,6 +557,7 @@ def prepare(
         models.append(model)
         surface_models.append(surface_model)
         mask_paths[role] = mask_rel
+        masks_to_write.extend((view.snippet.mask_artifact, view.mask) for view in views)
 
     axial_symmetries = []
     for role, spec in annotation["axial_symmetry_roles"].items():
@@ -498,6 +589,7 @@ def prepare(
         )
     }
     cache_identity["reference_polygons_by_role"] = annotation.get("reference_polygons_by_role", {})
+    cache_identity["additional_reference_views_by_role"] = additional_views
     if custom_reference_indices:
         cache_identity["reference_frames_by_role"] = reference_indices
     causal_config = (
@@ -962,10 +1054,10 @@ def prepare(
         causal_config,
         tuple(surface_models),
     )
-    for role, rel in mask_paths.items():
+    for rel, mask in masks_to_write:
         path = root / rel
         path.parent.mkdir(parents=True, exist_ok=True)
-        if not cv2.imwrite(str(path), reference_observations[role][1].astype(np.uint8) * 255):
+        if not cv2.imwrite(str(path), mask.astype(np.uint8) * 255):
             raise OSError(f"cannot write reference mask {path}")
     manifest = prepared.save(destination)
     if held_attachment_policy is not None:

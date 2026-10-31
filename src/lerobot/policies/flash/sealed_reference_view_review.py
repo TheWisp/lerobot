@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import gzip
+import hashlib
 import json
 from dataclasses import asdict
 from pathlib import Path
@@ -86,8 +87,6 @@ def review_sealed_reference_view(
     reference = next((item for item in prepared.references if item.role == role), None)
     if reference is None:
         raise ValueError("selected object is not in this prepared demo")
-    if len(reference.snippets) != 1:
-        raise ValueError("this review currently needs a single active reference view")
     annotation = json.loads((bundle_path.parent / "annotation.json").read_text(encoding="utf-8"))
     report = json.loads((bundle_path.parent / "preparation-report.json").read_text(encoding="utf-8"))
     if annotation["episode"] != prepared.skill.source_episode:
@@ -151,6 +150,8 @@ def review_sealed_reference_view(
         raise ValueError("prepared reference has no aligned mask and depth")
     model = next((item for item in prepared.surface_models if item.role == role), None)
     if model is None:
+        if len(reference.snippets) != 1:
+            raise ValueError("prepared multi-view reference needs its saved surface model")
         # Older prepared bundles predate saved surface models. Rebuild only the
         # first view from their immutable reference mask and recorded depth.
         depth_m = first_depth.astype(np.float32) * 0.001
@@ -160,6 +161,26 @@ def review_sealed_reference_view(
         points = move(observed["points"], snippet.object_from_camera)
         limit = config.surface_reference_max_points_per_view
         model = RegisteredSurfaceModel(role, reference.version, (points[spatial_sample(points, limit)],))
+    existing_view_index = next(
+        (
+            index
+            for index, item in enumerate(reference.snippets[1:], start=1)
+            if item.frame_index == frame_index
+        ),
+        None,
+    )
+    if existing_view_index is not None:
+        # Rechecking an already registered frame must compare against the
+        # remaining views, rather than scoring the candidate against itself.
+        model = RegisteredSurfaceModel(
+            role,
+            reference.version,
+            tuple(
+                points
+                for index, points in enumerate(model.view_points_object_m)
+                if index != existing_view_index
+            ),
+        )
 
     with np.load(cache_path, allow_pickle=False) as cache:
         count = int(cache["frames"])
@@ -195,28 +216,28 @@ def review_sealed_reference_view(
     depth_rows = [
         row
         for row in comparisons
-        if row["first_view"]["reference_to_depth_p90_m"] is not None
-        and row["combined_views"]["reference_to_depth_p90_m"] is not None
+        if row["saved_views"]["reference_to_depth_p90_m"] is not None
+        and row["with_candidate"]["reference_to_depth_p90_m"] is not None
     ]
     front_worsened = sorted(
         (
             row
             for row in depth_rows
-            if row["combined_views"]["reference_in_front_p90_m"]
-            > row["first_view"]["reference_in_front_p90_m"]
+            if row["with_candidate"]["reference_in_front_p90_m"]
+            > row["saved_views"]["reference_in_front_p90_m"]
         ),
-        key=lambda row: row["combined_views"]["reference_in_front_p90_m"]
-        - row["first_view"]["reference_in_front_p90_m"],
+        key=lambda row: row["with_candidate"]["reference_in_front_p90_m"]
+        - row["saved_views"]["reference_in_front_p90_m"],
         reverse=True,
     )
     behind_worsened = sorted(
         (
             row
             for row in depth_rows
-            if row["combined_views"]["reference_behind_p90_m"] > row["first_view"]["reference_behind_p90_m"]
+            if row["with_candidate"]["reference_behind_p90_m"] > row["saved_views"]["reference_behind_p90_m"]
         ),
-        key=lambda row: row["combined_views"]["reference_behind_p90_m"]
-        - row["first_view"]["reference_behind_p90_m"],
+        key=lambda row: row["with_candidate"]["reference_behind_p90_m"]
+        - row["saved_views"]["reference_behind_p90_m"],
         reverse=True,
     )
     independent_fits = []
@@ -235,8 +256,9 @@ def review_sealed_reference_view(
             gripper_prior = _gripper_motion_prior(
                 root, bundle_path, annotation, report, role, frame_index, grasp_pose, base_from_camera
             )
+            saved_points = np.concatenate(model.view_points_object_m)
             fits = fit_reference_view_candidates(
-                model.view_points_object_m[0],
+                saved_points,
                 candidate_view,
                 selected_mask,
                 intrinsics,
@@ -247,7 +269,7 @@ def review_sealed_reference_view(
             )
 
             def preview(pose: np.ndarray) -> list[list[int]]:
-                camera_points = move(model.view_points_object_m[0], pose)
+                camera_points = move(saved_points, pose)
                 camera_points = camera_points[camera_points[:, 2] > 0]
                 xy = project(camera_points, intrinsics)
                 inside = (
@@ -269,6 +291,7 @@ def review_sealed_reference_view(
                     "reference_in_front_p90_m": fit.reference_in_front_p90_m,
                     "reference_behind_p90_m": fit.reference_behind_p90_m,
                     "surface_center_camera_m": fit.surface_center_camera_m,
+                    "object_from_camera": inverse(fit.camera_from_object).tolist(),
                     "projected_points_xy": preview(fit.camera_from_object),
                 }
                 (gripper_motion_fits if fit.seed == "gripper_motion" else independent_fits).append(result)
@@ -295,8 +318,9 @@ def review_sealed_reference_view(
                         "reference_in_front_p90_m": score.reference_in_front_p90_m,
                         "reference_behind_p90_m": score.reference_behind_p90_m,
                         "surface_center_camera_m": tuple(
-                            float(x) for x in move(model.view_points_object_m[0], gripper_prior).mean(axis=0)
+                            float(x) for x in move(saved_points, gripper_prior).mean(axis=0)
                         ),
+                        "object_from_camera": inverse(gripper_prior).tolist(),
                         "projected_points_xy": preview(gripper_prior),
                     },
                 )
@@ -305,11 +329,22 @@ def review_sealed_reference_view(
     return {
         "reference_frame_index": snippet.frame_index,
         "first_view_points": len(model.view_points_object_m[0]),
+        "saved_view_count": len(model.view_points_object_m),
+        "replacing_saved_view": existing_view_index is not None,
         "candidate": summaries[0],
         "largest_front_conflicts": front_worsened[:5],
         "largest_behind_gaps": behind_worsened[:5],
         "independent_fits": independent_fits,
         "gripper_motion_fits": gripper_motion_fits,
         "independent_fit_error": independent_fit_error,
+        "source_bundle": str(bundle_path.resolve().relative_to(root.resolve())),
+        "source_reference_version": reference.version,
+        "base_reference_frame_index": snippet.frame_index,
+        "base_calibration_version": snippet.calibration_version,
+        "mask_sha256": (
+            hashlib.sha256(selected_mask.astype(np.uint8).tobytes()).hexdigest()
+            if selected_mask is not None
+            else None
+        ),
         "disclaimer": "Same pose trace registered and checked this view; review cannot establish independent accuracy.",
     }

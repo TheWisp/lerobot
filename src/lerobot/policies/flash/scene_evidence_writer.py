@@ -22,6 +22,42 @@ def _mask_runs(mask: np.ndarray) -> list[list[int]]:
     return [[int(start), int(end - start)] for start, end in edges.reshape(-1, 2)]
 
 
+def read_scene_evidence_mask(
+    directory: Path,
+    frame_index: int,
+    role: str,
+    *,
+    image_shape: tuple[int, int],
+    calibration_version: str,
+) -> np.ndarray:
+    """Read exactly the aligned mask reviewed in a prepared demo frame."""
+    path = directory / f"{frame_index:06d}.json.gz"
+    with gzip.open(path, "rt", encoding="utf-8") as stream:
+        evidence = json.load(stream)
+    if (
+        evidence.get("frame_index") != frame_index
+        or evidence.get("calibration_version") != calibration_version
+        or evidence.get("image_size") != list(image_shape)
+    ):
+        raise ValueError("reference-view evidence differs from its RGB-D frame")
+    runs = evidence.get("masks_rle", {}).get(role)
+    if not isinstance(runs, list):
+        raise ValueError(f"reference-view frame {frame_index} has no mask for {role}")
+    mask = np.zeros(image_shape[0] * image_shape[1], dtype=bool)
+    previous_end = 0
+    for run in runs:
+        if not isinstance(run, list) or len(run) != 2 or any(type(value) is not int for value in run):
+            raise ValueError("reference-view mask has invalid runs")
+        start, length = run
+        if start < previous_end or length <= 0 or start + length > mask.size:
+            raise ValueError("reference-view mask has overlapping or out-of-bounds runs")
+        mask[start : start + length] = True
+        previous_end = start + length
+    if not mask.any():
+        raise ValueError("reference-view mask is empty")
+    return mask.reshape(image_shape)
+
+
 class SceneEvidenceWriter:
     """Write one source frame at a time; a partial pass is never marked complete."""
 

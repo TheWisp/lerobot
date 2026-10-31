@@ -1,12 +1,16 @@
 """The sealed-demo adapter must preserve event meaning when clocks are sampled."""
 
+import gzip
+import hashlib
 import json
+from types import SimpleNamespace
 
 import cv2
 import numpy as np
 import pytest
 
 from lerobot.policies.flash.sealed_demo_import import (
+    _additional_reference_views,
     _apply_reference_polygons,
     _endpoint_requirement,
     _frame,
@@ -19,6 +23,103 @@ from lerobot.policies.flash.sealed_demo_import import (
     explicit_paths_from_prepared_skill,
 )
 from lerobot.policies.flash.skill import EndpointRequirement, Relation
+
+
+def test_additional_reference_view_uses_the_reviewed_mask_and_object_frame(tmp_path):
+    bundle = tmp_path / "flash/v1/prepared/first/bundle.json"
+    evidence = bundle.parent / "scene-evidence/000003.json.gz"
+    evidence.parent.mkdir(parents=True)
+    mask = np.zeros((4, 5), dtype=bool)
+    mask[1, 2:4] = True
+    with gzip.open(evidence, "wt", encoding="utf-8") as stream:
+        json.dump(
+            {
+                "frame_index": 3,
+                "calibration_version": "cal",
+                "image_size": [4, 5],
+                "masks_rle": {"object": [[7, 2]]},
+            },
+            stream,
+        )
+    identity = np.eye(4)
+    bundle.write_text(
+        json.dumps(
+            {
+                "references": [
+                    {
+                        "role": "object",
+                        "version": "first:cal",
+                        "snippets": [
+                            {
+                                "repo_id": "demo",
+                                "episode": 0,
+                                "frame_index": 0,
+                                "calibration_version": "cal",
+                                "object_from_camera": identity.tolist(),
+                            }
+                        ],
+                    }
+                ]
+            }
+        )
+    )
+    registered = np.eye(4)
+    registered[0, 3] = 0.02
+    spec = {
+        "frame_index": 3,
+        "object_from_camera": registered.tolist(),
+        "source_bundle": str(bundle.relative_to(tmp_path)),
+        "source_reference_version": "first:cal",
+        "mask_sha256": hashlib.sha256(mask.astype(np.uint8).tobytes()).hexdigest(),
+    }
+
+    def load(index):
+        assert index == 3
+        return SimpleNamespace(depth=np.zeros((4, 5), np.uint16))
+
+    views = _additional_reference_views(
+        tmp_path,
+        "object",
+        [spec],
+        primary_frame_index=0,
+        calibration_version="cal",
+        repo_id="demo",
+        episode=0,
+        output_name="second",
+        frame_count=4,
+        frame_loader=load,
+    )
+    assert len(views) == 1
+    np.testing.assert_array_equal(views[0].mask, mask)
+    np.testing.assert_array_equal(views[0].snippet.object_from_camera, registered)
+    assert views[0].snippet.mask_artifact == "flash/v1/masks/second-object-000003.png"
+
+    with pytest.raises(ValueError, match="reviewed mask has changed"):
+        _additional_reference_views(
+            tmp_path,
+            "object",
+            [{**spec, "mask_sha256": "wrong"}],
+            primary_frame_index=0,
+            calibration_version="cal",
+            repo_id="demo",
+            episode=0,
+            output_name="second",
+            frame_count=4,
+            frame_loader=load,
+        )
+    with pytest.raises(ValueError, match="another primary object frame"):
+        _additional_reference_views(
+            tmp_path,
+            "object",
+            [spec],
+            primary_frame_index=1,
+            calibration_version="cal",
+            repo_id="demo",
+            episode=0,
+            output_name="second",
+            frame_count=4,
+            frame_loader=load,
+        )
 
 
 def test_demo_replay_preserves_measured_position_when_orientation_is_predicted(tmp_path):
