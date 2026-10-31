@@ -103,15 +103,20 @@ class PerceptionService:
             while not self._stop.is_set():
                 try:
                     frame = self.source.read()
-                except TimeoutError:
+                except TimeoutError as exc:
                     # One missed camera read does not mean the camera is
                     # lost. The runtime's camera-age bound defines when the
                     # interruption becomes unsafe for planning and recording.
                     self.camera_timeouts += 1
                     silence_s = self.clock() - last_frame_s
                     logger.warning("FLASH RGB-D read timed out after %.3fs without a frame", silence_s)
-                    if self.max_camera_silence_s is None or silence_s > self.max_camera_silence_s:
+                    if self.max_camera_silence_s is None:
                         raise
+                    if silence_s > self.max_camera_silence_s:
+                        raise TimeoutError(
+                            f"RGB-D camera produced no frame for {silence_s:.3f}s "
+                            f"(camera silence limit {self.max_camera_silence_s:.3f}s); last read: {exc}"
+                        ) from exc
                     self._stop.wait(self.collector_period_s)
                     continue
                 if has_frame:

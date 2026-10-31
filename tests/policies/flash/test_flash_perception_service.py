@@ -178,6 +178,9 @@ def test_persistent_camera_timeout_fails_at_camera_age_bound():
         assert service.captured == 1
         assert isinstance(service.error, TimeoutError)
         assert service.camera_timeouts >= 2
+        assert "RGB-D camera produced no frame for" in str(service.error)
+        assert "camera silence limit 0.090s" in str(service.error)
+        assert "camera stopped" in str(service.error)
     finally:
         service._stop.set()
         service._capture_thread.join(1)
