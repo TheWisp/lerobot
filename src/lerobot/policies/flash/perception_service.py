@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Callable
 from threading import Event, Lock, Thread
@@ -10,6 +11,8 @@ from typing import Protocol
 from .perception import LatestPoseStore, LatestRGBDFrameStore, RGBDFrame
 from .perception_worker import PoseProcess
 from .trajectory import Evidence, PoseEstimate
+
+logger = logging.getLogger(__name__)
 
 
 class RGBDSource(Protocol):
@@ -42,6 +45,7 @@ class PerceptionService:
         on_frame: Callable[[RGBDFrame], None] | None = None,
         causal_frames: Callable[[RGBDFrame], None] | None = None,
         causal_error: Callable[[], Exception | None] | None = None,
+        max_camera_silence_s: float | None = None,
     ) -> None:
         if collector_period_s <= 0:
             raise ValueError("collector period must be positive")
@@ -49,6 +53,8 @@ class PerceptionService:
             raise ValueError("legacy service and pose worker must share one pose store")
         if causal_frames is not None and worker.store is not None:
             raise ValueError("causal service pose worker must not publish directly to a store")
+        if max_camera_silence_s is not None and max_camera_silence_s <= 0:
+            raise ValueError("camera silence bound must be positive")
         self.source = source
         self.worker = worker
         self.store = store
@@ -59,7 +65,9 @@ class PerceptionService:
         self.on_frame = on_frame
         self.causal_frames = causal_frames
         self.causal_error = causal_error
+        self.max_camera_silence_s = max_camera_silence_s
         self.captured = 0
+        self.camera_timeouts = 0
         self._stop = Event()
         self._lock = Lock()
         self._error: Exception | None = None
@@ -88,8 +96,22 @@ class PerceptionService:
 
     def _capture(self) -> None:
         try:
+            last_frame_s = self.clock()
             while not self._stop.is_set():
-                frame = self.source.read()
+                try:
+                    frame = self.source.read()
+                except TimeoutError:
+                    # One missed camera read does not mean the camera is
+                    # lost. The runtime's camera-age bound defines when the
+                    # interruption becomes unsafe for planning and recording.
+                    self.camera_timeouts += 1
+                    silence_s = self.clock() - last_frame_s
+                    logger.warning("FLASH RGB-D read timed out after %.3fs without a frame", silence_s)
+                    if self.max_camera_silence_s is None or silence_s > self.max_camera_silence_s:
+                        raise
+                    self._stop.wait(self.collector_period_s)
+                    continue
+                last_frame_s = frame.source_time_s
                 self.frames.publish(frame)
                 self.captured += 1
                 frozen = self.frames.snapshot()

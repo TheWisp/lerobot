@@ -129,6 +129,60 @@ def test_camera_failure_prevents_pose_readiness():
         service.close()
 
 
+def test_transient_camera_timeout_keeps_latest_frame_and_recovers():
+    class IntermittentSource(FakeCameraSource):
+        def __init__(self):
+            super().__init__()
+            self.calls = 0
+
+        def read(self):
+            self.calls += 1
+            if self.calls == 2:
+                time.sleep(0.025)
+                raise TimeoutError("one missed camera frame")
+            return super().read()
+
+    store = LatestPoseStore()
+    worker = SimpleNamespace(store=store, submit=lambda _frame: True, alive=True)
+    service = PerceptionService(IntermittentSource(), worker, store, max_camera_silence_s=0.15)
+    service._capture_thread.start()
+    try:
+        deadline = time.monotonic() + 1
+        while service.captured < 2 and time.monotonic() < deadline:
+            time.sleep(0.005)
+        assert service.captured >= 2
+        assert service.source.calls >= 3
+        assert service.error is None
+        assert service.camera_timeouts == 1
+    finally:
+        service._stop.set()
+        service._capture_thread.join(1)
+
+
+def test_persistent_camera_timeout_fails_at_camera_age_bound():
+    class StoppedSource(FakeCameraSource):
+        def read(self):
+            if self.frame_id:
+                time.sleep(0.025)
+                raise TimeoutError("camera stopped")
+            return super().read()
+
+    store = LatestPoseStore()
+    worker = SimpleNamespace(store=store, submit=lambda _frame: True, alive=True)
+    service = PerceptionService(StoppedSource(), worker, store, max_camera_silence_s=0.09)
+    service._capture_thread.start()
+    try:
+        deadline = time.monotonic() + 1
+        while service.error is None and time.monotonic() < deadline:
+            time.sleep(0.005)
+        assert service.captured == 1
+        assert isinstance(service.error, TimeoutError)
+        assert service.camera_timeouts >= 2
+    finally:
+        service._stop.set()
+        service._capture_thread.join(1)
+
+
 def test_readiness_uses_capture_time_of_direct_support_after_prediction():
     store = LatestPoseStore()
     worker = SimpleNamespace(store=store, metrics=SimpleNamespace(last_failures={}))

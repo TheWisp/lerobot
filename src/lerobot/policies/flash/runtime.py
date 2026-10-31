@@ -330,6 +330,7 @@ class FlashRuntime:
             on_frame=live_telemetry.frame if live_telemetry is not None else None,
             causal_frames=causal.submit_frame if causal is not None else None,
             causal_error=(lambda: causal.error) if causal is not None else None,
+            max_camera_silence_s=max_camera_age_s,
         )
         self.assembler = TickRecordAssembler(
             self.perception.frames,
