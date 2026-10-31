@@ -116,7 +116,11 @@ camera events. If the required frame or earlier accepted anchor has expired,
 the newer belief is preserved and the reason is recorded. A delayed object
 result crossing a grasp or release is rejected because attachment history is
 not yet replayed; other objects can still update from that image. Past motor
-commands are never rewritten.
+commands are never rewritten. The first camera frame after an attachment
+change withdraws the object's older scene pose and environment group relation.
+Independent point motion or a new visual observation may establish a pose on
+that frame; otherwise the scene reports it unknown while the separate gripper
+relationship can still predict a held object for control.
 
 Run → FLASH lists a sealed-format SO-107 recording with `showservo_demo.npz`
 even before it has a `flash/v1` extension. Open the raw demo, choose **Prepare

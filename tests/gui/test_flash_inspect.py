@@ -1407,7 +1407,7 @@ def test_run_flash_tracker_panel_reuses_view_for_recorded_layers(gui_page):
                                     "evidence": "predicted",
                                     "source_time_s": 12.0,
                                     "estimator": "environment_group_motion",
-                                    "pose": None,
+                                    "pose": np.eye(4).tolist(),
                                 }
                             },
                             "anchor_decisions": {
@@ -1845,6 +1845,25 @@ def test_flash_replay_does_not_draw_unaligned_held_or_stale_independent_pose(gui
     assert 0.6 in result["current"]
     assert 0.7 not in result["current"]
     assert "Latest motor-time prediction" in page.locator("#flash-tracker-content").inner_text()
+
+
+@pytest.mark.requires_playwright
+@pytest.mark.skipif(importlib.util.find_spec("playwright") is None, reason="Playwright is not installed")
+def test_flash_replay_labels_pose_withdrawn_after_attachment_change(gui_page):
+    page = gui_page
+    page.evaluate("switchTab('run')")
+    page.evaluate("() => selectWorkflow('flash')")
+    page.evaluate(
+        """() => renderFlashSnapshot({
+            camera: {frame_id: 9, source_time_s: 2.5},
+            accepted: {object: {role: 'object', evidence: 'lost', pose: null,
+                source_time_s: 2.5, source_frame_id: 9,
+                estimator: 'attachment_transition_unknown'}},
+        }, 'Recording')"""
+    )
+    content = page.locator("#flash-tracker-content").inner_text()
+    assert "Camera-frame pose: unknown — waiting for new evidence after grasp or release" in content
+    assert "Accepted estimator pose" not in content
 
 
 @pytest.mark.requires_playwright

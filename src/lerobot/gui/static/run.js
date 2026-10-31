@@ -804,6 +804,7 @@ function _flashLayerName(estimator) {
         object_point_motion: 'Object points',
         environment_group_motion: 'Verified group',
         environment_support_hypothesis: 'Group hypothesis',
+        attachment_transition_unknown: 'Object pose after grasp or release is unknown',
         stationary_prior: 'Stationary prior',
         grasp_attachment_prediction: 'Gripper attachment prediction',
         recorded_skill_reference: 'Saved reference in this skill',
@@ -1054,11 +1055,13 @@ function renderFlashSnapshot(snapshot, mode = 'Live') {
                 `Independent estimate <small>${_esc(_flashLayerName(independent.estimator || 'unspecified'))}: ${_esc(_flashPoseText(independent, snapshot, role))}</small>`)
                 : `<small>Independent estimate: ${_esc(_flashPoseText(independent, snapshot, role))} · not aligned to this image</small>`;
         }
-        const planningPose = held || accepted;
-        const lostStatus = snapshot.pose_status?.[role];
+        const planningPose = held || (accepted?.pose ? accepted : null);
+        const lostStatus = snapshot.pose_status?.[role] || (accepted?.evidence === 'lost' ? accepted : null);
         const unavailable = lostStatus?.evidence === 'lost'
             ? (lostStatus.estimator === 'stationary_prior_contradicted'
                 ? 'unknown — measured depth contradicts the old position'
+                : lostStatus.estimator === 'attachment_transition_unknown'
+                    ? 'unknown — waiting for new evidence after grasp or release'
                 : `unknown — ${_flashLayerName(lostStatus.estimator || 'unverified')}`)
             : snapshot.held_prediction?.role === role ? 'no pose aligned to this camera frame' : 'none';
         const heldAtCamera = held && held === snapshot.held_prediction_at_camera;
@@ -1580,6 +1583,7 @@ function _flashDrawOverlay() {
         const shownHeld = _flashHeldOnCamera(snapshot);
         for (const [role, pose] of Object.entries(snapshot.accepted || {})) {
             if (role === '__gripper__' && !compareSources) continue;
+            if (!pose?.pose) continue;
             if (!_flashAcceptedOnCamera(snapshot, role)) continue;
             if (shownHeld?.role === role) {
                 if (compareSources) draw(role, pose.estimator || 'accepted', pose, false, 'accepted');

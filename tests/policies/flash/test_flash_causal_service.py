@@ -133,6 +133,67 @@ def test_late_object_pose_cannot_cross_grasp_or_release_without_attachment_repla
     assert store.snapshot()[1]["target"].pose is not None
 
 
+def test_attachment_transition_withdraws_old_scene_pose_until_new_evidence():
+    image = np.random.default_rng(59).integers(0, 255, (96, 96), dtype=np.uint8)
+    frames = [frame(image, index) for index in range(3)]
+    mask = np.zeros(image.shape, dtype=bool)
+    mask[47:49, 47:49] = True  # too little surface to seed an independent point track
+    store = LatestPoseStore()
+    service = CausalPoseService(store)
+    service._frame(frames[0])
+    estimate = PoseEstimate(
+        "object", np.eye(4), 0, 0, Evidence.OBSERVED, "reference-v1", (True,) * 3, (True,) * 3
+    )
+    service._anchor(_Anchor(0, (estimate,), {"object": mask}))
+    assert store.snapshot()[1]["object"].evidence == Evidence.OBSERVED
+
+    service.set_attached_role("object", source_time_s=0.5 / 30)
+    service._frame(frames[1])
+    during_hold = store.snapshot()[1]["object"]
+    assert during_hold.evidence == Evidence.LOST
+    assert during_hold.source_frame_id == frames[1].frame_id
+
+    service.set_attached_role(None, source_time_s=1.5 / 30)
+    service._frame(frames[2])
+    after_release = store.snapshot()[1]["object"]
+    assert after_release.evidence == Evidence.LOST
+    assert after_release.source_frame_id == frames[2].frame_id
+
+    # A current image can establish the object again after release.
+    new_observation = PoseEstimate(
+        "object",
+        np.eye(4),
+        frames[2].source_time_s,
+        frames[2].available_time_s,
+        Evidence.OBSERVED,
+        "reference-v1",
+        (True,) * 3,
+        (True,) * 3,
+    )
+    service._anchor(_Anchor(2, (new_observation,), {"object": mask}))
+    assert store.snapshot()[1]["object"].evidence == Evidence.OBSERVED
+
+
+def test_grasp_and_release_between_camera_frames_clear_old_scene_support():
+    image = np.random.default_rng(60).integers(0, 255, (96, 96), dtype=np.uint8)
+    store = LatestPoseStore()
+    service = CausalPoseService(store)
+    first = frame(image, 0)
+    service._frame(first)
+    observed = PoseEstimate(
+        "object", np.eye(4), 0, 0, Evidence.OBSERVED, "reference-v1", (True,) * 3, (True,) * 3
+    )
+    service.observed["object"] = (observed, service.scene_history[-1], ())
+    store.publish((observed,))
+
+    service.set_attached_role("object", source_time_s=0.25 / 30)
+    service.set_attached_role(None, source_time_s=0.75 / 30)
+    service._frame(frame(image, 1))
+
+    assert "object" not in service.observed
+    assert store.snapshot()[1]["object"].evidence == Evidence.LOST
+
+
 def test_causal_config_rejects_unbounded_or_invalid_tracking():
     valid = {
         "history_frames": 60,
