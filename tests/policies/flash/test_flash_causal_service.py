@@ -223,6 +223,64 @@ def test_late_pregrasp_image_replays_exact_attachment_events_without_current_sce
     assert "object" not in service.relationships
 
 
+@pytest.mark.parametrize("release_before_last_camera", [False, True])
+def test_late_pregrasp_image_replays_gripper_prediction_at_each_camera_time(
+    release_before_last_camera,
+):
+    image = np.zeros((96, 96), dtype=np.uint8)
+    frames = [frame(image, index) for index in range(3)]
+    mask = np.zeros(image.shape, dtype=bool)
+    mask[47:49, 47:49] = True
+
+    def predict(role, source):
+        pose = np.eye(4)
+        pose[0, 3] = source.frame_id * 0.01
+        return PoseEstimate(
+            role,
+            pose,
+            source.source_time_s,
+            source.available_time_s,
+            Evidence.PREDICTED,
+            "reference-v1",
+            (True,) * 3,
+            (True,) * 3,
+            estimator="gripper_motion",
+            source_frame_id=source.frame_id,
+        )
+
+    seed = PoseEstimate(
+        "object", np.eye(4), 0, 0, Evidence.OBSERVED, "reference-v1", (True,) * 3, (True,) * 3
+    )
+
+    def run(late):
+        service = CausalPoseService(LatestPoseStore(), kinematic_prediction_at=predict)
+        service._frame(frames[0])
+        if not late:
+            service._anchor(_Anchor(0, (seed,), {"object": mask}))
+        service.set_attached_role("object", source_time_s=0.5 / 30)
+        service._frame(frames[1])
+        if release_before_last_camera:
+            service.set_attached_role(None, source_time_s=1.5 / 30)
+        service._frame(frames[2])
+        if late:
+            service._anchor(_Anchor(0, (seed,), {"object": mask}))
+            service._drain_pending()
+        return service, service.store.snapshot()[1]["object"]
+
+    _, source_order = run(late=False)
+    delayed_service, delayed = run(late=True)
+    assert delayed_service.event_replays == 1
+    assert delayed.source_frame_id == source_order.source_frame_id == 2
+    if release_before_last_camera:
+        assert delayed.estimator == source_order.estimator == "attachment_transition_unknown"
+        assert delayed.evidence == source_order.evidence == Evidence.LOST
+        assert delayed.pose is source_order.pose is None
+    else:
+        assert delayed.estimator == source_order.estimator == "gripper_motion"
+        assert delayed.evidence == source_order.evidence == Evidence.PREDICTED
+        np.testing.assert_allclose(delayed.pose, source_order.pose)
+
+
 def test_attachment_transition_withdraws_old_scene_pose_until_new_evidence():
     image = np.random.default_rng(59).integers(0, 255, (96, 96), dtype=np.uint8)
     frames = [frame(image, index) for index in range(3)]

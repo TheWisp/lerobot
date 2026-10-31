@@ -1412,6 +1412,10 @@ class CausalPoseService:
             object_centers_by_role=self.object_centers_by_role,
             object_points_by_role=self.object_points_by_role,
             axial_symmetries=tuple(self.axial_symmetries.values()),
+            # This callback reads a source-time motor/attachment snapshot. A
+            # shadow replay must see the same prediction as the live pass or
+            # an older camera anchor can erase the held object from the scene.
+            kinematic_prediction_at=self.kinematic_prediction_at,
             on_anchor_decision=decisions.append,
             decision_clock=self.decision_clock,
         )
