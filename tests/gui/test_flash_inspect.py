@@ -1771,6 +1771,42 @@ def test_flash_replay_shows_which_camera_pose_planned_the_command(gui_page):
 
 @pytest.mark.requires_playwright
 @pytest.mark.skipif(importlib.util.find_spec("playwright") is None, reason="Playwright is not installed")
+def test_flash_replay_draws_held_pose_at_displayed_camera_time(gui_page):
+    page = gui_page
+    page.evaluate("switchTab('run')")
+    page.evaluate("() => selectWorkflow('flash')")
+    result = page.evaluate(
+        """() => {
+            const canvas = document.createElement('canvas');
+            canvas.className = 'flash-pose-canvas';
+            canvas.style.width = '200px'; canvas.style.height = '200px';
+            document.body.append(canvas);
+            const pose = x => ({role: 'object', pose: [[1, 0, 0, x], [0, 1, 0, 0],
+                [0, 0, 1, 1], [0, 0, 0, 1]], evidence: 'predicted', source_time_s: 2.5});
+            const snapshot = {
+                recorded_at_s: 3.0,
+                camera: {frame_id: 9, width: 100, height: 100, intrinsics: [[100, 0, 50],
+                    [0, 100, 50], [0, 0, 1]], base_from_camera: [[1, 0, 0, 0],
+                    [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]},
+                centers_object_m: {object: [0, 0, 0]}, accepted: {},
+                held_prediction: pose(0.7),
+                held_prediction_at_camera: {...pose(0.6), source_frame_id: 9},
+            };
+            const seen = [], original = _flashProject;
+            _flashProject = (point, estimate) => { seen.push(estimate.pose[0][3]); return [50, 50]; };
+            try { renderFlashSnapshot(snapshot, 'Recording'); _flashDrawOverlay(); }
+            finally { _flashProject = original; canvas.remove(); }
+            return seen;
+        }"""
+    )
+    assert 0.6 in result
+    assert 0.7 not in result
+    assert "Gripper prediction on this camera frame" in page.locator("#flash-tracker-content").inner_text()
+    assert "Latest motor-time prediction" in page.locator("#flash-tracker-content").inner_text()
+
+
+@pytest.mark.requires_playwright
+@pytest.mark.skipif(importlib.util.find_spec("playwright") is None, reason="Playwright is not installed")
 def test_flash_replay_explains_when_depth_rules_out_a_stationary_prediction(gui_page):
     page = gui_page
     page.evaluate("switchTab('run')")

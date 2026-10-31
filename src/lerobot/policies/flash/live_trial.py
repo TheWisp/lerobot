@@ -283,11 +283,13 @@ def trial(
             model.points.role: model.points.points_object_m for model in bundle.appearance_models
         }
         causal_tracking = configured_scene
+        attachment_policy = AttachmentRuntimeLimits.from_config(settings["attachment"])
         telemetry = FlashLiveTelemetry(
             telemetry_path or output_root / "flash" / "v1" / "live_tracker.json",
             tracker_trace_path,
             centers_by_role,
             points_by_role=points_by_role,
+            joint_history_capacity=attachment_policy.history_capacity,
             decision_history_frames=causal_tracking.history_frames if causal_tracking is not None else None,
             # Pinocchio FK mutates its Data workspace. The telemetry writer
             # therefore has its own model instead of racing the planner.
@@ -298,7 +300,6 @@ def trial(
                 {"gripper": state["gripper.pos"]},
             ),
         )
-        attachment_policy = AttachmentRuntimeLimits.from_config(settings["attachment"])
         planner_limits = PlannerLimits(
             tuple(settings["joint_speed_deg_s"]),
             settings["position_error_m"],

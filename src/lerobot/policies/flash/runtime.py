@@ -223,9 +223,7 @@ class FlashRuntime:
                 self.live_telemetry.held_attachment(
                     role,
                     attachment_state,
-                    np.array([tick.observed[f"{name}.pos"] for name in self.arm_joint_names])
-                    if updater is not None
-                    else None,
+                    np.array([tick.observed[f"{name}.pos"] for name in self.arm_joint_names]),
                     tick.observed_at_s,
                     independently_observed=updater.has_postgrasp_observation
                     if updater is not None

@@ -468,6 +468,86 @@ def test_held_prediction_is_recorded_separately_from_stale_independent_pose(tmp_
     assert snapshot["held_visual_evidence"]["visual"]["depth_residual_p90_m"] == 0.008
 
 
+def test_held_overlay_uses_joints_at_displayed_camera_time(tmp_path: Path) -> None:
+    class Kinematics:
+        def forward_kinematics(self, joints):
+            result = np.eye(4)
+            result[0, 3] = joints[0]
+            return result
+
+    live = tmp_path / "live.json"
+    telemetry = FlashLiveTelemetry(
+        live,
+        tmp_path / "tracker.jsonl",
+        {"object": np.zeros(3)},
+        kinematics=Kinematics(),
+        joint_history_capacity=4,
+    )
+    gripper_from_object = np.eye(4)
+    gripper_from_object[0, 3] = 0.2
+    attachment = AttachmentState(gripper_from_object, 2.0, 2.0, "reference-v1")
+    frame = RGBDFrame(
+        9,
+        np.zeros((2, 3, 3), dtype=np.uint8),
+        np.ones((2, 3), dtype=np.uint16),
+        np.eye(3),
+        0.001,
+        np.eye(4),
+        2.5,
+        2.5,
+        "calibration-v1",
+    )
+    telemetry.frame(frame)
+    telemetry.held_attachment("object", attachment, np.array([0.3]), 2.0, independently_observed=False)
+    telemetry.held_attachment("object", attachment, np.array([0.5]), 3.0, independently_observed=False)
+    telemetry.close()
+    snapshot = json.loads(live.read_text())
+    assert snapshot["held_prediction"]["pose"][0][3] == pytest.approx(0.7)
+    aligned = snapshot["held_prediction_at_camera"]
+    assert aligned["pose"][0][3] == pytest.approx(0.6)
+    assert aligned["source_time_s"] == frame.source_time_s
+    assert aligned["source_frame_id"] == frame.frame_id
+    assert aligned["evidence"] == "predicted"
+
+
+def test_held_overlay_does_not_project_past_release(tmp_path: Path) -> None:
+    class Kinematics:
+        def forward_kinematics(self, joints):
+            result = np.eye(4)
+            result[0, 3] = joints[0]
+            return result
+
+    live = tmp_path / "live.json"
+    telemetry = FlashLiveTelemetry(
+        live,
+        tmp_path / "tracker.jsonl",
+        {"object": np.zeros(3)},
+        kinematics=Kinematics(),
+        joint_history_capacity=4,
+    )
+    attachment = AttachmentState(np.eye(4), 2.0, 2.0, "reference-v1")
+    telemetry.held_attachment("object", attachment, np.array([0.3]), 2.0, independently_observed=False)
+    telemetry.held_attachment(None, None, np.array([0.4]), 3.0, independently_observed=False)
+    telemetry.held_attachment(None, None, np.array([0.5]), 4.0, independently_observed=False)
+    telemetry.frame(
+        RGBDFrame(
+            10,
+            np.zeros((2, 3, 3), dtype=np.uint8),
+            np.ones((2, 3), dtype=np.uint16),
+            np.eye(3),
+            0.001,
+            np.eye(4),
+            3.5,
+            3.5,
+            "calibration-v1",
+        )
+    )
+    telemetry.close()
+    snapshot = json.loads(live.read_text())
+    assert snapshot["held_prediction"] is None
+    assert snapshot["held_prediction_at_camera"] is None
+
+
 def test_flash_recordings_lists_source_datasets_with_outcomes(tmp_path: Path) -> None:
     older = tmp_path / "demos" / "older" / "flash" / "v1"
     latest = tmp_path / "demos" / "latest" / "flash" / "v1"

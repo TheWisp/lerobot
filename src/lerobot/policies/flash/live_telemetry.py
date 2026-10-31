@@ -22,6 +22,8 @@ from .pose_disagreement import FreeSpaceComparison, PoseComparison
 from .pose_evidence import PoseProposal
 from .trajectory import AttachmentState, Evidence, PoseEstimate
 
+HeldMotorSample = tuple[str | None, AttachmentState | None, np.ndarray | None, float, bool, bool]
+
 
 def live_frame_path(live_path: Path, frame_id: int, kind: str) -> Path:
     """Locate a bounded, display-only RGB-D frame beside the live snapshot."""
@@ -96,9 +98,12 @@ class FlashLiveTelemetry:
         period_s: float = 0.1,
         frame_history: int = 8,
         decision_history_frames: int | None = None,
+        joint_history_capacity: int = 2,
     ) -> None:
         if frame_history < 1 or (decision_history_frames is not None and decision_history_frames < 1):
             raise ValueError("live frame history must contain at least one frame")
+        if joint_history_capacity < 2:
+            raise ValueError("camera-time held prediction needs at least two motor samples")
         self.live_path = live_path
         self.trace_path = trace_path
         self.decision_path = trace_path.with_suffix(".decisions.jsonl")
@@ -145,6 +150,7 @@ class FlashLiveTelemetry:
         self._latest_decisions: dict[str, dict] = {}
         self._pending_decisions: deque[dict] = deque()
         self._held_attachment: tuple[str, AttachmentState, np.ndarray, float, bool, bool] | None = None
+        self._held_history: deque[HeldMotorSample] = deque(maxlen=joint_history_capacity)
         self._held_visual_evidence: dict | None = None
         self._motor_tick: dict | None = None
         self._thread = Thread(target=self._write_loop, name="flash-live-telemetry", daemon=True)
@@ -321,6 +327,16 @@ class FlashLiveTelemetry:
     ) -> None:
         """Record the controller's rigid-grasp prediction without doing FK on the motor loop."""
         with self._condition:
+            self._held_history.append(
+                (
+                    role,
+                    attachment,
+                    np.asarray(joints_deg, dtype=float).copy() if joints_deg is not None else None,
+                    observed_at_s,
+                    independently_observed,
+                    visual_ambiguous,
+                )
+            )
             self._held_attachment = (
                 (
                     role,
@@ -356,6 +372,53 @@ class FlashLiveTelemetry:
             }
             self._changed()
 
+    def _held_at_camera(self, frame: RGBDFrame | None, samples: tuple[HeldMotorSample, ...]) -> dict | None:
+        """Project the attachment using motor joints bracketing this image.
+
+        The latest motor pose can be ahead of the displayed camera frame. Keep
+        that controller-time prediction separately; this retrospective view is
+        only for drawing on the exact image that was recorded.
+        """
+        if frame is None or self.kinematics is None:
+            return None
+        camera_s = frame.source_time_s
+        for index, left in enumerate(samples):
+            role, attachment, joints, motor_s, independently_observed, visual_ambiguous = left
+            if motor_s > camera_s:
+                break
+            if role is None or attachment is None or joints is None or attachment.source_time_s > camera_s:
+                continue
+            if motor_s == camera_s:
+                at_camera = joints
+            elif index + 1 < len(samples):
+                _, _, next_joints, next_s, _, _ = samples[index + 1]
+                if next_joints is None or not motor_s < camera_s < next_s:
+                    continue
+                alpha = (camera_s - motor_s) / (next_s - motor_s)
+                at_camera = joints + alpha * (next_joints - joints)
+            else:
+                continue
+            pose = self.kinematics.forward_kinematics(at_camera) @ attachment.gripper_from_object
+            estimate = _estimate_json(
+                PoseEstimate(
+                    role,
+                    pose,
+                    camera_s,
+                    max(time.perf_counter(), frame.available_time_s),
+                    Evidence.PREDICTED,
+                    attachment.reference_version,
+                    (True,) * 3,
+                    (True,) * 3,
+                    estimator="grasp_attachment_camera_prediction",
+                    last_direct_observation_s=(attachment.source_time_s if independently_observed else None),
+                    source_frame_id=frame.frame_id,
+                )
+            )
+            if visual_ambiguous:
+                estimate["evidence"] = "ambiguous_visual_prediction"
+            return estimate
+        return None
+
     def _snapshot(
         self,
     ) -> tuple[
@@ -388,6 +451,7 @@ class FlashLiveTelemetry:
             self._pending_group_events.clear()
             group_events_dropped = self._group_events_dropped
             held = self._held_attachment
+            held_history = tuple(self._held_history)
             held_visual_evidence = self._held_visual_evidence.copy() if self._held_visual_evidence else None
             motor_tick = self._motor_tick.copy() if self._motor_tick is not None else None
         held_prediction = None
@@ -410,6 +474,7 @@ class FlashLiveTelemetry:
             )
             if visual_ambiguous:
                 held_prediction["evidence"] = "ambiguous_visual_prediction"
+        held_prediction_at_camera = self._held_at_camera(frame, held_history)
         snapshot = {
             "schema_version": 1,
             "recorded_at_s": time.perf_counter(),
@@ -461,6 +526,7 @@ class FlashLiveTelemetry:
             "accepted": {role: _estimate_json(value) for role, value in accepted.items()},
             "anchor_decisions": latest_decisions,
             "held_prediction": held_prediction,
+            "held_prediction_at_camera": held_prediction_at_camera,
             "held_visual_evidence": held_visual_evidence,
             "motor_tick": motor_tick,
         }

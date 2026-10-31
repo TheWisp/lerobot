@@ -218,7 +218,7 @@ async function toggleFlashSceneView() {
                 option.textContent = role;
                 select.append(option);
             }
-            const {createFlashSceneView} = await import('/static/flash_scene_view.js?v=25');
+            const {createFlashSceneView} = await import('/static/flash_scene_view.js?v=26');
             const reprocessed = Object.fromEntries(Object.entries(
                 flashReplay?.reprocessed_scene_geometry?.points_object_m || {}).map(([role, points]) => [
                 role, {positions_object_m: points.flat(), colors_rgb: points.map(() => [180, 190, 200]), indices: []},
@@ -849,6 +849,13 @@ function _flashPoseText(pose, snapshot, role = null, source = 'primary') {
     return `${evidence}${freshness}${xyz}`;
 }
 
+function _flashHeldOnCamera(snapshot) {
+    const aligned = snapshot?.held_prediction_at_camera;
+    return aligned && snapshot?.camera?.frame_id != null &&
+        aligned.source_frame_id === snapshot.camera.frame_id
+        ? aligned : snapshot?.held_prediction;
+}
+
 function _flashCommandEvidence(snapshot) {
     const command = snapshot.motor_tick;
     const evidence = command?.plan_evidence;
@@ -948,6 +955,8 @@ function renderFlashSnapshot(snapshot, mode = 'Live') {
         ...Object.keys(snapshot.reprocessed_scene_support?.groups || {}),
         ...Object.keys(snapshot.reprocessed_raw_proposals || {}),
         ...(snapshot.held_visual_evidence ? [snapshot.held_visual_evidence.role] : []),
+        ...(snapshot.held_prediction ? [snapshot.held_prediction.role] : []),
+        ...(snapshot.held_prediction_at_camera ? [snapshot.held_prediction_at_camera.role] : []),
     ])].sort();
     if (!roles.length) {
         content.innerHTML = _flashCommandEvidence(snapshot) +
@@ -1022,7 +1031,8 @@ function renderFlashSnapshot(snapshot, mode = 'Live') {
                 `<span class="flash-tracker-dot" style="background:#f472b6"></span>Reprocessed rejected fit ` +
                 `<small>${_esc(reprocessedRaw.failure || 'Not accepted by vision')}</small>`);
         const accepted = snapshot.accepted?.[role];
-        const held = snapshot.held_prediction?.role === role ? snapshot.held_prediction : null;
+        const shownHeld = _flashHeldOnCamera(snapshot);
+        const held = shownHeld?.role === role ? shownHeld : null;
         if (held && accepted) html += _flashOverlayRow('accepted', role, '', 'flash-tracker-layer',
             `Independent estimate <small>${_esc(_flashLayerName(accepted.estimator || 'unspecified'))}: ${_esc(_flashPoseText(accepted, snapshot, role))}</small>`);
         const planningPose = held || accepted;
@@ -1032,10 +1042,13 @@ function renderFlashSnapshot(snapshot, mode = 'Live') {
                 ? 'unknown — measured depth contradicts the old position'
                 : `unknown — ${_flashLayerName(lostStatus.estimator || 'unverified')}`)
             : 'none';
-        const selectedText = `${held ? 'Planner prediction (rigid grasp)' : 'Accepted estimator pose'}: ${planningPose ? _esc(_flashLayerName(planningPose.estimator || 'unspecified')) + '<small>' + _esc(_flashPoseText(planningPose, snapshot, role)) + (held && !held.last_direct_observation_s ? ' · unverified after grasp' : '') + '</small>' : _esc(unavailable)}`;
+        const heldAtCamera = held && held === snapshot.held_prediction_at_camera;
+        const selectedText = `${heldAtCamera ? 'Gripper prediction on this camera frame' : held ? 'Latest gripper prediction' : 'Accepted estimator pose'}: ${planningPose ? _esc(_flashLayerName(planningPose.estimator || 'unspecified')) + '<small>' + _esc(_flashPoseText(planningPose, snapshot, role)) + (held && !held.last_direct_observation_s ? ' · unverified after grasp' : '') + '</small>' : _esc(unavailable)}`;
         html += planningPose
             ? _flashOverlayRow(held ? 'held' : 'accepted', role, '', 'flash-tracker-selected', selectedText)
             : `<div class="flash-tracker-selected">${selectedText}</div>`;
+        if (heldAtCamera && snapshot.held_prediction)
+            html += `<small>Latest motor-time prediction: ${_esc(_flashPoseText(snapshot.held_prediction, snapshot, role))}</small>`;
         if (snapshot.held_visual_evidence?.role === role)
             html += _flashHeldVisualEvidence(snapshot.held_visual_evidence);
         const decision = snapshot.anchor_decisions?.[role];
@@ -1215,7 +1228,8 @@ function renderFlashDemoSnapshot(snapshot) {
                 (patchSpread <= fitError ? '; full pose unverified' : '');
         const lastDirect = pose.last_direct_observation_s == null ? ''
             : ` · last direct observation ${Math.max(0, demo.time_s - pose.last_direct_observation_s).toFixed(1)} s ago`;
-        const used = snapshot.held_prediction?.role === role ? snapshot.held_prediction : snapshot.accepted?.[role];
+        const shownHeld = _flashHeldOnCamera(snapshot);
+        const used = shownHeld?.role === role ? shownHeld : snapshot.accepted?.[role];
         const center = snapshot.centers_object_m?.[role];
         const worldCenter = estimate => [0, 1, 2].map(i => estimate.pose[i][3] +
             [0, 1, 2].reduce((sum, j) => sum + estimate.pose[i][j] * center[j], 0));
@@ -1541,21 +1555,21 @@ function _flashDrawOverlay() {
             const goal = snapshot.demo_goal;
             draw(goal.role, 'recorded_skill_reference', goal, false, 'goal');
         }
+        const shownHeld = _flashHeldOnCamera(snapshot);
         for (const [role, pose] of Object.entries(snapshot.accepted || {})) {
             if (role === '__gripper__' && !compareSources) continue;
-            if (snapshot.held_prediction?.role === role) {
+            if (shownHeld?.role === role) {
                 if (compareSources) draw(role, pose.estimator || 'accepted', pose, false, 'accepted');
             }
             else draw(role, pose.estimator || 'accepted', pose, true, 'accepted');
         }
-        if (snapshot.held_prediction) {
-            const held = snapshot.held_prediction;
-            draw(held.role, held.estimator, held, true, 'held');
+        if (shownHeld) {
+            draw(shownHeld.role, shownHeld.estimator, shownHeld, true, 'held');
         }
         if (!compareSources && flashReplay?.kind === 'demo') {
             for (const [role, layers] of Object.entries(snapshot.layers || {})) {
                 if (role === '__gripper__' || snapshot.accepted?.[role] ||
-                    snapshot.held_prediction?.role === role) continue;
+                    shownHeld?.role === role) continue;
                 const pose = layers.demo_extraction;
                 if (pose?.pose && pose.evidence !== 'lost')
                     draw(role, pose.estimator, pose, true, 'layer', 'demo_extraction');

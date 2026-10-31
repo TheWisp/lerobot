@@ -316,7 +316,9 @@ export function createFlashSceneView(canvas, surfaces, reprocessedSurfaces = {})
         }
         turnGroup = null;
         const baseFromCamera = snapshot.camera.base_from_camera;
-        const held = snapshot.held_prediction;
+        const held = snapshot.held_prediction_at_camera && snapshot.camera?.frame_id != null &&
+            snapshot.held_prediction_at_camera.source_frame_id === snapshot.camera.frame_id
+            ? snapshot.held_prediction_at_camera : snapshot.held_prediction;
         observedCenters = {};
         observedBounds = {};
         // A current mask is independently measured. It must remain inspectable
@@ -482,8 +484,11 @@ export function createFlashSceneView(canvas, surfaces, reprocessedSurfaces = {})
         // pose is evidence to inspect, and may be the very thing that is wrong.
         if (observedCenters[role]) return observedCenters[role].clone();
         const primaryLocal = latestSnapshot?.centers_object_m?.[role];
-        const primaryPose = latestSnapshot?.held_prediction?.role === role
-            ? latestSnapshot.held_prediction : latestSnapshot?.accepted?.[role] ||
+        const held = latestSnapshot?.held_prediction_at_camera && latestSnapshot?.camera?.frame_id != null &&
+            latestSnapshot.held_prediction_at_camera.source_frame_id === latestSnapshot.camera.frame_id
+            ? latestSnapshot.held_prediction_at_camera : latestSnapshot?.held_prediction;
+        const primaryPose = held?.role === role
+            ? held : latestSnapshot?.accepted?.[role] ||
                 latestSnapshot?.layers?.[role]?.demo_extraction;
         const sceneLocal = latestSnapshot?.reprocessed_scene_geometry?.centers_object_m?.[role];
         const scenePose = latestSnapshot?.layers?.[role]?.reprocessed_scene;
