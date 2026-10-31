@@ -1033,7 +1033,7 @@ class Sam3TrackByDetectionAdapter(ConceptMaskAdapter):
         m = probe["masks"].get("_click")
         return m if m is not None and m.any() else None
 
-    def _apply_clicks(self, track: dict, pv, frame_rgb: np.ndarray, h: int, w: int) -> bool:
+    def _apply_clicks(self, track: dict, pv, frame_rgb: DeviceFrame, h: int, w: int) -> bool:
         """Turn this camera's queued clicks/boxes into tracked concepts. Returns True if
         the session was rebuilt (the caller should not also seed this frame)."""
         pending = self._pending_clicks.pop(self._cam, None)
@@ -1140,7 +1140,7 @@ class Sam3TrackByDetectionAdapter(ConceptMaskAdapter):
         )
         return best if best is not None and best.any() else None
 
-    def _apply_boxes(self, track: dict, pv, frame_rgb: np.ndarray, h: int, w: int) -> bool:
+    def _apply_boxes(self, track: dict, pv, frame_rgb: DeviceFrame, h: int, w: int) -> bool:
         """Turn ONE queued box into a new tracked concept; re-queue the rest, since each
         admit re-seeds the session. A box always creates a new object and never refines:
         enclosing a mask is how you select the thing next to it, so overlap proves nothing
@@ -1152,7 +1152,7 @@ class Sam3TrackByDetectionAdapter(ConceptMaskAdapter):
         if rest:
             self._pending_boxes[self._cam] = rest
         if self._box_method == "exemplar":
-            mask = self._mask_from_exemplar(frame_rgb, box, h, w)
+            mask = self._mask_from_exemplar(frame_rgb.numpy(), box, h, w)
         else:
             mask = self._mask_from_prompt(pv, h, w, box=box)
         if mask is None:
@@ -1277,7 +1277,7 @@ class Sam3TrackByDetectionAdapter(ConceptMaskAdapter):
                 self._seed(track, keep, pv, h, w)
             else:
                 track["session"] = None
-        if self._apply_clicks(track, pv, frame_rgb.numpy(), h, w):
+        if self._apply_clicks(track, pv, frame_rgb, h, w):
             # _apply_clicks appended a name and _live_masks filters by the list, so
             # re-read it — otherwise the new object is invisible for one frame.
             self._concepts = self._parse_concepts() + self._click_names.get(cam, [])

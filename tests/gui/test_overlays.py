@@ -1548,6 +1548,69 @@ def test_sam3_flush_releases_memory_when_every_object_is_lost():
     assert len(calls) == 1, "no stale tracker inference after the memory bank is dropped"
 
 
+@pytest.mark.parametrize("gesture", [None, "click", "tracker_box"])
+def test_sam3_device_frame_stays_on_device_without_detector_input(monkeypatch, gesture):
+    """Tracking and tracker-native prompts must not read back a GPU-decoded frame."""
+    adapter = object.__new__(adapters.Sam3TrackByDetectionAdapter)
+    adapter._init_click_state()
+    adapter.prompt = ""
+    adapter._cam = "top"
+    adapter._text_detection = False
+    adapter._click_names = {"top": ["clicked"]}
+    adapter._torch = torch
+    mask = np.ones((8, 8), bool)
+    adapter._tracks = {
+        "top": {
+            "session": object(),
+            "objs": {"clicked": 1},
+            "masks": {"clicked": mask},
+            "scores": {"clicked": 1.0},
+            "since_flush": 0,
+            "since_recover": 0,
+            "shape": (8, 8),
+        }
+    }
+    adapter._pv = lambda _: None
+    adapter._read_output = lambda *_: None
+    adapter._seed = lambda *_, **__: None
+    adapter.trk = lambda **_: object()
+    if gesture == "click":
+        adapter._pending_clicks["top"] = [(2, 3, 1)]
+        adapter._mask_from_prompt = lambda *_, **__: mask
+        adapter._admit_clicked_mask = lambda *_, **__: True
+    elif gesture == "tracker_box":
+        adapter._pending_boxes["top"] = [(1, 1, 6, 6)]
+        adapter._box_method = "tracker"
+        adapter._mask_from_prompt = lambda *_, **__: mask
+        adapter._admit_clicked_mask = lambda *_, **__: True
+    monkeypatch.setattr(
+        adapters.DeviceFrame,
+        "numpy",
+        lambda _: pytest.fail("GPU frame was copied to CPU without a detector request"),
+    )
+
+    masks, _, _ = adapter._infer_masks(adapters.DeviceFrame(tensor=torch.zeros((3, 8, 8), dtype=torch.uint8)))
+
+    assert list(masks) == ["clicked"]
+    assert np.array_equal(masks["clicked"][0], mask)
+
+
+def test_sam3_exemplar_box_reads_device_frame_for_detector(monkeypatch):
+    adapter = object.__new__(adapters.Sam3TrackByDetectionAdapter)
+    adapter._init_click_state()
+    adapter._cam = "top"
+    adapter._box_method = "exemplar"
+    adapter._pending_boxes["top"] = [(1, 1, 6, 6)]
+    image = np.zeros((8, 8, 3), dtype=np.uint8)
+    reads = []
+    monkeypatch.setattr(adapters.DeviceFrame, "numpy", lambda _: reads.append(True) or image)
+    adapter._mask_from_exemplar = lambda pixels, *_: np.ones((8, 8), bool) if pixels is image else None
+    adapter._admit_clicked_mask = lambda *_, **__: True
+
+    assert adapter._apply_clicks({}, None, adapters.DeviceFrame(tensor=torch.zeros((3, 8, 8))), 8, 8)
+    assert reads == [True]
+
+
 def test_worker_reuse_decision_is_unchanged_by_the_consolidation(monkeypatch):
     """Equivalence proof for folding the worker identity into one predicate.
 
