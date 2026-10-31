@@ -150,7 +150,7 @@ class FlashRuntime:
         self.max_camera_age_s = max_camera_age_s
         self.live_telemetry = live_telemetry
         self.poses = LatestPoseStore()
-        accepted_direct: SimpleQueue[tuple[PoseEstimate, RGBDFrame | None, np.ndarray | None]] = SimpleQueue()
+        accepted_direct: SimpleQueue[tuple[PoseEstimate, RGBDFrame, np.ndarray]] = SimpleQueue()
 
         def queue_held_direct(estimate: PoseEstimate, frame: RGBDFrame, mask: np.ndarray) -> None:
             # Before startup there is no consumer and no active attachment;
@@ -275,13 +275,15 @@ class FlashRuntime:
                 if self.live_telemetry is not None and self.attachment.active_role == observed.role:
                     updater = self.attachment.updaters[observed.role]
                     visual_evidence = updater.latest_visual_evidence()
-                    if (
-                        visual_evidence is not None
-                        and frame is not None
-                        and visual_evidence["frame_id"] == frame.frame_id
-                    ):
+                    if visual_evidence is not None and visual_evidence["frame_id"] == frame.frame_id:
                         self.live_telemetry.held_visual_evidence(visual_evidence)
-            self.attachment.on_pose_update(version, poses)
+            if self.causal is None:
+                # Without the causal scene owner, the pose store is the only
+                # direct-image handoff. With it, only the accepted observation
+                # callback above carries the source RGB-D frame and mask.
+                # A replayed scene snapshot must not become a second, weaker
+                # held-object measurement merely because it says "observed".
+                self.attachment.on_pose_update(version, poses)
             if version != self._last_pose_version:
                 changed = frozenset(
                     role for role, pose in poses.items() if self._last_pose_by_role.get(role) is not pose

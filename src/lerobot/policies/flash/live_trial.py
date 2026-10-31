@@ -385,6 +385,7 @@ def trial(
                                 "replay_compute_max_s": runtime.causal.replay_compute_max_s,
                                 "pending_point_tracks": tuple(runtime.causal.pending),
                                 "event_replays": runtime.causal.event_replays,
+                                "late_attachment_invalidations": runtime.causal.late_attachment_invalidations,
                                 "pending_event_replays": tuple(runtime.causal.pending_event_replays),
                             }
                             if runtime.causal is not None
@@ -412,6 +413,7 @@ def trial(
                         "slow_work_threshold_s": runtime.causal.slow_work_threshold_s,
                         "slow_work_count": runtime.causal.slow_work_count,
                         "recent_slow_work": list(runtime.causal.slow_work),
+                        "late_attachment_invalidations": runtime.causal.late_attachment_invalidations,
                     },
                     indent=2,
                 )
@@ -484,6 +486,7 @@ def trial(
                         "slow_work_path": str(causal_timing_path),
                         "pending_point_tracks": tuple(runtime.causal.pending),
                         "event_replays": runtime.causal.event_replays,
+                        "late_attachment_invalidations": runtime.causal.late_attachment_invalidations,
                         "pending_event_replays": tuple(runtime.causal.pending_event_replays),
                     }
                     if runtime.causal is not None

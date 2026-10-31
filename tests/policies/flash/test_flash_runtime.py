@@ -7,7 +7,7 @@ import pytest
 
 from lerobot.policies.flash.causal_service import CausalTrackingConfig
 from lerobot.policies.flash.execution import MissedEventError, TimedAction
-from lerobot.policies.flash.perception import ObjectReference, ReferenceSnippet
+from lerobot.policies.flash.perception import ObjectReference, ReferenceSnippet, RGBDFrame
 from lerobot.policies.flash.planner import PlannerLimits
 from lerobot.policies.flash.planning_coordinator import PlanBufferConfig
 from lerobot.policies.flash.progress import Phase
@@ -385,7 +385,18 @@ def test_delayed_direct_pose_updates_held_attachment_after_newer_point_predictio
         "target", identity(), 1.02, 1.03, Evidence.PREDICTED, "target-v1", (True,) * 3, (True,) * 3
     )
     assert attempt.causal.on_direct_observation_with_frame is not None
-    attempt.causal.on_direct_observation_with_frame(observed, None, None)
+    source_frame = RGBDFrame(
+        1,
+        np.zeros((8, 8, 3), dtype=np.uint8),
+        np.full((8, 8), 1000, dtype=np.uint16),
+        np.eye(3),
+        0.001,
+        identity(),
+        observed.source_time_s,
+        observed.available_time_s,
+        "cal-v1",
+    )
+    attempt.causal.on_direct_observation_with_frame(observed, source_frame, np.ones((8, 8), dtype=bool))
     callback = attempt.perception.on_pose_update
     assert callback is not None
 
@@ -393,6 +404,48 @@ def test_delayed_direct_pose_updates_held_attachment_after_newer_point_predictio
 
     assert updater.has_postgrasp_observation
     assert updater.state(1.04).gripper_from_object[0, 3] == pytest.approx(0.005)
+
+
+def test_replayed_scene_pose_does_not_correct_gripper_without_its_source_image():
+    base = skill()
+    interval = replace(
+        base.intervals[0],
+        samples=(replace(base.intervals[0].samples[0], event_id="attach"), base.intervals[0].samples[1]),
+    )
+    with_grasp = replace(
+        base,
+        intervals=(interval,),
+        attachment_transitions=(
+            AttachmentTransition("attach", AttachmentAction.ATTACH, "target", "target-v1"),
+        ),
+    )
+    attempt = runtime(
+        with_grasp,
+        (reference("target", "target-v1"),),
+        FakeRecorder(),
+        causal_tracking=CausalTrackingConfig(60, 64, 12, 0.1, 0.005),
+    )
+    updater = attempt.attachment.updaters["target"]
+    updater.history.append(1.0, np.array([0.0]))
+    updater.history.append(1.02, np.array([0.0]))
+    pregrasp = PoseEstimate(
+        "target", identity(), 0.99, 0.99, Evidence.OBSERVED, "target-v1", (True,) * 3, (True,) * 3
+    )
+    assert updater.activate(1.0, pregrasp, np.array([0.0]))
+    attempt.attachment.active_role = "target"
+    attempt._ready = True
+
+    corrected = identity()
+    corrected[0, 3] = 0.005
+    replayed = PoseEstimate(
+        "target", corrected, 1.01, 1.03, Evidence.OBSERVED, "target-v1", (True,) * 3, (True,) * 3
+    )
+    attempt.poses.publish((replayed,))
+    assert attempt.perception.on_pose_update is not None
+    attempt.perception.on_pose_update(*attempt.poses.snapshot())
+
+    assert not updater.has_postgrasp_observation
+    assert updater.state(1.04).gripper_from_object[0, 3] == pytest.approx(0)
 
 
 def test_startup_acquires_later_reference_before_any_motion(monkeypatch):

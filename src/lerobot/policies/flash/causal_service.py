@@ -52,6 +52,14 @@ class _Anchor:
 
 
 @dataclass(frozen=True)
+class _AttachmentEvent:
+    source_time_s: float
+    before_role: str | None
+    after_role: str | None
+    revision: int
+
+
+@dataclass(frozen=True)
 class AnchorDecision:
     """A direct pose candidate's source-frame disposition, including rejection."""
 
@@ -80,6 +88,7 @@ class _PendingEventReplay:
     trigger: _Anchor
     candidate: PoseEstimate
     anchor_revision: int
+    attachment_revision: int
     remaining_frame_ids: deque[int]
     last_frame_id: int | None = None
 
@@ -211,7 +220,7 @@ class CausalPoseService:
         self.anchor_event_revision_by_role: dict[str, int] = {}
         self.attachment_by_frame: dict[int, str | None] = {}
         self.pending_event_replays: dict[str, _PendingEventReplay] = {}
-        self.queue: Queue[RGBDFrame | _Anchor | None] = Queue(maxsize=queue_frames)
+        self.queue: Queue[RGBDFrame | _Anchor | _AttachmentEvent | None] = Queue(maxsize=queue_frames)
         self.tracker_kwargs = {
             "min_inliers": min_inliers,
             "max_frame_gap_s": max_frame_gap_s,
@@ -278,7 +287,9 @@ class CausalPoseService:
         self._attachment_lock = Lock()
         self._attached_role: str | None = None
         self._requested_attached_role: str | None = None
-        self._attachment_events: list[tuple[float, str | None]] = []
+        self._attachment_events: list[_AttachmentEvent] = []
+        self._attachment_revision = 0
+        self._attachment_applied_revision_by_role: dict[str, int] = {}
         self._thread = Thread(target=self._run, name="flash-causal-points", daemon=True)
         self._lock = Lock()
         self._error: Exception | None = None
@@ -318,6 +329,7 @@ class CausalPoseService:
         self.replay_compute_total_s = 0.0
         self.replay_compute_max_s = 0.0
         self.event_replays = 0
+        self.late_attachment_invalidations = 0
         # Keep enough recent slow events to identify a backlog without adding
         # synchronous file writes to the perception worker. A computation that
         # takes longer than the configured camera-frame gap cannot keep pace.
@@ -427,10 +439,15 @@ class CausalPoseService:
             at_s = float(source_time_s)
             if not np.isfinite(at_s):
                 raise ValueError("attachment event needs a finite source time")
-            if self._attachment_events and at_s < self._attachment_events[-1][0]:
+            if self._attachment_events and at_s < self._attachment_events[-1].source_time_s:
                 raise ValueError("attachment event times must increase")
-            self._attachment_events.append((at_s, role))
+            before_role = self._requested_attached_role
             self._requested_attached_role = role
+            self._attachment_revision += 1
+            event = _AttachmentEvent(at_s, before_role, role, self._attachment_revision)
+            self._attachment_events.append(event)
+        if self._started:
+            self._submit(event)
 
     def scene_group_supports(self) -> dict[str, dict]:
         """Measured current support points for inspection, with group provenance.
@@ -460,15 +477,15 @@ class CausalPoseService:
         if self.on_scene_support is not None and self.scene_history:
             self.on_scene_support(self.scene_history[-1].frame_id, self.scene_group_supports())
 
-    def _sync_attachment(self, source_time_s: float | None = None) -> str | None:
+    def _sync_attachment(self, source_time_s: float | None = None, *, clear: bool = True) -> str | None:
         with self._attachment_lock:
             role = self._attached_role
             if source_time_s is not None:
                 role = None
-                for at_s, event_role in self._attachment_events:
-                    if at_s > source_time_s:
+                for event in self._attachment_events:
+                    if event.source_time_s > source_time_s:
                         break
-                    role = event_role
+                    role = event.after_role
                 changed = {item for item in (self._attached_role, role) if item is not None}
                 if role != self._attached_role:
                     self._attached_role = role
@@ -476,7 +493,8 @@ class CausalPoseService:
                     changed.clear()
             else:
                 changed = set()
-        self._clear_environment_relationships(changed)
+        if clear:
+            self._clear_environment_relationships(changed)
         return role
 
     def _clear_environment_relationships(self, roles: set[str]) -> None:
@@ -493,26 +511,27 @@ class CausalPoseService:
         """Whether replaying a late object pose would cross a grasp or release.
 
         Camera frames have a source-time attachment state, but the current
-        estimator does not replay a delayed visual result through a changed
-        gripper relationship. Reject that result rather than using the latest
-        relationship to interpret an older image. Other objects are unaffected.
+        estimator must replay a delayed result through motor-time attachment
+        events rather than interpreting an older image under the current grasp.
         """
         return role in self._attachment_changed_roles_between(source_time_s, self.history[-1].source_time_s)
 
+    def _attachment_events_between(self, first_s: float, last_s: float) -> tuple[_AttachmentEvent, ...]:
+        with self._attachment_lock:
+            return tuple(
+                event for event in self._attachment_events if first_s < event.source_time_s <= last_s
+            )
+
     def _attachment_changed_roles_between(self, first_s: float, last_s: float) -> set[str]:
         """Roles whose grasp relationship changed in this camera-time span."""
-        changed: set[str] = set()
-        previous_role = None
-        with self._attachment_lock:
-            for event_time_s, next_role in self._attachment_events:
-                if event_time_s > last_s:
-                    break
-                if first_s < event_time_s and previous_role != next_role:
-                    changed.update(item for item in (previous_role, next_role) if item is not None)
-                previous_role = next_role
-        return changed
+        return {
+            role
+            for event in self._attachment_events_between(first_s, last_s)
+            for role in (event.before_role, event.after_role)
+            if role is not None
+        }
 
-    def _submit(self, item: RGBDFrame | _Anchor) -> None:
+    def _submit(self, item: RGBDFrame | _Anchor | _AttachmentEvent) -> None:
         if self.error is not None:
             raise RuntimeError("causal pose service failed") from self.error
         try:
@@ -534,6 +553,13 @@ class CausalPoseService:
                     source_time_s = item.source_time_s
                     kind = "frame"
                     roles: tuple[str, ...] = ()
+                elif isinstance(item, _AttachmentEvent):
+                    stages = {}
+                    self._apply_attachment_event(item)
+                    elapsed_s = time.perf_counter() - started_s
+                    source_time_s = item.source_time_s
+                    roles = tuple(role for role in (item.before_role, item.after_role) if role is not None)
+                    kind = "attachment"
                 else:
                     stages = {}
                     self._anchor(item, timings=stages)
@@ -549,7 +575,7 @@ class CausalPoseService:
                     self.slow_work.append(
                         {
                             "kind": kind,
-                            "frame_id": item.frame_id,
+                            "frame_id": getattr(item, "frame_id", None),
                             "roles": roles,
                             "started_s": started_s,
                             "duration_s": elapsed_s,
@@ -598,11 +624,77 @@ class CausalPoseService:
             if not progressed:
                 break
 
+    def _withdraw_scene_pose(self, role: str, frame: RGBDFrame, *, revise: bool) -> None:
+        previous = self.store.snapshot()[1].get(role)
+        if previous is None or previous.source_time_s > frame.source_time_s:
+            return
+        if previous.source_time_s == frame.source_time_s and not revise:
+            return
+        if (
+            previous.source_frame_id == frame.frame_id
+            and previous.evidence == Evidence.LOST
+            and previous.estimator == "attachment_transition_unknown"
+        ):
+            return
+        lost = PoseEstimate(
+            role,
+            None,
+            frame.source_time_s,
+            max(frame.available_time_s, self.decision_clock()),
+            Evidence.LOST,
+            previous.reference_version,
+            (False,) * 3,
+            (False,) * 3,
+            estimator="attachment_transition_unknown",
+            last_direct_observation_s=(
+                previous.source_time_s
+                if previous.evidence == Evidence.OBSERVED
+                else previous.last_direct_observation_s
+            ),
+            source_frame_id=frame.frame_id,
+        )
+        if revise:
+            self.store.revise(lost)
+        else:
+            self.store.publish((lost,))
+
+    def _apply_attachment_event(self, event: _AttachmentEvent) -> None:
+        if not self.history or event.source_time_s > self.history[-1].source_time_s:
+            return
+        # The motor callback can land just after the worker processed an image
+        # captured at or after the event. That image used the old relationship.
+        # Withdraw its scene pose and tracks; a later source-order replay or a
+        # fresh camera observation can re-establish them.
+        latest = self.history[-1]
+        self._sync_attachment(latest.source_time_s, clear=False)
+        changed = {
+            role
+            for role in (event.before_role, event.after_role)
+            if role is not None and self._attachment_applied_revision_by_role.get(role, 0) < event.revision
+        }
+        if not changed:
+            return
+        self._clear_environment_relationships(changed)
+        for role in changed:
+            self.active.pop(role, None)
+            self.pending.pop(role, None)
+            self.motion_history.pop(role, None)
+            self._withdraw_scene_pose(role, latest, revise=True)
+            self._attachment_applied_revision_by_role[role] = event.revision
+        self.late_attachment_invalidations += 1
+        self._report_scene_support()
+
     def _frame(self, frame: RGBDFrame) -> dict[str, float]:
         if self.history and frame.frame_id <= self.history[-1].frame_id:
             raise ValueError("causal camera frames must increase")
         prior_time_s = self.history[-1].source_time_s if self.history else float("-inf")
-        changed_roles = self._attachment_changed_roles_between(prior_time_s, frame.source_time_s)
+        attachment_events = self._attachment_events_between(prior_time_s, frame.source_time_s)
+        changed_roles = {
+            role
+            for event in attachment_events
+            for role in (event.before_role, event.after_role)
+            if role is not None
+        }
         attached_role = self._sync_attachment(frame.source_time_s)
         self.history.append(frame)
         # Both transitions can occur while the camera worker is behind. Even
@@ -613,36 +705,13 @@ class CausalPoseService:
         # An independent point track on this frame may supersede the unknown
         # state below; otherwise the object remains lost until measured again.
         for role in changed_roles:
-            previous = self.store.snapshot()[1].get(role)
-            if previous is None or previous.source_time_s >= frame.source_time_s:
-                continue
-            self.store.publish(
-                (
-                    PoseEstimate(
-                        role,
-                        None,
-                        frame.source_time_s,
-                        max(frame.available_time_s, self.decision_clock()),
-                        Evidence.LOST,
-                        previous.reference_version,
-                        (False,) * 3,
-                        (False,) * 3,
-                        estimator="attachment_transition_unknown",
-                        last_direct_observation_s=(
-                            previous.source_time_s
-                            if previous.evidence == Evidence.OBSERVED
-                            else previous.last_direct_observation_s
-                        ),
-                        source_frame_id=frame.frame_id,
-                    ),
-                )
-            )
+            self._withdraw_scene_pose(role, frame, revise=False)
         # Keep the relationship in force at the oldest retained image and
         # every later transition. Older events cannot affect replay anymore.
         with self._attachment_lock:
             while (
                 len(self._attachment_events) > 1
-                and self._attachment_events[1][0] <= self.history[0].source_time_s
+                and self._attachment_events[1].source_time_s <= self.history[0].source_time_s
             ):
                 del self._attachment_events[0]
         self.attachment_by_frame[frame.frame_id] = attached_role
@@ -737,6 +806,12 @@ class CausalPoseService:
             ):
                 self._publish_static(role, anchor, frame)
         self._report_scene_support()
+        for event in attachment_events:
+            for role in (event.before_role, event.after_role):
+                if role is not None:
+                    self._attachment_applied_revision_by_role[role] = max(
+                        self._attachment_applied_revision_by_role.get(role, 0), event.revision
+                    )
         return {
             "scene_update": scene_update_s,
             "object_track": object_track_s,
@@ -905,8 +980,12 @@ class CausalPoseService:
                 self._record_anchor_decision(result, candidate, "frame_mismatch")
                 continue
             if self._attachment_transition_crossed(estimate.role, source.source_time_s):
-                self._count_anchor_outcome(estimate.role, "attachment_transition_crossed")
-                self._record_anchor_decision(result, candidate, "attachment_transition_crossed")
+                if self._start_source_order_replay(estimate.role, result, candidate):
+                    self._count_anchor_outcome(estimate.role, "event_replay_pending")
+                    self._record_anchor_decision(result, candidate, "event_replay_pending")
+                else:
+                    self._count_anchor_outcome(estimate.role, "attachment_transition_crossed")
+                    self._record_anchor_decision(result, candidate, "attachment_transition_crossed")
                 continue
             estimate = replace(estimate, source_frame_id=source.frame_id)
             symmetry = self.axial_symmetries.get(estimate.role)
@@ -975,7 +1054,7 @@ class CausalPoseService:
                             decided_at_s=accepted_at_s,
                         )
                         continue
-                    if self._start_source_order_replay(estimate.role, attached_role, result, candidate):
+                    if self._start_source_order_replay(estimate.role, result, candidate):
                         self._count_anchor_outcome(estimate.role, "event_replay_pending")
                         self._record_anchor_decision(result, candidate, "event_replay_pending")
                         continue
@@ -1241,9 +1320,7 @@ class CausalPoseService:
         self._report_scene_support()
         return accepted_at_s
 
-    def _start_source_order_replay(
-        self, role: str, attached_role: str | None, trigger: _Anchor, candidate: PoseEstimate
-    ) -> bool:
+    def _start_source_order_replay(self, role: str, trigger: _Anchor, candidate: PoseEstimate) -> bool:
         """Prepare source-order replay without blocking the camera event worker.
 
         The scene point identities are already measured on each camera frame.
@@ -1253,11 +1330,7 @@ class CausalPoseService:
         untouched.
         """
         frames = list(self.history)
-        if (
-            not frames
-            or attached_role == role
-            or any(self.attachment_by_frame.get(frame.frame_id) == role for frame in frames)
-        ):
+        if not frames:
             return False
         event_frames = {
             frame.frame_id for frame in frames if role in self.anchor_events.get(frame.frame_id, {})
@@ -1316,6 +1389,13 @@ class CausalPoseService:
         shadow.scene.update = lambda frame: next(
             scene for scene in self.scene_history if scene.frame_id == frame.frame_id
         )
+        # Source-frame attachment labels lose transitions that occur twice
+        # between camera captures. Replay the motor-time events themselves.
+        with self._attachment_lock:
+            attachment_events = tuple(self._attachment_events)
+            attachment_revision = self._attachment_revision
+        for event in attachment_events:
+            shadow.set_attached_role(event.after_role, source_time_s=event.source_time_s)
         self.pending_event_replays[role] = _PendingEventReplay(
             role,
             shadow,
@@ -1323,6 +1403,7 @@ class CausalPoseService:
             trigger,
             candidate,
             self.anchor_event_revision_by_role[role],
+            attachment_revision,
             deque(frame.frame_id for frame in frames),
         )
         return True
@@ -1334,13 +1415,13 @@ class CausalPoseService:
 
     def _event_replay_step(self, role: str) -> bool:
         pending = self.pending_event_replays[role]
-        if self._sync_attachment() == role:
-            self._abort_event_replay(role, "event_replay_attachment_changed")
-            return False
-        if pending.anchor_revision != self.anchor_event_revision_by_role[role]:
-            if not self._start_source_order_replay(
-                role, self._sync_attachment(), pending.trigger, pending.candidate
-            ):
+        with self._attachment_lock:
+            attachment_revision = self._attachment_revision
+        if (
+            pending.anchor_revision != self.anchor_event_revision_by_role[role]
+            or pending.attachment_revision != attachment_revision
+        ):
+            if not self._start_source_order_replay(role, pending.trigger, pending.candidate):
                 self._abort_event_replay(role, "event_replay_history_expired")
                 return False
             pending = self.pending_event_replays[role]
@@ -1356,9 +1437,6 @@ class CausalPoseService:
         if next_frame is None:
             self._abort_event_replay(role, "event_replay_history_expired")
             return False
-        pending.shadow.set_attached_role(
-            self.attachment_by_frame[next_frame.frame_id], source_time_s=next_frame.source_time_s
-        )
         pending.shadow._frame(next_frame)
         if event := self.anchor_events.get(next_frame.frame_id, {}).get(role):
             pending.shadow._anchor(event, decision_time_s=next_frame.available_time_s)
@@ -1367,32 +1445,44 @@ class CausalPoseService:
         pending.remaining_frame_ids.popleft()
         if pending.remaining_frame_ids:
             return True
+        with self._attachment_lock:
+            if pending.attachment_revision != self._attachment_revision:
+                return True
         result = pending.shadow.store.snapshot()[1].get(role)
         current = self.store.snapshot()[1].get(role)
         if result is None or (current is not None and result.source_time_s < current.source_time_s):
             self._abort_event_replay(role, "event_replay_outdated")
             return False
-        for name in (
-            "active",
-            "pending",
-            "motion_history",
-            "observed",
-            "direct_history",
-            "relationships",
-            "candidate_relationships",
-        ):
-            original = getattr(self, name)
-            revised = getattr(pending.shadow, name)
-            if role in revised:
-                original[role] = revised[role]
+        with self._attachment_lock:
+            if pending.attachment_revision != self._attachment_revision:
+                # An intervening motor event makes the shadow's final scene
+                # state obsolete. The next replay step rebuilds from the
+                # updated event journal before publishing anything.
+                return True
+            for name in (
+                "active",
+                "pending",
+                "motion_history",
+                "observed",
+                "direct_history",
+                "relationships",
+                "candidate_relationships",
+            ):
+                original = getattr(self, name)
+                revised = getattr(pending.shadow, name)
+                if role in revised:
+                    original[role] = revised[role]
+                else:
+                    original.pop(role, None)
+            if role in pending.shadow._expired_verified_roles:
+                self._expired_verified_roles.add(role)
             else:
-                original.pop(role, None)
-        if role in pending.shadow._expired_verified_roles:
-            self._expired_verified_roles.add(role)
-        else:
-            self._expired_verified_roles.discard(role)
-        result = replace(result, available_time_s=max(result.available_time_s, self.decision_clock()))
-        self.store.revise(result)
+                self._expired_verified_roles.discard(role)
+            result = replace(result, available_time_s=max(result.available_time_s, self.decision_clock()))
+            self.store.revise(result)
+            self._attachment_applied_revision_by_role[role] = max(
+                self._attachment_applied_revision_by_role.get(role, 0), pending.attachment_revision
+            )
         if self.on_layer is not None:
             self.on_layer(result)
         self._report_scene_support()

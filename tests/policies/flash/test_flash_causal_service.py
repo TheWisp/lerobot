@@ -2,14 +2,19 @@
 
 import itertools
 import time
-from threading import Event
+from threading import Event, Thread
 
 import cv2
 import numpy as np
 import pytest
 
 from lerobot.policies.flash.causal_points import CausalRigidPointTracker
-from lerobot.policies.flash.causal_service import CausalPoseService, CausalTrackingConfig, _Anchor
+from lerobot.policies.flash.causal_service import (
+    CausalPoseService,
+    CausalTrackingConfig,
+    _Anchor,
+    _AttachmentEvent,
+)
 from lerobot.policies.flash.perception import LatestPoseStore, RGBDFrame
 from lerobot.policies.flash.scene_groups import ScenePointTracker
 from lerobot.policies.flash.trajectory import Evidence, PoseEstimate
@@ -96,19 +101,12 @@ def test_queued_camera_frames_keep_the_attachment_state_at_capture_time(monkeypa
         service.close()
 
 
-def test_late_object_pose_cannot_cross_grasp_or_release_without_attachment_replay():
+def test_late_object_pose_replays_grasp_and_release_in_camera_source_order():
     image = np.random.default_rng(58).integers(0, 255, (96, 96), dtype=np.uint8)
     frames = [frame(image, index) for index in range(3)]
     mask = np.ones(image.shape, dtype=bool)
-    store = LatestPoseStore()
-    service = CausalPoseService(store)
-    service._frame(frames[0])
-    service.set_attached_role("object", source_time_s=0.5 / 30)
-    service._frame(frames[1])
-    service.set_attached_role(None, source_time_s=1.5 / 30)
-    service._frame(frames[2])
 
-    def delayed(role: str, source: RGBDFrame) -> None:
+    def anchor(role: str, source: RGBDFrame) -> _Anchor:
         estimate = PoseEstimate(
             role,
             np.eye(4),
@@ -119,18 +117,80 @@ def test_late_object_pose_cannot_cross_grasp_or_release_without_attachment_repla
             (True,) * 3,
             (True,) * 3,
         )
-        service._anchor(_Anchor(source.frame_id, (estimate,), {role: mask}))
+        return _Anchor(source.frame_id, (estimate,), {role: mask})
 
-    delayed("object", frames[0])  # crossed grasp and release
-    delayed("object", frames[1])  # crossed release
-    assert service.anchor_decisions_by_source[(0, "object")].outcome == "attachment_transition_crossed"
-    assert service.anchor_decisions_by_source[(1, "object")].outcome == "attachment_transition_crossed"
-    assert "object" not in store.snapshot()[1]
+    def run(*, late: bool):
+        store = LatestPoseStore()
+        service = CausalPoseService(store)
+        service._frame(frames[0])
+        if not late:
+            service._anchor(anchor("object", frames[0]))
+            service._drain_pending()
+        service.set_attached_role("object", source_time_s=0.5 / 30)
+        service._frame(frames[1])
+        if not late:
+            service._anchor(anchor("object", frames[1]))
+            service._drain_pending()
+        service.set_attached_role(None, source_time_s=1.5 / 30)
+        service._frame(frames[2])
+        if late:
+            service._anchor(anchor("object", frames[0]))
+            service._anchor(anchor("object", frames[1]))
+        service._drain_pending()
+        return service, store.snapshot()[1]["object"]
 
-    # The same camera result for a different object is still useful.
-    delayed("target", frames[0])
+    _, expected = run(late=False)
+    service, actual = run(late=True)
+    assert actual.source_time_s == expected.source_time_s
+    assert actual.evidence == expected.evidence
+    if expected.pose is None:
+        assert actual.pose is None
+    else:
+        np.testing.assert_allclose(actual.pose, expected.pose, atol=0.005)
+    assert service.anchor_decisions_by_source[(0, "object")].outcome.startswith("replayed_")
+    assert service.anchor_decisions_by_source[(1, "object")].outcome.startswith("replayed_")
+
+    # An unrelated late observation does not need event replay.
+    service._anchor(anchor("target", frames[0]))
     assert service.anchor_decisions_by_source[(0, "target")].outcome == "accepted"
-    assert store.snapshot()[1]["target"].pose is not None
+    assert service.store.snapshot()[1]["target"].pose is not None
+
+
+@pytest.mark.parametrize("release_before_next_camera", [False, True])
+def test_late_pregrasp_image_replays_exact_attachment_events_without_current_scene_pose(
+    release_before_next_camera,
+):
+    image = np.random.default_rng(61).integers(0, 255, (96, 96), dtype=np.uint8)
+    frames = [frame(image, index) for index in range(3)]
+    mask = np.zeros(image.shape, dtype=bool)
+    mask[47:49, 47:49] = True  # insufficient support for a new independent point track
+    decisions = []
+    store = LatestPoseStore()
+    service = CausalPoseService(store, on_anchor_decision=decisions.append)
+    service._frame(frames[0])
+    service.set_attached_role("object", source_time_s=0.25 / 30)
+    if release_before_next_camera:
+        service.set_attached_role(None, source_time_s=0.75 / 30)
+    service._frame(frames[1])
+    service._frame(frames[2])
+
+    estimate = PoseEstimate(
+        "object", np.eye(4), 0, 0, Evidence.OBSERVED, "reference-v1", (True,) * 3, (True,) * 3
+    )
+    service._anchor(_Anchor(0, (estimate,), {"object": mask}))
+    assert service.anchor_decisions_by_source[(0, "object")].outcome == "event_replay_pending"
+    service._drain_pending()
+
+    current = store.snapshot()[1]["object"]
+    assert current.evidence == Evidence.LOST
+    assert current.pose is None
+    assert current.source_frame_id == frames[1].frame_id
+    assert current.estimator == "attachment_transition_unknown"
+    assert service.anchor_decisions_by_source[(0, "object")].outcome == "replayed_accepted"
+    assert decisions[-1].accepted is not None
+    assert decisions[-1].accepted.source_frame_id == frames[0].frame_id
+    assert "object" not in service.observed
+    assert "object" not in service.relationships
 
 
 def test_attachment_transition_withdraws_old_scene_pose_until_new_evidence():
@@ -192,6 +252,168 @@ def test_grasp_and_release_between_camera_frames_clear_old_scene_support():
 
     assert "object" not in service.observed
     assert store.snapshot()[1]["object"].evidence == Evidence.LOST
+
+
+def test_motor_attachment_arriving_after_its_camera_frame_withdraws_old_scene_pose():
+    image = np.random.default_rng(62).integers(0, 255, (96, 96), dtype=np.uint8)
+    first, second = frame(image, 0), frame(image, 1)
+    mask = np.zeros(image.shape, dtype=bool)
+    mask[47:49, 47:49] = True
+    observed = PoseEstimate(
+        "object", np.eye(4), 0, 0, Evidence.OBSERVED, "reference-v1", (True,) * 3, (True,) * 3
+    )
+    target = PoseEstimate(
+        "target", np.eye(4), 0, 0, Evidence.OBSERVED, "reference-v1", (True,) * 3, (True,) * 3
+    )
+    store = LatestPoseStore()
+    service = CausalPoseService(store)
+    service.slow_work_threshold_s = 0
+    service.start()
+    try:
+        service.submit_frame(first)
+        service.submit_anchor(0, (observed, target), {"object": mask, "target": mask})
+        deadline = time.monotonic() + 2
+        while "object" not in store.snapshot()[1] and service.error is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert store.snapshot()[1]["object"].evidence == Evidence.OBSERVED
+
+        service.submit_frame(second)
+        while service.frames < 2 and service.error is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert service.frames == 2
+        current_image_pose = PoseEstimate(
+            "object",
+            np.eye(4),
+            second.source_time_s,
+            second.available_time_s,
+            Evidence.OBSERVED,
+            "reference-v1",
+            (True,) * 3,
+            (True,) * 3,
+        )
+        service.submit_anchor(1, (current_image_pose,), {"object": mask})
+        while (
+            store.snapshot()[1]["object"].source_time_s < second.source_time_s
+            and service.error is None
+            and time.monotonic() < deadline
+        ):
+            time.sleep(0.01)
+        assert store.snapshot()[1]["object"].evidence == Evidence.OBSERVED
+        # The command was dispatched at this image time, but its callback
+        # reached the scene worker just after that image was processed.
+        service.set_attached_role("object", source_time_s=second.source_time_s)
+        while (
+            store.snapshot()[1]["object"].evidence != Evidence.LOST
+            and service.error is None
+            and time.monotonic() < deadline
+        ):
+            time.sleep(0.01)
+        current = store.snapshot()[1]["object"]
+        assert service.error is None
+        assert current.evidence == Evidence.LOST
+        assert current.source_frame_id == second.frame_id
+        assert "object" not in service.observed
+        assert store.snapshot()[1]["target"].evidence == Evidence.OBSERVED
+        assert service.late_attachment_invalidations == 1
+        assert any(item["kind"] == "attachment" for item in service.slow_work)
+    finally:
+        service.close()
+
+
+def test_new_attachment_event_restarts_a_delayed_source_order_replay():
+    image = np.random.default_rng(63).integers(0, 255, (96, 96), dtype=np.uint8)
+    frames = [frame(image, index) for index in range(3)]
+    mask = np.zeros(image.shape, dtype=bool)
+    mask[47:49, 47:49] = True
+    store = LatestPoseStore()
+    service = CausalPoseService(store)
+    for item in frames:
+        service._frame(item)
+
+    def observation(index: int) -> _Anchor:
+        estimate = PoseEstimate(
+            "object",
+            np.eye(4),
+            frames[index].source_time_s,
+            frames[index].available_time_s,
+            Evidence.OBSERVED,
+            "reference-v1",
+            (True,) * 3,
+            (True,) * 3,
+        )
+        return _Anchor(index, (estimate,), {"object": mask})
+
+    service._anchor(observation(1))
+    service._anchor(observation(0))
+    assert service._event_replay_step("object")  # Its first image used the old event journal.
+    service.set_attached_role("object", source_time_s=1.5 / 30)
+    service._drain_pending()
+
+    current = store.snapshot()[1]["object"]
+    assert current.evidence == Evidence.LOST
+    assert current.source_frame_id == frames[2].frame_id
+    assert service.anchor_decisions_by_source[(0, "object")].outcome == "replayed_accepted"
+
+
+def test_motor_event_does_not_erase_a_camera_pose_already_processed_with_that_event(monkeypatch):
+    image = np.random.default_rng(64).integers(0, 255, (96, 96), dtype=np.uint8)
+    first, second = frame(image, 0), frame(image, 1)
+    mask = np.zeros(image.shape, dtype=bool)
+    mask[47:49, 47:49] = True
+    store = LatestPoseStore()
+    service = CausalPoseService(store)
+    event_appended = Event()
+    enqueue_event = Event()
+    submit = service._submit
+
+    def delayed_event_submit(item):
+        if isinstance(item, _AttachmentEvent):
+            event_appended.set()
+            assert enqueue_event.wait(2)
+        submit(item)
+
+    monkeypatch.setattr(service, "_submit", delayed_event_submit)
+    service.start()
+    writer = Thread(target=lambda: service.set_attached_role("object", source_time_s=second.source_time_s))
+    try:
+        service.submit_frame(first)
+        deadline = time.monotonic() + 2
+        while service.frames < 1 and service.error is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        writer.start()
+        assert event_appended.wait(2)
+
+        service.submit_frame(second)
+        observed = PoseEstimate(
+            "object",
+            np.eye(4),
+            second.source_time_s,
+            second.available_time_s,
+            Evidence.OBSERVED,
+            "reference-v1",
+            (True,) * 3,
+            (True,) * 3,
+        )
+        service.submit_anchor(1, (observed,), {"object": mask})
+        while "object" not in store.snapshot()[1] and service.error is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert store.snapshot()[1]["object"].evidence == Evidence.OBSERVED
+
+        enqueue_event.set()
+        writer.join(2)
+        assert not writer.is_alive()
+        # A barrier frame proves the queued motor event has been consumed.
+        service.submit_frame(frame(image, 2))
+        while service.frames < 3 and service.error is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert service.error is None
+        assert store.snapshot()[1]["object"].evidence == Evidence.OBSERVED
+        assert service.late_attachment_invalidations == 0
+    finally:
+        enqueue_event.set()
+        if writer.ident is not None:
+            writer.join(2)
+        service.close()
 
 
 def test_causal_config_rejects_unbounded_or_invalid_tracking():
