@@ -74,6 +74,10 @@ class RGBDTrace:
                         "status",
                         "accepted",
                         "camera_from_reference",
+                        # This places the chosen object frame in camera space.
+                        # The reference transform above is incremental; its
+                        # translation alone is not object displacement.
+                        "camera_from_object",
                         "diagnostics",
                         "group_evidence",
                         "group_estimator",

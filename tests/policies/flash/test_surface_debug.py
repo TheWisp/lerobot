@@ -243,7 +243,15 @@ def test_diagnostic_trace_preserves_aligned_depth_mask_and_pose(tmp_path, monkey
     trace.save(
         selected,
         {"object": mask},
-        {"object": {"status": "fitted", "accepted": False, "camera_from_reference": pose, "diagnostics": {}}},
+        {
+            "object": {
+                "status": "fitted",
+                "accepted": False,
+                "camera_from_reference": pose,
+                "camera_from_object": pose,
+                "diagnostics": {},
+            }
+        },
     )
     trace.finish()
     stem = "000008.png"
@@ -255,6 +263,7 @@ def test_diagnostic_trace_preserves_aligned_depth_mask_and_pose(tmp_path, monkey
     np.testing.assert_array_equal(saved_mask > 0, mask)
     metadata = json.loads((trace.path / "frames.jsonl").read_text())
     assert metadata["objects"]["object"]["camera_from_reference"] == pose
+    assert metadata["objects"]["object"]["camera_from_object"] == pose
     assert trace.status()["complete"] and trace.status()["frames"] == 1
 
 
