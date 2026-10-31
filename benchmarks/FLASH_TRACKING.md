@@ -141,6 +141,10 @@ function reports both checks without changing a prepared reference. The
 check on the selected frame and links to frames with the largest depth
 disagreement. A later view needs independent support and explicit review
 before demo preparation or a live trial can use it.
+The same control also ran on the gamepad–cube demo: gamepad frame 136 reduced
+the measured-point gap from 0.92 to 0.78 mm across 211 other observed frames,
+while the projected-surface gap stayed about 1.04 mm. This shows the check is
+not tied to the dowel, but it still lacks independent pose labels.
 
 From the repository root, in an environment with FLASH's inference dependencies:
 
