@@ -14,11 +14,41 @@ from lerobot.policies.flash.reference_view_candidates import (
     review_reference_view_candidates,
 )
 from lerobot.policies.flash.reference_view_registration import fit_reference_view_candidates
-from lerobot.policies.flash.sealed_reference_view_review import review_sealed_reference_view
+from lerobot.policies.flash.sealed_reference_view_review import (
+    _gripper_motion_prior,
+    review_sealed_reference_view,
+)
 from lerobot.policies.flash.surface_grounding import ShapeConfig
 from lerobot.policies.flash.surface_observation import SurfaceObservationConfig, observation
 from lerobot.policies.flash.surface_reference import RegisteredSurfaceModel
 from lerobot.policies.flash.trajectory import Evidence, PoseEstimate
+
+
+def test_gripper_motion_prior_uses_only_grasp_seed_and_motor_motion(tmp_path):
+    bundle = tmp_path / "flash/v1/prepared/skill/bundle.json"
+    bundle.parent.mkdir(parents=True)
+    camera_times = np.array([0.0, 1.0, 2.0])
+    np.savez(
+        bundle.parent / "held-attachment-trace.npz",
+        camera_times_s=camera_times,
+        gripper_from_object=np.repeat((np.eye(4) * 100)[None], 3, axis=0),
+    )
+    arm = np.repeat(np.eye(4)[None], 3, axis=0)
+    arm[:, 0, 3] = [0.0, 0.1, 0.2]
+    np.savez(tmp_path / "showservo_demo.npz", t=camera_times, tips=arm)
+    grasp_seed = np.eye(4)
+    grasp_seed[0, 3] = 0.2
+    camera = np.eye(4)
+    camera[0, 3] = 0.05
+    annotation = {"held_role": "object", "grasp_time_s": 0.0, "release_time_s": 2.0}
+    report = {"held_attachment_trace": "held-attachment-trace.npz"}
+    result = _gripper_motion_prior(tmp_path, bundle, annotation, report, "object", 1, grasp_seed, camera)
+    assert result is not None
+    np.testing.assert_allclose(result[:3, 3], [0.25, 0.0, 0.0])
+    assert _gripper_motion_prior(tmp_path, bundle, annotation, report, "other", 1, grasp_seed, camera) is None
+    assert (
+        _gripper_motion_prior(tmp_path, bundle, annotation, report, "object", 2, grasp_seed, camera) is None
+    )
 
 
 @pytest.fixture

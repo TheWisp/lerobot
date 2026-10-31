@@ -11,13 +11,65 @@ import cv2
 import numpy as np
 from scipy.spatial import QhullError
 
+from .geometry import inverse
+from .held_pose_diagnostics import _arm_pose_at
 from .reference_view_candidates import MeasuredReferenceView, review_reference_view_candidates
 from .reference_view_registration import fit_reference_view_candidates
 from .surface_grounding import project
 from .surface_observation import move, observation, spatial_sample
-from .surface_reference import RegisteredSurfaceModel
+from .surface_reference import PreparedSurfaceAgreement, RegisteredSurfaceModel, registered_surface_agreement
 from .trajectory import Evidence, PoseEstimate
 from .vision_pipeline import VisionPipelineConfig
+
+
+def _gripper_motion_prior(
+    root: Path,
+    bundle_path: Path,
+    annotation: dict,
+    report: dict,
+    role: str,
+    frame_index: int,
+    grasp_reference_pose: np.ndarray | None,
+    base_from_camera: np.ndarray,
+) -> np.ndarray | None:
+    """Predict a carried view from one grasp seed and recorded motor motion.
+
+    This deliberately ignores later visual attachment corrections, which
+    would make the selected view part of its own registration prior.
+    """
+    if role != annotation.get("held_role") or grasp_reference_pose is None:
+        return None
+    trace_name = report.get("held_attachment_trace")
+    if not isinstance(trace_name, str):
+        return None
+    trace_path = (bundle_path.parent / trace_name).resolve()
+    if not trace_path.is_relative_to(bundle_path.parent.resolve()) or not trace_path.is_file():
+        return None
+    arm_path = root / "showservo_demo.npz"
+    if not arm_path.is_file():
+        return None
+    with np.load(trace_path, allow_pickle=False) as trace:
+        times = trace["camera_times_s"]
+        if frame_index >= len(times):
+            return None
+        capture_time_s = float(times[frame_index])
+    grasp_time_s = float(annotation["grasp_time_s"])
+    release_time_s = float(annotation["release_time_s"])
+    if not grasp_time_s <= capture_time_s < release_time_s:
+        return None
+    with np.load(arm_path, allow_pickle=False) as arm:
+        motor_times = arm["t"]
+        motor_poses = arm["tips"]
+        grasp_index = int(np.argmin(np.abs(motor_times - grasp_time_s)))
+        capture_pose = _arm_pose_at(motor_times, motor_poses, capture_time_s)
+        if capture_pose is None:
+            return None
+        return (
+            inverse(base_from_camera)
+            @ capture_pose
+            @ inverse(motor_poses[grasp_index])
+            @ grasp_reference_pose
+        )
 
 
 def review_sealed_reference_view(
@@ -168,15 +220,34 @@ def review_sealed_reference_view(
         reverse=True,
     )
     independent_fits = []
+    gripper_motion_fits = []
     independent_fit_error = None
     candidate_view = measured(role, frame_index)
     if candidate_view is not None and selected_mask is not None and len(candidate_view.points_camera_m) >= 3:
         try:
-            fits = fit_reference_view_candidates(
-                model.view_points_object_m[0], candidate_view, selected_mask, intrinsics, config.shape
+            grasp_frame = annotation.get("grasp_reference_frame")
+            grasp_estimate = estimates.get(grasp_frame, {}).get(role)
+            grasp_pose = (
+                grasp_estimate.pose
+                if grasp_estimate is not None and grasp_estimate.evidence == Evidence.OBSERVED
+                else None
             )
-            for fit in fits:
-                camera_points = move(model.view_points_object_m[0], fit.camera_from_object)
+            gripper_prior = _gripper_motion_prior(
+                root, bundle_path, annotation, report, role, frame_index, grasp_pose, base_from_camera
+            )
+            fits = fit_reference_view_candidates(
+                model.view_points_object_m[0],
+                candidate_view,
+                selected_mask,
+                intrinsics,
+                config.shape,
+                prior_poses_camera_from_object={"gripper_motion": gripper_prior}
+                if gripper_prior is not None
+                else None,
+            )
+
+            def preview(pose: np.ndarray) -> list[list[int]]:
+                camera_points = move(model.view_points_object_m[0], pose)
                 camera_points = camera_points[camera_points[:, 2] > 0]
                 xy = project(camera_points, intrinsics)
                 inside = (
@@ -185,19 +256,49 @@ def review_sealed_reference_view(
                     & (xy[:, 1] >= 0)
                     & (xy[:, 1] < candidate_view.depth_m.shape[0])
                 )
-                independent_fits.append(
+                return np.rint(xy[inside]).astype(int).tolist()
+
+            for fit in fits:
+                result = {
+                    "seed": fit.seed,
+                    "converged": fit.converged,
+                    "fit_cost": fit.fit_cost,
+                    "measured_to_reference_p90_m": fit.measured_to_reference_p90_m,
+                    "reference_depth_pixels": fit.reference_depth_pixels,
+                    "reference_to_depth_p90_m": fit.reference_to_depth_p90_m,
+                    "reference_in_front_p90_m": fit.reference_in_front_p90_m,
+                    "reference_behind_p90_m": fit.reference_behind_p90_m,
+                    "surface_center_camera_m": fit.surface_center_camera_m,
+                    "projected_points_xy": preview(fit.camera_from_object),
+                }
+                (gripper_motion_fits if fit.seed == "gripper_motion" else independent_fits).append(result)
+            if gripper_prior is not None:
+                prepared_agreement = PreparedSurfaceAgreement.build(model)
+                score, _ = registered_surface_agreement(
+                    model,
+                    gripper_prior,
+                    candidate_view.points_camera_m,
+                    candidate_view.clean_depth_pixels,
+                    candidate_view.depth_m,
+                    intrinsics,
+                    prepared=prepared_agreement,
+                )
+                gripper_motion_fits.insert(
+                    0,
                     {
-                        "seed": fit.seed,
-                        "converged": fit.converged,
-                        "fit_cost": fit.fit_cost,
-                        "measured_to_reference_p90_m": fit.measured_to_reference_p90_m,
-                        "reference_depth_pixels": fit.reference_depth_pixels,
-                        "reference_to_depth_p90_m": fit.reference_to_depth_p90_m,
-                        "reference_in_front_p90_m": fit.reference_in_front_p90_m,
-                        "reference_behind_p90_m": fit.reference_behind_p90_m,
-                        "surface_center_camera_m": fit.surface_center_camera_m,
-                        "projected_points_xy": np.rint(xy[inside]).astype(int).tolist(),
-                    }
+                        "seed": "gripper_prediction",
+                        "converged": None,
+                        "fit_cost": None,
+                        "measured_to_reference_p90_m": score.measured_to_reference_p90_m,
+                        "reference_depth_pixels": score.reference_depth_pixels,
+                        "reference_to_depth_p90_m": score.reference_to_depth_p90_m,
+                        "reference_in_front_p90_m": score.reference_in_front_p90_m,
+                        "reference_behind_p90_m": score.reference_behind_p90_m,
+                        "surface_center_camera_m": tuple(
+                            float(x) for x in move(model.view_points_object_m[0], gripper_prior).mean(axis=0)
+                        ),
+                        "projected_points_xy": preview(gripper_prior),
+                    },
                 )
         except (ValueError, RuntimeError, QhullError) as exc:
             independent_fit_error = str(exc)
@@ -208,6 +309,7 @@ def review_sealed_reference_view(
         "largest_front_conflicts": front_worsened[:5],
         "largest_behind_gaps": behind_worsened[:5],
         "independent_fits": independent_fits,
+        "gripper_motion_fits": gripper_motion_fits,
         "independent_fit_error": independent_fit_error,
         "disclaimer": "Same pose trace registered and checked this view; review cannot establish independent accuracy.",
     }

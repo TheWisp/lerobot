@@ -182,6 +182,16 @@ had 0.94 mm measured-surface and 1.08 mm projected-surface-to-depth p90 gaps, bu
 optimizer did not converge. The editor previews any candidate against the
 same recorded camera frame without changing the saved reference.
 
+The editor also compares a gripper-motion prediction during the declared carry
+interval. It starts with the selected pre-grasp object pose and moves it by the
+recorded gripper motion; later visual corrections are excluded so the selected
+frame cannot confirm itself. On dowel frame 500, this raw prediction had 17.05 mm
+measured-surface and 36.38 mm projected-depth p90 gaps. Refining it against that
+frame improved those gaps to 6.45 and 25.24 mm. The best geometry-only proposal
+had 3.97 and 11.67 mm gaps, although its solver did not converge. Gripper motion
+is useful as a labeled alternative, but these numbers do not justify accepting
+it or the geometry fit as the object pose without further evidence.
+
 From the repository root, in an environment with FLASH's inference dependencies:
 
 ```bash

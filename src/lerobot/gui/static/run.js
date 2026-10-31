@@ -1610,7 +1610,9 @@ function _flashDrawOverlay() {
         const fitIndex = flashDemoEditor?.referenceReviewCandidateIndex;
         if (flashReplay?.kind === 'demo' && viewReview?.frameIndex === camera.frame_id &&
             Number.isInteger(fitIndex)) {
-            const fit = viewReview.result?.independent_fits?.[fitIndex];
+            const fits = [...(viewReview.result?.independent_fits || []),
+                ...(viewReview.result?.gripper_motion_fits || [])];
+            const fit = fits[fitIndex];
             const points = fit?.projected_points_xy || [];
             if (points.length >= 3) {
                 context.globalAlpha = 0.9;

@@ -556,13 +556,18 @@ function _flashEditorRender() {
                 }
                 box.append(details);
             }
-            const fits = result.result?.independent_fits || [];
+            const gripperFits = result.result?.gripper_motion_fits || [];
+            const fits = [...(result.result?.independent_fits || []), ...gripperFits];
             if (fits.length || result.result?.independent_fit_error) {
                 const independent = document.createElement('details');
                 independent.append(Object.assign(document.createElement('summary'),
-                    {textContent: `Independent geometry fits · ${fits.length} proposals`}));
+                    {textContent: gripperFits.length
+                        ? `Geometry and gripper proposals · ${fits.length}`
+                        : `Independent geometry fits · ${fits.length} proposals`}));
                 independent.append(Object.assign(document.createElement('p'), {textContent:
-                    'Fitted from this frame’s mask and depth, without the saved pose. Pink preview is unverified; no view is added.'}));
+                    gripperFits.length
+                        ? 'Geometry starts from this frame’s mask and depth. Gripper motion starts from the selected pre-grasp pose and recorded motor movement; its second proposal is refined against this frame. Pink previews are unverified; no view is added.'
+                        : 'Fitted from this frame’s mask and depth, without the saved pose. Pink preview is unverified; no view is added.'}));
                 if (result.result?.independent_fit_error)
                     independent.append(Object.assign(document.createElement('p'),
                         {textContent: result.result.independent_fit_error}));
@@ -570,7 +575,10 @@ function _flashEditorRender() {
                     const row = document.createElement('div');
                     row.className = 'flash-editor-moment';
                     row.append(Object.assign(document.createElement('span'), {textContent:
-                        `Fit ${index + 1} · ${fit.converged ? 'converged' : 'not converged'} · surface ${(fit.measured_to_reference_p90_m * 1000).toFixed(2)} mm · depth ${fit.reference_to_depth_p90_m == null ? 'unavailable' : (fit.reference_to_depth_p90_m * 1000).toFixed(2) + ' mm'}`}));
+                        `${fit.seed === 'gripper_prediction' ? 'Gripper motion (before fitting)'
+                            : fit.seed === 'gripper_motion' ? 'Gripper-seeded surface fit' : `Geometry fit ${index + 1}`}` +
+                        `${fit.converged == null ? '' : fit.converged ? ' · converged' : ' · not converged'}` +
+                        ` · surface ${(fit.measured_to_reference_p90_m * 1000).toFixed(2)} mm · depth ${fit.reference_to_depth_p90_m == null ? 'unavailable' : (fit.reference_to_depth_p90_m * 1000).toFixed(2) + ' mm'}`}));
                     const button = _flashEditorButton(row,
                         state.referenceReviewCandidateIndex === index ? 'Showing fit' : 'Preview fit', () => {
                         state.referenceReviewCandidateIndex = index;

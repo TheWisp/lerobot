@@ -1098,6 +1098,16 @@ def test_run_flash_lists_demos_and_shows_extracted_pose_overlay(gui_page):
                         "projected_points_xy": [[20, 20], [30, 20], [30, 30], [20, 30]],
                     }
                 ],
+                "gripper_motion_fits": [
+                    {
+                        "seed": "gripper_prediction",
+                        "converged": None,
+                        "fit_cost": None,
+                        "measured_to_reference_p90_m": 0.006,
+                        "reference_to_depth_p90_m": 0.009,
+                        "projected_points_xy": [[21, 20], [31, 20], [31, 30], [21, 30]],
+                    }
+                ],
             }
         )
 
@@ -1136,8 +1146,9 @@ def test_run_flash_lists_demos_and_shows_extracted_pose_overlay(gui_page):
     )
     assert page.locator("#flash-demo-editor-change-status").inner_text() == "Viewing saved preparation"
     page.locator("#flash-reference-review-result details").nth(1).locator("summary").click()
-    page.get_by_role("button", name="Preview fit").click()
-    assert page.evaluate("flashDemoEditor.referenceReviewCandidateIndex") == 0
+    assert "Gripper motion (before fitting)" in page.locator("#flash-reference-review-result").inner_text()
+    page.get_by_role("button", name="Preview fit").nth(1).click()
+    assert page.evaluate("flashDemoEditor.referenceReviewCandidateIndex") == 1
     assert page.evaluate("_flashEditorCurrentFrame().frame_index") == 5
     assert page.evaluate("""() => {
         const canvas = document.querySelector('#rerun-viewer .flash-replay-grid .flash-pose-canvas');
