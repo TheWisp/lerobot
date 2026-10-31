@@ -402,6 +402,7 @@ def prepare(
     release = _nearest_index(times, annotation["release_time_s"])
     if not 0 < grasp < release < len(times) - 1:
         raise ValueError("grasp and release must lie inside the recorded demo")
+    attachment_events = ((float(times[grasp]), held), (float(times[release]), None))
     if not np.allclose(kinematics.forward_kinematics(joints[grasp]), recorded_tips[grasp], atol=1e-5):
         raise ValueError("calibrated fingertip differs from the grasp-time demo pose")
     start_anchor_end = _nearest_index(times, float(annotation["start_anchored_until_s"]))
@@ -507,6 +508,7 @@ def prepare(
     cache_identity["causal_tracking"] = annotation.get("causal_tracking")
     cache_identity["vision_pipeline"] = vision_config.to_dict()
     cache_identity["pose_trace_selection_version"] = POSE_TRACE_SELECTION_VERSION
+    cache_identity["attachment_events"] = attachment_events
     cache_identity["scene_evidence_capture_version"] = SCENE_EVIDENCE_CAPTURE_VERSION
     cache_identity["trace_frames"] = through_frame + 1
     cache_key = hashlib.sha256(
@@ -608,8 +610,6 @@ def prepare(
             surface_models=tuple(surface_models),
             clock=lambda: 0.0,
         )
-        grasp_camera = _nearest_index(camera_times, times[grasp])
-        release_camera = _nearest_index(camera_times, times[release])
 
         def capture_held_mask(frame, result, _groups, by_role) -> None:
             writer.record(frame, result, _groups, by_role)
@@ -630,9 +630,7 @@ def prepare(
             causal_tracking=causal_config,
             object_points_by_role={model.points.role: model.points.points_object_m for model in models},
             axial_symmetries=tuple(axial_symmetries),
-            attached_role_at_frame=(
-                lambda frame_id: held if grasp_camera <= frame_id < release_camera else None
-            ),
+            attachment_events=attachment_events,
             on_frame_evidence=capture_held_mask,
         )
         writer.finish()

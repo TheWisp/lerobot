@@ -273,7 +273,9 @@ publish provenance and do not turn an occluded pose into a direct measurement.
 The robot's fixed-rate command loop consumes the latest accepted belief; its
 30 Hz tick does not imply a fresh 30 Hz direct pose.
 Demo extraction uses that estimator synchronously, while the live run keeps
-perception asynchronous and may receive delayed proposals. Demo and live
+perception asynchronous and may receive delayed proposals. The sealed demo
+adapter feeds grasp and release at their recorded arm times, not the nearest
+RGB-D frame; the extraction cache key includes those event times. Demo and live
 still have distinct gripper attachment handling: the importer predicts held
 motion from recorded gripper poses, and the run updates its attachment from
 live observations.

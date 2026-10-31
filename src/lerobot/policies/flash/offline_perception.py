@@ -13,9 +13,9 @@ from .perception_step import PerceptionPipeline, PerceptionResult, PerceptionRun
 from .symmetry import AxialSymmetry
 from .trajectory import Evidence, PoseEstimate
 
-# Version 9 also prevents a full direct fit contradicted by observed free
-# space from replacing the current scene estimate.
-POSE_TRACE_SELECTION_VERSION = 9
+# Version 10 also preserves recorded motor event times when extracting a
+# grasp or release between camera frames.
+POSE_TRACE_SELECTION_VERSION = 10
 
 
 def extract_pose_trace(
@@ -27,6 +27,7 @@ def extract_pose_trace(
     object_points_by_role: dict[str, np.ndarray] | None = None,
     axial_symmetries: tuple[AxialSymmetry, ...] = (),
     attached_role_at_frame: Callable[[int], str | None] | None = None,
+    attachment_events: tuple[tuple[float, str | None], ...] = (),
     on_vision_result: Callable[[PerceptionResult], None] | None = None,
     on_frame_evidence: Callable[[RGBDFrame, PerceptionResult, dict, dict[str, PoseEstimate]], None]
     | None = None,
@@ -38,6 +39,8 @@ def extract_pose_trace(
     finish its direct proposal before advancing to the next frame. It does not
     claim to reproduce live scheduling or the gripper attachment updater.
     """
+    if attachment_events and attached_role_at_frame is not None:
+        raise ValueError("provide attachment event times or camera-frame roles, not both")
     pipeline = PerceptionPipeline(backend, references, require_masks=causal_tracking is not None)
     service = None
     if causal_tracking is not None:
@@ -54,9 +57,19 @@ def extract_pose_trace(
         )
     trace = []
     source = iter(frames)
+    next_attachment_event = 0
+    attached_role: str | None = None
     with PerceptionRunner(pipeline) as runner:
         while (item := runner.process_next(lambda: next(source, None))) is not None:
             frame, result = item
+            while (
+                next_attachment_event < len(attachment_events)
+                and attachment_events[next_attachment_event][0] <= frame.source_time_s
+            ):
+                event_time_s, attached_role = attachment_events[next_attachment_event]
+                if service is not None:
+                    service.set_attached_role(attached_role, source_time_s=event_time_s)
+                next_attachment_event += 1
             # Backend compute happens during this later extraction, not on the
             # recorded camera clock. In a source-order pass each proposal is
             # available at this frame's recorded availability; wall-clock
@@ -83,7 +96,9 @@ def extract_pose_trace(
                     proposals,
                     {role: mask.copy() for role, mask in masks.items()},
                     attached_role=(
-                        attached_role_at_frame(frame.frame_id) if attached_role_at_frame else None
+                        attached_role_at_frame(frame.frame_id)
+                        if attached_role_at_frame is not None
+                        else attached_role
                     ),
                     proposals=result.proposals,
                 )

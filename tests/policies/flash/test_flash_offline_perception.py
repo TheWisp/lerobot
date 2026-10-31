@@ -129,6 +129,48 @@ def test_offline_extraction_does_not_publish_backend_wall_clock_as_recorded_avai
         assert trace[index]["target"].available_time_s == frame.available_time_s
 
 
+def test_demo_extraction_uses_motor_event_time_between_camera_frames(monkeypatch):
+    mask = np.ones((96, 96), dtype=bool)
+    reference = ObjectReference(
+        "target", "v1", (ReferenceSnippet("demo", 0, 0, "target", np.eye(4), "mask.png", "camera-v1"),)
+    )
+    services = []
+    original_builder = offline_perception.build_causal_pose_service
+
+    def capture_service(*args, **kwargs):
+        service = original_builder(*args, **kwargs)
+        services.append(service)
+        return service
+
+    monkeypatch.setattr(offline_perception, "build_causal_pose_service", capture_service)
+    grasp_time_s = 0.4 / 30  # nearest camera is frame 0, captured before the grasp
+    release_time_s = 1.6 / 30
+    rows = offline_perception.extract_pose_trace(
+        (_frame(index) for index in range(3)),
+        _RecordedBackend(mask),
+        (reference,),
+        causal_tracking=CausalTrackingConfig(8, 8, 12, 0.1, 0.005),
+        attachment_events=((grasp_time_s, "target"), (release_time_s, None)),
+    )
+
+    service = services[0]
+    assert service.attachment_by_frame == {0: None, 1: "target", 2: None}
+    assert [event.source_time_s for event in service._attachment_events] == [
+        grasp_time_s,
+        release_time_s,
+    ]
+    assert rows[0]["target"].evidence == Evidence.OBSERVED
+    with np.testing.assert_raises_regex(ValueError, "event times or camera-frame roles"):
+        offline_perception.extract_pose_trace(
+            (_frame(index) for index in range(1)),
+            _RecordedBackend(mask),
+            (reference,),
+            causal_tracking=None,
+            attachment_events=((grasp_time_s, "target"),),
+            attached_role_at_frame=lambda _: "target",
+        )
+
+
 def test_demo_attachment_disables_environment_bridge(monkeypatch):
     """A held object must not inherit motion from its former tray group."""
     rng = np.random.default_rng(9)

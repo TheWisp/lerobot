@@ -66,12 +66,8 @@ def rebuild(root: Path, bundle: Path, *, through_frame: int | None = None, devic
         extractor=DinoPatchExtractor(model_id=prepared.descriptor_model_id, device=device),
         axial_symmetries=prepared.axial_symmetries,
     )
-    grasp_camera = _nearest_index(
-        camera_times, arm_times[_nearest_index(arm_times, annotation["grasp_time_s"])]
-    )
-    release_camera = _nearest_index(
-        camera_times, arm_times[_nearest_index(arm_times, annotation["release_time_s"])]
-    )
+    grasp_time_s = float(arm_times[_nearest_index(arm_times, annotation["grasp_time_s"])])
+    release_time_s = float(arm_times[_nearest_index(arm_times, annotation["release_time_s"])])
     destination = bundle.parent / "scene-evidence"
     identity = hashlib.sha256(
         bundle.read_bytes() + (bundle.parent / "annotation.json").read_bytes()
@@ -98,9 +94,7 @@ def rebuild(root: Path, bundle: Path, *, through_frame: int | None = None, devic
                 model.points.role: model.points.points_object_m for model in prepared.appearance_models
             },
             axial_symmetries=prepared.axial_symmetries,
-            attached_role_at_frame=lambda frame_id: (
-                annotation["held_role"] if grasp_camera <= frame_id < release_camera else None
-            ),
+            attachment_events=((grasp_time_s, annotation["held_role"]), (release_time_s, None)),
             on_frame_evidence=record,
         )
     finally:
