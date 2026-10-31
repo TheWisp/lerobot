@@ -1,6 +1,7 @@
 """Behavioral invariants for direct spatial imitation."""
 
 import json
+from dataclasses import replace
 
 import numpy as np
 import pytest
@@ -1438,9 +1439,61 @@ def test_demonstrated_attachment_events_bind_and_release_live_object():
     )
     assert lifecycle.on_pose_update(2, {"object": held})
     assert updater.has_postgrasp_observation
+    camera = RGBDFrame(
+        10,
+        np.zeros((2, 2, 3), dtype=np.uint8),
+        np.ones((2, 2), dtype=np.uint16),
+        np.eye(3),
+        0.001,
+        pose(),
+        0.10,
+        0.10,
+        "camera-v1",
+    )
+    prediction = lifecycle.prediction_at("object", camera)
+    assert prediction is not None
+    assert prediction.pose[0, 3] == pytest.approx(0.147)
+    assert prediction.last_direct_observation_s == pytest.approx(0.075)
     lifecycle.on_motor_tick(tick(0.12, "open"))
     assert lifecycle.state(0.13) is None
     assert lifecycle.last_event == "open"
+    # A queued image may be processed after release without using the current
+    # (now inactive) attachment state or a post-release motor position.
+    assert lifecycle.prediction_at("object", camera).pose[0, 3] == pytest.approx(0.147)
+    released_camera = RGBDFrame(
+        11,
+        camera.rgb,
+        camera.depth,
+        camera.intrinsics,
+        camera.depth_m_per_unit,
+        camera.base_from_camera,
+        0.13,
+        0.13,
+        camera.calibration_version,
+    )
+    assert lifecycle.prediction_at("object", released_camera) is None
+    poses.publish(
+        (
+            PoseEstimate(
+                "object",
+                pose(0.20),
+                0.135,
+                0.14,
+                Evidence.OBSERVED,
+                "object-v1",
+                (True,) * 3,
+                (True,) * 3,
+            ),
+        )
+    )
+    lifecycle.on_motor_tick(tick(0.14, "close"))
+    between_grasp_and_motor = replace(
+        released_camera, frame_id=12, source_time_s=0.155, available_time_s=0.155
+    )
+    assert lifecycle.prediction_at("object", between_grasp_and_motor) is None
+    lifecycle.on_motor_tick(tick(0.16))
+    after_new_motor = replace(released_camera, frame_id=13, source_time_s=0.165, available_time_s=0.165)
+    assert lifecycle.prediction_at("object", after_new_motor) is not None
 
 
 def test_rgbd_alignment_and_pose_handoff_preserve_source_time():

@@ -206,6 +206,7 @@ class CausalPoseService:
         on_free_space_comparison: Callable[[str, FreeSpaceComparison], None] | None = None,
         on_direct_observation: Callable[[PoseEstimate], None] | None = None,
         on_direct_observation_with_frame: Callable[[PoseEstimate, RGBDFrame, np.ndarray], None] | None = None,
+        kinematic_prediction_at: Callable[[str, RGBDFrame], PoseEstimate | None] | None = None,
         on_anchor_decision: Callable[[AnchorDecision], None] | None = None,
         on_scene_support: Callable[[int, dict[str, dict]], None] | None = None,
         decision_clock: Callable[[], float] = time.perf_counter,
@@ -265,6 +266,7 @@ class CausalPoseService:
         self.on_free_space_comparison = on_free_space_comparison
         self.on_direct_observation = on_direct_observation
         self.on_direct_observation_with_frame = on_direct_observation_with_frame
+        self.kinematic_prediction_at = kinematic_prediction_at
         self.on_anchor_decision = on_anchor_decision
         self.on_scene_support = on_scene_support
         self._live_decision_clock = decision_clock
@@ -796,6 +798,28 @@ class CausalPoseService:
             self._publish_environment(role, pose, frame, advanced, confirmed=confirmed)
         environment_track_s = time.perf_counter() - environment_started_s
         self.environment_track_total_s += environment_track_s
+        if (
+            attached_role is not None
+            and attached_role not in object_motion_roles
+            and self.kinematic_prediction_at is not None
+        ):
+            prediction = self.kinematic_prediction_at(attached_role, frame)
+            if prediction is not None:
+                if (
+                    prediction.role != attached_role
+                    or prediction.evidence != Evidence.PREDICTED
+                    or prediction.pose is None
+                    or prediction.source_time_s != frame.source_time_s
+                    or prediction.source_frame_id != frame.frame_id
+                    or prediction.direct_translation_observed
+                ):
+                    raise ValueError("kinematic prediction must be a same-frame, prediction-only pose")
+                prediction = replace(
+                    prediction, available_time_s=max(prediction.available_time_s, self.decision_clock())
+                )
+                before, _ = self.store.snapshot()
+                if self.store.publish((prediction,)) != before and self.on_layer is not None:
+                    self.on_layer(prediction)
         # A missing visual fit is not evidence that a stationary object moved.
         # Carry the last direct pose for a bounded interval, with explicit
         # prediction provenance. Once co-motion has been verified, only that
@@ -2029,6 +2053,7 @@ def build_causal_pose_service(
     on_free_space_comparison: Callable[[str, FreeSpaceComparison], None] | None = None,
     on_direct_observation: Callable[[PoseEstimate], None] | None = None,
     on_direct_observation_with_frame: Callable[[PoseEstimate, RGBDFrame, np.ndarray], None] | None = None,
+    kinematic_prediction_at: Callable[[str, RGBDFrame], PoseEstimate | None] | None = None,
     on_anchor_decision: Callable[[AnchorDecision], None] | None = None,
     on_scene_support: Callable[[int, dict[str, dict]], None] | None = None,
 ) -> CausalPoseService:
@@ -2045,6 +2070,7 @@ def build_causal_pose_service(
         on_free_space_comparison=on_free_space_comparison,
         on_direct_observation=on_direct_observation,
         on_direct_observation_with_frame=on_direct_observation_with_frame,
+        kinematic_prediction_at=kinematic_prediction_at,
         on_anchor_decision=on_anchor_decision,
         on_scene_support=on_scene_support,
     )

@@ -264,6 +264,68 @@ def test_attachment_transition_withdraws_old_scene_pose_until_new_evidence():
     assert store.snapshot()[1]["object"].evidence == Evidence.OBSERVED
 
 
+def test_gripper_prediction_fills_occluded_held_scene_pose_but_stops_at_release():
+    image = np.zeros((96, 96), dtype=np.uint8)
+    frames = [frame(image, index) for index in range(4)]
+    calls = []
+
+    def predict(role, source):
+        calls.append((role, source.frame_id))
+        pose = np.eye(4)
+        pose[0, 3] = source.frame_id * 0.01
+        return PoseEstimate(
+            role,
+            pose,
+            source.source_time_s,
+            source.available_time_s,
+            Evidence.PREDICTED,
+            "reference-v1",
+            (True,) * 3,
+            (True,) * 3,
+            estimator="gripper_motion",
+            last_direct_observation_s=0.0,
+            source_frame_id=source.frame_id,
+        )
+
+    store = LatestPoseStore()
+    service = CausalPoseService(store, kinematic_prediction_at=predict)
+    service._frame(frames[0])
+    service.set_attached_role("object", source_time_s=0.5 / 30)
+    service._frame(frames[1])
+    during_hold = store.snapshot()[1]["object"]
+    assert during_hold.evidence == Evidence.PREDICTED
+    assert during_hold.estimator == "gripper_motion"
+    assert during_hold.pose[0, 3] == pytest.approx(0.01)
+    assert calls == [("object", 1)]
+
+    mask = np.zeros(image.shape, dtype=bool)
+    mask[47:49, 47:49] = True
+    measured = np.eye(4)
+    measured[0, 3] = 0.03
+    observation = PoseEstimate(
+        "object",
+        measured,
+        frames[1].source_time_s,
+        frames[1].available_time_s,
+        Evidence.OBSERVED,
+        "reference-v1",
+        (True,) * 3,
+        (True,) * 3,
+    )
+    service._anchor(_Anchor(1, (observation,), {"object": mask}))
+    assert store.snapshot()[1]["object"].evidence == Evidence.OBSERVED
+    assert store.snapshot()[1]["object"].pose[0, 3] == pytest.approx(0.03)
+
+    service._frame(frames[2])
+    assert store.snapshot()[1]["object"].pose[0, 3] == pytest.approx(0.02)
+    service.set_attached_role(None, source_time_s=2.5 / 30)
+    service._frame(frames[3])
+    after_release = store.snapshot()[1]["object"]
+    assert after_release.evidence == Evidence.LOST
+    assert after_release.pose is None
+    assert calls == [("object", 1), ("object", 2)]
+
+
 def test_grasp_and_release_between_camera_frames_clear_old_scene_support():
     image = np.random.default_rng(60).integers(0, 255, (96, 96), dtype=np.uint8)
     store = LatestPoseStore()

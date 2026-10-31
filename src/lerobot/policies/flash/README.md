@@ -16,7 +16,7 @@ the conclusion changes. Do not create another summary document for each round.
 
 ## Perception at a glance
 
-The following is a code audit through `b41ab` (2026-10-29). It describes the
+The following is a code audit through the current FLASH work (2026-10-31). It describes the
 surface-backend route; a prepared bundle can instead select the older appearance
 backend. Replay displays recorded results rather than silently rerunning a new
 tracker.
@@ -566,10 +566,15 @@ receives every captured camera frame, tracks object and shared scene points,
 and can predict group motion after observed co-motion verifies a relationship.
 Grasp and release events carry their motor dispatch time into this service;
 queued camera frames captured before an event retain the earlier relationship.
-The gripper-backed held pose is still a separate prediction used by the
-controller and shown in replay. The causal scene store does not yet fuse that
-prediction into one accepted object belief, so its held-object layer can become
-stale during occlusion.
+The gripper-backed held pose supplies a prediction to the causal scene store
+when camera point motion is unavailable. It uses the measured motor state at
+or before that camera frame and keeps the last independent observation time;
+the prediction never claims to be a new visual measurement. A direct visual
+pose at the same frame takes priority. Release stops gripper predictions and
+withdraws the old scene pose. The controller still keeps its separate
+gripper-to-object relationship for motion planning. Demo extraction currently
+replays that relationship after its scene-pose pass, so source-time gripper
+fusion there remains to be integrated.
 When causal tracking is enabled, the heavy pose process submits
 source-frame proposals to the causal service, which alone publishes accepted
 poses and catches delayed proposals up to its retained frame history. That is

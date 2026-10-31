@@ -172,6 +172,7 @@ class FlashRuntime:
                     live_telemetry.free_space_comparison if live_telemetry is not None else None
                 ),
                 on_direct_observation_with_frame=queue_held_direct,
+                kinematic_prediction_at=lambda role, frame: self.attachment.prediction_at(role, frame),
                 on_anchor_decision=(live_telemetry.anchor_decision if live_telemetry is not None else None),
                 on_scene_support=(live_telemetry.scene_support if live_telemetry is not None else None),
             )

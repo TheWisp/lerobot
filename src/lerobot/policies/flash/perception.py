@@ -337,6 +337,7 @@ class TimedJointHistory:
         self._samples: deque[tuple[float, np.ndarray]] = deque(maxlen=capacity)
         self._lock = Lock()
         self.max_sample_gap_s = max_sample_gap_s
+        self.capacity = capacity
 
     def append(self, source_time_s: float, joints_deg: np.ndarray) -> None:
         joints = np.asarray(joints_deg, dtype=float)
