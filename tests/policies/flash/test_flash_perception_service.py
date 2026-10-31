@@ -1,6 +1,7 @@
 """A live perception host must wait for seeded evidence before motion."""
 
 import time
+from dataclasses import replace
 from threading import Event
 from types import SimpleNamespace
 
@@ -169,3 +170,27 @@ def test_readiness_uses_capture_time_of_direct_support_after_prediction():
     )
     with pytest.raises(PerceptionServiceError, match="no fresh observed pose"):
         service.wait_ready(("item",), max_pose_age_s=0.2, timeout_s=0.01)
+
+
+def test_readiness_accepts_measured_position_with_predicted_orientation_only_after_publication():
+    store = LatestPoseStore()
+    worker = SimpleNamespace(store=store, metrics=SimpleNamespace(last_failures={}))
+    service = PerceptionService(FakeCameraSource(), worker, store, clock=lambda: 1.1)
+    service._started = True
+    partial = PoseEstimate(
+        "item",
+        np.eye(4),
+        1.05,
+        1.2,
+        Evidence.PREDICTED,
+        "v1",
+        (True,) * 3,
+        (True,) * 3,
+        direct_translation_observed=True,
+    )
+    store.publish((partial,))
+    with pytest.raises(PerceptionServiceError, match="no fresh observed pose"):
+        service.wait_ready(("item",), max_pose_age_s=0.2, timeout_s=0.01)
+
+    store.revise(replace(partial, available_time_s=1.05))
+    service.wait_ready(("item",), max_pose_age_s=0.2, timeout_s=0.01)

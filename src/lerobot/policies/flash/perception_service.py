@@ -24,7 +24,8 @@ class PerceptionService:
     """Capture, estimate and publish without giving the motor loop a camera handle.
 
     ``start`` only means process initialization completed. ``wait_ready``
-    separately waits for actual observed roles after model/track seeding.
+    separately waits for current direct position evidence after model/track seeding;
+    an unobserved orientation may still be predicted.
     The host must stop motion on ``error``; a failed camera or estimator never
     silently turns the last observation into a fresh one.
     """
@@ -131,9 +132,7 @@ class PerceptionService:
         missing = list(roles)
 
         def fresh_direct(pose: PoseEstimate, now_s: float) -> bool:
-            direct_s = (
-                pose.source_time_s if pose.evidence == Evidence.OBSERVED else pose.last_direct_observation_s
-            )
+            direct_s = pose.source_time_s if pose.has_direct_translation else pose.last_direct_observation_s
             return direct_s is not None and 0 <= now_s - direct_s <= max_pose_age_s
 
         while time.monotonic() < deadline:
@@ -148,6 +147,7 @@ class PerceptionService:
                 or (not allow_predicted and not fresh_direct(poses[role], now_s))
                 or poses[role].evidence == Evidence.LOST
                 or not 0 <= now_s - poses[role].source_time_s <= max_pose_age_s
+                or now_s < poses[role].available_time_s
             ]
             if not missing:
                 return
