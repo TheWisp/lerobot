@@ -9,6 +9,22 @@ const visionColor = 0xaadce9;
 // control caps WebGL uploads without changing tracker samples or saved RGB-D.
 const defaultSurfaceVertices = 20_000;
 
+function heldOnCamera(snapshot) {
+    const aligned = snapshot?.held_prediction_at_camera;
+    if (snapshot?.camera && Object.hasOwn(snapshot, 'held_prediction_at_camera'))
+        return aligned?.source_frame_id === snapshot.camera.frame_id ? aligned : null;
+    return aligned?.source_frame_id === snapshot?.camera?.frame_id ? aligned : snapshot?.held_prediction;
+}
+
+function acceptedOnCamera(snapshot, role) {
+    const accepted = snapshot?.accepted?.[role];
+    if (!accepted || snapshot?.held_prediction?.role !== role || !snapshot?.camera ||
+        !Object.hasOwn(snapshot, 'held_prediction_at_camera')) return accepted;
+    return accepted.source_frame_id === snapshot.camera.frame_id ||
+        (accepted.source_frame_id == null && accepted.source_time_s === snapshot.camera.source_time_s)
+        ? accepted : null;
+}
+
 function setPose(group, baseFromObject, baseFromCamera) {
     const world = new THREE.Matrix4().set(...baseFromObject.flat());
     const camera = new THREE.Matrix4().set(...baseFromCamera.flat()).invert();
@@ -316,9 +332,7 @@ export function createFlashSceneView(canvas, surfaces, reprocessedSurfaces = {})
         }
         turnGroup = null;
         const baseFromCamera = snapshot.camera.base_from_camera;
-        const held = snapshot.held_prediction_at_camera && snapshot.camera?.frame_id != null &&
-            snapshot.held_prediction_at_camera.source_frame_id === snapshot.camera.frame_id
-            ? snapshot.held_prediction_at_camera : snapshot.held_prediction;
+        const held = heldOnCamera(snapshot);
         observedCenters = {};
         observedBounds = {};
         // A current mask is independently measured. It must remain inspectable
@@ -332,7 +346,7 @@ export function createFlashSceneView(canvas, surfaces, reprocessedSurfaces = {})
             const ref = references[role];
             const primaryRef = primaryReferences[role];
             const reprocessedRef = reprocessedReferences[role];
-            const skillPose = held?.role === role ? held : snapshot.accepted?.[role];
+            const skillPose = held?.role === role ? held : acceptedOnCamera(snapshot, role);
             const extracted = snapshot.layers?.[role]?.demo_extraction;
             const perceptionOnly = !skillPose && extracted?.evidence !== 'lost' && !!extracted?.pose;
             const used = skillPose || (perceptionOnly ? extracted : null);
@@ -484,11 +498,9 @@ export function createFlashSceneView(canvas, surfaces, reprocessedSurfaces = {})
         // pose is evidence to inspect, and may be the very thing that is wrong.
         if (observedCenters[role]) return observedCenters[role].clone();
         const primaryLocal = latestSnapshot?.centers_object_m?.[role];
-        const held = latestSnapshot?.held_prediction_at_camera && latestSnapshot?.camera?.frame_id != null &&
-            latestSnapshot.held_prediction_at_camera.source_frame_id === latestSnapshot.camera.frame_id
-            ? latestSnapshot.held_prediction_at_camera : latestSnapshot?.held_prediction;
+        const held = heldOnCamera(latestSnapshot);
         const primaryPose = held?.role === role
-            ? held : latestSnapshot?.accepted?.[role] ||
+            ? held : acceptedOnCamera(latestSnapshot, role) ||
                 latestSnapshot?.layers?.[role]?.demo_extraction;
         const sceneLocal = latestSnapshot?.reprocessed_scene_geometry?.centers_object_m?.[role];
         const scenePose = latestSnapshot?.layers?.[role]?.reprocessed_scene;
