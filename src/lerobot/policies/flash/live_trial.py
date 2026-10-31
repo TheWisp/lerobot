@@ -435,6 +435,7 @@ def trial(
                     "timeouts": runtime.perception.camera_timeouts,
                     "max_handoff_s": runtime.perception.max_capture_handoff_s,
                     "max_frame_gap_s": runtime.perception.max_capture_gap_s,
+                    "camera_reader": camera.read_timing_snapshot(),
                 },
                 "pose_metrics": vars(runtime.perception.worker.metrics).copy(),
                 "causal_metrics": (

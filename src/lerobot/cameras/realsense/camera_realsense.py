@@ -19,6 +19,7 @@ Provides the RealSenseCamera class for capturing frames from Intel RealSense cam
 import logging
 import sys
 import time
+from dataclasses import dataclass
 from threading import Event, Lock, Thread
 from typing import TYPE_CHECKING, Any
 
@@ -43,6 +44,18 @@ from .configuration_realsense import RealSenseCameraConfig
 
 logger = logging.getLogger(__name__)
 pkg_name = "pyrealsense2-macosx" if sys.platform == "darwin" else "pyrealsense2"
+
+
+@dataclass
+class RealSenseReadTiming:
+    frames: int = 0
+    errors: int = 0
+    max_hardware_wait_s: float = 0.0
+    max_processing_s: float = 0.0
+    max_publish_gap_s: float = 0.0
+    last_publish_s: float | None = None
+    inflight_stage: str | None = None
+    inflight_started_s: float | None = None
 
 
 class RealSenseCamera(Camera):
@@ -170,6 +183,7 @@ class RealSenseCamera(Camera):
         self.latest_depth_frame: NDArray[Any] | None = None
         self.latest_timestamp: float | None = None
         self.new_frame_event: Event = Event()
+        self._read_timing = RealSenseReadTiming()
 
         self.rotation: int | None = get_cv2_rotation(config.rotation)
 
@@ -650,11 +664,24 @@ class RealSenseCamera(Camera):
         if stop_event is None:
             raise RuntimeError(f"{self}: stop_event is not initialized before starting read loop.")
 
+        with self.frame_lock:
+            self._read_timing = RealSenseReadTiming()
+
         failure_count = 0
         while not stop_event.is_set():
             try:
+                hardware_start_s = time.perf_counter()
+                with self.frame_lock:
+                    self._read_timing.inflight_stage = "hardware"
+                    self._read_timing.inflight_started_s = hardware_start_s
                 frameset = self._read_from_hardware()
                 capture_time = time.perf_counter()
+                with self.frame_lock:
+                    self._read_timing.max_hardware_wait_s = max(
+                        self._read_timing.max_hardware_wait_s, capture_time - hardware_start_s
+                    )
+                    self._read_timing.inflight_stage = "processing"
+                    self._read_timing.inflight_started_s = capture_time
 
                 if self.use_rgb and self.use_depth and self.align_to_color is not None:
                     # Align depth to color coordinate system (single frameset,
@@ -724,7 +751,19 @@ class RealSenseCamera(Camera):
                 if processed_depth_frame is not None:
                     processed_depth_frame = processed_depth_frame.copy()
 
+                publish_s = time.perf_counter()
                 with self.frame_lock:
+                    timing = self._read_timing
+                    timing.max_processing_s = max(timing.max_processing_s, publish_s - capture_time)
+                    previous_publish_s = timing.last_publish_s
+                    if previous_publish_s is not None:
+                        timing.max_publish_gap_s = max(
+                            timing.max_publish_gap_s, publish_s - previous_publish_s
+                        )
+                    timing.last_publish_s = publish_s
+                    timing.frames += 1
+                    timing.inflight_stage = None
+                    timing.inflight_started_s = None
                     if self.use_rgb:
                         self.latest_color_frame = processed_color_frame
                     if self.use_depth and processed_depth_frame is not None:
@@ -737,13 +776,39 @@ class RealSenseCamera(Camera):
                 failure_count = 0
 
             except DeviceNotConnectedError:
+                with self.frame_lock:
+                    self._read_timing.inflight_stage = None
+                    self._read_timing.inflight_started_s = None
                 break
             except Exception as e:
+                with self.frame_lock:
+                    self._read_timing.errors += 1
+                    self._read_timing.inflight_stage = None
+                    self._read_timing.inflight_started_s = None
                 if failure_count <= 10:
                     failure_count += 1
                     logger.warning(f"Error reading frame in background thread for {self}: {e}")
                 else:
                     raise RuntimeError(f"{self} exceeded maximum consecutive read failures.") from e
+
+    def read_timing_snapshot(self) -> dict[str, float | int | str | None]:
+        """Show whether a missing frame is blocked in hardware or processing."""
+        with self.frame_lock:
+            timing = RealSenseReadTiming(**vars(self._read_timing))
+        return {
+            "frames": timing.frames,
+            "errors": timing.errors,
+            "max_hardware_wait_s": timing.max_hardware_wait_s,
+            "max_processing_s": timing.max_processing_s,
+            "max_publish_gap_s": timing.max_publish_gap_s,
+            "last_publish_s": timing.last_publish_s,
+            "inflight_stage": timing.inflight_stage,
+            "inflight_age_s": (
+                time.perf_counter() - timing.inflight_started_s
+                if timing.inflight_started_s is not None
+                else None
+            ),
+        }
 
     def _start_read_thread(self) -> None:
         """Starts or restarts the background read thread if it's not running."""

@@ -159,12 +159,14 @@ def test_cached_rgbd_frames_do_not_hold_realsense_buffers():
     camera.latest_timestamp = None
     calls = 0
     finish = Event()
+    second_started = Event()
 
     def read_hardware():
         nonlocal calls
         calls += 1
         if calls == 1:
             return Frameset()
+        second_started.set()
         finish.wait(2)
         raise DeviceNotConnectedError("end fake stream")
 
@@ -179,6 +181,13 @@ def test_cached_rgbd_frames_do_not_hold_realsense_buffers():
         depth[:] = 77
         assert np.all(cached_color == 17)
         assert np.all(cached_depth == 42)
+        assert second_started.wait(2)
+        timing = camera.read_timing_snapshot()
+        assert timing["frames"] == 1
+        assert timing["errors"] == 0
+        assert timing["max_processing_s"] > 0
+        assert timing["inflight_stage"] == "hardware"
+        assert timing["inflight_age_s"] is not None
     finally:
         finish.set()
         camera.stop_event.set()
