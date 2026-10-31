@@ -543,7 +543,9 @@ class CausalPoseService:
         try:
             while (item := self.queue.get()) is not None:
                 started_s = time.perf_counter()
+                started_cpu_s = time.thread_time()
                 queue_depth = self.queue.qsize()
+                environment_stages: dict[str, dict[str, float]] = {}
                 if isinstance(item, RGBDFrame):
                     self.max_queue_age_s = max(self.max_queue_age_s, started_s - item.source_time_s)
                     stages = self._frame(item)
@@ -562,7 +564,7 @@ class CausalPoseService:
                     kind = "attachment"
                 else:
                     stages = {}
-                    self._anchor(item, timings=stages)
+                    self._anchor(item, timings=stages, environment_timings=environment_stages)
                     elapsed_s = time.perf_counter() - started_s
                     self.anchor_compute_total_s += elapsed_s
                     self.anchor_compute_max_s = max(self.anchor_compute_max_s, elapsed_s)
@@ -579,11 +581,13 @@ class CausalPoseService:
                             "roles": roles,
                             "started_s": started_s,
                             "duration_s": elapsed_s,
+                            "thread_cpu_s": time.thread_time() - started_cpu_s,
                             "source_age_at_start_s": (
                                 started_s - source_time_s if source_time_s is not None else None
                             ),
                             "queue_depth_after_pop": queue_depth,
                             "stages_s": stages,
+                            "environment_stages": environment_stages,
                         }
                     )
                 # Catch a delayed object-point seed up only in the gaps
@@ -908,6 +912,7 @@ class CausalPoseService:
         *,
         decision_time_s: float | None = None,
         timings: dict[str, float] | None = None,
+        environment_timings: dict[str, dict[str, float]] | None = None,
     ) -> None:
         # Offline extraction is an explicit source-order simulation. Live
         # results instead become usable only when this worker accepts them,
@@ -1083,7 +1088,7 @@ class CausalPoseService:
                 continue
             if estimate.has_direct_translation and estimate.role != attached_role:
                 with timed("environment_observation"):
-                    self._observe_environment(estimate, scene, result.masks)
+                    self._observe_environment(estimate, scene, result.masks, timings=environment_timings)
             accepted_at_s = self.decision_clock() if decision_time_s is None else decision_time_s
             estimate = replace(estimate, available_time_s=max(estimate.available_time_s, accepted_at_s))
             self._count_anchor_outcome(estimate.role, "direct_accepted")
@@ -1831,9 +1836,29 @@ class CausalPoseService:
         return True
 
     def _observe_environment(
-        self, estimate: PoseEstimate, scene: SceneTracks, masks: dict[str, np.ndarray]
+        self,
+        estimate: PoseEstimate,
+        scene: SceneTracks,
+        masks: dict[str, np.ndarray],
+        *,
+        timings: dict[str, dict[str, float]] | None = None,
     ) -> None:
         """Verify co-motion before a group can predict a hidden object."""
+
+        @contextmanager
+        def measured(name: str):
+            if timings is None:
+                yield
+                return
+            started_s = time.perf_counter()
+            started_cpu_s = time.thread_time()
+            try:
+                yield
+            finally:
+                entry = timings.setdefault(name, {"wall_s": 0.0, "thread_cpu_s": 0.0})
+                entry["wall_s"] += time.perf_counter() - started_s
+                entry["thread_cpu_s"] += time.thread_time() - started_cpu_s
+
         role = estimate.role
         previous_relationship = self.relationships.get(role) or self.candidate_relationships.get(role)
         # An independent direct view can re-establish the stationary prior
@@ -1841,9 +1866,10 @@ class CausalPoseService:
         self._expired_verified_roles.discard(role)
         existing = self.relationships.get(role) or self.candidate_relationships.get(role)
         if existing is not None:
-            predicted = existing.predict(
-                scene, fit_threshold_m=self.fit_threshold_m, min_inliers=self.environment_min_inliers
-            )
+            with measured("existing_prediction"):
+                predicted = existing.predict(
+                    scene, fit_threshold_m=self.fit_threshold_m, min_inliers=self.environment_min_inliers
+                )
             if (
                 predicted is None
                 or estimate.pose is None
@@ -1877,40 +1903,44 @@ class CausalPoseService:
             if previous is not None:
                 old_estimate, old_scene, old_masks = previous
                 if old_estimate.pose is not None and estimate.pose is not None:
-                    candidate = establish_environment_relationship(
-                        old_scene,
-                        scene,
-                        old_estimate.pose,
-                        estimate.pose,
-                        old_masks,
-                        context_radius_m=self.environment_context_radius_m,
-                        fit_threshold_m=self.fit_threshold_m,
-                        min_motion_m=self.environment_min_motion_m,
-                        min_inliers=self.environment_min_inliers,
-                        reference_version=estimate.reference_version,
-                        allow_stationary=True,
-                        object_center_object_m=self.object_centers_by_role.get(role),
-                    )
+                    with measured("establish_relationship"):
+                        candidate = establish_environment_relationship(
+                            old_scene,
+                            scene,
+                            old_estimate.pose,
+                            estimate.pose,
+                            old_masks,
+                            context_radius_m=self.environment_context_radius_m,
+                            fit_threshold_m=self.fit_threshold_m,
+                            min_motion_m=self.environment_min_motion_m,
+                            min_inliers=self.environment_min_inliers,
+                            reference_version=estimate.reference_version,
+                            allow_stationary=True,
+                            object_center_object_m=self.object_centers_by_role.get(role),
+                        )
                     if candidate is not None:
                         self.candidate_relationships[role] = candidate
             if role not in self.candidate_relationships:
-                seed = seed_environment_relationship(
-                    scene,
-                    estimate.pose,
-                    tuple(masks.values()),
-                    context_radius_m=self.environment_context_radius_m,
-                    min_inliers=self.environment_min_inliers,
-                    reference_version=estimate.reference_version,
-                    object_center_object_m=self.object_centers_by_role.get(role),
-                )
+                with measured("seed_relationship"):
+                    seed = seed_environment_relationship(
+                        scene,
+                        estimate.pose,
+                        tuple(masks.values()),
+                        context_radius_m=self.environment_context_radius_m,
+                        min_inliers=self.environment_min_inliers,
+                        reference_version=estimate.reference_version,
+                        object_center_object_m=self.object_centers_by_role.get(role),
+                    )
                 if seed is not None:
                     self.candidate_relationships[role] = seed
-        observation = (estimate, scene, tuple(mask.copy() for mask in masks.values()))
-        self.observed[role] = observation
-        self.direct_history.setdefault(role, deque(maxlen=self.history.maxlen)).append(observation)
+        with measured("record_observation"):
+            observation = (estimate, scene, tuple(mask.copy() for mask in masks.values()))
+            self.observed[role] = observation
+            self.direct_history.setdefault(role, deque(maxlen=self.history.maxlen)).append(observation)
         current_relationship = self.relationships.get(role) or self.candidate_relationships.get(role)
         if current_relationship is not previous_relationship:
-            self._report_scene_support()
+            with measured("publish_support"):
+                self._report_scene_support()
 
     def _pose_disagrees(self, role: str, predicted: np.ndarray, observed: np.ndarray) -> bool:
         local_center = self.object_centers_by_role.get(role)

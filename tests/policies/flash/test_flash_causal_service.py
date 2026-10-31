@@ -16,7 +16,7 @@ from lerobot.policies.flash.causal_service import (
     _AttachmentEvent,
 )
 from lerobot.policies.flash.perception import LatestPoseStore, RGBDFrame
-from lerobot.policies.flash.scene_groups import ScenePointTracker
+from lerobot.policies.flash.scene_groups import ScenePointTracker, SceneTracks
 from lerobot.policies.flash.trajectory import Evidence, PoseEstimate
 
 
@@ -53,9 +53,39 @@ def test_slow_camera_processing_records_stage_and_source_frame(monkeypatch):
     assert service.slow_work_count == 1
     event = service.slow_work[0]
     assert event["kind"] == "frame"
+    assert event["thread_cpu_s"] >= 0
+    assert event["environment_stages"] == {}
     assert event["frame_id"] == 4
     assert event["stages_s"]["scene_update"] >= 0.02
     assert event["duration_s"] >= event["stages_s"]["scene_update"]
+
+
+def test_environment_timing_distinguishes_group_fitting_from_worker_wait():
+    rng = np.random.default_rng(65)
+    points = rng.uniform((-0.08, -0.08, 0.98), (0.08, 0.08, 1.02), (32, 3))
+    pixels = np.column_stack((np.arange(32) + 20, np.arange(32) + 30))
+    first = SceneTracks(0, 0.0, np.arange(32), pixels, points)
+    second = SceneTracks(1, 1 / 30, np.arange(32), pixels, points.copy())
+    pose = np.eye(4)
+    pose[2, 3] = 1.0
+    estimate = PoseEstimate(
+        "object", pose, 0.0, 0.0, Evidence.OBSERVED, "reference-v1", (True,) * 3, (True,) * 3
+    )
+    mask = np.zeros((96, 96), dtype=bool)
+    service = CausalPoseService(LatestPoseStore())
+    timings = {}
+
+    service._observe_environment(estimate, first, {"object": mask}, timings=timings)
+    assert "seed_relationship" in timings
+    assert timings["seed_relationship"]["wall_s"] >= 0
+    assert timings["seed_relationship"]["thread_cpu_s"] >= 0
+    assert "record_observation" in timings
+
+    service.candidate_relationships.clear()
+    service._observe_environment(estimate, second, {"object": mask}, timings=timings)
+    assert "establish_relationship" in timings
+    assert timings["establish_relationship"]["wall_s"] >= 0
+    assert timings["establish_relationship"]["thread_cpu_s"] >= 0
 
 
 def test_queued_camera_frames_keep_the_attachment_state_at_capture_time(monkeypatch):
