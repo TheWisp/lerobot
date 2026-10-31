@@ -727,6 +727,7 @@ function closeFlashDemoEditor() {
     document.getElementById('tab-run')?.classList.remove('flash-demo-editing');
     const toggle = document.getElementById('flash-demo-edit-toggle');
     if (toggle) toggle.textContent = flashReplay?.kind === 'raw_demo' ? 'Prepare demo' : 'Edit on camera';
+    _flashDrawOverlay();
 }
 
 function toggleFlashTrackerPanel() {
@@ -1603,6 +1604,24 @@ function _flashDrawOverlay() {
                     const [x, y] = pixel(point);
                     context.fillRect(x - 2, y - 2, 4, 4);
                 }
+            }
+        }
+        const viewReview = flashDemoEditor?.referenceReview;
+        const fitIndex = flashDemoEditor?.referenceReviewCandidateIndex;
+        if (flashReplay?.kind === 'demo' && viewReview?.frameIndex === camera.frame_id &&
+            Number.isInteger(fitIndex)) {
+            const fit = viewReview.result?.independent_fits?.[fitIndex];
+            const points = fit?.projected_points_xy || [];
+            if (points.length >= 3) {
+                context.globalAlpha = 0.9;
+                outline(_flashHull(points), '#ff4d6d', 2.5);
+                context.globalAlpha = 0.55;
+                context.fillStyle = '#ff4d6d';
+                for (const point of points) {
+                    const [x, y] = pixel(point);
+                    context.fillRect(x, y, 1, 1);
+                }
+                context.globalAlpha = 1;
             }
         }
         if (compareSources || flashHighlightedOverlay?.kind === 'reprocessed_raw_proposal')

@@ -1088,6 +1088,16 @@ def test_run_flash_lists_demos_and_shows_extracted_pose_overlay(gui_page):
                 },
                 "largest_front_conflicts": [],
                 "largest_behind_gaps": [{"frame_index": 4}],
+                "independent_fits": [
+                    {
+                        "seed": "geometry_0",
+                        "converged": False,
+                        "fit_cost": 0.2,
+                        "measured_to_reference_p90_m": 0.003,
+                        "reference_to_depth_p90_m": 0.004,
+                        "projected_points_xy": [[20, 20], [30, 20], [30, 30], [20, 30]],
+                    }
+                ],
             }
         )
 
@@ -1125,7 +1135,18 @@ def test_run_flash_lists_demos_and_shows_extracted_pose_overlay(gui_page):
         in page.locator("#flash-demo-editor").inner_text()
     )
     assert page.locator("#flash-demo-editor-change-status").inner_text() == "Viewing saved preparation"
-    page.locator("#flash-reference-review-result details summary").click()
+    page.locator("#flash-reference-review-result details").nth(1).locator("summary").click()
+    page.get_by_role("button", name="Preview fit").click()
+    assert page.evaluate("flashDemoEditor.referenceReviewCandidateIndex") == 0
+    assert page.evaluate("_flashEditorCurrentFrame().frame_index") == 5
+    assert page.evaluate("""() => {
+        const canvas = document.querySelector('#rerun-viewer .flash-replay-grid .flash-pose-canvas');
+        const data = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
+        for (let i = 0; i < data.length; i += 4)
+            if (data[i] === 255 && data[i + 1] === 77 && data[i + 2] === 109 && data[i + 3]) return true;
+        return false;
+    }""")
+    page.locator("#flash-reference-review-result details summary").first.click()
     page.locator("#flash-reference-review-result").get_by_role("button", name="Frame 4").click()
     assert page.evaluate("_flashEditorCurrentFrame().frame_index") == 4
     assert page.locator(

@@ -13,7 +13,9 @@ from lerobot.policies.flash.reference_view_candidates import (
     MeasuredReferenceView,
     review_reference_view_candidates,
 )
+from lerobot.policies.flash.reference_view_registration import fit_reference_view_candidates
 from lerobot.policies.flash.sealed_reference_view_review import review_sealed_reference_view
+from lerobot.policies.flash.surface_grounding import ShapeConfig
 from lerobot.policies.flash.surface_observation import SurfaceObservationConfig, observation
 from lerobot.policies.flash.surface_reference import RegisteredSurfaceModel
 from lerobot.policies.flash.trajectory import Evidence, PoseEstimate
@@ -79,6 +81,39 @@ def test_candidate_review_keeps_first_reference_and_separates_depth_directions(r
         assert comparison["reference_behind_p90_m"] >= 0
     np.testing.assert_array_equal(model.view_points_object_m[0], original)
     assert len(model.view_points_object_m) == 1
+
+
+def test_independent_view_fit_reports_alternatives_without_using_the_pose_trace(recorded_views):
+    intrinsics, base_from_camera, model, estimates, measured = recorded_views
+    with np.load(Path(__file__).parent / "fixtures" / "gamepad_reference_depth_20261028.npz") as fixture:
+        mask = fixture["mask_290"].astype(bool)
+    original = model.view_points_object_m[0].copy()
+    config = ShapeConfig(max_fit_points=256, max_evaluations=30, batch_jacobian=False)
+    first = fit_reference_view_candidates(
+        model.view_points_object_m[0], measured[290], mask, intrinsics, config
+    )
+    prior = np.linalg.inv(base_from_camera) @ estimates[290]["object"].pose
+    with_prior = fit_reference_view_candidates(
+        model.view_points_object_m[0],
+        measured[290],
+        mask,
+        intrinsics,
+        config,
+        prior_poses_camera_from_object={"recorded_pose_prior": prior},
+    )
+    assert len(first) == 4
+    assert len(with_prior) == 5
+    assert {item.seed for item in first} == {f"geometry_{index}" for index in range(4)}
+    assert "recorded_pose_prior" in {item.seed for item in with_prior}
+    for item in first:
+        matching = next(candidate for candidate in with_prior if candidate.seed == item.seed)
+        np.testing.assert_allclose(item.camera_from_object, matching.camera_from_object)
+        assert item.fit_cost >= 0
+        assert item.measured_to_reference_p90_m >= 0
+        assert item.reference_depth_pixels > 0
+        assert item.reference_in_front_p90_m is not None
+        assert item.reference_behind_p90_m is not None
+    np.testing.assert_array_equal(model.view_points_object_m[0], original)
 
 
 def test_candidate_review_rejects_unobserved_pose_and_misaligned_frame(recorded_views):
@@ -200,4 +235,5 @@ def test_old_prepared_demo_rebuilds_first_view_from_saved_mask_without_mutating_
     assert result["first_view_points"] >= 3
     assert result["candidate"]["status"] == "registration_hypothesis"
     assert result["candidate"]["cross_frame"]["frames"] == 2
+    assert "independent_fits" in result
     assert sorted(path.relative_to(root) for path in root.rglob("*") if path.is_file()) == original_files

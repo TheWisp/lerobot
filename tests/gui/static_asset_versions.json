@@ -60,8 +60,8 @@
     "v": "89"
   },
   "flash_demo_editor.js": {
-    "sha256_16": "2f10d4a3e9cceb08",
-    "v": "37"
+    "sha256_16": "ccf11cafc05597d7",
+    "v": "39"
   },
   "flash_live_tracking.js": {
     "sha256_16": "81853940c6b57f41",
@@ -128,8 +128,8 @@
     "v": "27"
   },
   "run.js": {
-    "sha256_16": "4401908790d21416",
-    "v": "170"
+    "sha256_16": "9bba57e82558de7c",
+    "v": "172"
   },
   "style.css": {
     "sha256_16": "129ce1a360ad9a1f",

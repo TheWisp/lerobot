@@ -9,8 +9,11 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+from scipy.spatial import QhullError
 
 from .reference_view_candidates import MeasuredReferenceView, review_reference_view_candidates
+from .reference_view_registration import fit_reference_view_candidates
+from .surface_grounding import project
 from .surface_observation import move, observation, spatial_sample
 from .surface_reference import RegisteredSurfaceModel
 from .trajectory import Evidence, PoseEstimate
@@ -47,8 +50,10 @@ def review_sealed_reference_view(
     calibration = json.loads(Path(annotation["calibration_path"]).expanduser().read_text(encoding="utf-8"))
     base_from_camera = np.asarray(calibration["camera"]["T_base_cam"], dtype=float)
     config = VisionPipelineConfig.from_settings(annotation, backend="appearance")
+    selected_mask = None
 
     def measured(name: str, index: int) -> MeasuredReferenceView | None:
+        nonlocal selected_mask
         path = evidence_root / f"{index:06d}.json.gz"
         if not path.is_file():
             return None
@@ -74,6 +79,8 @@ def review_sealed_reference_view(
                 raise ValueError(f"frame {index} has invalid object mask runs")
             mask[start : start + length] = True
         mask = mask.reshape(depth.shape)
+        if name == role and index == frame_index:
+            selected_mask = mask
         depth_m = depth.astype(np.float32) * 0.001
         observed = observation(depth_m, mask, intrinsics, asdict(config.observation))
         return MeasuredReferenceView(
@@ -160,11 +167,47 @@ def review_sealed_reference_view(
         - row["first_view"]["reference_behind_p90_m"],
         reverse=True,
     )
+    independent_fits = []
+    independent_fit_error = None
+    candidate_view = measured(role, frame_index)
+    if candidate_view is not None and selected_mask is not None and len(candidate_view.points_camera_m) >= 3:
+        try:
+            fits = fit_reference_view_candidates(
+                model.view_points_object_m[0], candidate_view, selected_mask, intrinsics, config.shape
+            )
+            for fit in fits:
+                camera_points = move(model.view_points_object_m[0], fit.camera_from_object)
+                camera_points = camera_points[camera_points[:, 2] > 0]
+                xy = project(camera_points, intrinsics)
+                inside = (
+                    (xy[:, 0] >= 0)
+                    & (xy[:, 0] < candidate_view.depth_m.shape[1])
+                    & (xy[:, 1] >= 0)
+                    & (xy[:, 1] < candidate_view.depth_m.shape[0])
+                )
+                independent_fits.append(
+                    {
+                        "seed": fit.seed,
+                        "converged": fit.converged,
+                        "fit_cost": fit.fit_cost,
+                        "measured_to_reference_p90_m": fit.measured_to_reference_p90_m,
+                        "reference_depth_pixels": fit.reference_depth_pixels,
+                        "reference_to_depth_p90_m": fit.reference_to_depth_p90_m,
+                        "reference_in_front_p90_m": fit.reference_in_front_p90_m,
+                        "reference_behind_p90_m": fit.reference_behind_p90_m,
+                        "surface_center_camera_m": fit.surface_center_camera_m,
+                        "projected_points_xy": np.rint(xy[inside]).astype(int).tolist(),
+                    }
+                )
+        except (ValueError, RuntimeError, QhullError) as exc:
+            independent_fit_error = str(exc)
     return {
         "reference_frame_index": snippet.frame_index,
         "first_view_points": len(model.view_points_object_m[0]),
         "candidate": summaries[0],
         "largest_front_conflicts": front_worsened[:5],
         "largest_behind_gaps": behind_worsened[:5],
+        "independent_fits": independent_fits,
+        "independent_fit_error": independent_fit_error,
         "disclaimer": "Same pose trace registered and checked this view; review cannot establish independent accuracy.",
     }

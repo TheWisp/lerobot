@@ -84,6 +84,7 @@ function _flashEditorSetReferenceFrame(frameIndex) {
         if (annotation.reference_polygons_by_role) delete annotation.reference_polygons_by_role[role];
         flashDemoEditor.message = `${role} reference changed; review its new mask.`;
         flashDemoEditor.referenceReview = null;
+        flashDemoEditor.referenceReviewCandidateIndex = null;
     }
     _flashEditorRender();
     _flashRenderTimeline();
@@ -97,6 +98,7 @@ async function _flashEditorReviewCurrentView() {
     const frameIndex = _flashEditorCurrentFrame().frame_index;
     state.referenceReviewRunning = true;
     state.referenceReview = null;
+    state.referenceReviewCandidateIndex = null;
     _flashEditorRender();
     try {
         const response = await fetch('/api/run/flash/demo/reference-view/review', {
@@ -194,6 +196,8 @@ function _flashEditorMaskRole(role) {
         flashDemoEditor.drawing = false;
         flashDemoEditor.vertices = [];
         flashDemoEditor.referenceReview = null;
+        flashDemoEditor.referenceReviewCandidateIndex = null;
+        _flashDrawOverlay();
     }
     const mask = document.querySelector('#rerun-viewer .flash-demo-mask');
     if (flashReplay.bundle_path) {
@@ -551,6 +555,34 @@ function _flashEditorRender() {
                         _flashEditorButton(details, `Frame ${row.frame_index}`, () => _flashEditorJump(row.frame_index));
                 }
                 box.append(details);
+            }
+            const fits = result.result?.independent_fits || [];
+            if (fits.length || result.result?.independent_fit_error) {
+                const independent = document.createElement('details');
+                independent.append(Object.assign(document.createElement('summary'),
+                    {textContent: `Independent geometry fits · ${fits.length} proposals`}));
+                independent.append(Object.assign(document.createElement('p'), {textContent:
+                    'Fitted from this frame’s mask and depth, without the saved pose. Pink preview is unverified; no view is added.'}));
+                if (result.result?.independent_fit_error)
+                    independent.append(Object.assign(document.createElement('p'),
+                        {textContent: result.result.independent_fit_error}));
+                fits.forEach((fit, index) => {
+                    const row = document.createElement('div');
+                    row.className = 'flash-editor-moment';
+                    row.append(Object.assign(document.createElement('span'), {textContent:
+                        `Fit ${index + 1} · ${fit.converged ? 'converged' : 'not converged'} · surface ${(fit.measured_to_reference_p90_m * 1000).toFixed(2)} mm · depth ${fit.reference_to_depth_p90_m == null ? 'unavailable' : (fit.reference_to_depth_p90_m * 1000).toFixed(2) + ' mm'}`}));
+                    const button = _flashEditorButton(row,
+                        state.referenceReviewCandidateIndex === index ? 'Showing fit' : 'Preview fit', () => {
+                        state.referenceReviewCandidateIndex = index;
+                        _flashEditorJump(result.frameIndex);
+                        for (const choice of independent.querySelectorAll('button[data-fit-index]'))
+                            choice.textContent = Number(choice.dataset.fitIndex) === index ? 'Showing fit' : 'Preview fit';
+                        _flashDrawOverlay();
+                    });
+                    button.dataset.fitIndex = index;
+                    independent.append(row);
+                });
+                box.append(independent);
             }
             references.append(box);
         }
@@ -1102,7 +1134,7 @@ async function toggleFlashDemoEditor() {
             keypointsDocument: structuredClone(result.keypoints_document),
             referenceMasks: result.reference_masks,
             preparationReport: result.preparation_report,
-            referenceReview: null, referenceReviewRunning: false,
+            referenceReview: null, referenceReviewRunning: false, referenceReviewCandidateIndex: null,
             role: result.annotation.held_role,
             section: null,
             keypointIndex: result.keypoints_document.keypoints.reduce((best, point, index, points) =>

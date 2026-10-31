@@ -175,6 +175,12 @@ later view. These images show the measured mask boundary in cyan and the
 saved frame-100 surface projected in red under the two placements:
 [frame 150](../docs/proofs/flash-reference-view-registration/dowel-frame-150.jpg),
 [frame 500](../docs/proofs/flash-reference-view-registration/dowel-frame-500.jpg).
+The generic `reference_view_registration` candidate generator now makes the
+four geometry fits available beside the existing trace-based check in the demo
+editor. It also ran on the gamepad view at frame 136; its lowest-cost proposal
+had 0.94 mm measured-surface and 1.08 mm projected-surface-to-depth p90 gaps, but its
+optimizer did not converge. The editor previews any candidate against the
+same recorded camera frame without changing the saved reference.
 
 From the repository root, in an environment with FLASH's inference dependencies:
 
