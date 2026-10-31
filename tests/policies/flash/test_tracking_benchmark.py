@@ -13,6 +13,7 @@ import numpy as np
 import pytest
 
 from benchmarks.flash_tracking_benchmark import compare_results, markdown, score_suite
+from benchmarks.flash_tracking_run import run_case
 
 BENCHMARKS = Path(__file__).resolve().parents[3] / "benchmarks"
 
@@ -174,3 +175,40 @@ def test_saved_baseline_matches_frozen_case_manifest():
     assert baseline["suite_sha256"] == hashlib.sha256(suite_path.read_bytes()).hexdigest()
     assert {case["id"] for case in suite["cases"]} == {case["id"] for case in baseline["cases"]}
     assert all(case["status"] == "scored" for case in baseline["cases"])
+
+
+def test_sam3_benchmark_uses_live_segmentation_path_without_supplied_masks(tmp_path, monkeypatch):
+    from lerobot.policies.flash import observation_processing
+
+    dataset = tmp_path / "rgbd"
+    flash = dataset / "flash/v1"
+    flash.mkdir(parents=True)
+    (flash / "source.json").write_text(json.dumps({"source": "fixture"}))
+    evidence = flash / "observation-evidence/episode_000000"
+    evidence.mkdir(parents=True)
+    (evidence / "manifest.json").write_text(json.dumps({"roles": ["object"]}))
+    config = tmp_path / "config.json"
+    config.write_text("{}")
+    called = {}
+
+    def extract(root, masks, config_path, **kwargs):
+        called.update(root=root, masks=masks, config=config_path, **kwargs)
+
+    monkeypatch.setattr(observation_processing, "extract", extract)
+    case = {
+        "id": "fixture",
+        "kind": "lerobot_rgbd",
+        "artifact_root": str(dataset),
+        "segmentation": {"source": "sam3", "prompts_by_role": {"object": "cracker box"}},
+    }
+    updated = run_case(case, tmp_path / "candidate", config)
+    assert called["root"] == dataset
+    assert called["masks"] == {}
+    assert called["prompts_by_role"] == {"object": "cracker box"}
+    assert called["config"] == config
+    assert updated["source"] == "fixture"
+    assert updated["evidence_dir"] == str(tmp_path / "candidate/fixture/evidence")
+
+    case["segmentation"]["prompts_by_role"] = {"other": "cracker box"}
+    with pytest.raises(ValueError, match="one prompt per role"):
+        run_case(case, tmp_path / "invalid", config)

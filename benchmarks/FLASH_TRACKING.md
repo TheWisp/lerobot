@@ -31,8 +31,10 @@ all frames are present, then reports, per visible object and per clip:
   correct. These cases can detect coverage regressions, but cannot establish
   pose accuracy or physical task success.
 
-The external runs **feed supplied masks into perception**, so their 1.00 mask
-agreement is expected and says nothing about SAM3. The rig demo traces have no
+The frozen external baseline **feeds supplied masks into perception**, so its 1.00
+mask agreement is expected and says nothing about SAM3. Candidate reruns can use
+SAM3 prompts instead; the scorer still uses supplied masks only as evaluation
+labels. The rig demo traces have no
 independent mask agreement score. YCB annotations are evaluation
 labels, not input to tracking or independent sensor ground truth. Caryx has no
 object-pose labels; pose accuracy there is unknown. The two domains have different
@@ -42,12 +44,10 @@ convention audit remains a caveat for pose interpretation on that domain.
 Offline wall time from new reruns includes model initialization and is not live
 robot FPS. Frame-time and memory profiling still need separate instrumentation.
 
-This suite does **not** yet test the complete path from selecting/segmenting an
-object through tracking and task execution. A full-path evaluation needs fresh
-SAM3 output scored against separately annotated masks and object identity, then
-pose coverage and error on the same frames, plus independently checked contact
-or task outcomes for rig runs. The saved demonstration masks alone cannot serve
-as both predictions and truth.
+SAM3 candidate reruns test the path from text prompt through mask and pose on
+labeled clips, but the suite does **not** test task execution. That requires
+independently checked contact or task outcomes for rig runs. The saved
+demonstration masks cannot serve as both predictions and truth.
 
 ## What transfers to FLASH
 
@@ -55,13 +55,13 @@ The benchmark, demo preparation, and live run call the same surface tracker and
 scene/group pose estimator. A change to those shared algorithms is available to
 all three after their processes restart. Their **inputs and settings differ**:
 
-| Path                               | Masks and object reference                                        | Scene/group fallback | Gripper attachment                                    |
-| ---------------------------------- | ----------------------------------------------------------------- | -------------------- | ----------------------------------------------------- |
-| YCB / Caryx benchmark rerun        | Supplied masks; first observed view is the local reference        | Yes                  | No                                                    |
-| Saved rig-demo rows in this report | Saved SAM3 masks and prepared reference from the older extraction | Yes, as saved        | Demo attachment interval, without live motor feedback |
-| Fresh demo preparation             | SAM3; prepared appearance and surface reference                   | Yes                  | Demo attachment interval, without live motor feedback |
-| Live tracking debugger             | SAM3; local reference made from the clicked/named frame           | Optional             | No                                                    |
-| Live FLASH run                     | SAM3; prepared appearance and surface reference                   | Yes                  | Yes, updated from motor and vision evidence           |
+| Path                               | Masks and object reference                                                 | Scene/group fallback | Gripper attachment                                    |
+| ---------------------------------- | -------------------------------------------------------------------------- | -------------------- | ----------------------------------------------------- |
+| YCB / Caryx benchmark rerun        | Supplied masks or SAM3 prompts; first observed view is the local reference | Yes                  | No                                                    |
+| Saved rig-demo rows in this report | Saved SAM3 masks and prepared reference from the older extraction          | Yes, as saved        | Demo attachment interval, without live motor feedback |
+| Fresh demo preparation             | SAM3; prepared appearance and surface reference                            | Yes                  | Demo attachment interval, without live motor feedback |
+| Live tracking debugger             | SAM3; local reference made from the clicked/named frame                    | Optional             | No                                                    |
+| Live FLASH run                     | SAM3; prepared appearance and surface reference                            | Yes                  | Yes, updated from motor and vision evidence           |
 
 The two saved rig-demo traces were prepared with pose-trace selection version 6;
 the current extractor is version 8. **Scoring a saved trace does not rerun the
@@ -92,6 +92,18 @@ cracker-box case and produced the same 28 observed, 87 predicted, 66 lost states
 and 6.5 mm conditional median point error. Its offline wall time was 22.9 s
 including model initialization; this is not a live frame-rate measurement.
 
+An end-to-end SAM3 rerun of that same 181-frame cracker-box clip used the prompt
+`cracker box`, with no supplied mask passed into inference. Its median mask overlap
+with the reference masks was 0.817. It published a pose on 113 frames (115 for the
+supplied-mask baseline), directly observed 93 frames (28 baseline), and was lost
+for 66 consecutive visible frames late in the clip. On the 112 frames where both
+runs published a pose, median measured-point error against the pose annotations
+was 3.74 mm with SAM3 and 6.45 mm with supplied masks. This is one development
+clip, not evidence of a general pose-accuracy improvement; the late loss remains
+an unsolved failure. Full local evidence is in
+`/tmp/flash-sam3-cracker-20261031-b/` and the score is
+`/tmp/flash-sam3-cracker-score-v2.json`.
+
 From the repository root, in an environment with FLASH's inference dependencies:
 
 ```bash
@@ -114,6 +126,10 @@ PYTHONPATH=src:. python benchmarks/flash_tracking_benchmark.py \
 ```
 
 `--config-bundle PATH` on the runner permits a controlled parameter comparison.
+For an end-to-end segmentation rerun, copy the suite to a candidate JSON and add
+`"segmentation": {"source": "sam3", "prompts_by_role": {"object": "cracker box"}}`
+to the selected case. Use a descriptive prompt for each role in a multi-object
+case. The default `"source": "supplied"` retains the frozen baseline behavior.
 The comparison checks source hashes and matching frame visibility. It reports
 pose availability separately from **paired** pose error on frames where both
 runs published a pose, so dropping hard frames cannot appear as an accuracy gain.
