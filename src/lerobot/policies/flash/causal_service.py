@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 from collections import deque
 from collections.abc import Callable
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, fields, replace
 from math import isfinite
 from queue import Full, Queue
@@ -316,6 +317,12 @@ class CausalPoseService:
         self.replay_compute_total_s = 0.0
         self.replay_compute_max_s = 0.0
         self.event_replays = 0
+        # Keep enough recent slow events to identify a backlog without adding
+        # synchronous file writes to the perception worker. A computation that
+        # takes longer than the configured camera-frame gap cannot keep pace.
+        self.slow_work_threshold_s = max_frame_gap_s
+        self.slow_work_count = 0
+        self.slow_work: deque[dict] = deque(maxlen=history_frames)
 
     @property
     def error(self) -> Exception | None:
@@ -468,17 +475,42 @@ class CausalPoseService:
         try:
             while (item := self.queue.get()) is not None:
                 started_s = time.perf_counter()
+                queue_depth = self.queue.qsize()
                 if isinstance(item, RGBDFrame):
                     self.max_queue_age_s = max(self.max_queue_age_s, started_s - item.source_time_s)
-                    self._frame(item)
+                    stages = self._frame(item)
                     elapsed_s = time.perf_counter() - started_s
                     self.frame_compute_total_s += elapsed_s
                     self.frame_compute_max_s = max(self.frame_compute_max_s, elapsed_s)
+                    source_time_s = item.source_time_s
+                    kind = "frame"
+                    roles: tuple[str, ...] = ()
                 else:
-                    self._anchor(item)
+                    stages = {}
+                    self._anchor(item, timings=stages)
                     elapsed_s = time.perf_counter() - started_s
                     self.anchor_compute_total_s += elapsed_s
                     self.anchor_compute_max_s = max(self.anchor_compute_max_s, elapsed_s)
+                    source_time_s = item.source_time_s
+                    roles = tuple(estimate.role for estimate in item.estimates)
+                    kind = "anchor"
+                if elapsed_s > self.slow_work_threshold_s:
+                    stages["other"] = max(0.0, elapsed_s - sum(stages.values()))
+                    self.slow_work_count += 1
+                    self.slow_work.append(
+                        {
+                            "kind": kind,
+                            "frame_id": item.frame_id,
+                            "roles": roles,
+                            "started_s": started_s,
+                            "duration_s": elapsed_s,
+                            "source_age_at_start_s": (
+                                started_s - source_time_s if source_time_s is not None else None
+                            ),
+                            "queue_depth_after_pop": queue_depth,
+                            "stages_s": stages,
+                        }
+                    )
                 # Catch a delayed object-point seed up only in the gaps
                 # between incoming camera events. Each step is interruptible
                 # by the next queued frame, so replay cannot starve the
@@ -517,7 +549,7 @@ class CausalPoseService:
             if not progressed:
                 break
 
-    def _frame(self, frame: RGBDFrame) -> None:
+    def _frame(self, frame: RGBDFrame) -> dict[str, float]:
         attached_role = self._sync_attachment()
         if self.history and frame.frame_id <= self.history[-1].frame_id:
             raise ValueError("causal camera frames must increase")
@@ -539,7 +571,8 @@ class CausalPoseService:
                 self._abort_event_replay(role, "event_replay_history_expired")
         scene_started_s = time.perf_counter()
         scene = self.scene.update(frame)
-        self.scene_update_total_s += time.perf_counter() - scene_started_s
+        scene_update_s = time.perf_counter() - scene_started_s
+        self.scene_update_total_s += scene_update_s
         self.scene_history.append(scene)
         self.frames += 1
         self.max_processing_lag_s = max(
@@ -563,7 +596,8 @@ class CausalPoseService:
                 )
                 object_motion_roles.add(role)
                 self._publish(role, anchor, motion, frame.frame_id)
-        self.object_track_total_s += time.perf_counter() - object_started_s
+        object_track_s = time.perf_counter() - object_started_s
+        self.object_track_total_s += object_track_s
         environment_started_s = time.perf_counter()
         for role, relationship in list(self.relationships.items()) + list(
             self.candidate_relationships.items()
@@ -596,7 +630,8 @@ class CausalPoseService:
             pose, advanced = tracked
             source[role] = advanced
             self._publish_environment(role, pose, frame, advanced, confirmed=confirmed)
-        self.environment_track_total_s += time.perf_counter() - environment_started_s
+        environment_track_s = time.perf_counter() - environment_started_s
+        self.environment_track_total_s += environment_track_s
         # A missing visual fit is not evidence that a stationary object moved.
         # Carry the last direct pose for a bounded interval, with explicit
         # prediction provenance. Once co-motion has been verified, only that
@@ -611,6 +646,11 @@ class CausalPoseService:
             ):
                 self._publish_static(role, anchor, frame)
         self._report_scene_support()
+        return {
+            "scene_update": scene_update_s,
+            "object_track": object_track_s,
+            "environment_track": environment_track_s,
+        }
 
     def _publish_environment(
         self,
@@ -696,10 +736,25 @@ class CausalPoseService:
                 self.on_layer(self.store.snapshot()[1][role])
             self.static_published += 1
 
-    def _anchor(self, result: _Anchor, *, decision_time_s: float | None = None) -> None:
+    def _anchor(
+        self,
+        result: _Anchor,
+        *,
+        decision_time_s: float | None = None,
+        timings: dict[str, float] | None = None,
+    ) -> None:
         # Offline extraction is an explicit source-order simulation. Live
         # results instead become usable only when this worker accepts them,
         # which can be later than the backend's own completion timestamp.
+        @contextmanager
+        def timed(name: str):
+            started = time.perf_counter()
+            try:
+                yield
+            finally:
+                if timings is not None:
+                    timings[name] = timings.get(name, 0.0) + time.perf_counter() - started
+
         attached_role = self._sync_attachment()
         source = next((frame for frame in self.history if frame.frame_id == result.frame_id), None)
         scene = next((item for item in self.scene_history if item.frame_id == result.frame_id), None)
@@ -780,7 +835,8 @@ class CausalPoseService:
                     self._count_anchor_outcome(estimate.role, "direct_symmetry_invalid")
                     self._record_anchor_decision(result, candidate, "direct_symmetry_invalid")
                     continue
-            free_space = self._record_direct_free_space(estimate, source)
+            with timed("free_space"):
+                free_space = self._record_direct_free_space(estimate, source)
             if (
                 free_space is not None
                 and free_space.verdict == FreeSpaceVerdict.CONTRADICTED
@@ -807,9 +863,10 @@ class CausalPoseService:
                     # if the same measured scene points survive between the
                     # two source frames. This replays that relationship up to
                     # the latest scene without rewinding the newer pose.
-                    accepted_at_s = self._reconcile_late_environment_observation(
-                        estimate, scene, result.masks, attached_role, decision_time_s=decision_time_s
-                    )
+                    with timed("late_environment_reconcile"):
+                        accepted_at_s = self._reconcile_late_environment_observation(
+                            estimate, scene, result.masks, attached_role, decision_time_s=decision_time_s
+                        )
                     if accepted_at_s is not None:
                         historical = replace(
                             estimate, available_time_s=max(estimate.available_time_s, accepted_at_s)
@@ -834,20 +891,25 @@ class CausalPoseService:
                     self._count_anchor_outcome(estimate.role, "superseded_by_direct")
                     self._record_anchor_decision(result, candidate, "superseded_by_direct")
                     continue
-            if (
-                estimate.has_direct_translation
-                and estimate.role != attached_role
-                and self._direct_conflicts_with_verified_group(estimate, source, scene, mask)
-            ):
+            with timed("group_comparison"):
+                group_conflict = (
+                    estimate.has_direct_translation
+                    and estimate.role != attached_role
+                    and self._direct_conflicts_with_verified_group(estimate, source, scene, mask)
+                )
+            if group_conflict:
                 self._count_anchor_outcome(estimate.role, "direct_group_unresolved")
                 self._record_anchor_decision(result, candidate, "direct_group_unresolved")
                 continue
-            if self._direct_conflicts_with_point_motion(estimate, source, mask):
+            with timed("point_comparison"):
+                point_conflict = self._direct_conflicts_with_point_motion(estimate, source, mask)
+            if point_conflict:
                 self._count_anchor_outcome(estimate.role, "direct_point_unresolved")
                 self._record_anchor_decision(result, candidate, "direct_point_unresolved")
                 continue
             if estimate.has_direct_translation and estimate.role != attached_role:
-                self._observe_environment(estimate, scene, result.masks)
+                with timed("environment_observation"):
+                    self._observe_environment(estimate, scene, result.masks)
             accepted_at_s = self.decision_clock() if decision_time_s is None else decision_time_s
             estimate = replace(estimate, available_time_s=max(estimate.available_time_s, accepted_at_s))
             self._count_anchor_outcome(estimate.role, "direct_accepted")
@@ -885,7 +947,8 @@ class CausalPoseService:
                 # spend the live camera budget replaying the same interval in
                 # a second tracker.
                 standby = CausalRigidPointTracker(**self.tracker_kwargs)
-                seeded = standby.seed(source, mask)
+                with timed("point_seed"):
+                    seeded = standby.seed(source, mask)
                 if seeded >= standby.min_inliers:
                     self.active.pop(estimate.role, None)
                     self.pending[estimate.role] = _PendingTrack(standby, estimate, source.frame_id, {})
@@ -936,7 +999,8 @@ class CausalPoseService:
                     self._publish_static(estimate.role, estimate, self.history[-1])
                 continue
             tracker = CausalRigidPointTracker(**self.tracker_kwargs)
-            seeded = tracker.seed(source, mask)
+            with timed("point_seed"):
+                seeded = tracker.seed(source, mask)
             if seeded < tracker.min_inliers:
                 self._count_anchor_outcome(estimate.role, "point_seed_failed")
                 if self.history[-1].frame_id > source.frame_id and estimate.role not in self.relationships:

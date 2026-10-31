@@ -30,6 +30,29 @@ def frame(image, frame_id):
     )
 
 
+def test_slow_camera_processing_records_stage_and_source_frame(monkeypatch):
+    service = CausalPoseService(LatestPoseStore(), max_frame_gap_s=0.01)
+    update = service.scene.update
+
+    def slow_update(item):
+        scene = update(item)
+        time.sleep(0.02)
+        return scene
+
+    monkeypatch.setattr(service.scene, "update", slow_update)
+    service.start()
+    service.submit_frame(frame(np.zeros((96, 96), dtype=np.uint8), 4))
+    service.close()
+
+    assert service.error is None
+    assert service.slow_work_count == 1
+    event = service.slow_work[0]
+    assert event["kind"] == "frame"
+    assert event["frame_id"] == 4
+    assert event["stages_s"]["scene_update"] >= 0.02
+    assert event["duration_s"] >= event["stages_s"]["scene_update"]
+
+
 def test_causal_config_rejects_unbounded_or_invalid_tracking():
     valid = {
         "history_frames": 60,

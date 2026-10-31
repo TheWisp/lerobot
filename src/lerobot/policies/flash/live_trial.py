@@ -245,6 +245,7 @@ def trial(
             episode_index=0,
         )
         tracker_trace_path = output_root / "flash" / "v1" / "tracker_episode_000000.jsonl"
+        causal_timing_path = output_root / "flash" / "v1" / "causal_timing_episode_000000.json"
         recorder = RecorderWorker(
             FlashEpisodeWriter(
                 dataset,
@@ -255,6 +256,7 @@ def trial(
                     "anchor_decisions": tracker_trace_path.with_suffix(".decisions.jsonl").name,
                     "source_frame_masks": tracker_trace_path.with_suffix(".masks.jsonl.gz").name,
                     "source_frame_groups": tracker_trace_path.with_suffix(".groups.jsonl.gz").name,
+                    **({"causal_timing": causal_timing_path.name} if configured_scene is not None else {}),
                 },
             )
         )
@@ -396,6 +398,19 @@ def trial(
                 file=sys.stderr,
             )
             raise
+        if runtime.causal is not None:
+            causal_timing_path.write_text(
+                json.dumps(
+                    {
+                        "slow_work_threshold_s": runtime.causal.slow_work_threshold_s,
+                        "slow_work_count": runtime.causal.slow_work_count,
+                        "recent_slow_work": list(runtime.causal.slow_work),
+                    },
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
         report.update(
             {
                 "outcome": result.outcome,
@@ -450,6 +465,8 @@ def trial(
                         "max_queue_age_s": runtime.causal.max_queue_age_s,
                         "replay_compute_total_s": runtime.causal.replay_compute_total_s,
                         "replay_compute_max_s": runtime.causal.replay_compute_max_s,
+                        "slow_work_count": runtime.causal.slow_work_count,
+                        "slow_work_path": str(causal_timing_path),
                         "pending_point_tracks": tuple(runtime.causal.pending),
                         "event_replays": runtime.causal.event_replays,
                         "pending_event_replays": tuple(runtime.causal.pending_event_replays),
