@@ -98,6 +98,28 @@ preceding CPU fit; the debugger reports publication intervals and source age
 separately. There is no unbounded pending-frame queue. CPU scaling alone still
 does not deliver ten updates/s for this three-object live workload.
 
+## UFM image-pair batching check (2026-10-31)
+
+A temporary opt-in implementation sent three objects' 320-pixel image pairs
+through one UFM call. The isolated GPU call improved from 87.9 to 72.2 ms
+median, at the cost of about 1.1 GB more peak allocated GPU memory. Its flow
+output differed from three individual calls by up to 0.073 pixel.
+
+The complete pipeline did not gain meaningfully on **identical** 30-frame,
+three-object recorded input: 6.91 versus 6.95 steady updates/s. All 90 pose
+decisions remained accepted, but the largest fitted-pose difference was 2.05 mm
+and 0.265°. A separate static live scene improved from 196 to 182 ms median
+processing time (4.92 to 5.29 reported updates/s), with all three objects
+accepted. Those sessions seeded their references afresh and are not a paired
+pose-accuracy test. The [measurements](ufm_batch_trial.json) retain both
+comparisons and the sampled source ages.
+
+The prototype was **reverted**: the paired throughput gain was too small to
+justify an additional execution path and a changed pose trace. It also did not
+establish correctness during object motion or occlusion. Further speed work
+should measure the shared GPU scheduling and mask stage before assuming that
+image-pair batching is the limiting factor.
+
 ## Reproduce
 
 ```bash

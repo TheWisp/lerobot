@@ -1,0 +1,126 @@
+{
+  "date": "2026-10-31",
+  "hypothesis": "Batching three UFM image pairs would materially improve three-object perception throughput without changing pose decisions.",
+  "isolated_gpu": {
+    "input": "three synthetic 320x320 RGB image pairs, 12 warmed repeats per mode",
+    "serial_median_ms": 87.92,
+    "batched_median_ms": 72.24,
+    "serial_peak_allocated_mb": 2497,
+    "batched_peak_allocated_mb": 3643,
+    "max_flow_difference_px": 0.07327,
+    "max_covisibility_difference": 0.00034
+  },
+  "paired_recording": {
+    "trace_id": "trace-20261025-192743-253063024",
+    "frame_count": 30,
+    "roles": [
+      "object",
+      "object_2",
+      "object_3"
+    ],
+    "modes": {
+      "ufm_serial": {
+        "elapsed_s": 4.517804836970754,
+        "steady_fps": 6.911762238975669,
+        "interval_median_ms": 124.63187496177852,
+        "interval_p95_ms": 291.2985121132805,
+        "max_pose_matrix_difference": 0.0,
+        "status_changes": 0,
+        "max_translation_difference_mm": 0.0,
+        "max_rotation_difference_deg": 7.824964720612764e-06,
+        "accepted": {
+          "object": 30,
+          "object_2": 30,
+          "object_3": 30
+        },
+        "timings": {
+          "preprocess_ms": 18.064815900288522,
+          "match_ms": 45.89682805817574,
+          "fit_ms": 62.83398100640625
+        }
+      },
+      "ufm_batched": {
+        "elapsed_s": 4.314301733043976,
+        "steady_fps": 6.95423049559515,
+        "interval_median_ms": 115.19321706146002,
+        "interval_p95_ms": 317.35616226214904,
+        "max_pose_matrix_difference": 0.004414750061304988,
+        "status_changes": 0,
+        "max_translation_difference_mm": 2.0467348331192086,
+        "max_rotation_difference_deg": 0.26504795324280095,
+        "accepted": {
+          "object": 30,
+          "object_2": 30,
+          "object_3": 30
+        },
+        "timings": {
+          "preprocess_ms": 18.196232966147363,
+          "match_ms": 75.92882914468646,
+          "fit_ms": 58.779612998478115
+        }
+      }
+    }
+  },
+  "live_static_scene": {
+    "objects": [
+      "green gamepad",
+      "wooden dowel",
+      "green ring"
+    ],
+    "camera": "640x480 RGB-D, 30 fps capture, group fallback enabled",
+    "method": "fresh clicked selection in each session; 14 seconds sampled after all three were tracked",
+    "modes": [
+      {
+        "batched": false,
+        "frames": 62,
+        "total_ms_median": 195.99611399462447,
+        "fps_median": 4.923310918389847,
+        "age_ms_median": 308.623157965485,
+        "mask_ms_median": 102.83604846335948,
+        "quality": {
+          "object": {
+            "accepted": true,
+            "p90_mm": 0.7511570469790853,
+            "matcher_batch_size": 1
+          },
+          "object_2": {
+            "accepted": true,
+            "p90_mm": 1.5451166328227601,
+            "matcher_batch_size": 1
+          },
+          "object_3": {
+            "accepted": true,
+            "p90_mm": 1.2919725383178475,
+            "matcher_batch_size": 1
+          }
+        }
+      },
+      {
+        "batched": true,
+        "frames": 65,
+        "total_ms_median": 181.78947002161294,
+        "fps_median": 5.286460585336918,
+        "age_ms_median": 293.7647440703586,
+        "mask_ms_median": 103.91729208640754,
+        "quality": {
+          "object": {
+            "accepted": true,
+            "p90_mm": 0.9672994763041569,
+            "matcher_batch_size": 3
+          },
+          "object_2": {
+            "accepted": true,
+            "p90_mm": 1.564831198775693,
+            "matcher_batch_size": 3
+          },
+          "object_3": {
+            "accepted": true,
+            "p90_mm": 1.3109530255792432,
+            "matcher_batch_size": 3
+          }
+        }
+      }
+    ]
+  },
+  "decision": "Do not enable batching by default. Paired steady throughput barely changed, while poses differed; the integration prototype was reverted."
+}
