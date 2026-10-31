@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import time
 from collections.abc import Callable, Mapping
 
@@ -87,12 +88,23 @@ def verify_pose_relation(
     moving = poses.get(criterion.moving_role)
     reference = poses.get(criterion.reference_role)
     if moving is not None and reference is not None:
-        source_id = "|".join(
-            f"{pose.role}:{pose.source_time_s!r}:{pose.reference_version}:"
-            f"{pose.evidence.value}:{pose.direct_translation_observed}:"
-            f"{pose.translation_supported!r}:{pose.rotation_supported!r}"
-            for pose in (moving, reference)
-        )
+        # A delayed estimator can revise a pose on the same RGB-D frame. Its
+        # source time stays fixed, but a changed transform must supersede the
+        # earlier verdict. Unchanged poses keep the same ID across unrelated
+        # pose-store revisions, so they cannot count as fresh evidence.
+        def pose_identity(pose: PoseEstimate) -> str:
+            transform_id = (
+                hashlib.blake2b(pose.pose.tobytes(order="C"), digest_size=16).hexdigest()
+                if pose.pose is not None
+                else "none"
+            )
+            return (
+                f"{pose.role}:{pose.source_frame_id}:{pose.source_time_s!r}:"
+                f"{pose.reference_version}:{pose.evidence.value}:{pose.direct_translation_observed}:"
+                f"{pose.translation_supported!r}:{pose.rotation_supported!r}:{transform_id}"
+            )
+
+        source_id = "|".join(pose_identity(pose) for pose in (moving, reference))
         if any(now_s - pose.source_time_s > criterion.max_pose_age_s for pose in (moving, reference)):
             source_id += "|expired"
         elif any(now_s < pose.available_time_s for pose in (moving, reference)):

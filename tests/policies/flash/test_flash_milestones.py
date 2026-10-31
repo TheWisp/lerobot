@@ -154,6 +154,45 @@ def test_true_pose_milestone_is_revoked_once_when_observation_expires():
     assert published[0].source_id != published[1].source_id
 
 
+def test_same_camera_frame_pose_revision_replaces_relation_verdict():
+    spec = milestone()
+    interval = Interval(
+        "place",
+        MotionMode.DEMONSTRATED,
+        Relation.EE_TO_OBJECT,
+        "target",
+        (SpatialSample(0, pose(), pose()), SpatialSample(1, pose(), pose())),
+        completion_milestone="placed",
+    )
+    progress = Progress(FlashSkill("demo", 0, (interval,), milestones=(spec,)))
+    now = [1.0]
+    publisher = PoseMilestonePublisher((spec,), progress.update_milestone, clock=lambda: now[0])
+    target = observed("target", 0.4, version="target-v1")
+    first = observed("held", 0.501, version="held-v1")
+    publisher(1, {"target": target, "held": first})
+    assert progress.milestones["placed"].verdict == Verdict.TRUE
+
+    # Re-evaluating the unchanged image cannot manufacture new evidence.
+    original_source = progress.milestones["placed"].source_id
+    count = len(progress.events)
+    publisher(2, {"target": target, "held": first})
+    assert len(progress.events) == count
+
+    # A delayed estimator correction to the same camera image can change the
+    # relationship. It must supersede the old verdict despite equal frame times.
+    corrected = observed("held", 0.52, version="held-v1")
+    publisher(3, {"target": target, "held": corrected})
+    assert progress.milestones["placed"].verdict == Verdict.FALSE
+    assert progress.milestones["placed"].source_id != original_source
+
+    # After a pose-change invalidation, a second revision that is still true
+    # must be able to restore the gate from that same camera frame.
+    progress.invalidate_changed_roles({"held"}, "pose:4", 1.0)
+    assert progress.milestones["placed"].verdict == Verdict.UNKNOWN
+    publisher(4, {"target": target, "held": observed("held", 0.502, version="held-v1")})
+    assert progress.milestones["placed"].verdict == Verdict.TRUE
+
+
 def test_local_contact_point_and_direction_ignore_irrelevant_roll_but_reject_bad_alignment(tmp_path):
     """A contact requires the measured point and axis, not an arbitrary frame roll."""
     spec = MilestoneSpec(
