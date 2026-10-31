@@ -151,7 +151,11 @@ def test_late_object_pose_replays_grasp_and_release_in_camera_source_order():
 
     def run(*, late: bool):
         store = LatestPoseStore()
-        service = CausalPoseService(store)
+        revisions = []
+        service = CausalPoseService(
+            store,
+            on_source_order_replay=lambda *args: revisions.append((*args, store.snapshot()[0])),
+        )
         service._frame(frames[0])
         if not late:
             service._anchor(anchor("object", frames[0]))
@@ -167,10 +171,10 @@ def test_late_object_pose_replays_grasp_and_release_in_camera_source_order():
             service._anchor(anchor("object", frames[0]))
             service._anchor(anchor("object", frames[1]))
         service._drain_pending()
-        return service, store.snapshot()[1]["object"]
+        return service, store.snapshot()[1]["object"], revisions
 
-    _, expected = run(late=False)
-    service, actual = run(late=True)
+    _, expected, _ = run(late=False)
+    service, actual, revisions = run(late=True)
     assert actual.source_time_s == expected.source_time_s
     assert actual.evidence == expected.evidence
     if expected.pose is None:
@@ -179,6 +183,14 @@ def test_late_object_pose_replays_grasp_and_release_in_camera_source_order():
         np.testing.assert_allclose(actual.pose, expected.pose, atol=0.005)
     assert service.anchor_decisions_by_source[(0, "object")].outcome.startswith("replayed_")
     assert service.anchor_decisions_by_source[(1, "object")].outcome.startswith("replayed_")
+    assert revisions
+    assert revisions[-1][0] == "object"
+    assert revisions[-1][1:3] == (frames[0].source_time_s, frames[-1].source_time_s)
+    assert all(
+        pose.role == "object" and pose.source_time_s == source.source_time_s
+        for pose, source, _mask in revisions[-1][3]
+    )
+    assert revisions[-1][4] < service.store.snapshot()[0]
 
     # An unrelated late observation does not need event replay.
     service._anchor(anchor("target", frames[0]))

@@ -1437,7 +1437,19 @@ def test_demonstrated_attachment_events_bind_and_release_live_object():
     held = PoseEstimate(
         "object", pose(0.132), 0.075, 0.1, Evidence.OBSERVED, "object-v1", (True,) * 3, (True,) * 3
     )
-    assert lifecycle.on_pose_update(2, {"object": held})
+    held_frame = RGBDFrame(
+        9,
+        np.zeros((2, 2, 3), dtype=np.uint8),
+        np.ones((2, 2), dtype=np.uint16),
+        np.eye(3),
+        0.001,
+        pose(),
+        held.source_time_s,
+        held.available_time_s,
+        "camera-v1",
+    )
+    held_mask = np.ones((2, 2), dtype=bool)
+    assert lifecycle.on_pose_update(2, {"object": held}, frame=held_frame, mask=held_mask)
     assert updater.has_postgrasp_observation
     camera = RGBDFrame(
         10,
@@ -1454,9 +1466,23 @@ def test_demonstrated_attachment_events_bind_and_release_live_object():
     assert prediction is not None
     assert prediction.pose[0, 3] == pytest.approx(0.147)
     assert prediction.last_direct_observation_s == pytest.approx(0.075)
+    # A source-order scene replay may revoke a previously accepted image.
+    # The held relation and retained motor-time predictions must both rewind.
+    assert lifecycle.reconcile_source_order("object", 0.075, 0.075, ())
+    assert not updater.has_postgrasp_observation
+    assert lifecycle.prediction_at("object", camera).pose[0, 3] == pytest.approx(0.145)
+    assert lifecycle.reconcile_source_order("object", 0.075, 0.075, ((held, held_frame, held_mask),))
+    assert updater.has_postgrasp_observation
+    assert lifecycle.prediction_at("object", camera).pose[0, 3] == pytest.approx(0.147)
     lifecycle.on_motor_tick(tick(0.12, "open"))
     assert lifecycle.state(0.13) is None
     assert lifecycle.last_event == "open"
+    # The replay can start before the grasp and finish after release; only
+    # source times inside the actual attachment epoch revise its history.
+    assert lifecycle.reconcile_source_order("object", 0.0, 0.12, ())
+    assert lifecycle.prediction_at("object", camera).pose[0, 3] == pytest.approx(0.145)
+    assert lifecycle.reconcile_source_order("object", 0.0, 0.12, ((held, held_frame, held_mask),))
+    assert lifecycle.prediction_at("object", camera).pose[0, 3] == pytest.approx(0.147)
     # A queued image may be processed after release without using the current
     # (now inactive) attachment state or a post-release motor position.
     assert lifecycle.prediction_at("object", camera).pose[0, 3] == pytest.approx(0.147)

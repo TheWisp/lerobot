@@ -150,13 +150,22 @@ class FlashRuntime:
         self.max_camera_age_s = max_camera_age_s
         self.live_telemetry = live_telemetry
         self.poses = LatestPoseStore()
-        accepted_direct: SimpleQueue[tuple[PoseEstimate, RGBDFrame, np.ndarray]] = SimpleQueue()
+        scene_events: SimpleQueue[tuple[str, object]] = SimpleQueue()
 
         def queue_held_direct(estimate: PoseEstimate, frame: RGBDFrame, mask: np.ndarray) -> None:
             # Before startup there is no consumer and no active attachment;
             # retaining full RGB-D frames here would grow memory unbounded.
-            if self._ready and self.attachment.active_role == estimate.role:
-                accepted_direct.put((estimate, frame, mask))
+            if self._ready and self.attachment.epoch_at(estimate.role, estimate.source_time_s) is not None:
+                scene_events.put(("direct", (estimate, frame, mask)))
+
+        def queue_source_order_replay(
+            role: str,
+            first_s: float,
+            last_s: float,
+            observations: tuple[tuple[PoseEstimate, RGBDFrame, np.ndarray], ...],
+        ) -> None:
+            if self._ready:
+                scene_events.put(("replay", (role, first_s, last_s, observations)))
 
         self.causal = (
             build_causal_pose_service(
@@ -172,6 +181,7 @@ class FlashRuntime:
                     live_telemetry.free_space_comparison if live_telemetry is not None else None
                 ),
                 on_direct_observation_with_frame=queue_held_direct,
+                on_source_order_replay=queue_source_order_replay,
                 kinematic_prediction_at=lambda role, frame: self.attachment.prediction_at(role, frame),
                 on_anchor_decision=(live_telemetry.anchor_decision if live_telemetry is not None else None),
                 on_scene_support=(live_telemetry.scene_support if live_telemetry is not None else None),
@@ -259,10 +269,10 @@ class FlashRuntime:
         def on_pose_update(version: int, poses: dict[str, PoseEstimate]) -> None:
             if self.live_telemetry is not None:
                 self.live_telemetry.accepted(poses)
-            direct_observations = []
+            pending_scene_events = []
             while True:
                 try:
-                    direct_observations.append(accepted_direct.get_nowait())
+                    pending_scene_events.append(scene_events.get_nowait())
                 except Empty:
                     break
             # Perception may publish for many seconds while the first observed
@@ -271,8 +281,26 @@ class FlashRuntime:
             # snapshot once the session is ready.
             if not self._ready:
                 return
-            for observed, frame, mask in direct_observations:
-                self.attachment.on_pose_update(version, {observed.role: observed}, frame=frame, mask=mask)
+            for kind, payload in pending_scene_events:
+                if kind == "replay":
+                    role, first_s, last_s, observations = payload
+                    if not self.attachment.reconcile_source_order(role, first_s, last_s, observations):
+                        raise RuntimeError(
+                            f"cannot revise {role}'s held pose: source-frame or motor history expired"
+                        )
+                    continue
+                observed, frame, mask = payload
+                if self.attachment.is_active_at(observed.role, observed.source_time_s):
+                    self.attachment.on_pose_update(version, {observed.role: observed}, frame=frame, mask=mask)
+                elif not self.attachment.reconcile_source_order(
+                    observed.role,
+                    observed.source_time_s,
+                    observed.source_time_s,
+                    ((observed, frame, mask),),
+                ):
+                    raise RuntimeError(
+                        f"cannot apply {observed.role}'s delayed held observation: motor history expired"
+                    )
                 if self.live_telemetry is not None and self.attachment.active_role == observed.role:
                     updater = self.attachment.updaters[observed.role]
                     visual_evidence = updater.latest_visual_evidence()

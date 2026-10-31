@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import deque
+from copy import deepcopy
 from dataclasses import dataclass
 from threading import Lock
 from typing import TYPE_CHECKING, Protocol
@@ -450,6 +451,61 @@ class HeldAttachmentUpdater:
         self._last_visual_correction_accepted = False
         self.has_postgrasp_observation = False
         self.last_rejection: str | None = None
+
+    _REPLAY_STATE_FIELDS = (
+        "_active",
+        "_activation_time_s",
+        "_conflicted",
+        "_visual_ambiguous",
+        "_pending_visual",
+        "_last_visual_source_time_s",
+        "_last_visual_comparison",
+        "_last_visual_candidate",
+        "_last_visual_correction_accepted",
+        "has_postgrasp_observation",
+        "last_rejection",
+    )
+
+    def snapshot(self) -> dict[str, object]:
+        """Capture the visual reducer state, excluding measured motor history."""
+        with self._lock:
+            state = {name: deepcopy(getattr(self, name)) for name in self._REPLAY_STATE_FIELDS}
+            state["estimate"] = (
+                self._estimate.gripper_from_object,
+                self._estimate._source_time_s,
+                self._estimate._reference_version,
+            )
+            return state
+
+    def restore(self, state: dict[str, object]) -> None:
+        """Atomically install a source-order replay result on the live updater."""
+        with self._lock:
+            for name in self._REPLAY_STATE_FIELDS:
+                setattr(self, name, deepcopy(state[name]))
+            attachment, source_time_s, reference_version = state["estimate"]
+            self._estimate = AttachmentEstimate()
+            self._estimate._attachment = None if attachment is None else attachment.copy()
+            self._estimate._source_time_s = source_time_s
+            self._estimate._reference_version = reference_version
+
+    def replay_copy(self) -> HeldAttachmentUpdater:
+        """Make an independent reducer with identical configured acceptance rules."""
+        return HeldAttachmentUpdater(
+            self.role,
+            self.reference_version,
+            self.kinematics,
+            self.arm_joint_names,
+            history_capacity=self.history.capacity,
+            max_motor_sample_gap_s=self.history.max_sample_gap_s,
+            max_attachment_age_s=self.max_attachment_age_s,
+            max_update_shift_m=self.max_update_shift_m,
+            max_update_turn_rad=self.max_update_turn_rad,
+            object_center_object_m=self.object_center_object_m,
+            object_points_object_m=self.object_points_object_m,
+            min_visual_support_points=self.min_visual_support_points,
+            depth_occlusion_tolerance_m=self.depth_occlusion_tolerance_m,
+            observation_quality=self.observation_quality,
+        )
 
     def on_motor_tick(self, tick: MotorTick) -> None:
         if tick.observed_at_s is None:

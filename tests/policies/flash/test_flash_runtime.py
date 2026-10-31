@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from lerobot.policies.flash.causal_service import CausalTrackingConfig
-from lerobot.policies.flash.execution import MissedEventError, TimedAction
+from lerobot.policies.flash.execution import ActionReceipt, MissedEventError, MotorTick, TimedAction
 from lerobot.policies.flash.perception import ObjectReference, ReferenceSnippet, RGBDFrame
 from lerobot.policies.flash.planner import PlannerLimits
 from lerobot.policies.flash.planning_coordinator import PlanBufferConfig
@@ -369,13 +369,18 @@ def test_delayed_direct_pose_updates_held_attachment_after_newer_point_predictio
     )
     assert attempt.causal is not None
     updater = attempt.attachment.updaters["target"]
-    updater.history.append(1.0, np.array([0.0]))
-    updater.history.append(1.02, np.array([0.0]))
     pregrasp = PoseEstimate(
         "target", identity(), 0.99, 0.99, Evidence.OBSERVED, "target-v1", (True,) * 3, (True,) * 3
     )
-    assert updater.activate(1.0, pregrasp, np.array([0.0]))
-    attempt.attachment.active_role = "target"
+    attempt.poses.publish((pregrasp,))
+    attach_action = TimedAction(0, {"arm.pos": 0.0}, "move", event_id="attach")
+    receipt = ActionReceipt(0, 0.99, 1.0, 0, 0, {"arm.pos": 0.0}, attach_action, {"arm.pos": 0.0}, 1)
+    attempt.attachment.on_motor_tick(
+        MotorTick(0, 1.0, {"arm.pos": 0.0}, 0, {"arm.pos": 0.0}, receipt, observed_at_s=1.0)
+    )
+    attempt.attachment.on_motor_tick(
+        MotorTick(1, 1.02, {"arm.pos": 0.0}, 0, {"arm.pos": 0.0}, None, observed_at_s=1.02)
+    )
     attempt._ready = True
     corrected = identity()
     corrected[0, 3] = 0.005
@@ -397,14 +402,20 @@ def test_delayed_direct_pose_updates_held_attachment_after_newer_point_predictio
         observed.available_time_s,
         "cal-v1",
     )
+    assert attempt.attachment.is_active_at("target", observed.source_time_s)
     attempt.causal.on_direct_observation_with_frame(observed, source_frame, np.ones((8, 8), dtype=bool))
     callback = attempt.perception.on_pose_update
     assert callback is not None
 
     callback(1, {"target": newer_prediction})
 
-    assert updater.has_postgrasp_observation
+    assert updater.has_postgrasp_observation, updater.last_rejection
     assert updater.state(1.04).gripper_from_object[0, 3] == pytest.approx(0.005)
+    assert attempt.causal.on_source_order_replay is not None
+    attempt.causal.on_source_order_replay("target", 1.0, 1.02, ())
+    callback(2, {"target": newer_prediction})
+    assert not updater.has_postgrasp_observation
+    assert updater.state(1.04).gripper_from_object[0, 3] == pytest.approx(0)
 
 
 def test_replayed_scene_pose_does_not_correct_gripper_without_its_source_image():

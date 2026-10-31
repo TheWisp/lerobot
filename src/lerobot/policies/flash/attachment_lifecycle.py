@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import deque
 from collections.abc import Mapping
+from dataclasses import dataclass
 from math import isfinite
 from threading import Lock
 
@@ -13,6 +14,27 @@ from .execution import MotorTick
 from .perception import HeldAttachmentUpdater, LatestPoseStore, RGBDFrame
 from .skill import AttachmentAction, FlashSkill
 from .trajectory import AttachmentState, Evidence, PoseEstimate
+
+
+@dataclass
+class _VisualEvent:
+    pose: PoseEstimate
+    frame: RGBDFrame
+    mask: np.ndarray
+    ee_at_capture: np.ndarray
+    state_after: dict[str, object]
+    last_direct_after: float | None
+
+
+@dataclass
+class _EpochJournal:
+    role: str
+    start_s: float
+    end_s: float | None
+    checkpoint_s: float
+    checkpoint: dict[str, object]
+    checkpoint_last_direct_s: float | None
+    observations: deque[_VisualEvent]
 
 
 class AttachmentLifecycle:
@@ -56,6 +78,7 @@ class AttachmentLifecycle:
         }
         self._attachment_epoch = 0
         self._last_direct_by_role: dict[str, float | None] = dict.fromkeys(self.updaters)
+        self._epochs: dict[int, _EpochJournal] = {}
 
     def on_motor_tick(self, tick: MotorTick) -> None:
         for updater in self.updaters.values():
@@ -106,6 +129,15 @@ class AttachmentLifecycle:
                 self._role_events[transition.role].append(
                     (receipt.dispatched_s, True, self._attachment_epoch)
                 )
+                self._epochs[self._attachment_epoch] = _EpochJournal(
+                    transition.role,
+                    receipt.dispatched_s,
+                    None,
+                    receipt.dispatched_s,
+                    self.updaters[transition.role].snapshot(),
+                    self._last_direct_by_role[transition.role],
+                    deque(),
+                )
         else:
             if self.active_role != transition.role:
                 raise RuntimeError(f"cannot detach {transition.role}: it is not the active attachment")
@@ -115,6 +147,13 @@ class AttachmentLifecycle:
                 self._role_events[transition.role].append(
                     (receipt.dispatched_s, False, self._attachment_epoch)
                 )
+                self._epochs[self._attachment_epoch].end_s = receipt.dispatched_s
+                retained_epochs = {
+                    sample[4] for samples in self._prediction_samples.values() for sample in samples
+                }
+                for old_epoch, journal in tuple(self._epochs.items()):
+                    if journal.end_s is not None and old_epoch not in retained_epochs:
+                        del self._epochs[old_epoch]
         self.last_event = event_id
 
     def _fresh_seed(self, pose: PoseEstimate, version: str, at_s: float) -> bool:
@@ -126,6 +165,30 @@ class AttachmentLifecycle:
             and pose.available_time_s <= at_s
             and 0 <= at_s - pose.source_time_s <= self.max_pregrasp_age_s
         )
+
+    def epoch_at(self, role: str, source_time_s: float) -> int | None:
+        """Find the gripper event epoch that actually covered an image time."""
+        with self._prediction_lock:
+            return next(
+                (
+                    epoch
+                    for epoch, journal in reversed(tuple(self._epochs.items()))
+                    if journal.role == role
+                    and journal.start_s <= source_time_s
+                    and (journal.end_s is None or source_time_s < journal.end_s)
+                ),
+                None,
+            )
+
+    def is_active_at(self, role: str, source_time_s: float) -> bool:
+        with self._prediction_lock:
+            journal = self._epochs.get(self._attachment_epoch)
+            return bool(
+                self.active_role == role
+                and journal is not None
+                and journal.start_s <= source_time_s
+                and journal.end_s is None
+            )
 
     def on_pose_update(
         self,
@@ -141,8 +204,16 @@ class AttachmentLifecycle:
         if role is None:
             return False
         updater = self.updaters[role]
-        accepted = updater.on_pose_update(version, poses, frame=frame, mask=mask)
         held = poses.get(role)
+        ee = (
+            updater._ee_at(held.source_time_s)
+            if held is not None
+            and held.evidence == Evidence.OBSERVED
+            and frame is not None
+            and mask is not None
+            else None
+        )
+        accepted = updater.on_pose_update(version, poses, frame=frame, mask=mask, ee_at_capture=ee)
         if held is not None and held.evidence == Evidence.OBSERVED:
             # A delayed visual correction belongs to its image time, not the
             # motor tick on which the worker happened to accept it.
@@ -151,6 +222,31 @@ class AttachmentLifecycle:
                     return accepted
                 if accepted:
                     self._last_direct_by_role[role] = held.source_time_s
+                if frame is not None and mask is not None and ee is not None:
+                    journal = self._epochs.get(epoch)
+                    if (
+                        journal is not None
+                        and held.source_time_s >= journal.start_s
+                        and (
+                            not journal.observations
+                            or held.source_time_s > journal.observations[-1].pose.source_time_s
+                        )
+                    ):
+                        if len(journal.observations) == updater.history.capacity:
+                            expired = journal.observations.popleft()
+                            journal.checkpoint_s = expired.pose.source_time_s
+                            journal.checkpoint = expired.state_after
+                            journal.checkpoint_last_direct_s = expired.last_direct_after
+                        journal.observations.append(
+                            _VisualEvent(
+                                held,
+                                frame,
+                                mask,
+                                ee,
+                                updater.snapshot(),
+                                self._last_direct_by_role[role],
+                            )
+                        )
                 samples = self._prediction_samples[role]
                 for index, (time_s, joints, _state, direct_s, sample_epoch) in enumerate(samples):
                     if sample_epoch == epoch and time_s >= held.source_time_s:
@@ -162,6 +258,103 @@ class AttachmentLifecycle:
                             sample_epoch,
                         )
         return accepted
+
+    def reconcile_source_order(
+        self,
+        role: str,
+        first_s: float,
+        last_s: float,
+        observations: tuple[tuple[PoseEstimate, RGBDFrame, np.ndarray], ...],
+    ) -> bool:
+        """Rebuild held corrections after a committed scene decision replay.
+
+        The scene service supplies all accepted direct observations in its
+        retained source-time window. Each attachment epoch is replayed from a
+        checkpoint made before that window. Motor samples are revised only
+        after the complete new visual history is ready.
+        """
+        updater = self.updaters.get(role)
+        if updater is None:
+            return True
+        with self._prediction_lock:
+            epochs = tuple(
+                (epoch, journal)
+                for epoch, journal in self._epochs.items()
+                if journal.role == role
+                and journal.start_s <= last_s
+                and (journal.end_s is None or journal.end_s > first_s)
+            )
+        for epoch, journal in epochs:
+            first_held_s = max(first_s, journal.start_s)
+            if first_held_s < journal.checkpoint_s:
+                return False
+            retained = [
+                item for item in journal.observations if not first_held_s <= item.pose.source_time_s <= last_s
+            ]
+            existing = {item.frame.frame_id: item for item in journal.observations}
+            revised = []
+            for pose, frame, mask in observations:
+                if (
+                    pose.role != role
+                    or not journal.start_s <= pose.source_time_s
+                    or (journal.end_s is not None and pose.source_time_s >= journal.end_s)
+                    or not first_held_s <= pose.source_time_s <= last_s
+                ):
+                    continue
+                old = existing.get(frame.frame_id)
+                ee = old.ee_at_capture if old is not None else updater._ee_at(pose.source_time_s)
+                if ee is None:
+                    return False
+                revised.append(_VisualEvent(pose, frame, mask, ee, {}, None))
+            ordered = sorted((*retained, *revised), key=lambda item: item.pose.source_time_s)
+            shadow = updater.replay_copy()
+            shadow.restore(journal.checkpoint)
+            last_direct = journal.checkpoint_last_direct_s
+            rebuilt = []
+            for item in ordered:
+                accepted = shadow.on_pose_update(
+                    0,
+                    {role: item.pose},
+                    frame=item.frame,
+                    mask=item.mask,
+                    ee_at_capture=item.ee_at_capture,
+                )
+                if accepted:
+                    last_direct = item.pose.source_time_s
+                rebuilt.append(
+                    _VisualEvent(
+                        item.pose,
+                        item.frame,
+                        item.mask,
+                        item.ee_at_capture,
+                        shadow.snapshot(),
+                        last_direct,
+                    )
+                )
+            with self._prediction_lock:
+                # Motor ticks may append while replay computes; revise every
+                # currently retained sample in one short critical section.
+                journal.observations = deque(rebuilt)
+                samples = self._prediction_samples[role]
+                for index, (time_s, joints, _state, _direct_s, sample_epoch) in enumerate(samples):
+                    if sample_epoch != epoch or time_s < first_held_s:
+                        continue
+                    latest = next(
+                        (item for item in reversed(rebuilt) if item.pose.source_time_s <= time_s), None
+                    )
+                    shadow.restore(latest.state_after if latest is not None else journal.checkpoint)
+                    samples[index] = (
+                        time_s,
+                        joints,
+                        shadow.state(time_s),
+                        latest.last_direct_after if latest is not None else journal.checkpoint_last_direct_s,
+                        sample_epoch,
+                    )
+                if self.active_role == role and self._attachment_epoch == epoch:
+                    shadow.restore(rebuilt[-1].state_after if rebuilt else journal.checkpoint)
+                    updater.restore(shadow.snapshot())
+                    self._last_direct_by_role[role] = last_direct
+        return True
 
     def prediction_at(self, role: str, frame: RGBDFrame) -> PoseEstimate | None:
         """Predict a held pose for one camera time using bounded measured motor history."""

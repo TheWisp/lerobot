@@ -208,6 +208,10 @@ class CausalPoseService:
         on_direct_observation_with_frame: Callable[[PoseEstimate, RGBDFrame, np.ndarray], None] | None = None,
         kinematic_prediction_at: Callable[[str, RGBDFrame], PoseEstimate | None] | None = None,
         on_anchor_decision: Callable[[AnchorDecision], None] | None = None,
+        on_source_order_replay: Callable[
+            [str, float, float, tuple[tuple[PoseEstimate, RGBDFrame, np.ndarray], ...]], None
+        ]
+        | None = None,
         on_scene_support: Callable[[int, dict[str, dict]], None] | None = None,
         decision_clock: Callable[[], float] = time.perf_counter,
     ) -> None:
@@ -268,6 +272,7 @@ class CausalPoseService:
         self.on_direct_observation_with_frame = on_direct_observation_with_frame
         self.kinematic_prediction_at = kinematic_prediction_at
         self.on_anchor_decision = on_anchor_decision
+        self.on_source_order_replay = on_source_order_replay
         self.on_scene_support = on_scene_support
         self._live_decision_clock = decision_clock
         self._offline_decision_time_s: float | None = None
@@ -1486,6 +1491,26 @@ class CausalPoseService:
         if result is None or (current is not None and result.source_time_s < current.source_time_s):
             self._abort_event_replay(role, "event_replay_outdated")
             return False
+        frames_by_id = {frame.frame_id: frame for frame in self.history}
+        if any(frame.frame_id not in frames_by_id for frame in pending.shadow.history):
+            self._abort_event_replay(role, "event_replay_history_expired")
+            return False
+        accepted_for_attachment = tuple(
+            (
+                decision.accepted,
+                frames_by_id[decision.frame_id],
+                self.anchor_events[decision.frame_id][role].masks[role],
+            )
+            for decision in pending.decisions
+            if decision.candidate.role == role
+            and decision.accepted is not None
+            and decision.accepted.evidence == Evidence.OBSERVED
+            and decision.frame_id in frames_by_id
+            and role in self.anchor_events.get(decision.frame_id, {})
+            and role in self.anchor_events[decision.frame_id][role].masks
+        )
+        first_s = pending.shadow.history[0].source_time_s
+        last_s = pending.shadow.history[-1].source_time_s
         with self._attachment_lock:
             if pending.attachment_revision != self._attachment_revision:
                 # An intervening motor event makes the shadow's final scene
@@ -1512,6 +1537,11 @@ class CausalPoseService:
             else:
                 self._expired_verified_roles.discard(role)
             result = replace(result, available_time_s=max(result.available_time_s, self.decision_clock()))
+            # Queue the matching held-relation revision before publishing the
+            # new scene version. The collector drains these events in order
+            # before it posts scene-change evidence to the coordinator.
+            if self.on_source_order_replay is not None:
+                self.on_source_order_replay(role, first_s, last_s, accepted_for_attachment)
             self.store.revise(result)
             self._attachment_applied_revision_by_role[role] = max(
                 self._attachment_applied_revision_by_role.get(role, 0), pending.attachment_revision
@@ -2059,6 +2089,10 @@ def build_causal_pose_service(
     on_direct_observation_with_frame: Callable[[PoseEstimate, RGBDFrame, np.ndarray], None] | None = None,
     kinematic_prediction_at: Callable[[str, RGBDFrame], PoseEstimate | None] | None = None,
     on_anchor_decision: Callable[[AnchorDecision], None] | None = None,
+    on_source_order_replay: Callable[
+        [str, float, float, tuple[tuple[PoseEstimate, RGBDFrame, np.ndarray], ...]], None
+    ]
+    | None = None,
     on_scene_support: Callable[[int, dict[str, dict]], None] | None = None,
 ) -> CausalPoseService:
     """Construct the identical estimator policy for recorded and live frames."""
@@ -2076,5 +2110,6 @@ def build_causal_pose_service(
         on_direct_observation_with_frame=on_direct_observation_with_frame,
         kinematic_prediction_at=kinematic_prediction_at,
         on_anchor_decision=on_anchor_decision,
+        on_source_order_replay=on_source_order_replay,
         on_scene_support=on_scene_support,
     )
