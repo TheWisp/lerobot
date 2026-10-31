@@ -104,6 +104,16 @@ an unsolved failure. Full local evidence is in
 `/tmp/flash-sam3-cracker-20261031-b/` and the score is
 `/tmp/flash-sam3-cracker-score-v2.json`.
 
+Two more 181-frame checks show why mask initialization must be measured too.
+`mustard bottle` gave 0.795 median mask overlap and 99/181 frames with a pose,
+versus 64/181 with supplied masks. `sugar box` produced **no mask at all** from
+text alone. One click inside the visible box at the initial frame gave 0.905
+median mask overlap and a pose on all 181 frames; its median pose error was
+1.11 mm versus 0.90 mm with supplied masks. These are development clips and the
+click result is not a claim that SAM3 is universally accurate. Local scores:
+`/tmp/flash-sam3-extra-score-20261031-b.json` and
+`/tmp/flash-sam3-sugar-click-score-20261031.json`.
+
 From the repository root, in an environment with FLASH's inference dependencies:
 
 ```bash
@@ -129,7 +139,9 @@ PYTHONPATH=src:. python benchmarks/flash_tracking_benchmark.py \
 For an end-to-end segmentation rerun, copy the suite to a candidate JSON and add
 `"segmentation": {"source": "sam3", "prompts_by_role": {"object": "cracker box"}}`
 to the selected case. Use a descriptive prompt for each role in a multi-object
-case. The default `"source": "supplied"` retains the frozen baseline behavior.
+case. If text does not initialize the intended object, add
+`"seed_points_by_role": {"object": [x, y]}` with a point in the first RGB frame.
+The default `"source": "supplied"` retains the frozen baseline behavior.
 The comparison checks source hashes and matching frame visibility. It reports
 pose availability separately from **paired** pose error on frames where both
 runs published a pose, so dropping hard frames cannot appear as an accuracy gain.

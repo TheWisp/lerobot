@@ -45,10 +45,14 @@ def _run_ycb(case: dict, output: Path, config_path: Path) -> None:
         prompt = segmentation.get("prompts_by_role", {}).get("object", "").strip()
         if not prompt:
             raise ValueError(f"{case['id']}: SAM3 segmentation needs a prompt for object")
+        seeds = segmentation.get("seed_points_by_role", {})
+        if set(seeds) - {"object"}:
+            raise ValueError(f"{case['id']}: SAM3 seed has no matching object role")
         mask_source = Sam3MaskSource(
             {"object": prompt},
             camera_id="rgb",
             resolution=vision_config.sam_resolution,
+            seed_points_by_role=seeds,
             detection_correction=vision_config.detection_correction.control(offline=True),
         )
         mask_description = "SAM3 text prompt on RGB frames"
@@ -75,7 +79,7 @@ def _run_ycb(case: dict, output: Path, config_path: Path) -> None:
         "input_sha256": digest.hexdigest(),
         "checkout": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
     }
-    output.mkdir(parents=True)
+    output.mkdir(parents=True, exist_ok=True)
     (output / "provenance.json").write_text(json.dumps(provenance, indent=2) + "\n")
 
     def frames():
@@ -166,16 +170,28 @@ def run_case(case: dict, run_root: Path, config_path: Path | None = None) -> dic
         if segmentation.get("source") == "supplied":
             masks = {role: dataset / "flash/v1/imported-masks" / role for role in roles}
             prompts = {}
+            seeds = {}
         elif segmentation.get("source") == "sam3":
             masks = {}
             prompts = segmentation.get("prompts_by_role", {})
+            seeds = segmentation.get("seed_points_by_role", {})
             if set(prompts) != set(roles) or any(not text.strip() for text in prompts.values()):
                 raise ValueError(f"{case['id']}: SAM3 needs one prompt per role")
+            if set(seeds) - set(prompts):
+                raise ValueError(f"{case['id']}: SAM3 seed has no matching object role")
         else:
             raise ValueError(f"{case['id']}: unknown segmentation source {segmentation.get('source')!r}")
         path = config_path or dataset / "flash/v1/observation-config.json"
         destination = output / "evidence"
-        extract(dataset, masks, path, episode=0, output=destination, prompts_by_role=prompts)
+        extract(
+            dataset,
+            masks,
+            path,
+            episode=0,
+            output=destination,
+            prompts_by_role=prompts,
+            seed_points_by_role=seeds,
+        )
         updated["evidence_dir"] = str(destination)
         updated["source"] = source["source"]
     else:

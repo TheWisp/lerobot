@@ -199,12 +199,17 @@ def test_sam3_benchmark_uses_live_segmentation_path_without_supplied_masks(tmp_p
         "id": "fixture",
         "kind": "lerobot_rgbd",
         "artifact_root": str(dataset),
-        "segmentation": {"source": "sam3", "prompts_by_role": {"object": "cracker box"}},
+        "segmentation": {
+            "source": "sam3",
+            "prompts_by_role": {"object": "cracker box"},
+            "seed_points_by_role": {"object": [50.0, 30.0]},
+        },
     }
     updated = run_case(case, tmp_path / "candidate", config)
     assert called["root"] == dataset
     assert called["masks"] == {}
     assert called["prompts_by_role"] == {"object": "cracker box"}
+    assert called["seed_points_by_role"] == {"object": [50.0, 30.0]}
     assert called["config"] == config
     assert updated["source"] == "fixture"
     assert updated["evidence_dir"] == str(tmp_path / "candidate/fixture/evidence")
