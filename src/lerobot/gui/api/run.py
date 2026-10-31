@@ -1378,12 +1378,15 @@ def _flash_recorded_demo_replay(root: Path, episode: int, bundle_path: Path) -> 
     result["prepared_intervals"] = []
     transitions = {item.event_id: item for item in prepared.skill.attachment_transitions}
     milestones = {item.name: item.pose_relation for item in prepared.skill.milestones}
-    for interval in prepared.skill.intervals:
+    for interval_index, interval in enumerate(prepared.skill.intervals):
         first = interval.samples[0].source_frame_index
         last = interval.samples[-1].source_frame_index
         if first is None or last is None:
             raise ValueError("prepared recorded section has no source frame indices")
         attachment = transitions.get(interval.samples[-1].event_id)
+        outcome_check = (
+            prepared.skill.outcome_milestone if interval_index == len(prepared.skill.intervals) - 1 else None
+        )
         result["prepared_intervals"].append(
             {
                 "name": interval.name,
@@ -1401,6 +1404,7 @@ def _flash_recorded_demo_replay(root: Path, episode: int, bundle_path: Path) -> 
                     or (sample.held_evidence is not None and sample.held_evidence != "observed")
                     for sample in interval.samples
                 ),
+                "task_outcome": outcome_check is not None,
                 "verify_relation": (
                     {
                         "moving_role": check.moving_role,
@@ -1412,7 +1416,7 @@ def _flash_recorded_demo_replay(root: Path, episode: int, bundle_path: Path) -> 
                             else ""
                         ),
                     }
-                    if (check := milestones.get(interval.completion_milestone)) is not None
+                    if (check := milestones.get(interval.completion_milestone or outcome_check)) is not None
                     else None
                 ),
             }

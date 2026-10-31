@@ -2571,6 +2571,7 @@ def test_recorded_motion_editor_marks_contiguous_sections_in_same_replay(gui_pag
     page.locator(".flash-recorded-section").locator('[data-field="held_role"]').select_option("tool")
     assert "2/2 frames with measured full pose" in page.locator(".flash-recorded-section").inner_text()
     page.get_by_label("Check final object relationship").check()
+    page.get_by_label("Use this final check to report task success or failure").check()
     page.get_by_label("Allowed position difference from demo (mm)").fill("6")
     page.get_by_label("Allowed position difference from demo (mm)").dispatch_event("change")
     page.get_by_role("button", name="Prepare candidate").click()
@@ -2581,6 +2582,7 @@ def test_recorded_motion_editor_marks_contiguous_sections_in_same_replay(gui_pag
     assert submissions[0]["intervals"][1]["relation"] == "held_to_target"
     assert submissions[0]["intervals"][1]["held_role"] == "tool"
     assert submissions[0]["intervals"][1]["verify_relation"]["translation_tolerance_mm"] == "6"
+    assert submissions[0]["intervals"][1]["task_outcome"] is True
     assert page.locator("#flash-recorded-editor").is_visible()
     page.locator(".flash-recorded-sections button").first.click()
     page.locator(".flash-recorded-section").first.get_by_role("button", name="Remove").click()

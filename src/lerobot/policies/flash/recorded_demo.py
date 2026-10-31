@@ -33,6 +33,7 @@ def prepare_recorded_episode(
     annotations: tuple[IntervalAnnotation, ...],
     milestones: tuple[MilestoneSpec, ...] = (),
     pose_relation_annotations: tuple[PoseRelationAnnotation, ...] = (),
+    outcome_milestone: str | None = None,
     attachment_transitions: tuple[AttachmentTransition, ...] = (),
     symmetry_baseline_frames: dict[str, int] | None = None,
 ) -> Path:
@@ -75,6 +76,7 @@ def prepare_recorded_episode(
         milestones=milestones,
         pose_relation_annotations=pose_relation_annotations,
         attachment_transitions=attachment_transitions,
+        outcome_milestone=outcome_milestone,
     )
     used_roles = {
         interval.reference_role for interval in skill.intervals if interval.relation != Relation.EE_TO_START

@@ -135,6 +135,7 @@ def compile_skill(
     milestones: tuple[MilestoneSpec, ...] = (),
     pose_relation_annotations: tuple[PoseRelationAnnotation, ...] = (),
     attachment_transitions: tuple[AttachmentTransition, ...] = (),
+    outcome_milestone: str | None = None,
     joint_units: str = "degrees",
 ) -> FlashSkill:
     """Use measured robot state, accepted gripper action and pose sidecars.
@@ -315,4 +316,5 @@ def compile_skill(
         tuple(intervals),
         milestones=tuple(compiled_milestones),
         attachment_transitions=attachment_transitions,
+        outcome_milestone=outcome_milestone,
     )

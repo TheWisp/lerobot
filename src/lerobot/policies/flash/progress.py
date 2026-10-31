@@ -130,6 +130,17 @@ class Progress:
         oldest = update.oldest_source_time_s
         return (update.source_time_s if oldest is None else oldest) >= self.last_receipt_s
 
+    def outcome_evidence(self) -> MilestoneUpdate | None:
+        """Return only a post-motion verdict explicitly annotated as task outcome."""
+        name = self.skill.outcome_milestone
+        if name is None or self.last_receipt_s is None:
+            return None
+        update = self.milestones.get(name)
+        if update is None:
+            return None
+        oldest = update.oldest_source_time_s
+        return update if (update.source_time_s if oldest is None else oldest) >= self.last_receipt_s else None
+
     def begin(self, now_s: float) -> bool:
         if not self.can_begin():
             return False

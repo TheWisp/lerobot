@@ -361,6 +361,7 @@ class FlashRuntime:
         self._recorder_started = False
         self._ready = False
         self._started_once = False
+        self._outcome_observation_error: str | None = None
 
     @staticmethod
     def _validate_bindings(skill: FlashSkill, references: tuple[ObjectReference, ...]) -> None:
@@ -479,6 +480,11 @@ class FlashRuntime:
             raise RuntimeError("FLASH attempt is not ready")
         error = self.perception.error
         if error is not None:
+            if self.session.progress.phase == Phase.MOTION_COMPLETE:
+                # Losing the camera after motion cannot establish that the
+                # physical task failed. The annotated outcome is unknown.
+                self._outcome_observation_error = str(error)
+                return
             self.session.actions.cancel_unissued("perception failed")
             self.session.progress.fail(self.session.motor.clock(), f"perception failed: {error}")
             return
@@ -486,7 +492,12 @@ class FlashRuntime:
             self.session.actions.cancel_unissued("recording failed")
             self.session.progress.fail(self.session.motor.clock(), f"recording failed: {self.recorder.error}")
             return
-        if self.session.progress.phase in (Phase.FAILED, Phase.INTERRUPTED, Phase.MOTION_COMPLETE):
+        if self.session.progress.phase in (Phase.FAILED, Phase.INTERRUPTED):
+            return
+        if self.session.progress.phase == Phase.MOTION_COMPLETE:
+            # Keep recording fixed-rate hold ticks while an annotated outcome
+            # awaits a new camera observation after the final motor receipt.
+            self.session.step()
             return
         self.coordinator.step()
 
@@ -514,28 +525,48 @@ class FlashRuntime:
                 first_pose_timeout_s=first_pose_timeout_s,
             )
             deadline_s = self.session.motor.clock() + max_duration_s
-            while self.session.progress.phase not in (
-                Phase.MOTION_COMPLETE,
-                Phase.SUCCEEDED,
-                Phase.FAILED,
-                Phase.INTERRUPTED,
-            ):
+            while True:
+                phase = self.session.progress.phase
+                if phase in (Phase.SUCCEEDED, Phase.FAILED, Phase.INTERRUPTED):
+                    break
+                if phase == Phase.MOTION_COMPLETE:
+                    if outcome_verifier is not None or self.skill.outcome_milestone is None:
+                        break
+                    if self._outcome_observation_error is not None:
+                        break
+                    evidence = self.session.progress.outcome_evidence()
+                    if evidence is not None and evidence.verdict != Verdict.UNKNOWN:
+                        break
                 if stop_requested is not None and stop_requested():
                     self.session.actions.cancel_unissued("operator stopped attempt")
                     self.session.progress.interrupt(self.session.motor.clock(), "operator stopped attempt")
                     break
                 if self.session.motor.clock() >= deadline_s:
+                    if phase == Phase.MOTION_COMPLETE:
+                        break
                     self.session.actions.cancel_unissued("attempt duration expired")
                     self.session.progress.fail(self.session.motor.clock(), "attempt duration expired")
                     break
                 self.step()
             phase = self.session.progress.phase
             if phase == Phase.MOTION_COMPLETE:
-                verdict, reason = (
-                    outcome_verifier()
-                    if outcome_verifier is not None
-                    else (Verdict.UNKNOWN, "unverified outcome")
-                )
+                if outcome_verifier is not None:
+                    verdict, reason = outcome_verifier()
+                elif self.skill.outcome_milestone is not None:
+                    evidence = self.session.progress.outcome_evidence()
+                    verdict = evidence.verdict if evidence is not None else Verdict.UNKNOWN
+                    reason = (
+                        f"outcome milestone {self.skill.outcome_milestone}: {evidence.reason}"
+                        if evidence is not None and evidence.verdict != Verdict.UNKNOWN
+                        else (
+                            f"outcome milestone {self.skill.outcome_milestone} unknown: "
+                            f"perception failed after motion: {self._outcome_observation_error}"
+                            if self._outcome_observation_error is not None
+                            else f"outcome milestone {self.skill.outcome_milestone} remained unknown after motion"
+                        )
+                    )
+                else:
+                    verdict, reason = Verdict.UNKNOWN, "unverified outcome"
                 self.session.finish(verdict, reason)
                 outcome = {
                     Verdict.TRUE: "success",

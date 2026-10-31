@@ -178,6 +178,7 @@ def prepare_recorded_trial(
     annotations = []
     transitions = []
     relation_checks = []
+    outcome_milestone = None
     for index, item in enumerate(intervals):
         relation = Relation(item["relation"])
         reference = item.get("reference_role") if relation != Relation.EE_TO_START else "__start__"
@@ -201,6 +202,9 @@ def prepare_recorded_trial(
             )
         check = item.get("verify_relation")
         completion_milestone = None
+        task_outcome = bool(item.get("task_outcome", False))
+        if task_outcome and (index != len(intervals) - 1 or check is None):
+            raise ValueError("a task outcome needs a relation check on the final section")
         if check is not None:
             if not isinstance(check, dict):
                 raise ValueError(f"section {index + 1} result check must specify two objects")
@@ -214,11 +218,15 @@ def prepare_recorded_trial(
                 max_pose_age_s = float(settings["max_pose_age_s"])
             except (KeyError, TypeError, ValueError) as exc:
                 raise ValueError("trial configuration needs max_pose_age_s for result checks") from exc
-            completion_milestone = f"section-{index + 1}-result"
+            check_name = f"section-{index + 1}-result"
+            completion_milestone = check_name
+            if task_outcome:
+                outcome_milestone = check_name
+                completion_milestone = None
             angle = check.get("rotation_tolerance_deg")
             relation_checks.append(
                 PoseRelationAnnotation(
-                    name=completion_milestone,
+                    name=check_name,
                     frame_index=item["last_frame"],
                     moving_role=moving_role,
                     reference_role=target_role,
@@ -261,6 +269,7 @@ def prepare_recorded_trial(
         annotations=tuple(annotations),
         attachment_transitions=tuple(transitions),
         pose_relation_annotations=tuple(relation_checks),
+        outcome_milestone=outcome_milestone,
         symmetry_baseline_frames=symmetry_baseline_frames,
     )
     (output.parent / "preparation-report.json").write_text(

@@ -523,6 +523,14 @@ def test_recorded_trial_editor_gates_a_section_on_its_observed_result(tmp_path, 
         "translation_tolerance_mm": pytest.approx(6),
         "rotation_tolerance_deg": "",
     }
+    section["task_outcome"] = True
+    outcome_output = prepare_recorded_trial(tmp_path, 0, "outcome-checked", [section])
+    outcome_skill = PreparedFlashSkill.load(outcome_output).skill
+    assert outcome_skill.intervals[0].completion_milestone is None
+    assert outcome_skill.outcome_milestone == "section-1-result"
+    outcome_replay = run._flash_recorded_demo_replay(tmp_path, 0, outcome_output)
+    assert outcome_replay["prepared_intervals"][0]["task_outcome"] is True
+    assert outcome_replay["prepared_intervals"][0]["verify_relation"]["translation_tolerance_mm"] == 6
     section["verify_relation"]["translation_tolerance_mm"] = ""
     with pytest.raises(ValueError, match="explicit distance tolerance"):
         prepare_recorded_trial(tmp_path, 0, "invalid", [section])

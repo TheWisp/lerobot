@@ -137,10 +137,13 @@ function _flashRecordedRender() {
                 html += `<label>Target object<select data-index="${index}" data-check-field="reference_role">${_flashRecordedOptions(roles.filter(role => role !== check.moving_role).map(role => [role, role]), check.reference_role)}</select></label>`;
                 html += `<label>Allowed position difference from demo (mm)<input type="number" min="0" step="any" placeholder="Choose for this task" data-index="${index}" data-check-field="translation_tolerance_mm" value="${_esc(check.translation_tolerance_mm ?? '')}"></label>`;
                 html += `<label>Allowed rotation difference (degrees; optional)<input type="number" min="0" step="any" placeholder="Any rotation" data-index="${index}" data-check-field="rotation_tolerance_deg" value="${_esc(check.rotation_tolerance_deg ?? '')}"></label>`;
+                if (index === intervals.length - 1) html += `<label class="flash-recorded-check"><input type="checkbox" data-index="${index}" data-field="task_outcome" ${item.task_outcome ? 'checked' : ''}> Use this final check to report task success or failure</label>`;
                 const observed = [check.moving_role, check.reference_role].filter(role =>
                     !(source.observed_frames?.[role] || []).includes(item.last_frame));
                 html += observed.length
                     ? `<p class="flash-recorded-warning">Frame ${item.last_frame} has no measured full pose for ${_esc(observed.join(' and '))}. Choose an observed end frame or improve tracking before preparing this check.</p>`
+                    : item.task_outcome && index === intervals.length - 1
+                    ? '<p>After motion, the run checks fresh measured poses of both objects and reports success, failure or unknown.</p>'
                     : '<p>The run waits for fresh measured poses of both objects before this section counts as complete.</p>';
             }
         }
@@ -165,6 +168,7 @@ function _flashRecordedRender() {
                     moving_role: roles[0], reference_role: roles[1], translation_tolerance_mm: '',
                     rotation_tolerance_deg: '',
                 } : null;
+                if (!input.checked) item.task_outcome = false;
             } else item[input.dataset.field] = input.type === 'checkbox' ? input.checked : input.value;
             if (input.dataset.field === 'reference_role' && item.held_role === item.reference_role)
                 item.held_role = roles.find(role => role !== item.reference_role) || '';
@@ -210,13 +214,17 @@ function flashRecordedAddSection(toEnd) {
     const last = toEnd ? state.source.frame_count - 1 : _flashRecordedPlayhead();
     if (last <= first) return;
     const roles = state.source.roles || [];
+    const previousOutcome = Boolean(state.intervals.at(-1)?.task_outcome);
+    if (previousOutcome) state.intervals.at(-1).task_outcome = false;
     state.intervals.push({
         first_frame: first, last_frame: last, mode: 'demonstrated', relation: 'ee_to_start',
         reference_role: roles[0] || '', held_role: roles[1] || '', endpoint_requirement: 'required',
         attachment_action: '', attachment_role: '', allow_predicted_demo_pose: false,
     });
     state.selectedIndex = state.intervals.length - 1;
-    state.message = '';
+    state.message = previousOutcome
+        ? 'The previous final check is now a section check. Mark the new final check as the task outcome if needed.'
+        : '';
     _flashRecordedRender();
 }
 

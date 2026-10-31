@@ -10,13 +10,14 @@ from lerobot.policies.flash.execution import MissedEventError, TimedAction
 from lerobot.policies.flash.perception import ObjectReference, ReferenceSnippet, RGBDFrame
 from lerobot.policies.flash.planner import PlannerLimits
 from lerobot.policies.flash.planning_coordinator import PlanBufferConfig
-from lerobot.policies.flash.progress import Phase
+from lerobot.policies.flash.progress import MilestoneUpdate, Phase, Verdict
 from lerobot.policies.flash.runtime import AttachmentRuntimeLimits, FlashRuntime
 from lerobot.policies.flash.skill import (
     AttachmentAction,
     AttachmentTransition,
     FlashSkill,
     Interval,
+    MilestoneSpec,
     MotionMode,
     Relation,
     SpatialSample,
@@ -516,6 +517,150 @@ def test_motion_completion_without_outcome_verifier_remains_unknown(monkeypatch)
     assert result.outcome == "unknown"
     assert result.phase == Phase.MOTION_COMPLETE
     assert recorder.finished == ("unknown", "unverified outcome")
+
+
+@pytest.mark.parametrize("verdict,outcome", [(Verdict.TRUE, "success"), (Verdict.FALSE, "failure")])
+def test_annotated_outcome_waits_for_new_post_motion_evidence(monkeypatch, verdict, outcome):
+    test_skill = replace(
+        skill(),
+        milestones=(MilestoneSpec("task_result", ("target",), require_post_motion_evidence=True),),
+        outcome_milestone="task_result",
+    )
+    recorder = FakeRecorder()
+    attempt = runtime(test_skill, (reference("target", "target-v1"),), recorder)
+    clock = [10.0]
+    attempt.session.motor.clock = lambda: clock[0]
+    idle_ticks = []
+
+    def start(**_kwargs):
+        attempt._ready = True
+        attempt.session.motor.start()
+
+    def complete_motion():
+        attempt.session.progress.phase = Phase.MOTION_COMPLETE
+        attempt.session.progress.last_receipt_s = 10.0
+        attempt.session.progress.update_milestone(
+            MilestoneUpdate("task_result", Verdict.TRUE, "before-end", 9.9)
+        )
+
+    def idle_tick():
+        idle_ticks.append(clock[0])
+        clock[0] += 0.03
+        attempt.session.progress.update_milestone(
+            MilestoneUpdate(
+                "task_result",
+                verdict,
+                f"after-end-{len(idle_ticks)}",
+                clock[0],
+                oldest_source_time_s=9.9 if len(idle_ticks) == 1 else clock[0],
+            )
+        )
+
+    monkeypatch.setattr(attempt, "start", start)
+    monkeypatch.setattr(attempt.coordinator, "step", complete_motion)
+    monkeypatch.setattr(attempt.session, "step", idle_tick)
+    monkeypatch.setattr(
+        attempt, "close", lambda result, reason: setattr(recorder, "finished", (result, reason))
+    )
+
+    result = attempt.run(max_duration_s=1, pose_start_timeout_s=1, first_pose_timeout_s=1)
+    assert idle_ticks == [10.0, 10.03]
+    assert result.outcome == outcome
+    assert recorder.finished[0] == outcome
+
+
+def test_outcome_milestone_round_trips_and_requires_post_motion_evidence(tmp_path):
+    with pytest.raises(ValueError, match="post-motion evidence"):
+        replace(
+            skill(),
+            milestones=(MilestoneSpec("result", ("target",)),),
+            outcome_milestone="result",
+        )
+    with pytest.raises(ValueError, match="must not also gate"):
+        replace(
+            skill(),
+            intervals=(replace(skill().intervals[0], completion_milestone="result"),),
+            milestones=(MilestoneSpec("result", ("target",), require_post_motion_evidence=True),),
+            outcome_milestone="result",
+        )
+    annotated = replace(
+        skill(),
+        milestones=(MilestoneSpec("result", ("target",), require_post_motion_evidence=True),),
+        outcome_milestone="result",
+    )
+    path = tmp_path / "skill.json"
+    annotated.save(path)
+    assert FlashSkill.load(path).outcome_milestone == "result"
+
+
+def test_annotated_outcome_without_new_evidence_expires_unknown(monkeypatch):
+    annotated = replace(
+        skill(),
+        milestones=(MilestoneSpec("result", ("target",), require_post_motion_evidence=True),),
+        outcome_milestone="result",
+    )
+    recorder = FakeRecorder()
+    attempt = runtime(annotated, (reference("target", "target-v1"),), recorder)
+    clock = [10.0]
+    attempt.session.motor.clock = lambda: clock[0]
+
+    def start(**_kwargs):
+        attempt._ready = True
+        attempt.session.motor.start()
+
+    def complete_motion():
+        attempt.session.progress.phase = Phase.MOTION_COMPLETE
+        attempt.session.progress.last_receipt_s = 10.0
+        attempt.session.progress.update_milestone(MilestoneUpdate("result", Verdict.TRUE, "old", 9.9))
+
+    monkeypatch.setattr(attempt, "start", start)
+    monkeypatch.setattr(attempt.coordinator, "step", complete_motion)
+    monkeypatch.setattr(attempt.session, "step", lambda: clock.__setitem__(0, clock[0] + 0.05))
+    monkeypatch.setattr(
+        attempt, "close", lambda outcome, reason: setattr(recorder, "finished", (outcome, reason))
+    )
+
+    result = attempt.run(max_duration_s=0.2, pose_start_timeout_s=1, first_pose_timeout_s=1)
+    assert result.outcome == "unknown"
+    assert result.phase == Phase.MOTION_COMPLETE
+    assert recorder.finished[0] == "unknown"
+
+
+def test_camera_loss_after_motion_does_not_claim_task_failure(monkeypatch):
+    annotated = replace(
+        skill(),
+        milestones=(MilestoneSpec("result", ("target",), require_post_motion_evidence=True),),
+        outcome_milestone="result",
+    )
+    recorder = FakeRecorder()
+    attempt = runtime(annotated, (reference("target", "target-v1"),), recorder)
+    clock = [10.0]
+    attempt.session.motor.clock = lambda: clock[0]
+
+    def start(**_kwargs):
+        attempt._ready = True
+        attempt.session.motor.start()
+
+    def complete_motion():
+        attempt.session.progress.phase = Phase.MOTION_COMPLETE
+        attempt.session.progress.last_receipt_s = 10.0
+
+    def idle_tick():
+        clock[0] += 0.03
+        attempt.perception._fail(TimeoutError("camera stopped"))
+
+    monkeypatch.setattr(attempt, "start", start)
+    monkeypatch.setattr(attempt.coordinator, "step", complete_motion)
+    monkeypatch.setattr(attempt.session, "step", idle_tick)
+    monkeypatch.setattr(
+        attempt, "close", lambda outcome, reason: setattr(recorder, "finished", (outcome, reason))
+    )
+
+    result = attempt.run(max_duration_s=1, pose_start_timeout_s=1, first_pose_timeout_s=1)
+    assert result.outcome == "unknown"
+    assert result.phase == Phase.MOTION_COMPLETE
+    assert "camera stopped" in result.reason
+    assert recorder.finished[0] == "unknown"
 
 
 def test_operator_stop_interrupts_before_dispatch_and_records_reason(monkeypatch):

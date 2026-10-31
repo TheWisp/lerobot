@@ -470,7 +470,14 @@ The executable core already separates:
   event loop: it waits for an observed first object pose in the demonstrated
   frame before resetting the motor epoch, passes pose changes and milestone
   verdicts to the session, runs bounded steps, and saves an explicit outcome.
-  Finishing motion without an independent verifier remains `unknown`;
+  An optional `outcome_milestone` in the skill names an independent check that
+  must use evidence captured after the final motor command. While it waits,
+  the host records fixed-rate hold ticks until the attempt deadline. A fresh
+  true or false verdict becomes success or failure; absent or partial evidence
+  leaves the outcome `unknown`, including camera loss after motion. A skill
+  without this check still reports `unknown` on motion completion. The
+  recorded-episode editor exposes this for a final relation check; historical
+  sealed-demo imports do not gain an outcome annotation automatically;
 - a selected-joint adapter that runs the SO-107's seven-joint FK/IK model
   while the planner controls six arm joints and the gripper separately;
 - a camera-independent motor read/dispatch tick through `Robot`;

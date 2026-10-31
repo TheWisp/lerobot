@@ -242,6 +242,7 @@ class FlashSkill:
     schema_version: int = 1
     milestones: tuple[MilestoneSpec, ...] = ()
     attachment_transitions: tuple[AttachmentTransition, ...] = ()
+    outcome_milestone: str | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -280,6 +281,14 @@ class FlashSkill:
         }
         if not referenced <= milestone_names:
             raise ValueError(f"missing milestone definitions: {sorted(referenced - milestone_names)}")
+        if self.outcome_milestone is not None:
+            outcome_spec = next(
+                (item for item in self.milestones if item.name == self.outcome_milestone), None
+            )
+            if outcome_spec is None or not outcome_spec.require_post_motion_evidence:
+                raise ValueError("outcome milestone must require independent post-motion evidence")
+            if self.outcome_milestone in referenced:
+                raise ValueError("outcome milestone must not also gate an interval or motor event")
         turns: dict[str, tuple[TurnAtPoint, str, str | None, int]] = {}
         for index, interval in enumerate(self.intervals):
             rule = interval.turn_at_point
@@ -359,10 +368,11 @@ class FlashSkill:
             data["schema_version"],
             milestones,
             attachment_transitions,
+            data.get("outcome_milestone"),
         )
 
     def to_dict(self) -> dict:
-        return {
+        result = {
             "schema_version": self.schema_version,
             "source_repo_id": self.source_repo_id,
             "source_episode": self.source_episode,
@@ -446,6 +456,9 @@ class FlashSkill:
                 for interval in self.intervals
             ],
         }
+        if self.outcome_milestone is not None:
+            result["outcome_milestone"] = self.outcome_milestone
+        return result
 
     def save(self, path: str | Path) -> None:
         Path(path).write_text(json.dumps(self.to_dict(), indent=2) + "\n")
