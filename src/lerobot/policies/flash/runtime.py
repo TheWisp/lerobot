@@ -141,6 +141,7 @@ class FlashRuntime:
         live_telemetry: FlashLiveTelemetry | None = None,
         grasp_symmetries: tuple[AxialSymmetry, ...] = (),
         observation_quality: SurfaceObservationConfig | None = None,
+        planner_process_factory: Callable[[], JointPlanner] | None = None,
     ) -> None:
         self._validate_bindings(skill, references)
         self.skill = skill
@@ -336,7 +337,9 @@ class FlashRuntime:
             clock=self.session.motor.clock,
         )
         planner = JointPlanner(kinematics, arm_joint_names, gripper_joint_name, planner_limits)
-        self.planner = PlannerWorker(planner, self.session.publish_plan)
+        self.planner = PlannerWorker(
+            planner, self.session.publish_plan, process_factory=planner_process_factory
+        )
         self.coordinator = PlanningCoordinator(
             self.session,
             self.planner,

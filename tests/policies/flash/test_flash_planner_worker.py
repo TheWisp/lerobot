@@ -12,6 +12,17 @@ from lerobot.policies.flash.skill import Interval, MotionMode, Relation, Spatial
 from lerobot.policies.flash.trajectory import ConnectionTrajectory, Evidence, PoseEstimate
 
 
+class ProcessActionPlanner:
+    def plan(self, interval, *, seed_deg, **_kwargs):
+        return [TimedAction(0, {"joint.pos": float(seed_deg[0])}, interval.name)]
+
+
+class SlowProcessActionPlanner(ProcessActionPlanner):
+    def plan(self, interval, *, seed_deg, **kwargs):
+        time.sleep(0.25)
+        return super().plan(interval, seed_deg=seed_deg, **kwargs)
+
+
 def request(revision):
     identity = np.eye(4)
     interval = Interval(
@@ -79,6 +90,53 @@ def test_worker_stamps_queued_commands_with_the_pose_snapshot_used_for_ik():
         assert evidence.reference_source_frame_id == 5
         assert evidence.reference_source_time_s == 0.1
         assert evidence.reference_available_time_s == 0.2
+    finally:
+        worker.close()
+
+
+def test_isolated_worker_returns_the_same_pose_stamped_plan():
+    published = []
+    worker = PlannerWorker(
+        ProcessActionPlanner(),
+        lambda revision, actions: published.append((revision, actions)),
+        process_factory=ProcessActionPlanner,
+    )
+    worker.start()
+    try:
+        base = request(1)
+        reference = replace(base.reference, source_frame_id=5, source_time_s=0.1, available_time_s=0.2)
+        worker.submit(replace(base, reference=reference, pose_revision=7))
+        deadline = time.monotonic() + 10
+        while not published and worker.fatal_error is None:
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+        assert worker.fatal_error is None
+        assert worker.last_result is not None and worker.last_result.error is None
+        assert published[0][1][0].plan_evidence.pose_revision == 7
+        assert published[0][1][0].plan_evidence.reference_source_frame_id == 5
+    finally:
+        worker.close()
+
+
+def test_isolated_worker_discards_superseded_solve_and_pending_request():
+    published = []
+    worker = PlannerWorker(
+        SlowProcessActionPlanner(),
+        lambda revision, actions: published.append(revision),
+        process_factory=SlowProcessActionPlanner,
+    )
+    worker.start()
+    try:
+        worker.submit(request(1))
+        time.sleep(0.1)
+        worker.submit(request(2))
+        worker.submit(request(3))
+        deadline = time.monotonic() + 10
+        while worker.last_result is None or worker.last_result.revision != 3:
+            assert worker.fatal_error is None
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+        assert published == [3]
     finally:
         worker.close()
 

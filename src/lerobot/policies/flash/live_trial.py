@@ -33,6 +33,7 @@ from lerobot.policies.flash.prepared import PreparedFlashSkill, snapshot_prepare
 from lerobot.policies.flash.recording import FlashEpisodeWriter, RecorderWorker
 from lerobot.policies.flash.rgbd_source import LeRobotRGBDSource
 from lerobot.policies.flash.runtime import AttachmentRuntimeLimits, FlashRuntime
+from lerobot.policies.flash.so107_planner_factory import SO107PlannerFactory
 from lerobot.policies.flash.vision_pipeline import VisionBackendFactory, VisionPipelineConfig
 from lerobot.robots.obs_stream import publish_external_observation
 from lerobot.robots.so107_description.calibrated_kinematics import make_calibrated_so107_kinematics
@@ -170,6 +171,7 @@ def trial(
     if arm != settings["robot_arm"]:
         raise ValueError("robot arm and calibrated arm differ")
     telemetry: FlashLiveTelemetry | None = None
+    primary_error: BaseException | None = None
     try:
         robot.connect(calibrate=False)
         strict_robot = StrictMotorState(robot)
@@ -297,6 +299,17 @@ def trial(
             ),
         )
         attachment_policy = AttachmentRuntimeLimits.from_config(settings["attachment"])
+        planner_limits = PlannerLimits(
+            tuple(settings["joint_speed_deg_s"]),
+            settings["position_error_m"],
+            np.deg2rad(settings["rotation_error_deg"]),
+            settings["max_pose_age_s"],
+            allow_predicted_reference=True,
+            ik_refinement_attempts=settings["ik_refinement_attempts"],
+            max_attachment_age_s=attachment_policy.max_attachment_age_s,
+            max_connection_ik_samples=settings["max_connection_ik_samples"],
+            max_connection_retimings=settings["max_connection_retimings"],
+        )
         runtime = FlashRuntime(
             skill=bundle.skill,
             robot=strict_robot,
@@ -311,16 +324,9 @@ def trial(
             kinematics=kin,
             arm_joint_names=arm_names,
             gripper_joint_name="gripper",
-            planner_limits=PlannerLimits(
-                tuple(settings["joint_speed_deg_s"]),
-                settings["position_error_m"],
-                np.deg2rad(settings["rotation_error_deg"]),
-                settings["max_pose_age_s"],
-                allow_predicted_reference=True,
-                ik_refinement_attempts=settings["ik_refinement_attempts"],
-                max_attachment_age_s=attachment_policy.max_attachment_age_s,
-                max_connection_ik_samples=settings["max_connection_ik_samples"],
-                max_connection_retimings=settings["max_connection_retimings"],
+            planner_limits=planner_limits,
+            planner_process_factory=SO107PlannerFactory(
+                calibration, arm, arm_names, state["gripper.pos"], planner_limits
             ),
             buffer_config=PlanBufferConfig(
                 settings["lead_ticks"],
@@ -530,16 +536,44 @@ def trial(
             }
         )
         return report
+    except BaseException as exc:
+        primary_error = exc
+        raise
     finally:
+        cleanup_errors = []
         if telemetry is not None:
-            telemetry.close()
-        if robot.is_connected:
-            robot.disconnect()
-        else:
+            try:
+                telemetry.close()
+            except Exception as exc:
+                cleanup_errors.append(exc)
+        try:
+            if robot.is_connected:
+                robot.disconnect()
+            else:
+                if camera.is_connected:
+                    camera.disconnect()
+                if robot.bus.is_connected:
+                    robot.bus.disconnect()
+        except Exception as exc:
+            cleanup_errors.append(exc)
             if camera.is_connected:
-                camera.disconnect()
+                try:
+                    camera.disconnect()
+                except Exception as fallback_exc:
+                    cleanup_errors.append(fallback_exc)
             if robot.bus.is_connected:
-                robot.bus.disconnect()
+                # A motor fault can reject torque-disable writes during
+                # disconnect. Still close the serial port, preserving the
+                # original connection or trial error for diagnosis.
+                try:
+                    robot.bus.disconnect(disable_torque=False)
+                except Exception as fallback_exc:
+                    cleanup_errors.append(fallback_exc)
+        if cleanup_errors:
+            if primary_error is None:
+                raise cleanup_errors[0]
+            for cleanup_error in cleanup_errors:
+                primary_error.add_note(f"FLASH cleanup also failed: {cleanup_error}")
 
 
 def main() -> None:

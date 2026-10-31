@@ -7,8 +7,10 @@ from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass, replace
 from enum import Enum
+from multiprocessing import get_context
 from queue import Empty, Full, Queue
 from threading import Lock, Thread
+from typing import Any
 
 import numpy as np
 
@@ -82,6 +84,110 @@ class PlanFailureKind(str, Enum):
     INVALID = "invalid"
 
 
+def _compute_plan(planner: JointPlanner, request: PlanRequest) -> tuple[PlanResult, list[TimedAction]]:
+    """One planner request, shared by the local and isolated workers."""
+    try:
+        attachment_pose = request.attachment.gripper_from_object if request.attachment is not None else None
+        turn_angle = request.turn_angle_rad
+        if turn_angle is None:
+            turn_angle = select_turn_angle(
+                planner,
+                request.interval,
+                request.seed_deg,
+                request.reference.pose,
+                attachment_pose,
+                request.period_s,
+            )
+        connection = request.connection
+        if connection is not None and connection.turn_angle_rad != turn_angle:
+            connection = ConnectionTrajectory.begin(
+                request.interval,
+                planner.kinematics.forward_kinematics(request.seed_deg),
+                request.reference.pose,
+                attachment_pose,
+                request.epoch_s + request.start_tick * request.period_s,
+                turn_angle,
+            )
+        actions = planner.plan(
+            request.interval,
+            start_tick=request.start_tick,
+            count=request.count,
+            epoch_s=request.epoch_s,
+            period_s=request.period_s,
+            interval_start_s=request.interval_start_s,
+            seed_deg=request.seed_deg,
+            reference=request.reference,
+            attachment=request.attachment,
+            connection=connection,
+            issued_events=request.issued_events,
+            turn_angle_rad=turn_angle,
+        )
+        if request.pose_revision is not None:
+            evidence = PlanEvidence(
+                pose_revision=request.pose_revision,
+                reference_role=request.reference.role,
+                reference_version=request.reference.reference_version,
+                reference_source_frame_id=request.reference.source_frame_id,
+                reference_source_time_s=request.reference.source_time_s,
+                reference_available_time_s=request.reference.available_time_s,
+                attachment_reference_version=(
+                    request.attachment.reference_version if request.attachment is not None else None
+                ),
+                attachment_source_time_s=(
+                    request.attachment.source_time_s if request.attachment is not None else None
+                ),
+                attachment_available_time_s=(
+                    request.attachment.available_time_s if request.attachment is not None else None
+                ),
+            )
+            actions = [replace(action, plan_evidence=evidence) for action in actions]
+        return (
+            PlanResult(
+                request.revision,
+                len(actions),
+                None,
+                connection=connection,
+                turn_angle_rad=turn_angle,
+                turn_rule_id=(
+                    request.interval.turn_at_point.rule_id
+                    if request.interval.turn_at_point is not None
+                    else None
+                ),
+            ),
+            actions,
+        )
+    except MissingEvidenceError as exc:
+        result = PlanResult(
+            request.revision, 0, str(exc), PlanFailureKind.MISSING_EVIDENCE, request.connection
+        )
+    except DemonstratedEntryDiscontinuityError as exc:
+        result = PlanResult(
+            request.revision, 0, str(exc), PlanFailureKind.ENTRY_DISCONTINUITY, request.connection
+        )
+    except InfeasibleTrajectoryError as exc:
+        result = PlanResult(request.revision, 0, str(exc), PlanFailureKind.INFEASIBLE, request.connection)
+    except PlanRejectedError as exc:
+        result = PlanResult(request.revision, 0, str(exc), PlanFailureKind.REJECTED, request.connection)
+    except ValueError as exc:
+        result = PlanResult(request.revision, 0, str(exc), PlanFailureKind.INVALID, request.connection)
+    return result, []
+
+
+def _planner_process_main(factory: Callable[[], JointPlanner], requests: Any, results: Any) -> None:
+    try:
+        planner = factory()
+        results.put(("ready",))
+        # This is a multiprocessing queue, not an HTTP request. The parent
+        # sends a sentinel on close and terminates the child on timeout.
+        while (request := requests.get()) is not None:  # nosec B113
+            started_s = time.perf_counter()
+            result, actions = _compute_plan(planner, request)
+            results.put(("result", request.revision, result, actions, time.perf_counter() - started_s))
+        results.put(("stopped",))
+    except Exception as exc:
+        results.put(("fatal", f"{type(exc).__name__}: {exc}"))
+
+
 class PlannerWorker:
     """Replan off the motor owner and atomically replace only unissued ticks.
 
@@ -96,11 +202,19 @@ class PlannerWorker:
         self,
         planner: JointPlanner,
         publish: Callable[[int, list[TimedAction]], None],
+        *,
+        process_factory: Callable[[], JointPlanner] | None = None,
     ) -> None:
         self.planner = planner
         self.publish = publish
+        self.process_factory = process_factory
         self._requests: Queue[PlanRequest | None] = Queue(maxsize=1)
         self._thread = Thread(target=self._run, name="flash-joint-planner", daemon=False)
+        self._process: Any = None
+        self._process_requests: Any = None
+        self._process_results: Any = None
+        self._sender_thread: Thread | None = None
+        self._closing = False
         self._lock = Lock()
         self._last_result: PlanResult | None = None
         self._fatal: Exception | None = None
@@ -124,6 +238,32 @@ class PlannerWorker:
     def start(self) -> None:
         if self._started:
             raise RuntimeError("planner worker already started")
+        if self.process_factory is not None:
+            context = get_context("spawn")
+            self._process_requests = context.Queue(maxsize=1)
+            self._process_results = context.Queue()
+            self._process = context.Process(
+                target=_planner_process_main,
+                args=(self.process_factory, self._process_requests, self._process_results),
+                name="flash-joint-planner-process",
+            )
+            self._process.start()
+            try:
+                ready = self._process_results.get(timeout=30)
+            except Empty as exc:
+                self._process.terminate()
+                self._process.join()
+                raise RuntimeError("isolated planner did not initialize") from exc
+            if ready != ("ready",):
+                self._process.join(timeout=1)
+                raise RuntimeError(f"isolated planner initialization failed: {ready}")
+            self._thread = Thread(
+                target=self._receive_process, name="flash-joint-planner-results", daemon=False
+            )
+            self._sender_thread = Thread(
+                target=self._send_process, name="flash-joint-planner-requests", daemon=False
+            )
+            self._sender_thread.start()
         self._thread.start()
         self._started = True
 
@@ -145,122 +285,95 @@ class PlannerWorker:
                     raise RuntimeError("planner request handoff is busy") from exc
             self._newest_requested = request.revision
 
+    def _send_process(self) -> None:
+        assert self._process_requests is not None
+        while (request := self._requests.get()) is not None:
+            while not self._closing:
+                with self._lock:
+                    superseded = request.revision < self._newest_requested
+                    if superseded:
+                        self.superseded += 1
+                if superseded:
+                    break
+                try:
+                    self._process_requests.put(request, timeout=0.05)
+                    break
+                except Full:
+                    continue
+        while self._process is not None and self._process.is_alive():
+            try:
+                self._process_requests.put(None, timeout=0.05)
+                return
+            except Full:
+                continue
+
+    def _commit_result(
+        self,
+        revision: int,
+        result: PlanResult,
+        actions: list[TimedAction],
+        compute_s: float,
+    ) -> None:
+        with self._lock:
+            if revision < self._newest_requested:
+                result = PlanResult(
+                    revision,
+                    0,
+                    "superseded by a newer pose or plan",
+                    PlanFailureKind.SUPERSEDED,
+                )
+            elif result.error is None:
+                try:
+                    self.publish(revision, actions)
+                except PlanRejectedError as exc:
+                    result = PlanResult(revision, 0, str(exc), PlanFailureKind.REJECTED, result.connection)
+            self.completed += 1
+            self.compute_total_s += compute_s
+            self.compute_max_s = max(self.compute_max_s, compute_s)
+            self._last_result = replace(result, compute_s=compute_s)
+
     def _run(self) -> None:
         while (request := self._requests.get()) is not None:
             started_s = time.perf_counter()
             try:
-                attachment_pose = (
-                    request.attachment.gripper_from_object if request.attachment is not None else None
-                )
-                turn_angle = request.turn_angle_rad
-                if turn_angle is None:
-                    turn_angle = select_turn_angle(
-                        self.planner,
-                        request.interval,
-                        request.seed_deg,
-                        request.reference.pose,
-                        attachment_pose,
-                        request.period_s,
-                    )
-                connection = request.connection
-                if connection is not None and connection.turn_angle_rad != turn_angle:
-                    connection = ConnectionTrajectory.begin(
-                        request.interval,
-                        self.planner.kinematics.forward_kinematics(request.seed_deg),
-                        request.reference.pose,
-                        attachment_pose,
-                        request.epoch_s + request.start_tick * request.period_s,
-                        turn_angle,
-                    )
-                actions = self.planner.plan(
-                    request.interval,
-                    start_tick=request.start_tick,
-                    count=request.count,
-                    epoch_s=request.epoch_s,
-                    period_s=request.period_s,
-                    interval_start_s=request.interval_start_s,
-                    seed_deg=request.seed_deg,
-                    reference=request.reference,
-                    attachment=request.attachment,
-                    connection=connection,
-                    issued_events=request.issued_events,
-                    turn_angle_rad=turn_angle,
-                )
-                if request.pose_revision is not None:
-                    evidence = PlanEvidence(
-                        pose_revision=request.pose_revision,
-                        reference_role=request.reference.role,
-                        reference_version=request.reference.reference_version,
-                        reference_source_frame_id=request.reference.source_frame_id,
-                        reference_source_time_s=request.reference.source_time_s,
-                        reference_available_time_s=request.reference.available_time_s,
-                        attachment_reference_version=(
-                            request.attachment.reference_version if request.attachment is not None else None
-                        ),
-                        attachment_source_time_s=(
-                            request.attachment.source_time_s if request.attachment is not None else None
-                        ),
-                        attachment_available_time_s=(
-                            request.attachment.available_time_s if request.attachment is not None else None
-                        ),
-                    )
-                    actions = [replace(action, plan_evidence=evidence) for action in actions]
-                with self._lock:
-                    if request.revision < self._newest_requested:
-                        result = PlanResult(
-                            request.revision,
-                            0,
-                            "superseded by a newer pose or plan",
-                            PlanFailureKind.SUPERSEDED,
-                        )
-                    else:
-                        self.publish(request.revision, actions)
-                        result = PlanResult(
-                            request.revision,
-                            len(actions),
-                            None,
-                            connection=connection,
-                            turn_angle_rad=turn_angle,
-                            turn_rule_id=(
-                                request.interval.turn_at_point.rule_id
-                                if request.interval.turn_at_point is not None
-                                else None
-                            ),
-                        )
-            except MissingEvidenceError as exc:
-                result = PlanResult(
-                    request.revision, 0, str(exc), PlanFailureKind.MISSING_EVIDENCE, request.connection
-                )
-            except DemonstratedEntryDiscontinuityError as exc:
-                result = PlanResult(
-                    request.revision, 0, str(exc), PlanFailureKind.ENTRY_DISCONTINUITY, request.connection
-                )
-            except InfeasibleTrajectoryError as exc:
-                result = PlanResult(
-                    request.revision, 0, str(exc), PlanFailureKind.INFEASIBLE, request.connection
-                )
-            except PlanRejectedError as exc:
-                result = PlanResult(
-                    request.revision, 0, str(exc), PlanFailureKind.REJECTED, request.connection
-                )
-            except ValueError as exc:
-                result = PlanResult(
-                    request.revision, 0, str(exc), PlanFailureKind.INVALID, request.connection
-                )
+                result, actions = _compute_plan(self.planner, request)
+                self._commit_result(request.revision, result, actions, time.perf_counter() - started_s)
             except Exception as exc:
                 with self._lock:
                     self._fatal = exc
                 return
-            with self._lock:
-                compute_s = time.perf_counter() - started_s
-                self.completed += 1
-                self.compute_total_s += compute_s
-                self.compute_max_s = max(self.compute_max_s, compute_s)
-                self._last_result = replace(result, compute_s=compute_s)
+
+    def _receive_process(self) -> None:
+        assert self._process_results is not None
+        assert self._process is not None
+        while True:
+            try:
+                message = self._process_results.get(timeout=0.2)
+            except Empty:
+                if not self._process.is_alive():
+                    if not self._closing:
+                        with self._lock:
+                            self._fatal = RuntimeError("isolated planner exited without a result")
+                    return
+                continue
+            if message[0] == "stopped":
+                return
+            if message[0] == "fatal":
+                with self._lock:
+                    self._fatal = RuntimeError(message[1])
+                return
+            _, revision, result, actions, compute_s = message
+            try:
+                self._commit_result(revision, result, actions, compute_s)
+            except Exception as exc:
+                with self._lock:
+                    self._fatal = exc
+                return
 
     def close(self, timeout_s: float = 5.0) -> None:
         if not self._started:
             return
+        self._closing = True
         try:
             self._requests.put_nowait(None)
         except Full:
@@ -268,7 +381,22 @@ class PlannerWorker:
                 self._requests.get_nowait()
             with suppress(Full):
                 self._requests.put(None, timeout=min(timeout_s, 0.5))
+        if self._process is not None:
+            assert self._sender_thread is not None
+            self._sender_thread.join(timeout_s)
+            if self._sender_thread.is_alive():
+                self._process.terminate()
+                self._process.join(timeout_s)
+                raise TimeoutError("isolated planner request sender did not stop")
+            self._process.join(timeout_s)
+            if self._process.is_alive():
+                self._process.terminate()
+                self._process.join(timeout_s)
+                raise TimeoutError("isolated planner did not stop")
         self._thread.join(timeout_s)
         if self._thread.is_alive():
             raise TimeoutError("planner worker did not stop")
+        if self._process_requests is not None:
+            self._process_requests.close()
+            self._process_results.close()
         self._started = False

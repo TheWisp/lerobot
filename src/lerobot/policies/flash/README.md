@@ -444,7 +444,10 @@ The executable core already separates:
 - an asynchronous IK producer that supersedes pending replan requests while
   the motor owner keeps consuming the already accepted queue; a solve made
   stale by a newer request is discarded before publication. The producer
-  can snapshot the committed prefix and seed IK at a future splice tick;
+  can snapshot the committed prefix and seed IK at a future splice tick. The
+  SO-107 Test launcher builds a second kinematics workspace in a spawned
+  planner process; the parent still validates and publishes its returned
+  chunks. This isolates long IK searches from camera and scene tracking;
 - a planning coordinator that fills that queue ahead of the motor, retains a
   generated connection's clock across ordinary refills, retargets from the
   committed joint prefix when a reference changes, and interrupts if a pose
@@ -550,6 +553,16 @@ contact-pose accuracy.
 The [recorded-evidence audit](docs/evidence_status.md) separates demo extraction,
 offline pose checks, visually successful sealed-prototype runs and the
 interrupted physical trials of this redesign.
+
+The 2026-10-31 insertion trial lifted the dowel, then stopped at the next
+connection. The ring group still had measured support, but the last processed
+ring pose was nearly three seconds old. Replaying that turn search took about
+3.9 seconds and made a concurrent scene-tracking call pause for up to 1.1
+seconds in the same process. Running the same search in another process kept
+the scene call below 3.4 ms in that replay. The search itself still reported
+no feasible turn; process isolation prevents false pose loss from compute
+contention but does not make an infeasible path reachable. New trial datasets
+record slow camera and anchor stages in `flash/v1/causal_timing_episode_000000.json`.
 
 The [scene-estimator contract](docs/architecture.md#one-scene-estimator-several-evidence-sources) is not fully implemented. The current code has one publisher when causal tracking is enabled, but it still treats a backend's candidate `PoseEstimate` as an accepted six-axis observation. In particular, the RGB-D backend keeps its own previous candidate for shape-continuity checks, and the scene service has no general rule for comparing a new candidate with visible depth, point motion, a group prediction and unresolved symmetry at the same source time. Candidate dispositions are recorded. Delayed direct poses within retained history are replayed in source order in a bounded shadow calculation, but this is not yet a full event replay across all evidence types.
 
