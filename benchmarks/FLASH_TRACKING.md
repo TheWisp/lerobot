@@ -157,6 +157,25 @@ the measured-point gap from 0.92 to 0.78 mm across 211 other observed frames,
 while the projected-surface gap stayed about 1.04 mm. This shows the check is
 not tied to the dowel, but it still lacks independent pose labels.
 
+An independent registration probe used only the dowel's frame-100 measured
+surface, each candidate frame's mask and depth, and the existing whole-surface
+fit. Four geometry-based initializations were refined and ranked by fit cost;
+the prepared pose trace was used **only afterward** for comparison. At frame
+150 the fitted and recorded surfaces had centers 2.6 mm apart, but the
+independent fit was _worse_ against measured depth (4.13 versus 2.77 mm p90).
+At frame 500 their centers were 1.4 mm apart and the independent fit improved
+the visible-point distance (3.89 versus 7.93 mm p90), but it differed by
+165.5° in orientation (possibly an interchangeable-end assignment), and the
+winning solver branch did not converge. The
+large transform-translation differences from this probe are not physical
+object displacements: this saved object's frame origin is near the original
+camera, so rotation about the object moves the arbitrary origin. Geometry
+alone has not yet established the stable point identity needed to add that
+later view. These images show the measured mask boundary in cyan and the
+saved frame-100 surface projected in red under the two placements:
+[frame 150](../docs/proofs/flash-reference-view-registration/dowel-frame-150.jpg),
+[frame 500](../docs/proofs/flash-reference-view-registration/dowel-frame-500.jpg).
+
 From the repository root, in an environment with FLASH's inference dependencies:
 
 ```bash
