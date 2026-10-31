@@ -528,21 +528,29 @@ function _flashEditorRender() {
                 const surface = document.createElement('p');
                 surface.textContent = `Measured points to surface: ${mm(score.first_view_measured_p90_median_m)} → ${mm(score.combined_views_measured_p90_median_m)}`;
                 box.append(surface);
-                const depth = document.createElement('p');
-                depth.textContent = `Surface to measured depth: ${mm(score.first_view_reverse_p90_median_m)} → ${mm(score.combined_views_reverse_p90_median_m)}`;
-                box.append(depth);
+                const front = document.createElement('p');
+                front.textContent = `Surface closer than measured depth: ${mm(score.first_view_front_p90_median_m)} → ${mm(score.combined_views_front_p90_median_m)}`;
+                box.append(front);
+                const behind = document.createElement('p');
+                behind.textContent = `Surface farther than measured depth: ${mm(score.first_view_behind_p90_median_m)} → ${mm(score.combined_views_behind_p90_median_m)}`;
+                box.append(behind);
                 const caveat = document.createElement('p');
-                caveat.textContent = 'The same estimated poses placed and checked this view. This does not prove its position is correct.';
+                caveat.textContent = 'A farther surface may be hidden. A closer surface conflicts more strongly. The same estimated poses placed and checked this view, so neither value proves accuracy.';
                 box.append(caveat);
             }
-            if (candidate?.status === 'registration_hypothesis' &&
-                result.result.largest_reverse_conflicts?.length) {
-                const label = document.createElement('p');
-                label.textContent = 'Check frames with the largest depth disagreement:';
-                box.append(label);
-                for (const row of result.result.largest_reverse_conflicts.slice(0, 3)) {
-                    _flashEditorButton(box, `Frame ${row.frame_index}`, () => _flashEditorJump(row.frame_index));
+            if (candidate?.status === 'registration_hypothesis') {
+                const details = document.createElement('details');
+                details.append(Object.assign(document.createElement('summary'), {textContent: 'Inspect difference by frame'}));
+                for (const [label, rows] of [
+                    ['Surface closer than depth', result.result.largest_front_conflicts || []],
+                    ['Surface farther than depth', result.result.largest_behind_gaps || []],
+                ]) {
+                    if (!rows.length) continue;
+                    details.append(Object.assign(document.createElement('p'), {textContent: label}));
+                    for (const row of rows.slice(0, 3))
+                        _flashEditorButton(details, `Frame ${row.frame_index}`, () => _flashEditorJump(row.frame_index));
                 }
+                box.append(details);
             }
             references.append(box);
         }

@@ -62,10 +62,12 @@ playback. Raw demo setup also shows object naming. Object corrections, tracker
 experiments and numeric settings are optional.
 In **Objects → Clear views**, **Check this view** compares a selected frame
 against the saved first reference across other observed demo frames. It shows
-both how well measured points fit the saved surface and how well the projected
-surface agrees with depth. The check uses the prepared pose trace to place the
-candidate, so it can expose contradictions but cannot independently prove its
-pose; it does not modify the skill or include unsaved edits. Older sealed
+how well measured points fit the saved surface and separates projected surface
+that falls in front of measured depth from surface behind it. The latter may
+simply be hidden; neither score alone establishes a correct pose. The check
+uses the prepared pose trace to place and check the candidate, so it cannot
+independently prove its accuracy. It does not modify the skill or include
+unsaved edits. Older sealed
 preparations can rebuild their first surface from the saved reference mask.
 The path shown at each key frame is the path the importer uses. Older prepared
 skills that implicitly replayed a grasp interval open with that interval

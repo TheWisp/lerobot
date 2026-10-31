@@ -133,21 +133,38 @@ def review_sealed_reference_view(
         config.surface_reference_max_points_per_view,
     )
     comparisons = details[0]["comparisons"]
-    reverse_worsened = sorted(
+    depth_rows = [
+        row
+        for row in comparisons
+        if row["first_view"]["reference_to_depth_p90_m"] is not None
+        and row["combined_views"]["reference_to_depth_p90_m"] is not None
+    ]
+    front_worsened = sorted(
         (
             row
-            for row in comparisons
-            if row["first_view"]["reference_to_depth_p90_m"] is not None
-            and row["combined_views"]["reference_to_depth_p90_m"] is not None
+            for row in depth_rows
+            if row["combined_views"]["reference_in_front_p90_m"]
+            > row["first_view"]["reference_in_front_p90_m"]
         ),
-        key=lambda row: row["combined_views"]["reference_to_depth_p90_m"]
-        - row["first_view"]["reference_to_depth_p90_m"],
+        key=lambda row: row["combined_views"]["reference_in_front_p90_m"]
+        - row["first_view"]["reference_in_front_p90_m"],
+        reverse=True,
+    )
+    behind_worsened = sorted(
+        (
+            row
+            for row in depth_rows
+            if row["combined_views"]["reference_behind_p90_m"] > row["first_view"]["reference_behind_p90_m"]
+        ),
+        key=lambda row: row["combined_views"]["reference_behind_p90_m"]
+        - row["first_view"]["reference_behind_p90_m"],
         reverse=True,
     )
     return {
         "reference_frame_index": snippet.frame_index,
         "first_view_points": len(model.view_points_object_m[0]),
         "candidate": summaries[0],
-        "largest_reverse_conflicts": reverse_worsened[:5],
+        "largest_front_conflicts": front_worsened[:5],
+        "largest_behind_gaps": behind_worsened[:5],
         "disclaimer": "Same pose trace registered and checked this view; review cannot establish independent accuracy.",
     }

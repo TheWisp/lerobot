@@ -52,7 +52,7 @@ def recorded_views():
     return intrinsics, base_from_camera, model, estimates, measured
 
 
-def test_candidate_review_keeps_first_reference_and_exposes_reverse_depth_conflict(recorded_views):
+def test_candidate_review_keeps_first_reference_and_separates_depth_directions(recorded_views):
     intrinsics, base_from_camera, model, estimates, measured = recorded_views
     original = model.view_points_object_m[0].copy()
     summaries, details = review_reference_view_candidates(
@@ -72,6 +72,11 @@ def test_candidate_review_keeps_first_reference_and_exposes_reverse_depth_confli
     # projected surface. Both directions must remain visible to the reviewer.
     at_430 = next(row for row in details[0]["comparisons"] if row["frame_index"] == 430)
     assert at_430["combined_views"]["reference_to_depth_p90_m"] > 0.1
+    for comparison in (at_430["first_view"], at_430["combined_views"]):
+        assert comparison["reference_in_front_p90_m"] is not None
+        assert comparison["reference_behind_p90_m"] is not None
+        assert comparison["reference_in_front_p90_m"] >= 0
+        assert comparison["reference_behind_p90_m"] >= 0
     np.testing.assert_array_equal(model.view_points_object_m[0], original)
     assert len(model.view_points_object_m) == 1
 

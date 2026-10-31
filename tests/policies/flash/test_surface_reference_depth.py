@@ -14,7 +14,26 @@ from lerobot.policies.flash.surface_reference import (
     RegisteredSurfaceModel,
     registered_surface_agreement,
 )
-from lerobot.policies.flash.surface_tracking import SurfaceTrackingSession, reference_depth_support
+from lerobot.policies.flash.surface_tracking import (
+    SurfaceTrackingSession,
+    reference_depth_residual_mm,
+    reference_depth_support,
+)
+
+
+def test_reference_depth_keeps_front_and_hidden_surface_errors_distinct():
+    intrinsics = np.eye(3)
+    depth = np.ones((3, 3), dtype=float)
+    clean = np.zeros_like(depth, dtype=bool)
+    clean[1, 1] = True
+    front = np.array([[0.99, 0.99, 0.99]])
+    hidden = np.array([[1.02, 1.02, 1.02]])
+    np.testing.assert_allclose(reference_depth_residual_mm(front, clean, depth, intrinsics), [-10])
+    np.testing.assert_allclose(reference_depth_residual_mm(hidden, clean, depth, intrinsics), [20])
+    # Multiple saved surfaces on one ray compare only the frontmost one.
+    np.testing.assert_allclose(
+        reference_depth_residual_mm(np.concatenate((front, hidden)), clean, depth, intrinsics), [-10]
+    )
 
 
 def test_recorded_gamepad_clean_depth_separates_supported_and_unsupported_carry_frames():

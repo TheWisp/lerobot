@@ -1080,9 +1080,14 @@ def test_run_flash_lists_demos_and_shows_extracted_pose_overlay(gui_page):
                         "combined_views_measured_p90_median_m": 0.001,
                         "first_view_reverse_p90_median_m": 0.003,
                         "combined_views_reverse_p90_median_m": 0.009,
+                        "first_view_front_p90_median_m": 0.0,
+                        "combined_views_front_p90_median_m": 0.0,
+                        "first_view_behind_p90_median_m": 0.003,
+                        "combined_views_behind_p90_median_m": 0.009,
                     },
                 },
-                "largest_reverse_conflicts": [{"frame_index": 4}],
+                "largest_front_conflicts": [],
+                "largest_behind_gaps": [{"frame_index": 4}],
             }
         )
 
@@ -1115,8 +1120,12 @@ def test_run_flash_lists_demos_and_shows_extracted_pose_overlay(gui_page):
         }
     ]
     assert "2.00 mm → 1.00 mm" in page.locator("#flash-demo-editor").inner_text()
-    assert "3.00 mm → 9.00 mm" in page.locator("#flash-demo-editor").inner_text()
+    assert (
+        "Surface farther than measured depth: 3.00 mm → 9.00 mm"
+        in page.locator("#flash-demo-editor").inner_text()
+    )
     assert page.locator("#flash-demo-editor-change-status").inner_text() == "Viewing saved preparation"
+    page.locator("#flash-reference-review-result details summary").click()
     page.locator("#flash-reference-review-result").get_by_role("button", name="Frame 4").click()
     assert page.evaluate("_flashEditorCurrentFrame().frame_index") == 4
     assert page.locator(

@@ -65,6 +65,24 @@ def reference_depth_support(
     This reverse check uses only pixels retained by the existing mask/depth
     observation filter; occluded or invalid pixels supply no positive evidence.
     """
+    residual_mm = reference_depth_residual_mm(
+        reference_camera_points, clean_depth_pixels, depth_m, intrinsics
+    )
+    return len(residual_mm), float(np.percentile(np.abs(residual_mm), 90)) if len(residual_mm) else None
+
+
+def reference_depth_residual_mm(
+    reference_camera_points: np.ndarray,
+    clean_depth_pixels: np.ndarray,
+    depth_m: np.ndarray,
+    intrinsics: np.ndarray,
+) -> np.ndarray:
+    """Signed frontmost-reference minus measured depth, in millimetres.
+
+    Negative means the saved surface lies in front of measured depth. Positive
+    may mean a hidden reference surface, so it is not a free-space conflict.
+    Only clean pixels on the measured object's mask are compared.
+    """
     positive = np.isfinite(reference_camera_points).all(axis=1) & (reference_camera_points[:, 2] > 0)
     projected = np.rint(project(reference_camera_points[positive], intrinsics)).astype(int)
     points = reference_camera_points[positive]
@@ -85,8 +103,7 @@ def reference_depth_support(
     np.minimum.at(front_depth, inverse, points[:, 2])
     y, x = np.divmod(pixels, width)
     clean = clean_depth_pixels[y, x]
-    residual_mm = np.abs(depth_m[y[clean], x[clean]] - front_depth[clean]) * 1000
-    return len(residual_mm), float(np.percentile(residual_mm, 90)) if len(residual_mm) else None
+    return (front_depth[clean] - depth_m[y[clean], x[clean]]) * 1000
 
 
 class SurfaceTrackingSession:

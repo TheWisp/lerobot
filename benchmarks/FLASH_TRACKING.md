@@ -127,19 +127,25 @@ after occlusion and reject incomplete or contradictory surface support. Merely
 loosening the existing 5 mm acceptance limit would publish an unverified pose.
 
 A review-only check on the insertion demo illustrates why new reference views
-need two checks. The first asks how closely measured points fit the saved
-surface; the second asks whether the saved surface projects onto measured
-depth. With 1,427 clean points from the prepared mask at dowel frame 100 as
+need more than a one-way fit. The first score asks how closely measured points
+fit the saved surface. The reverse check projects the saved surface into the
+recorded depth image. A surface in front of measured depth is more concerning;
+a surface behind it may simply be hidden. With 1,427 clean points from the
+prepared mask at dowel frame 100 as
 the first view, adding frame 150 reduced the median first gap across 272
 observed frames from 1.30 to 1.07 mm, and the second from 2.32 to 1.86 mm.
 Adding frame 500 or 550 also reduced the first gap (to 1.28 or 1.14 mm), but
-increased the second to 5.79 or 9.14 mm. These are **internal
-consistency scores**, not accuracy: the same prepared pose trace supplied both
+increased the absolute reverse gap to 5.79 or 9.14 mm. For frame 500, splitting
+the gap by direction shows a much smaller change in surface closer than measured
+depth (median 0.87 to 1.15 mm) than in surface farther away (2.13 to 4.44 mm).
+That increase alone does **not** show a contradiction: at frame 224, frame
+500's added surface projects mostly behind the observed dowel. These are **internal consistency
+scores**, not accuracy: the same prepared pose trace supplied both
 registration and evaluation. The reusable `reference_view_candidates` review
 function reports both checks without changing a prepared reference. The
 **Run → FLASH → Edit demo → Objects → Clear views** control now runs this
-check on the selected frame and links to frames with the largest depth
-disagreement. A later view needs independent support and explicit review
+check on the selected frame and separates surface in front of measured depth
+from surface behind it. A later view needs independent support and explicit review
 before demo preparation or a live trial can use it.
 The same control also ran on the gamepad–cube demo: gamepad frame 136 reduced
 the measured-point gap from 0.92 to 0.78 mm across 211 other observed frames,

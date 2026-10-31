@@ -16,6 +16,7 @@ from .geometry import inverse
 from .pose_evidence import SurfaceAgreement
 from .surface_observation import move, spatial_sample
 from .surface_reference import PreparedSurfaceAgreement, RegisteredSurfaceModel, registered_surface_agreement
+from .surface_tracking import reference_depth_residual_mm
 from .trajectory import Evidence, PoseEstimate
 
 
@@ -46,11 +47,23 @@ class MeasuredReferenceView:
             raise ValueError("reference view needs aligned depth, clean pixels and finite metric points")
 
 
-def _agreement(agreement: SurfaceAgreement) -> dict:
+def _agreement(
+    agreement: SurfaceAgreement,
+    reference_camera_points: np.ndarray,
+    frame: MeasuredReferenceView,
+    intrinsics: np.ndarray,
+) -> dict:
+    signed_mm = reference_depth_residual_mm(
+        reference_camera_points, frame.clean_depth_pixels, frame.depth_m, intrinsics
+    )
+    front_p90 = float(np.percentile(np.maximum(-signed_mm, 0), 90)) * 0.001 if len(signed_mm) else None
+    behind_p90 = float(np.percentile(np.maximum(signed_mm, 0), 90)) * 0.001 if len(signed_mm) else None
     return {
         "measured_to_reference_p90_m": agreement.measured_to_reference_p90_m,
         "reference_depth_pixels": agreement.reference_depth_pixels,
         "reference_to_depth_p90_m": agreement.reference_to_depth_p90_m,
+        "reference_in_front_p90_m": front_p90,
+        "reference_behind_p90_m": behind_p90,
     }
 
 
@@ -66,6 +79,10 @@ def _summary(rows: list[dict]) -> dict:
         "combined_views_measured_p90_median_m": middle("combined_views", "measured_to_reference_p90_m"),
         "first_view_reverse_p90_median_m": middle("first_view", "reference_to_depth_p90_m"),
         "combined_views_reverse_p90_median_m": middle("combined_views", "reference_to_depth_p90_m"),
+        "first_view_front_p90_median_m": middle("first_view", "reference_in_front_p90_m"),
+        "combined_views_front_p90_median_m": middle("combined_views", "reference_in_front_p90_m"),
+        "first_view_behind_p90_median_m": middle("first_view", "reference_behind_p90_m"),
+        "combined_views_behind_p90_median_m": middle("combined_views", "reference_behind_p90_m"),
         "measured_gap_improved_frames": sum(
             row["combined_views"]["measured_to_reference_p90_m"]
             < row["first_view"]["measured_to_reference_p90_m"]
@@ -176,9 +193,10 @@ def review_reference_view_candidates(
                     frame = measured(role, other)
                     if frame is None or len(frame.points_camera_m) < 3:
                         continue
+                    camera_from_object = camera_from_base @ other_estimate.pose
                     first_score, combined_score = registered_surface_agreement(
                         combined,
-                        camera_from_base @ other_estimate.pose,
+                        camera_from_object,
                         frame.points_camera_m,
                         frame.clean_depth_pixels,
                         frame.depth_m,
@@ -188,8 +206,18 @@ def review_reference_view_candidates(
                     rows.append(
                         {
                             "frame_index": other,
-                            "first_view": _agreement(first_score),
-                            "combined_views": _agreement(combined_score),
+                            "first_view": _agreement(
+                                first_score,
+                                move(first.view_points_object_m[0], camera_from_object),
+                                frame,
+                                intrinsics,
+                            ),
+                            "combined_views": _agreement(
+                                combined_score,
+                                move(prepared.all_points, camera_from_object),
+                                frame,
+                                intrinsics,
+                            ),
                         }
                     )
                 item["status"] = "registration_hypothesis"
