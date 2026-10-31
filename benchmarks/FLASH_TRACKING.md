@@ -139,7 +139,12 @@ increased the absolute reverse gap to 5.79 or 9.14 mm. For frame 500, splitting
 the gap by direction shows a much smaller change in surface closer than measured
 depth (median 0.87 to 1.15 mm) than in surface farther away (2.13 to 4.44 mm).
 That increase alone does **not** show a contradiction: at frame 224, frame
-500's added surface projects mostly behind the observed dowel. These are **internal consistency
+500's added surface projects mostly behind the observed dowel. This direction
+is not automatically safe either: in the recorded gamepad frame 430, a known
+bad pose has a 124 mm absolute reverse gap almost entirely behind the measured
+surface, despite a 2.35 mm measured-point-to-reference gap. The live acceptance
+gate therefore remains conservative until visibility or independent motion
+evidence can distinguish a hidden patch from a misplaced one. These are **internal consistency
 scores**, not accuracy: the same prepared pose trace supplied both
 registration and evaluation. The reusable `reference_view_candidates` review
 function reports both checks without changing a prepared reference. The

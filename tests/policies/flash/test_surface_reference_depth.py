@@ -16,6 +16,7 @@ from lerobot.policies.flash.surface_reference import (
 )
 from lerobot.policies.flash.surface_tracking import (
     SurfaceTrackingSession,
+    reference_depth_directional_support,
     reference_depth_residual_mm,
     reference_depth_support,
 )
@@ -34,6 +35,12 @@ def test_reference_depth_keeps_front_and_hidden_surface_errors_distinct():
     np.testing.assert_allclose(
         reference_depth_residual_mm(np.concatenate((front, hidden)), clean, depth, intrinsics), [-10]
     )
+    np.testing.assert_allclose(
+        reference_depth_directional_support(front, clean, depth, intrinsics), [1, 10, 10, 0]
+    )
+    np.testing.assert_allclose(
+        reference_depth_directional_support(hidden, clean, depth, intrinsics), [1, 20, 0, 20]
+    )
 
 
 def test_recorded_gamepad_clean_depth_separates_supported_and_unsupported_carry_frames():
@@ -50,19 +57,21 @@ def test_recorded_gamepad_clean_depth_separates_supported_and_unsupported_carry_
             clean = observation(depth, mask, intrinsics, config)["valid_image"]
             camera_from_object = camera_from_base @ data[f"pose_{frame_index}"]
             points = move(model, camera_from_object)
-            scores[frame_index] = reference_depth_support(points, clean, depth, intrinsics)
+            scores[frame_index] = reference_depth_directional_support(points, clean, depth, intrinsics)
 
     # The same saved reference is carried through all three frames. At 290 and
     # 300 a small clean patch agrees with depth. At 430 the first-view
     # reference is not supported by enough of the visible surface to certify
     # a pose, though this alone does not establish that the pose is wrong.
     for frame_index in (290, 300):
-        count, p90_mm = scores[frame_index]
+        count, p90_mm, _, _ = scores[frame_index]
         assert count >= 12
         assert p90_mm is not None and p90_mm < 5
-    count, p90_mm = scores[430]
+    count, p90_mm, front_mm, behind_mm = scores[430]
     assert count >= 12
     assert p90_mm is not None and p90_mm > 100
+    assert front_mm is not None and front_mm < 5
+    assert behind_mm is not None and behind_mm > 100
 
 
 def test_missing_reference_depth_is_unknown_not_a_perfect_fit():

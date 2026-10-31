@@ -18,15 +18,21 @@ class SurfaceAgreement:
     measured_to_reference_p90_m: float
     reference_depth_pixels: int
     reference_to_depth_p90_m: float | None
+    reference_in_front_p90_m: float | None = None
+    reference_behind_p90_m: float | None = None
 
     def __post_init__(self) -> None:
         if (
             not isfinite(self.measured_to_reference_p90_m)
             or self.measured_to_reference_p90_m < 0
             or self.reference_depth_pixels < 0
-            or (
-                self.reference_to_depth_p90_m is not None
-                and (not isfinite(self.reference_to_depth_p90_m) or self.reference_to_depth_p90_m < 0)
+            or any(
+                value is not None and (not isfinite(value) or value < 0)
+                for value in (
+                    self.reference_to_depth_p90_m,
+                    self.reference_in_front_p90_m,
+                    self.reference_behind_p90_m,
+                )
             )
         ):
             raise ValueError("registered surface agreement needs nonnegative finite measurements")
@@ -68,6 +74,8 @@ class VisibleSurfaceSupport:
     surface_fit_converged: bool | None = None
     reference_depth_pixels: int | None = None
     reference_depth_residual_p90_m: float | None = None
+    reference_depth_in_front_p90_m: float | None = None
+    reference_depth_behind_p90_m: float | None = None
     visible_lateral_spread_m: float | None = None
     principal_surface_axis_base: tuple[float, float, float] | None = None
     principal_surface_spreads_m: tuple[float, float, float] | None = None
@@ -91,6 +99,8 @@ class VisibleSurfaceSupport:
         for measurement in (
             self.depth_residual_p90_m,
             self.reference_depth_residual_p90_m,
+            self.reference_depth_in_front_p90_m,
+            self.reference_depth_behind_p90_m,
             self.visible_lateral_spread_m,
         ):
             if measurement is not None and (not isfinite(measurement) or measurement < 0):

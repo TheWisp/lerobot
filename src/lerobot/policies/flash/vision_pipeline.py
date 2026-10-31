@@ -521,6 +521,16 @@ class SurfacePoseBackend:
                     if diagnostics.get("reference_depth_p90_mm") is not None
                     else None
                 ),
+                reference_depth_in_front_p90_m=(
+                    float(diagnostics["reference_depth_in_front_p90_mm"]) / 1000
+                    if diagnostics.get("reference_depth_in_front_p90_mm") is not None
+                    else None
+                ),
+                reference_depth_behind_p90_m=(
+                    float(diagnostics["reference_depth_behind_p90_mm"]) / 1000
+                    if diagnostics.get("reference_depth_behind_p90_mm") is not None
+                    else None
+                ),
                 visible_lateral_spread_m=(
                     float(diagnostics["visible_lateral_spread_mm"]) / 1000
                     if diagnostics.get("visible_lateral_spread_mm") is not None

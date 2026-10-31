@@ -290,6 +290,8 @@ def test_failed_rgb_motion_remains_visible_for_debugging_but_not_authoritative()
     assert proposal.visible_support.depth_residual_p90_m is not None
     assert proposal.visible_support.reference_depth_pixels is not None
     assert proposal.visible_support.reference_depth_residual_p90_m is not None
+    assert proposal.visible_support.reference_depth_in_front_p90_m is not None
+    assert proposal.visible_support.reference_depth_behind_p90_m is not None
     # A rejected complete fit still carries the measured visible-patch
     # direction. The rectangular mask is wider than it is tall at constant
     # depth, so its long direction is camera X in this fixture.
@@ -431,6 +433,8 @@ def test_registered_demo_surface_is_reported_without_changing_pose_decision():
     assert first["reference_version"] == reference().version
     assert first["first_view"]["measured_to_reference_p90_m"] < 0.001
     assert first["first_view"]["reference_depth_pixels"] > 0
+    assert first["first_view"]["reference_in_front_p90_m"] is not None
+    assert first["first_view"]["reference_behind_p90_m"] is not None
     assert shifted["first_view"]["measured_to_reference_p90_m"] > 0.1
     assert shifted["first_view"]["reference_depth_pixels"] == 0
 

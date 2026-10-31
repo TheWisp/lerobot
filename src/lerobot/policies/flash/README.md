@@ -69,6 +69,10 @@ uses the prepared pose trace to place and check the candidate, so it cannot
 independently prove its accuracy. It does not modify the skill or include
 unsaved edits. Older sealed
 preparations can rebuild their first surface from the saved reference mask.
+The same signed depth gaps are recorded with live surface evidence and shown in
+the camera-only debugger. Live acceptance still uses the absolute gap: a large
+behind-surface gap can represent either occlusion or a bad pose, as the recorded
+gamepad example demonstrates. It is not silently treated as support.
 The path shown at each key frame is the path the importer uses. Older prepared
 skills that implicitly replayed a grasp interval open with that interval
 labelled “Follow recording”; saving the edited recipe makes the choice explicit

@@ -16,7 +16,6 @@ from .geometry import inverse
 from .pose_evidence import SurfaceAgreement
 from .surface_observation import move, spatial_sample
 from .surface_reference import PreparedSurfaceAgreement, RegisteredSurfaceModel, registered_surface_agreement
-from .surface_tracking import reference_depth_residual_mm
 from .trajectory import Evidence, PoseEstimate
 
 
@@ -47,23 +46,13 @@ class MeasuredReferenceView:
             raise ValueError("reference view needs aligned depth, clean pixels and finite metric points")
 
 
-def _agreement(
-    agreement: SurfaceAgreement,
-    reference_camera_points: np.ndarray,
-    frame: MeasuredReferenceView,
-    intrinsics: np.ndarray,
-) -> dict:
-    signed_mm = reference_depth_residual_mm(
-        reference_camera_points, frame.clean_depth_pixels, frame.depth_m, intrinsics
-    )
-    front_p90 = float(np.percentile(np.maximum(-signed_mm, 0), 90)) * 0.001 if len(signed_mm) else None
-    behind_p90 = float(np.percentile(np.maximum(signed_mm, 0), 90)) * 0.001 if len(signed_mm) else None
+def _agreement(agreement: SurfaceAgreement) -> dict:
     return {
         "measured_to_reference_p90_m": agreement.measured_to_reference_p90_m,
         "reference_depth_pixels": agreement.reference_depth_pixels,
         "reference_to_depth_p90_m": agreement.reference_to_depth_p90_m,
-        "reference_in_front_p90_m": front_p90,
-        "reference_behind_p90_m": behind_p90,
+        "reference_in_front_p90_m": agreement.reference_in_front_p90_m,
+        "reference_behind_p90_m": agreement.reference_behind_p90_m,
     }
 
 
@@ -103,7 +92,8 @@ def review_reference_view_candidates(
     """Compare first-view geometry with first-plus-candidate geometry.
 
     Both registration and cross-frame scoring use the supplied pose trace.
-    Scores detect internal contradictions but cannot prove pose accuracy. A
+    Scores expose internal agreement and possible contradictions but cannot
+    prove pose accuracy. A
     candidate remains unregistered for execution until separately reviewed.
     """
     models = {model.role: model for model in surface_models}
@@ -206,18 +196,8 @@ def review_reference_view_candidates(
                     rows.append(
                         {
                             "frame_index": other,
-                            "first_view": _agreement(
-                                first_score,
-                                move(first.view_points_object_m[0], camera_from_object),
-                                frame,
-                                intrinsics,
-                            ),
-                            "combined_views": _agreement(
-                                combined_score,
-                                move(prepared.all_points, camera_from_object),
-                                frame,
-                                intrinsics,
-                            ),
+                            "first_view": _agreement(first_score),
+                            "combined_views": _agreement(combined_score),
                         }
                     )
                 item["status"] = "registration_hypothesis"

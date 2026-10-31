@@ -18,7 +18,7 @@ from .perception import ObjectReference
 from .pose_evidence import SurfaceAgreement
 from .registration import transform_points
 from .surface_observation import SurfaceObservationConfig, move, observation, spatial_sample
-from .surface_tracking import reference_depth_support
+from .surface_tracking import reference_depth_directional_support
 
 
 @dataclass(frozen=True)
@@ -76,8 +76,10 @@ def registered_surface_agreement(
     """Score the first view and all registered views against one live RGB-D frame.
 
     A low measured-to-reference distance can come from a tiny matching patch.
-    The reverse depth comparison exposes a projected surface that contradicts
-    measured depth. Neither direction alone establishes the correct 6D pose.
+    The reverse depth comparison exposes a projected surface that disagrees
+    with measured depth. A reference surface behind the measurement may be
+    hidden or misplaced; neither direction alone establishes the correct 6D
+    pose.
     """
     pose = np.asarray(camera_from_object, dtype=float)
     measured = np.asarray(measured_camera_points, dtype=float)
@@ -96,11 +98,15 @@ def registered_surface_agreement(
 
     def score(reference: np.ndarray, tree: cKDTree) -> SurfaceAgreement:
         distance = tree.query(measured_object)[0]
-        support, depth_p90_mm = reference_depth_support(reference, clean_depth_pixels, depth_m, intrinsics)
+        support, depth_p90_mm, front_p90_mm, behind_p90_mm = reference_depth_directional_support(
+            reference, clean_depth_pixels, depth_m, intrinsics
+        )
         return SurfaceAgreement(
             float(np.percentile(distance, 90)),
             support,
             depth_p90_mm / 1000 if depth_p90_mm is not None else None,
+            front_p90_mm / 1000 if front_p90_mm is not None else None,
+            behind_p90_mm / 1000 if behind_p90_mm is not None else None,
         )
 
     first_score = score(first, prepared.first_tree)

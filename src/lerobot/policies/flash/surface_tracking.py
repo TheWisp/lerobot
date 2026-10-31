@@ -65,10 +65,34 @@ def reference_depth_support(
     This reverse check uses only pixels retained by the existing mask/depth
     observation filter; occluded or invalid pixels supply no positive evidence.
     """
+    count, absolute, _, _ = reference_depth_directional_support(
+        reference_camera_points, clean_depth_pixels, depth_m, intrinsics
+    )
+    return count, absolute
+
+
+def reference_depth_directional_support(
+    reference_camera_points: np.ndarray,
+    clean_depth_pixels: np.ndarray,
+    depth_m: np.ndarray,
+    intrinsics: np.ndarray,
+) -> tuple[int, float | None, float | None, float | None]:
+    """Count pixels and report absolute, in-front and behind p90 gaps in mm.
+
+    One-sided scores include zero for pixels with the opposite sign, so they
+    describe the same pixel population as the absolute score.
+    """
     residual_mm = reference_depth_residual_mm(
         reference_camera_points, clean_depth_pixels, depth_m, intrinsics
     )
-    return len(residual_mm), float(np.percentile(np.abs(residual_mm), 90)) if len(residual_mm) else None
+    if not len(residual_mm):
+        return 0, None, None, None
+    return (
+        len(residual_mm),
+        float(np.percentile(np.abs(residual_mm), 90)),
+        float(np.percentile(np.maximum(-residual_mm, 0), 90)),
+        float(np.percentile(np.maximum(residual_mm, 0), 90)),
+    )
 
 
 def reference_depth_residual_mm(
@@ -345,12 +369,16 @@ class SurfaceTrackingSession:
         detail.update(
             surface_median_mm=float(np.median(distances)), surface_p90_mm=float(np.percentile(distances, 90))
         )
-        reference_depth_pixels, reference_depth_p90_mm = reference_depth_support(
-            predicted, current["obs"]["valid_image"], current["depth"], intrinsics
+        reference_depth_pixels, reference_depth_p90_mm, front_p90_mm, behind_p90_mm = (
+            reference_depth_directional_support(
+                predicted, current["obs"]["valid_image"], current["depth"], intrinsics
+            )
         )
         detail.update(
             reference_depth_pixels=reference_depth_pixels,
             reference_depth_p90_mm=reference_depth_p90_mm,
+            reference_depth_in_front_p90_mm=front_p90_mm,
+            reference_depth_behind_p90_mm=behind_p90_mm,
         )
         anchors = move(self.anchors, self.pose)
         # The display frame is fixed at A, with axes chosen once at initialization.
