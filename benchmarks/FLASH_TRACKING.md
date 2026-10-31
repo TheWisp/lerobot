@@ -114,6 +114,18 @@ click result is not a claim that SAM3 is universally accurate. Local scores:
 `/tmp/flash-sam3-extra-score-20261031-b.json` and
 `/tmp/flash-sam3-sugar-click-score-20261031.json`.
 
+The cracker-box loss is not just a missing mask. At frame 150, its SAM3 mask
+overlaps the label by 0.864, yet the first saved surface is 28.9 mm from the
+current clean depth points at the annotated pose. Adding views from four earlier
+**accepted** frames (0, 30, 60, 90) changes that to only 28.2 mm: they largely
+show the same side. Registering frame 150 with its evaluation pose label reduces
+the same-frame distance to 3.9 mm, but that is an **oracle experiment**, not a
+tracking method; the label never enters inference. It also does not solve frame
+180, where the current SAM3 surface remains 36.4 mm from the label-registered
+views. The next estimator change needs a way to register a genuinely new side
+after occlusion and reject incomplete or contradictory surface support. Merely
+loosening the existing 5 mm acceptance limit would publish an unverified pose.
+
 From the repository root, in an environment with FLASH's inference dependencies:
 
 ```bash

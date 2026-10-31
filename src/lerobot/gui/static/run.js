@@ -221,7 +221,7 @@ async function toggleFlashSceneView() {
                 option.textContent = role;
                 select.append(option);
             }
-            const {createFlashSceneView} = await import('/static/flash_scene_view.js?v=23');
+            const {createFlashSceneView} = await import('/static/flash_scene_view.js?v=24');
             const reprocessed = Object.fromEntries(Object.entries(
                 flashReplay?.reprocessed_scene_geometry?.points_object_m || {}).map(([role, points]) => [
                 role, {positions_object_m: points.flat(), colors_rgb: points.map(() => [180, 190, 200]), indices: []},
@@ -1776,7 +1776,7 @@ function _flashCreateSceneGrid(kind, imageAlt, depthAvailable = true) {
                     '<label title="Display spacing in recorded camera pixels">Spacing <input type="number" id="flash-scene-point-spacing" min="2" max="16" step="1" value="5" onchange="_flashUpdateSceneFrame()"></label>'
                 : '') +
             '<label title="Reference surface projected by the used estimate"><input type="checkbox" id="flash-scene-projection" checked onchange="_flashUpdateSceneFrame()">Pose estimate</label>' +
-            '<label title="Coarse RGB-D mesh shown when orbiting; incomplete at missing-depth pixels"><input type="checkbox" id="flash-scene-depth" checked onchange="_flashUpdateSceneFrame()">Scene context</label>' +
+            '<label title="Measured background depth points shown when orbiting; missing depth stays empty"><input type="checkbox" id="flash-scene-depth" checked onchange="_flashUpdateSceneFrame()">Scene context</label>' +
             '<label><input type="checkbox" id="flash-scene-axes" checked onchange="_flashUpdateSceneFrame()">Axes</label>' +
             (hasGroupSupport
                 ? '<label title="Tracked scene context used by the group predictor"><input type="checkbox" id="flash-scene-group" onchange="_flashUpdateSceneFrame()">Scene support</label>'

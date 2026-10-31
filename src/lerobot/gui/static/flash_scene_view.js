@@ -130,45 +130,41 @@ function makeDashedReference(geometry, color) {
     return group;
 }
 
-function makeContext(depth, rgb, camera) {
+function makeContext(depth, rgb, camera, masksRle = {}) {
     const {width, height, intrinsics: k} = camera;
     if (depth.length !== width * height || rgb.length !== width * height * 4)
         throw new Error('RGB and depth dimensions differ');
     const step = 4; // Only a display sampling budget; it does not affect tracking.
     const cols = Math.ceil(width / step), rows = Math.ceil(height / step);
     const positions = new Float32Array(cols * rows * 3), colors = new Float32Array(cols * rows * 3);
-    const z = new Float32Array(cols * rows), triangles = [];
+    const tracked = new Uint8Array(width * height);
+    for (const runs of Object.values(masksRle))
+        for (const [start, length] of runs) tracked.fill(1, start, start + length);
     const fx = k[0][0], fy = k[1][1], cx = k[0][2], cy = k[1][2];
+    let count = 0;
     for (let row = 0; row < rows; row++) for (let col = 0; col < cols; col++) {
-        const u = col * step, v = row * step, id = row * cols + col, pixel = v * width + u;
+        const u = col * step, v = row * step, pixel = v * width + u;
         const depthM = depth[pixel] / 1000;
-        z[id] = depthM;
-        positions.set([(u - cx) * depthM / fx, -(v - cy) * depthM / fy, -depthM], id * 3);
+        if (!(depthM > 0) || tracked[pixel]) continue;
+        positions.set([(u - cx) * depthM / fx, -(v - cy) * depthM / fy, -depthM], count * 3);
         const gray = (0.299 * rgb[pixel * 4] + 0.587 * rgb[pixel * 4 + 1] +
             0.114 * rgb[pixel * 4 + 2]) / 255;
-        // Desaturate the surrounding scene so measured object surfaces stand out.
+        // Retain muted color as context; tracked surfaces have their own layer.
         for (let channel = 0; channel < 3; channel++)
-            colors[id * 3 + channel] = 0.12 + 0.25 * gray + 0.28 * rgb[pixel * 4 + channel] / 255;
-    }
-    const add = (a, b, c) => {
-        const min = Math.min(z[a], z[b], z[c]), max = Math.max(z[a], z[b], z[c]);
-        const footprint = step * (z[a] + z[b] + z[c]) / 3 / Math.min(fx, fy);
-        if (min > 0 && max - min <= 3 * footprint) triangles.push(a, b, c);
-    };
-    for (let row = 0; row < rows - 1; row++) for (let col = 0; col < cols - 1; col++) {
-        const a = row * cols + col, b = a + 1, c = a + cols, d = c + 1;
-        add(a, c, b); add(b, c, d);
+            colors[count * 3 + channel] = 0.12 + 0.25 * gray + 0.28 * rgb[pixel * 4 + channel] / 255;
+        count++;
     }
     const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-    geometry.setIndex(triangles);
-    // Coarse single-view depth has holes and stretched silhouettes when orbited.
-    // Keep it desaturated; sharp geometry belongs to measured masks.
-    return new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({
-        vertexColors: true, side: THREE.DoubleSide, transparent: true, opacity: 0.75,
-        depthWrite: false,
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions.subarray(0, count * 3), 3));
+    geometry.setAttribute('color', new THREE.BufferAttribute(colors.subarray(0, count * 3), 3));
+    // A single RGB-D view has holes and no measured surface behind silhouettes.
+    // Points preserve that uncertainty; triangles would bridge unrelated depths.
+    const context = new THREE.Points(geometry, new THREE.PointsMaterial({
+        vertexColors: true, size: 1.5, sizeAttenuation: false, transparent: true,
+        opacity: 0.14, depthWrite: false,
     }));
+    context.renderOrder = -1;
+    return context;
 }
 
 function makePoseAxes(length) {
@@ -313,7 +309,7 @@ export function createFlashSceneView(canvas, surfaces, reprocessedSurfaces = {})
             context = null;
         }
         if (options.showDepthScene) {
-            context = makeContext(depth, rgba, snapshot.camera);
+            context = makeContext(depth, rgba, snapshot.camera, frameEvidence?.masks_rle);
             context.visible = !cameraAligned;
             scene.add(context);
         }
