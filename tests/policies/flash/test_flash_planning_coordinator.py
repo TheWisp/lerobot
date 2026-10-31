@@ -1,7 +1,11 @@
 """The motor consumes future chunks while pose changes revise only unissued ticks."""
 
+from dataclasses import replace
+from math import pi
+
 import numpy as np
 import pytest
+from scipy.spatial.transform import Rotation
 
 from lerobot.policies.flash.execution import PlanRejectedError, TimedAction
 from lerobot.policies.flash.perception import LatestPoseStore
@@ -21,7 +25,9 @@ from lerobot.policies.flash.skill import (
     MotionMode,
     Relation,
     SpatialSample,
+    TurnAtPoint,
 )
+from lerobot.policies.flash.symmetry import AxialSymmetry
 from lerobot.policies.flash.trajectory import AttachmentState, Evidence, PoseEstimate
 
 
@@ -230,6 +236,82 @@ def test_coordinator_interrupts_when_target_exits_explicit_replanning_envelope()
     assert session.progress.phase == Phase.INTERRUPTED
     assert session.actions.snapshot().pending == ()
     assert "demonstrated goal beyond the replanning envelope" in session.progress.events[-1]["reason"]
+
+
+def test_symmetric_reference_gauge_change_preserves_goal_but_real_motion_interrupts():
+    now, _, session, poses, worker, coordinator = make_runtime(mode=MotionMode.CONNECTION)
+    interval = session.progress.skill.intervals[0]
+    rule = TurnAtPoint("target-turn", (0, 0, 0), (0, 0, 1), -pi, pi, 0, "symmetry_invariant")
+    session.progress.skill = FlashSkill("demo/source", 0, (replace(interval, turn_at_point=rule),))
+    coordinator.grasp_symmetries = (AxialSymmetry("target", (0, 0, 1), (0, 0, 0), pose(), True, 0.3),)
+    for _ in range(4):
+        coordinator.step()
+    assert session.progress.phase == Phase.MOVING
+    assert session.actions.snapshot().pending
+    coordinator.turn_choices[rule.rule_id] = 0.0
+    coordinator._planned_turn_angle_rad = 0.0
+    old_goal = worker.requests[-1].connection.requested_goal_pose.copy()
+
+    spun = pose(0.2)
+    spun[:3, :3] = Rotation.from_euler("z", pi).as_matrix()
+    poses.publish(
+        (
+            PoseEstimate(
+                "target", spun, now[0], now[0], Evidence.OBSERVED, "target-v1", (True,) * 3, (True,) * 3
+            ),
+        )
+    )
+    coordinator.schedule()
+    assert session.progress.phase == Phase.MOVING
+    assert coordinator.turn_choices[rule.rule_id] == pytest.approx(-pi)
+    assert sum(event["type"] == "turn_at_point_rebased" for event in session.progress.events) == 1
+    np.testing.assert_allclose(coordinator._connection.requested_goal_pose, old_goal)
+    coordinator.schedule()
+    assert sum(event["type"] == "turn_at_point_rebased" for event in session.progress.events) == 1
+
+    moved = spun.copy()
+    moved[0, 3] += 0.1
+    now[0] += 0.01
+    poses.publish(
+        (
+            PoseEstimate(
+                "target", moved, now[0], now[0], Evidence.OBSERVED, "target-v1", (True,) * 3, (True,) * 3
+            ),
+        )
+    )
+    coordinator.schedule()
+    assert session.progress.phase == Phase.INTERRUPTED
+    assert "demonstrated goal beyond the replanning envelope" in session.progress.events[-1]["reason"]
+
+
+@pytest.mark.parametrize(
+    ("source_evidence", "max_turn_rad"),
+    (("observed", pi), ("symmetry_invariant", 0.5)),
+)
+def test_reference_spin_is_not_rebased_without_a_matching_allowed_turn(source_evidence, max_turn_rad):
+    now, _, session, poses, _, coordinator = make_runtime(mode=MotionMode.CONNECTION)
+    interval = session.progress.skill.intervals[0]
+    rule = TurnAtPoint("target-turn", (0, 0, 0), (0, 0, 1), -max_turn_rad, max_turn_rad, 0, source_evidence)
+    session.progress.skill = FlashSkill("demo/source", 0, (replace(interval, turn_at_point=rule),))
+    coordinator.grasp_symmetries = (AxialSymmetry("target", (0, 0, 1), (0, 0, 0), pose(), True, 0.3),)
+    for _ in range(4):
+        coordinator.step()
+    assert session.progress.phase == Phase.MOVING
+    coordinator.turn_choices[rule.rule_id] = 0.0
+    coordinator._planned_turn_angle_rad = 0.0
+
+    spun = pose(0.2)
+    spun[:3, :3] = Rotation.from_euler("z", pi).as_matrix()
+    poses.publish(
+        (
+            PoseEstimate(
+                "target", spun, now[0], now[0], Evidence.OBSERVED, "target-v1", (True,) * 3, (True,) * 3
+            ),
+        )
+    )
+    coordinator.schedule()
+    assert session.progress.phase == Phase.INTERRUPTED
+    assert not any(event["type"] == "turn_at_point_rebased" for event in session.progress.events)
 
 
 def test_coordinator_waits_for_new_pose_when_only_future_refill_exceeds_age_limit():

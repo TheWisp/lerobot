@@ -212,6 +212,8 @@ def test_live_tracker_layers_are_replayed_with_camera_frame(tmp_path: Path) -> N
         "surface_fit_converged": True,
         "reference_depth_pixels": None,
         "reference_depth_residual_p90_m": None,
+        "reference_depth_in_front_p90_m": None,
+        "reference_depth_behind_p90_m": None,
         "visible_lateral_spread_m": None,
         "principal_surface_axis_base": [0.0, 1.0, 0.0],
         "principal_surface_spreads_m": [0.001, 0.002, 0.01],

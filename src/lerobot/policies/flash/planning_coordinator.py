@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from math import floor
+from math import ceil, floor, pi
 
 import numpy as np
+from scipy.spatial.transform import Rotation
 
 from .grasp_symmetry import GraspSymmetryChoice, _pregrasp_prefix, select_grasp_symmetry
 from .perception import LatestPoseStore
@@ -75,6 +76,7 @@ class PlanningCoordinator:
         self.grasp_symmetries = grasp_symmetries
         self.grasp_choices: dict[str, GraspSymmetryChoice] = {}
         self.turn_choices: dict[str, float] = {}
+        self._planned_turn_angle_rad: float | None = None
         self._grasp_prefix_names: dict[str, frozenset[str]] = {}
         self._next_revision = 0
         self._pending_revision: int | None = None
@@ -182,6 +184,8 @@ class PlanningCoordinator:
                             }
                         )
                         self._reported_preferred_limit.add(key)
+            if result.error is None and result.turn_angle_rad is not None:
+                self._planned_turn_angle_rad = result.turn_angle_rad
             if (
                 result.error is None
                 and result.turn_rule_id is not None
@@ -264,14 +268,37 @@ class PlanningCoordinator:
             self._fail("held-object attachment uses the wrong object frame")
             return
         if (
+            rule is not None
+            and self._planned_reference is not None
+            and self._planned_interval_index == self.session.progress.interval_index
+            and self._planned_interval_name == interval.name
+            and self._planned_turn_angle_rad is not None
+        ):
+            rebased = self._equivalent_turn_angle(
+                self._planned_reference, reference, interval, attachment, self._planned_turn_angle_rad
+            )
+            if rebased is not None:
+                turn_angle = rebased
+                previous = self.turn_choices.get(rule.rule_id)
+                self.turn_choices[rule.rule_id] = rebased
+                if previous is None or abs(previous - rebased) > (
+                    32 * np.finfo(float).eps * max(1.0, abs(previous), abs(rebased))
+                ):
+                    self.session.progress.events.append(
+                        {"type": "turn_at_point_rebased", "rule_id": rule.rule_id, "angle_rad": rebased}
+                    )
+        changed_interval = self._planned_interval_index != self.session.progress.interval_index
+        changed_interval |= self._planned_interval_name != interval.name
+        if (
             self.session.progress.suspended
             and self._planned_reference is not None
-            and self._reference_changed_too_far(self._planned_reference, reference, interval, attachment)
+            and not changed_interval
+            and self._reference_changed_too_far(
+                self._planned_reference, reference, interval, attachment, turn_angle
+            )
         ):
             self._fail(f"{interval.reference_role} changed the demonstrated goal while evidence was missing")
             return
-        changed_interval = self._planned_interval_index != self.session.progress.interval_index
-        changed_interval |= self._planned_interval_name != interval.name
         new_image = (
             changed_interval
             or self._planned_reference is None
@@ -318,7 +345,9 @@ class PlanningCoordinator:
             if (
                 not changed_interval
                 and self._planned_reference is not None
-                and self._reference_changed_too_far(self._planned_reference, reference, interval, attachment)
+                and self._reference_changed_too_far(
+                    self._planned_reference, reference, interval, attachment, turn_angle
+                )
             ):
                 self.session.actions.cancel_unissued("reference changed before interval entry")
                 pending = []
@@ -334,7 +363,9 @@ class PlanningCoordinator:
             and new_image
             and not changed_interval
             and self._planned_reference is not None
-            and self._reference_changed_too_far(self._planned_reference, reference, interval, attachment)
+            and self._reference_changed_too_far(
+                self._planned_reference, reference, interval, attachment, turn_angle
+            )
         ):
             self._fail(
                 f"{interval.reference_role} changed the demonstrated goal beyond the replanning envelope"
@@ -435,6 +466,7 @@ class PlanningCoordinator:
         self._next_revision = revision + 1
         self._pending_revision = revision
         self._planned_reference = reference
+        self._planned_turn_angle_rad = turn_angle
         self._planned_attachment_time_s = attachment.source_time_s if attachment else None
         self._planned_interval_index = self.session.progress.interval_index
         self._planned_interval_name = interval.name
@@ -469,17 +501,77 @@ class PlanningCoordinator:
             turn_at_point=interval.turn_at_point,
         )
 
+    def _equivalent_turn_angle(
+        self,
+        prior: PoseEstimate,
+        current: PoseEstimate,
+        interval: Interval,
+        attachment: AttachmentState | None,
+        prior_angle: float,
+    ) -> float | None:
+        """Carry a physical goal across a change of a declared symmetry gauge.
+
+        Only a prepared symmetry-invariant turn may do this. The resulting
+        goals must remain inside the same configured replanning envelope; a
+        genuine target move still follows the ordinary interruption path.
+        """
+        rule = interval.turn_at_point
+        if rule is None or rule.source_evidence != "symmetry_invariant" or current.pose is None:
+            return None
+        symmetry = next(
+            (item for item in self.grasp_symmetries if item.role == interval.reference_role), None
+        )
+        if (
+            symmetry is None
+            or not symmetry.lock_to_baseline
+            or not np.allclose(rule.pivot_reference_m, symmetry.center_object_m, rtol=0, atol=1e-9)
+            or not np.allclose(rule.axis_reference, symmetry.axis_object, rtol=0, atol=1e-9)
+            or prior.reference_version != current.reference_version
+        ):
+            return None
+        relative_rotation = current.pose[:3, :3].T @ prior.pose[:3, :3]
+        delta = float(Rotation.from_matrix(relative_rotation).as_rotvec() @ symmetry.axis_object)
+        raw_angle = prior_angle + delta
+        turns = 2 * pi
+        first = ceil((rule.min_angle_rad - raw_angle) / turns)
+        last = floor((rule.max_angle_rad - raw_angle) / turns)
+        if first > last:
+            return None
+        nearest = round((prior_angle - raw_angle) / turns)
+        angle = raw_angle + min(max(nearest, first), last) * turns
+        if self._reference_changed_too_far(prior, current, interval, attachment, angle, prior_angle):
+            return None
+        return angle
+
     def _reference_changed_too_far(
-        self, prior: PoseEstimate, current: PoseEstimate, interval, attachment: AttachmentState | None
+        self,
+        prior: PoseEstimate,
+        current: PoseEstimate,
+        interval: Interval,
+        attachment: AttachmentState | None,
+        turn_angle_rad: float | None = None,
+        prior_turn_angle_rad: float | None = None,
     ) -> bool:
         if prior.reference_version != current.reference_version or current.pose is None:
             return True
         held = attachment.gripper_from_object if attachment is not None else None
         rule = interval.turn_at_point
         angle = self.turn_choices.get(rule.rule_id, 0.0) if rule is not None else 0.0
+        same_interval = (
+            self._planned_interval_index == self.session.progress.interval_index
+            and self._planned_interval_name == interval.name
+        )
+        old_angle = prior_turn_angle_rad
+        if old_angle is None:
+            old_angle = (
+                self._planned_turn_angle_rad
+                if same_interval and self._planned_turn_angle_rad is not None
+                else angle
+            )
+        new_angle = angle if turn_angle_rad is None else turn_angle_rad
         for sample in interval.samples:
-            old_goal = spatial_goal(interval, sample, prior.pose, held, angle)
-            new_goal = spatial_goal(interval, sample, current.pose, held, angle)
+            old_goal = spatial_goal(interval, sample, prior.pose, held, old_angle)
+            new_goal = spatial_goal(interval, sample, current.pose, held, new_angle)
             shift = np.linalg.norm(old_goal[:3, 3] - new_goal[:3, 3])
             turn = np.arccos(np.clip((np.trace(old_goal[:3, :3].T @ new_goal[:3, :3]) - 1) / 2, -1, 1))
             if shift > self.config.max_reference_shift_m or turn > self.config.max_reference_turn_rad:
