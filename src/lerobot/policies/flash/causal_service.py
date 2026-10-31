@@ -780,7 +780,22 @@ class CausalPoseService:
                     self._count_anchor_outcome(estimate.role, "direct_symmetry_invalid")
                     self._record_anchor_decision(result, candidate, "direct_symmetry_invalid")
                     continue
-            self._record_direct_free_space(estimate, source)
+            free_space = self._record_direct_free_space(estimate, source)
+            if (
+                free_space is not None
+                and free_space.verdict == FreeSpaceVerdict.CONTRADICTED
+                and estimate.evidence == Evidence.OBSERVED
+                and all(estimate.rotation_supported)
+            ):
+                # A full direct fit cannot place the measured reference
+                # surface in observed empty space. Preserve the previous
+                # belief (including a group prediction) instead of letting
+                # this source-frame proposal become its new anchor. For a
+                # translation-only observation the predicted orientation may
+                # cause the conflict, so retain its independent position.
+                self._count_anchor_outcome(estimate.role, "direct_free_space_contradicted")
+                self._record_anchor_decision(result, candidate, "direct_free_space_contradicted")
+                continue
             current = self.store.snapshot()[1].get(estimate.role)
             if current is not None:
                 last_direct_s = current.last_direct_observation_s
@@ -1442,11 +1457,16 @@ class CausalPoseService:
             PoseComparisonVerdict.CANDIDATE_FAVORED,
         )
 
-    def _record_direct_free_space(self, estimate: PoseEstimate, frame: RGBDFrame) -> None:
-        """Record an independent contradiction without yet changing pose ownership."""
-        points = self.object_points_by_role.get(estimate.role)
+    def _record_direct_free_space(
+        self, estimate: PoseEstimate, frame: RGBDFrame
+    ) -> FreeSpaceComparison | None:
+        """Record one-sided same-frame depth evidence against a direct fit."""
+        # Prepared skills provide a reference surface. A newly clicked or
+        # imported object has no prepared model, but its first accepted RGB-D
+        # view is retained in the same object frame by _remember_static_support.
+        points = self.static_support_points_by_role.get(estimate.role)
         if points is None or not estimate.has_direct_translation:
-            return
+            return None
         assert estimate.pose is not None
         support = free_space_support(
             frame,
@@ -1469,6 +1489,7 @@ class CausalPoseService:
         counts[verdict.value] = counts.get(verdict.value, 0) + 1
         if self.on_free_space_comparison is not None:
             self.on_free_space_comparison(estimate.role, comparison)
+        return comparison
 
     def _remember_static_support(self, estimate: PoseEstimate, frame: RGBDFrame, mask: np.ndarray) -> None:
         if estimate.role in self.static_support_points_by_role or estimate.pose is None:

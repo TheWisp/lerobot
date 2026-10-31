@@ -13,9 +13,9 @@ from .perception_step import PerceptionPipeline, PerceptionResult, PerceptionRun
 from .symmetry import AxialSymmetry
 from .trajectory import Evidence, PoseEstimate
 
-# Version 8 withdraws a stationary prediction when current aligned depth
-# independently shows free space behind its previously measured surface.
-POSE_TRACE_SELECTION_VERSION = 8
+# Version 9 also prevents a full direct fit contradicted by observed free
+# space from replacing the current scene estimate.
+POSE_TRACE_SELECTION_VERSION = 9
 
 
 def extract_pose_trace(

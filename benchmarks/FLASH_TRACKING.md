@@ -63,8 +63,8 @@ all three after their processes restart. Their **inputs and settings differ**:
 | Live tracking debugger             | SAM3; local reference made from the clicked/named frame                    | Optional             | No                                                    |
 | Live FLASH run                     | SAM3; prepared appearance and surface reference                            | Yes                  | Yes, updated from motor and vision evidence           |
 
-The two saved rig-demo traces were prepared with pose-trace selection version 6;
-the current extractor is version 8. **Scoring a saved trace does not rerun the
+The two frozen rig-demo benchmark traces were prepared with pose-trace selection version 6;
+the current extractor is version 9. **Scoring a saved trace does not rerun the
 tracker.** The frozen YCB configuration also differs from the rig demo in SAM3
 resolution (504 versus 448), group image scale (1.0 versus 0.5), and static
 prediction age (unlimited versus 4.5 s). A benchmark gain is therefore a reason

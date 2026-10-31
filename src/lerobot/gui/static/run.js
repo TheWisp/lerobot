@@ -1055,6 +1055,7 @@ function renderFlashSnapshot(snapshot, mode = 'Live') {
                 superseded_by_direct: 'A newer direct pose was already used',
                 direct_group_unresolved: 'Direct pose disagrees with tracked scene motion',
                 direct_point_unresolved: 'Direct pose disagrees with tracked object points',
+                direct_free_space_contradicted: 'Measured depth rules out this direct pose',
                 event_replay_pending: 'Checking this pose against earlier camera frames',
                 event_replay_history_expired: 'Earlier frames expired; current estimate kept',
                 event_replay_attachment_changed: 'Object attachment changed; current estimate kept',

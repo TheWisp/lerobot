@@ -553,6 +553,14 @@ interrupted physical trials of this redesign.
 
 The [scene-estimator contract](docs/architecture.md#one-scene-estimator-several-evidence-sources) is not fully implemented. The current code has one publisher when causal tracking is enabled, but it still treats a backend's candidate `PoseEstimate` as an accepted six-axis observation. In particular, the RGB-D backend keeps its own previous candidate for shape-continuity checks, and the scene service has no general rule for comparing a new candidate with visible depth, point motion, a group prediction and unresolved symmetry at the same source time. Candidate dispositions are recorded. Delayed direct poses within retained history are replayed in source order in a bounded shadow calculation, but this is not yet a full event replay across all evidence types.
 
+One narrow exception now rejects a full direct pose if the saved object surface
+projects into reliably measured empty space in that same RGB-D frame. This
+retains the existing group or point-motion prediction; it does not establish
+that the retained prediction is accurate. A translation measured with predicted
+orientation remains usable because that orientation can cause the projected
+surface conflict. The first accepted RGB-D view supplies this check for
+objects without a prepared surface; it cannot validate its own initialization.
+
 The [architecture](docs/architecture.md) defines the intended scene-estimator
 contract. This implementation map describes the present gap without defining
 a second roadmap.
