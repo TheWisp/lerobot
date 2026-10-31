@@ -259,6 +259,13 @@ remain necessary before that switch.
 The 3D demo viewer draws every registered snippet in the saved object frame,
 with separate triangles for each measured view. This is display geometry;
 showing several views does not establish that their registration is correct.
+The review viewer shows the current mask and depth as its primary 3D layer;
+the saved reference projected by a fitted pose is an optional comparison.
+Missing triangles do not erase measured depth points. The scene-depth layer
+includes the tracked objects as well as their surroundings. For robot recordings
+that reuse a camera capture across motor ticks, replay uses the original dataset
+row for both RGB and depth while keeping the distinct-camera index for saved
+pose evidence.
 The camera-only debugger has no demo to register against, so it explicitly
 creates a local reference at the initial A landmark. This initialization
 choice does not change surface filtering, motion estimation or fitting.

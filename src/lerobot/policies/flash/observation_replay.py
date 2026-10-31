@@ -64,6 +64,7 @@ def load_observation_replay(root: Path, episode: int = 0) -> dict:
     )
     height, width = dataset.meta.features[depth_key]["shape"][:2]
     intrinsics = source["camera_intrinsics"]
+    episode_start, _ = dataset.episode_rows(episode)
     frames = []
     geometry = {"points_object_m": {}, "centers_object_m": {}}
     point_limit = None
@@ -191,6 +192,10 @@ def load_observation_replay(root: Path, episode: int = 0) -> dict:
             {
                 "frame_index": frame_id,
                 "source_row_index": sample.row_index,
+                # The FLASH frame index counts distinct camera captures. A
+                # robot episode can repeat one capture across motor ticks, so
+                # the ordinary dataset's image row may be a different index.
+                "dataset_frame_index": sample.row_index - episode_start,
                 "source_camera_frame_id": sample.camera_frame_id,
                 "evidence": {"available": True, **frame_evidence} if frame_evidence else None,
                 "snapshot": {

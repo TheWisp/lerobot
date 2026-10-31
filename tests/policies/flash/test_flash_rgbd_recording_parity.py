@@ -288,6 +288,7 @@ def test_robot_trace_advances_vision_only_for_distinct_camera_captures(tmp_path,
     replay = load_observation_replay(root)
     assert replay["evidence_available"]
     assert [frame["source_row_index"] for frame in replay["frames"]] == [0, 2]
+    assert [frame["dataset_frame_index"] for frame in replay["frames"]] == [0, 2]
     assert [frame["snapshot"]["camera"]["source_time_s"] for frame in replay["frames"]] == [20.0, 20.1]
     assert [frame["evidence"]["frame_index"] for frame in replay["frames"]] == [0, 1]
     motor = _flash_tracker_replay(root, 0)

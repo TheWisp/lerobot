@@ -42,7 +42,7 @@ function makeObservedSurface(runs, depth, rgba, camera, options) {
     const lookup = new Int32Array(pixelCount);
     lookup.fill(-1);
     const mask = stride > 1 ? new Uint8Array(pixelCount) : null;
-    const positions = [], colors = [], pixels = [], pointPositions = [];
+    const positions = [], colors = [], pixels = [];
     const fx = k[0][0], fy = k[1][1], cx = k[0][2], cy = k[1][2];
     for (const [start, count] of runs) {
         if (start < 0 || count < 0 || start + count > pixelCount)
@@ -63,8 +63,6 @@ function makeObservedSurface(runs, depth, rgba, camera, options) {
                     positions.push(x, y, -z);
                     colors.push(rgba[pixel * 4] / 255, rgba[pixel * 4 + 1] / 255,
                         rgba[pixel * 4 + 2] / 255);
-                    if (options.showPoints && u % options.pointSpacingPx === 0)
-                        pointPositions.push(x, y, -z);
                 }
             }
             rowStart = rowEnd;
@@ -98,11 +96,13 @@ function makeObservedSurface(runs, depth, rgba, camera, options) {
     }));
     mesh.visible = options.showSurface !== false;
     group.add(mesh);
+    // Depth points remain measured evidence even where adjacent pixels are
+    // too discontinuous to form a trustworthy triangle.
     const pointGeometry = new THREE.BufferGeometry();
-    pointGeometry.setAttribute('position', new THREE.Float32BufferAttribute(pointPositions, 3));
+    pointGeometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
     const points = new THREE.Points(pointGeometry, new THREE.PointsMaterial({
-        color: 0x35e3ed, size: 3, sizeAttenuation: false,
-        transparent: true, opacity: 0.7, depthTest: true, depthWrite: false,
+        color: 0x35e3ed, size: 2, sizeAttenuation: false,
+        transparent: true, opacity: 0.8, depthTest: true, depthWrite: false,
     }));
     points.visible = !!options.showPoints;
     group.add(points);
@@ -130,22 +130,19 @@ function makeDashedReference(geometry, color) {
     return group;
 }
 
-function makeContext(depth, rgb, camera, masksRle = {}) {
+function makeContext(depth, rgb, camera) {
     const {width, height, intrinsics: k} = camera;
     if (depth.length !== width * height || rgb.length !== width * height * 4)
         throw new Error('RGB and depth dimensions differ');
     const step = 4; // Only a display sampling budget; it does not affect tracking.
     const cols = Math.ceil(width / step), rows = Math.ceil(height / step);
     const positions = new Float32Array(cols * rows * 3), colors = new Float32Array(cols * rows * 3);
-    const tracked = new Uint8Array(width * height);
-    for (const runs of Object.values(masksRle))
-        for (const [start, length] of runs) tracked.fill(1, start, start + length);
     const fx = k[0][0], fy = k[1][1], cx = k[0][2], cy = k[1][2];
     let count = 0;
     for (let row = 0; row < rows; row++) for (let col = 0; col < cols; col++) {
         const u = col * step, v = row * step, pixel = v * width + u;
         const depthM = depth[pixel] / 1000;
-        if (!(depthM > 0) || tracked[pixel]) continue;
+        if (!(depthM > 0)) continue;
         positions.set([(u - cx) * depthM / fx, -(v - cy) * depthM / fy, -depthM], count * 3);
         const gray = (0.299 * rgb[pixel * 4] + 0.587 * rgb[pixel * 4 + 1] +
             0.114 * rgb[pixel * 4 + 2]) / 255;
@@ -283,7 +280,7 @@ export function createFlashSceneView(canvas, surfaces, reprocessedSurfaces = {})
 
     function setCameraAligned(value) {
         cameraAligned = value;
-        if (context) context.visible = !value;
+        if (context) context.visible = true;
         canvas.parentElement.classList.toggle('flash-scene-orbit', !value);
     }
 
@@ -309,8 +306,7 @@ export function createFlashSceneView(canvas, surfaces, reprocessedSurfaces = {})
             context = null;
         }
         if (options.showDepthScene) {
-            context = makeContext(depth, rgba, snapshot.camera, frameEvidence?.masks_rle);
-            context.visible = !cameraAligned;
+            context = makeContext(depth, rgba, snapshot.camera);
             scene.add(context);
         }
         while (evidence.children.length) {

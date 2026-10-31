@@ -613,6 +613,10 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .flash-recording-card { border-bottom: 1px solid #263c55; }
 .flash-recording-card:last-child { border-bottom: 0; }
 .flash-recording-card .flash-recording { border-bottom: 0; }
+.flash-recording-card:not(.selected) .flash-recording-secondary,
+.flash-recording-card:not(.selected) .flash-recording-version { display: none; }
+.flash-recording-card:not(.selected) .flash-recording-meta { display: none; }
+.flash-recording-card.selected > .flash-recording:first-child { background: #17334a; }
 .flash-recording-version { display: block; width: calc(100% - 20px); margin: 0 10px 8px; color: #a7b5c8; background: #101b2a; border: 1px solid #31516c; border-radius: 3px; font-size: 11px; }
 .flash-recording:hover, .flash-recording:focus { background: #0f3460; }
 .flash-recording strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -67,6 +67,44 @@ def test_flash_camera_image_stays_inside_overlay_for_portrait_and_landscape_fram
             )
 
 
+def test_flash_camera_replay_uses_source_dataset_row_after_repeated_capture(gui_page):
+    page = gui_page
+    seen = []
+    ok, encoded = cv2.imencode(".png", np.zeros((48, 64, 3), dtype=np.uint8))
+    assert ok
+
+    def image(route):
+        seen.append(route.request.url)
+        route.fulfill(body=encoded.tobytes(), content_type="image/png")
+
+    def depth(route):
+        seen.append(route.request.url)
+        route.fulfill(
+            body=np.full((48, 64), 1000, dtype="<u2").tobytes(),
+            content_type="application/octet-stream",
+        )
+
+    page.route("**/episodes/0/frame/*", image)
+    page.route("**/episodes/0/depth-frame/*", depth)
+    page.evaluate("switchTab('run'); selectWorkflow('flash')")
+    page.evaluate("""() => {
+        const identity = [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]];
+        const camera = index => ({frame_id: index, width: 64, height: 48,
+            intrinsics: [[50, 0, 32], [0, 50, 24], [0, 0, 1]], base_from_camera: identity});
+        _flashInstallReplay({kind: 'observation_demo', datasetId: 'recording', datasetRoot: '/tmp/recording',
+            episode: 0, fps: 10, camera_features: {rgb: 'rgb', depth: 'depth'},
+            frames: [0, 1].map(index => ({frame_index: index, dataset_frame_index: index * 2,
+                snapshot: {camera: camera(index), accepted: {}, observed_masks: {},
+                    scene_support: {groups: {}}, demo: {time_s: index / 10}}}))}, 'Recorded camera');
+        seekFlashReplay(1);
+    }""")
+    page.wait_for_function("document.querySelector('.flash-replay-grid img')?.dataset.loadedFrame === '1'")
+    assert "/episodes/0/frame/2?" in page.locator(".flash-replay-grid img").get_attribute("src")
+    page.get_by_role("button", name="3D scene").click()
+    page.wait_for_function("flashSceneFrameCache?.frameIndex === 1")
+    assert any("/episodes/0/depth-frame/2?" in url for url in seen)
+
+
 def test_flash_3d_scene_shows_measured_object_without_saved_pose_or_surface(gui_page):
     result = gui_page.evaluate("""async () => {
         const {createFlashSceneView} = await import('/static/flash_scene_view.js?v=23');
@@ -88,14 +126,18 @@ def test_flash_3d_scene_shows_measured_object_without_saved_pose_or_surface(gui_
         view.update(depth, color, snapshot, {showSurface: true, showPoints: true,
             pointSpacingPx: 2, showDepthScene: true}, evidence);
         const [x, y] = view.projectCameraXYZ([(-6) / 50, 0, 1]);
+        const rect = canvas.getBoundingClientRect();
+        const projectionError = Math.hypot(x - (rect.left + 26 * 10), y - (rect.top + 24 * 10));
         const picked = view.pickObserved(x, y)?.role;
         const focused = view.focus('sample');
         const framed = view.frameAll();
         view.dispose();
         host.remove();
-        return {picked, focused, framed};
+        return {picked, focused, framed, projectionError};
     }""")
-    assert result == {"picked": "sample", "focused": True, "framed": True}
+    assert result["picked"] == "sample"
+    assert result["focused"] and result["framed"]
+    assert result["projectionError"] < 1e-6
 
 
 def test_flash_inspect_subprocess_returns_spatial_intervals(tmp_path):
@@ -1470,7 +1512,7 @@ def test_rollout_replay_uses_recorded_metric_depth_in_the_shared_scene(gui_page,
     if with_mask_evidence:
         assert "Recorded RGB-D evidence" in page.locator("#flash-scene-status").inner_text()
         assert "mask arrived after this snapshot" in page.locator("#flash-scene-status").inner_text()
-        assert "2 verified support points" in page.locator("#flash-scene-status").inner_text()
+        assert "support points" not in page.locator("#flash-scene-status").inner_text()
         assert page.locator("#flash-scene-surface").count() == 1
         assert page.locator("#flash-scene-group").count() == 1
         assert "Scene support" in page.locator("#flash-tracker-content").text_content()
