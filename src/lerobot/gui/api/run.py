@@ -270,6 +270,12 @@ class FlashDemoPrepareRequest(FlashDatasetInspectRequest):
     output_name: str | None = None
 
 
+class FlashReferenceViewReviewRequest(FlashDatasetInspectRequest):
+    bundle_path: str
+    role: str
+    frame_index: int
+
+
 class FlashRecordedPrepareRequest(FlashDatasetInspectRequest):
     name: str
     intervals: list[dict[str, Any]]
@@ -1952,6 +1958,27 @@ async def flash_demo_preparation(dataset_root: str, bundle_path: str, episode: i
         )
     except (OSError, KeyError, TypeError, ValueError) as exc:
         raise HTTPException(400, f"Cannot load FLASH demo preparation: {exc}") from exc
+
+
+@router.post("/flash/demo/reference-view/review")
+async def flash_demo_reference_view_review(req: FlashReferenceViewReviewRequest) -> dict:
+    """Check a proposed extra view; never apply it to the prepared skill."""
+    from lerobot.policies.flash.sealed_reference_view_review import review_sealed_reference_view
+
+    try:
+        root, bundle = _flash_demo_paths(req.dataset_root, req.bundle_path)
+        result = await asyncio.get_running_loop().run_in_executor(
+            _flash_config_pool,
+            review_sealed_reference_view,
+            root,
+            bundle,
+            req.episode,
+            req.role,
+            req.frame_index,
+        )
+        return result
+    except (OSError, KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(400, f"Cannot review FLASH reference view: {exc}") from exc
 
 
 @router.get("/flash/demo/reference-mask")

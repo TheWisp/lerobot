@@ -129,16 +129,18 @@ loosening the existing 5 mm acceptance limit would publish an unverified pose.
 A review-only check on the insertion demo illustrates why new reference views
 need two checks. The first asks how closely measured points fit the saved
 surface; the second asks whether the saved surface projects onto measured
-depth. With 1,372 clean points from dowel frame 100 as the first view, adding
-frame 150 reduced the median first gap across 272 observed frames from 1.19 to
-1.08 mm; the second stayed about 1.94 mm. Adding frame 500 or 550 also reduced
-the first gap (to 1.16 or 1.12 mm), but increased the second to 6.22 or
-9.01 mm. Each candidate was capped at 800 points. These are **internal
+depth. With 1,427 clean points from the prepared mask at dowel frame 100 as
+the first view, adding frame 150 reduced the median first gap across 272
+observed frames from 1.30 to 1.07 mm, and the second from 2.32 to 1.86 mm.
+Adding frame 500 or 550 also reduced the first gap (to 1.28 or 1.14 mm), but
+increased the second to 5.79 or 9.14 mm. These are **internal
 consistency scores**, not accuracy: the same prepared pose trace supplied both
 registration and evaluation. The reusable `reference_view_candidates` review
-function reports both checks without changing a prepared reference. A later
-view needs independent support and explicit review before demo preparation or
-a live trial can use it.
+function reports both checks without changing a prepared reference. The
+**Run → FLASH → Edit demo → Objects → Clear views** control now runs this
+check on the selected frame and links to frames with the largest depth
+disagreement. A later view needs independent support and explicit review
+before demo preparation or a live trial can use it.
 
 From the repository root, in an environment with FLASH's inference dependencies:
 

@@ -1,13 +1,19 @@
+import gzip
+import json
 from dataclasses import asdict
 from pathlib import Path
+from types import SimpleNamespace
 
+import cv2
 import numpy as np
 import pytest
 
+from lerobot.policies.flash.perception import ObjectReference, ReferenceSnippet
 from lerobot.policies.flash.reference_view_candidates import (
     MeasuredReferenceView,
     review_reference_view_candidates,
 )
+from lerobot.policies.flash.sealed_reference_view_review import review_sealed_reference_view
 from lerobot.policies.flash.surface_observation import SurfaceObservationConfig, observation
 from lerobot.policies.flash.surface_reference import RegisteredSurfaceModel
 from lerobot.policies.flash.trajectory import Evidence, PoseEstimate
@@ -126,3 +132,67 @@ def test_candidate_review_rejects_unobserved_pose_and_misaligned_frame(recorded_
             base_from_camera,
             256,
         )
+
+
+def test_old_prepared_demo_rebuilds_first_view_from_saved_mask_without_mutating_bundle(tmp_path, monkeypatch):
+    root = tmp_path / "demo"
+    bundle = root / "flash/v1/prepared/example/bundle.json"
+    bundle.parent.mkdir(parents=True)
+    mask_path = root / "flash/v1/masks/object.png"
+    mask_path.parent.mkdir(parents=True)
+    depth_path = root / "recording/depth"
+    depth_path.mkdir(parents=True)
+    calibration = root / "calibration.json"
+    identity = np.eye(4)
+    calibration.write_text(json.dumps({"camera": {"T_base_cam": identity.tolist()}}))
+    (bundle.parent / "annotation.json").write_text(
+        json.dumps({"episode": 0, "calibration_path": str(calibration)})
+    )
+    (bundle.parent / "preparation-report.json").write_text(
+        json.dumps({"pose_trace_cache": "flash/v1/preparation-cache/trace.npz"})
+    )
+    np.savetxt(root / "recording/cam_K.txt", [[100, 0, 16], [0, 100, 16], [0, 0, 1]])
+    mask = np.zeros((32, 32), np.uint8)
+    mask[8:24, 8:24] = 255
+    assert cv2.imwrite(str(mask_path), mask)
+    evidence_root = bundle.parent / "scene-evidence"
+    evidence_root.mkdir()
+    for index in range(3):
+        assert cv2.imwrite(str(depth_path / f"{index:06d}.png"), np.full(mask.shape, 1000, np.uint16))
+        evidence = {
+            "frame_index": index,
+            "image_size": list(mask.shape),
+            "masks_rle": {"object": [[row * 32 + 8, 16] for row in range(8, 24)]},
+        }
+        with gzip.open(evidence_root / f"{index:06d}.json.gz", "wt") as stream:
+            json.dump(evidence, stream)
+    cache = root / "flash/v1/preparation-cache/trace.npz"
+    cache.parent.mkdir(parents=True)
+    np.savez(
+        cache,
+        frames=3,
+        object_evidence=["observed"] * 3,
+        object_poses=np.repeat(identity[None], 3, axis=0),
+        object_translation_supported=np.ones((3, 3), bool),
+        object_rotation_supported=np.ones((3, 3), bool),
+        object_estimator=["surface_rgbd"] * 3,
+    )
+    reference = ObjectReference(
+        "object",
+        "v1",
+        (
+            ReferenceSnippet(
+                "test/demo", 0, 0, "object", identity, "flash/v1/masks/object.png", "calibration"
+            ),
+        ),
+    )
+    prepared = SimpleNamespace(
+        skill=SimpleNamespace(source_episode=0), references=(reference,), surface_models=()
+    )
+    monkeypatch.setattr("lerobot.policies.flash.prepared.PreparedFlashSkill.load", lambda _: prepared)
+    original_files = sorted(path.relative_to(root) for path in root.rglob("*") if path.is_file())
+    result = review_sealed_reference_view(root, bundle, 0, "object", 1)
+    assert result["first_view_points"] >= 3
+    assert result["candidate"]["status"] == "registration_hypothesis"
+    assert result["candidate"]["cross_frame"]["frames"] == 2
+    assert sorted(path.relative_to(root) for path in root.rglob("*") if path.is_file()) == original_files

@@ -60,6 +60,13 @@ object frame_ used by the demonstration before robot motion begins.
 The demo editor keeps the current key frame and grasp/release timing beside
 playback. Raw demo setup also shows object naming. Object corrections, tracker
 experiments and numeric settings are optional.
+In **Objects → Clear views**, **Check this view** compares a selected frame
+against the saved first reference across other observed demo frames. It shows
+both how well measured points fit the saved surface and how well the projected
+surface agrees with depth. The check uses the prepared pose trace to place the
+candidate, so it can expose contradictions but cannot independently prove its
+pose; it does not modify the skill or include unsaved edits. Older sealed
+preparations can rebuild their first surface from the saved reference mask.
 The path shown at each key frame is the path the importer uses. Older prepared
 skills that implicitly replayed a grasp interval open with that interval
 labelled “Follow recording”; saving the edited recipe makes the choice explicit

@@ -1024,6 +1024,7 @@ def test_run_flash_lists_demos_and_shows_extracted_pose_overlay(gui_page):
                 },
                 "keypoints_document": {"keypoints": [{"t": 1.0, "move": "line", "frame": "object"}]},
                 "reference_masks": {"object": {"frame_index": 4, "available": True}},
+                "preparation_report": {"pose_trace_cache": "flash/v1/preparation-cache/trace.npz"},
             }
         ),
     )
@@ -1064,11 +1065,60 @@ def test_run_flash_lists_demos_and_shows_extracted_pose_overlay(gui_page):
             }
         ),
     )
+    reference_checks = []
+
+    def check_reference_view(route):
+        reference_checks.append(route.request.post_data_json)
+        route.fulfill(
+            json={
+                "reference_frame_index": 4,
+                "candidate": {
+                    "status": "registration_hypothesis",
+                    "cross_frame": {
+                        "frames": 8,
+                        "first_view_measured_p90_median_m": 0.002,
+                        "combined_views_measured_p90_median_m": 0.001,
+                        "first_view_reverse_p90_median_m": 0.003,
+                        "combined_views_reverse_p90_median_m": 0.009,
+                    },
+                },
+                "largest_reverse_conflicts": [{"frame_index": 4}],
+            }
+        )
+
+    page.route("**/api/run/flash/demo/reference-view/review", check_reference_view)
+    page.evaluate("""() => {
+        if (flashReplayTimer) toggleFlashReplay();
+        const next = structuredClone(flashReplay.frames[0]);
+        next.frame_index = 5;
+        next.snapshot.camera.frame_id = 5;
+        next.snapshot.demo.time_s = 1.2;
+        flashReplay.frames.push(next);
+        document.getElementById('flash-tracker-scrub').max = '1';
+        seekFlashReplay(1);
+    }""")
+    assert page.evaluate("_flashEditorCurrentFrame().frame_index") == 5
     page.locator("#flash-demo-edit-toggle").click()
     page.wait_for_function("() => !!document.querySelector('#flash-demo-editor')")
     assert "Edit demo" in page.locator("#flash-demo-editor").inner_text()
-    assert page.locator("#flash-demo-editor-frame").inner_text().startswith("Frame 4")
+    assert page.locator("#flash-demo-editor-frame").inner_text().startswith("Frame 5")
     page.locator(".flash-editor-navigation").get_by_role("button", name="Objects").click()
+    page.get_by_role("button", name="Check this view").click()
+    page.wait_for_function("() => !!flashDemoEditor?.referenceReview")
+    assert reference_checks == [
+        {
+            "dataset_root": "/tmp/one-demo",
+            "episode": 2,
+            "bundle_path": "/tmp/one-demo/flash/v1/prepared/new-skill/bundle.json",
+            "role": "object",
+            "frame_index": 5,
+        }
+    ]
+    assert "2.00 mm → 1.00 mm" in page.locator("#flash-demo-editor").inner_text()
+    assert "3.00 mm → 9.00 mm" in page.locator("#flash-demo-editor").inner_text()
+    assert page.locator("#flash-demo-editor-change-status").inner_text() == "Viewing saved preparation"
+    page.locator("#flash-reference-review-result").get_by_role("button", name="Frame 4").click()
+    assert page.evaluate("_flashEditorCurrentFrame().frame_index") == 4
     assert page.locator(
         "#flash-demo-editor .flash-editor-pane[data-section='objects'] > section"
     ).first.is_visible()

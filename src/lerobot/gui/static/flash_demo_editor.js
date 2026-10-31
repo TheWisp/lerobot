@@ -83,9 +83,41 @@ function _flashEditorSetReferenceFrame(frameIndex) {
         (annotation.reference_frames_by_role ||= {})[role] = Number(frameIndex);
         if (annotation.reference_polygons_by_role) delete annotation.reference_polygons_by_role[role];
         flashDemoEditor.message = `${role} reference changed; review its new mask.`;
+        flashDemoEditor.referenceReview = null;
     }
     _flashEditorRender();
     _flashRenderTimeline();
+}
+
+async function _flashEditorReviewCurrentView() {
+    const state = flashDemoEditor;
+    const replay = flashReplay;
+    if (!state || state.raw || !state.role || state.referenceReviewRunning || !replay?.bundle_path) return;
+    const role = state.role;
+    const frameIndex = _flashEditorCurrentFrame().frame_index;
+    state.referenceReviewRunning = true;
+    state.referenceReview = null;
+    _flashEditorRender();
+    try {
+        const response = await fetch('/api/run/flash/demo/reference-view/review', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({dataset_root: replay.datasetRoot, episode: replay.episode,
+                bundle_path: replay.bundle_path, role, frame_index: frameIndex}),
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.detail || 'Could not check this view');
+        if (flashDemoEditor === state && flashReplay === replay)
+            state.referenceReview = {role, frameIndex, result};
+    } catch (error) {
+        if (flashDemoEditor === state && flashReplay === replay)
+            state.referenceReview = {role, frameIndex, error: error.message};
+    } finally {
+        if (flashDemoEditor === state) {
+            state.referenceReviewRunning = false;
+            _flashEditorRender();
+            document.getElementById('flash-reference-review-result')?.scrollIntoView({block: 'center'});
+        }
+    }
 }
 
 function _flashEditorUpdateStatus() {
@@ -161,6 +193,7 @@ function _flashEditorMaskRole(role) {
     if (changed) {
         flashDemoEditor.drawing = false;
         flashDemoEditor.vertices = [];
+        flashDemoEditor.referenceReview = null;
     }
     const mask = document.querySelector('#rerun-viewer .flash-demo-mask');
     if (flashReplay.bundle_path) {
@@ -466,6 +499,53 @@ function _flashEditorRender() {
     if (!state.raw) {
         _flashEditorButton(references, 'Go to appearance view', () =>
             _flashEditorJump(_flashEditorReferenceFrame(state.role)));
+        const review = _flashEditorButton(references,
+            state.referenceReviewRunning ? 'Checking view…' : 'Check this view',
+            () => void _flashEditorReviewCurrentView());
+        review.disabled = !state.role || state.referenceReviewRunning ||
+            !state.preparationReport?.pose_trace_cache;
+        const explanation = document.createElement('p');
+        explanation.textContent = 'Uses the saved demo. This check does not add the view or include unsaved edits.';
+        references.append(explanation);
+        if (state.referenceReview) {
+            const result = state.referenceReview;
+            const box = document.createElement('div');
+            box.className = 'flash-editor-keypoint';
+            box.id = 'flash-reference-review-result';
+            const title = document.createElement('strong');
+            title.textContent = `${result.role} · frame ${result.frameIndex}`;
+            box.append(title);
+            const message = document.createElement('p');
+            box.append(message);
+            const candidate = result.result?.candidate;
+            if (result.error) message.textContent = result.error;
+            else if (candidate?.status !== 'registration_hypothesis')
+                message.textContent = candidate?.reason || 'This view could not be checked.';
+            else {
+                const score = candidate.cross_frame;
+                const mm = value => value == null ? 'unavailable' : `${(value * 1000).toFixed(2)} mm`;
+                message.textContent = `Checked on ${score.frames} other observed frames. Saved view → with this view:`;
+                const surface = document.createElement('p');
+                surface.textContent = `Measured points to surface: ${mm(score.first_view_measured_p90_median_m)} → ${mm(score.combined_views_measured_p90_median_m)}`;
+                box.append(surface);
+                const depth = document.createElement('p');
+                depth.textContent = `Surface to measured depth: ${mm(score.first_view_reverse_p90_median_m)} → ${mm(score.combined_views_reverse_p90_median_m)}`;
+                box.append(depth);
+                const caveat = document.createElement('p');
+                caveat.textContent = 'The same estimated poses placed and checked this view. This does not prove its position is correct.';
+                box.append(caveat);
+            }
+            if (candidate?.status === 'registration_hypothesis' &&
+                result.result.largest_reverse_conflicts?.length) {
+                const label = document.createElement('p');
+                label.textContent = 'Check frames with the largest depth disagreement:';
+                box.append(label);
+                for (const row of result.result.largest_reverse_conflicts.slice(0, 3)) {
+                    _flashEditorButton(box, `Frame ${row.frame_index}`, () => _flashEditorJump(row.frame_index));
+                }
+            }
+            references.append(box);
+        }
     }
     _flashEditorField(exactTimes, 'Appearance reference frame for selected object',
         _flashEditorReferenceFrame(state.role), value => _flashEditorSetReferenceFrame(value), null, 'number');
@@ -1014,6 +1094,7 @@ async function toggleFlashDemoEditor() {
             keypointsDocument: structuredClone(result.keypoints_document),
             referenceMasks: result.reference_masks,
             preparationReport: result.preparation_report,
+            referenceReview: null, referenceReviewRunning: false,
             role: result.annotation.held_role,
             section: null,
             keypointIndex: result.keypoints_document.keypoints.reduce((best, point, index, points) =>
@@ -1056,8 +1137,6 @@ async function toggleFlashDemoEditor() {
         toggle.textContent = 'Close editor';
         _flashEditorRender();
         _flashRenderTimeline();
-        const selected = flashDemoEditor.keypointsDocument.keypoints[flashDemoEditor.keypointIndex];
-        if (selected) _flashEditorJumpTime(selected.t);
     } catch (error) { showToast('Cannot edit demo', error.message, 'error'); }
     finally { toggle.disabled = false; }
 }
