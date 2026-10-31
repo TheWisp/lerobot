@@ -315,6 +315,7 @@ def test_startup_pose_updates_do_not_overflow_unconsumed_evidence():
             (True,) * 3,
             (True,) * 3,
         )
+        attempt.poses.publish((pose,))
         callback(version, {"target": pose})
     assert attempt.session._evidence.empty()
 
@@ -373,6 +374,8 @@ def test_delayed_direct_pose_updates_held_attachment_after_newer_point_predictio
         "target", identity(), 0.99, 0.99, Evidence.OBSERVED, "target-v1", (True,) * 3, (True,) * 3
     )
     attempt.poses.publish((pregrasp,))
+    initial_version, initial_poses = attempt.poses.snapshot()
+    attempt.planning_belief.publish_scene(initial_version, initial_poses, 0, None, None)
     attach_action = TimedAction(0, {"arm.pos": 0.0}, "move", event_id="attach")
     receipt = ActionReceipt(0, 0.99, 1.0, 0, 0, {"arm.pos": 0.0}, attach_action, {"arm.pos": 0.0}, 1)
     attempt.attachment.on_motor_tick(
@@ -412,7 +415,7 @@ def test_delayed_direct_pose_updates_held_attachment_after_newer_point_predictio
     assert updater.has_postgrasp_observation, updater.last_rejection
     assert updater.state(1.04).gripper_from_object[0, 3] == pytest.approx(0.005)
     assert attempt.causal.on_source_order_replay is not None
-    attempt.causal.on_source_order_replay("target", 1.0, 1.02, ())
+    attempt.causal.on_source_order_replay("target", 1.0, 1.02, (), attempt.poses.snapshot()[0])
     callback(2, {"target": newer_prediction})
     assert not updater.has_postgrasp_observation
     assert updater.state(1.04).gripper_from_object[0, 3] == pytest.approx(0)
@@ -458,6 +461,44 @@ def test_replayed_scene_pose_does_not_correct_gripper_without_its_source_image()
 
     assert not updater.has_postgrasp_observation
     assert updater.state(1.04).gripper_from_object[0, 3] == pytest.approx(0)
+
+
+def test_replay_correction_waits_for_its_scene_version_before_planner_publication(monkeypatch):
+    attempt = runtime(
+        skill(),
+        (reference("target", "target-v1"),),
+        FakeRecorder(),
+        causal_tracking=CausalTrackingConfig(60, 64, 12, 0.1, 0.005),
+    )
+    attempt._ready = True
+    callback = attempt.perception.on_pose_update
+    assert callback is not None and attempt.causal is not None
+    first = PoseEstimate(
+        "target", identity(), 1.0, 1.0, Evidence.OBSERVED, "target-v1", (True,) * 3, (True,) * 3
+    )
+    first_version = attempt.poses.publish((first,))
+    callback(first_version, {"target": first})
+    calls = []
+    monkeypatch.setattr(
+        attempt.attachment,
+        "reconcile_source_order",
+        lambda *args: calls.append(args) or True,
+    )
+    assert attempt.causal.on_source_order_replay is not None
+    attempt.causal.on_source_order_replay("target", 1.0, 1.0, (), first_version + 1)
+    callback(first_version, {"target": first})
+    assert not calls
+    assert attempt.planning_belief.snapshot(1.0, None)[0] == first_version
+
+    revised_pose = identity()
+    revised_pose[0, 3] = 0.01
+    revised = replace(first, pose=revised_pose)
+    revised_version = attempt.poses.revise(revised)
+    callback(revised_version, {"target": revised})
+    version, poses, _attachment = attempt.planning_belief.snapshot(1.0, None)
+    assert len(calls) == 1
+    assert version == revised_version
+    assert poses["target"].pose[0, 3] == pytest.approx(0.01)
 
 
 def test_startup_acquires_later_reference_before_any_motion(monkeypatch):

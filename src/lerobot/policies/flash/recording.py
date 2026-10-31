@@ -65,6 +65,7 @@ class TickRecordAssembler:
         max_camera_age_s: float,
         progress_events: Callable[[], list[dict]],
         clock: Callable[[], float] = time.perf_counter,
+        pose_snapshot: Callable[[], tuple[int, dict[str, PoseEstimate]]] | None = None,
     ) -> None:
         if not rgb_feature or (depth_feature is not None and not depth_feature):
             raise ValueError("camera feature names must be nonempty")
@@ -77,6 +78,7 @@ class TickRecordAssembler:
         self.max_camera_age_s = max_camera_age_s
         self.progress_events = progress_events
         self.clock = clock
+        self.pose_snapshot = pose_snapshot or poses.snapshot
         self._event_cursor = 0
 
     def assemble(self, tick: MotorTick) -> RecordedTick:
@@ -84,7 +86,7 @@ class TickRecordAssembler:
         frame = self.frames.snapshot(no_later_than_s=now_s)
         if frame is None or not 0 <= now_s - frame.source_time_s <= self.max_camera_age_s:
             raise RuntimeError("no fresh aligned RGB-D frame for motor tick recording")
-        version, poses = self.poses.snapshot()
+        version, poses = self.pose_snapshot()
         visible_poses = {
             role: estimate for role, estimate in poses.items() if estimate.available_time_s <= now_s
         }

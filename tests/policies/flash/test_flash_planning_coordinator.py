@@ -15,6 +15,7 @@ from lerobot.policies.flash.planner import (
     PlannerLimits,
 )
 from lerobot.policies.flash.planner_worker import PlanFailureKind, PlanResult
+from lerobot.policies.flash.planning_belief import PlanningBeliefStore
 from lerobot.policies.flash.planning_coordinator import PlanBufferConfig, PlanningCoordinator
 from lerobot.policies.flash.progress import Phase
 from lerobot.policies.flash.session import FlashSession
@@ -163,6 +164,7 @@ def test_coordinator_starts_in_future_and_replans_from_committed_prefix():
         coordinator.step()
     assert len(robot.sent) == 1
     assert robot.sent[0]["arm.pos"] == 20.0
+
     poses.publish((target(0.205, now[0]),))
     coordinator.schedule()
     assert worker.requests[-1].revision > worker.requests[0].revision
@@ -173,6 +175,19 @@ def test_coordinator_starts_in_future_and_replans_from_committed_prefix():
         coordinator.step()
     assert session.progress.phase == Phase.MOTION_COMPLETE
     assert robot.sent[-1]["arm.pos"] == 30.5
+
+
+def test_coordinator_uses_committed_planning_belief_during_raw_scene_revision():
+    _now, _robot, _session, raw_poses, worker, coordinator = make_runtime()
+    belief = PlanningBeliefStore(max_attachment_age_s=None)
+    belief.publish_scene(1, {"target": target(0.2, 0.0)}, 0, None, None)
+    coordinator.belief_snapshot = belief.snapshot
+    raw_poses.revise(target(0.4, 0.0))
+
+    coordinator.step()
+
+    assert worker.requests[0].reference.pose[0, 3] == pytest.approx(0.2)
+    assert raw_poses.snapshot()[1]["target"].pose[0, 3] == pytest.approx(0.4)
 
 
 def test_same_camera_frame_pose_revision_replans_the_unissued_suffix():

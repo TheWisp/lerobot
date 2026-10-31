@@ -65,6 +65,10 @@ class PlanningCoordinator:
         config: PlanBufferConfig,
         attachment_at: Callable[[float], AttachmentState | None],
         grasp_symmetries: tuple[AxialSymmetry, ...] = (),
+        belief_snapshot: Callable[
+            [float, str | None], tuple[int, dict[str, PoseEstimate], AttachmentState | None]
+        ]
+        | None = None,
     ) -> None:
         self.session = session
         self.worker = worker
@@ -73,6 +77,7 @@ class PlanningCoordinator:
         self.arm_joint_names = arm_joint_names
         self.config = config
         self.attachment_at = attachment_at
+        self.belief_snapshot = belief_snapshot
         self.grasp_symmetries = grasp_symmetries
         self.grasp_choices: dict[str, GraspSymmetryChoice] = {}
         self.turn_choices: dict[str, float] = {}
@@ -211,8 +216,13 @@ class PlanningCoordinator:
         interval = self.session.progress.interval
         rule = interval.turn_at_point
         turn_angle = self.turn_choices.get(rule.rule_id) if rule is not None else 0.0
-        pose_revision, live_poses = self.poses.snapshot()
         now_s = self.session.motor.clock()
+        if self.belief_snapshot is None:
+            pose_revision, live_poses = self.poses.snapshot()
+            planned_attachment = None
+        else:
+            held_role = interval.held_role if interval.relation == Relation.HELD_TO_TARGET else None
+            pose_revision, live_poses, planned_attachment = self.belief_snapshot(now_s, held_role)
         if interval.relation == Relation.EE_TO_START:
             interval_index = self.session.progress.interval_index
             if self._start_anchor_interval_index != interval_index:
@@ -264,7 +274,11 @@ class PlanningCoordinator:
         if interval.name in self._grasp_prefix_names.get(interval.reference_role, ()):
             choice = self.grasp_choices[interval.reference_role]
             reference = replace(reference, pose=reference.pose @ choice.equivalent_transform)
-        attachment = self.attachment_at(now_s) if interval.relation == Relation.HELD_TO_TARGET else None
+        attachment = (
+            (self.attachment_at(now_s) if self.belief_snapshot is None else planned_attachment)
+            if interval.relation == Relation.HELD_TO_TARGET
+            else None
+        )
         if interval.relation == Relation.HELD_TO_TARGET and attachment is None:
             if phase == Phase.MOVING:
                 self._fail("held-object attachment expired during motion")

@@ -209,7 +209,7 @@ class CausalPoseService:
         kinematic_prediction_at: Callable[[str, RGBDFrame], PoseEstimate | None] | None = None,
         on_anchor_decision: Callable[[AnchorDecision], None] | None = None,
         on_source_order_replay: Callable[
-            [str, float, float, tuple[tuple[PoseEstimate, RGBDFrame, np.ndarray], ...]], None
+            [str, float, float, tuple[tuple[PoseEstimate, RGBDFrame, np.ndarray], ...], int], None
         ]
         | None = None,
         on_scene_support: Callable[[int, dict[str, dict]], None] | None = None,
@@ -301,6 +301,9 @@ class CausalPoseService:
         self._lock = Lock()
         self._error: Exception | None = None
         self._started = False
+        self._processing_sequence = 0
+        self._completed_sequence = 0
+        self._committed_pose_snapshot: tuple[int, dict[str, PoseEstimate]] = (0, {})
         self.frames = 0
         self.anchors = 0
         self.missed_anchors = 0
@@ -355,6 +358,25 @@ class CausalPoseService:
             if self._offline_decision_time_s is not None
             else self._live_decision_clock()
         )
+
+    @property
+    def processing_sequence(self) -> int:
+        with self._lock:
+            return self._processing_sequence
+
+    @property
+    def completed_sequence(self) -> int:
+        with self._lock:
+            return self._completed_sequence
+
+    def committed_snapshot(self) -> tuple[int, dict[str, PoseEstimate]]:
+        """Expose only scene versions whose camera event finished processing."""
+        with self._lock:
+            if self._started:
+                version, poses = self._committed_pose_snapshot
+                return version, dict(poses)
+        # Synchronous offline processing and direct unit tests have no worker.
+        return self.store.snapshot()
 
     def start(self) -> None:
         if self._started:
@@ -549,6 +571,9 @@ class CausalPoseService:
     def _run(self) -> None:
         try:
             while (item := self.queue.get()) is not None:
+                with self._lock:
+                    self._processing_sequence += 1
+                    sequence = self._processing_sequence
                 started_s = time.perf_counter()
                 started_cpu_s = time.thread_time()
                 queue_depth = self.queue.qsize()
@@ -602,9 +627,20 @@ class CausalPoseService:
                 # by the next queued frame, so replay cannot starve the
                 # current scene state for the duration of its whole history.
                 self._drain_pending(while_queue_empty=True)
+                committed = self.store.snapshot()
+                with self._lock:
+                    self._committed_pose_snapshot = committed
+                    self._completed_sequence = sequence
             # A stopped camera has no future event to yield to. Finish any
             # retained replay before the service closes its decision journal.
+            with self._lock:
+                self._processing_sequence += 1
+                sequence = self._processing_sequence
             self._drain_pending()
+            committed = self.store.snapshot()
+            with self._lock:
+                self._committed_pose_snapshot = committed
+                self._completed_sequence = sequence
         except Exception as exc:
             with self._lock:
                 self._error = exc
@@ -1541,7 +1577,8 @@ class CausalPoseService:
             # new scene version. The collector drains these events in order
             # before it posts scene-change evidence to the coordinator.
             if self.on_source_order_replay is not None:
-                self.on_source_order_replay(role, first_s, last_s, accepted_for_attachment)
+                next_pose_version = self.store.snapshot()[0] + 1
+                self.on_source_order_replay(role, first_s, last_s, accepted_for_attachment, next_pose_version)
             self.store.revise(result)
             self._attachment_applied_revision_by_role[role] = max(
                 self._attachment_applied_revision_by_role.get(role, 0), pending.attachment_revision
@@ -2090,7 +2127,7 @@ def build_causal_pose_service(
     kinematic_prediction_at: Callable[[str, RGBDFrame], PoseEstimate | None] | None = None,
     on_anchor_decision: Callable[[AnchorDecision], None] | None = None,
     on_source_order_replay: Callable[
-        [str, float, float, tuple[tuple[PoseEstimate, RGBDFrame, np.ndarray], ...]], None
+        [str, float, float, tuple[tuple[PoseEstimate, RGBDFrame, np.ndarray], ...], int], None
     ]
     | None = None,
     on_scene_support: Callable[[int, dict[str, dict]], None] | None = None,

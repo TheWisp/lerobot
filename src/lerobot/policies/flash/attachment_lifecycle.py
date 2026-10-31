@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import deque
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from math import isfinite
 from threading import Lock
@@ -53,6 +53,7 @@ class AttachmentLifecycle:
         updaters: Mapping[str, HeldAttachmentUpdater],
         *,
         max_pregrasp_age_s: float,
+        pose_snapshot_at: Callable[[float], tuple[int, dict[str, PoseEstimate]]] | None = None,
     ) -> None:
         if not isfinite(max_pregrasp_age_s) or max_pregrasp_age_s <= 0:
             raise ValueError("maximum pregrasp pose age must be positive")
@@ -64,6 +65,7 @@ class AttachmentLifecycle:
             if updater is None or updater.reference_version != transition.reference_version:
                 raise ValueError(f"{transition.event_id}: missing matching held-object updater")
         self.max_pregrasp_age_s = max_pregrasp_age_s
+        self.pose_snapshot_at = pose_snapshot_at
         self.active_role: str | None = None
         self.last_event: str | None = None
         # Motor samples retain the relation that was valid at that source
@@ -77,6 +79,7 @@ class AttachmentLifecycle:
             role: deque(maxlen=updater.history.capacity + 1) for role, updater in self.updaters.items()
         }
         self._attachment_epoch = 0
+        self._belief_revision = 0
         self._last_direct_by_role: dict[str, float | None] = dict.fromkeys(self.updaters)
         self._epochs: dict[int, _EpochJournal] = {}
 
@@ -106,7 +109,11 @@ class AttachmentLifecycle:
         if transition.action == AttachmentAction.ATTACH:
             if self.active_role is not None:
                 raise RuntimeError(f"cannot attach {transition.role} while holding {self.active_role}")
-            _, poses = self.poses.snapshot()
+            _, poses = (
+                self.pose_snapshot_at(receipt.dispatched_s)
+                if self.pose_snapshot_at is not None
+                else self.poses.snapshot()
+            )
             seed = poses.get(transition.role)
             if seed is not None and not self._fresh_seed(
                 seed, transition.reference_version, receipt.dispatched_s
@@ -116,9 +123,10 @@ class AttachmentLifecycle:
                 float(tick.observed[f"{name}.pos"]) for name in self.updaters[transition.role].arm_joint_names
             ]
             self.updaters[transition.role].activate(receipt.dispatched_s, seed, grasp_joints)
-            self.active_role = transition.role
             with self._prediction_lock:
+                self.active_role = transition.role
                 self._attachment_epoch += 1
+                self._belief_revision += 1
                 self._last_direct_by_role[transition.role] = (
                     seed.source_time_s
                     if seed is not None and seed.evidence == Evidence.OBSERVED
@@ -142,8 +150,9 @@ class AttachmentLifecycle:
             if self.active_role != transition.role:
                 raise RuntimeError(f"cannot detach {transition.role}: it is not the active attachment")
             self.updaters[transition.role].deactivate()
-            self.active_role = None
             with self._prediction_lock:
+                self.active_role = None
+                self._belief_revision += 1
                 self._role_events[transition.role].append(
                     (receipt.dispatched_s, False, self._attachment_epoch)
                 )
@@ -220,6 +229,7 @@ class AttachmentLifecycle:
             with self._prediction_lock:
                 if self.active_role != role or self._attachment_epoch != epoch:
                     return accepted
+                self._belief_revision += 1
                 if accepted:
                     self._last_direct_by_role[role] = held.source_time_s
                 if frame is not None and mask is not None and ee is not None:
@@ -354,7 +364,15 @@ class AttachmentLifecycle:
                     shadow.restore(rebuilt[-1].state_after if rebuilt else journal.checkpoint)
                     updater.restore(shadow.snapshot())
                     self._last_direct_by_role[role] = last_direct
+                    self._belief_revision += 1
         return True
+
+    def planning_state(self, now_s: float) -> tuple[int, str | None, AttachmentState | None]:
+        """Read one relation revision for an atomic planning projection."""
+        with self._prediction_lock:
+            role = self.active_role
+            state = self.updaters[role].state(now_s) if role is not None else None
+            return self._belief_revision, role, state
 
     def prediction_at(self, role: str, frame: RGBDFrame) -> PoseEstimate | None:
         """Predict a held pose for one camera time using bounded measured motor history."""

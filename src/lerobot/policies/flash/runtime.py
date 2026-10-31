@@ -21,6 +21,7 @@ from .perception_service import PerceptionService, RGBDSource
 from .perception_worker import PoseProcess
 from .planner import CartesianKinematics, JointPlanner, PlannerLimits
 from .planner_worker import PlannerWorker
+from .planning_belief import PlanningBeliefStore
 from .planning_coordinator import PlanBufferConfig, PlanningCoordinator
 from .progress import Phase, Verdict
 from .recording import RecordedTick, TickRecordAssembler
@@ -151,21 +152,37 @@ class FlashRuntime:
         self.live_telemetry = live_telemetry
         self.poses = LatestPoseStore()
         scene_events: SimpleQueue[tuple[str, object]] = SimpleQueue()
+        deferred_scene_events: list[tuple[str, object]] = []
 
         def queue_held_direct(estimate: PoseEstimate, frame: RGBDFrame, mask: np.ndarray) -> None:
             # Before startup there is no consumer and no active attachment;
             # retaining full RGB-D frames here would grow memory unbounded.
             if self._ready and self.attachment.epoch_at(estimate.role, estimate.source_time_s) is not None:
-                scene_events.put(("direct", (estimate, frame, mask)))
+                assert self.causal is not None
+                scene_events.put(("direct", (estimate, frame, mask, self.causal.processing_sequence)))
 
         def queue_source_order_replay(
             role: str,
             first_s: float,
             last_s: float,
             observations: tuple[tuple[PoseEstimate, RGBDFrame, np.ndarray], ...],
+            published_after_version: int,
         ) -> None:
             if self._ready:
-                scene_events.put(("replay", (role, first_s, last_s, observations)))
+                assert self.causal is not None
+                scene_events.put(
+                    (
+                        "replay",
+                        (
+                            role,
+                            first_s,
+                            last_s,
+                            observations,
+                            published_after_version,
+                            self.causal.processing_sequence,
+                        ),
+                    )
+                )
 
         self.causal = (
             build_causal_pose_service(
@@ -210,8 +227,15 @@ class FlashRuntime:
             )
             for transition in skill.attachment_transitions
         }
+        self.planning_belief = PlanningBeliefStore(
+            max_attachment_age_s=attachment_limits.max_attachment_age_s
+        )
         self.attachment = AttachmentLifecycle(
-            skill, self.poses, updaters, max_pregrasp_age_s=attachment_limits.max_pregrasp_age_s
+            skill,
+            self.poses,
+            updaters,
+            max_pregrasp_age_s=attachment_limits.max_pregrasp_age_s,
+            pose_snapshot_at=lambda at_s: self.planning_belief.snapshot(at_s, None)[:2],
         )
 
         def on_tick(tick: MotorTick) -> None:
@@ -223,6 +247,9 @@ class FlashRuntime:
                 self.causal.set_attached_role(
                     self.attachment.active_role, source_time_s=tick.receipt.dispatched_s
                 )
+            if self.attachment.active_role != prior_attachment:
+                attachment_revision, role, state = self.attachment.planning_state(tick.observed_at_s)
+                self.planning_belief.publish_attachment(attachment_revision, role, state)
             if self.live_telemetry is not None:
                 role = self.attachment.active_role
                 updater = self.attachment.updaters[role] if role is not None else None
@@ -267,9 +294,8 @@ class FlashRuntime:
         self._last_pose_by_role: dict[str, PoseEstimate] = {}
 
         def on_pose_update(version: int, poses: dict[str, PoseEstimate]) -> None:
-            if self.live_telemetry is not None:
-                self.live_telemetry.accepted(poses)
-            pending_scene_events = []
+            pending_scene_events = list(deferred_scene_events)
+            deferred_scene_events.clear()
             while True:
                 try:
                     pending_scene_events.append(scene_events.get_nowait())
@@ -280,16 +306,28 @@ class FlashRuntime:
             # startup completes; the next collector pass publishes the latest
             # snapshot once the session is ready.
             if not self._ready:
+                if self.live_telemetry is not None:
+                    initial_poses = self.causal.committed_snapshot()[1] if self.causal is not None else poses
+                    self.live_telemetry.accepted(initial_poses)
                 return
-            for kind, payload in pending_scene_events:
+            for index, (kind, payload) in enumerate(pending_scene_events):
                 if kind == "replay":
-                    role, first_s, last_s, observations = payload
+                    role, first_s, last_s, observations, published_after_version, needed_sequence = payload
+                    if self.causal is not None and (
+                        self.causal.completed_sequence < needed_sequence
+                        or self.causal.committed_snapshot()[0] < published_after_version
+                    ):
+                        deferred_scene_events.extend(pending_scene_events[index:])
+                        break
                     if not self.attachment.reconcile_source_order(role, first_s, last_s, observations):
                         raise RuntimeError(
                             f"cannot revise {role}'s held pose: source-frame or motor history expired"
                         )
                     continue
-                observed, frame, mask = payload
+                observed, frame, mask, needed_sequence = payload
+                if self.causal is not None and self.causal.completed_sequence < needed_sequence:
+                    deferred_scene_events.extend(pending_scene_events[index:])
+                    break
                 if self.attachment.is_active_at(observed.role, observed.source_time_s):
                     self.attachment.on_pose_update(version, {observed.role: observed}, frame=frame, mask=mask)
                 elif not self.attachment.reconcile_source_order(
@@ -313,6 +351,15 @@ class FlashRuntime:
                 # A replayed scene snapshot must not become a second, weaker
                 # held-object measurement merely because it says "observed".
                 self.attachment.on_pose_update(version, poses)
+            # The planning projection is published only after all queued
+            # source-frame corrections for this collector pass are applied.
+            version, poses = (
+                self.causal.committed_snapshot() if self.causal is not None else self.poses.snapshot()
+            )
+            attachment_revision, role, state = self.attachment.planning_state(self.session.motor.clock())
+            self.planning_belief.publish_scene(version, poses, attachment_revision, role, state)
+            if self.live_telemetry is not None:
+                self.live_telemetry.accepted(poses)
             if version != self._last_pose_version:
                 changed = frozenset(
                     role for role, pose in poses.items() if self._last_pose_by_role.get(role) is not pose
@@ -369,6 +416,7 @@ class FlashRuntime:
             max_camera_age_s=max_camera_age_s,
             progress_events=lambda: self.session.progress.events,
             clock=self.session.motor.clock,
+            pose_snapshot=self.planning_belief.pose_snapshot,
         )
         planner = JointPlanner(kinematics, arm_joint_names, gripper_joint_name, planner_limits)
         self.planner = PlannerWorker(
@@ -383,6 +431,7 @@ class FlashRuntime:
             buffer_config,
             self.attachment.state,
             grasp_symmetries,
+            belief_snapshot=self.planning_belief.snapshot,
         )
         self._perception_started = False
         self._causal_started = False
@@ -465,7 +514,7 @@ class FlashRuntime:
                             "perception failed while catching up to the live camera"
                         ) from self.perception.error
                     source_s = self.causal.latest_processed_source_time_s
-                    _, current_poses = self.poses.snapshot()
+                    _, current_poses = self.causal.committed_snapshot()
                     now_s = self.session.motor.clock()
                     if (
                         source_s is not None
@@ -482,7 +531,9 @@ class FlashRuntime:
                     time.sleep(0.01)
                 else:
                     raise RuntimeError("causal scene tracking did not catch up to the live camera")
-            _, first_poses = self.poses.snapshot()
+            _, first_poses = (
+                self.causal.committed_snapshot() if self.causal is not None else self.poses.snapshot()
+            )
             if first_object_interval is not None:
                 first_role = first_object_interval.reference_role
                 if first_poses[first_role].reference_version != first_object_interval.reference_version:
@@ -498,6 +549,11 @@ class FlashRuntime:
             self.recorder.start()
             self._recorder_started = True
             # Heavy model loading and first pose seeding precede the motor epoch.
+            version, poses = (
+                self.causal.committed_snapshot() if self.causal is not None else self.poses.snapshot()
+            )
+            attachment_revision, role, state = self.attachment.planning_state(self.session.motor.clock())
+            self.planning_belief.publish_scene(version, poses, attachment_revision, role, state)
             self.session.motor.start()
             self._ready = True
         except Exception:

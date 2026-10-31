@@ -1592,6 +1592,21 @@ def test_tick_record_uses_only_camera_and_pose_evidence_available_at_that_time()
     assert set(recorded.pose_estimates) == {"target"}
     assert recorded.progress_events == ({"type": "interval_start"},)
     assert assembler.assemble(tick).progress_events == ()
+    planner_pose = PoseEstimate(
+        "target", pose(0.3), 1.0, 1.05, Evidence.OBSERVED, "v1", (True,) * 3, (True,) * 3
+    )
+    planner_record = TickRecordAssembler(
+        frames,
+        poses,
+        rgb_feature="observation.images.overhead",
+        depth_feature="observation.depth.overhead",
+        max_camera_age_s=0.2,
+        progress_events=lambda: [],
+        clock=lambda: now[0],
+        pose_snapshot=lambda: (7, {"target": planner_pose}),
+    ).assemble(tick)
+    assert planner_record.pose_version == 7
+    assert planner_record.pose_estimates["target"].pose[0, 3] == pytest.approx(0.3)
     now[0] = 1.3
     with pytest.raises(RuntimeError, match="no fresh aligned RGB-D"):
         assembler.assemble(tick)

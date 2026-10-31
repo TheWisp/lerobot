@@ -60,6 +60,41 @@ def test_slow_camera_processing_records_stage_and_source_frame(monkeypatch):
     assert event["duration_s"] >= event["stages_s"]["scene_update"]
 
 
+def test_planning_snapshot_excludes_an_unfinished_scene_event(monkeypatch):
+    store = LatestPoseStore()
+    service = CausalPoseService(store)
+    entered = Event()
+    release = Event()
+    update = service.scene.update
+    estimate = PoseEstimate(
+        "object", np.eye(4), 0, 0, Evidence.OBSERVED, "reference-v1", (True,) * 3, (True,) * 3
+    )
+
+    def paused_update(item):
+        store.publish((estimate,))
+        entered.set()
+        assert release.wait(2)
+        return update(item)
+
+    monkeypatch.setattr(service.scene, "update", paused_update)
+    service.start()
+    try:
+        service.submit_frame(frame(np.zeros((96, 96), dtype=np.uint8), 0))
+        assert entered.wait(2)
+        assert store.snapshot()[0] == 1
+        assert service.committed_snapshot()[0] == 0
+        assert service.completed_sequence == 0
+        release.set()
+        deadline = time.monotonic() + 2
+        while service.completed_sequence < 1 and service.error is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert service.error is None
+        assert service.committed_snapshot()[0] == 1
+    finally:
+        release.set()
+        service.close()
+
+
 def test_environment_timing_distinguishes_group_fitting_from_worker_wait():
     rng = np.random.default_rng(65)
     points = rng.uniform((-0.08, -0.08, 0.98), (0.08, 0.08, 1.02), (32, 3))
@@ -190,7 +225,8 @@ def test_late_object_pose_replays_grasp_and_release_in_camera_source_order():
         pose.role == "object" and pose.source_time_s == source.source_time_s
         for pose, source, _mask in revisions[-1][3]
     )
-    assert revisions[-1][4] < service.store.snapshot()[0]
+    assert revisions[-1][4] == revisions[-1][5] + 1
+    assert revisions[-1][4] <= service.store.snapshot()[0]
 
     # An unrelated late observation does not need event replay.
     service._anchor(anchor("target", frames[0]))
