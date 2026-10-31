@@ -872,6 +872,14 @@ function _flashAcceptedOnCamera(snapshot, role) {
         ? accepted : null;
 }
 
+function _flashLayerOnCamera(pose, camera) {
+    if (!pose?.pose || !camera) return false;
+    if (pose.source_frame_id != null && camera.frame_id != null)
+        return pose.source_frame_id === camera.frame_id;
+    return pose.source_time_s != null && camera.source_time_s != null &&
+        pose.source_time_s === camera.source_time_s;
+}
+
 function _flashCommandEvidence(snapshot) {
     const command = snapshot.motor_tick;
     const evidence = command?.plan_evidence;
@@ -1034,8 +1042,10 @@ function renderFlashSnapshot(snapshot, mode = 'Live') {
         html += _flashConditionalSurfaceInfo(raw?.conditional_surface_information, raw?.frame_id,
             role, expandedSurfaceRoles.has(role));
         for (const [name, pose] of Object.entries(snapshot.layers?.[role] || {})) {
-            html += _flashOverlayRow('layer', role, name, 'flash-tracker-layer',
-                `<span class="flash-tracker-dot" style="background:${_flashLayerColor(name)}"></span>${_esc(_flashLayerName(name))}<small>${_esc(_flashPoseText(pose, snapshot, role, name === 'reprocessed_scene' ? 'reprocessed' : 'primary'))}</small>`);
+            const label = `<span class="flash-tracker-dot" style="background:${_flashLayerColor(name)}"></span>${_esc(_flashLayerName(name))}<small>${_esc(_flashPoseText(pose, snapshot, role, name === 'reprocessed_scene' ? 'reprocessed' : 'primary'))}`;
+            html += _flashLayerOnCamera(pose, snapshot.camera)
+                ? _flashOverlayRow('layer', role, name, 'flash-tracker-layer', `${label}</small>`)
+                : `<div class="flash-tracker-layer flash-tracker-unavailable">${label} · not on this camera frame</small></div>`;
         }
         const reprocessed = snapshot.reprocessed_scene_status?.[role];
         if (reprocessed?.evidence === 'lost') html +=
@@ -1572,7 +1582,7 @@ function _flashDrawOverlay() {
         const compareSources = !['demo', 'observation_demo'].includes(flashReplay?.kind) || flashCompareSources;
         if (compareSources) for (const [role, layers] of Object.entries(snapshot.layers || {})) {
             Object.entries(layers).forEach(([name, pose]) => {
-                if (name !== 'candidate_tracker') draw(role, name === 'demo_extraction' ? pose.estimator : name,
+                if (name !== 'candidate_tracker' && _flashLayerOnCamera(pose, camera)) draw(role, name === 'demo_extraction' ? pose.estimator : name,
                     pose, false, 'layer', name);
             });
         }
@@ -1598,7 +1608,7 @@ function _flashDrawOverlay() {
                 if (role === '__gripper__' || snapshot.accepted?.[role] ||
                     shownHeld?.role === role) continue;
                 const pose = layers.demo_extraction;
-                if (pose?.pose && pose.evidence !== 'lost')
+                if (_flashLayerOnCamera(pose, camera) && pose.evidence !== 'lost')
                     draw(role, pose.estimator, pose, true, 'layer', 'demo_extraction');
             }
         }

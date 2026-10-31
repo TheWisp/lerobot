@@ -1383,7 +1383,14 @@ def test_run_flash_tracker_panel_reuses_view_for_recorded_layers(gui_page):
                         "frame_index": 3,
                         "snapshot": {
                             "recorded_at_s": 12.0,
-                            "camera": None,
+                            "camera": {
+                                "frame_id": 3,
+                                "source_time_s": 12.0,
+                                "width": 64,
+                                "height": 48,
+                                "intrinsics": [[60, 0, 32], [0, 60, 24], [0, 0, 1]],
+                                "base_from_camera": np.eye(4).tolist(),
+                            },
                             "centers_object_m": {},
                             "proposals": {
                                 "object": {
@@ -1398,7 +1405,8 @@ def test_run_flash_tracker_panel_reuses_view_for_recorded_layers(gui_page):
                                     "environment_group_motion": {
                                         "evidence": "predicted",
                                         "source_time_s": 12.0,
-                                        "pose": None,
+                                        "source_frame_id": 3,
+                                        "pose": np.eye(4).tolist(),
                                     }
                                 }
                             },
@@ -1406,6 +1414,7 @@ def test_run_flash_tracker_panel_reuses_view_for_recorded_layers(gui_page):
                                 "object": {
                                     "evidence": "predicted",
                                     "source_time_s": 12.0,
+                                    "source_frame_id": 3,
                                     "estimator": "environment_group_motion",
                                     "pose": np.eye(4).tolist(),
                                 }
@@ -1845,6 +1854,48 @@ def test_flash_replay_does_not_draw_unaligned_held_or_stale_independent_pose(gui
     assert 0.6 in result["current"]
     assert 0.7 not in result["current"]
     assert "Latest motor-time prediction" in page.locator("#flash-tracker-content").inner_text()
+
+
+@pytest.mark.requires_playwright
+@pytest.mark.skipif(importlib.util.find_spec("playwright") is None, reason="Playwright is not installed")
+def test_flash_replay_keeps_stale_comparison_layer_out_of_camera_overlay(gui_page):
+    page = gui_page
+    page.evaluate("switchTab('run')")
+    page.evaluate("() => selectWorkflow('flash')")
+    result = page.evaluate(
+        """() => {
+            const canvas = document.createElement('canvas');
+            canvas.className = 'flash-pose-canvas';
+            canvas.style.width = '200px'; canvas.style.height = '200px';
+            document.body.append(canvas);
+            const pose = (x, frame) => ({role: 'object', pose: [[1, 0, 0, x], [0, 1, 0, 0],
+                [0, 0, 1, 1], [0, 0, 0, 1]], evidence: 'predicted', source_time_s: frame,
+                source_frame_id: frame});
+            const snapshot = {
+                recorded_at_s: 3.0,
+                camera: {frame_id: 9, source_time_s: 2.5, width: 100, height: 100,
+                    intrinsics: [[100, 0, 50], [0, 100, 50], [0, 0, 1]],
+                    base_from_camera: [[1, 0, 0, 0], [0, 1, 0, 0],
+                        [0, 0, 1, 0], [0, 0, 0, 1]]},
+                centers_object_m: {object: [0, 0, 0]}, accepted: {},
+                layers: {object: {environment_group_motion: pose(0.1, 5)}},
+            };
+            const seen = [], original = _flashProject;
+            _flashProject = (point, estimate) => { seen.push(estimate.pose[0][3]); return [50, 50]; };
+            try {
+                renderFlashSnapshot(snapshot, 'Recording');
+                const stale = [...seen];
+                const staleLabel = document.querySelector('#flash-tracker-content').innerText;
+                seen.length = 0;
+                snapshot.layers.object.environment_group_motion = pose(0.6, 9);
+                renderFlashSnapshot(snapshot, 'Recording');
+                return {stale, staleLabel, current: [...seen]};
+            } finally { _flashProject = original; canvas.remove(); }
+        }"""
+    )
+    assert result["stale"] == []
+    assert "not on this camera frame" in result["staleLabel"]
+    assert 0.6 in result["current"]
 
 
 @pytest.mark.requires_playwright
