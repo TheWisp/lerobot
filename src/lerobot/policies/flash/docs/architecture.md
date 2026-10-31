@@ -1,8 +1,8 @@
 # FLASH: spatial action model
 
-Status: proposed
+Status: superseded by [the sealed experiment handover](SEALED_20261031.md)
 
-This is the single current FLASH system design. The [implementation map](../README.md)
+This is the historical FLASH redesign proposal. The [implementation map](../README.md)
 describes what runs; dated results belong in [proofs](../../../../../docs/proofs/README.md).
 Neither a research result nor a mockup silently changes the contract here.
 

@@ -10,7 +10,7 @@ import pytest
 
 from lerobot.policies.flash.offline_perception import extract_pose_trace
 from lerobot.policies.flash.perception import ObjectReference, ReferenceSnippet, RGBDFrame
-from lerobot.policies.flash.perception_step import PerceptionPipeline, PerceptionResult
+from lerobot.policies.flash.perception_step import PerceptionPipeline, PerceptionResult, PerceptionRunner
 from lerobot.policies.flash.perception_worker import _run_backend
 from lerobot.policies.flash.surface_observation import SurfaceObservationConfig, observation
 from lerobot.policies.flash.surface_reference import RegisteredSurfaceModel
@@ -437,6 +437,64 @@ def test_registered_demo_surface_is_reported_without_changing_pose_decision():
     assert first["first_view"]["reference_behind_p90_m"] is not None
     assert shifted["first_view"]["measured_to_reference_p90_m"] > 0.1
     assert shifted["first_view"]["reference_depth_pixels"] == 0
+
+
+@pytest.mark.parametrize("pipelined", [False, True])
+def test_reviewed_second_view_is_used_by_live_surface_fit_in_the_seeded_object_frame(pipelined):
+    from dataclasses import asdict
+
+    sequence = frames()[:2]
+    source = Masks()
+    masks = FrameMaskCache(source)
+    seed = np.eye(4)
+    seed[:3, 3] = [0.04, -0.02, 0.03]
+    primary_mask = source.masks(sequence[0])["object"]
+    measured = observation(
+        sequence[0].metric_depth(), primary_mask, sequence[0].intrinsics, asdict(SurfaceObservationConfig())
+    )["points"]
+    primary_object = measured - seed[:3, 3]
+    # The extra registered view measures a different face in the same object
+    # frame; its points must reach the fitter, not only the diagnostic scorer.
+    back_object = primary_object + [0, 0, 0.02]
+    ref = ObjectReference(
+        "object",
+        "preview:0",
+        (
+            ReferenceSnippet("demo", 0, 0, "object", np.eye(4), "first.png", "cal"),
+            ReferenceSnippet("demo", 0, 1, "object", np.eye(4), "second.png", "cal"),
+        ),
+    )
+    model = RegisteredSurfaceModel("object", ref.version, (primary_object, back_object))
+    backend = SurfacePoseBackend(
+        masks,
+        object(),
+        VisionPipelineConfig(compiled_surface_fit=False, reuse_surface_search=False),
+        initializer=RegisteredInitializer(masks, seed),
+        surface_models=(model,),
+        clock=lambda: 0.0,
+    )
+    pipeline = PerceptionPipeline(backend, (ref,), require_masks=True)
+    with patch("lerobot.policies.flash.surface_tracking.ufm_pairs", synthetic_pairs):
+        if pipelined:
+            with PerceptionRunner(pipeline) as runner:
+                incoming = iter(sequence)
+                first = runner.process_next(lambda: next(incoming, None))[1]
+                second = runner.process_next(lambda: next(incoming, None))[1]
+        else:
+            first = pipeline.process(sequence[0])
+            second = pipeline.process(sequence[1])
+
+    np.testing.assert_allclose(first.estimates[0].pose, seed, atol=1e-10)
+    session = backend.sessions["object"]
+    np.testing.assert_allclose(session.reference, measured)
+    np.testing.assert_allclose(session.registered_reference_camera_m[: len(measured)], measured)
+    np.testing.assert_allclose(
+        session.registered_reference_camera_m[len(measured) :], measured + [0, 0, 0.02]
+    )
+    assert second.details["object"]["diagnostics"]["fitting_reference"] == "registered_views"
+    assert second.details["object"]["diagnostics"]["fitting_reference_points"] == 2 * len(measured)
+    assert len(second.details["object"]["reference_m"]) == 2 * len(measured)
+    assert backend.prepared_surface_agreement["object"].all_points.shape[0] == 2 * len(measured)
 
 
 def test_rejected_fit_retains_visual_recovery_and_a_separate_motion_prior():

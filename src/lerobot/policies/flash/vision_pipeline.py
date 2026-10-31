@@ -21,7 +21,7 @@ from .perception import PoseBackend, RGBDFrame
 from .pose_evidence import ConditionalSurfaceInformation, RegisteredSurfaceEvidence, VisibleSurfaceSupport
 from .surface_correspondence import SurfaceMotionConfig
 from .surface_grounding import ShapeConfig
-from .surface_observation import SurfaceObservationConfig, prepare_surface_frame
+from .surface_observation import SurfaceObservationConfig, move, prepare_surface_frame
 from .surface_reference import PreparedSurfaceAgreement, RegisteredSurfaceModel, registered_surface_agreement
 from .surface_tracking import SurfaceTrackingSession, load_ufm
 from .symmetry import AxialSymmetry
@@ -346,6 +346,17 @@ class SurfacePoseBackend:
                 unregistered.add(role)
                 continue
             if session is None:
+                model = self.surface_models.get(role)
+                registered_reference_camera_m = None
+                if model is not None and len(model.view_points_object_m) > 1 and seed is not None:
+                    # The seed binds the prepared object frame to this first
+                    # live camera frame. Keep the live patch as the display
+                    # landmark frame while fitting subsequent frames against
+                    # all reviewed surfaces in that same fixed frame.
+                    camera_from_object = np.linalg.inv(frame.base_from_camera) @ seed.pose
+                    registered_reference_camera_m = move(
+                        np.concatenate(model.view_points_object_m), camera_from_object
+                    )
                 session = SurfaceTrackingSession(
                     self.matcher,
                     observation_config=self.config.observation,
@@ -355,6 +366,7 @@ class SurfacePoseBackend:
                     fit_kernels=self._fit_kernels,
                     search_pool=self._search_pool,
                     information_correspondence_m=self.config.registration_threshold_m,
+                    registered_reference_camera_m=registered_reference_camera_m,
                 )
                 self.sessions[role] = session
             jobs.append((role, session, masks.get(role)))

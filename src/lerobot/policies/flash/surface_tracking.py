@@ -1,8 +1,10 @@
-"""Experimental vision-only surface tracking, independent of cameras and robot control.
+"""Experimental surface tracking, independent of cameras and robot control.
 
-One fixed partial reference is transported by UFM then corrected against the
-current SAM mask and measured depth. No complete object, mass center, or
-calibrated confidence is inferred. A new reference requires an explicit reset.
+UFM transports the first live partial observation. The pose correction fits
+either that observation or several reviewed demo surfaces registered to its
+frame against the current SAM mask and measured depth. Neither choice implies
+a complete object, mass center, or calibrated confidence. Changing a reference
+requires an explicit reset.
 """
 
 from __future__ import annotations
@@ -142,6 +144,7 @@ class SurfaceTrackingSession:
         fit_kernels=None,
         search_pool=None,
         information_correspondence_m=None,
+        registered_reference_camera_m=None,
     ):
         self.matcher = matcher
         self.matcher_lock = matcher_lock
@@ -158,6 +161,12 @@ class SurfaceTrackingSession:
         if not np.isfinite(self.information_correspondence_m) or self.information_correspondence_m <= 0:
             raise ValueError("surface information correspondence distance must be positive")
         self.reference = None
+        self.registered_reference_camera_m = None
+        if registered_reference_camera_m is not None:
+            points = np.asarray(registered_reference_camera_m, dtype=float)
+            if points.ndim != 2 or points.shape[1] != 3 or len(points) < 3 or not np.isfinite(points).all():
+                raise ValueError("registered fitting reference needs finite metric Nx3 points")
+            self.registered_reference_camera_m = points.copy()
         self.previous = None
         self.pose = np.eye(4)
         # Keep an independent motion-only lineage from the last RGB-D accepted
@@ -310,6 +319,11 @@ class SurfaceTrackingSession:
             detail["reference_frame_id"] = self.reference_frame_id
             status = "reference"
         else:
+            fitting_reference = (
+                self.registered_reference_camera_m
+                if self.registered_reference_camera_m is not None
+                else self.reference
+            )
             step = prepared["step"]
             if self.last_accepted_pose is not None:
                 if step is None:
@@ -320,9 +334,9 @@ class SurfaceTrackingSession:
             prior = self.pose.copy()
             start = time.perf_counter()
             if self.prepared_reference is None:
-                self.prepared_reference = PreparedReferenceSurface.build(self.reference, self.shape_config)
+                self.prepared_reference = PreparedReferenceSurface.build(fitting_reference, self.shape_config)
             self.pose, fit = WholeSurfaceFit(
-                self.reference,
+                fitting_reference,
                 current,
                 intrinsics,
                 self.shape_config,
@@ -341,16 +355,25 @@ class SurfaceTrackingSession:
                 final_rotation_deg=angle(self.pose, prior),
             )
             status = "fitted" if step is not None else "fitted_without_rgb_motion"
+        fitting_reference = (
+            self.registered_reference_camera_m
+            if self.registered_reference_camera_m is not None
+            else self.reference
+        )
+        detail["fitting_reference"] = (
+            "registered_views" if self.registered_reference_camera_m is not None else "first_live_view"
+        )
+        detail["fitting_reference_points"] = len(fitting_reference)
         motion_only_prior = (
             self.motion_from_accepted @ self.last_accepted_pose
             if self.last_accepted_pose is not None and self.motion_chain_complete
             else None
         )
         all_points = current["all_surface_points"]
-        predicted = move(self.reference, self.pose)
+        predicted = move(fitting_reference, self.pose)
         information_start = time.perf_counter()
         information = measured_surface_information(
-            self.reference,
+            fitting_reference,
             self.pose,
             current["obs"]["points"],
             current["obs"]["normals"],

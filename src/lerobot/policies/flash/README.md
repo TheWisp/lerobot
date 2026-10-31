@@ -1,7 +1,12 @@
-# FLASH: current implementation
+# FLASH: sealed implementation
 
-This is the implementation map. The [architecture](docs/architecture.md) is
-the current proposed design; it does not claim every feature is built.
+**Sealed 2026-10-31.** This experiment is retained for research and comparison.
+Start with the [sealed handover](docs/SEALED_20261031.md), which records the
+limitations, agreed restart scope and final verification. The documentation
+below describes the archived implementation; it is not the next design.
+
+This is the archived implementation map. The [architecture](docs/architecture.md)
+is the historical proposal; it does not claim every feature is built.
 [Surface tracking](docs/surface_tracking.md), [pose flow](docs/pose_flow.md)
 and [attachment policy](docs/attachment_policy.md) explain implemented paths.
 The [benchmark](../../../../benchmarks/FLASH_TRACKING.md) and
@@ -73,6 +78,9 @@ the exact reviewed mask, source frame, calibration and shared object frame;
 changing the primary reference clears the additional views. The saved views
 feed appearance matching and the registered surface model. Adding a view does
 not change the saved motion or itself prove the new alignment is correct.
+The [dowel illustration](../../../../docs/proofs/flash-multiview-reference/dowel_view_workflow.jpg)
+shows the two partial views and a later RGB-D frame; its second view remains
+unapproved in the main demo.
 The check does not modify the skill or include unsaved edits. Older sealed
 preparations can rebuild their first surface from the saved reference mask.
 The same signed depth gaps are recorded with live surface evidence and shown in
@@ -287,20 +295,20 @@ motion from recorded gripper poses, and the run updates its attachment from
 live observations.
 
 The surface backend first registers the current observation into the prepared
-object frame using the reference matcher. It then transports that same frame
-with the temporally tracked surface; it does not recompute the object's origin
+object frame using the reference matcher. It then transports that frame with
+temporally tracked surface motion; it does not recompute the object's origin
 from the current visible points. Failed initial registration remains `LOST`.
-Its fit still uses the first live observed surface. For newly prepared bundles,
-the source-frame proposal also records how the saved demo surface agrees with
-the current masked depth, using the first registered view and all registered
-views separately. It measures both visible depth points to the saved surface
-and the saved surface back to reliable depth pixels. A low one-way distance can
-hide a wrong pose; these numbers are diagnostics, not confidence probabilities.
-The sealed-demo importer starts with one view per object and can add reviewed
-views as above. The saved surfaces do not yet alter pose acceptance or control;
-the current surface fit still starts from the first live observed surface.
-The additional views improve the reference evidence and diagnostics, but their
-effect on live fitting needs independent validation before that switch.
+With one saved view, fitting remains anchored to the first live observed
+surface. With two or more reviewed views, fitting subsequent frames uses their
+combined measured surface in that same fixed frame. The display landmarks
+still come from the first live observation. The source-frame proposal also
+records how the first saved view and all saved views separately agree with
+the current masked depth, in both depth-to-surface and surface-to-depth
+directions. A low one-way distance can hide a wrong pose; these numbers are
+diagnostics, not confidence probabilities. Reviewed view alignment remains an
+annotation decision. Extra geometry does not independently prove the pose or
+guarantee better control, and no physical trial of a multi-view bundle has yet
+been completed.
 The 3D demo viewer draws every registered snippet in the saved object frame,
 with separate triangles for each measured view. This is display geometry;
 showing several views does not establish that their registration is correct.
