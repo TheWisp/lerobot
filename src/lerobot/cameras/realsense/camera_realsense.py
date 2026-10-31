@@ -50,6 +50,7 @@ pkg_name = "pyrealsense2-macosx" if sys.platform == "darwin" else "pyrealsense2"
 class RealSenseReadTiming:
     frames: int = 0
     errors: int = 0
+    first_frame_wait_s: float | None = None
     max_hardware_wait_s: float = 0.0
     max_processing_s: float = 0.0
     max_publish_gap_s: float = 0.0
@@ -677,9 +678,13 @@ class RealSenseCamera(Camera):
                 frameset = self._read_from_hardware()
                 capture_time = time.perf_counter()
                 with self.frame_lock:
-                    self._read_timing.max_hardware_wait_s = max(
-                        self._read_timing.max_hardware_wait_s, capture_time - hardware_start_s
-                    )
+                    hardware_wait_s = capture_time - hardware_start_s
+                    if self._read_timing.frames == 0:
+                        self._read_timing.first_frame_wait_s = hardware_wait_s
+                    else:
+                        self._read_timing.max_hardware_wait_s = max(
+                            self._read_timing.max_hardware_wait_s, hardware_wait_s
+                        )
                     self._read_timing.inflight_stage = "processing"
                     self._read_timing.inflight_started_s = capture_time
 
@@ -798,6 +803,7 @@ class RealSenseCamera(Camera):
         return {
             "frames": timing.frames,
             "errors": timing.errors,
+            "first_frame_wait_s": timing.first_frame_wait_s,
             "max_hardware_wait_s": timing.max_hardware_wait_s,
             "max_processing_s": timing.max_processing_s,
             "max_publish_gap_s": timing.max_publish_gap_s,

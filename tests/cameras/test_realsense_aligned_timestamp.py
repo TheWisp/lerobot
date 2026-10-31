@@ -185,6 +185,8 @@ def test_cached_rgbd_frames_do_not_hold_realsense_buffers():
         timing = camera.read_timing_snapshot()
         assert timing["frames"] == 1
         assert timing["errors"] == 0
+        assert timing["first_frame_wait_s"] is not None
+        assert timing["max_hardware_wait_s"] == 0
         assert timing["max_processing_s"] > 0
         assert timing["inflight_stage"] == "hardware"
         assert timing["inflight_age_s"] is not None
