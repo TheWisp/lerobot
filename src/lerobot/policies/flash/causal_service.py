@@ -1041,6 +1041,10 @@ class CausalPoseService:
                 self._count_anchor_outcome(estimate.role, "missing_mask")
                 self._record_anchor_decision(result, candidate, "missing_mask")
                 continue
+            if mask.shape != source.depth.shape:
+                self._count_anchor_outcome(estimate.role, "mask_shape_mismatch")
+                self._record_anchor_decision(result, candidate, "mask_shape_mismatch")
+                continue
             if estimate.source_time_s != source.source_time_s:
                 self._count_anchor_outcome(estimate.role, "time_mismatch")
                 self._record_anchor_decision(result, candidate, "time_mismatch")

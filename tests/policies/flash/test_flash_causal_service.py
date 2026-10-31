@@ -35,6 +35,44 @@ def frame(image, frame_id):
     )
 
 
+def test_wrong_sized_mask_rejects_only_its_source_pose_and_allows_reacquisition():
+    service = CausalPoseService(LatestPoseStore())
+    image = np.zeros((96, 96), dtype=np.uint8)
+    first = frame(image, 0)
+    service._frame(first)
+
+    def pose(role, source):
+        return PoseEstimate(
+            role,
+            np.eye(4),
+            source.source_time_s,
+            source.available_time_s,
+            Evidence.OBSERVED,
+            "reference-v1",
+            (True,) * 3,
+            (True,) * 3,
+        )
+
+    valid_mask = np.zeros(image.shape, dtype=bool)
+    valid_mask[36:60, 36:60] = True
+    service._anchor(
+        _Anchor(
+            first.frame_id,
+            (pose("bad", first), pose("good", first)),
+            {"bad": np.ones((48, 48), dtype=bool), "good": valid_mask},
+        )
+    )
+    assert service.anchor_decisions_by_source[(0, "bad")].outcome == "mask_shape_mismatch"
+    assert service.anchor_decisions_by_source[(0, "good")].outcome == "accepted"
+    assert "bad" not in service.store.snapshot()[1]
+
+    second = frame(image, 1)
+    service._frame(second)
+    service._anchor(_Anchor(second.frame_id, (pose("bad", second),), {"bad": valid_mask}))
+    assert service.anchor_decisions_by_source[(1, "bad")].outcome == "accepted"
+    assert service.store.snapshot()[1]["bad"].source_frame_id == second.frame_id
+
+
 def test_slow_camera_processing_records_stage_and_source_frame(monkeypatch):
     service = CausalPoseService(LatestPoseStore(), max_frame_gap_s=0.01)
     update = service.scene.update
