@@ -147,6 +147,53 @@ def test_later_observation_rebases_pending_track_without_restarting_replay():
         service.close()
 
 
+def test_reseeding_pending_point_track_retires_old_active_track():
+    """Two seed frames must not write into one shared motion history."""
+    image = np.random.default_rng(57).integers(0, 255, (96, 96), dtype=np.uint8)
+    frames = [
+        frame(cv2.warpAffine(image, np.float32([[1, 0, 2 * i], [0, 1, 0]]), (96, 96)), i) for i in range(4)
+    ]
+    mask = np.zeros(image.shape, dtype=bool)
+    mask[20:76, 20:76] = True
+    store = LatestPoseStore()
+    service = CausalPoseService(store)
+    for item in frames[:3]:
+        service._frame(item)
+    first = PoseEstimate(
+        "object",
+        np.eye(4),
+        frames[0].source_time_s,
+        frames[0].available_time_s,
+        Evidence.OBSERVED,
+        "first-view",
+        (True,) * 3,
+        (True,) * 3,
+    )
+    service._anchor(_Anchor(0, (first,), {"object": mask}))
+    service._drain_pending()
+    assert "object" in service.active
+    revised = PoseEstimate(
+        "object",
+        np.eye(4),
+        frames[2].source_time_s,
+        frames[2].available_time_s,
+        Evidence.OBSERVED,
+        "new-view",
+        (True,) * 3,
+        (True,) * 3,
+    )
+    service._anchor(_Anchor(2, (revised,), {"object": mask}))
+    assert "object" in service.pending
+    assert "object" not in service.active
+    assert [item[0] for item in service.motion_history["object"]] == [2]
+    service._frame(frames[3])
+    service._drain_pending()
+    assert service.error is None
+    result = store.snapshot()[1]["object"]
+    assert result.source_time_s == frames[3].source_time_s
+    assert result.last_direct_observation_s == frames[2].source_time_s
+
+
 @pytest.mark.parametrize("last_frame", [2, 3])
 def test_late_older_observation_rechecks_a_newer_direct_fit_against_its_point_history(last_frame):
     """Arrival order must not make a disputed later pose become the final belief."""

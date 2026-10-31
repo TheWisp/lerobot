@@ -939,6 +939,10 @@ class CausalPoseService:
                 )
             )
             self.anchors += 1
+            # The old active track and this new pending track cannot share a
+            # motion history: their seed frames (and possibly object frames)
+            # differ. Retire the old one before replaying the new seed.
+            self.active.pop(estimate.role, None)
             self.pending[estimate.role] = _PendingTrack(tracker, estimate, source.frame_id, {})
             # A point track may fail before catching up to the newest camera
             # frame. Keep the last directly measured pose explicitly predicted
@@ -1654,6 +1658,12 @@ class CausalPoseService:
         if motion.base_motion_from_seed is None:
             return
         assert anchor.pose is not None
+        if anchor.source_time_s > motion.source_time_s:
+            raise ValueError(
+                f"point prediction precedes its anchor: role={role}, frame={frame_id}, "
+                f"motion_time={motion.source_time_s}, anchor_frame={anchor.source_frame_id}, "
+                f"anchor_time={anchor.source_time_s}"
+            )
         pose = motion.base_motion_from_seed @ anchor.pose
         symmetry = self.axial_symmetries.get(role)
         if symmetry is not None:
