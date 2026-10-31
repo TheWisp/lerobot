@@ -385,6 +385,23 @@ def establish_environment_relationship(
     if int(agree.sum()) < min_inliers:
         return None
     ids, old_xyz, new_xyz = ids[agree], old_xyz[agree], new_xyz[agree]
+    new_center = _support_center(new_pose, object_center_object_m)
+    # These correspondences already agree with the independently observed
+    # object motion. If one rigid fit explains every remaining measured point
+    # and carries the object centre correctly, random three-point trials
+    # cannot find a larger consensus. Keep the robust search for other cases.
+    try:
+        direct = rigid_fit(old_xyz, new_xyz)
+        residual = np.linalg.norm(transform_points(direct, old_xyz) - new_xyz, axis=1)
+        if (
+            np.all(residual <= fit_threshold_m)
+            and np.linalg.norm(transform_points(direct, old_center[None])[0] - new_center) <= fit_threshold_m
+        ):
+            return EnvironmentRelationship(
+                ids, new_xyz, new_pose, after.source_time_s, reference_version, after.source_time_s
+            )
+    except DegenerateRegistrationError:
+        pass
     try:
         fit = register_object(
             old_xyz,
@@ -396,7 +413,6 @@ def establish_environment_relationship(
     except DegenerateRegistrationError:
         return None
     predicted_center = transform_points(fit.base_from_demo_object, old_center[None])[0]
-    new_center = _support_center(new_pose, object_center_object_m)
     if np.linalg.norm(predicted_center - new_center) > fit_threshold_m:
         return None
     indices = np.asarray(fit.inlier_indices, dtype=int)

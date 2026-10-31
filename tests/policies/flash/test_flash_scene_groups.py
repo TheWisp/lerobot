@@ -9,6 +9,7 @@ import pytest
 
 from lerobot.policies.flash.causal_service import CausalPoseService, _Anchor
 from lerobot.policies.flash.perception import LatestPoseStore, RGBDFrame
+from lerobot.policies.flash.registration import DegenerateRegistrationError, register_object
 from lerobot.policies.flash.scene_groups import (
     EnvironmentRelationship,
     ScenePointTracker,
@@ -131,6 +132,69 @@ def test_environment_relation_needs_non_object_co_motion_and_tracks_occlusion():
             )
             is None
         )
+
+
+def test_clear_environment_relation_uses_all_measured_correspondences_without_ransac(monkeypatch):
+    rng = np.random.default_rng(19)
+    points = rng.uniform((-0.08, -0.08, 0.98), (0.08, 0.08, 1.02), (48, 3))
+    pixels = np.column_stack((rng.integers(10, 80, 48), rng.integers(10, 80, 48)))
+    before = _tracks(0, points, pixels)
+    after = _tracks(1, points + [0.02, 0, 0], pixels)
+    mask = np.zeros((96, 96), dtype=bool)
+
+    def unexpected_ransac(*_args, **_kwargs):
+        raise AssertionError("fully consistent measured support does not need randomized fitting")
+
+    monkeypatch.setattr("lerobot.policies.flash.scene_groups.register_object", unexpected_ransac)
+    relation = establish_environment_relationship(
+        before,
+        after,
+        _pose(0),
+        _pose(0.02),
+        (mask,),
+        context_radius_m=0.25,
+        fit_threshold_m=0.003,
+        min_motion_m=0.008,
+        min_inliers=12,
+        reference_version="v1",
+    )
+    assert relation is not None
+    np.testing.assert_array_equal(relation.ids, before.ids)
+    np.testing.assert_allclose(relation.anchor_xyz, after.base_xyz, atol=1e-10)
+
+
+def test_environment_relation_retains_robust_fit_for_contaminated_correspondences(monkeypatch):
+    threshold_m = 0.005
+    rng = np.random.default_rng(0)
+    points = rng.uniform((-0.1, -0.1, 0.98), (0.1, 0.1, 1.02), (50, 3))
+    moved = points + [0.02, 0, 0]
+    noisy = rng.choice(len(points), 15, replace=False)
+    perturbation = rng.normal(size=(len(noisy), 3))
+    perturbation /= np.linalg.norm(perturbation, axis=1)[:, None]
+    moved[noisy] += perturbation * (0.98 * threshold_m)
+    pixels = np.column_stack((np.arange(50) + 10, np.arange(50) + 10))
+    calls = []
+
+    def robust_fit(*args, **kwargs):
+        calls.append(True)
+        return register_object(*args, **kwargs)
+
+    monkeypatch.setattr("lerobot.policies.flash.scene_groups.register_object", robust_fit)
+    relation = establish_environment_relationship(
+        _tracks(0, points, pixels),
+        _tracks(1, moved, pixels),
+        _pose(0),
+        _pose(0.02),
+        (np.zeros((96, 96), dtype=bool),),
+        context_radius_m=0.25,
+        fit_threshold_m=threshold_m,
+        min_motion_m=0.008,
+        min_inliers=12,
+        reference_version="v1",
+    )
+    assert calls == [True]
+    assert relation is not None
+    assert len(relation.ids) >= 12
 
 
 def test_group_bridge_is_same_when_first_direct_pose_arrives_after_second():
@@ -822,7 +886,7 @@ def test_scene_tracks_keep_identities_on_every_frame():
     assert tracker.gaps == 1
 
 
-def test_recorded_moving_tray_group_predicts_ring_but_not_independent_motion():
+def test_recorded_moving_tray_group_predicts_ring_but_not_independent_motion(monkeypatch):
     """The old run supplies measured scene tracks, not synthetic pixel shifts."""
     with np.load(RECORDED_MOTION) as recorded:
 
@@ -849,6 +913,27 @@ def test_recorded_moving_tray_group_predicts_ring_but_not_independent_motion():
             reference_version="ring-v1",
         )
         assert relation is not None and len(relation.ids) >= 12
+        with monkeypatch.context() as forced_legacy:
+
+            def skip_direct_fit(*_args, **_kwargs):
+                raise DegenerateRegistrationError("use randomized fit")
+
+            forced_legacy.setattr("lerobot.policies.flash.scene_groups.rigid_fit", skip_direct_fit)
+            legacy = establish_environment_relationship(
+                before,
+                after,
+                recorded["pose_331"],
+                recorded["pose_360"],
+                (recorded["mask_331"],),
+                context_radius_m=0.25,
+                fit_threshold_m=0.005,
+                min_motion_m=0.008,
+                min_inliers=12,
+                reference_version="ring-v1",
+            )
+        assert legacy is not None
+        np.testing.assert_array_equal(relation.ids, legacy.ids)
+        np.testing.assert_allclose(relation.anchor_xyz, legacy.anchor_xyz, atol=1e-10)
         for frame_id in (390, 422):
             predicted = relation.predict(snapshot(frame_id), fit_threshold_m=0.005, min_inliers=12)
             assert predicted is not None
