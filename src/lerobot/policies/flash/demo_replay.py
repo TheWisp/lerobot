@@ -260,6 +260,11 @@ def _add_saved_extraction_layers(root: Path, bundle: Path, result: dict) -> None
                     "pose": cache[f"{role}_poses"][index].tolist() if evidence != "lost" else None,
                     "evidence": evidence,
                     "estimator": estimator,
+                    "direct_translation_observed": (
+                        bool(cache[f"{role}_direct_translation"][index])
+                        if f"{role}_direct_translation" in cache
+                        else False
+                    ),
                     "source_time_s": source_s,
                     "last_direct_observation_s": (
                         float(cache[f"{role}_last_direct_s"][index])

@@ -1,5 +1,7 @@
 """The sealed-demo adapter must preserve event meaning when clocks are sampled."""
 
+import json
+
 import cv2
 import numpy as np
 import pytest
@@ -17,6 +19,36 @@ from lerobot.policies.flash.sealed_demo_import import (
     explicit_paths_from_prepared_skill,
 )
 from lerobot.policies.flash.skill import EndpointRequirement, Relation
+
+
+def test_demo_replay_preserves_measured_position_when_orientation_is_predicted(tmp_path):
+    from lerobot.policies.flash.demo_replay import _add_saved_extraction_layers
+
+    cache = tmp_path / "flash/v1/preparation-cache/trace.npz"
+    cache.parent.mkdir(parents=True)
+    np.savez(
+        cache,
+        frames=1,
+        fixture_poses=np.eye(4)[None],
+        fixture_evidence=np.array(["predicted"]),
+        fixture_estimator=np.array(["group_rgbd"]),
+        fixture_direct_translation=np.array([True]),
+    )
+    bundle = tmp_path / "flash/v1/prepared/example/bundle.json"
+    bundle.parent.mkdir(parents=True)
+    (bundle.parent / "preparation-report.json").write_text(
+        json.dumps({"pose_trace_cache": "flash/v1/preparation-cache/trace.npz"})
+    )
+    replay = {
+        "geometry": {"points_object_m": {"fixture": []}},
+        "frames": [{"snapshot": {"recorded_at_s": 1.0, "layers": {}, "accepted": {}}}],
+    }
+
+    _add_saved_extraction_layers(tmp_path, bundle, replay)
+
+    extraction = replay["frames"][0]["snapshot"]["layers"]["fixture"]["demo_extraction"]
+    assert extraction["evidence"] == "predicted"
+    assert extraction["direct_translation_observed"] is True
 
 
 def test_sealed_rgbd_frame_uses_recorded_camera_time(tmp_path):

@@ -193,6 +193,12 @@ launcher requires an explicit experimental override before executing such a
 bundle. Those intervals are **not verified contact geometry**; inspect the
 `held_evidence` trace before testing.
 
+The sealed importer now extracts pose and scene evidence through the final
+recorded camera frame. Authored keyframes still determine where executable
+skill motion ends; later camera frames remain available to inspect release,
+retreat and the outcome in demo playback. A preparation cache records the
+full camera-frame count so an older keyframe-truncated trace cannot be reused.
+
 New regular LeRobot episodes have a separate, model-neutral skill compiler in
 [`compiler.py`](compiler.py): it takes dataset frames, role-indexed pose
 sidecars and explicit interval annotations. Start-relative intervals need no
@@ -552,5 +558,7 @@ contract. This implementation map describes the present gap without defining
 a second roadmap.
 
 The [tracking benchmark](../../../../benchmarks/FLASH_TRACKING.md) scores saved
-scene evidence without changing the perception path. Its baseline uses supplied
-masks and does not measure success on the rig's own demonstrations.
+scene evidence without changing the perception path. Its external baseline uses
+supplied masks. It also includes the rig's insertion and stacking demonstrations
+as diagnostic cases; those recordings lack independent pose and outcome labels,
+so their coverage counts cannot measure task success or pose accuracy.

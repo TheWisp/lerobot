@@ -474,7 +474,11 @@ def prepare(
         points = next(model.points.points_object_m for model in models if model.points.role == role)
         axial_symmetries.append(_symmetry_from_annotation(role, spec, points, base_from_camera))
 
-    through_frame = _nearest_index(camera_times, times[_nearest_index(times, keypoints[-1]["t"])])
+    # Keyframes bound the executable skill, not the evidence available for
+    # reviewing the demonstration. In particular, the camera may record a
+    # post-release retreat after the final authored motion. Keep those frames
+    # in the pose trace and scene evidence so replay can show what happened.
+    through_frame = len(camera_times) - 1
     estimates: list[dict] = []
     held_observed_masks: dict[int, np.ndarray] = {}
     observed_counts = dict.fromkeys(prompts, 0)
@@ -504,6 +508,7 @@ def prepare(
     cache_identity["vision_pipeline"] = vision_config.to_dict()
     cache_identity["pose_trace_selection_version"] = POSE_TRACE_SELECTION_VERSION
     cache_identity["scene_evidence_capture_version"] = SCENE_EVIDENCE_CAPTURE_VERSION
+    cache_identity["trace_frames"] = through_frame + 1
     cache_key = hashlib.sha256(
         json.dumps(cache_identity, sort_keys=True).encode()
         + intrinsics.tobytes()

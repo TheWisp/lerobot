@@ -1140,7 +1140,9 @@ function renderFlashDemoSnapshot(snapshot) {
                 (extracted?.evidence !== 'lost' ? extracted : null);
             if (!pose) continue;
             const origin = held ? 'Gripper-carried prediction' : pose.evidence === 'observed'
-                ? 'Observed pose' : pose.evidence === 'predicted' ? 'Predicted pose' : 'Pose unavailable';
+                ? 'Observed pose' : pose.direct_translation_observed
+                    ? 'Position measured; orientation predicted'
+                    : pose.evidence === 'predicted' ? 'Predicted pose' : 'Pose unavailable';
             html += `<div class="flash-tracker-role"><strong>${_esc(role)}</strong>` +
                 _flashOverlayRow(held ? 'held' : skillPose ? 'accepted' : 'layer', role,
                     skillPose ? '' : 'demo_extraction', 'flash-tracker-selected',
@@ -1221,8 +1223,10 @@ function renderFlashDemoSnapshot(snapshot) {
             : '';
         const detail = pose.evidence === 'lost' ? `Lost${lastDirect}`
             : `${_flashLayerName(pose.estimator)} · ${_flashPoseText(pose, snapshot, role)}${lastDirect}${separation}`;
-        const predictionNote = pose.evidence === 'predicted' && pose.estimator === 'appearance_rgbd'
-            ? 'Visual evidence contributed, but the full pose remained predicted. ' : '';
+        const predictionNote = pose.direct_translation_observed
+            ? 'Position measured in this frame; orientation remains predicted. '
+            : pose.evidence === 'predicted' && pose.estimator === 'appearance_rgbd'
+                ? 'Visual evidence contributed, but the full pose remained predicted. ' : '';
         const originNote = rebuilt
             ? 'Current masks and group supports were rebuilt with the same perception pipeline; the saved skill was unchanged.'
             : 'Per-frame masks and supporting group points were not stored.';
