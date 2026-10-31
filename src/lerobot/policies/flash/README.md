@@ -497,6 +497,9 @@ The executable core already separates:
   provenance. Test and Replay show this distinction in the tracker panel.
   A tick assembler joins the latest available RGB-D frame and pose evidence
   before the recorder worker performs disk/video encoding.
+  The GUI trial subprocess also saves its final camera, perception, planner
+  and outcome diagnostics in the dataset's `flash/v1/trial_report.json`, so a
+  failed attempt can be investigated after its console output disappears.
 
 The annotation points to a source LeRobot dataset episode. Dense transform
 samples are derived geometry; the original RGB-D, robot observations and

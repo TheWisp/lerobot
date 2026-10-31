@@ -613,6 +613,15 @@ def main() -> None:
         stop_requested=stop.is_set,
         allow_conflicted_demo_pose=args.allow_conflicted_demo_pose,
     )
+    if dataset_root := report.get("dataset_root"):
+        # The GUI launches this module as a subprocess. Its stdout is transient,
+        # while the episode must retain the camera and planner diagnostics that
+        # explain a failed attempt when it is reviewed later.
+        path = Path(dataset_root) / "flash" / "v1" / "trial_report.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        pending = path.with_suffix(".json.tmp")
+        pending.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+        pending.replace(path)
     print(json.dumps(report, indent=2))
     if report.get("outcome") == "failure" or (report.get("outcome") == "interrupted" and not stop.is_set()):
         print(f"FLASH {report['outcome']}: {report['reason']}", file=sys.stderr)
