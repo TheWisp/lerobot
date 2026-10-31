@@ -273,8 +273,10 @@ def _add_saved_extraction_layers(root: Path, bundle: Path, result: dict) -> None
                         else None
                     ),
                 }
-                goal = snapshot.get("demo_goal")
-                if goal is not None and goal["role"] == role and evidence != "lost":
+                # The prepared scene trace is the source-time object estimate.
+                # Skill samples may describe a future endpoint or a motion
+                # reference; neither is the current camera-frame object pose.
+                if evidence != "lost":
                     snapshot["accepted"][role] = {
                         "pose": cache[f"{role}_poses"][index].tolist(),
                         "evidence": evidence,
@@ -282,6 +284,8 @@ def _add_saved_extraction_layers(root: Path, bundle: Path, result: dict) -> None
                         "source_time_s": snapshot["recorded_at_s"],
                         "available_time_s": snapshot["recorded_at_s"],
                     }
+                else:
+                    snapshot["accepted"].pop(role, None)
                 held = snapshot.get("held_prediction")
                 if (
                     held is not None

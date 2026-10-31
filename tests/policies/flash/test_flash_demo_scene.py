@@ -131,7 +131,10 @@ def test_extraction_layer_preserves_group_prediction_and_lost_state(tmp_path) ->
     )
     result = {
         "geometry": {"points_object_m": {"object": [[0, 0, 1]]}},
-        "frames": [{"snapshot": {"recorded_at_s": float(i)}} for i in range(3)],
+        "frames": [
+            {"snapshot": {"recorded_at_s": float(i), "accepted": {"object": {"estimator": "old_goal"}}}}
+            for i in range(3)
+        ],
     }
 
     _add_saved_extraction_layers(root, bundle_dir / "bundle.json", result)
@@ -141,6 +144,9 @@ def test_extraction_layer_preserves_group_prediction_and_lost_state(tmp_path) ->
     assert layers[1]["evidence"] == "predicted"
     assert layers[2]["pose"] is None
     assert layers[2]["evidence"] == "lost"
+    assert result["frames"][0]["snapshot"]["accepted"]["object"]["estimator"] == "appearance_rgbd"
+    assert result["frames"][1]["snapshot"]["accepted"]["object"]["estimator"] == "environment_group_motion"
+    assert "object" not in result["frames"][2]["snapshot"]["accepted"]
 
 
 def test_rebuilt_scene_evidence_preserves_mask_pixels_and_rejects_stale_bundle(tmp_path) -> None:

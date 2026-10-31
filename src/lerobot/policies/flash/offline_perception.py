@@ -13,9 +13,9 @@ from .perception_step import PerceptionPipeline, PerceptionResult, PerceptionRun
 from .symmetry import AxialSymmetry
 from .trajectory import Evidence, PoseEstimate
 
-# Version 10 also preserves recorded motor event times when extracting a
-# grasp or release between camera frames.
-POSE_TRACE_SELECTION_VERSION = 10
+# Version 11 includes source-time held-object predictions in the same scene
+# decision as independently measured object motion.
+POSE_TRACE_SELECTION_VERSION = 11
 
 
 def extract_pose_trace(
@@ -28,6 +28,7 @@ def extract_pose_trace(
     axial_symmetries: tuple[AxialSymmetry, ...] = (),
     attached_role_at_frame: Callable[[int], str | None] | None = None,
     attachment_events: tuple[tuple[float, str | None], ...] = (),
+    kinematic_prediction_at: Callable[[str, RGBDFrame], PoseEstimate | None] | None = None,
     on_vision_result: Callable[[PerceptionResult], None] | None = None,
     on_frame_evidence: Callable[[RGBDFrame, PerceptionResult, dict, dict[str, PoseEstimate]], None]
     | None = None,
@@ -37,7 +38,8 @@ def extract_pose_trace(
     The direct backend and causal estimator are the same components as in a
     live attempt. Offline processing receives every recorded frame and may
     finish its direct proposal before advancing to the next frame. It does not
-    claim to reproduce live scheduling or the gripper attachment updater.
+    claim to reproduce live scheduling. A supplied gripper prediction is
+    evaluated at each camera frame's recorded source time.
     """
     if attachment_events and attached_role_at_frame is not None:
         raise ValueError("provide attachment event times or camera-frame roles, not both")
@@ -54,6 +56,7 @@ def extract_pose_trace(
             },
             object_points_by_role=object_points_by_role,
             axial_symmetries=axial_symmetries,
+            kinematic_prediction_at=kinematic_prediction_at,
         )
     trace = []
     source = iter(frames)

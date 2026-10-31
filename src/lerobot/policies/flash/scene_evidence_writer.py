@@ -13,7 +13,7 @@ from .perception import RGBDFrame
 from .perception_step import PerceptionResult
 from .trajectory import PoseEstimate
 
-SCENE_EVIDENCE_CAPTURE_VERSION = 7
+SCENE_EVIDENCE_CAPTURE_VERSION = 8
 
 
 def _mask_runs(mask: np.ndarray) -> list[list[int]]:

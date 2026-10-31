@@ -205,6 +205,45 @@ def test_demo_attachment_disables_environment_bridge(monkeypatch):
     assert rows[2]["target"].evidence == Evidence.LOST
 
 
+def test_demo_held_prediction_uses_the_same_scene_owner_as_live():
+    mask = np.zeros((96, 96), dtype=bool)
+    mask[40:56, 40:56] = True
+    reference = ObjectReference(
+        "target", "v1", (ReferenceSnippet("demo", 0, 0, "target", np.eye(4), "mask.png", "camera-v1"),)
+    )
+    frames = [_frame(index) for index in range(3)]
+
+    def gripper_at_source(role, frame):
+        return PoseEstimate(
+            role,
+            _pose(0.2 + frame.frame_id * 0.01),
+            frame.source_time_s,
+            frame.available_time_s,
+            Evidence.PREDICTED,
+            "v1",
+            (True,) * 3,
+            (True,) * 3,
+            estimator="gripper_motion",
+            source_frame_id=frame.frame_id,
+        )
+
+    rows = offline_perception.extract_pose_trace(
+        frames,
+        _RecordedBackend(mask),
+        (reference,),
+        causal_tracking=CausalTrackingConfig(8, 8, 12, 0.1, 0.005),
+        attachment_events=((0.5 / 30, "target"),),
+        kinematic_prediction_at=gripper_at_source,
+    )
+
+    assert rows[0]["target"].evidence == Evidence.OBSERVED
+    assert rows[1]["target"].evidence == Evidence.OBSERVED
+    assert rows[1]["target"].estimator == "recorded_direct"
+    assert rows[2]["target"].evidence == Evidence.PREDICTED
+    assert rows[2]["target"].estimator == "gripper_motion"
+    np.testing.assert_allclose(rows[2]["target"].pose[:3, 3], [0.22, 0, 1])
+
+
 def test_rejected_direct_fit_is_not_reintroduced_as_a_demo_observation(monkeypatch):
     mask = np.zeros((96, 96), dtype=bool)
     mask[46:48, 46:48] = True  # Too few pixels to seed point motion.

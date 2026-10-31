@@ -505,7 +505,130 @@ def prepare(
         if annotation.get("causal_tracking") is not None
         else None
     )
+    selected_grasp_frame = int(annotation["grasp_reference_frame"])
+    if not 0 <= selected_grasp_frame <= int(_nearest_index(camera_times, float(times[grasp]))):
+        raise ValueError("the selected grasp reference must precede the demonstrated grasp")
+    held_model = next(model.points.points_object_m for model in models if model.points.role == held)
+    held_attachment_policy = annotation.get("held_attachment")
+    updater = None
+    if held_attachment_policy is not None:
+        limits = AttachmentRuntimeLimits.from_config(held_attachment_policy)
+        updater = HeldAttachmentUpdater(
+            held,
+            next(reference.version for reference in references if reference.role == held),
+            kinematics,
+            tuple(f"joint-{index}" for index in range(joints.shape[1])),
+            history_capacity=limits.history_capacity,
+            max_motor_sample_gap_s=limits.max_motor_sample_gap_s,
+            max_attachment_age_s=limits.max_attachment_age_s,
+            max_update_shift_m=limits.max_update_shift_m,
+            max_update_turn_rad=limits.max_update_turn_rad,
+            object_center_object_m=held_model.mean(axis=0),
+            object_points_object_m=held_model,
+            min_visual_support_points=(
+                causal_config.min_inliers
+                if causal_config is not None
+                else vision_config.registration_min_inliers
+            ),
+            depth_occlusion_tolerance_m=(
+                causal_config.fit_threshold_m
+                if causal_config is not None
+                else vision_config.registration_threshold_m
+            ),
+            observation_quality=vision_config.observation,
+        )
+    held_attachment_by_camera: list[np.ndarray | None] = [None for _ in camera_times]
+    held_conflicted_by_camera = [False for _ in camera_times]
+    held_ambiguous_by_camera = [False for _ in camera_times]
+    held_corrected_by_camera = [False for _ in camera_times]
+    held_visual_evidence_by_camera: list[dict | None] = [None for _ in camera_times]
+    held_correction_frames: list[int] = []
+    held_conflict_frames: list[int] = []
+    last_attachment: np.ndarray | None = None
+    last_direct_s: float | None = None
+    has_correction = False
+
+    def advance_held_attachment(
+        frame_index: int,
+        estimate: PoseEstimate,
+        mask: np.ndarray | None = None,
+        frame: RGBDFrame | None = None,
+    ) -> None:
+        nonlocal last_attachment, last_direct_s, has_correction
+        if frame_index == selected_grasp_frame:
+            if estimate.evidence != Evidence.OBSERVED:
+                raise ValueError("the selected grasp reference has no observed metric pose")
+            last_direct_s = estimate.source_time_s
+            if updater is not None:
+                if not updater.activate(float(times[grasp]), estimate, joints[grasp]):
+                    raise ValueError("selected grasp pose cannot seed the held attachment")
+                last_attachment = updater.last_accepted_gripper_from_object
+        if updater is None or not float(times[grasp]) <= estimate.source_time_s < float(times[release]):
+            held_attachment_by_camera[frame_index] = (
+                last_attachment.copy() if last_attachment is not None else None
+            )
+            return
+        if estimate.evidence == Evidence.OBSERVED and estimate.supports() and mask is not None:
+            if frame is None:
+                frame = _frame(
+                    root, frame_index, intrinsics, base_from_camera, version, estimate.source_time_s
+                )
+            ee_at_capture = _arm_pose_at(times, recorded_tips, estimate.source_time_s)
+            if ee_at_capture is not None:
+                accepted_update = updater.on_pose_update(
+                    frame_index,
+                    {held: estimate},
+                    frame=frame,
+                    mask=mask,
+                    ee_at_capture=ee_at_capture,
+                )
+                visual_evidence = updater.latest_visual_evidence()
+                if visual_evidence is not None and visual_evidence["frame_id"] == frame_index:
+                    held_visual_evidence_by_camera[frame_index] = visual_evidence
+                if accepted_update:
+                    last_attachment = updater.last_accepted_gripper_from_object
+                    last_direct_s = estimate.source_time_s
+                    held_correction_frames.append(frame_index)
+                    has_correction = True
+                elif updater.state(estimate.source_time_s) is None:
+                    held_conflict_frames.append(frame_index)
+        held_attachment_by_camera[frame_index] = (
+            last_attachment.copy() if last_attachment is not None else None
+        )
+        state, visual_ambiguous = updater.state_with_visual_status(estimate.source_time_s)
+        held_conflicted_by_camera[frame_index] = state is None
+        held_ambiguous_by_camera[frame_index] = visual_ambiguous
+        held_corrected_by_camera[frame_index] = has_correction
+
+    def recorded_gripper_prediction(role: str, frame: RGBDFrame) -> PoseEstimate | None:
+        if role != held or updater is None:
+            return None
+        state = updater.state(frame.source_time_s)
+        if state is None:
+            return None
+        nearest_motor = _nearest_index(times, frame.source_time_s)
+        if abs(float(times[nearest_motor]) - frame.source_time_s) > updater.history.max_sample_gap_s:
+            return None
+        ee = _arm_pose_at(times, recorded_tips, frame.source_time_s)
+        if ee is None:
+            return None
+        return PoseEstimate(
+            role,
+            ee @ state.gripper_from_object,
+            frame.source_time_s,
+            frame.available_time_s,
+            Evidence.PREDICTED,
+            state.reference_version,
+            (True,) * 3,
+            (True,) * 3,
+            estimator="gripper_motion",
+            source_frame_id=frame.frame_id,
+            last_direct_observation_s=last_direct_s,
+        )
+
     cache_identity["causal_tracking"] = annotation.get("causal_tracking")
+    cache_identity["held_attachment"] = held_attachment_policy
+    cache_identity["grasp_reference_frame"] = selected_grasp_frame
     cache_identity["vision_pipeline"] = vision_config.to_dict()
     cache_identity["pose_trace_selection_version"] = POSE_TRACE_SELECTION_VERSION
     cache_identity["attachment_events"] = attachment_events
@@ -516,6 +639,8 @@ def prepare(
         + intrinsics.tobytes()
         + base_from_camera.tobytes()
         + camera_times.tobytes()
+        + times.tobytes()
+        + joints.tobytes()
     ).hexdigest()[:12]
     cache_path = root / "flash" / "v1" / "preparation-cache" / f"{output_name}-{cache_key}.npz"
     evidence_cache_path = cache_path.with_suffix(".scene-evidence")
@@ -597,6 +722,22 @@ def prepare(
                     int(index): mask.astype(bool)
                     for index, mask in zip(cache["held_mask_indices"], cache["held_masks"], strict=True)
                 }
+        if updater is not None:
+            missing_masks = [
+                frame_index
+                for frame_index, row in enumerate(estimates)
+                if times[grasp] <= row[held].source_time_s < times[release]
+                and row[held].evidence == Evidence.OBSERVED
+                and row[held].supports()
+                and frame_index not in held_observed_masks
+            ]
+            if missing_masks:
+                raise ValueError(
+                    f"held correction needs recorded aligned masks for {len(missing_masks)} observed frames; "
+                    "regenerate the pose-trace cache"
+                )
+        for frame_index, row in enumerate(estimates):
+            advance_held_attachment(frame_index, row[held], held_observed_masks.get(frame_index))
     else:
         writer = SceneEvidenceWriter(
             evidence_cache_path, total_frames=through_frame + 1, roles=tuple(prompts)
@@ -619,6 +760,9 @@ def prepare(
                 and held in result.masks
             ):
                 held_observed_masks[frame.frame_id] = result.masks[held].copy()
+            advance_held_attachment(
+                frame.frame_id, by_role[held], held_observed_masks.get(frame.frame_id), frame
+            )
 
         estimates = extract_pose_trace(
             (
@@ -631,6 +775,7 @@ def prepare(
             object_points_by_role={model.points.role: model.points.points_object_m for model in models},
             axial_symmetries=tuple(axial_symmetries),
             attachment_events=attachment_events,
+            kinematic_prediction_at=recorded_gripper_prediction,
             on_frame_evidence=capture_held_mask,
         )
         writer.finish()
@@ -678,15 +823,11 @@ def prepare(
         np.savez_compressed(cache_path, **arrays)
     camera_for_arm = np.array([_nearest_index(camera_times, time_s) for time_s in times])
     max_gap = int(annotation["max_demo_pose_gap_frames"])
-    selected_grasp_frame = int(annotation["grasp_reference_frame"])
-    if not 0 <= selected_grasp_frame <= int(camera_for_arm[grasp]):
-        raise ValueError("the selected grasp reference must precede the demonstrated grasp")
     selected = estimates[selected_grasp_frame][held]
     if selected.evidence != Evidence.OBSERVED:
         raise ValueError("the selected grasp reference has no observed metric pose")
     grasp_held, grasp_evidence = selected.pose, "predicted from selected pre-occlusion frame"
     grip_from_held = inverse(recorded_tips[grasp]) @ grasp_held
-    held_model = next(model.points.points_object_m for model in models if model.points.role == held)
     held_pose_comparison = compare_demo_held_pose(
         role=held,
         estimates=estimates,
@@ -697,99 +838,13 @@ def prepare(
         grasp_attachment=grip_from_held,
         object_center_m=held_model.mean(axis=0),
     )
-    # Replay the same source-time attachment updater as a live attempt. A
-    # captured visual pose can revise the grasp assumption without changing
-    # the saved object frame. When the image cannot arbitrate a large change,
-    # retain the last accepted relation and mark the bundle for review.
-    held_attachment_by_camera = [grip_from_held.copy() for _ in estimates]
-    held_conflicted_by_camera = [False for _ in estimates]
-    held_ambiguous_by_camera = [False for _ in estimates]
-    held_corrected_by_camera = [False for _ in estimates]
-    held_visual_evidence_by_camera: list[dict | None] = [None for _ in estimates]
-    held_correction_frames: list[int] = []
-    held_conflict_frames: list[int] = []
-    held_attachment_policy = annotation.get("held_attachment")
-    if held_attachment_policy is not None:
-        missing_masks = [
-            frame_index
-            for frame_index, row in enumerate(estimates)
-            if times[grasp] <= row[held].source_time_s < times[release]
-            and row[held].evidence == Evidence.OBSERVED
-            and row[held].supports()
-            and frame_index not in held_observed_masks
-        ]
-        if missing_masks:
-            raise ValueError(
-                f"held correction needs recorded aligned masks for {len(missing_masks)} observed frames; "
-                "regenerate the pose-trace cache"
-            )
-        limits = AttachmentRuntimeLimits.from_config(held_attachment_policy)
-        updater = HeldAttachmentUpdater(
-            held,
-            next(reference.version for reference in references if reference.role == held),
-            kinematics,
-            tuple(f"joint-{index}" for index in range(joints.shape[1])),
-            history_capacity=limits.history_capacity,
-            max_motor_sample_gap_s=limits.max_motor_sample_gap_s,
-            max_attachment_age_s=limits.max_attachment_age_s,
-            max_update_shift_m=limits.max_update_shift_m,
-            max_update_turn_rad=limits.max_update_turn_rad,
-            object_center_object_m=held_model.mean(axis=0),
-            object_points_object_m=held_model,
-            min_visual_support_points=(
-                causal_config.min_inliers
-                if causal_config is not None
-                else vision_config.registration_min_inliers
-            ),
-            depth_occlusion_tolerance_m=(
-                causal_config.fit_threshold_m
-                if causal_config is not None
-                else vision_config.registration_threshold_m
-            ),
-            observation_quality=vision_config.observation,
-        )
-        if not updater.activate(float(times[grasp]), selected, joints[grasp]):
-            raise ValueError("selected grasp pose cannot seed the held attachment")
-        last_attachment = grip_from_held
-        has_correction = False
-        for frame_index, row in enumerate(estimates):
-            estimate = row[held]
-            if not float(times[grasp]) <= estimate.source_time_s < float(times[release]):
-                held_attachment_by_camera[frame_index] = last_attachment.copy()
-                continue
-            if estimate.evidence == Evidence.OBSERVED and estimate.supports():
-                mask = held_observed_masks.get(frame_index)
-                ee_at_capture = _arm_pose_at(times, recorded_tips, estimate.source_time_s)
-                if mask is not None and ee_at_capture is not None:
-                    frame = _frame(
-                        root,
-                        frame_index,
-                        intrinsics,
-                        base_from_camera,
-                        version,
-                        estimate.source_time_s,
-                    )
-                    accepted_update = updater.on_pose_update(
-                        frame_index,
-                        {held: estimate},
-                        frame=frame,
-                        mask=mask,
-                        ee_at_capture=ee_at_capture,
-                    )
-                    visual_evidence = updater.latest_visual_evidence()
-                    if visual_evidence is not None and visual_evidence["frame_id"] == frame_index:
-                        held_visual_evidence_by_camera[frame_index] = visual_evidence
-                    if accepted_update:
-                        last_attachment = updater.last_accepted_gripper_from_object
-                        held_correction_frames.append(frame_index)
-                        has_correction = True
-                    elif updater.state(estimate.source_time_s) is None:
-                        held_conflict_frames.append(frame_index)
-            held_attachment_by_camera[frame_index] = last_attachment.copy()
-            state, visual_ambiguous = updater.state_with_visual_status(estimate.source_time_s)
-            held_conflicted_by_camera[frame_index] = state is None
-            held_ambiguous_by_camera[frame_index] = visual_ambiguous
-            held_corrected_by_camera[frame_index] = has_correction
+    # The same updater now runs during source-order scene estimation, so its
+    # corrections affect the next camera frame. Frames outside the hold retain
+    # the selected seed only for the saved, read-only attachment trace.
+    held_attachment_by_camera = [
+        attachment if attachment is not None else grip_from_held.copy()
+        for attachment in held_attachment_by_camera
+    ]
     roles_version = {reference.role: reference.version for reference in references}
     intervals = []
     for number, (first, last, end_key, demonstrated, start_anchored, carrying) in enumerate(
