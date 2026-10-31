@@ -473,7 +473,7 @@ def test_verified_group_defers_duplicate_point_replay_until_grasp():
         assert service.replay_compute_total_s == replay_before
         assert "object" in service.pending
 
-        service.set_attached_role("object")
+        service.set_attached_role("object", source_time_s=8 / 30)
         service.submit_frame(_camera_frame(rgb, 8))
         while (
             service.replay_compute_total_s == replay_before
@@ -531,7 +531,7 @@ def test_stationary_support_stays_measured_until_grasp_then_is_withdrawn():
         assert predicted.last_direct_observation_s == pytest.approx(2 / 30)
 
         published = service.environment_published
-        service.set_attached_role("object")
+        service.set_attached_role("object", source_time_s=46 / 30)
         service.submit_frame(_camera_frame(rgb, 46))
         while service.frames < 47 and service.error is None and time.monotonic() < deadline:
             time.sleep(0.002)
@@ -570,7 +570,7 @@ def test_single_visible_pose_can_seed_a_labeled_support_hypothesis():
         assert estimate.evidence == Evidence.PREDICTED
         assert estimate.estimator == "environment_support_hypothesis"
         assert estimate.last_direct_observation_s == first.source_time_s
-        service.set_attached_role("object")
+        service.set_attached_role("object", source_time_s=2 / 30)
         service.submit_frame(_camera_frame(rgb, 2))
         while service.frames < 3 and service.error is None and time.monotonic() < deadline:
             time.sleep(0.01)

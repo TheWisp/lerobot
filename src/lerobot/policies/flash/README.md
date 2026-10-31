@@ -540,6 +540,12 @@ pose; the recorded fixture and consistency rejection cover that failure, but
 do not establish accurate pose under occlusion. The optional causal service
 receives every captured camera frame, tracks object and shared scene points,
 and can predict group motion after observed co-motion verifies a relationship.
+Grasp and release events carry their motor dispatch time into this service;
+queued camera frames captured before an event retain the earlier relationship.
+The gripper-backed held pose is still a separate prediction used by the
+controller and shown in replay. The causal scene store does not yet fuse that
+prediction into one accepted object belief, so its held-object layer can become
+stale during occlusion.
 When causal tracking is enabled, the heavy pose process submits
 source-frame proposals to the causal service, which alone publishes accepted
 poses and catches delayed proposals up to its retained frame history. That is

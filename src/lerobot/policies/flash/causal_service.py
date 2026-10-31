@@ -277,7 +277,8 @@ class CausalPoseService:
         self._expired_verified_roles: set[str] = set()
         self._attachment_lock = Lock()
         self._attached_role: str | None = None
-        self._attachment_changed_roles: set[str] = set()
+        self._requested_attached_role: str | None = None
+        self._attachment_events: list[tuple[float, str | None]] = []
         self._thread = Thread(target=self._run, name="flash-causal-points", daemon=True)
         self._lock = Lock()
         self._error: Exception | None = None
@@ -393,7 +394,7 @@ class CausalPoseService:
         prior_time_s = self._offline_decision_time_s
         self._offline_decision_time_s = frame.available_time_s
         try:
-            self.set_attached_role(attached_role)
+            self.set_attached_role(attached_role, source_time_s=frame.source_time_s)
             self._frame(frame)
             self._anchor(
                 _Anchor(
@@ -411,14 +412,25 @@ class CausalPoseService:
         finally:
             self._offline_decision_time_s = prior_time_s
 
-    def set_attached_role(self, role: str | None) -> None:
-        """Withdraw support assumptions when an object is grasped or released."""
+    def set_attached_role(self, role: str | None, *, source_time_s: float) -> None:
+        """Record a grasp/release at its motor time, not at worker arrival time.
+
+        The causal worker may still be processing older camera frames. Applying
+        a new relationship to those frames would erase valid pregrasp scene
+        support and mislabel their direct observations as held-object views.
+        Offline processing uses the source time of the frame where the
+        relationship changes; live execution uses the issued motor event.
+        """
         with self._attachment_lock:
-            if role != self._attached_role:
-                self._attachment_changed_roles.update(
-                    item for item in (self._attached_role, role) if item is not None
-                )
-                self._attached_role = role
+            if role == self._requested_attached_role:
+                return
+            at_s = float(source_time_s)
+            if not np.isfinite(at_s):
+                raise ValueError("attachment event needs a finite source time")
+            if self._attachment_events and at_s < self._attachment_events[-1][0]:
+                raise ValueError("attachment event times must increase")
+            self._attachment_events.append((at_s, role))
+            self._requested_attached_role = role
 
     def scene_group_supports(self) -> dict[str, dict]:
         """Measured current support points for inspection, with group provenance.
@@ -448,11 +460,22 @@ class CausalPoseService:
         if self.on_scene_support is not None and self.scene_history:
             self.on_scene_support(self.scene_history[-1].frame_id, self.scene_group_supports())
 
-    def _sync_attachment(self) -> str | None:
+    def _sync_attachment(self, source_time_s: float | None = None) -> str | None:
         with self._attachment_lock:
             role = self._attached_role
-            changed = self._attachment_changed_roles.copy()
-            self._attachment_changed_roles.clear()
+            if source_time_s is not None:
+                role = None
+                for at_s, event_role in self._attachment_events:
+                    if at_s > source_time_s:
+                        break
+                    role = event_role
+                changed = {item for item in (self._attached_role, role) if item is not None}
+                if role != self._attached_role:
+                    self._attached_role = role
+                else:
+                    changed.clear()
+            else:
+                changed = set()
         for item in changed:
             self.relationships.pop(item, None)
             self.candidate_relationships.pop(item, None)
@@ -550,10 +573,18 @@ class CausalPoseService:
                 break
 
     def _frame(self, frame: RGBDFrame) -> dict[str, float]:
-        attached_role = self._sync_attachment()
+        attached_role = self._sync_attachment(frame.source_time_s)
         if self.history and frame.frame_id <= self.history[-1].frame_id:
             raise ValueError("causal camera frames must increase")
         self.history.append(frame)
+        # Keep the relationship in force at the oldest retained image and
+        # every later transition. Older events cannot affect replay anymore.
+        with self._attachment_lock:
+            while (
+                len(self._attachment_events) > 1
+                and self._attachment_events[1][0] <= self.history[0].source_time_s
+            ):
+                del self._attachment_events[0]
         self.attachment_by_frame[frame.frame_id] = attached_role
         retained = {item.frame_id for item in self.history}
         for frame_id in self.anchor_events.keys() - retained:
@@ -1261,7 +1292,9 @@ class CausalPoseService:
         if next_frame is None:
             self._abort_event_replay(role, "event_replay_history_expired")
             return False
-        pending.shadow.set_attached_role(self.attachment_by_frame[next_frame.frame_id])
+        pending.shadow.set_attached_role(
+            self.attachment_by_frame[next_frame.frame_id], source_time_s=next_frame.source_time_s
+        )
         pending.shadow._frame(next_frame)
         if event := self.anchor_events.get(next_frame.frame_id, {}).get(role):
             pending.shadow._anchor(event, decision_time_s=next_frame.available_time_s)

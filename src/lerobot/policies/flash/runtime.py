@@ -207,7 +207,11 @@ class FlashRuntime:
             prior_attachment = self.attachment.active_role
             self.attachment.on_motor_tick(tick)
             if self.causal is not None and self.attachment.active_role != prior_attachment:
-                self.causal.set_attached_role(self.attachment.active_role)
+                if tick.receipt is None:
+                    raise RuntimeError("gripper relationship changed without an issued motor event")
+                self.causal.set_attached_role(
+                    self.attachment.active_role, source_time_s=tick.receipt.dispatched_s
+                )
             if self.live_telemetry is not None:
                 role = self.attachment.active_role
                 updater = self.attachment.updaters[role] if role is not None else None

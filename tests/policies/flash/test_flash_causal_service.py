@@ -53,6 +53,49 @@ def test_slow_camera_processing_records_stage_and_source_frame(monkeypatch):
     assert event["duration_s"] >= event["stages_s"]["scene_update"]
 
 
+def test_queued_camera_frames_keep_the_attachment_state_at_capture_time(monkeypatch):
+    service = CausalPoseService(LatestPoseStore())
+    entered = Event()
+    release = Event()
+    update = service.scene.update
+
+    def paused_update(item):
+        if item.frame_id == 0:
+            entered.set()
+            assert release.wait(2)
+        return update(item)
+
+    monkeypatch.setattr(service.scene, "update", paused_update)
+    image = np.zeros((96, 96), dtype=np.uint8)
+    service.start()
+    try:
+        service.submit_frame(frame(image, 0))
+        assert entered.wait(2)
+        for frame_id in range(1, 6):
+            service.submit_frame(frame(image, frame_id))
+        # The motor has already grasped and released while camera processing
+        # is behind. Neither event may be applied to earlier queued images.
+        service.set_attached_role("object", source_time_s=2.5 / 30)
+        service.set_attached_role(None, source_time_s=4.5 / 30)
+        release.set()
+        deadline = time.monotonic() + 2
+        while service.frames < 6 and service.error is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert service.error is None
+        assert service.frames == 6
+        assert [service.attachment_by_frame[index] for index in range(6)] == [
+            None,
+            None,
+            None,
+            "object",
+            "object",
+            None,
+        ]
+    finally:
+        release.set()
+        service.close()
+
+
 def test_causal_config_rejects_unbounded_or_invalid_tracking():
     valid = {
         "history_frames": 60,
