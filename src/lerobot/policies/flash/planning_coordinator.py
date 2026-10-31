@@ -90,6 +90,14 @@ class PlanningCoordinator:
         self._missing_evidence_key: tuple[int, str] | None = None
         self._missing_evidence_since_s: float | None = None
         self._reported_preferred_limit: set[tuple[str, int]] = set()
+        self.max_schedule_s = 0.0
+
+    def _timed_schedule(self) -> None:
+        started_s = self.session.motor.clock()
+        try:
+            self.schedule()
+        finally:
+            self.max_schedule_s = max(self.max_schedule_s, self.session.motor.clock() - started_s)
 
     def prepare_grasp_choices(self, poses: dict[str, PoseEstimate], seed_deg: np.ndarray) -> None:
         """Resolve declared grasp equivalences before starting the motor clock."""
@@ -123,9 +131,9 @@ class PlanningCoordinator:
         """Check live evidence, execute one motor tick, then refill the future queue."""
         # Re-read evidence before dispatch so a newly known large target move
         # can invalidate the old queue without sending one more stale action.
-        self.schedule()
+        self._timed_schedule()
         receipt = self.session.step()
-        self.schedule()
+        self._timed_schedule()
         return receipt
 
     def schedule(self) -> None:

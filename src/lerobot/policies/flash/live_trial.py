@@ -429,6 +429,13 @@ def trial(
                     for name, value in vars(runtime.session.motor.metrics).items()
                     if not isinstance(value, list)
                 },
+                "planner_schedule_max_s": runtime.coordinator.max_schedule_s,
+                "capture_metrics": {
+                    "frames": runtime.perception.captured,
+                    "timeouts": runtime.perception.camera_timeouts,
+                    "max_handoff_s": runtime.perception.max_capture_handoff_s,
+                    "max_frame_gap_s": runtime.perception.max_capture_gap_s,
+                },
                 "pose_metrics": vars(runtime.perception.worker.metrics).copy(),
                 "causal_metrics": (
                     {

@@ -548,6 +548,34 @@ def test_motor_overrun_delays_free_space_sequence_without_a_joint_jump():
     assert loop.tick().requested.action["joint.pos"] == pytest.approx(0.2)
 
 
+def test_motor_metrics_separate_post_dispatch_callbacks_from_bus_io():
+    class FakeRobot:
+        def get_state_observation(self):
+            return {"joint.pos": 0.0}
+
+        def send_action(self, action):
+            return action
+
+    now = [0.0]
+    queue = ActionQueue()
+    queue.publish(0, [TimedAction(0, {"joint.pos": 0.1}, "carry")])
+
+    def on_receipt(_receipt):
+        now[0] += 0.02
+
+    def on_tick(_tick):
+        now[0] += 0.03
+
+    loop = MotorLoop(
+        FakeRobot(), queue, on_receipt, on_tick=on_tick, clock=lambda: now[0], sleep=lambda _dt: None
+    )
+    loop.start()
+    loop.tick()
+    assert loop.metrics.write_s == [0.0]
+    assert loop.metrics.max_receipt_callback_s == pytest.approx(0.02)
+    assert loop.metrics.max_tick_callback_s == pytest.approx(0.03)
+
+
 def test_one_missed_motor_deadline_defers_required_samples_without_a_joint_jump():
     class FakeRobot:
         def get_state_observation(self):

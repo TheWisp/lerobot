@@ -316,6 +316,8 @@ class MotorMetrics:
     late_ticks: int = 0
     skipped_ticks: int = 0
     max_dispatch_gap_s: float = 0.0
+    max_receipt_callback_s: float = 0.0
+    max_tick_callback_s: float = 0.0
     read_s: list[float] = field(default_factory=list)
     write_s: list[float] = field(default_factory=list)
 
@@ -378,21 +380,27 @@ class MotorLoop:
         source = (
             "commanded" if receipt else ("held_goal" if self._last_issued is not None else "observed_hold")
         )
-        self.on_tick(
-            MotorTick(
-                tick,
-                deadline,
-                observed,
-                read_duration_s,
-                dict(effective),
-                receipt,
-                idle_reason,
-                source,
-                skipped_before,
-                observed_at_s,
-                self._last_plan_evidence,
+        callback_start_s = self.clock()
+        try:
+            self.on_tick(
+                MotorTick(
+                    tick,
+                    deadline,
+                    observed,
+                    read_duration_s,
+                    dict(effective),
+                    receipt,
+                    idle_reason,
+                    source,
+                    skipped_before,
+                    observed_at_s,
+                    self._last_plan_evidence,
+                )
             )
-        )
+        finally:
+            self.metrics.max_tick_callback_s = max(
+                self.metrics.max_tick_callback_s, self.clock() - callback_start_s
+            )
 
     def start(self) -> None:
         self.epoch_s = self.clock()
@@ -485,6 +493,12 @@ class MotorLoop:
             accepted,
             revision,
         )
-        self.on_receipt(receipt)
+        callback_start_s = self.clock()
+        try:
+            self.on_receipt(receipt)
+        finally:
+            self.metrics.max_receipt_callback_s = max(
+                self.metrics.max_receipt_callback_s, self.clock() - callback_start_s
+            )
         self._record_tick(tick, deadline, observed, read_end - read_start, receipt, observed_at_s=read_end)
         return receipt

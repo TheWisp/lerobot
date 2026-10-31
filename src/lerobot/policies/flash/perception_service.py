@@ -68,6 +68,8 @@ class PerceptionService:
         self.max_camera_silence_s = max_camera_silence_s
         self.captured = 0
         self.camera_timeouts = 0
+        self.max_capture_handoff_s = 0.0
+        self.max_capture_gap_s = 0.0
         self._stop = Event()
         self._lock = Lock()
         self._error: Exception | None = None
@@ -97,6 +99,7 @@ class PerceptionService:
     def _capture(self) -> None:
         try:
             last_frame_s = self.clock()
+            has_frame = False
             while not self._stop.is_set():
                 try:
                     frame = self.source.read()
@@ -111,7 +114,11 @@ class PerceptionService:
                         raise
                     self._stop.wait(self.collector_period_s)
                     continue
+                if has_frame:
+                    self.max_capture_gap_s = max(self.max_capture_gap_s, frame.source_time_s - last_frame_s)
                 last_frame_s = frame.source_time_s
+                has_frame = True
+                handoff_start_s = self.clock()
                 self.frames.publish(frame)
                 self.captured += 1
                 frozen = self.frames.snapshot()
@@ -122,6 +129,7 @@ class PerceptionService:
                     self.causal_frames(frozen)
                 if not self.worker.submit(frame) and not self.worker.alive:
                     raise PerceptionServiceError("pose process stopped during camera capture")
+                self.max_capture_handoff_s = max(self.max_capture_handoff_s, self.clock() - handoff_start_s)
         except Exception as exc:
             self._fail(exc)
 
