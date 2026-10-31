@@ -714,6 +714,16 @@ class RealSenseCamera(Camera):
                     # Depth has been consumed; don't cache it for consumers.
                     processed_depth_frame = None
 
+                # pyrealsense2 exposes its frame data as a borrowed memoryview.
+                # Caching that view lets callers retain SDK frame buffers (for
+                # example, a pose tracker's frame history). After the SDK pool
+                # fills, capture stops producing frames. Own both arrays before
+                # publishing them across threads.
+                if processed_color_frame is not None:
+                    processed_color_frame = processed_color_frame.copy()
+                if processed_depth_frame is not None:
+                    processed_depth_frame = processed_depth_frame.copy()
+
                 with self.frame_lock:
                     if self.use_rgb:
                         self.latest_color_frame = processed_color_frame

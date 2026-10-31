@@ -117,3 +117,69 @@ def test_reader_cannot_consume_one_cached_frameset_twice_during_publication():
         camera.new_frame_event.release_second_set.set()
         camera.stop_event.set()
         camera.thread.join(2)
+
+
+def test_cached_rgbd_frames_do_not_hold_realsense_buffers():
+    color_buffer = bytearray(2 * 3 * 3)
+    depth_buffer = bytearray(2 * 3 * 2)
+    color = np.frombuffer(color_buffer, dtype=np.uint8).reshape(2, 3, 3)
+    depth = np.frombuffer(depth_buffer, dtype=np.uint16).reshape(2, 3)
+    color[:] = 17
+    depth[:] = 42
+
+    class Frame:
+        def __init__(self, data):
+            self.data = data
+
+        def get_data(self):
+            return self.data
+
+    class Frameset:
+        def get_color_frame(self):
+            return Frame(color)
+
+        def get_depth_frame(self):
+            return Frame(depth)
+
+    camera = object.__new__(RealSenseCamera)
+    camera.rs_pipeline = object()
+    camera.rs_profile = object()
+    camera.serial_number = "test-camera"
+    camera.use_rgb = True
+    camera.use_depth = True
+    camera.align_to_color = type("Align", (), {"process": lambda self, frame: frame})()
+    camera._apply_depth_filters = lambda frame: frame
+    camera._postprocess_image = lambda frame, depth_frame=False: frame
+    camera.post_grab_processor = None
+    camera.frame_lock = Lock()
+    camera.new_frame_event = Event()
+    camera.stop_event = Event()
+    camera.latest_color_frame = None
+    camera.latest_depth_frame = None
+    camera.latest_timestamp = None
+    calls = 0
+    finish = Event()
+
+    def read_hardware():
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return Frameset()
+        finish.wait(2)
+        raise DeviceNotConnectedError("end fake stream")
+
+    camera._read_from_hardware = read_hardware
+    camera.thread = Thread(target=camera._read_loop, daemon=True)
+    camera.thread.start()
+    try:
+        assert camera.new_frame_event.wait(2)
+        cached_color, cached_depth, _ = camera.read_color_and_aligned_depth_with_timestamp()
+        assert cached_color.flags.owndata and cached_depth.flags.owndata
+        color[:] = 99
+        depth[:] = 77
+        assert np.all(cached_color == 17)
+        assert np.all(cached_depth == 42)
+    finally:
+        finish.set()
+        camera.stop_event.set()
+        camera.thread.join(2)
