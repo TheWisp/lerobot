@@ -1,7 +1,8 @@
 """IK preparation continues while the motor owner can consume old actions."""
 
+import json
 import time
-from dataclasses import replace
+from dataclasses import asdict, replace
 from threading import Event
 
 import numpy as np
@@ -9,7 +10,7 @@ import numpy as np
 from lerobot.policies.flash.execution import TimedAction
 from lerobot.policies.flash.planner_worker import PlannerWorker, PlanRequest
 from lerobot.policies.flash.skill import Interval, MotionMode, Relation, SpatialSample
-from lerobot.policies.flash.trajectory import ConnectionTrajectory, Evidence, PoseEstimate
+from lerobot.policies.flash.trajectory import AttachmentState, ConnectionTrajectory, Evidence, PoseEstimate
 
 
 class ProcessActionPlanner:
@@ -78,8 +79,19 @@ def test_worker_stamps_queued_commands_with_the_pose_snapshot_used_for_ik():
     worker.start()
     try:
         base = request(1)
-        reference = replace(base.reference, source_frame_id=5, source_time_s=0.1, available_time_s=0.2)
-        worker.submit(replace(base, reference=reference, pose_revision=7))
+        reference_pose = np.eye(4)
+        reference_pose[0, 3] = 0.12
+        attachment_pose = np.eye(4)
+        attachment_pose[1, 3] = -0.03
+        reference = replace(
+            base.reference,
+            pose=reference_pose,
+            source_frame_id=5,
+            source_time_s=0.1,
+            available_time_s=0.2,
+        )
+        attachment = AttachmentState(attachment_pose, 0.1, 0.2, "held-v1")
+        worker.submit(replace(base, reference=reference, attachment=attachment, pose_revision=7))
         deadline = time.monotonic() + 5
         while not published:
             assert time.monotonic() < deadline
@@ -90,6 +102,12 @@ def test_worker_stamps_queued_commands_with_the_pose_snapshot_used_for_ik():
         assert evidence.reference_source_frame_id == 5
         assert evidence.reference_source_time_s == 0.1
         assert evidence.reference_available_time_s == 0.2
+        assert evidence.reference_pose[0][3] == 0.12
+        assert evidence.attachment_gripper_from_object[1][3] == -0.03
+        assert evidence.turn_angle_rad == 0.0
+        recorded = json.loads(json.dumps(asdict(evidence)))
+        assert recorded["reference_pose"][0][3] == 0.12
+        assert recorded["attachment_gripper_from_object"][1][3] == -0.03
     finally:
         worker.close()
 
@@ -104,7 +122,15 @@ def test_isolated_worker_returns_the_same_pose_stamped_plan():
     worker.start()
     try:
         base = request(1)
-        reference = replace(base.reference, source_frame_id=5, source_time_s=0.1, available_time_s=0.2)
+        reference_pose = np.eye(4)
+        reference_pose[2, 3] = 0.07
+        reference = replace(
+            base.reference,
+            pose=reference_pose,
+            source_frame_id=5,
+            source_time_s=0.1,
+            available_time_s=0.2,
+        )
         worker.submit(replace(base, reference=reference, pose_revision=7))
         deadline = time.monotonic() + 10
         while not published and worker.fatal_error is None:
@@ -114,6 +140,7 @@ def test_isolated_worker_returns_the_same_pose_stamped_plan():
         assert worker.last_result is not None and worker.last_result.error is None
         assert published[0][1][0].plan_evidence.pose_revision == 7
         assert published[0][1][0].plan_evidence.reference_source_frame_id == 5
+        assert published[0][1][0].plan_evidence.reference_pose[2][3] == 0.07
     finally:
         worker.close()
 

@@ -139,6 +139,15 @@ def _compute_plan(planner: JointPlanner, request: PlanRequest) -> tuple[PlanResu
                 attachment_available_time_s=(
                     request.attachment.available_time_s if request.attachment is not None else None
                 ),
+                reference_pose=tuple(tuple(float(value) for value in row) for row in request.reference.pose),
+                attachment_gripper_from_object=(
+                    tuple(
+                        tuple(float(value) for value in row) for row in request.attachment.gripper_from_object
+                    )
+                    if request.attachment is not None
+                    else None
+                ),
+                turn_angle_rad=turn_angle,
             )
             actions = [replace(action, plan_evidence=evidence) for action in actions]
         return (

@@ -24,7 +24,7 @@ class RobotIO(Protocol):
 
 @dataclass(frozen=True)
 class PlanEvidence:
-    """Pose snapshot used to solve a queued command, not the pose at dispatch."""
+    """Exact spatial inputs used to solve a queued command, not values at dispatch."""
 
     pose_revision: int
     reference_role: str
@@ -35,6 +35,9 @@ class PlanEvidence:
     attachment_reference_version: str | None = None
     attachment_source_time_s: float | None = None
     attachment_available_time_s: float | None = None
+    reference_pose: tuple[tuple[float, ...], ...] | None = None
+    attachment_gripper_from_object: tuple[tuple[float, ...], ...] | None = None
+    turn_angle_rad: float | None = None
 
 
 @dataclass(frozen=True)

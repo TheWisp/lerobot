@@ -556,13 +556,18 @@ interrupted physical trials of this redesign.
 
 The 2026-10-31 insertion trial lifted the dowel, then stopped at the next
 connection. The ring group still had measured support, but the last processed
-ring pose was nearly three seconds old. Replaying that turn search took about
-3.9 seconds and made a concurrent scene-tracking call pause for up to 1.1
-seconds in the same process. Running the same search in another process kept
-the scene call below 3.4 ms in that replay. The search itself still reported
-no feasible turn; process isolation prevents false pose loss from compute
-contention but does not make an infeasible path reachable. New trial datasets
-record slow camera and anchor stages in `flash/v1/causal_timing_episode_000000.json`.
+ring pose was nearly three seconds old. A turn search took seconds and made a
+concurrent scene-tracking call pause for up to 1.1 seconds in the same process.
+Running that search in another process kept the scene call below 3.4 ms in the
+recorded replay. An initial offline reachability check incorrectly derived the
+gripper attachment from an old scene pose of the held dowel and reported no
+feasible turn. Approximately reconstructing the attachment from the recorded
+gripper-backed held pose instead found a feasible connection at the demonstrated
+angle. The exact attachment used by the interrupted live planner was not
+recorded, so a new trial must verify both reachability and fresh ring tracking.
+Future trial traces include the exact reference and attachment transforms used by each
+published plan, plus slow camera and anchor stages in
+`flash/v1/causal_timing_episode_000000.json`.
 
 The [scene-estimator contract](docs/architecture.md#one-scene-estimator-several-evidence-sources) is not fully implemented. The current code has one publisher when causal tracking is enabled, but it still treats a backend's candidate `PoseEstimate` as an accepted six-axis observation. In particular, the RGB-D backend keeps its own previous candidate for shape-continuity checks, and the scene service has no general rule for comparing a new candidate with visible depth, point motion, a group prediction and unresolved symmetry at the same source time. Candidate dispositions are recorded. Delayed direct poses within retained history are replayed in source order in a bounded shadow calculation, but this is not yet a full event replay across all evidence types.
 
