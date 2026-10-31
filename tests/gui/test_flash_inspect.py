@@ -67,6 +67,37 @@ def test_flash_camera_image_stays_inside_overlay_for_portrait_and_landscape_fram
             )
 
 
+def test_flash_3d_scene_shows_measured_object_without_saved_pose_or_surface(gui_page):
+    result = gui_page.evaluate("""async () => {
+        const {createFlashSceneView} = await import('/static/flash_scene_view.js?v=23');
+        const host = document.createElement('div');
+        host.style.cssText = 'position:relative;width:640px;height:480px';
+        const canvas = document.createElement('canvas');
+        canvas.style.cssText = 'width:100%;height:100%';
+        host.append(canvas);
+        document.body.append(host);
+        const view = createFlashSceneView(canvas, {});
+        const width = 64, height = 48;
+        const depth = new Uint16Array(width * height).fill(1000);
+        const color = new Uint8ClampedArray(width * height * 4).fill(180);
+        const identity = [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]];
+        const snapshot = {camera: {width, height, intrinsics: [[50, 0, 32], [0, 50, 24], [0, 0, 1]],
+            base_from_camera: identity}, accepted: {}, layers: {}};
+        const evidence = {available: true, masks_rle: {sample:
+            Array.from({length: 12}, (_, row) => [(18 + row) * width + 20, 12])}, groups: {}};
+        view.update(depth, color, snapshot, {showSurface: true, showPoints: true,
+            pointSpacingPx: 2, showDepthScene: true}, evidence);
+        const [x, y] = view.projectCameraXYZ([(-6) / 50, 0, 1]);
+        const picked = view.pickObserved(x, y)?.role;
+        const focused = view.focus('sample');
+        const framed = view.frameAll();
+        view.dispose();
+        host.remove();
+        return {picked, focused, framed};
+    }""")
+    assert result == {"picked": "sample", "focused": True, "framed": True}
+
+
 def test_flash_inspect_subprocess_returns_spatial_intervals(tmp_path):
     identity = np.eye(4).tolist()
     path = tmp_path / "skill.json"
