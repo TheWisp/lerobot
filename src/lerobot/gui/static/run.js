@@ -1093,6 +1093,7 @@ function renderFlashSnapshot(snapshot, mode = 'Live') {
                 event_replay_pending: 'Checking this pose against earlier camera frames',
                 event_replay_history_expired: 'Earlier frames expired; current estimate kept',
                 event_replay_attachment_changed: 'Object attachment changed; current estimate kept',
+                attachment_transition_crossed: 'Older image crossed a grasp or release; current estimate kept',
                 event_replay_outdated: 'Newer evidence arrived; current estimate kept',
             };
             const replayed = decision.outcome.startsWith('replayed_');

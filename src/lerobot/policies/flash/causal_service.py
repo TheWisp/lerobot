@@ -486,6 +486,29 @@ class CausalPoseService:
                 self.static_support_points_by_role.pop(item, None)
         return role
 
+    def _attachment_transition_crossed(self, role: str, source_time_s: float) -> bool:
+        """Whether replaying a late object pose would cross a grasp or release.
+
+        Camera frames have a source-time attachment state, but the current
+        estimator does not replay a delayed visual result through a changed
+        gripper relationship. Reject that result rather than using the latest
+        relationship to interpret an older image. Other objects are unaffected.
+        """
+        latest_time_s = self.history[-1].source_time_s
+        previous_role = None
+        with self._attachment_lock:
+            for event_time_s, next_role in self._attachment_events:
+                if event_time_s > latest_time_s:
+                    break
+                if (
+                    source_time_s < event_time_s
+                    and previous_role != next_role
+                    and role in (previous_role, next_role)
+                ):
+                    return True
+                previous_role = next_role
+        return False
+
     def _submit(self, item: RGBDFrame | _Anchor) -> None:
         if self.error is not None:
             raise RuntimeError("causal pose service failed") from self.error
@@ -843,6 +866,10 @@ class CausalPoseService:
             if estimate.source_frame_id is not None and estimate.source_frame_id != source.frame_id:
                 self._count_anchor_outcome(estimate.role, "frame_mismatch")
                 self._record_anchor_decision(result, candidate, "frame_mismatch")
+                continue
+            if self._attachment_transition_crossed(estimate.role, source.source_time_s):
+                self._count_anchor_outcome(estimate.role, "attachment_transition_crossed")
+                self._record_anchor_decision(result, candidate, "attachment_transition_crossed")
                 continue
             estimate = replace(estimate, source_frame_id=source.frame_id)
             symmetry = self.axial_symmetries.get(estimate.role)

@@ -113,8 +113,10 @@ point motion, group arbitration and later direct proposals in source order for
 the affected unattached object. It commits a new pose version only after
 catching up, and records revised direct decisions. Replay steps yield to new
 camera events. If the required frame or earlier accepted anchor has expired,
-the newer belief is preserved and the reason is recorded; attachment history
-is not yet replayed. Past motor commands are never rewritten.
+the newer belief is preserved and the reason is recorded. A delayed object
+result crossing a grasp or release is rejected because attachment history is
+not yet replayed; other objects can still update from that image. Past motor
+commands are never rewritten.
 
 Run → FLASH lists a sealed-format SO-107 recording with `showservo_demo.npz`
 even before it has a `flash/v1` extension. Open the raw demo, choose **Prepare

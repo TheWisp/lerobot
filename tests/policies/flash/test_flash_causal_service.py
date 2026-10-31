@@ -96,6 +96,43 @@ def test_queued_camera_frames_keep_the_attachment_state_at_capture_time(monkeypa
         service.close()
 
 
+def test_late_object_pose_cannot_cross_grasp_or_release_without_attachment_replay():
+    image = np.random.default_rng(58).integers(0, 255, (96, 96), dtype=np.uint8)
+    frames = [frame(image, index) for index in range(3)]
+    mask = np.ones(image.shape, dtype=bool)
+    store = LatestPoseStore()
+    service = CausalPoseService(store)
+    service._frame(frames[0])
+    service.set_attached_role("object", source_time_s=0.5 / 30)
+    service._frame(frames[1])
+    service.set_attached_role(None, source_time_s=1.5 / 30)
+    service._frame(frames[2])
+
+    def delayed(role: str, source: RGBDFrame) -> None:
+        estimate = PoseEstimate(
+            role,
+            np.eye(4),
+            source.source_time_s,
+            source.available_time_s,
+            Evidence.OBSERVED,
+            "reference-v1",
+            (True,) * 3,
+            (True,) * 3,
+        )
+        service._anchor(_Anchor(source.frame_id, (estimate,), {role: mask}))
+
+    delayed("object", frames[0])  # crossed grasp and release
+    delayed("object", frames[1])  # crossed release
+    assert service.anchor_decisions_by_source[(0, "object")].outcome == "attachment_transition_crossed"
+    assert service.anchor_decisions_by_source[(1, "object")].outcome == "attachment_transition_crossed"
+    assert "object" not in store.snapshot()[1]
+
+    # The same camera result for a different object is still useful.
+    delayed("target", frames[0])
+    assert service.anchor_decisions_by_source[(0, "target")].outcome == "accepted"
+    assert store.snapshot()[1]["target"].pose is not None
+
+
 def test_causal_config_rejects_unbounded_or_invalid_tracking():
     valid = {
         "history_frames": 60,
