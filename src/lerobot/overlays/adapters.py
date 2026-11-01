@@ -516,6 +516,15 @@ def _from_cache_first(cls, model_id: str, **kwargs):
         return cls.from_pretrained(model_id, **kwargs)
 
 
+def _same_region(a: np.ndarray, b: np.ndarray) -> bool:
+    """Whether two masks show one object: they share more than half of their union
+    (IoU above 0.5, the detection-matching convention). A part of a larger object — a
+    gripper against the arm it sits on — shares far less, so nested concepts stay
+    distinct and a lost one can still be recovered."""
+    inter = int(np.count_nonzero(a & b))
+    return 2 * inter > int(np.count_nonzero(a | b))
+
+
 class Sam3TrackByDetectionAdapter(ConceptMaskAdapter):
     """SAM3 LOCKED-OBJECT tracking (tracking-by-detection). Two tiers sharing one encoder:
 
@@ -654,7 +663,15 @@ class Sam3TrackByDetectionAdapter(ConceptMaskAdapter):
         self._tracks = {}
 
     # ---------------- Tier 1: image detector (text -> mask per concept) ----------------
-    def _select_instances(self, res: dict, h: int, w: int) -> np.ndarray | None:
+    def _select_instances(
+        self,
+        res: dict,
+        h: int,
+        w: int,
+        *,
+        taken: dict[str, np.ndarray] | None = None,
+        concept: str = "",
+    ) -> np.ndarray | None:
         """Turn one post-processed detection result into a seed mask, or None.
 
         Debug overlay (``_seed_multi`` False): the single largest instance — the
@@ -662,12 +679,32 @@ class Sam3TrackByDetectionAdapter(ConceptMaskAdapter):
         True): the UNION of every instance, so a concept like "robot arm" protects
         BOTH arms, not just the biggest (SAM3 returns them as separate instances;
         taking the largest silently dropped the second). Instances under the small
-        area gate are noise, not objects."""
+        area gate are noise, not objects.
+
+        ``taken`` maps the OTHER concepts to the masks they hold on this frame. An
+        instance that is one of those regions is that object, however well the name
+        fits it — the detector offered the tracked gamepad for "green cube" once the
+        cube was hidden under it (#270) — so it is skipped, per instance and before
+        the size rule, and a smaller instance that really is ``concept`` still wins."""
         masks = res.get("masks", [])
         if len(masks) == 0:
             return None
         arrs = [(m.cpu().numpy() if hasattr(m, "cpu") else np.asarray(m)) > 0 for m in masks]
         arrs = [a for a in arrs if int(a.sum()) > 50]
+        if taken:
+            free = []
+            for a in arrs:
+                owner = next((name for name, held in taken.items() if _same_region(a, held)), None)
+                if owner is None:
+                    free.append(a)
+                else:
+                    logger.info(
+                        "detect[%s]: %r offered the mask held as %r; skipped",
+                        self._cam or "?",
+                        concept,
+                        owner,
+                    )
+            arrs = free
         if not arrs:
             return None
         if self._seed_multi:
@@ -681,7 +718,13 @@ class Sam3TrackByDetectionAdapter(ConceptMaskAdapter):
         return best
 
     def _detect_many(
-        self, frame_rgb: np.ndarray, concepts: list[str], h: int, w: int
+        self,
+        frame_rgb: np.ndarray,
+        concepts: list[str],
+        h: int,
+        w: int,
+        *,
+        taken: dict[str, np.ndarray] | None = None,
     ) -> dict[str, np.ndarray | None]:
         """Seed masks for ``concepts`` on ONE frame with ONE vision encode.
 
@@ -690,7 +733,8 @@ class Sam3TrackByDetectionAdapter(ConceptMaskAdapter):
         ``text_embeds`` for exactly this reuse, so N concepts cost one encode plus
         N cheap fusion/decode passes instead of N full forwards. Text features are
         deterministic per concept string and cached for the adapter's lifetime.
-        Pre: ``frame_rgb`` is HxWx3 uint8. Post: one entry per concept (None =
+        Pre: ``frame_rgb`` is HxWx3 uint8; ``taken`` holds other concepts' current
+        masks (see :meth:`_select_instances`). Post: one entry per concept (None =
         nothing detected)."""
         if not concepts:
             return {}
@@ -747,7 +791,7 @@ class Sam3TrackByDetectionAdapter(ConceptMaskAdapter):
             # One result per concept, by construction of the batched decode:
             # a length mismatch is a contract break, not something to truncate.
             for concept, res in zip(concepts, results, strict=True):
-                out[concept] = self._select_instances(res, h, w)
+                out[concept] = self._select_instances(res, h, w, taken=taken, concept=concept)
         return out
 
     # ---------------- Tier 2: geometric video tracker ----------------
@@ -861,7 +905,13 @@ class Sam3TrackByDetectionAdapter(ConceptMaskAdapter):
             return
 
     def _read_output(self, track: dict, out, h: int, w: int) -> None:
-        """Update per-concept full-res mask + score from a tracker forward output."""
+        """Update per-concept full-res mask + score from a tracker forward output.
+
+        An object the tracker places nowhere is lost and gets no entry, whatever its
+        score: it reported 0.30-0.48 for a cube hidden under a gamepad while drawing
+        no pixel, the flush re-seeded that empty mask as healthy, and the rebuilt
+        tracker then found the "cube" in a tape roll (#270). Leaving it out here is
+        what makes every reader of ``masks``/``scores`` agree it is lost."""
         torch = self._torch
         id_to_concept = {oid: c for c, oid in track["objs"].items()}
         track["masks"], track["scores"] = {}, {}
@@ -879,7 +929,10 @@ class Sam3TrackByDetectionAdapter(ConceptMaskAdapter):
                 continue
             fm = full[k]
             fm = fm.cpu().numpy() if hasattr(fm, "cpu") else np.asarray(fm)
-            track["masks"][concept] = fm.squeeze().astype(bool)  # (H, W)
+            mask = fm.squeeze().astype(bool)  # (H, W)
+            if not mask.any():
+                continue
+            track["masks"][concept] = mask
             track["scores"][concept] = float(torch.sigmoid(logits[k])) if logits is not None else 1.0
 
     # Prompt coordinates normalise against this, while _pv() feeds the configured preset —
@@ -1123,7 +1176,7 @@ class Sam3TrackByDetectionAdapter(ConceptMaskAdapter):
             gone = sorted(prev - held)
             if gone:
                 logger.info(
-                    "track[%s]: lost %s (score < %.2f)%s",
+                    "track[%s]: lost %s (no pixels, or score < %.2f)%s",
                     self._cam,
                     gone,
                     self.LOST_THRESH,
@@ -1255,7 +1308,9 @@ class Sam3TrackByDetectionAdapter(ConceptMaskAdapter):
                         else:
                             to_detect.append(c)  # lost: Tier-1 re-detect (one shared encode)
                     recovered = 0
-                    for c, m in self._detect_many(frame_rgb.numpy(), to_detect, h, w).items():
+                    # ``seeds`` is exactly the healthy set at this point: what the lost
+                    # concepts must not be recovered onto.
+                    for c, m in self._detect_many(frame_rgb.numpy(), to_detect, h, w, taken=seeds).items():
                         if m is not None:
                             seeds[c] = m
                             recovered += 1
