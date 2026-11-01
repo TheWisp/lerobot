@@ -5,6 +5,8 @@ Status: superseded by [the sealed experiment handover](SEALED_20261031.md)
 This is the historical FLASH redesign proposal. The [implementation map](../README.md)
 describes what runs; dated results belong in [proofs](../../../../../docs/proofs/README.md).
 Neither a research result nor a mockup silently changes the contract here.
+The current perception proposal is [Tracking pipeline](tracking_pipeline.md);
+the architecture below remains historical.
 
 FLASH is imitation learning with an explicit 3D representation of objects, relationships and actions. Its initial form performs direct imitation: retain how a demonstration accomplishes an interaction, and adapt the motion to the live scene. Teaching, testing and collecting robot data should be one workflow: record an interaction, try it in a changed scene, intervene when needed, and retain the whole experience. The sealed prototype demonstrated useful spatial adaptation, but its uncertain object estimates, execution rules and recording paths became entangled. More demonstrations need to improve what the robot can do, while producing ordinary LeRobot data augmented with 3D information for future learned models.
 

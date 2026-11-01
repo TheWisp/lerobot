@@ -12,7 +12,7 @@ let flashDatasets = []; // opened ordinary LeRobot datasets, refreshed on FLASH 
 let flashPreparedSkills = [];
 let flashInspectGeneration = 0;
 let flashRecordingsGeneration = 0;
-let flashUiMode = 'review';
+let flashUiMode = 'experiments';
 let flashLibraryTab = 'demos';
 let flashSceneView = null;
 let flashSceneRequest = 0;
@@ -287,6 +287,9 @@ function _flashScenePointerUp(event) {
 }
 
 function _flashUpdateWorkspace() {
+    const experiments = selectedWorkflow === 'flash' && flashUiMode === 'experiments';
+    document.getElementById('tab-run').classList.toggle('flash-experiments', experiments);
+    if (!experiments) document.getElementById('flash-experiment-video')?.pause();
     const reviewing = selectedWorkflow === 'flash' && flashUiMode === 'review' &&
         !(_isRunning && _runCommand === 'flash');
     document.getElementById('tab-run').classList.toggle('flash-reviewing', reviewing);
@@ -320,6 +323,7 @@ async function showFlashReview() {
     if (_isRunning && _runCommand === 'flash_tracking') await flashTrackingStop();
     flashUiMode = 'review';
     _flashUpdateWorkspace();
+    await Promise.all([_loadFlashDatasets(), _loadFlashRecordings()]);
 }
 
 // ============================================================================
@@ -359,7 +363,10 @@ async function runTabInit() {
     initFlashTrackerPanelDrag();
     renderRunForm();
     _flashUpdateWorkspace();
-    if (selectedWorkflow === 'flash') await Promise.all([_loadFlashDatasets(), _loadFlashRecordings()]);
+    if (selectedWorkflow === 'flash') {
+        if (flashUiMode === 'experiments') await showFlashExperiments();
+        else await Promise.all([_loadFlashDatasets(), _loadFlashRecordings()]);
+    }
     _initSelectTitleSync();
     await _ensureModelDataLoaded();
     await pollRunStatus();
@@ -412,7 +419,10 @@ async function selectWorkflow(workflow) {
     if (workflow === 'policy' || workflow === 'teleop') {
         await _ensureModelDataLoaded();
     }
-    if (workflow === 'flash') await Promise.all([_loadFlashDatasets(), _loadFlashRecordings()]);
+    if (workflow === 'flash') {
+        if (flashUiMode === 'experiments') await showFlashExperiments();
+        else await Promise.all([_loadFlashDatasets(), _loadFlashRecordings()]);
+    }
     const trackerPanel = document.getElementById('flash-tracker-panel');
     if (trackerPanel) trackerPanel.hidden = workflow !== 'flash';
     document.getElementById('flash-tracker-replay-controls').hidden = workflow !== 'flash' || !flashReplay;
@@ -3525,6 +3535,7 @@ function renderRunForm() {
     // Demo viewing and skill inspection are read-only. The shared Run button
     // only starts a robot trial after a prepared bundle and rig are selected.
     html += `<div id="run-section-flash" style="${selectedWorkflow === 'flash' ? '' : 'display:none'}">`;
+    html += '<div id="flash-experiment-sidebar"><div class="flash-experiment-list-heading"><strong>Tracking experiments</strong><button type="button" onclick="loadFlashExperiments()" aria-label="Refresh tracking experiments">↻</button></div><button type="button" id="flash-experiment-rebuild" onclick="rebuildFlashExamples()" title="Benchmark all listed examples using their saved RGB-D, masks and configurations. Existing results stay available.">Run all benchmarks</button><progress id="flash-experiment-rebuild-progress" hidden></progress><div id="flash-experiment-rebuild-status" role="status"></div><div id="flash-experiment-report" hidden><a id="flash-experiment-report-view">View results</a> · <a id="flash-experiment-report-download">Download JSON</a></div><details id="flash-experiment-rebuild-errors" hidden><summary>Failures</summary><ul></ul></details><div id="flash-experiment-list">Loading recordings…</div><button type="button" onclick="showFlashReview()">Demo / rollout editor</button></div>';
     html += '<div class="flash-library"><div class="flash-library-tabs" role="tablist" aria-label="FLASH recordings">';
     html += `<button type="button" class="flash-library-tab ${flashLibraryTab === 'demos' ? 'active' : ''}" data-tab="demos" role="tab" aria-selected="${flashLibraryTab === 'demos'}" onclick="selectFlashLibraryTab('demos')">Demos</button>`;
     html += `<button type="button" class="flash-library-tab ${flashLibraryTab === 'examples' ? 'active' : ''}" data-tab="examples" role="tab" aria-selected="${flashLibraryTab === 'examples'}" onclick="selectFlashLibraryTab('examples')">Examples</button>`;
@@ -3533,6 +3544,7 @@ function renderRunForm() {
     html += '<div id="run-flash-demos" class="flash-recordings">Loading demos…</div>';
     html += '<div id="run-flash-examples" class="flash-recordings">Loading RGB-D examples…</div>';
     html += '<div id="run-flash-recordings" class="flash-recordings">Loading rollouts…</div>';
+    html += '<button type="button" class="flash-live-entry" onclick="showFlashExperiments()">Tracking experiments →</button>';
     html += '<button type="button" class="flash-live-entry" onclick="showFlashLiveSetup()">Set up live trial →</button>';
     html += '<button type="button" class="flash-live-entry flash-tracking-entry" onclick="showFlashTracking()">Live tracking · camera only →</button></div>';
     html += '<button type="button" class="flash-review-return" onclick="showFlashReview()">← Back to recordings</button>';

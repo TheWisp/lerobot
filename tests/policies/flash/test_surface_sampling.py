@@ -5,7 +5,7 @@ from pathlib import Path
 
 import numpy as np
 
-from lerobot.policies.flash.surface_correspondence import SurfaceMotionConfig, crop_pair
+from lerobot.policies.flash.surface_correspondence import SurfaceMotionConfig, crop_pair, full_pixels
 from lerobot.policies.flash.surface_grounding import (
     PreparedReferenceSurface,
     ShapeConfig,
@@ -124,6 +124,21 @@ def test_rgb_crop_never_discards_large_object_extremities():
     assert a.shape == b.shape == (config.input_size_px, config.input_size_px, 3)
     assert x <= 100 and x + size >= 1179.5
     assert y <= 10 and y + size >= 699.5
+
+
+def test_crop_coordinates_round_trip_to_pixels_actually_sampled_from_image():
+    # Encode original x/y in the image itself, so the assertion is independent
+    # of the inverse-transform formula. OpenCV quantizes interpolation to 1/32 px.
+    yy, xx = np.mgrid[:600, :800].astype(np.float32)
+    rgb = np.stack((xx, yy, xx + yy), axis=-1)
+    for extent in (40, 96, 192, 350):
+        mask = np.zeros(xx.shape, bool)
+        mask[200:240, 220 : 220 + extent] = True
+        frame = {"rgb": rgb, "mask": mask}
+        image, _, crop = crop_pair(frame, frame)
+        uv = np.array([[130, 110], [173, 161], [210, 195]], dtype=float)
+        measured_xy = image[uv[:, 1].astype(int), uv[:, 0].astype(int), :2]
+        np.testing.assert_allclose(full_pixels(uv, crop), measured_xy, atol=1 / 32, rtol=0)
 
 
 def test_prepared_reference_preserves_recorded_ring_fit():

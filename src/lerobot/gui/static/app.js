@@ -1520,6 +1520,7 @@ document.addEventListener('DOMContentLoaded', () => {
 // Keyboard controls
 // Tab switching
 function switchTab(tabName) {
+    if (tabName !== 'run') document.getElementById('flash-experiment-video')?.pause();
     // Captured before the active classes are cleared below — the camera release
     // hook at the end of this function needs to know which tab we are leaving.
     const previousTab = document.querySelector('.tab.active')?.dataset.tab || null;

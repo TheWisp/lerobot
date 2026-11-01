@@ -1,0 +1,42 @@
+/* A list and one player. The old editor remains accessible, outside this view. */
+#flash-experiment-sidebar, #flash-experiment-view { display: none; }
+#tab-run.flash-experiments #run-sidebar { width: 280px; min-width: 210px; }
+#tab-run.flash-experiments .run-form { padding: 10px; min-height: 0; overflow: hidden; }
+#tab-run.flash-experiments #run-section-flash { height: 100%; min-height: 0; }
+#tab-run.flash-experiments #run-section-flash > :not(#flash-experiment-sidebar),
+#tab-run.flash-experiments #run-main > :not(#flash-experiment-view),
+#tab-run.flash-experiments .run-actions,
+#tab-run.flash-experiments #overlays-panel-run,
+#tab-run.flash-experiments #run-overlays-resize { display: none !important; }
+#tab-run.flash-experiments #flash-experiment-sidebar { display: flex; flex-direction: column; height: 100%; min-height: 0; gap: 8px; }
+.flash-experiment-list-heading { display: flex; align-items: center; justify-content: space-between; }
+#flash-experiment-rebuild-status, #flash-experiment-rebuild-errors { font-size: 12px; overflow-wrap: anywhere; color: #b8c7d8; }
+#flash-experiment-rebuild-progress { width: 100%; }
+#flash-experiment-report a { color: #9fceff; }
+#flash-experiment-rebuild-errors { max-height: 140px; overflow-y: auto; }
+#flash-experiment-list { overflow-y: auto; flex: 1; min-height: 0; }
+.flash-experiment-item { display: block; width: 100%; border: 0; border-radius: 4px; background: transparent; color: #c7d4e5; text-align: left; padding: 12px 8px; cursor: pointer; font: inherit; font-size: 13px; overflow-wrap: anywhere; }
+.flash-experiment-item:hover { background: #23354d; }
+.flash-experiment-item[aria-pressed="true"] { background: #254363; color: #fff; }
+#tab-run.flash-experiments #flash-experiment-view { display: flex; flex: 1; min-width: 0; min-height: 0; flex-direction: column; gap: 10px; padding: 16px; }
+#flash-experiment-title { font-size: 18px; font-weight: 500; }
+#flash-experiment-detail { color: #a7b5c8; font-size: 12px; }
+.flash-experiment-tools { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; font-size: 13px; }
+.flash-experiment-tools label { display: inline-flex; align-items: center; gap: 5px; }
+.flash-experiment-tools select { background: #16263c; color: #eee; border: 1px solid #31516c; border-radius: 4px; padding: 5px; }
+.flash-experiment-mask-label { color: #00d2c8; }
+.flash-experiment-pose-label { color: #ffffff; }
+#flash-experiment-explanation { font-size: 12px; color: #b8c7d8; margin: 0; }
+#flash-experiment-player { flex: 1; min-height: 0; min-width: 0; position: relative; background: #080d14; }
+#flash-experiment-video, #flash-experiment-overlay { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+#flash-experiment-overlay { pointer-events: none; }
+#flash-experiment-player:fullscreen { width: 100vw; height: 100vh; }
+#flash-experiment-status { color: #b8c7d8; font-size: 13px; min-height: 20px; }
+#flash-experiment-sidebar button:not(.flash-experiment-item), .flash-experiment-tools button { background: #16263c; color: #c7d4e5; border: 1px solid #31516c; border-radius: 4px; padding: 5px 9px; cursor: pointer; }
+@media (max-width: 700px) {
+    #tab-run.flash-experiments #run-sidebar { width: 180px; min-width: 150px; }
+    #tab-run.flash-experiments #flash-experiment-view { padding: 8px; }
+}
+
+/* Dim RGB, as in TrackEverything, so small coloured heads and paths read clearly. */
+#flash-experiment-player.flow-visible #flash-experiment-video { filter: brightness(.7); }

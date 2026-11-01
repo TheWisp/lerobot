@@ -5,8 +5,10 @@ Start with the [sealed handover](docs/SEALED_20261031.md), which records the
 limitations, agreed restart scope and final verification. The documentation
 below describes the archived implementation; it is not the next design.
 
-The separate research branch records the
-[restart postmortem and literature review](../../../../docs/proofs/flash-tracker-restart/RESEARCH.md).
+The current proposal is the [growing-surface tracking pipeline](docs/tracking_pipeline.md).
+It supersedes the sealed perception design; it is not an implementation claim.
+The separate [restart postmortem and literature review](../../../../docs/proofs/flash-tracker-restart/RESEARCH.md)
+retains the experiments and their results.
 
 This is the archived implementation map. The [architecture](docs/architecture.md)
 is the historical proposal; it does not claim every feature is built.

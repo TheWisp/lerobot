@@ -1,0 +1,91 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="810" viewBox="0 0 1100 810">
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10Z" fill="#52647a"/></marker></defs>
+<rect width="1100" height="810" fill="#f5f7fb"/>
+<g font-family="DejaVu Sans, sans-serif">
+<text x="35" y="50" font-size="34" fill="#18283e" font-weight="bold" text-anchor="start">A new side after occlusion</text>
+<text x="35" y="86" font-size="23" fill="#52647a" font-weight="normal" text-anchor="start">Illustration · the object turns while hidden</text>
+<rect x="35" y="120" width="320" height="310" rx="14" fill="white" stroke="#d8e0e9" stroke-width="2"/>
+<text x="55" y="158" font-size="25" fill="#18283e" font-weight="bold" text-anchor="start">1. Front visible</text>
+<rect x="390" y="120" width="320" height="310" rx="14" fill="white" stroke="#d8e0e9" stroke-width="2"/>
+<text x="410" y="158" font-size="25" fill="#18283e" font-weight="bold" text-anchor="start">2. Fully hidden</text>
+<rect x="745" y="120" width="320" height="310" rx="14" fill="white" stroke="#d8e0e9" stroke-width="2"/>
+<text x="765" y="158" font-size="25" fill="#18283e" font-weight="bold" text-anchor="start">3. Back visible</text>
+<g transform="translate(195 280) scale(1 1)"><path d="M-95 -40 C-55 -65 -22 -40 0 -48 C48 -70 80 -40 95 5 C120 50 66 70 35 45 C0 28 -42 68 -80 45 C-110 28 -120 -15 -95 -40Z" fill="#287abc" fill-opacity=".15" stroke="#287abc" stroke-width="3"/>
+<circle cx="-65" cy="-25" r="3" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="-65" cy="-5" r="3" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="-65" cy="15" r="3" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="-65" cy="35" r="3" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="-44" cy="-25" r="3" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="-44" cy="-5" r="3" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="-44" cy="15" r="3" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="-44" cy="35" r="3" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="-23" cy="-25" r="3" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="-23" cy="-5" r="3" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="-23" cy="15" r="3" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="-23" cy="35" r="3" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="-2" cy="-25" r="3" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="-2" cy="-5" r="3" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="-2" cy="15" r="3" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="-2" cy="35" r="3" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="19" cy="-25" r="3" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="19" cy="-5" r="3" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="19" cy="15" r="3" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="19" cy="35" r="3" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="40" cy="-25" r="3" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="40" cy="-5" r="3" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="40" cy="15" r="3" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="40" cy="35" r="3" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="61" cy="-25" r="3" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="61" cy="-5" r="3" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="61" cy="15" r="3" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="61" cy="35" r="3" fill="#287abc" stroke="none" stroke-width="2"/>
+<path d="M-46 -22 L-14 -22 L-14 10 L-46 10Z" fill="none" stroke="#287abc" stroke-width="5"/>
+</g>
+<text x="195" y="397" font-size="22" fill="#287abc" font-weight="normal" text-anchor="middle">Measured patch A</text>
+<g transform="translate(905 280) scale(-1 1)"><path d="M-95 -40 C-55 -65 -22 -40 0 -48 C48 -70 80 -40 95 5 C120 50 66 70 35 45 C0 28 -42 68 -80 45 C-110 28 -120 -15 -95 -40Z" fill="#bd742b" fill-opacity=".15" stroke="#bd742b" stroke-width="3"/>
+<circle cx="-65" cy="-25" r="3" fill="#bd742b" stroke="none" stroke-width="2"/>
+<circle cx="-65" cy="-5" r="3" fill="#bd742b" stroke="none" stroke-width="2"/>
+<circle cx="-65" cy="15" r="3" fill="#bd742b" stroke="none" stroke-width="2"/>
+<circle cx="-65" cy="35" r="3" fill="#bd742b" stroke="none" stroke-width="2"/>
+<circle cx="-44" cy="-25" r="3" fill="#bd742b" stroke="none" stroke-width="2"/>
+<circle cx="-44" cy="-5" r="3" fill="#bd742b" stroke="none" stroke-width="2"/>
+<circle cx="-44" cy="15" r="3" fill="#bd742b" stroke="none" stroke-width="2"/>
+<circle cx="-44" cy="35" r="3" fill="#bd742b" stroke="none" stroke-width="2"/>
+<circle cx="-23" cy="-25" r="3" fill="#bd742b" stroke="none" stroke-width="2"/>
+<circle cx="-23" cy="-5" r="3" fill="#bd742b" stroke="none" stroke-width="2"/>
+<circle cx="-23" cy="15" r="3" fill="#bd742b" stroke="none" stroke-width="2"/>
+<circle cx="-23" cy="35" r="3" fill="#bd742b" stroke="none" stroke-width="2"/>
+<circle cx="-2" cy="-25" r="3" fill="#bd742b" stroke="none" stroke-width="2"/>
+<circle cx="-2" cy="-5" r="3" fill="#bd742b" stroke="none" stroke-width="2"/>
+<circle cx="-2" cy="15" r="3" fill="#bd742b" stroke="none" stroke-width="2"/>
+<circle cx="-2" cy="35" r="3" fill="#bd742b" stroke="none" stroke-width="2"/>
+<circle cx="19" cy="-25" r="3" fill="#bd742b" stroke="none" stroke-width="2"/>
+<circle cx="19" cy="-5" r="3" fill="#bd742b" stroke="none" stroke-width="2"/>
+<circle cx="19" cy="15" r="3" fill="#bd742b" stroke="none" stroke-width="2"/>
+<circle cx="19" cy="35" r="3" fill="#bd742b" stroke="none" stroke-width="2"/>
+<circle cx="40" cy="-25" r="3" fill="#bd742b" stroke="none" stroke-width="2"/>
+<circle cx="40" cy="-5" r="3" fill="#bd742b" stroke="none" stroke-width="2"/>
+<circle cx="40" cy="15" r="3" fill="#bd742b" stroke="none" stroke-width="2"/>
+<circle cx="40" cy="35" r="3" fill="#bd742b" stroke="none" stroke-width="2"/>
+<circle cx="61" cy="-25" r="3" fill="#bd742b" stroke="none" stroke-width="2"/>
+<circle cx="61" cy="-5" r="3" fill="#bd742b" stroke="none" stroke-width="2"/>
+<circle cx="61" cy="15" r="3" fill="#bd742b" stroke="none" stroke-width="2"/>
+<circle cx="61" cy="35" r="3" fill="#bd742b" stroke="none" stroke-width="2"/>
+<circle cx="35" cy="0" r="17" fill="none" stroke="#bd742b" stroke-width="2"/>
+</g>
+<text x="905" y="397" font-size="22" fill="#bd742b" font-weight="normal" text-anchor="middle">Measured patch B</text>
+<rect x="425" y="206" width="250" height="149" rx="9" fill="#d9dee5" stroke="#a4afbd" stroke-width="2"/>
+<text x="550" y="270" font-size="23" fill="#18283e" font-weight="normal" text-anchor="middle">Larger object</text>
+<text x="550" y="305" font-size="23" fill="#18283e" font-weight="normal" text-anchor="middle">blocks the view</text>
+<text x="550" y="397" font-size="22" fill="#52647a" font-weight="normal" text-anchor="middle">No object depth</text>
+<path d="M357 280 L385 280" stroke="#52647a" stroke-width="3" fill="none" marker-end="url(#arrow)"/>
+<path d="M710 280 L740 280" stroke="#52647a" stroke-width="3" fill="none" marker-end="url(#arrow)"/>
+<text x="35" y="477" font-size="27" fill="#18283e" font-weight="bold" text-anchor="start">Can patch B join the old surface?</text>
+<rect x="35" y="505" width="1030" height="111" rx="14" fill="#e8f5ed" stroke="#b2d1bf" stroke-width="2"/>
+<text x="55" y="543" font-size="25" fill="#18283e" font-weight="bold" text-anchor="start">A connection exists</text>
+<text x="55" y="577" font-size="23" fill="#18283e" font-weight="normal" text-anchor="start">An older overlapping view, image features, or valid motion links A to B.</text>
+<rect x="35" y="638" width="1030" height="125" rx="14" fill="#fff2e3" stroke="#dcc5a7" stroke-width="2"/>
+<text x="55" y="677" font-size="25" fill="#18283e" font-weight="bold" text-anchor="start">No connection exists</text>
+<text x="55" y="711" font-size="23" fill="#18283e" font-weight="normal" text-anchor="start">Observe B, but keep it separate. Its placement relative to A is unknown.</text>
+<text x="55" y="742" font-size="22" fill="#52647a" font-weight="normal" text-anchor="start">Same object identity alone does not supply that placement.</text>
+</g></svg>

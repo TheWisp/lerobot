@@ -145,8 +145,10 @@ class SurfaceTrackingSession:
         search_pool=None,
         information_correspondence_m=None,
         registered_reference_camera_m=None,
+        record_correspondences=False,
     ):
         self.matcher = matcher
+        self.record_correspondences = record_correspondences
         self.matcher_lock = matcher_lock
         self.fit_kernels = fit_kernels
         self.search_pool = search_pool
@@ -226,6 +228,7 @@ class SurfaceTrackingSession:
             "mask": mask,
             "obs": obs,
             "usable": obs["valid_image"] & connected,
+            "frame_id": frame_id,
             "all_surface_points": all_points,
         }
         detail = {
@@ -286,13 +289,15 @@ class SurfaceTrackingSession:
             start = time.perf_counter()
             a, b, crop = crop_pair(self.previous, current, self.motion_config)
             match_args = (self.matcher, a, b, crop, self.previous, current, intrinsics, self.motion_config)
+            evidence = {} if self.record_correspondences else None
+            kwargs = {"evidence": evidence} if evidence is not None else {}
             if self.matcher_lock is None:
-                source, target = ufm_pairs(*match_args)
+                source, target = ufm_pairs(*match_args, **kwargs)
             else:
                 wait_start = time.perf_counter()
                 with self.matcher_lock:
                     detail["matcher_wait_ms"] = (time.perf_counter() - wait_start) * 1000
-                    source, target = ufm_pairs(*match_args)
+                    source, target = ufm_pairs(*match_args, **kwargs)
             step, inliers, residual = robust_fit(source, target, self.motion_config)
             detail.update(
                 matches=len(source),
@@ -302,6 +307,9 @@ class SurfaceTrackingSession:
                 matcher_available=step is not None,
             )
             prepared["step"] = step
+            if evidence is not None:
+                prepared["correspondences"] = evidence
+                prepared["match_source_frame"] = self.previous["frame_id"]
         self.previous = current
         return prepared
 

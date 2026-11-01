@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1320" height="1680" viewBox="0 0 1320 1680">
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10Z" fill="#52647a"/></marker></defs>
+<rect width="1320" height="1680" fill="#f5f7fb"/>
+<g font-family="DejaVu Sans, sans-serif">
+<text x="35" y="48" font-size="34" fill="#18283e" font-weight="bold" text-anchor="start">One session; repeated frame updates</text>
+<text x="35" y="83" font-size="23" fill="#52647a" font-weight="normal" text-anchor="start">Proposed behavior · explicit references and failure handling</text>
+<rect x="35" y="110" width="1250" height="220" rx="14" fill="#e6edf8" stroke="#adc0da" stroke-width="2"/>
+<text x="60" y="151" font-size="27" fill="#18283e" font-weight="bold" text-anchor="start">SESSION: initialize once, retain and revise state</text>
+<text x="60" y="191" font-size="24" fill="#18283e" font-weight="normal" text-anchor="start">First usable mask + depth → initial surface + fixed object coordinates</text>
+<text x="60" y="229" font-size="24" fill="#18283e" font-weight="normal" text-anchor="start">Keep: raw patches / map versions · last connected image p · older views k</text>
+<text x="60" y="267" font-size="24" fill="#18283e" font-weight="normal" text-anchor="start">Keep: group / gripper relationships · source times · replay checkpoints</text>
+<text x="60" y="305" font-size="23" fill="#52647a" font-weight="normal" text-anchor="start">No usable first observation? Wait. No pose or surface is invented.</text>
+<text x="35" y="382" font-size="28" fill="#18283e" font-weight="bold" text-anchor="start">EVERY PROCESSED FRAME t</text>
+<rect x="35" y="410" width="395" height="165" rx="14" fill="#e6f4ff" stroke="#d8e0e9" stroke-width="2"/>
+<text x="53" y="447" font-size="25" fill="#18283e" font-weight="bold" text-anchor="start">Current observation</text>
+<text x="53" y="486" font-size="21" fill="#18283e" font-weight="normal" text-anchor="start">RGB + aligned depth at t</text>
+<text x="53" y="516" font-size="21" fill="#18283e" font-weight="normal" text-anchor="start">SAM mask at t</text>
+<text x="53" y="546" font-size="21" fill="#18283e" font-weight="normal" text-anchor="start">Empty / invalid is recorded</text>
+<rect x="450" y="410" width="395" height="165" rx="14" fill="white" stroke="#d8e0e9" stroke-width="2"/>
+<text x="468" y="447" font-size="25" fill="#18283e" font-weight="bold" text-anchor="start">Image comparisons</text>
+<text x="468" y="486" font-size="21" fill="#18283e" font-weight="normal" text-anchor="start">UFM: last connected p → t</text>
+<text x="468" y="516" font-size="21" fill="#18283e" font-weight="normal" text-anchor="start">Depth at both endpoints</text>
+<text x="468" y="546" font-size="21" fill="#18283e" font-weight="normal" text-anchor="start">p is usually the prior frame</text>
+<rect x="865" y="410" width="420" height="165" rx="14" fill="#fff2df" stroke="#d8e0e9" stroke-width="2"/>
+<text x="883" y="447" font-size="25" fill="#18283e" font-weight="bold" text-anchor="start">Motion prediction</text>
+<text x="883" y="486" font-size="21" fill="#18283e" font-weight="normal" text-anchor="start">Group tracks / gripper poses</text>
+<text x="883" y="516" font-size="21" fill="#18283e" font-weight="normal" text-anchor="start">Use their actual source times</text>
+<text x="883" y="546" font-size="21" fill="#18283e" font-weight="normal" text-anchor="start">Can work with no object pixels</text>
+<path d="M235 575 L235 625" stroke="#52647a" stroke-width="3" fill="none" marker-end="url(#arrow)"/>
+<path d="M650 575 L650 625" stroke="#52647a" stroke-width="3" fill="none" marker-end="url(#arrow)"/>
+<path d="M1075 575 L1075 625" stroke="#52647a" stroke-width="3" fill="none" marker-end="url(#arrow)"/>
+<rect x="35" y="625" width="1250" height="160" rx="14" fill="#e9edff" stroke="#d8e0e9" stroke-width="2"/>
+<text x="60" y="665" font-size="27" fill="#18283e" font-weight="bold" text-anchor="start">Fit the current visible surface</text>
+<text x="60" y="706" font-size="24" fill="#18283e" font-weight="normal" text-anchor="start">Geometry: accumulated surface BEFORE t ↔ current mask + depth</text>
+<text x="60" y="742" font-size="23" fill="#18283e" font-weight="normal" text-anchor="start">Use image matches and motion as evidence. New points cannot confirm themselves.</text>
+<path d="M660 785 L660 830" stroke="#52647a" stroke-width="3" fill="none" marker-end="url(#arrow)"/>
+<rect x="35" y="830" width="1250" height="200" rx="14" fill="white" stroke="#d8e0e9" stroke-width="2"/>
+<text x="60" y="870" font-size="27" fill="#18283e" font-weight="bold" text-anchor="start">Choose what the evidence supports</text>
+<text x="60" y="910" font-size="23" fill="#18283e" font-weight="normal" text-anchor="start">Reliable direct view → correct the movements it determines.</text>
+<text x="60" y="947" font-size="23" fill="#18283e" font-weight="normal" text-anchor="start">Partial / empty view → valid motion supplies missing movement; mark predicted.</text>
+<text x="60" y="984" font-size="23" fill="#18283e" font-weight="normal" text-anchor="start">No usable source → lost. Unresolved conflict → no surface growth.</text>
+<path d="M660 1030 L660 1075" stroke="#52647a" stroke-width="3" fill="none" marker-end="url(#arrow)"/>
+<rect x="35" y="1075" width="1250" height="205" rx="14" fill="#fff2df" stroke="#d8e0e9" stroke-width="2"/>
+<text x="60" y="1116" font-size="26" fill="#18283e" font-weight="bold" text-anchor="start">If connection fails: recover without changing the object origin</text>
+<text x="60" y="1157" font-size="23" fill="#18283e" font-weight="normal" text-anchor="start">Try retained older view k → t; record k. Attempts have a configured budget.</text>
+<text x="60" y="1194" font-size="23" fill="#18283e" font-weight="normal" text-anchor="start">Missing mask? Text redetection / click can restore it, but does not restore pose.</text>
+<text x="60" y="1231" font-size="23" fill="#18283e" font-weight="normal" text-anchor="start">Completely new side with no connection? Keep separate; old A/B/C are unresolved.</text>
+<path d="M660 1280 L660 1325" stroke="#52647a" stroke-width="3" fill="none" marker-end="url(#arrow)"/>
+<rect x="35" y="1325" width="1250" height="230" rx="14" fill="#e7f4ed" stroke="#d8e0e9" stroke-width="2"/>
+<text x="60" y="1366" font-size="27" fill="#18283e" font-weight="bold" text-anchor="start">Publish; then update session state for the next frame</text>
+<text x="60" y="1408" font-size="23" fill="#18283e" font-weight="normal" text-anchor="start">Publish: pose + source time + evidence + status + model version.</text>
+<text x="60" y="1445" font-size="23" fill="#18283e" font-weight="normal" text-anchor="start">Advance p only after visual connection. Add measured patches only if aligned.</text>
+<text x="60" y="1482" font-size="23" fill="#18283e" font-weight="normal" text-anchor="start">Keep additions separate and revisable. Retain older views within a memory budget.</text>
+<text x="60" y="1519" font-size="23" fill="#18283e" font-weight="normal" text-anchor="start">Suspect old addition? Rebuild map; refit now / replay dependent frames offline.</text>
+<text x="35" y="1621" font-size="24" fill="#18283e" font-weight="bold" text-anchor="start">Independent robot loop: 30 Hz · reads the latest estimate · never waits for this loop</text>
+</g></svg>

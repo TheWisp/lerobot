@@ -67,7 +67,9 @@ def full_pixels(
     crop_pixels: np.ndarray, crop: tuple[float, float, float], config: SurfaceMotionConfig = _DEFAULT
 ) -> np.ndarray:
     x, y, size = crop
-    return (crop_pixels + 0.5) * size / config.input_size_px + np.array([x, y]) - 0.5
+    # crop_pair uses warpAffine, whose integer pixel centres map by this exact
+    # affine transform. A resize-style half-pixel correction is not its inverse.
+    return crop_pixels * size / config.input_size_px + np.array([x, y])
 
 
 def measured_pairs(
@@ -148,6 +150,8 @@ def ufm_pairs(
     b: dict,
     intrinsics: np.ndarray,
     config: SurfaceMotionConfig = _DEFAULT,
+    *,
+    evidence: dict | None = None,
 ):
     import torch
 
@@ -163,4 +167,39 @@ def ufm_pairs(
     keep = visible[ys, xs] >= config.covisibility_min
     uv_a = np.column_stack((xs[keep], ys[keep])).astype(float)
     uv_b = uv_a + flow[:, ys[keep], xs[keep]].T
-    return measured_pairs(a, b, full_pixels(uv_a, crop, config), full_pixels(uv_b, crop, config), intrinsics)
+    source_uv, target_uv = full_pixels(uv_a, crop, config), full_pixels(uv_b, crop, config)
+    source, target = measured_pairs(a, b, source_uv, target_uv, intrinsics)
+    if evidence is not None:
+        # Observe the existing matcher without changing sampling, rejection or fit.
+        # Include low-visibility predictions, but only source pixels on this object.
+        all_a = np.column_stack((xs, ys)).astype(float)
+        all_b = all_a + flow[:, ys, xs].T
+        all_a, all_b = full_pixels(all_a, crop, config), full_pixels(all_b, crop, config)
+        pa, pb = np.rint(all_a).astype(int), np.rint(all_b).astype(int)
+        h, w = a["depth"].shape
+        inside_a = (pa[:, 0] >= 0) & (pa[:, 0] < w) & (pa[:, 1] >= 0) & (pa[:, 1] < h)
+        on_object = np.zeros(len(pa), dtype=bool)
+        on_object[inside_a] = a["mask"][pa[inside_a, 1], pa[inside_a, 0]]
+        indices = np.flatnonzero(on_object & np.isfinite(all_b).all(axis=1))
+        pa, pb = pa[indices], pb[indices]
+        # Stages: 0 low co-visibility, 1 outside target mask, 2 depth/cleanup,
+        # 3 usable 3D pair, 4 also agrees with the resulting rigid motion.
+        stage = np.zeros(len(indices), dtype=np.uint8)
+        covisible = visible[ys[indices], xs[indices]] >= config.covisibility_min
+        stage[covisible] = 1
+        inside_b = (pb[:, 0] >= 0) & (pb[:, 0] < w) & (pb[:, 1] >= 0) & (pb[:, 1] < h)
+        rows = np.flatnonzero(covisible & inside_b)
+        rows = rows[b["mask"][pb[rows, 1], pb[rows, 0]]]
+        stage[rows] = 2
+        usable = a["usable"][pa[rows, 1], pa[rows, 0]] & b["usable"][pb[rows, 1], pb[rows, 0]]
+        stage[rows[usable]] = 3
+        evidence.update(
+            source_uv=all_a[indices],
+            target_uv=all_b[indices],
+            stage=stage,
+            # Only optional diagnostic recording uses this full field. Fitting
+            # still receives the same sampled pairs. Do not serialize the array.
+            flow=flow,
+            crop=crop,
+        )
+    return source, target

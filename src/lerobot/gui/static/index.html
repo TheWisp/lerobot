@@ -6,6 +6,7 @@
     <title>LeRobot GUI</title>
     <script>document.title = `LeRobot GUI [${window.location.host}]`;</script>
     <link rel="stylesheet" href="/static/style.css?v=172">
+    <link rel="stylesheet" href="/static/flash_experiments.css?v=8">
     <script type="importmap">{"imports":{"three":"/static/vendor/three.module.js"}}</script>
 </head>
 <body>
@@ -294,6 +295,26 @@
             </div>
             <div class="sidebar-resize-handle"></div>
             <div class="main run-main-split" id="run-main">
+                <section id="flash-experiment-view" aria-label="Tracker experiment playback">
+                    <h2 id="flash-experiment-title">Tracking experiments</h2>
+                    <div id="flash-experiment-detail">Select a recording from the list.</div>
+                    <div class="flash-experiment-tools">
+                        <label>Pose calculation <select id="flash-experiment-method" onchange="drawFlashExperiment()" aria-label="Tracking method"></select></label>
+                        <label class="flash-experiment-mask-label"><input id="flash-experiment-mask" type="checkbox" onchange="drawFlashExperiment()">Input mask</label>
+                        <label class="flash-experiment-pose-label"><input id="flash-experiment-pose" type="checkbox" onchange="drawFlashExperiment()">3D reference surface + axes</label>
+                        <label class="flash-experiment-matches-label">UFM point trails <select id="flash-experiment-matches" onchange="drawFlashExperiment()"><option value="off">Off</option><option value="raw" selected>Raw predictions</option><option value="used">Agree with rigid fit</option></select></label>
+                        <label>Trail length <select id="flash-experiment-flow-trail" onchange="drawFlashExperiment()"><option value="0">Off</option><option value="5">5 frames</option><option value="10" selected>10 frames</option><option value="20">20 frames</option><option value="30">30 frames</option></select></label>
+                        <button type="button" onclick="stepFlashExperiment(-1)" aria-label="Previous experiment frame">‹</button>
+                        <button type="button" onclick="stepFlashExperiment(1)" aria-label="Next experiment frame">›</button>
+                        <button type="button" onclick="toggleFlashExperimentFullscreen()">Full screen</button>
+                    </div>
+                    <div id="flash-experiment-explanation" class="form-hint"></div>
+                    <div id="flash-experiment-player">
+                        <video id="flash-experiment-video" controls playsinline preload="auto"></video>
+                        <canvas id="flash-experiment-overlay" aria-label="Frame-aligned masks and estimated object poses"></canvas>
+                    </div>
+                    <div id="flash-experiment-status" role="status" title="Playback preserves the original timestamps. The image holds until the next recorded image; no inference runs during playback."></div>
+                </section>
                 <div class="rerun-viewer" id="rerun-viewer">
                     <div class="rerun-placeholder" id="rerun-placeholder">Camera view will appear here when a process is running</div>
                     <section class="flash-tracker-panel" id="flash-tracker-panel" hidden aria-label="FLASH tracker inspection">
@@ -795,7 +816,7 @@ nebius iam auth-public-key generate \
     <script src="/static/dataset_browser.js?v=3"></script>
     <script src="/static/mask_composite.js?v=1"></script>
     <script src="/static/chunk_player.js?v=22"></script>
-    <script src="/static/app.js?v=89"></script>
+    <script src="/static/app.js?v=90"></script>
     <script src="/static/treatment_control.js?v=4"></script>
     <script src="/static/bitset.js?v=1"></script>
     <script src="/static/timeline_lanes.js?v=1"></script>
@@ -805,8 +826,9 @@ nebius iam auth-public-key generate \
     <script src="/static/charts.js?v=5"></script>
     <script src="/static/robot.js?v=27"></script>
     <script src="/static/flash_live_tracking.js?v=12"></script>
-    <script src="/static/run.js?v=181"></script>
-    <script src="/static/flash_demo_editor.js?v=40"></script>
+    <script src="/static/run.js?v=184"></script>
+    <script src="/static/flash_experiments.js?v=13"></script>
+    <script src="/static/flash_demo_editor.js?v=41"></script>
     <script src="/static/flash_recorded_editor.js?v=7"></script>
     <script src="/static/flash_observation_editor.js?v=6"></script>
     <script src="/static/overlay_gate.js?v=1"></script>

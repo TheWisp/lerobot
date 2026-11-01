@@ -1,5 +1,9 @@
 # RGB-D surface tracking in FLASH
 
+This describes the retained implementation. The proposed replacement is the
+[growing-surface tracking pipeline](tracking_pipeline.md); the fixed-reference
+behavior documented below has not silently become a growing model.
+
 This is the implementation reference for `vision_pipeline.backend = "surface"`,
 including the **Run → FLASH → Live tracking** camera debugger. The mechanism is
 originally verified against revision `68db02b2d`; the

@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1380" height="950" viewBox="0 0 1380 950">
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#506078"/></marker></defs>
+<rect width="1380" height="950" fill="#f5f7fb"/>
+<g font-family="DejaVu Sans, sans-serif" fill="#18283e">
+<text x="40" y="52" font-size="34" font-weight="bold" fill="#18283e" text-anchor="start">FLASH · Growing surface + shared pose estimation</text>
+<text x="40" y="89" font-size="23" font-weight="normal" fill="#596a80" text-anchor="start">Proposed pipeline · rigid objects · no supplied mesh</text>
+<rect x="360" y="130" width="560" height="110" rx="14" fill="#e7f4ff" stroke="#8fb9d7" stroke-width="2"/>
+<text x="640.0" y="165" font-size="24" font-weight="bold" fill="#18283e" text-anchor="middle">Direct observation · when visible</text>
+<text x="640.0" y="199" font-size="21" font-weight="normal" fill="#44546a" text-anchor="middle">SAM visible mask + aligned RGB-D</text>
+<text x="640.0" y="226" font-size="21" font-weight="normal" fill="#44546a" text-anchor="middle">Measure the visible surface</text>
+<rect x="40" y="330" width="270" height="120" rx="14" fill="#e6f4ed" stroke="#8ebba7" stroke-width="2"/>
+<text x="175.0" y="365" font-size="24" font-weight="bold" fill="#18283e" text-anchor="middle">Working surface</text>
+<text x="175.0" y="399" font-size="21" font-weight="normal" fill="#44546a" text-anchor="middle">Points + source quality</text>
+<text x="175.0" y="426" font-size="21" font-weight="normal" fill="#44546a" text-anchor="middle">Fixed object coordinates</text>
+<rect x="360" y="330" width="560" height="120" rx="14" fill="#e9edff" stroke="#a1afd6" stroke-width="2"/>
+<text x="640.0" y="365" font-size="24" font-weight="bold" fill="#18283e" text-anchor="middle">Estimate position + orientation</text>
+<text x="640.0" y="399" font-size="21" font-weight="normal" fill="#44546a" text-anchor="middle">Visible: fit shape + image evidence</text>
+<text x="640.0" y="426" font-size="21" font-weight="normal" fill="#44546a" text-anchor="middle">Hidden: predict from a valid relationship</text>
+<rect x="960" y="130" width="380" height="110" rx="14" fill="#fff" stroke="#ccd5e1" stroke-width="2"/>
+<text x="1150.0" y="165" font-size="24" font-weight="bold" fill="#18283e" text-anchor="middle">Image matches</text>
+<text x="1150.0" y="199" font-size="21" font-weight="normal" fill="#44546a" text-anchor="middle">Pairwise or persistent tracks</text>
+<text x="1150.0" y="226" font-size="21" font-weight="normal" fill="#44546a" text-anchor="middle">Same evidence family</text>
+<rect x="960" y="330" width="380" height="120" rx="14" fill="#fff3df" stroke="#d6bb8b" stroke-width="2"/>
+<text x="1150.0" y="365" font-size="24" font-weight="bold" fill="#18283e" text-anchor="middle">Motion prediction</text>
+<text x="1150.0" y="399" font-size="21" font-weight="normal" fill="#44546a" text-anchor="middle">Valid group/gripper relationship</text>
+<text x="1150.0" y="426" font-size="20" font-weight="normal" fill="#44546a" text-anchor="middle">Works with no visible object pixels</text>
+<rect x="360" y="525" width="560" height="110" rx="14" fill="#fff" stroke="#ccd5e1" stroke-width="2"/>
+<text x="640.0" y="560" font-size="24" font-weight="bold" fill="#18283e" text-anchor="middle">Pose + evidence + uncertainty</text>
+<text x="640.0" y="594" font-size="21" font-weight="normal" fill="#44546a" text-anchor="middle">Mark observed, predicted or lost</text>
+<text x="640.0" y="621" font-size="21" font-weight="normal" fill="#44546a" text-anchor="middle">Sources, age, unresolved directions</text>
+<rect x="960" y="525" width="380" height="110" rx="14" fill="#fff" stroke="#ccd5e1" stroke-width="2"/>
+<text x="1150.0" y="560" font-size="24" font-weight="bold" fill="#18283e" text-anchor="middle">Record and inspect</text>
+<text x="1150.0" y="594" font-size="21" font-weight="normal" fill="#44546a" text-anchor="middle">Demo · debugger · benchmark</text>
+<text x="1150.0" y="621" font-size="21" font-weight="normal" fill="#44546a" text-anchor="middle">Same source image + A/B/C</text>
+<rect x="360" y="720" width="560" height="110" rx="14" fill="#e6f4ed" stroke="#8ebba7" stroke-width="2"/>
+<text x="640.0" y="755" font-size="24" font-weight="bold" fill="#18283e" text-anchor="middle">Update measured surface</text>
+<text x="640.0" y="789" font-size="21" font-weight="normal" fill="#44546a" text-anchor="middle">Add only when visible and aligned</text>
+<text x="640.0" y="816" font-size="21" font-weight="normal" fill="#44546a" text-anchor="middle">Keep sources; bound points and memory</text>
+<rect x="960" y="720" width="380" height="110" rx="14" fill="#fff" stroke="#ccd5e1" stroke-width="2"/>
+<text x="1150.0" y="755" font-size="24" font-weight="bold" fill="#18283e" text-anchor="middle">Independent robot loop</text>
+<text x="1150.0" y="789" font-size="21" font-weight="normal" fill="#44546a" text-anchor="middle">30 Hz · reads latest estimate</text>
+<text x="1150.0" y="816" font-size="21" font-weight="normal" fill="#44546a" text-anchor="middle">Never waits for perception</text>
+<path d="M 640 240 V 330" fill="none" stroke="#506078" stroke-width="3" marker-end="url(#arrow)"/>
+<text x="665" y="285" font-size="18" font-weight="normal" fill="#44546a" text-anchor="start">Prefer what the view reveals</text>
+<path d="M 310 390 H 360" fill="none" stroke="#506078" stroke-width="3" marker-end="url(#arrow)"/>
+<path d="M 960 185 H 942 V 365 H 920" fill="none" stroke="#506078" stroke-width="3" marker-end="url(#arrow)"/>
+<path d="M 960 390 H 920" fill="none" stroke="#506078" stroke-width="3" marker-end="url(#arrow)"/>
+<path d="M 640 450 V 525" fill="none" stroke="#506078" stroke-width="3" marker-end="url(#arrow)"/>
+<path d="M 640 635 V 720" fill="none" stroke="#506078" stroke-width="3" marker-end="url(#arrow)"/>
+<text x="653" y="680" font-size="20" font-weight="normal" fill="#416754" text-anchor="start">Skip when hidden</text>
+<path d="M 920 580 H 960" fill="none" stroke="#506078" stroke-width="3" marker-end="url(#arrow)"/>
+<path d="M 940 580 V 775 H 960" fill="none" stroke="#506078" stroke-width="3" stroke-dasharray="8 7" marker-end="url(#arrow)"/>
+<path d="M 360 775 H 175 V 450" fill="none" stroke="#506078" stroke-width="3" marker-end="url(#arrow)"/>
+<text x="195" y="610" font-size="19" font-weight="normal" fill="#416754" text-anchor="start">Updated model</text>
+<text x="195" y="638" font-size="19" font-weight="normal" fill="#416754" text-anchor="start">Next frame</text>
+<text x="40" y="895" font-size="25" font-weight="bold" fill="#18283e" text-anchor="start">Hidden object: predict its movement; keep its stored shape unchanged.</text>
+</g></svg>
