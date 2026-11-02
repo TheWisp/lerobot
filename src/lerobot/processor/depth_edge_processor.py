@@ -199,6 +199,11 @@ class DepthEdgeOverlayProcessorStep(ObservationProcessorStep):
     """
     Real-time depth edge detection and overlay for RealSense cameras.
 
+    To be retired. It burned the depth map into the RGB as edges because the
+    dataset could not store depth; ``record_depth`` on the bimanual SO-107 now
+    stores the map itself. The overlay stays only for the checkpoints trained
+    on overlaid frames and goes once those are no longer served.
+
     This processor detects depth discontinuities using Sobel gradients
     and overlays colored edges on the RGB image. Edges are colored by depth
     (red=near, blue=far) within a configurable depth range.

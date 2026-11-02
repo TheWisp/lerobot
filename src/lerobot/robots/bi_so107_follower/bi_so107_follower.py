@@ -78,6 +78,8 @@ class BiSO107Follower(Robot):
 
         # ``record_depth`` trades the overlay for the map itself: no processor
         # is installed, so the grab thread caches raw depth for get_observation.
+        # The overlay is to be retired once the checkpoints trained on overlaid
+        # frames are no longer served; ``record_depth`` is its replacement.
         for cam_key, cam in self.cameras.items():
             if isinstance(cam, RealSenseCamera) and cam.use_depth and not config.record_depth:
                 cam.post_grab_processor = DepthEdgeOverlayProcessorStep(
