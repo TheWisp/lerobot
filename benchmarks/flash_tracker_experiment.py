@@ -1,7 +1,8 @@
 """Small offline ablation: identical UFM motion, with and without surface correction.
 
 Uses the archived core directly. These are candidate poses, without publication
-gates, group fallback or gripper prediction. Fit residuals are not accuracy.
+gates or gripper prediction. Optional scene groups supply recorded motion hints.
+Fit residuals are not accuracy.
 Run with python -m benchmarks.flash_tracker_experiment --help.
 """
 
@@ -16,16 +17,20 @@ import subprocess
 import time
 from contextlib import nullcontext
 from dataclasses import asdict
+from functools import partial
 from pathlib import Path
 
 import cv2
 import numpy as np
 
+from benchmarks.flash_experiment_groups import GroupConfig, GroupHints
 from benchmarks.flash_experiment_inputs import samples
 from benchmarks.flash_experiment_labels import load_pose_labels
 from benchmarks.flash_flow_paths import DenseFlow, FlowPaths
 from benchmarks.flash_full_pose_score import score_transforms, summarize
 from lerobot.policies.flash.experimental_surface_session import GrowingSurfaceConfig, GrowingSurfaceSession
+from lerobot.policies.flash.scene_groups import ScenePointTracker
+from lerobot.policies.flash.shared_image_tracking import SharedFrameTracker, SharedMatchingConfig
 from lerobot.policies.flash.surface_acceleration import SearchPool, compiled_kernels
 from lerobot.policies.flash.surface_correspondence import crop_pair, measured_pairs, robust_fit, ufm_pairs
 from lerobot.policies.flash.surface_tracking import SurfaceTrackingSession, load_ufm
@@ -64,8 +69,9 @@ class RetainedMotionReference:
     correspondences can still be wrong; the labelled cases measure that risk.
     """
 
-    def __init__(self, matcher, config, *, record_correspondences=False):
+    def __init__(self, matcher, config, *, record_correspondences=False, shared_matching=None):
         self.matcher, self.config = matcher, config
+        self.shared_matching = shared_matching
         self.record_correspondences = record_correspondences
         self.evidence = None
         self.paths = FlowPaths()
@@ -87,17 +93,22 @@ class RetainedMotionReference:
                 a, b, crop = crop_pair(self.reference, current, self.config)
                 evidence = {} if self.record_correspondences else None
                 kwargs = {"evidence": evidence} if evidence is not None else {}
-                source, target = ufm_pairs(
-                    self.matcher,
-                    a,
-                    b,
-                    crop,
-                    self.reference,
-                    current,
-                    prepared["intrinsics"],
-                    self.config,
-                    **kwargs,
-                )
+                if self.shared_matching is not None:
+                    source, target = self.shared_matching.pairs(
+                        self.reference, current, prepared["intrinsics"], evidence=evidence
+                    )
+                else:
+                    source, target = ufm_pairs(
+                        self.matcher,
+                        a,
+                        b,
+                        crop,
+                        self.reference,
+                        current,
+                        prepared["intrinsics"],
+                        self.config,
+                        **kwargs,
+                    )
                 step, inliers, residual = robust_fit(source, target, self.config)
                 diagnostics.update(
                     extra_match_ms=(time.perf_counter() - started) * 1000,
@@ -143,7 +154,17 @@ def match_record(evidence, source, target, intrinsics, step, config, *, paths=No
         "stage": stages.tolist(),
         "fit_available": step is not None,
     }
-    if paths is not None and "flow" in evidence:
+    if "track_ids" in evidence:
+        record["backend"] = evidence["backend"]
+        record["track_ids"] = evidence["track_ids"].tolist()
+        record["paths"] = [
+            [int(i), int((i * 137) % 280), *np.round(a, 3).tolist(), *np.round(b, 3).tolist(), int(s)]
+            for i, a, b, s in zip(
+                evidence["track_ids"], evidence["source_uv"], evidence["target_uv"], stages, strict=True
+            )
+        ]
+        record["path_sampling"] = "shared_point_identities"
+    elif paths is not None and "flow" in evidence:
         crop = evidence["crop"]
         field = (
             DenseFlow(record, evidence["flow"], crop[:2], crop[2] / config.input_size_px)
@@ -186,7 +207,11 @@ def score_case(case, rows, references, reference_frames):
         methods = ["ufm_chain", "surface_corrected"]
         if "ufm_retained_reference" in details[0]:
             methods.append("ufm_retained_reference")
-        methods += [name for name in ("conditioned_fixed", "conditioned_growing") if name in details[0]]
+        methods += [
+            name
+            for name in ("conditioned_fixed", "conditioned_growing", "group_fixed", "group_growing")
+            if name in details[0]
+        ]
         for name in methods:
             poses = [item[name] for item in details[first:]]
             available = np.asarray([p is not None for p in poses])
@@ -225,12 +250,20 @@ def score_case(case, rows, references, reference_frames):
             key: quantiles([item[key] for item in details[first + 1 :]])
             for key in ("prepare_ms", "finish_ms")
         }
-        for name in ("conditioned_fixed", "conditioned_growing"):
+        for name in ("conditioned_fixed", "conditioned_growing", "group_fixed", "group_growing"):
             if name in methods:
                 result["timing_ms"][name] = quantiles([item[name + "_ms"] for item in details[first + 1 :]])
                 result["methods"][name]["max_map_points"] = max(
                     item[name + "_details"]["map_points"] for item in details
                 )
+                result["methods"][name]["pose_sources"] = {
+                    status: sum(item[name + "_status"] == status for item in details[first + 1 :])
+                    for status in ("observed_candidate", "predicted", "lost")
+                }
+        if "group_fixed" in methods:
+            result["timing_ms"]["scene_point_tracking_ms"] = quantiles(
+                [row["scene_point_tracking_ms"] for row in rows[first + 1 :]]
+            )
         report["roles"][role] = result
     return report
 
@@ -248,6 +281,9 @@ def code_snapshot(output):
         repo / "benchmarks/flash_experiment_browser.py",
         repo / "benchmarks/flash_rebuild_examples.py",
         repo / "benchmarks/flash_experiment_cache.py",
+        repo / "benchmarks/flash_experiment_groups.py",
+        repo / "src/lerobot/gui/flash_group_overlay.py",
+        repo / "src/lerobot/gui/group_wireframe.py",
     ]
     hashes = {}
     for file in source_files:
@@ -277,9 +313,12 @@ def run_case(
     retain_motion_reference=False,
     record_correspondences=False,
     surface_experiment=None,
+    group_experiment=None,
     progress=None,
+    shared_matching_config=None,
 ):
     output.mkdir(parents=True, exist_ok=False)
+    shared = SharedFrameTracker(shared_matching_config, model) if shared_matching_config else None
     sessions = {
         role: SurfaceTrackingSession(
             model,
@@ -289,31 +328,53 @@ def run_case(
             fit_kernels=kernels,
             search_pool=search_pool,
             record_correspondences=record_correspondences,
+            shared_matching=shared,
         )
         for role in case["roles"]
     }
     chains = {role: MotionChain() for role in sessions}
     paths = {role: FlowPaths() for role in sessions}
     retained = {
-        role: RetainedMotionReference(model, config.motion, record_correspondences=record_correspondences)
+        role: RetainedMotionReference(
+            model, config.motion, record_correspondences=record_correspondences, shared_matching=shared
+        )
         for role in sessions
     }
+    if group_experiment is not None and surface_experiment is None:
+        raise ValueError("group variants require the surface experiment")
+    variants = [("conditioned_fixed", False), ("conditioned_growing", True)]
+    if group_experiment is not None:
+        variants += [("group_fixed", False), ("group_growing", True)]
     candidates = (
         {
             name: {
                 role: GrowingSurfaceSession(
                     config.shape,
-                    GrowingSurfaceConfig(**{**asdict(surface_experiment), "grow": grow}),
+                    GrowingSurfaceConfig(
+                        **{
+                            **asdict(surface_experiment),
+                            "grow": grow,
+                            "retain_unobserved_pose": name.startswith("group_"),
+                        }
+                    ),
                     fit_kernels=kernels,
                     search_pool=search_pool,
                 )
                 for role in sessions
             }
-            for name, grow in (("conditioned_fixed", False), ("conditioned_growing", True))
+            for name, grow in variants
         }
         if surface_experiment is not None
         else {}
     )
+    scene_tracker = ScenePointTracker() if group_experiment is not None and shared is None else None
+    groups = {
+        name: {
+            role: GroupHints(group_experiment, shared_image_points=shared is not None) for role in sessions
+        }
+        for name in candidates
+        if name.startswith("group_")
+    }
     digest, rows, references, reference_frames = hashlib.sha256(), [], {}, {}
     started = time.perf_counter()
     (output / "case.json").write_text(json.dumps(case, indent=2) + "\n")
@@ -335,6 +396,14 @@ def run_case(
                 a = np.asarray(value)
                 digest.update(str((a.shape, a.dtype)).encode() + a.tobytes())
             row = {"frame": frame.frame_id, "time_s": frame.source_time_s, "objects": {}}
+            if shared is not None:
+                scene = shared.update(frame, masks)
+                row["shared_matching"] = dict(shared.diagnostics)
+                row["scene_point_tracking_ms"] = shared.diagnostics["total_ms"]
+            if scene_tracker is not None:
+                begin = time.perf_counter()
+                scene = scene_tracker.update(frame)
+                row["scene_point_tracking_ms"] = (time.perf_counter() - begin) * 1000
             match_row = {"frame": frame.frame_id, "objects": {}}
             for role, session in sessions.items():
                 begin = time.perf_counter()
@@ -396,16 +465,60 @@ def run_case(
                         candidate_input = dict(prepared)
                         old = track.connected_observation
                         current = prepared["current"]
-                        a, b, crop = crop_pair(old, current, config.motion)
-                        source, target = ufm_pairs(
-                            model, a, b, crop, old, current, prepared["intrinsics"], config.motion
-                        )
+                        if shared is not None:
+                            source, target = shared.pairs(old, current, prepared["intrinsics"])
+                        else:
+                            a, b, crop = crop_pair(old, current, config.motion)
+                            source, target = ufm_pairs(
+                                model, a, b, crop, old, current, prepared["intrinsics"], config.motion
+                            )
                         step, _, _ = robust_fit(source, target, config.motion)
                         candidate_input.update(
                             step=step, point_pairs=(source, target), match_source_frame=track.connected_frame
                         )
-                    result = track.update(candidate_input, frame.source_time_s)
+                    hint = None
+                    if name in groups:
+                        hint, group_details = groups[name][role].predict(
+                            frame,
+                            scene,
+                            masks,
+                            role,
+                            track.reference_frame,
+                            **({"object_usable": prepared["current"]["usable"]} if shared else {}),
+                            observation=prepared["current"] if prepared["status"] is None else None,
+                            shape_config=config.shape,
+                        )
+                    candidate_check = (
+                        partial(
+                            groups[name][role].compare_candidate,
+                            frame,
+                            masks[role],
+                            hint,
+                            observation=prepared["current"] if track.config.surface_priority else None,
+                            shape_config=config.shape,
+                        )
+                        if hint is not None
+                        else None
+                    )
+                    result = track.update(
+                        candidate_input,
+                        frame.source_time_s,
+                        hint=hint,
+                        candidate_check=candidate_check,
+                        base_from_camera=frame.base_from_camera,
+                    )
                     details = result["diagnostics"]
+                    if name in groups:
+                        groups[name][role].observe(
+                            frame,
+                            scene,
+                            masks,
+                            role,
+                            result,
+                            track.reference,
+                            **({"object_usable": prepared["current"]["usable"]} if shared else {}),
+                        )
+                        details["group"] = group_details
                     row["objects"][role].update(
                         {
                             name: result["camera_from_reference"],
@@ -444,6 +557,12 @@ def run_case(
                 print(f"{case['id']}: {frame.frame_id + 1}/{case['expected_frames']}", flush=True)
     report = score_case(case, rows, references, reference_frames)
     report.update(input_sha256=digest.hexdigest(), offline_wall_s=time.perf_counter() - started)
+    if shared is not None:
+        report["shared_matching"] = {
+            "config": asdict(shared.config),
+            "calls": shared.calls,
+            "timing_ms": quantiles([r["shared_matching"]["total_ms"] for r in rows[1:]]),
+        }
     np.savez_compressed(output / "reference_points.npz", **references)
     (output / "summary.json").write_text(json.dumps(report, indent=2, allow_nan=False) + "\n")
     return report
@@ -461,6 +580,11 @@ def main():
         help="Opt in to fixed/growing surfaces with retained image evidence; JSON GrowingSurfaceConfig",
     )
     parser.add_argument(
+        "--group-experiment-config",
+        type=Path,
+        help="Also compare fixed/growing surfaces with scene groups; JSON GroupConfig",
+    )
+    parser.add_argument(
         "--retain-motion-reference",
         action="store_true",
         help="Also test retrying from the last successfully connected image",
@@ -469,6 +593,11 @@ def main():
         "--record-correspondences",
         action="store_true",
         help="Save sampled raw UFM matches and filtering evidence for playback",
+    )
+    parser.add_argument(
+        "--shared-matching-config",
+        type=Path,
+        help="Opt in to one LK/UFM matching pass for objects and groups; JSON SharedMatchingConfig",
     )
     args = parser.parse_args()
     suite = json.loads(args.suite.read_text())
@@ -483,23 +612,35 @@ def main():
         if args.surface_experiment_config
         else None
     )
+    group_experiment = (
+        GroupConfig.from_dict(json.loads(args.group_experiment_config.read_text()))
+        if args.group_experiment_config
+        else None
+    )
+    shared_config = (
+        SharedMatchingConfig.from_dict(json.loads(args.shared_matching_config.read_text()))
+        if args.shared_matching_config
+        else None
+    )
     provenance = code_snapshot(args.output)
     provenance.update(
         config=asdict(config),
         cases=cases,
         experiment="candidate poses: raw UFM chain vs archived surface correction",
         masks="recorded SAM for rig; supplied dataset masks for external",
-        optional_motion_sources=[],
+        optional_motion_sources=["scene_points"] if group_experiment else [],
         certainty="uncalibrated diagnostics only",
         retain_motion_reference=args.retain_motion_reference,
         record_correspondences=args.record_correspondences,
         surface_experiment=asdict(surface_experiment) if surface_experiment else None,
+        group_experiment=asdict(group_experiment) if group_experiment else None,
+        shared_matching=asdict(shared_config) if shared_config else None,
         packages={d.metadata["Name"]: d.version for d in importlib.metadata.distributions()},
     )
     (args.output / "provenance.json").write_text(json.dumps(provenance, indent=2) + "\n")
     cv2.setNumThreads(1)
     started = time.perf_counter()
-    model = load_ufm()
+    model = load_ufm() if shared_config is None or shared_config.backend == "ufm" else None
     kernels = compiled_kernels() if config.compiled_surface_fit else None
     pool = SearchPool(config.shape.batch_query_workers) if config.reuse_surface_search else None
     startup = time.perf_counter() - started
@@ -517,6 +658,8 @@ def main():
                     retain_motion_reference=args.retain_motion_reference,
                     record_correspondences=args.record_correspondences,
                     surface_experiment=surface_experiment,
+                    group_experiment=group_experiment,
+                    shared_matching_config=shared_config,
                 )
             )
     finally:

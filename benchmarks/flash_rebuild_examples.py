@@ -12,6 +12,7 @@ import os
 import signal
 import time
 import traceback
+from dataclasses import asdict
 from html import escape
 from pathlib import Path
 
@@ -110,8 +111,10 @@ def rebuild(job: Path):
     # Import model/dataset dependencies only inside this process, never the GUI.
     from benchmarks.flash_experiment_browser import export
     from benchmarks.flash_experiment_cache import case_identity, execution_identity, reusable, seal_result
+    from benchmarks.flash_experiment_groups import GroupConfig
     from benchmarks.flash_tracker_experiment import code_snapshot, run_case
     from lerobot.policies.flash.experimental_surface_session import GrowingSurfaceConfig
+    from lerobot.policies.flash.shared_image_tracking import SharedMatchingConfig
     from lerobot.policies.flash.surface_acceleration import SearchPool, compiled_kernels
     from lerobot.policies.flash.surface_tracking import load_ufm
     from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig
@@ -146,12 +149,20 @@ def rebuild(job: Path):
                 previous_provenance = json.loads((previous_run.parent / "provenance.json").read_text())
                 config = VisionPipelineConfig.from_dict(previous_provenance["config"])
                 experimental = previous_provenance.get("surface_experiment")
+                shared = previous_provenance.get("shared_matching")
+                groups = (
+                    asdict(GroupConfig.from_dict(previous_provenance.get("group_experiment") or {}))
+                    if experimental
+                    else None
+                )
                 retain = "ufm_retained_reference" in item["methods"]
                 identity = case_identity(
                     case,
                     {
                         "config": previous_provenance["config"],
                         "surface_experiment": experimental,
+                        "group_experiment": groups,
+                        "shared_matching": shared,
                         "retain_motion_reference": retain,
                         "record_correspondences": True,
                     },
@@ -173,7 +184,7 @@ def rebuild(job: Path):
                     write_json(job / "status.json", state)
                     continue
                 check_cancel()
-                if model is None:
+                if model is None and (shared is None or shared["backend"] == "ufm"):
                     state.update(phase="Loading UFM")
                     write_json(job / "status.json", state)
                     model = load_ufm(revision=execution["model_revision"])
@@ -189,6 +200,8 @@ def rebuild(job: Path):
                         "code_snapshot": str(job),
                         "record_correspondences": True,
                         "surface_experiment": experimental,
+                        "group_experiment": groups,
+                        "shared_matching": shared,
                     },
                 )
                 if config.compiled_surface_fit and kernels is None:
@@ -217,6 +230,8 @@ def rebuild(job: Path):
                     retain_motion_reference=retain,
                     record_correspondences=True,
                     surface_experiment=GrowingSurfaceConfig(**experimental) if experimental else None,
+                    group_experiment=GroupConfig.from_dict(groups) if groups else None,
+                    shared_matching_config=SharedMatchingConfig.from_dict(shared) if shared else None,
                     progress=progress,
                 )
                 # Re-read the inputs before certifying reuse, so an edit during
@@ -227,6 +242,8 @@ def rebuild(job: Path):
                         {
                             "config": previous_provenance["config"],
                             "surface_experiment": experimental,
+                            "group_experiment": groups,
+                            "shared_matching": shared,
                             "retain_motion_reference": retain,
                             "record_correspondences": True,
                         },

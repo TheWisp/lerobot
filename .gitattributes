@@ -20,6 +20,8 @@
 *.arrow filter=lfs diff=lfs merge=lfs -text
 *.json !text !filter !merge !diff
 tests/artifacts/cameras/*.png filter=lfs diff=lfs merge=lfs -text
+# Recorded RGB-D and network outputs for matching-adapter equivalence tests.
+tests/policies/flash/fixtures/image_matching_*.npz filter=lfs diff=lfs merge=lfs -text
 # Proof media are small and exist to be LOOKED AT. GitHub serves an LFS
 # object as application/octet-stream with nosniff, so a browser refuses to
 # render it -- an embedded proof video is a blank box in a PR, and the

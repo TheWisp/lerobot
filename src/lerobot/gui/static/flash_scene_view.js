@@ -1,6 +1,6 @@
 /* Aligned RGB-D scene inspection for prepared FLASH demos. Geometry is display-only. */
 import * as THREE from '/static/vendor/three.module.js';
-import {calibratedProjection, createRgbdCloud, sceneControls} from '/static/rgbd_scene.js?v=3';
+import {calibratedProjection, createRgbdCloud, sceneControls} from '/static/rgbd_scene.js?v=5';
 
 const groupColor = 0xe5b661;
 const gripperColor = 0xf2a578;

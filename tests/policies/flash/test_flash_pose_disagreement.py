@@ -127,6 +127,40 @@ def test_equal_surface_support_does_not_claim_the_new_pose_is_better():
     assert result.verdict == PoseComparisonVerdict.AMBIGUOUS
 
 
+def test_contradicted_depth_is_not_mistaken_for_unavailable_depth():
+    frame = RGBDFrame(
+        1,
+        np.zeros((32, 32, 3), dtype=np.uint8),
+        np.ones((32, 32), dtype=np.float32),
+        np.array([[100.0, 0, 16], [0, 100.0, 16], [0, 0, 1]]),
+        1.0,
+        np.eye(4),
+        1.0,
+        1.0,
+        "test",
+    )
+    points = np.array([(x, y, 1.0) for x in (-0.02, 0, 0.02) for y in (-0.02, 0, 0.02)])
+    behind = np.eye(4)
+    behind[2, 3] = 0.02
+    options = {
+        "max_agreement_offset_m": 0.01,
+        "max_agreement_angle_rad": 0.1,
+        "min_masked_depth_points": 3,
+        "depth_occlusion_tolerance_m": 0.005,
+    }
+    visible = np.ones((32, 32), bool)
+    good = compare_pose_proposals(frame, visible, points, np.eye(4), behind, **options)
+    assert good.prior.masked_depth_points == 0
+    assert good.prior.tested_masked_depth_points == 9
+    assert good.verdict == PoseComparisonVerdict.CANDIDATE_FAVORED
+    reversed_ = compare_pose_proposals(frame, visible, points, behind, np.eye(4), **options)
+    assert reversed_.verdict == PoseComparisonVerdict.PRIOR_FAVORED
+    # If instead the nearer surface belongs to an occluder, it gives no reason
+    # to replace the object's hidden pose. Same geometry, different ownership.
+    hidden = compare_pose_proposals(frame, visible & False, points, np.eye(4), behind, **options)
+    assert hidden.verdict == PoseComparisonVerdict.INSUFFICIENT_EVIDENCE
+
+
 def test_recorded_held_dowel_proposals_conflict_across_depth_and_mask_support():
     fixture = Path(__file__).with_name("fixtures") / "dowel_held_frame_315.npz"
     with np.load(fixture) as data:

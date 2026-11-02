@@ -218,7 +218,7 @@ async function toggleFlashSceneView() {
                 option.textContent = role;
                 select.append(option);
             }
-            const {createFlashSceneView} = await import('/static/flash_scene_view.js?v=30');
+            const {createFlashSceneView} = await import('/static/flash_scene_view.js?v=32');
             const reprocessed = Object.fromEntries(Object.entries(
                 flashReplay?.reprocessed_scene_geometry?.points_object_m || {}).map(([role, points]) => [
                 role, {positions_object_m: points.flat(), colors_rgb: points.map(() => [180, 190, 200]), indices: []},

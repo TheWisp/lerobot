@@ -72,7 +72,7 @@ def scene_packet(manifest: dict, index: int, method: str) -> bytes:
         result = row["objects"][role]
         model = reference
         version = result.get(method + "_details", {}).get("map_version_after", 0)
-        if version and method in {"conditioned_fixed", "conditioned_growing"}:
+        if version and method in {"conditioned_fixed", "conditioned_growing", "group_fixed", "group_growing"}:
             model_path = (run / "surface_models" / method / role / f"{int(version):06d}.npz").resolve()
             if not model_path.is_relative_to(run):
                 raise ValueError("Surface is outside its experiment")
@@ -110,6 +110,7 @@ def scene_packet(manifest: dict, index: int, method: str) -> bytes:
             "label_kind": label_kind,
             "model_version": version,
             "error": error,
+            "group_tracks": result.get(method + "_details", {}).get("group", {}),
         }
     depth = frame.metric_depth()
     depth = np.where(np.isfinite(depth) & (depth > 0), depth, 0).astype("<f4")

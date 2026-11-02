@@ -16,6 +16,7 @@ import numpy as np
 
 from .depth_quality import depth_support_mask
 from .geometry import inverse, transform
+from .image_matching import LKMatchConfig, prepare_image_pair
 from .perception import RGBDFrame
 from .registration import (
     DegenerateRegistrationError,
@@ -110,23 +111,11 @@ class ScenePointTracker:
                 self.gaps += 1
                 self.recent_gap_durations_s.append(float(dt))
             if self._gray is not None and len(self._uv):
-                before = self._uv.reshape(-1, 1, 2)
-                after, forward_ok, _ = cv2.calcOpticalFlowPyrLK(
-                    self._gray, gray, before, None, winSize=(21, 21), maxLevel=3
+                pair = prepare_image_pair(
+                    self._gray, gray, LKMatchConfig(forward_backward_limit_px=self.fb_threshold_px)
                 )
-                backward, backward_ok, _ = cv2.calcOpticalFlowPyrLK(
-                    gray, self._gray, after, None, winSize=(21, 21), maxLevel=3
-                )
-                xy = after.reshape(-1, 2)
-                good = (
-                    (forward_ok.ravel() == 1)
-                    & (backward_ok.ravel() == 1)
-                    & (np.linalg.norm((before - backward).reshape(-1, 2), axis=1) < self.fb_threshold_px)
-                    & (xy[:, 0] >= 0)
-                    & (xy[:, 0] < gray.shape[1])
-                    & (xy[:, 1] >= 0)
-                    & (xy[:, 1] < gray.shape[0])
-                )
+                matches = pair.match(self._uv)
+                xy, good = matches.target_xy, matches.accepted
                 self._uv, self._ids = xy[good], self._ids[good]
         self._gray = gray
         self._last_time_s = frame.source_time_s

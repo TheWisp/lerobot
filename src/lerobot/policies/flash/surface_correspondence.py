@@ -11,6 +11,7 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
+from .image_matching import UFMMatchConfig, prepare_image_pair
 from .surface_observation import move
 
 
@@ -93,16 +94,16 @@ def measured_pairs(
     ua, ub = ua[good], ub[good]
     z_a, z_b = a["depth"][ua[:, 1], ua[:, 0]], b["depth"][ub[:, 1], ub[:, 0]]
 
-    def lift(uv: np.ndarray, z: np.ndarray) -> np.ndarray:
+    def lift(uv: np.ndarray, z: np.ndarray, camera: np.ndarray) -> np.ndarray:
         return np.column_stack(
             (
-                (uv[:, 0] - intrinsics[0, 2]) * z / intrinsics[0, 0],
-                (uv[:, 1] - intrinsics[1, 2]) * z / intrinsics[1, 1],
+                (uv[:, 0] - camera[0, 2]) * z / camera[0, 0],
+                (uv[:, 1] - camera[1, 2]) * z / camera[1, 1],
                 z,
             )
         )
 
-    return lift(ua, z_a), lift(ub, z_b)
+    return lift(ua, z_a, a.get("intrinsics", intrinsics)), lift(ub, z_b, b.get("intrinsics", intrinsics))
 
 
 def rigid_fit(source: np.ndarray, target: np.ndarray) -> np.ndarray:
@@ -153,27 +154,19 @@ def ufm_pairs(
     *,
     evidence: dict | None = None,
 ):
-    import torch
-
-    with torch.inference_mode():
-        output = model.predict_correspondences_batched(
-            torch.from_numpy(image_a.copy()).cuda(), torch.from_numpy(image_b.copy()).cuda()
-        )
-    flow = output.flow.flow_output[0].detach().float().cpu().numpy()
-    visible = output.covisibility.mask[0].detach().float().cpu().numpy()
+    pair = prepare_image_pair(image_a, image_b, UFMMatchConfig(config.covisibility_min), model=model)
     step, end = config.grid_step_px, config.input_size_px - config.grid_step_px
     ys, xs = np.mgrid[step:end:step, step:end:step]
     ys, xs = ys.ravel(), xs.ravel()
-    keep = visible[ys, xs] >= config.covisibility_min
-    uv_a = np.column_stack((xs[keep], ys[keep])).astype(float)
-    uv_b = uv_a + flow[:, ys[keep], xs[keep]].T
+    matches = pair.match(np.column_stack((xs, ys)).astype(float))
+    keep = matches.accepted
+    uv_a, uv_b = matches.source_xy[keep], matches.target_xy[keep]
     source_uv, target_uv = full_pixels(uv_a, crop, config), full_pixels(uv_b, crop, config)
     source, target = measured_pairs(a, b, source_uv, target_uv, intrinsics)
     if evidence is not None:
         # Observe the existing matcher without changing sampling, rejection or fit.
         # Include low-visibility predictions, but only source pixels on this object.
-        all_a = np.column_stack((xs, ys)).astype(float)
-        all_b = all_a + flow[:, ys, xs].T
+        all_a, all_b = matches.source_xy, matches.target_xy
         all_a, all_b = full_pixels(all_a, crop, config), full_pixels(all_b, crop, config)
         pa, pb = np.rint(all_a).astype(int), np.rint(all_b).astype(int)
         h, w = a["depth"].shape
@@ -185,7 +178,7 @@ def ufm_pairs(
         # Stages: 0 low co-visibility, 1 outside target mask, 2 depth/cleanup,
         # 3 usable 3D pair, 4 also agrees with the resulting rigid motion.
         stage = np.zeros(len(indices), dtype=np.uint8)
-        covisible = visible[ys[indices], xs[indices]] >= config.covisibility_min
+        covisible = keep[indices]
         stage[covisible] = 1
         inside_b = (pb[:, 0] >= 0) & (pb[:, 0] < w) & (pb[:, 1] >= 0) & (pb[:, 1] < h)
         rows = np.flatnonzero(covisible & inside_b)
@@ -199,7 +192,7 @@ def ufm_pairs(
             stage=stage,
             # Only optional diagnostic recording uses this full field. Fitting
             # still receives the same sampled pairs. Do not serialize the array.
-            flow=flow,
+            flow=pair.flow,
             crop=crop,
         )
     return source, target

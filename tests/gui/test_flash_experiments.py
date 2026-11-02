@@ -485,7 +485,10 @@ def test_rebuild_lock_survives_launcher_and_detects_worker_exit(tmp_path, monkey
 
     root = tmp_path / "browser"
     run, _ = completed_run(tmp_path)
-    export(run, root)
+    selected = export(run, root).name
+    # A second independent recording must never enter a single-scene request.
+    other_run, _ = completed_run(tmp_path / "other")
+    export(other_run, root)
     monkeypatch.setenv("LEROBOT_FLASH_EXPERIMENT_DIR", str(root))
     launch = subprocess.Popen
     children = []
@@ -505,16 +508,24 @@ def test_rebuild_lock_survives_launcher_and_detects_worker_exit(tmp_path, monkey
         with TestClient(app) as client:
             base = "/api/run/flash/experiments/rebuild"
             assert client.get(base).json()["state"] == "idle"
-            assert client.post(base + "?force=true").status_code == 202
+            assert client.post(base + "?identity=missing").status_code == 404
+            assert not children
+            response = client.post(base + f"?force=true&identity={selected}")
+            assert response.status_code == 202
+            assert response.json()["total"] == 1
             job = Path(json.loads((root / ".rebuild/current.json").read_text())["job"])
-            assert json.loads((job / "request.json").read_text())["force"] is True
+            request = json.loads((job / "request.json").read_text())
+            assert request["force"] is True
+            assert [item["id"] for item in request["items"]] == [selected]
             assert client.get(base).json()["state"] == "starting"
             assert client.post(base).status_code == 409
             assert len(children) == 1
             children[0].terminate()
             children[0].wait(timeout=5)
             assert client.get(base).json()["state"] == "failed"
-            assert client.post(base).status_code == 202
+            response = client.post(base)
+            assert response.status_code == 202
+            assert response.json()["total"] == 2
             assert len(children) == 2
     finally:
         for child in children:
@@ -578,7 +589,7 @@ def test_browser_rebuild_button_reports_progress_and_failure(gui_page, tmp_path,
 
     def status(route):
         if route.request.method == "POST":
-            posts.append(route.request.method)
+            posts.append(route.request.url)
             state.update(
                 id="job",
                 state="running",
@@ -597,13 +608,14 @@ def test_browser_rebuild_button_reports_progress_and_failure(gui_page, tmp_path,
             body=json.dumps(state),
         )
 
-    page.route("**/api/run/flash/experiments/rebuild", status)
+    page.route("**/api/run/flash/experiments/rebuild*", status)
     page.evaluate("async () => { switchTab('run'); await runTabInit(); await selectWorkflow('flash'); }")
-    page.get_by_role("button", name="Rerun all benchmarks").click()
+    page.get_by_role("button", name="Rerun this scene", exact=True).click()
     page.wait_for_function(
         "document.getElementById('flash-experiment-rebuild-status').textContent.includes('2/20')"
     )
-    assert posts == ["POST"]
+    assert len(posts) == 1
+    assert posts[0].endswith("?identity=" + page.evaluate("flashExperiments.selected"))
     assert page.get_by_role("button", name="Rerun all benchmarks").is_disabled()
     # Published results remain accessible even while the next report is pending.
     page.get_by_role("button", name="View results", exact=True).click()
@@ -617,7 +629,8 @@ def test_browser_rebuild_button_reports_progress_and_failure(gui_page, tmp_path,
     page.wait_for_function(
         "document.getElementById('flash-experiment-rebuild-status').textContent.includes('2/20')"
     )
-    assert posts == ["POST"]
+    assert len(posts) == 1
+    assert posts[0].endswith("?identity=" + page.evaluate("flashExperiments.selected"))
     state.update(
         state="completed_with_errors", completed=1, errors=[{"name": "Example", "error": "Missing depth"}]
     )
@@ -672,13 +685,33 @@ def test_growing_surface_playback_uses_frame_model_without_recentering_axes(tmp_
 
 
 @pytest.mark.requires_playwright
-def test_growing_method_does_not_show_matches_from_a_different_source_frame(gui_page, tmp_path, monkeypatch):
+@pytest.mark.parametrize("method", ["conditioned_growing", "group_growing", "group_fixed"])
+def test_growing_method_does_not_show_matches_from_a_different_source_frame(
+    gui_page, tmp_path, monkeypatch, method
+):
     run, _ = completed_run(tmp_path)
     recorded_matches(run)
     rows = [json.loads(line) for line in (run / "frames.jsonl").read_text().splitlines()]
-    for row in rows:
+    for i, row in enumerate(rows):
         row["objects"]["object"].update(
-            conditioned_growing=np.eye(4).tolist(), conditioned_growing_details={"image_source_frame": 0}
+            {
+                method: np.eye(4).tolist(),
+                method + "_details": {
+                    "image_source_frame": 0,
+                    "group": {
+                        "source": "object_point_group",
+                        "ids": [1, 2, 3],
+                        "pixels": [[20, 20], [30, 20], [20, 30]],
+                        "camera_xyz": [[0, 0, 1], [0.01, 0, 1], [0, 0.01, 1]],
+                        # Own points drive this prediction, but surrounding
+                        # support must still be visible before occlusion.
+                        "display_ids": [1, 2, 3, 100],
+                        "display_pixels": [[20, 20], [30, 20], [20, 30], [40, 40]],
+                        "display_camera_xyz": [[0, 0, 1], [0.01, 0, 1], [0, 0.01, 1], [0.02, 0.02, 1]],
+                    },
+                },
+                method + "_status": "predicted" if i == 2 else "observed_candidate",
+            }
         )
     (run / "frames.jsonl").write_text("\n".join(json.dumps(r) for r in rows))
     root = tmp_path / "browser"
@@ -687,16 +720,81 @@ def test_growing_method_does_not_show_matches_from_a_different_source_frame(gui_
     page = gui_page
     page.evaluate("async () => { switchTab('run'); await runTabInit(); await selectWorkflow('flash'); }")
     page.wait_for_selector('#flash-experiment-overlay[data-frame="0"]')
-    page.select_option("#flash-experiment-method", "conditioned_growing")
+    page.select_option("#flash-experiment-method", method)
     page.check("#flash-experiment-pose")
-    assert "accumulated measured surface" in page.locator("#flash-experiment-explanation").inner_text()
-    assert "undefined" not in page.locator("#flash-experiment-explanation").inner_text()
+    explanation = page.locator("#flash-experiment-explanation").inner_text()
+    assert ("accumulated measured surface" in explanation) == method.endswith("growing")
+    assert "undefined" not in explanation
     assert page.evaluate(
-        "flashExperimentPair(flashExperiments.data.frames[1].objects.object, 'conditioned_growing') !== null"
+        "method => flashExperimentPair(flashExperiments.data.frames[1].objects.object, method) !== null",
+        method,
     )
     assert page.evaluate(
-        "flashExperimentPair(flashExperiments.data.frames[2].objects.object, 'conditioned_growing') === null"
+        "method => flashExperimentPair(flashExperiments.data.frames[2].objects.object, method) === null",
+        method,
     )
+    page.evaluate("seekFlashExperiment(2)")
+    page.wait_for_selector('#flash-experiment-overlay[data-frame="2"]')
+    assert "Predicted: object" in page.locator("#flash-experiment-status").inner_text()
+
+    if method.startswith("group_"):
+        assert "Group points: object 4" in page.locator("#flash-experiment-status").inner_text()
+        assert page.evaluate(
+            "method => flashExperiments.data.frames[2].objects.object.group_tracks[method].ids", method
+        ) == [1, 2, 3]
+        calls = page.evaluate(
+            """method => {
+            const ops = [];
+            const ctx = new Proxy({}, {get: (_, key) => (...args) => ops.push([key, ...args]), set: () => true});
+            drawFlashGroupTracks(ctx, flashExperiments.data, 2, method, 1);
+            return ops;
+        }""",
+            method,
+        )
+        assert not any(call[0] == "arc" for call in calls)
+        assert sum(call[0] == "lineTo" for call in calls) >= 3
+        page.uncheck("#flash-experiment-groups")
+        assert not page.evaluate("flashGroupVisible('object')")
+        assert (
+            page.evaluate(
+                """method => {
+            let count = 0;
+            const ctx = new Proxy({}, {get: (_, key) => () => {if (key === 'lineTo') count++;}, set: () => true});
+            drawFlashGroupTracks(ctx, flashExperiments.data, 2, method, 1);
+            return count;
+        }""",
+                method,
+            )
+            == 0
+        )
+        page.check("#flash-experiment-groups")
+        page.select_option("#flash-experiment-group-role", "object:object")
+        assert page.evaluate("flashGroupVisible('object') && !flashGroupVisible('another object')")
+        assert page.evaluate(
+            "method => !('display_camera_xyz' in flashExperiments.data.frames[2].objects.object.group_tracks[method])",
+            method,
+        )
+        page.get_by_role("button", name="3D scene", exact=True).click()
+        page.wait_for_selector(f'#flash-experiment-scene[data-frame="2"][data-method="{method}"]')
+        assert page.evaluate("flashSceneState.packet.objects.object.group_tracks.camera_xyz") == [
+            [0, 0, 1],
+            [0.01, 0, 1],
+            [0, 0.01, 1],
+        ]
+        assert page.evaluate("flashSceneState.packet.objects.object.group_tracks.display_camera_xyz[3]") == [
+            0.02,
+            0.02,
+            1,
+        ]
+        page.uncheck("#flash-experiment-groups")
+        assert page.evaluate("""() => {
+            const viewer = flashSceneState.viewer;
+            const update = viewer.update;
+            let layers;
+            viewer.update = (...args) => {layers = args[3].map(item => item.layer); return update(...args);};
+            try { drawFlashExperimentScene(true); } finally {viewer.update = update;}
+            return !layers.includes('groups') && layers.includes('estimate');
+        }""")
 
 
 def scored_run(tmp_path, *, labelled=True):
@@ -924,23 +1022,24 @@ def test_scene_http_uses_same_frame_units_and_relative_label_origin(tmp_path, mo
         )
 
 
-def test_scene_growth_never_changes_labelled_reference(tmp_path):
+@pytest.mark.parametrize("method", ["conditioned_growing", "group_fixed", "group_growing"])
+def test_scene_growth_never_changes_labelled_reference(tmp_path, method):
     from lerobot.gui.flash_experiment_scene import scene_packet
 
     run, _ = labelled_scene_run(tmp_path)
     rows = [json.loads(line) for line in (run / "frames.jsonl").read_text().splitlines()]
     for i, row in enumerate(rows):
         obj = row["objects"]["object"]
-        obj["conditioned_growing"] = obj["surface_corrected"]
-        obj["conditioned_growing_details"] = {"map_version_after": i + 1}
-        file = run / "surface_models/conditioned_growing/object" / f"{i + 1:06d}.npz"
+        obj[method] = obj["surface_corrected"]
+        obj[method + "_details"] = {"map_version_after": i + 1}
+        file = run / f"surface_models/{method}/object" / f"{i + 1:06d}.npz"
         file.parent.mkdir(parents=True, exist_ok=True)
         np.savez(file, points=np.full((7, 3), i + 0.25))
     (run / "frames.jsonl").write_text("\n".join(json.dumps(row) for row in rows))
     output = export(run, tmp_path / "browser")
     manifest = json.loads((output / "manifest.json").read_text())
     for index in (2, 0, 1):
-        data, _, _ = decode_scene_packet(scene_packet(manifest, index, "conditioned_growing"))
+        data, _, _ = decode_scene_packet(scene_packet(manifest, index, method))
         obj = data["objects"]["object"]
         np.testing.assert_array_equal(obj["surface"], np.full((7, 3), index + 0.25))
         assert len(obj["reference"]) == 4
@@ -967,7 +1066,7 @@ def test_scene_browser_orbits_resets_and_switches_recorded_method(gui_page, tmp_
     # Validate the actual GPU projection: off-centre intrinsics and portrait
     # source must agree with the pixel positions of object-fit: contain.
     error = page.evaluate("""async () => {
-        const {calibratedProjection} = await import('/static/rgbd_scene.js?v=3');
+        const {calibratedProjection} = await import('/static/rgbd_scene.js?v=5');
         const T = await import('/static/vendor/three.module.js');
         const camera = new T.PerspectiveCamera(45, 1, .01, 100);
         let error = 0;
@@ -1022,7 +1121,7 @@ def test_scene_browser_orbits_resets_and_switches_recorded_method(gui_page, tmp_
 @pytest.mark.requires_playwright
 def test_shared_rgbd_shader_preserves_rgb_depth_alignment_and_missing_depth(gui_page):
     result = gui_page.evaluate("""async () => {
-        const {createRgbdScene} = await import('/static/rgbd_scene.js?v=3');
+        const {createRgbdScene} = await import('/static/rgbd_scene.js?v=5');
         const canvas=document.createElement('canvas');
         canvas.style.cssText='position:fixed;left:0;top:0;width:320px;height:240px';
         document.body.append(canvas);
@@ -1099,3 +1198,99 @@ def test_scene_ignores_inflight_frame_after_method_changes(gui_page, tmp_path, m
     assert np.asarray(page.evaluate("flashSceneState.packet.objects.object.pose"))[:3, 3] == pytest.approx(
         [0, 0.02, 0]
     )
+
+
+def test_rerun_preserves_shared_matching_backend_and_cache_separates_it(tmp_path, monkeypatch):
+    from dataclasses import asdict
+    from pathlib import Path
+
+    import torch
+
+    from benchmarks import flash_experiment_cache
+    from benchmarks.flash_rebuild_examples import rebuild, write_json
+    from lerobot.policies.flash import surface_tracking
+    from lerobot.policies.flash.shared_image_tracking import SharedMatchingConfig
+    from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig
+    from tests.policies.flash.test_shared_image_tracking import TranslationModel
+
+    root = tmp_path / "browser"
+    monkeypatch.setenv("LEROBOT_FLASH_EXPERIMENT_DIR", str(root))
+    run, source = completed_run(tmp_path)
+    (source / "annotated_poses").mkdir()
+    for i in range(3):
+        np.savetxt(source / "annotated_poses" / f"{i:03d}.txt", np.eye(4))
+    config = VisionPipelineConfig(compiled_surface_fit=False, reuse_surface_search=False)
+    shared = asdict(SharedMatchingConfig(backend="ufm"))
+    write_json(run.parent / "provenance.json", {"config": asdict(config), "shared_matching": shared})
+    export(run, root)
+    model = TranslationModel()
+    monkeypatch.setattr(surface_tracking, "load_ufm", lambda **_: model)
+    monkeypatch.setattr(torch.Tensor, "cuda", lambda self: self)
+    monkeypatch.setattr(
+        flash_experiment_cache,
+        "execution_identity",
+        lambda source: {"model_revision": "test", "source": source},
+    )
+
+    def rerun(name):
+        item = flash_experiments._list()[0]
+        job = root / ".rebuild" / name
+        job.mkdir(parents=True)
+        write_json(job / "request.json", {"browser_root": str(root), "items": [item]})
+        write_json(
+            job / "status.json",
+            {"id": name, "state": "starting", "total": 1, "completed": 0, "succeeded": 0, "errors": []},
+        )
+        rebuild(job)
+        state = json.loads((job / "status.json").read_text())
+        assert state["state"] == "completed", state
+        return state, flash_experiments._list()[0]
+
+    state, item = rerun("ufm")
+    assert state["computed"] == 1 and model.calls == 2
+    result = Path(item["source_run"])
+    saved = json.loads((result.parent / "provenance.json").read_text())
+    assert saved["shared_matching"] == shared
+    assert json.loads((result / "summary.json").read_text())["shared_matching"]["calls"] == 2
+    data = json.loads((root / item["id"] / "overlays.json").read_text())
+    assert (
+        data["frames"][1]["objects"]["object"]["matches"]["pair"]["path_sampling"]
+        == "shared_point_identities"
+    )
+    assert rerun("cached")[0]["reused"] == 1
+    assert model.calls == 2
+    # Changing the backend must recompute, and LK must not load the neural model.
+    saved["shared_matching"]["backend"] = "lk"
+    write_json(result.parent / "provenance.json", saved)
+    monkeypatch.setattr(surface_tracking, "load_ufm", lambda **_: pytest.fail("LK loaded UFM"))
+    state, item = rerun("lk")
+    assert state["computed"] == 1 and state["reused"] == 0
+    assert (
+        json.loads((Path(item["source_run"]) / "summary.json").read_text())["shared_matching"]["config"][
+            "backend"
+        ]
+        == "lk"
+    )
+    assert rerun("lk-cached")[0]["reused"] == 1
+
+
+@pytest.mark.requires_playwright
+def test_browser_names_matching_backend_from_selected_recording(gui_page, tmp_path, monkeypatch):
+    run, _ = completed_run(tmp_path)
+    recorded_matches(run)
+    summary_file = run / "summary.json"
+    summary = json.loads(summary_file.read_text())
+    summary["shared_matching"] = {"config": {"backend": "lk"}, "timing_ms": {"median": 2.5}}
+    summary_file.write_text(json.dumps(summary))
+    root = tmp_path / "browser"
+    export(run, root)
+    monkeypatch.setenv("LEROBOT_FLASH_EXPERIMENT_DIR", str(root))
+    page = gui_page
+    page.evaluate("async () => { switchTab('run'); await runTabInit(); await selectWorkflow('flash'); }")
+    page.wait_for_selector('#flash-experiment-overlay[data-frame="0"]')
+    assert page.locator("#flash-experiment-method option:checked").inner_text() == "LK matching → Pose"
+    page.select_option("#flash-experiment-method", "surface_corrected")
+    assert "LK’s pose" in page.locator("#flash-experiment-explanation").inner_text()
+    assert "Shared LK matching: 2.5 ms/frame" in page.locator("#flash-experiment-results").inner_text()
+    page.get_by_role("button", name="Next experiment frame").click()
+    assert "LK point paths" in page.locator("#flash-experiment-matches").get_attribute("title")

@@ -5,7 +5,7 @@
 <text x="40" y="52" font-size="34" font-weight="bold" fill="#18283e" text-anchor="start">FLASH · Growing surface + shared pose estimation</text>
 <text x="40" y="89" font-size="23" font-weight="normal" fill="#596a80" text-anchor="start">Proposed pipeline · rigid objects · no supplied mesh</text>
 <rect x="360" y="130" width="560" height="110" rx="14" fill="#e7f4ff" stroke="#8fb9d7" stroke-width="2"/>
-<text x="640.0" y="165" font-size="24" font-weight="bold" fill="#18283e" text-anchor="middle">Direct observation · when visible</text>
+<text x="640.0" y="165" font-size="24" font-weight="bold" fill="#18283e" text-anchor="middle">Primary: mask + measured depth</text>
 <text x="640.0" y="199" font-size="21" font-weight="normal" fill="#44546a" text-anchor="middle">SAM visible mask + aligned RGB-D</text>
 <text x="640.0" y="226" font-size="21" font-weight="normal" fill="#44546a" text-anchor="middle">Measure the visible surface</text>
 <rect x="40" y="330" width="270" height="120" rx="14" fill="#e6f4ed" stroke="#8ebba7" stroke-width="2"/>
@@ -14,12 +14,12 @@
 <text x="175.0" y="426" font-size="21" font-weight="normal" fill="#44546a" text-anchor="middle">Fixed object coordinates</text>
 <rect x="360" y="330" width="560" height="120" rx="14" fill="#e9edff" stroke="#a1afd6" stroke-width="2"/>
 <text x="640.0" y="365" font-size="24" font-weight="bold" fill="#18283e" text-anchor="middle">Estimate position + orientation</text>
-<text x="640.0" y="399" font-size="21" font-weight="normal" fill="#44546a" text-anchor="middle">Visible: fit shape + image evidence</text>
+<text x="640.0" y="399" font-size="21" font-weight="normal" fill="#44546a" text-anchor="middle">Visible: geometry first, image matches second</text>
 <text x="640.0" y="426" font-size="21" font-weight="normal" fill="#44546a" text-anchor="middle">Hidden: predict from a valid relationship</text>
 <rect x="960" y="130" width="380" height="110" rx="14" fill="#fff" stroke="#ccd5e1" stroke-width="2"/>
-<text x="1150.0" y="165" font-size="24" font-weight="bold" fill="#18283e" text-anchor="middle">Image matches</text>
+<text x="1150.0" y="165" font-size="24" font-weight="bold" fill="#18283e" text-anchor="middle">Secondary: 2D matches</text>
 <text x="1150.0" y="199" font-size="21" font-weight="normal" fill="#44546a" text-anchor="middle">Pairwise or persistent tracks</text>
-<text x="1150.0" y="226" font-size="21" font-weight="normal" fill="#44546a" text-anchor="middle">Same evidence family</text>
+<text x="1150.0" y="226" font-size="18" font-weight="normal" fill="#44546a" text-anchor="middle">Cannot overrule usable mask + depth</text>
 <rect x="960" y="330" width="380" height="120" rx="14" fill="#fff3df" stroke="#d6bb8b" stroke-width="2"/>
 <text x="1150.0" y="365" font-size="24" font-weight="bold" fill="#18283e" text-anchor="middle">Motion prediction</text>
 <text x="1150.0" y="399" font-size="21" font-weight="normal" fill="#44546a" text-anchor="middle">Valid group/gripper relationship</text>
@@ -41,7 +41,7 @@
 <text x="1150.0" y="789" font-size="21" font-weight="normal" fill="#44546a" text-anchor="middle">30 Hz · reads latest estimate</text>
 <text x="1150.0" y="816" font-size="21" font-weight="normal" fill="#44546a" text-anchor="middle">Never waits for perception</text>
 <path d="M 640 240 V 330" fill="none" stroke="#506078" stroke-width="3" marker-end="url(#arrow)"/>
-<text x="665" y="285" font-size="18" font-weight="normal" fill="#44546a" text-anchor="start">Prefer what the view reveals</text>
+<text x="665" y="285" font-size="18" font-weight="normal" fill="#44546a" text-anchor="start">Direct geometry wins</text>
 <path d="M 310 390 H 360" fill="none" stroke="#506078" stroke-width="3" marker-end="url(#arrow)"/>
 <path d="M 960 185 H 942 V 365 H 920" fill="none" stroke="#506078" stroke-width="3" marker-end="url(#arrow)"/>
 <path d="M 960 390 H 920" fill="none" stroke="#506078" stroke-width="3" marker-end="url(#arrow)"/>

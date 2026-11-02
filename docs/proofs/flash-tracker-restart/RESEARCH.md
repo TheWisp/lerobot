@@ -946,3 +946,834 @@ was found for this clip; pose annotation, calibration, model shape, depth and
 capture timing remain possible contributors. Calling the labels themselves
 wrong was too strong.** Scripts, raw model provenance and per-frame comparisons
 are in `~/.cache/flash-tracker-restart/dexycb-alignment-audit/`.
+
+### Point groups: two controlled comparisons (2026-11-02)
+
+**Historical first implementation.** The measurements below describe the
+initial integration, before stationary support, dedicated object points and
+proposal comparison were added. See the completion entry below for the
+current behavior; these results must not be attributed to the updated code.
+
+Run → FLASH adds **Depth + mask fit, UFM + groups**, with fixed and growing
+surfaces. Both reuse the existing scene point tracker: optical flow follows
+pixel identities, depth supplies their 3D positions, and a rigid fit estimates
+their shared motion. Points inside the object support its motion directly.
+Surrounding points are associated only after they have moved with the visibly
+tracked object. Proximity alone does not establish that relationship.
+
+The group pose initializes the same surface fit used by the two corresponding
+baselines. If the surface fit cannot produce a pose, an available group pose
+is returned as **predicted**; it cannot extend the surface. These experiments
+do **not** yet compare conflicting surface/group proposals before accepting a
+visible fit. Group association thresholds are recorded in `GroupConfig`, using
+the earlier tracker's defaults. There are no object-specific rules or gripper inputs.
+
+Purple points in both 2D and 3D are the actual measured points used by the group
+prediction. The short 2D trails join persistent point IDs. They are separate
+from the fitted object surface and from UFM matches. Missing support is shown
+as zero group points; historical results without this evidence say to rerun.
+
+The 42-scene, seven-method run is
+`browser/.rebuild/rebuild-20261102-011645-c96e7bb4/` under the cache root.
+It preserves source/config snapshots, raw group proposals, supporting points,
+final poses, and processing times. Side-by-side full videos of both FLASH demos
+and analysis scripts are in `~/.cache/flash-tracker-restart/group-experiment-20261102/`.
+
+**Completed: 42/42 scenes, seven methods, no execution errors.** Of these,
+21 real clips have pose labels; three additional labelled clips are synthetic
+controls. On the 21 real clips, the mean per-clip fraction within **20 mm and
+20° of the labels** is:
+
+| Surface | Without groups | With groups |
+| ------- | -------------: | ----------: |
+| Fixed   |         68.87% |      69.16% |
+| Growing |         59.37% |      59.34% |
+
+Missing poses count as failures; clips receive equal weight. These are label
+agreement scores, with the label-quality limitations described above. On
+common returned frames, the median point-error change is below 1 mm in 19/20
+fixed-surface comparisons and all 20 growing-surface comparisons. The remaining
+fixed-surface comparison improves by 1.12 mm. One labelled cracker-box clip has
+no returned poses in either variant and is included as zero in the table.
+
+The fixed-surface variant returns 191 group-only predictions over the real
+recordings. Only 34 have pose labels, and **12/34** meet the 20 mm / 20° limits.
+The growing variant returns two group-only predictions, both unlabelled.
+Groups can fill gaps, but these results do not justify treating their output
+as reliable or promoting either variant as an accuracy improvement.
+
+Scene point tracking takes a median **1.71 ms/frame** across real-clip medians
+(range 1.10–2.78 ms). Per-object fit-stage medians increase by 1.85 ms for fixed
+surfaces and 2.34 ms for growing surfaces, including association work and any
+change in fitting iterations. The scene tracker is shared across objects.
+This is offline batch timing, not a robot-loop frame-rate measurement.
+
+Both FLASH demos still drift visibly. With the growing surface, missing poses
+change from 28 to 26 for the dowel (712 evaluated frames), remain 31 for the
+gamepad and 117 for the cube (627 each). Neither demo produces a group-only
+fallback pose: support is absent in the missing frames. At gamepad frames
+265–266 (11.71–11.77 s), the group-enabled estimate rotates 106° while the image
+changes little; no group prediction exists there. The saved cube mask also
+ends up on the tape roll, an unchanged segmentation error in both versions.
+
+**Why this is not the old debugger's full behavior:** that service additionally
+seeds points specifically on each object and permits hypotheses based on
+stationary nearby support. Its point/group-versus-surface comparison code also
+requires a reference cloud; the debugger's constructor does not supply that
+cloud, so those two comparisons are inactive there. Its separate depth
+contradiction check does use an automatically saved first surface. This small comparison uses a subset of the
+global scene points and requires observed co-motion for surrounding support.
+The old debugger's saved logs contain group predictions, but they are often
+from different camera frames than its slow recorded RGB-D samples; they are
+not an aligned accuracy benchmark for the new methods.
+
+At dowel frame 263 (8.77 s), 49 surrounding points provide a prediction, but
+the surface fit moves the reference surface a median 24.8 mm away from it.
+Only 25 cleaned surface measurements and no UFM image pairs enter that fit.
+Applying the old debugger's comparison rule to these two recorded proposals
+returns **ambiguous**, rather than favoring the surface fit. Frame 350 returns
+**insufficient evidence**. This is a diagnostic on recorded proposals, not a
+closed-loop rerun of the old service, and does not establish that the group
+pose was correct. Both its anchor and the accumulated surface may already be
+wrong. The next comparison should test when a partial observation can justify
+replacing the point-motion prediction, together with seeding points on each
+object's mask; simply adding the scene tracker has not reproduced debugger stability.
+
+Another inherited limitation is the association rule's centre-displacement
+test. A controlled 30° rotation about the object's centre moved its surface
+points a median 24.2 mm, with surrounding points following the same rigid
+motion, but established no surrounding relationship. Existing associations
+can predict rotation; learning one from rotation alone is the missing case.
+This rule was kept unchanged during the benchmark, rather than tuning a
+threshold mid-run. Testing a measure of whole-surface movement is a separate
+follow-up; this probe does not establish the cause of any particular video failure.
+
+### Why the dowel still disappears: debugger comparison (2026-11-02)
+
+This audit concerns the initial group integration above. It did not reproduce either sealed system. This is an
+integration gap, not evidence that grouping cannot bridge this occlusion.
+
+- At frame 150 (5.00 s), the current scene-wide pool contains **11** points
+  inside the dowel mask, below its configured 12-point minimum. Running the
+  debugger's object-specific seeding on the same image/mask yields **52**
+  points. This is a seeding comparison, not 52 proven persistent tracks.
+- At frame 180 (6.00 s), the saved dowel mask is empty. No own visible points
+  can help then. The new adapter has no surrounding relationship because its
+  association requires object motion first. The debugger permits stationary
+  support and retains a surrounding-point prediction.
+- Replaying all **713 frames**, feeding the same saved `conditioned_growing`
+  proposals to the unchanged debugger service, supplies a current-frame pose
+  in **all 26 frames** missing from `group_growing`. Five use a verified group;
+  21 use a proximity-based, unconfirmed support hypothesis. No gripper input
+  or stationary-hold timer was enabled. These counts measure availability,
+  not correctness.
+- Passing the reference cloud to that same service enables its existing
+  group/point disagreement checks. This diagnostic also fills all 26 gaps,
+  now using a verified group. Neither version fixes the whole trajectory:
+  at frame 350 (11.67 s), both the benchmark and debugger-call comparison
+  accept a badly oriented saved surface fit. The dowel is upright; the
+  reference surface is drawn sideways. Reusing a group service alone is
+  therefore insufficient to repair erroneous direct observations.
+
+The replay isolates group integration: identical RGB-D, masks and saved surface
+proposals, processed in source order. It does **not** rerun the debugger's
+different vision frontend or reproduce asynchronous scheduling. The debugger's
+four tracking modules are unchanged from sealed `c72e1e1c3`.
+
+The first sealed system (`80d90b783`) uses causal BootsTAPIR rather than LK
+optical flow, seeds object and surrounding points explicitly, and maintains
+object-to-group membership through occlusion. Its own report also documents
+incorrect attachment to stationary background during slow insertion; retaining
+a pose is not proof of accurate motion. Source: `showservo/groups.py`,
+`benchmarks/group_live.py`, and sealed lesson 7 at that revision.
+
+Evidence, reproducible scripts, full-length comparison video, source-point
+counts and screenshots: local directory
+`~/.cache/flash-tracker-restart/group-experiment-20261102/debugger-audit-dowel/`.
+The governing verification rule is **Prove the refactor equivalent** in
+`.agents/skills/verifying-changes/SKILL.md`: borrowing the tracker class did not
+establish parity with its surrounding association and pose-selection logic.
+
+### Completed group integration (2026-11-02)
+
+**This run predates the sustained-agreement rule below.**
+
+The same two group options now use these components from the sealed debugger:
+
+- Dedicated optical-flow points inside each object's mask, plus shared scene
+  points outside it. Another tracked object can supply surrounding points.
+- Surrounding points become support after agreeing with two observed object
+  poses, including when both are stationary. That agreement is evidence for
+  shared motion, not proof of attachment. A later accepted observation that
+  separates from the group removes the association.
+- Before changing the pose or growing the surface, compare the proposed
+  surface fit with the point-motion prediction against the current mask and
+  depth. Keep the prediction when the observation cannot distinguish them;
+  allow a better-supported observation to correct it. Predictions never add
+  measured surface points or establish a new surrounding association.
+
+The comparison had an inherited bug: valid depth contradicting a proposed pose
+could be counted as missing evidence. It now distinguishes a contradictory
+measurement inside the object mask from unavailable depth or an occluder.
+This permits a clearly supported observation to correct a wrong prediction.
+
+Purple points in 2D and 3D show the measured own-object and surrounding support,
+even when only one source currently supplies the prediction. Persistent IDs
+join the trails; reseeding starts new IDs. Recorded evidence distinguishes
+the selected source, both point sets and the surface-versus-group comparison.
+
+The five existing no-group options are unchanged. Group parameters are saved
+in `GroupConfig`; there are no object names, task phases or gripper inputs in
+this integration. This completes the experiment's missing components, not
+tracking accuracy or exact equivalence with every heuristic in the old service.
+
+Regression coverage includes stationary occlusion, moving support, separation,
+support on another tracked object, real optical-flow tracking without any
+global scene points, rejection before surface mutation, and correction from
+contradictory depth. Reintroducing each of five defects fails its named test.
+The closed-loop rerun of both FLASH demos and one labelled bleach clip is
+`browser/.rebuild/rebuild-20261102-080126-66fb2b03/`; outputs use the same recorded
+RGB-D and masks as the first comparison. Availability and accuracy must be
+reported separately.
+
+That three-clip run completed without execution errors. All five no-group
+methods reproduced their previous saved poses exactly. For the growing
+variant, adding groups reduced missing poses from 28 to 5 for the dowel,
+31 to 24 for the gamepad and 117 to 2 for the cube. The remaining five dowel
+gaps are frames 265–269: neither object points nor surrounding support supply
+a prediction, and the proposed surface fit does not overlap the observation.
+Both object poses and their group associations still have errors.
+
+The bleach clip demonstrates why a whole-clip score is insufficient: at
+10 mm / 10°, both group variants pass 63/180 frames, all in the first 12 s,
+versus 1/180 for their no-group counterparts. The fixed-surface group variant
+still loses its pose at 26.42–27.20 s and ends 117.8° from the label. The growing
+variant's median labelled point error worsens from 19.76 to 21.31 mm. Improved
+early scores do not establish success during the later rotation.
+
+### Sustained agreement before joining; prompt separation (2026-11-02)
+
+The user identified a real weakness in the two-observation association rule.
+At dowel frame 350, 17 of its 399 surrounding support points projected inside
+the ring mask. The combined purple overlay also showed the ring's own points,
+but the problematic association was not merely a display misunderstanding.
+
+The revised experiment stores each nearby tracked point's first measured
+position relative to the observed object. It must remain within the configured
+distance tolerance for `support_confirmation_s` before becoming support
+(initial experiment setting: 1 s). A contradiction removes it immediately;
+the distance tolerance remains configurable through `fit_threshold_m` (5 mm).
+Comparing with the first relative position prevents many small deviations
+from accumulating unnoticed. New point identities start their own histories.
+
+An occlusion interrupts confirmation of pending points; it does not count as
+contradiction of established support. Current object-point motion can break
+an existing surrounding relationship before a surface fit is accepted. The
+viewer can isolate one object's group support while retaining both poses.
+
+The duration and tolerance are experiment settings, not calibrated confidence.
+An erroneous accepted object pose can still corrupt the association; this is
+not a solution to all pose errors. The updated closed-loop comparison is
+`browser/.rebuild/rebuild-20261102-082912-f5cd72ff/`. Earlier scores above belong
+to the earlier implementation, not this revised rule.
+
+The three-clip rerun finished without execution errors; the five no-group
+methods again reproduced their saved poses exactly. The stricter association
+rule is **not an accuracy improvement established by this test**. Compared
+with the preceding two-observation implementation, missing poses increased:
+
+| Growing-surface method | Previous groups | Sustained-agreement groups | No groups |
+| ---------------------- | --------------: | -------------------------: | --------: |
+| Dowel                  |               5 |                         32 |        28 |
+| Gamepad                |              24 |                         31 |        31 |
+| Cube                   |               2 |                        113 |       117 |
+
+The bleach growing result is unchanged: its higher early score still does not
+solve the later rotation. The fixed variant has 16 missing poses, previously 14.
+
+A concrete failure of the stricter rule is recorded at dowel frames 100–150.
+Of 175 previously admitted surrounding points still tracked, 90% moved less
+than 2.02 mm in the fixed camera frame. The accepted object pose rotated
+14.95°, making those points appear to move by a median 33.30 mm relative to
+that estimated object frame. Thus pose instability can remove useful support;
+this is not evidence that the whole group physically separated. Comparing
+raw own-object motion with surrounding motion, independently of changes to
+the fitted pose anchor, needs investigation before treating the rule as a fix.
+The 5 mm tolerance is configurable, but increasing it would not resolve this
+source-of-evidence problem. Joining and separation also currently share this
+parameter with point fitting and pose comparison; they are not independently
+tuned confidence estimates.
+
+Measurements and the reproducible probe are in
+`~/.cache/flash-tracker-restart/group-experiment-20261102/`:
+`support-confirmed-drift-probe.json`,
+`support-confirmed-drift-measurements.npz`, and
+`support-confirmed-drift-probe.py`. The probe selects previously admitted IDs,
+not arbitrary points elsewhere in the scene. Tolerance, source-time joining,
+slow separation, and occlusion behavior have regression tests; restoring each
+of five defects makes its targeted test fail. These tests establish the rule's
+implementation, not the quality of its input pose estimates.
+
+Playback now uses the original show-and-servo triangle/quad wireframe renderer
+from `80d90b783`, copied unchanged into `gui/group_wireframe.py`. The adapter
+uses recorded measured support and stable track IDs. These display links do
+not add tracking constraints. Group visibility has an independent checkbox
+in 2D and 3D; the object selector limits only the support overlay. Existing
+42 exports received display-only updates with the recorded poses preserved.
+“Rerun this scene” sends only the selected published recording to the existing
+cancellable worker. The actual UI rerun `rebuild-20261102-091650-50b8e378`
+recomputed the 181-frame bleach clip, exactly reproduced all seven pose traces,
+and left the other 41 recording entries unchanged. The dowel's support loss
+reported above remains unresolved; this UI work makes it easier to inspect.
+
+### Why the accepted pose corrupted its own group reference (2026-11-02)
+
+The 14.95° change at dowel frames 100–150 accumulated over 50 updates; it was
+not one jump. Almost all of it was roll: the long direction changed only 0.36°.
+The surrounding points independently imply 0.086° rotation (166 of 175
+previously admitted, still-tracked points agree within the existing 5 mm fit
+tolerance). These are measured-motion diagnostics, not independent pose labels.
+
+The implementation does not jointly constrain the fit with those points:
+
+1. `GroupHints.predict` selects object-point motion whenever available, even
+   when surrounding support is also available. The selected pose initializes
+   the depth/mask/UFM fit; group measurements are absent from its objective.
+2. All 50 updates pass `compare_pose_proposals` as `agree`: each correction is
+   small relative to that frame's prediction. Twelve pass even though both
+   mask coverage and depth p90 worsen under that check's own measurements.
+3. `GroupHints.observe` overwrites both object and surrounding pose anchors
+   with each accepted fit. The next prediction consequently includes the
+   preceding fitting error. This is not independent confirmation of its pose.
+4. Association history still uses the earlier object-relative coordinates.
+   Accumulating roll changes those coordinates for distant tray points, and
+   their admitted support falls from 187 points at frame 100 to zero at 144.
+
+Removing the anchor corrections algebraically from the saved object-point
+motion gives 3.31° across this interval, versus the accepted 14.95°. This
+isolates the feedback contribution; it is not a rerun with a corrected fusion
+algorithm. Surface information is recorded after acceptance but does not
+control which pose corrections are trusted. Thus a small accepted update
+currently means neither high confidence nor an improvement over all evidence.
+
+Next experiment: preserve an independent measured group-motion history and
+test how it constrains the surface fit, including real separation and later
+visual corrections. Simply freezing the object or enlarging the separation
+tolerance would not test that requirement. No tracker behavior was changed
+for this diagnosis.
+
+Reproducible probes, per-update measurements and the two-frame/curve figure:
+`~/.cache/flash-tracker-restart/group-experiment-20261102/pose-feedback-*`.
+
+Sealed-branch code comparison: in `80d90b783`, `showservo/groups.py` fits scene
+groups from visible TAPIR tracks lifted through depth, before placing objects.
+Hidden members retain predicted positions but do not vote as visible measured
+points. An object's own fit changes its group-relative placement only after
+the visible-support check and a significant disagreement; small fit changes
+leave that relationship unchanged. The code explicitly cites noisy small-object
+rotations as the reason. The downstream `SeenThrough` depth test does not refit
+the upstream group's points.
+
+In `c72e1e1c`, `causal_service.py` checks direct fits against object-point and
+surrounding predictions, then rebases their object-pose anchors on accepted
+vision. `_observe_environment` likewise refreshes the relationship. Thus the
+reference-update feedback pattern predates this experiment; its previous
+presence is not evidence of correctness. That branch's live surface debugger
+used this service only with optional `group_fallback` enabled (default off).
+In the current experiment the fitted pose changes the point-to-object
+relationship and support membership, **not** the raw optical-flow pixels or
+their measured depth. This distinction is essential to interpreting the drift.
+
+### Joint fit from independent point evidence (2026-11-02; local experiment)
+
+The two group variants now fit measured depth/mask, UFM correspondences and
+independent group point pairs together. A source supplies fixed object
+coordinates and current camera coordinates, marked **measured** (tracked object
+pixels plus depth) or **predicted** (object points carried by surrounding
+measured motion). Each source has a configurable, point-count-normalized Huber
+residual. The default weight of 1 and the existing 5 mm residual scale are
+experimental settings, not calibrated uncertainty. Correlated sources can
+still agree on a wrong answer.
+
+The final fitted pose no longer rebases ongoing point tracks or determines
+whether their surrounding associations survive. Group learning uses measured
+object-point motion even if the downstream surface fit is rejected. Conversely,
+a surrounding prediction alone cannot establish its own co-movement relationship.
+Initialization, or recovery after all independent object motion is lost, still
+needs a coordinate reference from an accepted surface observation; these events
+are recorded as `point_reference_reset`. This is not a guarantee that a newly
+established reference is correct.
+
+Predicted points enter the motion objective only. They never become measured
+surface patches. A clear new depth observation can correct a wrong prediction;
+the existing post-fit observation check remains in place. The five methods
+without groups are unchanged. No gripper source is injected in this experiment.
+
+Verification covers actual LK tracking, synthetic measured co-movement and
+separation, missing masks, the real surface optimizer, normalized source weights,
+and scalar/batched residual parity. Restoring pose feedback, removing the joint
+point residual, or making group learning wait for final pose acceptance each
+fails its targeted regression test. The first partial rerun was cancelled when
+the acceptance dependency was found; the complete rerun is
+`rebuild-20261102-122643-joint-points`.
+
+Complete-demo result (same recordings and masks; no independent pose labels):
+
+| Object              | Missing frames before | Missing frames after |
+| ------------------- | --------------------: | -------------------: |
+| Dowel, 713 frames   |                    32 |                   30 |
+| Ring, 713 frames    |                     0 |                    0 |
+| Gamepad, 628 frames |                    31 |                   31 |
+| Cube, 628 frames    |                   113 |                    0 |
+
+These counts measure availability, **not accuracy**. The new cube trace has
+275 predicted frames; inspection shows that it stays under the gamepad instead
+of following the late erroneous mask to the tape roll. Dowel rotation during
+the stationary frame-100–150 interval falls from 14.95° to 3.47°, with 69
+surrounding points still available at frame 150 (previously zero).
+
+This is not a general quality improvement yet: held-dowel estimates and the
+growing surface are visibly worse in part of the carry. At frame 350 there are
+15 own-object tracked points and no surrounding support. The fit falls back to
+that own-point prediction after an ambiguous comparison; both proposed poses
+already disagree strongly with depth (about 128 mm p90 in that comparison).
+Keeping a point source independent does not repair its initially wrong reference
+or later drift. The observation check and reference recovery still need work;
+this experiment does not justify treating returned poses as correct.
+
+All five non-group methods exactly reproduce their previous pose matrices
+across both demos. The 74 focused tests pass. Both exports were published back
+into the existing FLASH list; the server and source recordings were unchanged.
+Uncommitted code was copied into the run's provenance archive. Local comparison,
+rendering scripts, screenshots and mutation-test logs are under
+`~/.cache/flash-tracker-restart/group-experiment-20261102/joint-points/`.
+The [52-second before/after video](https://github.com/TheWisp/lerobot/releases/download/flash-visible-tracking-20261023/FLASH_independent_groups_20261102.mp4)
+contains both full demos at source speed, including the failures. Only this
+video was uploaded; experimental source changes remain uncommitted.
+
+### Persistent predictions and safer surface additions (2026-11-02; local experiment)
+
+A tracked background group already measures the effect of camera motion. If an
+object has stayed fixed relative to those points, the group can carry its hidden
+points without a separately supplied camera pose. The relationship must end on
+observed separation, not merely because the object disappears. A paired test now
+checks the same hidden-object prediction with and without known camera motion.
+
+Two extrapolation errors discarded surrounding support prematurely. We compared
+a noisy pose fitted from a small visible fragment over the entire hidden object,
+and used that pose to re-express distant surrounding points. Separation now
+compares the group's prediction at the **measured object points** with their
+actual positions. An established, agreeing group supplies the coordinate
+reference for maintaining its surrounding membership. The final surface pose
+still does not update those point tracks. Real measured separation still breaks
+the relationship using the configured tolerance. Raw point drift can nevertheless
+produce a false contradiction; this change does not solve that uncertainty.
+
+Both group methods now retain an output after initialization when all measured
+support is lost. Such frames are labelled `last_world_pose`, distinct from a
+measured group prediction, and record the time since support was available.
+Known camera poses transform that retained state into the current camera view.
+If neither camera motion nor background motion can be measured, retaining it is
+only a stationary assumption, not recovered tracking. There is no invented pose
+before initialization and no calibrated confidence estimate yet.
+
+The sprawling surface had a separate cause: real depth points were inserted at
+wrong object coordinates after a bad fit. A similar fit in the next frame then
+confirmed them. New additions are now projected into retained earlier views:
+points in observed empty space, or outside the earlier mask without a nearer
+occluder, are rejected. Points behind earlier measured depth remain possible
+hidden surfaces. The existing mask/depth tolerances apply; no dowel-specific rule
+is used. Retained views are bounded by the surface patch budget.
+
+Point-by-point rejection alone was insufficient in the first trial: a mostly
+contradicted extension left a small unexplained tail in previously hidden space.
+We now defer that whole extension unless the existing configurable
+`patch_overlap` fraction is consistent with retained views (default 0.5). This
+is an experimental consistency threshold, not a probability. It can reject valid
+growth when an earlier mask, depth or alignment was wrong; it does not implement
+automatic repair of already accepted bad patches. Tests include an actual newly
+visible back surface that must remain admissible.
+
+The first trial, `rebuild-20261102-132342-joint-points`, completed the dowel but was
+cancelled during gamepad processing after the unexplained-tail failure. The final
+full rerun is `rebuild-20261102-133839-joint-points`, using the same recordings and
+masks. It changes both growing methods as well as the group methods. No gripper
+motion is supplied. These demos have no independent pose labels, so availability
+and visual improvement must not be reported as measured pose accuracy.
+
+The 82 focused tests pass. Restoring either group extrapolation error, removing
+historical surface checks, bypassing the whole-extension check, or removing
+persistent output makes its regression test fail. Evidence, code snapshots,
+comparisons and render scripts remain under
+`~/.cache/flash-tracker-restart/group-experiment-20261102/persistent-pose/` and the
+rerun directory. Experimental code remains uncommitted.
+
+Both full recordings completed and were verified in the running FLASH browser
+without page errors. Both group methods output a pose on every frame after
+initialization. For the growing variant:
+
+| Object  | Frames | Missing before → after | New prediction sources when direct fitting is rejected |
+| ------- | -----: | ---------------------: | ------------------------------------------------------ |
+| Dowel   |    713 |                 30 → 0 | 20 own-point, 32 last-known-pose                       |
+| Ring    |    713 |                  0 → 0 | None                                                   |
+| Gamepad |    628 |                 31 → 0 | 13 own-point, 31 last-known-pose                       |
+| Cube    |    628 |                  0 → 0 | 276 surrounding-group                                  |
+
+The unsupported 32 dowel and 31 gamepad frames are **not successful group
+tracking**. The cube is the clearest example of surrounding points maintaining a
+hidden object's prediction. Qualitatively, the dowel's carry/release surface is
+much less distorted; the gamepad still has visible alignment errors during
+carry. Final stored point counts fall from 1171 to 435 for the dowel, 817 to 520
+for the ring, 909 to 457 for the gamepad and 280 to 235 for the cube. No final map
+points violate the initial retained view's ray check; that is internal
+consistency with one observation, not independent shape or pose accuracy.
+
+The [full before/after video](https://github.com/TheWisp/lerobot/releases/download/flash-visible-tracking-20261023/FLASH_persistent_pose_and_surface_20261102.mp4)
+shows previous above and current below, at source speed. It includes both full
+recordings and labels last-known-pose intervals separately from measured group
+predictions. The gamepad section displays the cube's surrounding support.
+
+### Gamepad jump before lifting: rejected observation-check experiment (2026-11-02)
+
+Inspection of the previous full rerun locates the first major break at frames
+168–170 (7.41–7.50 s). The dedicated object point tracker loses its fit; a scene
+point fit supplies a shifted reference for reseeding. The next own-point
+prediction differs from the surrounding group by 7.92 mm, which removes 186
+surrounding tracks. The reported orientation then reaches 21.2° from its starting
+orientation at frame 170, while the gripper is covering the object.
+
+This was not an unavoidable lack of evidence. At frame 169, the surrounding
+prediction explains the initial measured surface better than the own-point
+prediction: mask/depth support 65.1% versus 58.2%, and depth residual p90
+2.32 mm versus 4.51 mm. These are internal observation checks, not labelled pose
+accuracy. The existing comparison returns `prior_favored`, but was not consulted
+before destroying the relationship. The point tracks' mutual agreement alone
+had been treated as proof of real separation.
+
+The tested change ran the same depth/mask comparison at that upstream decision when measured
+point disagreement exceeds the configured tolerance. Only when it favored the
+surrounding proposal did it reject the own-point proposal and retain support;
+other verdicts retained the previous separation behavior. Rejected points did not
+enter the downstream joint fit or define its reseeded reference. This comparison
+used independently predicted transforms and the initial measured surface, never
+the downstream fitted pose. It adds no threshold. It does **not** solve ambiguous
+comparisons, sparse observations that admit many rotations, or reliable
+attachment acquisition during the lift. No gripper encoder prediction is supplied.
+
+Paired regression cases give the same coherent point displacement with either
+stationary or genuinely moved RGB-D geometry. Only the first keeps the group;
+the second must separate. Removing this check makes the stationary case fail
+while the genuine-movement case still passes. The 84 focused tests pass.
+The full rerun is `rebuild-20261102-141801-group-observation-check`; evidence and
+scripts are under `~/.cache/flash-tracker-restart/group-experiment-20261102/gamepad-diagnosis/`.
+
+The prior dowel display contains 296 sampled surface points initially and 435
+at the end, joined only by short nearest-neighbor lines. It is a partial measured
+surface, not a watertight mesh. Its incomplete display is not proof of a wrong
+pose, but neither do the retained-view checks establish a correct complete shape.
+
+**Full-sequence result: rejected and reverted.** Both demos completed. Dowel and
+ring counts and final surfaces are unchanged. For the gamepad, the check reduces
+the early orientation change at frame 170 from 21.2° to 4.7°, and preserves the
+tray support through the covering interval. However, after the gamepad lifts,
+the estimate stays on the tray: the retained surrounding prediction wins while
+object points are unavailable, and the correct new observation fails to recover
+its connection to the original surface. Availability is not correctness. The
+change and its two synthetic tests are preserved in the local evidence directory
+(`rejected-guard.patch`, `groups-rejected-guard.py`, `tests-with-rejected-guard.py`),
+but removed from the active algorithm. Complete output remains under the job;
+its browser exports are archived in `rejected_exports` so they do not replace
+the previous examples. The synthetic pair did not cover loss followed by genuine
+separation and reappearance; that temporal case is necessary before another
+acceptance-rule change. No new threshold or gripper-specific rule was added.
+
+### LK versus UFM near the gamepad occluder (2026-11-02)
+
+`compare_lk_ufm.py` seeds the same image corners at frame 150 and advances both
+methods through every frame to 172, without pose fitting affecting their image
+positions. UFM uses the deployed DINOv2-L checkpoint and existing 320-pixel crop;
+LK uses the existing 21-pixel patch and forward/backward check. Both endpoints
+are checked against the same raw SAM mask and depth-support test for this
+comparison; production UFM pose fitting additionally uses cleaned/trimmed depth.
+No robot action, geometry fitting, or predicted hidden point is an image match.
+
+At frame 168, 11 common accepted points also have their original position inside
+the current mask with valid depth. Their displacement from frame 150 has median
+4.25 px / p90 8.07 px for LK, versus 1.26 px / p90 1.70 px for UFM. This is a
+stationary-object diagnostic, **not labelled flow accuracy**. The common set
+shrinks to two at frame 169, so later aggregate comparisons are not meaningful.
+UFM is better on this visible subset, but still accepts covered features: the
+illustrated point B moves 24.1 px onto another visible location, with UFM's
+current pair co-visibility output 0.993. That output is not the probability that
+its accumulated point identity is correct. Both methods can keep the endpoint
+inside SAM while switching which physical spot they follow.
+
+The matching-patch experiment tried 7, 11, 15 and 21 pixels with identical initial
+seeds, depth checks and pyramid settings. Smaller windows reduce aggregate drift
+but discard different points; on identical surviving IDs the improvement is
+mixed. Therefore changing the window alone is not a validated fix. The raw mask
+captures also rule out the suspected circuit-board segmentation contamination
+at frames 150 and 168: white markers over the board in the comparison are earlier
+point positions that have since become covered, not new points seeded there.
+
+**Current implementation, audited rather than inferred:**
+
+| Stage                               | Matcher/input                                                  | Where SAM/depth filtering happens                                                                                     |
+| ----------------------------------- | -------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| Surface + UFM pose proposal         | UFM on unmasked RGB crops                                      | Accept matching pixel pairs only when both endpoints pass the cleaned object mask/depth; default mask margin is 2 px. |
+| Dedicated object points for groups  | LK on full-resolution grayscale, 21×21 window, pyramid level 3 | Seed/accept point centers in the raw mask; depth support and forward/backward test. No 2-pixel mask erosion here.     |
+| Surrounding scene points for groups | Separate LK on half-resolution grayscale                       | Track scene corners; depth support; current raw object mask determines ownership.                                     |
+
+Even applying the same 2-pixel margin to LK would not contain a 21×21 matching
+patch within the object; at half resolution it spans roughly 42×42 sensor pixels.
+Coarser pyramid levels also use wider context. The linked picture shows a center
+9.6 px inside SAM while 6% of its finest-level matching patch is outside. This
+establishes the implementation's exposure to mixed motion, not the sole cause
+of every slipped point. UFM also sees surrounding RGB; segmentation is currently
+an endpoint/geometry check, not an input attention constraint.
+
+Sources: [OpenCV's LK description](https://docs.opencv.org/4.12.0/d4/dee/tutorial_optical_flow.html),
+[UFM model and usage](https://github.com/UniFlowMatch/UFM). The consolidation
+proposal is maintained in the pipeline design; it is not implemented by this
+comparison. Local evidence includes raw RGB/masks, per-point coordinates and
+visibility, the window ablation, complete before/after recordings, and scripts.
+
+Phone-accessible evidence:
+[LK patch crossing the mask](https://github.com/TheWisp/lerobot/releases/download/flash-visible-tracking-20261023/FLASH_LK_mask_patch_20261102.jpg),
+[same-point LK/UFM comparison](https://github.com/TheWisp/lerobot/releases/download/flash-visible-tracking-20261023/FLASH_LK_UFM_occlusion_20261102.jpg),
+[short point-tracking video](https://github.com/TheWisp/lerobot/releases/download/flash-visible-tracking-20261023/FLASH_LK_UFM_occlusion_20261102.mp4),
+[full gamepad before/after showing the rejected guard's later failure](https://github.com/TheWisp/lerobot/releases/download/flash-visible-tracking-20261023/FLASH_rejected_group_guard_20261102.mp4).
+The short video repeats the same source interval three times and holds its final
+frame briefly; the full recording uses original timestamps. After reverting,
+the existing 26 group tests pass. No physical trial or robot control was run.
+
+The user's abstraction clarification makes the consolidation backend-neutral:
+LK and UFM are selectable providers of 2D matches behind the same contract.
+Persistent point identities, SAM/depth filtering, grouping and surface fitting
+belong downstream. This is a design revision, not a claim that the active
+experimental code has already replaced its two separate tracking paths.
+
+### 2026-11-02 — Matching adapters, before sharing inference
+
+Extracted the duplicated LK forward/backward calls and the UFM field query into
+`image_matching.py`. Both return query-ordered source/target image pixels,
+acceptance and backend-native diagnostics. Explicit settings select LK or UFM;
+UFM inference is reusable across point queries. SAM ownership, depth cleaning,
+point IDs, group association and pose fitting remain downstream.
+
+This step deliberately preserves the current full-resolution object LK,
+half-resolution scene LK and cropped UFM paths. It does **not** yet make them
+consume one shared inference result, change the mask margins, or fix slipping.
+The implementation status is marked in the existing pipeline design.
+
+**Equivalence:** compared frozen pre-refactor source with the new implementation
+on every frame of both FLASH demos and the external bleach-bottle clip:
+
+| Recording                       | Frames | Depth-lifted pairs | Outcome       |
+| ------------------------------- | -----: | -----------------: | ------------- |
+| Gamepad / cube                  |    628 |            320,288 | Exactly equal |
+| Dowel / ring                    |    713 |            440,289 | Exactly equal |
+| YCB bleach hard 00 03 chaitanya |    181 |             29,876 | Exactly equal |
+
+The comparison checks raw correspondences and rejection stages, 3D motion,
+scene point identities, group membership/state, reseeding and predicted poses.
+It includes 113 empty object masks and 61 failed UFM rigid fits in the two demos.
+Both implementations receive the same real UFM network output after verifying
+that their requested input images are identical. Group feedback uses the same
+recorded final-fit results. The unchanged final surface optimizer was not rerun;
+its geometric and group inputs were compared instead. This establishes refactor
+equivalence on these recordings, not that their tracking is accurate.
+
+150 targeted tests pass. Two recorded-frame fixtures retain the original
+implementation's outputs for permanent, hardware-free regression tests. Injecting
+a one-pixel endpoint error into either backend makes the real-consumer fixture
+test fail. A float32 threshold-comparison test also guards a subtle conversion
+regression. Existing benchmark source hashing automatically includes the new file.
+
+No extra model inference was introduced. With captured UFM output, CPU
+postprocessing rises from about 0.55 to 0.69 ms per image pair (+0.13 ms); this
+small allocation/contract cost is recorded rather than claimed as zero overhead.
+Paired LK measurements show no slowdown; their second-call cache advantage is
+not evidence of a speedup. No hardware run, server restart or commit was made.
+
+[Machine-readable evidence](image-matching-refactor-20261102.json) includes source
+hashes, counts, timing distributions and environment versions. The full original
+source snapshot, runnable `audit.py`, logs and measurements are retained locally
+under `~/.cache/flash-tracker-restart/image-matcher-refactor-20261102/`.
+
+### 2026-11-02 — One matching pass for objects and surrounding groups
+
+Implemented an opt-in shared LK or UFM pass. Both consumers use the same persistent
+point IDs and mask/depth checks; object pose cannot move those points. Shared
+object matches contribute once to fitting, not once as image evidence and again
+as an independent group measurement. Matching continues with empty object masks.
+Point budgets, image resolution and history length are configurable and recorded.
+GUI reruns preserve these settings and cache them separately.
+
+Ran both choices through the complete gamepad (628 frames), dowel (713) and
+labelled bleach-bottle (181) clips: exactly one matching call per consecutive
+frame pair, regardless of object count. This is a new algorithm configuration;
+the adapter-equivalence result above does not guarantee equal quality here.
+
+**Not ready to replace the baseline.** For the bottle, using surface growth and
+groups on the same 180 evaluated frames:
+
+| Matching                          | Median point error | p90 point error | Median rotation error |
+| --------------------------------- | -----------------: | --------------: | --------------------: |
+| Existing UFM + separate LK groups |             4.0 mm |          7.8 mm |                  2.7° |
+| Shared UFM                        |             7.3 mm |         22.8 mm |                  2.0° |
+| Shared LK                         |             4.6 mm |          9.8 mm |                  3.6° |
+
+These compare identical reference points placed by estimated versus labelled
+poses. The control was rerun with current group logic: the earlier 21.3 mm result
+used older group code and is **not** the valid baseline for this comparison.
+
+Both demos retain poses throughout, but neither has independent pose labels.
+Shared UFM visibly fails during dowel rotation: at frame 350 the real dowel is
+upright while its estimate is sideways. Projecting the unchanged initial surface
+confirms a pose error, not merely bad surface growth. Shared LK is better in that
+frame, but also drifts; availability is not correctness.
+
+Shared matching, seeding and depth processing take median 35–37 ms with UFM and
+12–13 ms with LK across these clips. This excludes subsequent surface fitting;
+it is not end-to-end tracker FPS. The experiment changes image crop/scale,
+sampling and group inputs together. The next useful experiment isolates these
+changes on the failing rotation interval, rather than changing acceptance limits.
+
+203 targeted tests and an additional browser test pass; four deliberate defects
+(pixel scaling, second tracker, exhausted point budget and double-counting) each
+fail their regression test. Rerun/cache and browser-label tests also pass after
+export changes. The existing default stays unchanged; new recordings are named
+“shared LK” and “shared UFM” in FLASH. Changes remain local and uncommitted.
+
+[Full demo comparison video](https://github.com/TheWisp/lerobot/releases/download/flash-visible-tracking-20261023/FLASH_shared_UFM_comparison_20261102.mp4)
+shows the existing path above shared UFM, at recorded timestamps.
+[Machine-readable measurements](shared-matching-comparison-20261102.json) identify
+the inputs, settings and preserved source snapshots. Complete runs and drivers
+are under `~/.cache/flash-tracker-restart/shared-matching-20261102/`.
+
+**Follow-up: the gamepad also fails before pickup.** At frame 100 (4.37 s),
+44 accepted points surviving from initialization have median accumulated UFM
+displacement 3.89 px. A visible 30×30 button patch independently matches its
+original position with zero-pixel displacement (normalized correlation 0.985),
+and the mask bounds stay within one pixel. Thus the image tracks already drift
+while the gamepad is stationary. At frame 144 (6.34 s), the object points disagree
+with the environment prediction by 5.09 mm; the 5 mm separation rule removes the
+surrounding group. At frame 160 (7.04 s), the final estimate has rotated 23.3° from
+initialization while the object remains on the tray. The surface fit still accepts
+it. This is not limited to complete occlusion or to the dowel rotation. The origin
+of the image drift (sampling/scale versus model behavior) remains unisolated;
+increasing a group tolerance is not a demonstrated fix. The local
+`gamepad_pregrasp_audit.py` and `gamepad-pregrasp-160.jpg` preserve the diagnostic.
+
+### 2026-11-02 — Recorded stationary-gamepad regression
+
+Added a real RGB-D → pinned UFM → shared groups → growing-surface integration
+test. The visually annotated stationary interval is frames 0–164 (0–7.24 s),
+including gripper occlusion. Frames 165–170 show pickup beginning. Inference runs
+through frame 280; the annotation is used only afterward. Inputs are hashed.
+
+| Maximum false motion before pickup |  Before |   After | Test limit |
+| ---------------------------------- | ------: | ------: | ---------: |
+| Surface-center displacement        | 9.22 mm | 1.15 mm |       5 mm |
+| Rotation from initialization       |  24.49° |   3.98° |         5° |
+
+The limits were fixed before changing the algorithm. The estimate subsequently
+moves 59 mm by frame 280; this prevents freezing from passing, but is not proof
+of accurate held-object tracking. There are no independent gamepad pose labels.
+
+The fixes are geometric, not timed or object-specific:
+
+- Keep the existing 2 px boundary exclusion at **both** match endpoints. Tests
+  verify it, but interior matches can still slide to wrong material points.
+- Use the measured-surface objective consistently when fitting and deciding
+  whether object matches contradict a surrounding group. A drifting image
+  hypothesis cannot win merely by outweighing better geometric agreement.
+- Do not pull hidden reference points toward the visible fragment. Nearer or
+  unknown depth outside the visible mask is not evidence of an empty ray.
+- Do not force an incomplete reference to cover the whole current outline.
+  That assumption initially regressed the bottle: an excluded bottom surface
+  pulled the correctly aligned reference down. Removing the assumption fixed
+  the regression; the complete-reference option remains explicit.
+
+Cross-check on the full 181-frame labelled bleach-bottle clip: median point
+error 7.34 → 4.42 mm, p90 22.81 → 8.33 mm, and frames within 10 mm / 10°
+136/180 → 170/180. **Tradeoff:** median rotation error 2.00° → 3.90°; not every
+metric improved. On the full 713-frame dowel demo, the previous sideways estimate
+at frame 350 becomes upright. That is visual evidence, not full-clip accuracy.
+
+169 checks pass, including the two recorded tests and generic stationary/moving/
+rotating shapes at three scales. Deliberately reinstating wrong image weighting,
+unknown-depth penalties, complete-outline assumptions, or removing boundary
+filtering makes the relevant tests fail. Freezing every output pose passes the
+stationary check but fails the pickup check. Changes remain local and uncommitted;
+the running server and historical benchmark playbacks were not replaced.
+
+[Before/after video, including pickup](https://github.com/TheWisp/lerobot/releases/download/flash-visible-tracking-20261023/FLASH_gamepad_stationary_regression_20261102.mp4).
+[Inputs, settings, measurements and source hashes](gamepad-stationary-regression-20261102.json).
+The test and replay command are documented in
+[`tests/policies/flash/fixtures/README.md`](../../../tests/policies/flash/fixtures/README.md).
+
+### 2026-11-02 — Full-suite validation after the geometry fixes
+
+Ran all seven methods on **42 clips / 8,611 source frames**: 21 real labelled
+scenes, three synthetic controls, and 18 unlabelled scenes (including both FLASH
+demos and two deformable negative controls). All completed. RGB, depth, masks,
+intrinsics, timestamps, labels and initial surface samples match the saved
+baselines. Tracker sources stayed unchanged throughout. SAM masks were reused;
+this tests downstream tracking, not segmentation changes.
+
+For depth/mask fitting with shared UFM, groups and growing surface:
+
+| Real labelled frames     |              Before |               After |
+| ------------------------ | ------------------: | ------------------: |
+| Within 10 mm **and** 10° | 1,229/2,927 (42.0%) | 1,622/2,927 (55.4%) |
+| Within 20 mm **and** 20° | 1,720/2,927 (58.8%) | 2,154/2,927 (73.6%) |
+| Returned a pose          |         2,702/2,927 |         2,927/2,927 |
+
+**Better overall, but not regression-free.** At 10 mm/10°, 12 scenes improve,
+five worsen, four tie. The regressions are DexYCB marker, banana, drill, tomato
+can and bowl. At 20 mm/20°, eight improve, eight worsen, five tie. On the same
+2,702 frames with poses in both versions, median point error improves
+10.42 → 4.78 mm and median angle 9.46 → 4.66°. These are annotation-relative
+motion errors; neither absolute initialization nor reconstructed-shape accuracy
+is measured. Labels remain imperfect and scoring is not symmetry-minimized.
+
+All seven methods improve in aggregate. Groups versus the current otherwise
+identical growing-surface method add 70 available poses but produce one fewer
+passing frame at 10 mm/10°; availability alone is not an accuracy improvement.
+Historical versus current selected-path timing is about **83 → 195 ms/frame**
+(median across the 21 real labelled scenes), excluding SAM/display. Those cases
+ran sequentially; later concurrent unlabelled runs are excluded from timing.
+
+The full runner exactly reproduces the earlier post-fix integration outputs:
+gamepad frames 0–280 and all 713 dowel frames. Gamepad false pre-pickup motion
+remains 1.15 mm/3.98°; motion by frame 280 is 59.19 mm. Both complete demos retain
+poses throughout, but have no independent full-motion accuracy labels.
+
+This compares accumulated changes, including separate LK/UFM → shared UFM,
+against saved baselines. It does not isolate the last fix. The three prior
+shared-UFM comparisons are also preserved separately. No tracker tuning or
+product changes were made during this sweep. The code and evidence are preserved
+together as a research milestone, with the limitations above.
+
+Visual review distinguishes two failures: the tomato can clearly gets worse;
+the selected marker frame shows two inaccurate estimates, so it does not show
+a previously successful frame becoming a failure. The marker's aggregate score
+still decreases. Neither example identifies the cause yet.
+
+![Tomato can: the same initial surface projected by the label (green) and the estimate (orange), before and after](full-suite-tomato-can-20261102.jpg)
+
+![Marker: both estimates are inaccurate in this selected frame; green is the label and orange the estimate](full-suite-marker-20261102.jpg)
+
+The benchmark uses **shared UFM**, not LK. FLASH also retains explicitly named
+"shared LK" comparison recordings; their method labels follow the recording's
+actual backend. The main playback catalogue still contains historical results;
+the full-suite report is a separate snapshot. A historical playback is not the
+new result merely because the server runs the new code.
+
+![Per-scene comparison](full-suite-validation-20261102.png)
+
+[Inputs, settings, hashes, per-scene scores and integration checks](full-suite-validation-20261102.json).
+Full traces, baseline summaries, paired-frame checks and the HTML report are in
+`~/.cache/flash-tracker-restart/full-validation-20261102/`.

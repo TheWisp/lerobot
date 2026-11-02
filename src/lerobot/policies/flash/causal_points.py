@@ -13,6 +13,7 @@ import cv2
 import numpy as np
 
 from .depth_quality import depth_support_mask
+from .image_matching import LKMatchConfig, prepare_image_pair
 from .perception import RGBDFrame
 from .registration import DegenerateRegistrationError, register_object, transform_points, unproject_pixels
 
@@ -75,6 +76,7 @@ class CausalRigidPointTracker:
         self._base_seed = np.empty((0, 3), dtype=float)
         self._valid = np.zeros(0, dtype=bool)
         self._last_source_time_s: float | None = None
+        self._inlier_samples = (np.empty(0, dtype=int), np.empty((0, 2)), np.empty((0, 3)))
 
     def seed(self, frame: RGBDFrame, mask: np.ndarray) -> int:
         if mask.shape != frame.depth.shape or mask.dtype != bool:
@@ -107,9 +109,11 @@ class CausalRigidPointTracker:
         self._valid = np.ones(len(full_uv), dtype=bool)
         self._gray = self._gray_image(frame.rgb)
         self._last_source_time_s = frame.source_time_s
+        self._inlier_samples = (np.empty(0, dtype=int), np.empty((0, 2)), np.empty((0, 3)))
         return len(full_uv)
 
     def update(self, frame: RGBDFrame, mask: np.ndarray | None = None) -> RigidPointMotion:
+        self._inlier_samples = (np.empty(0, dtype=int), np.empty((0, 2)), np.empty((0, 3)))
         if mask is not None and (mask.shape != frame.depth.shape or mask.dtype != bool):
             raise ValueError("current mask must align with RGB-D pixels")
         if self._gray is None or self._last_source_time_s is None:
@@ -121,24 +125,11 @@ class CausalRigidPointTracker:
         gray = self._gray_image(frame.rgb)
         live = np.flatnonzero(self._valid)
         if len(live):
-            before = self._uv[live].reshape(-1, 1, 2)
-            after, forward_ok, _ = cv2.calcOpticalFlowPyrLK(
-                self._gray, gray, before, None, winSize=(21, 21), maxLevel=3
+            pair = prepare_image_pair(
+                self._gray, gray, LKMatchConfig(forward_backward_limit_px=self.fb_threshold_px)
             )
-            backward, backward_ok, _ = cv2.calcOpticalFlowPyrLK(
-                gray, self._gray, after, None, winSize=(21, 21), maxLevel=3
-            )
-            xy = after.reshape(-1, 2)
-            height, width = gray.shape
-            good = (
-                (forward_ok.ravel() == 1)
-                & (backward_ok.ravel() == 1)
-                & (np.linalg.norm((before - backward).reshape(-1, 2), axis=1) < self.fb_threshold_px)
-                & (xy[:, 0] >= 0)
-                & (xy[:, 0] < width)
-                & (xy[:, 1] >= 0)
-                & (xy[:, 1] < height)
-            )
+            matches = pair.match(self._uv[live])
+            xy, good = matches.target_xy, matches.accepted
             self._valid[live[~good]] = False
             self._uv[live[good]] = xy[good]
         self._gray = gray
@@ -175,6 +166,12 @@ class CausalRigidPointTracker:
             return RigidPointMotion(
                 None, frame.source_time_s, frame.available_time_s, int(self._valid.sum()), len(live), 0, None
             )
+        indices = np.asarray(fit.inlier_indices, dtype=int)
+        self._inlier_samples = (
+            live[indices].copy(),
+            (self._uv[live[indices]] / self.image_scale).copy(),
+            current[indices].copy(),
+        )
         return RigidPointMotion(
             fit.base_from_demo_object,
             frame.source_time_s,
@@ -184,6 +181,20 @@ class CausalRigidPointTracker:
             len(fit.inlier_indices),
             fit.median_error_m,
         )
+
+    def inlier_samples(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Latest fit's seed IDs, image pixels and measured world points.
+
+        Empty after seeding or a failed update. IDs persist until reseeding;
+        callers combining trackers must include their tracker/seed identity.
+        These are sensor measurements, not a projected reference surface.
+        """
+        return tuple(value.copy() for value in self._inlier_samples)
+
+    def inlier_point_pairs(self) -> tuple[np.ndarray, np.ndarray]:
+        """Original measured seed points and their current measured positions."""
+        ids, _, current = self._inlier_samples
+        return self._base_seed[ids].copy(), current.copy()
 
     def current_pixels(self, depth_shape: tuple[int, int]) -> np.ndarray:
         """Depth-image coordinates for surviving tracked point identities."""

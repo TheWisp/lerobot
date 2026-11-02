@@ -106,3 +106,34 @@ surface has less lateral extent than the earlier fit's own 90th-percentile
 error, so it cannot certify a full rigid pose even though the fit passed its
 old point-count and depth-error checks. Frames 290 and 300 provide the
 complementary broader visible patch.
+
+`image_matching_gamepad_168.npz` and `image_matching_dowel_240.npz` freeze
+real-frame outputs from the implementation immediately before the 2026-11-02
+LK/UFM adapter refactor. They include UFM input crops and raw network output,
+SAM/depth acceptance inputs, expected correspondences and rigid motion, plus
+scene-LK state and its next recorded RGB-D frame with expected IDs/pixels/3D
+points. The adjacent JSON files identify source recordings, frame numbers and
+SHA256 hashes of the original source files. They test refactor equivalence,
+including rejected matches, not the accuracy of these estimates. No network,
+checkpoint download or hardware is needed to run their tests.
+These two recorded fixtures use Git LFS; run `git lfs pull` after checkout.
+
+`gamepad_stationary.json` identifies the **real recorded integration test**, not
+a saved tracker answer. It pins the RGB-D/mask input hash and UFM checkpoint.
+Visual annotation: the gamepad stays on the tray through frame 164 (7.24 s),
+including approach occlusion; it starts turning in frames 165–170. The test runs
+through frame 280 and requires subsequent movement, so freezing cannot pass.
+The 5 mm / 5° stationary budgets were fixed before the fix and are never inputs
+to inference. This does not certify absolute pose or post-grasp accuracy.
+
+With the recording and checkpoint cached locally, run from the repository:
+
+```bash
+FLASH_RUN_RECORDED_TESTS=1 HF_HUB_OFFLINE=1 PYTHONPATH=src:. \
+  uv run python -m pytest -q -s tests/policies/flash/test_gamepad_stationary_integration.py
+```
+
+Use the experiment's virtual environment if the project environment lacks UFM.
+The test writes diagnostics to pytest's temporary directory, never to the demo.
+It skips explicitly if the data/model/CUDA prerequisite is missing. It uses the
+saved masks; segmentation generation is outside this test.

@@ -300,11 +300,14 @@
                     <div id="flash-experiment-detail">Select a recording from the list.</div>
                     <div id="flash-experiment-playback">
                     <div class="flash-experiment-tools">
+                        <button type="button" id="flash-experiment-rerun-scene" onclick="rebuildFlashExamples(true)" disabled>Rerun this scene</button>
                         <button type="button" id="flash-experiment-3d-toggle" onclick="toggleFlashExperiment3D()" aria-pressed="false">3D scene</button>
                         <label>Pose calculation <select id="flash-experiment-method" onchange="changeFlashExperimentMethod()" aria-label="Tracking method"></select></label>
+                        <label id="flash-experiment-group-control"><input id="flash-experiment-groups" type="checkbox" checked onchange="changeFlashGroupDisplay()">Group tracking</label>
+                        <select id="flash-experiment-group-role" onchange="changeFlashGroupDisplay()" aria-label="Show group support for"><option value="all">All objects</option></select>
                         <label class="flash-experiment-mask-label flash-experiment-2d-tool"><input id="flash-experiment-mask" type="checkbox" onchange="drawFlashExperiment()">Input mask</label>
                         <label class="flash-experiment-pose-label flash-experiment-2d-tool"><input id="flash-experiment-pose" type="checkbox" onchange="drawFlashExperiment()">3D reference surface + axes</label>
-                        <label class="flash-experiment-matches-label flash-experiment-2d-tool">UFM point trails <select id="flash-experiment-matches" onchange="drawFlashExperiment()"><option value="off">Off</option><option value="raw" selected>Raw predictions</option><option value="used">Agree with rigid fit</option></select></label>
+                        <label class="flash-experiment-matches-label flash-experiment-2d-tool">Image point trails <select id="flash-experiment-matches" onchange="drawFlashExperiment()"><option value="off">Off</option><option value="raw" selected>Raw predictions</option><option value="used">Agree with rigid fit</option></select></label>
                         <label class="flash-experiment-2d-tool">Trail length <select id="flash-experiment-flow-trail" onchange="drawFlashExperiment()"><option value="0">Off</option><option value="5">5 frames</option><option value="10" selected>10 frames</option><option value="20">20 frames</option><option value="30">30 frames</option></select></label>
                         <button type="button" onclick="stepFlashExperiment(-1)" aria-label="Previous experiment frame">‹</button>
                         <button type="button" onclick="stepFlashExperiment(1)" aria-label="Next experiment frame">›</button>
@@ -861,8 +864,8 @@ nebius iam auth-public-key generate \
     <script src="/static/charts.js?v=5"></script>
     <script src="/static/robot.js?v=27"></script>
     <script src="/static/flash_live_tracking.js?v=12"></script>
-    <script src="/static/run.js?v=189"></script>
-    <script src="/static/flash_experiments.js?v=21"></script>
+    <script src="/static/run.js?v=191"></script>
+    <script src="/static/flash_experiments.js?v=28"></script>
     <script src="/static/flash_demo_editor.js?v=41"></script>
     <script src="/static/flash_recorded_editor.js?v=7"></script>
     <script src="/static/flash_observation_editor.js?v=6"></script>

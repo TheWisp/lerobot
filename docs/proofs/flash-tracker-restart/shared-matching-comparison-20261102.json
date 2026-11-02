@@ -1,0 +1,1443 @@
+{
+  "date": "2026-11-02",
+  "status": "experimental; legacy remains default",
+  "method_compared": "group_growing",
+  "conclusion": "Shared configuration and data flow work. Quality does not justify promotion: both shared variants worsen median labelled point error, and shared UFM visibly regresses during dowel rotation.",
+  "accuracy_note": "Point error compares the same fixed initial reference points transformed by estimated vs labelled pose. Own demos have no independent ground-truth pose. Availability is not accuracy.",
+  "timing_note": "shared_matching_ms includes one image match plus shared seeding/depth processing for all objects/groups; excludes surface fitting and is not total tracker FPS.",
+  "runs": {
+    "baseline": [
+      {
+        "case": "flash-demo-gamepad-cube",
+        "source_run": "/home/feit/.cache/flash-tracker-restart/browser/.rebuild/rebuild-20261102-133839-joint-points/runs/001/flash-demo-gamepad-cube",
+        "summary_sha256": "f9623d379a2115ffe72e2d2ca5043cfbb8bc63ea4c02259241c669f5dddece4d",
+        "frames": 628,
+        "input_sha256": "fda3c6528b84615e7e04bed498cbec284fb4837a34f453f37c0b632a701d10cf",
+        "shared_matching": null,
+        "roles": {
+          "gamepad": {
+            "available_after_initialization": 627,
+            "total_after_initialization": 627,
+            "max_map_points": 457,
+            "pose_sources": {
+              "observed_candidate": 583,
+              "predicted": 44,
+              "lost": 0
+            }
+          },
+          "cube": {
+            "available_after_initialization": 627,
+            "total_after_initialization": 627,
+            "max_map_points": 235,
+            "pose_sources": {
+              "observed_candidate": 351,
+              "predicted": 276,
+              "lost": 0
+            }
+          }
+        },
+        "configuration": {
+          "config": {
+            "backend": "surface",
+            "sam_resolution": 504,
+            "min_similarity": 0.75,
+            "registration_threshold_m": 0.005,
+            "registration_min_inliers": 12,
+            "registration_trials": 100,
+            "visible_shape_fallback": false,
+            "parallel_surface_objects": true,
+            "pipeline_surface_frames": true,
+            "surface_object_workers": 2,
+            "surface_reference_max_points_per_view": 15000,
+            "compiled_surface_fit": true,
+            "reuse_surface_search": true,
+            "detection_correction": {
+              "enabled": false,
+              "offline_interval_frames": 16,
+              "runtime_interval_frames": 60,
+              "min_detector_score": 0.8,
+              "min_tracker_score": 0.8,
+              "min_mask_overlap": 0.5
+            },
+            "observation": {
+              "mask_margin_px": 2,
+              "depth_span_m": 0.01,
+              "depth_neighborhood_px": 3,
+              "normal_bilateral_diameter_px": 5,
+              "normal_bilateral_sigma_px": 2.0,
+              "huber_m": 0.005,
+              "surface_spacing_m": 0.003,
+              "samples_across_object": 64,
+              "min_surface_spacing_m": 0.001,
+              "component_gap_m": 0.01,
+              "validation_tile_px": 4
+            },
+            "shape": {
+              "depth_tolerance_m": 0.005,
+              "surface_spacing_m": 0.003,
+              "mask_boundary_tolerance_px": 2.0,
+              "max_surface_distance_m": 0.03,
+              "max_evaluations": 50,
+              "solver_tolerance": 1e-05,
+              "max_fit_points": 2048,
+              "nn_queries_per_worker": 512,
+              "batch_jacobian": true,
+              "batch_query_workers": 8
+            },
+            "motion": {
+              "crop_min_px": 160,
+              "crop_max_px": 480,
+              "crop_extent_multiplier": 2.5,
+              "input_size_px": 320,
+              "grid_step_px": 4,
+              "covisibility_min": 0.5,
+              "min_ransac_pairs": 6,
+              "ransac_distance_m": 0.006,
+              "ransac_confidence": 0.99,
+              "refinement_steps": 2,
+              "connected_dilation_px": 7
+            }
+          },
+          "surface_experiment": {
+            "spacing_m": 0.003,
+            "agreement_m": 0.005,
+            "min_overlap": 0.25,
+            "patch_overlap": 0.5,
+            "image_weight": 1.0,
+            "confirmations": 2,
+            "max_patches": 32,
+            "max_pending": 8,
+            "points_per_patch": 1024,
+            "max_points": 8192,
+            "grow": true
+          },
+          "group_experiment": {
+            "context_radius_m": 0.25,
+            "min_inliers": 12,
+            "fit_threshold_m": 0.005,
+            "object_max_points": 120,
+            "object_max_frame_gap_s": 0.1,
+            "object_fb_threshold_px": 1.0,
+            "object_image_scale": 1.0,
+            "depth_support_radius_px": 1,
+            "support_confirmation_s": 1.0,
+            "point_evidence_weight": 1.0
+          },
+          "shared_matching": null
+        },
+        "code_snapshot": "/home/feit/.cache/flash-tracker-restart/browser/.rebuild/rebuild-20261102-133839-joint-points/code",
+        "key_source_sha256": {
+          "src/lerobot/policies/flash/surface_tracking.py": "e8d9efe821335e9dcba03b2cf6a2ae6cc05e044d7d5121977dfbcf8530bf9bc6",
+          "src/lerobot/policies/flash/surface_correspondence.py": "650308498a9e4b746e3b5d931969526b59fbe56670c86fd4ef0f8aafb4ad03cc",
+          "src/lerobot/policies/flash/experimental_surface_session.py": "8d377d382c2abdcd1f92a312c0b4ed83945f260602661f562e7d36dea61fab15",
+          "benchmarks/flash_experiment_groups.py": "d4119c1fdbc9a3de7d6e5dcab9f9b6b246ef9d6b9c867346125dd59b1efc958c",
+          "benchmarks/flash_tracker_experiment.py": "92c1ddbbbc0bcabe03eaae4681898e32deddb7d55418f99ec59fc2f91412c443"
+        }
+      },
+      {
+        "case": "flash-demo-dowel-ring",
+        "source_run": "/home/feit/.cache/flash-tracker-restart/browser/.rebuild/rebuild-20261102-133839-joint-points/runs/000/flash-demo-dowel-ring",
+        "summary_sha256": "7273fcbfa95858018431a76f214a65ab56a54c6e353224a22aac9911f47f265a",
+        "frames": 713,
+        "input_sha256": "9451f8b8a7129105375c6e6ab5ca84f561e86b6d327f83ce83550252bbdc8bf9",
+        "shared_matching": null,
+        "roles": {
+          "dowel": {
+            "available_after_initialization": 712,
+            "total_after_initialization": 712,
+            "max_map_points": 435,
+            "pose_sources": {
+              "observed_candidate": 660,
+              "predicted": 52,
+              "lost": 0
+            }
+          },
+          "ring": {
+            "available_after_initialization": 712,
+            "total_after_initialization": 712,
+            "max_map_points": 520,
+            "pose_sources": {
+              "observed_candidate": 712,
+              "predicted": 0,
+              "lost": 0
+            }
+          }
+        },
+        "configuration": {
+          "config": {
+            "backend": "surface",
+            "sam_resolution": 504,
+            "min_similarity": 0.75,
+            "registration_threshold_m": 0.005,
+            "registration_min_inliers": 12,
+            "registration_trials": 100,
+            "visible_shape_fallback": false,
+            "parallel_surface_objects": true,
+            "pipeline_surface_frames": true,
+            "surface_object_workers": 2,
+            "surface_reference_max_points_per_view": 15000,
+            "compiled_surface_fit": true,
+            "reuse_surface_search": true,
+            "detection_correction": {
+              "enabled": false,
+              "offline_interval_frames": 16,
+              "runtime_interval_frames": 60,
+              "min_detector_score": 0.8,
+              "min_tracker_score": 0.8,
+              "min_mask_overlap": 0.5
+            },
+            "observation": {
+              "mask_margin_px": 2,
+              "depth_span_m": 0.01,
+              "depth_neighborhood_px": 3,
+              "normal_bilateral_diameter_px": 5,
+              "normal_bilateral_sigma_px": 2.0,
+              "huber_m": 0.005,
+              "surface_spacing_m": 0.003,
+              "samples_across_object": 64,
+              "min_surface_spacing_m": 0.001,
+              "component_gap_m": 0.01,
+              "validation_tile_px": 4
+            },
+            "shape": {
+              "depth_tolerance_m": 0.005,
+              "surface_spacing_m": 0.003,
+              "mask_boundary_tolerance_px": 2.0,
+              "max_surface_distance_m": 0.03,
+              "max_evaluations": 50,
+              "solver_tolerance": 1e-05,
+              "max_fit_points": 2048,
+              "nn_queries_per_worker": 512,
+              "batch_jacobian": true,
+              "batch_query_workers": 8
+            },
+            "motion": {
+              "crop_min_px": 160,
+              "crop_max_px": 480,
+              "crop_extent_multiplier": 2.5,
+              "input_size_px": 320,
+              "grid_step_px": 4,
+              "covisibility_min": 0.5,
+              "min_ransac_pairs": 6,
+              "ransac_distance_m": 0.006,
+              "ransac_confidence": 0.99,
+              "refinement_steps": 2,
+              "connected_dilation_px": 7
+            }
+          },
+          "surface_experiment": {
+            "spacing_m": 0.003,
+            "agreement_m": 0.005,
+            "min_overlap": 0.25,
+            "patch_overlap": 0.5,
+            "image_weight": 1.0,
+            "confirmations": 2,
+            "max_patches": 32,
+            "max_pending": 8,
+            "points_per_patch": 1024,
+            "max_points": 8192,
+            "grow": true
+          },
+          "group_experiment": {
+            "context_radius_m": 0.25,
+            "min_inliers": 12,
+            "fit_threshold_m": 0.005,
+            "object_max_points": 120,
+            "object_max_frame_gap_s": 0.1,
+            "object_fb_threshold_px": 1.0,
+            "object_image_scale": 1.0,
+            "depth_support_radius_px": 1,
+            "support_confirmation_s": 1.0,
+            "point_evidence_weight": 1.0
+          },
+          "shared_matching": null
+        },
+        "code_snapshot": "/home/feit/.cache/flash-tracker-restart/browser/.rebuild/rebuild-20261102-133839-joint-points/code",
+        "key_source_sha256": {
+          "src/lerobot/policies/flash/surface_tracking.py": "e8d9efe821335e9dcba03b2cf6a2ae6cc05e044d7d5121977dfbcf8530bf9bc6",
+          "src/lerobot/policies/flash/surface_correspondence.py": "650308498a9e4b746e3b5d931969526b59fbe56670c86fd4ef0f8aafb4ad03cc",
+          "src/lerobot/policies/flash/experimental_surface_session.py": "8d377d382c2abdcd1f92a312c0b4ed83945f260602661f562e7d36dea61fab15",
+          "benchmarks/flash_experiment_groups.py": "d4119c1fdbc9a3de7d6e5dcab9f9b6b246ef9d6b9c867346125dd59b1efc958c",
+          "benchmarks/flash_tracker_experiment.py": "92c1ddbbbc0bcabe03eaae4681898e32deddb7d55418f99ec59fc2f91412c443"
+        }
+      },
+      {
+        "case": "ycb-bleach_hard_00_03_chaitanya",
+        "source_run": "/home/feit/.cache/flash-tracker-restart/shared-matching-20261102/baseline-v2/002/ycb-bleach_hard_00_03_chaitanya",
+        "summary_sha256": "9de0af3a765f699828ee43f1c04b294ad4a6321217124c7c472d248161029d06",
+        "frames": 181,
+        "input_sha256": "cd7c190df35d1c469584222b41829428ef61b2c3ee00ec276d61eb2d7c34f419",
+        "shared_matching": null,
+        "roles": {
+          "object": {
+            "available_after_initialization": 180,
+            "total_after_initialization": 180,
+            "pose_error": {
+              "available": 180,
+              "total": 180,
+              "cloud_mm_median": 4.014939755590609,
+              "cloud_mm_p90": 7.798053803718749,
+              "angle_deg_median": 2.6889390500987727,
+              "angle_deg_p90": 5.634716431096033,
+              "center_mm_median": 3.4933966706859847,
+              "within_10mm_10deg": 168,
+              "within_20mm_20deg": 178,
+              "final_cloud_mm": 14.292138130228647,
+              "final_angle_deg": 9.409198494223242
+            },
+            "max_map_points": 569,
+            "pose_sources": {
+              "observed_candidate": 1,
+              "predicted": 179,
+              "lost": 0
+            }
+          }
+        },
+        "configuration": {
+          "config": {
+            "backend": "surface",
+            "sam_resolution": 504,
+            "min_similarity": 0.75,
+            "registration_threshold_m": 0.005,
+            "registration_min_inliers": 12,
+            "registration_trials": 100,
+            "visible_shape_fallback": false,
+            "parallel_surface_objects": true,
+            "pipeline_surface_frames": true,
+            "surface_object_workers": 2,
+            "surface_reference_max_points_per_view": 15000,
+            "compiled_surface_fit": true,
+            "reuse_surface_search": true,
+            "detection_correction": {
+              "enabled": false,
+              "offline_interval_frames": 16,
+              "runtime_interval_frames": 60,
+              "min_detector_score": 0.8,
+              "min_tracker_score": 0.8,
+              "min_mask_overlap": 0.5
+            },
+            "observation": {
+              "mask_margin_px": 2,
+              "depth_span_m": 0.01,
+              "depth_neighborhood_px": 3,
+              "normal_bilateral_diameter_px": 5,
+              "normal_bilateral_sigma_px": 2.0,
+              "huber_m": 0.005,
+              "surface_spacing_m": 0.003,
+              "samples_across_object": 64,
+              "min_surface_spacing_m": 0.001,
+              "component_gap_m": 0.01,
+              "validation_tile_px": 4
+            },
+            "shape": {
+              "depth_tolerance_m": 0.005,
+              "surface_spacing_m": 0.003,
+              "mask_boundary_tolerance_px": 2.0,
+              "max_surface_distance_m": 0.03,
+              "max_evaluations": 50,
+              "solver_tolerance": 1e-05,
+              "max_fit_points": 2048,
+              "nn_queries_per_worker": 512,
+              "batch_jacobian": true,
+              "batch_query_workers": 8
+            },
+            "motion": {
+              "crop_min_px": 160,
+              "crop_max_px": 480,
+              "crop_extent_multiplier": 2.5,
+              "input_size_px": 320,
+              "grid_step_px": 4,
+              "covisibility_min": 0.5,
+              "min_ransac_pairs": 6,
+              "ransac_distance_m": 0.006,
+              "ransac_confidence": 0.99,
+              "refinement_steps": 2,
+              "connected_dilation_px": 7
+            }
+          },
+          "surface_experiment": {
+            "spacing_m": 0.003,
+            "agreement_m": 0.005,
+            "min_overlap": 0.25,
+            "patch_overlap": 0.5,
+            "image_weight": 1.0,
+            "confirmations": 2,
+            "max_patches": 32,
+            "max_pending": 8,
+            "points_per_patch": 1024,
+            "max_points": 8192,
+            "grow": true
+          },
+          "group_experiment": {
+            "context_radius_m": 0.25,
+            "min_inliers": 12,
+            "fit_threshold_m": 0.005,
+            "object_max_points": 120,
+            "object_max_frame_gap_s": 0.1,
+            "object_fb_threshold_px": 1.0,
+            "object_image_scale": 1.0,
+            "depth_support_radius_px": 1,
+            "support_confirmation_s": 1.0
+          },
+          "shared_matching": null
+        },
+        "code_snapshot": "/home/feit/.cache/flash-tracker-restart/shared-matching-20261102/baseline-v2/002/code",
+        "key_source_sha256": {
+          "src/lerobot/policies/flash/surface_tracking.py": "786a0910727ddc5083c28c2bfdc80c5b844d533fd4188e636739efef07ec79cd",
+          "src/lerobot/policies/flash/surface_correspondence.py": "e8071d5493132aac53cd3d2ab1c07ad32f4e0ad091d6b538e6be63f34efc7d42",
+          "src/lerobot/policies/flash/experimental_surface_session.py": "f958b3396e9202050160b9b183ca15f161edb48554f4e8ee28e87bd06f105625",
+          "src/lerobot/policies/flash/image_matching.py": "15818b7bf88772502230c4f1fffda2178b3a473a8bb1306fd3e117ddf4b4b523",
+          "src/lerobot/policies/flash/shared_image_tracking.py": "c1e9ed95bd46bd69a6a47bb25a37117ed839b58b68e91d0f98a45ccb41ae47da",
+          "benchmarks/flash_experiment_groups.py": "72a2c837e4dd7431a765d1f616d0b6fc5f2300787d68aeddc03f9e320e19819b",
+          "benchmarks/flash_tracker_experiment.py": "ca8e65769ad86d18c7b68f6d4c20a99e20394ca2f42c5869a8e71472e59d64b8"
+        }
+      }
+    ],
+    "ufm-v2": [
+      {
+        "case": "flash-demo-gamepad-cube",
+        "source_run": "/home/feit/.cache/flash-tracker-restart/shared-matching-20261102/ufm-v2/000/flash-demo-gamepad-cube",
+        "summary_sha256": "017e966a29326781cc15c4ad3c745ac9aa515d4941d4c4b39d19bfd03cdae319",
+        "frames": 628,
+        "input_sha256": "fda3c6528b84615e7e04bed498cbec284fb4837a34f453f37c0b632a701d10cf",
+        "shared_matching": {
+          "config": {
+            "backend": "ufm",
+            "max_image_size_px": 640,
+            "scene_points": 800,
+            "object_points": 256,
+            "spacing_px": 5,
+            "history_frames": 64,
+            "depth_support_radius_px": 1,
+            "lk": {
+              "window_size_px": 21,
+              "pyramid_levels": 3,
+              "forward_backward_limit_px": 1.0
+            },
+            "ufm": {
+              "covisibility_min": 0.5
+            }
+          },
+          "calls": 627,
+          "timing_ms": {
+            "median": 36.568478011759,
+            "p90": 37.55205579800531
+          }
+        },
+        "roles": {
+          "gamepad": {
+            "available_after_initialization": 627,
+            "total_after_initialization": 627,
+            "max_map_points": 541,
+            "pose_sources": {
+              "observed_candidate": 581,
+              "predicted": 46,
+              "lost": 0
+            }
+          },
+          "cube": {
+            "available_after_initialization": 627,
+            "total_after_initialization": 627,
+            "max_map_points": 260,
+            "pose_sources": {
+              "observed_candidate": 344,
+              "predicted": 283,
+              "lost": 0
+            }
+          }
+        },
+        "configuration": {
+          "config": {
+            "backend": "surface",
+            "sam_resolution": 504,
+            "min_similarity": 0.75,
+            "registration_threshold_m": 0.005,
+            "registration_min_inliers": 12,
+            "registration_trials": 100,
+            "visible_shape_fallback": false,
+            "parallel_surface_objects": true,
+            "pipeline_surface_frames": true,
+            "surface_object_workers": 2,
+            "surface_reference_max_points_per_view": 15000,
+            "compiled_surface_fit": true,
+            "reuse_surface_search": true,
+            "detection_correction": {
+              "enabled": false,
+              "offline_interval_frames": 16,
+              "runtime_interval_frames": 60,
+              "min_detector_score": 0.8,
+              "min_tracker_score": 0.8,
+              "min_mask_overlap": 0.5
+            },
+            "observation": {
+              "mask_margin_px": 2,
+              "depth_span_m": 0.01,
+              "depth_neighborhood_px": 3,
+              "normal_bilateral_diameter_px": 5,
+              "normal_bilateral_sigma_px": 2.0,
+              "huber_m": 0.005,
+              "surface_spacing_m": 0.003,
+              "samples_across_object": 64,
+              "min_surface_spacing_m": 0.001,
+              "component_gap_m": 0.01,
+              "validation_tile_px": 4
+            },
+            "shape": {
+              "depth_tolerance_m": 0.005,
+              "surface_spacing_m": 0.003,
+              "mask_boundary_tolerance_px": 2.0,
+              "max_surface_distance_m": 0.03,
+              "max_evaluations": 50,
+              "solver_tolerance": 1e-05,
+              "max_fit_points": 2048,
+              "nn_queries_per_worker": 512,
+              "batch_jacobian": true,
+              "batch_query_workers": 8
+            },
+            "motion": {
+              "crop_min_px": 160,
+              "crop_max_px": 480,
+              "crop_extent_multiplier": 2.5,
+              "input_size_px": 320,
+              "grid_step_px": 4,
+              "covisibility_min": 0.5,
+              "min_ransac_pairs": 6,
+              "ransac_distance_m": 0.006,
+              "ransac_confidence": 0.99,
+              "refinement_steps": 2,
+              "connected_dilation_px": 7
+            }
+          },
+          "surface_experiment": {
+            "spacing_m": 0.003,
+            "agreement_m": 0.005,
+            "min_overlap": 0.25,
+            "patch_overlap": 0.5,
+            "image_weight": 1.0,
+            "confirmations": 2,
+            "max_patches": 32,
+            "max_pending": 8,
+            "points_per_patch": 1024,
+            "max_points": 8192,
+            "grow": true
+          },
+          "group_experiment": {
+            "context_radius_m": 0.25,
+            "min_inliers": 12,
+            "fit_threshold_m": 0.005,
+            "object_max_points": 120,
+            "object_max_frame_gap_s": 0.1,
+            "object_fb_threshold_px": 1.0,
+            "object_image_scale": 1.0,
+            "depth_support_radius_px": 1,
+            "support_confirmation_s": 1.0,
+            "point_evidence_weight": 1.0
+          },
+          "shared_matching": {
+            "backend": "ufm",
+            "max_image_size_px": 640,
+            "scene_points": 800,
+            "object_points": 256,
+            "spacing_px": 5,
+            "history_frames": 64,
+            "depth_support_radius_px": 1,
+            "lk": {
+              "window_size_px": 21,
+              "pyramid_levels": 3,
+              "forward_backward_limit_px": 1.0
+            },
+            "ufm": {
+              "covisibility_min": 0.5
+            }
+          }
+        },
+        "code_snapshot": "/home/feit/.cache/flash-tracker-restart/shared-matching-20261102/ufm-v2/000/code",
+        "key_source_sha256": {
+          "src/lerobot/policies/flash/surface_tracking.py": "786a0910727ddc5083c28c2bfdc80c5b844d533fd4188e636739efef07ec79cd",
+          "src/lerobot/policies/flash/surface_correspondence.py": "e8071d5493132aac53cd3d2ab1c07ad32f4e0ad091d6b538e6be63f34efc7d42",
+          "src/lerobot/policies/flash/experimental_surface_session.py": "f958b3396e9202050160b9b183ca15f161edb48554f4e8ee28e87bd06f105625",
+          "src/lerobot/policies/flash/image_matching.py": "15818b7bf88772502230c4f1fffda2178b3a473a8bb1306fd3e117ddf4b4b523",
+          "src/lerobot/policies/flash/shared_image_tracking.py": "c1e9ed95bd46bd69a6a47bb25a37117ed839b58b68e91d0f98a45ccb41ae47da",
+          "benchmarks/flash_experiment_groups.py": "72a2c837e4dd7431a765d1f616d0b6fc5f2300787d68aeddc03f9e320e19819b",
+          "benchmarks/flash_tracker_experiment.py": "ca8e65769ad86d18c7b68f6d4c20a99e20394ca2f42c5869a8e71472e59d64b8"
+        }
+      },
+      {
+        "case": "flash-demo-dowel-ring",
+        "source_run": "/home/feit/.cache/flash-tracker-restart/shared-matching-20261102/ufm-v2/001/flash-demo-dowel-ring",
+        "summary_sha256": "5e7ff2e83bbd7efd648a4d1568715d09ca70e09abafe130571736ec5835ee534",
+        "frames": 713,
+        "input_sha256": "9451f8b8a7129105375c6e6ab5ca84f561e86b6d327f83ce83550252bbdc8bf9",
+        "shared_matching": {
+          "config": {
+            "backend": "ufm",
+            "max_image_size_px": 640,
+            "scene_points": 800,
+            "object_points": 256,
+            "spacing_px": 5,
+            "history_frames": 64,
+            "depth_support_radius_px": 1,
+            "lk": {
+              "window_size_px": 21,
+              "pyramid_levels": 3,
+              "forward_backward_limit_px": 1.0
+            },
+            "ufm": {
+              "covisibility_min": 0.5
+            }
+          },
+          "calls": 712,
+          "timing_ms": {
+            "median": 36.43175750039518,
+            "p90": 37.423644281807356
+          }
+        },
+        "roles": {
+          "dowel": {
+            "available_after_initialization": 712,
+            "total_after_initialization": 712,
+            "max_map_points": 676,
+            "pose_sources": {
+              "observed_candidate": 464,
+              "predicted": 248,
+              "lost": 0
+            }
+          },
+          "ring": {
+            "available_after_initialization": 712,
+            "total_after_initialization": 712,
+            "max_map_points": 505,
+            "pose_sources": {
+              "observed_candidate": 526,
+              "predicted": 186,
+              "lost": 0
+            }
+          }
+        },
+        "configuration": {
+          "config": {
+            "backend": "surface",
+            "sam_resolution": 504,
+            "min_similarity": 0.75,
+            "registration_threshold_m": 0.005,
+            "registration_min_inliers": 12,
+            "registration_trials": 100,
+            "visible_shape_fallback": false,
+            "parallel_surface_objects": true,
+            "pipeline_surface_frames": true,
+            "surface_object_workers": 2,
+            "surface_reference_max_points_per_view": 15000,
+            "compiled_surface_fit": true,
+            "reuse_surface_search": true,
+            "detection_correction": {
+              "enabled": false,
+              "offline_interval_frames": 16,
+              "runtime_interval_frames": 60,
+              "min_detector_score": 0.8,
+              "min_tracker_score": 0.8,
+              "min_mask_overlap": 0.5
+            },
+            "observation": {
+              "mask_margin_px": 2,
+              "depth_span_m": 0.01,
+              "depth_neighborhood_px": 3,
+              "normal_bilateral_diameter_px": 5,
+              "normal_bilateral_sigma_px": 2.0,
+              "huber_m": 0.005,
+              "surface_spacing_m": 0.003,
+              "samples_across_object": 64,
+              "min_surface_spacing_m": 0.001,
+              "component_gap_m": 0.01,
+              "validation_tile_px": 4
+            },
+            "shape": {
+              "depth_tolerance_m": 0.005,
+              "surface_spacing_m": 0.003,
+              "mask_boundary_tolerance_px": 2.0,
+              "max_surface_distance_m": 0.03,
+              "max_evaluations": 50,
+              "solver_tolerance": 1e-05,
+              "max_fit_points": 2048,
+              "nn_queries_per_worker": 512,
+              "batch_jacobian": true,
+              "batch_query_workers": 8
+            },
+            "motion": {
+              "crop_min_px": 160,
+              "crop_max_px": 480,
+              "crop_extent_multiplier": 2.5,
+              "input_size_px": 320,
+              "grid_step_px": 4,
+              "covisibility_min": 0.5,
+              "min_ransac_pairs": 6,
+              "ransac_distance_m": 0.006,
+              "ransac_confidence": 0.99,
+              "refinement_steps": 2,
+              "connected_dilation_px": 7
+            }
+          },
+          "surface_experiment": {
+            "spacing_m": 0.003,
+            "agreement_m": 0.005,
+            "min_overlap": 0.25,
+            "patch_overlap": 0.5,
+            "image_weight": 1.0,
+            "confirmations": 2,
+            "max_patches": 32,
+            "max_pending": 8,
+            "points_per_patch": 1024,
+            "max_points": 8192,
+            "grow": true
+          },
+          "group_experiment": {
+            "context_radius_m": 0.25,
+            "min_inliers": 12,
+            "fit_threshold_m": 0.005,
+            "object_max_points": 120,
+            "object_max_frame_gap_s": 0.1,
+            "object_fb_threshold_px": 1.0,
+            "object_image_scale": 1.0,
+            "depth_support_radius_px": 1,
+            "support_confirmation_s": 1.0,
+            "point_evidence_weight": 1.0
+          },
+          "shared_matching": {
+            "backend": "ufm",
+            "max_image_size_px": 640,
+            "scene_points": 800,
+            "object_points": 256,
+            "spacing_px": 5,
+            "history_frames": 64,
+            "depth_support_radius_px": 1,
+            "lk": {
+              "window_size_px": 21,
+              "pyramid_levels": 3,
+              "forward_backward_limit_px": 1.0
+            },
+            "ufm": {
+              "covisibility_min": 0.5
+            }
+          }
+        },
+        "code_snapshot": "/home/feit/.cache/flash-tracker-restart/shared-matching-20261102/ufm-v2/001/code",
+        "key_source_sha256": {
+          "src/lerobot/policies/flash/surface_tracking.py": "786a0910727ddc5083c28c2bfdc80c5b844d533fd4188e636739efef07ec79cd",
+          "src/lerobot/policies/flash/surface_correspondence.py": "e8071d5493132aac53cd3d2ab1c07ad32f4e0ad091d6b538e6be63f34efc7d42",
+          "src/lerobot/policies/flash/experimental_surface_session.py": "f958b3396e9202050160b9b183ca15f161edb48554f4e8ee28e87bd06f105625",
+          "src/lerobot/policies/flash/image_matching.py": "15818b7bf88772502230c4f1fffda2178b3a473a8bb1306fd3e117ddf4b4b523",
+          "src/lerobot/policies/flash/shared_image_tracking.py": "c1e9ed95bd46bd69a6a47bb25a37117ed839b58b68e91d0f98a45ccb41ae47da",
+          "benchmarks/flash_experiment_groups.py": "72a2c837e4dd7431a765d1f616d0b6fc5f2300787d68aeddc03f9e320e19819b",
+          "benchmarks/flash_tracker_experiment.py": "ca8e65769ad86d18c7b68f6d4c20a99e20394ca2f42c5869a8e71472e59d64b8"
+        }
+      },
+      {
+        "case": "ycb-bleach_hard_00_03_chaitanya",
+        "source_run": "/home/feit/.cache/flash-tracker-restart/shared-matching-20261102/ufm-v2/002/ycb-bleach_hard_00_03_chaitanya",
+        "summary_sha256": "9e4d0dabeef30817047ee27c71e1475aff1eef3bd04add578782ac4f9dbc3ce2",
+        "frames": 181,
+        "input_sha256": "cd7c190df35d1c469584222b41829428ef61b2c3ee00ec276d61eb2d7c34f419",
+        "shared_matching": {
+          "config": {
+            "backend": "ufm",
+            "max_image_size_px": 640,
+            "scene_points": 800,
+            "object_points": 256,
+            "spacing_px": 5,
+            "history_frames": 64,
+            "depth_support_radius_px": 1,
+            "lk": {
+              "window_size_px": 21,
+              "pyramid_levels": 3,
+              "forward_backward_limit_px": 1.0
+            },
+            "ufm": {
+              "covisibility_min": 0.5
+            }
+          },
+          "calls": 180,
+          "timing_ms": {
+            "median": 34.74123898195103,
+            "p90": 35.59247399971355
+          }
+        },
+        "roles": {
+          "object": {
+            "available_after_initialization": 180,
+            "total_after_initialization": 180,
+            "pose_error": {
+              "available": 180,
+              "total": 180,
+              "cloud_mm_median": 7.335872373900601,
+              "cloud_mm_p90": 22.807758588657375,
+              "angle_deg_median": 1.9945728082843532,
+              "angle_deg_p90": 4.654595767955898,
+              "center_mm_median": 7.317931934448358,
+              "within_10mm_10deg": 136,
+              "within_20mm_20deg": 156,
+              "final_cloud_mm": 23.029400550859677,
+              "final_angle_deg": 5.49827731213298
+            },
+            "max_map_points": 569,
+            "pose_sources": {
+              "observed_candidate": 0,
+              "predicted": 180,
+              "lost": 0
+            }
+          }
+        },
+        "configuration": {
+          "config": {
+            "backend": "surface",
+            "sam_resolution": 504,
+            "min_similarity": 0.75,
+            "registration_threshold_m": 0.005,
+            "registration_min_inliers": 12,
+            "registration_trials": 100,
+            "visible_shape_fallback": false,
+            "parallel_surface_objects": true,
+            "pipeline_surface_frames": true,
+            "surface_object_workers": 2,
+            "surface_reference_max_points_per_view": 15000,
+            "compiled_surface_fit": true,
+            "reuse_surface_search": true,
+            "detection_correction": {
+              "enabled": false,
+              "offline_interval_frames": 16,
+              "runtime_interval_frames": 60,
+              "min_detector_score": 0.8,
+              "min_tracker_score": 0.8,
+              "min_mask_overlap": 0.5
+            },
+            "observation": {
+              "mask_margin_px": 2,
+              "depth_span_m": 0.01,
+              "depth_neighborhood_px": 3,
+              "normal_bilateral_diameter_px": 5,
+              "normal_bilateral_sigma_px": 2.0,
+              "huber_m": 0.005,
+              "surface_spacing_m": 0.003,
+              "samples_across_object": 64,
+              "min_surface_spacing_m": 0.001,
+              "component_gap_m": 0.01,
+              "validation_tile_px": 4
+            },
+            "shape": {
+              "depth_tolerance_m": 0.005,
+              "surface_spacing_m": 0.003,
+              "mask_boundary_tolerance_px": 2.0,
+              "max_surface_distance_m": 0.03,
+              "max_evaluations": 50,
+              "solver_tolerance": 1e-05,
+              "max_fit_points": 2048,
+              "nn_queries_per_worker": 512,
+              "batch_jacobian": true,
+              "batch_query_workers": 8
+            },
+            "motion": {
+              "crop_min_px": 160,
+              "crop_max_px": 480,
+              "crop_extent_multiplier": 2.5,
+              "input_size_px": 320,
+              "grid_step_px": 4,
+              "covisibility_min": 0.5,
+              "min_ransac_pairs": 6,
+              "ransac_distance_m": 0.006,
+              "ransac_confidence": 0.99,
+              "refinement_steps": 2,
+              "connected_dilation_px": 7
+            }
+          },
+          "surface_experiment": {
+            "spacing_m": 0.003,
+            "agreement_m": 0.005,
+            "min_overlap": 0.25,
+            "patch_overlap": 0.5,
+            "image_weight": 1.0,
+            "confirmations": 2,
+            "max_patches": 32,
+            "max_pending": 8,
+            "points_per_patch": 1024,
+            "max_points": 8192,
+            "grow": true
+          },
+          "group_experiment": {
+            "context_radius_m": 0.25,
+            "min_inliers": 12,
+            "fit_threshold_m": 0.005,
+            "object_max_points": 120,
+            "object_max_frame_gap_s": 0.1,
+            "object_fb_threshold_px": 1.0,
+            "object_image_scale": 1.0,
+            "depth_support_radius_px": 1,
+            "support_confirmation_s": 1.0
+          },
+          "shared_matching": {
+            "backend": "ufm",
+            "max_image_size_px": 640,
+            "scene_points": 800,
+            "object_points": 256,
+            "spacing_px": 5,
+            "history_frames": 64,
+            "depth_support_radius_px": 1,
+            "lk": {
+              "window_size_px": 21,
+              "pyramid_levels": 3,
+              "forward_backward_limit_px": 1.0
+            },
+            "ufm": {
+              "covisibility_min": 0.5
+            }
+          }
+        },
+        "code_snapshot": "/home/feit/.cache/flash-tracker-restart/shared-matching-20261102/ufm-v2/002/code",
+        "key_source_sha256": {
+          "src/lerobot/policies/flash/surface_tracking.py": "786a0910727ddc5083c28c2bfdc80c5b844d533fd4188e636739efef07ec79cd",
+          "src/lerobot/policies/flash/surface_correspondence.py": "e8071d5493132aac53cd3d2ab1c07ad32f4e0ad091d6b538e6be63f34efc7d42",
+          "src/lerobot/policies/flash/experimental_surface_session.py": "f958b3396e9202050160b9b183ca15f161edb48554f4e8ee28e87bd06f105625",
+          "src/lerobot/policies/flash/image_matching.py": "15818b7bf88772502230c4f1fffda2178b3a473a8bb1306fd3e117ddf4b4b523",
+          "src/lerobot/policies/flash/shared_image_tracking.py": "c1e9ed95bd46bd69a6a47bb25a37117ed839b58b68e91d0f98a45ccb41ae47da",
+          "benchmarks/flash_experiment_groups.py": "72a2c837e4dd7431a765d1f616d0b6fc5f2300787d68aeddc03f9e320e19819b",
+          "benchmarks/flash_tracker_experiment.py": "ca8e65769ad86d18c7b68f6d4c20a99e20394ca2f42c5869a8e71472e59d64b8"
+        }
+      }
+    ],
+    "lk-v2": [
+      {
+        "case": "flash-demo-gamepad-cube",
+        "source_run": "/home/feit/.cache/flash-tracker-restart/shared-matching-20261102/lk-v2/000/flash-demo-gamepad-cube",
+        "summary_sha256": "76d45999697bda97bb4342982559e19f746233be0c2a078f0650b628e3418ead",
+        "frames": 628,
+        "input_sha256": "fda3c6528b84615e7e04bed498cbec284fb4837a34f453f37c0b632a701d10cf",
+        "shared_matching": {
+          "config": {
+            "backend": "lk",
+            "max_image_size_px": 640,
+            "scene_points": 800,
+            "object_points": 256,
+            "spacing_px": 5,
+            "history_frames": 64,
+            "depth_support_radius_px": 1,
+            "lk": {
+              "window_size_px": 21,
+              "pyramid_levels": 3,
+              "forward_backward_limit_px": 1.0
+            },
+            "ufm": {
+              "covisibility_min": 0.5
+            }
+          },
+          "calls": 627,
+          "timing_ms": {
+            "median": 12.968730996362865,
+            "p90": 14.11013719625771
+          }
+        },
+        "roles": {
+          "gamepad": {
+            "available_after_initialization": 627,
+            "total_after_initialization": 627,
+            "max_map_points": 485,
+            "pose_sources": {
+              "observed_candidate": 591,
+              "predicted": 36,
+              "lost": 0
+            }
+          },
+          "cube": {
+            "available_after_initialization": 627,
+            "total_after_initialization": 627,
+            "max_map_points": 246,
+            "pose_sources": {
+              "observed_candidate": 351,
+              "predicted": 276,
+              "lost": 0
+            }
+          }
+        },
+        "configuration": {
+          "config": {
+            "backend": "surface",
+            "sam_resolution": 504,
+            "min_similarity": 0.75,
+            "registration_threshold_m": 0.005,
+            "registration_min_inliers": 12,
+            "registration_trials": 100,
+            "visible_shape_fallback": false,
+            "parallel_surface_objects": true,
+            "pipeline_surface_frames": true,
+            "surface_object_workers": 2,
+            "surface_reference_max_points_per_view": 15000,
+            "compiled_surface_fit": true,
+            "reuse_surface_search": true,
+            "detection_correction": {
+              "enabled": false,
+              "offline_interval_frames": 16,
+              "runtime_interval_frames": 60,
+              "min_detector_score": 0.8,
+              "min_tracker_score": 0.8,
+              "min_mask_overlap": 0.5
+            },
+            "observation": {
+              "mask_margin_px": 2,
+              "depth_span_m": 0.01,
+              "depth_neighborhood_px": 3,
+              "normal_bilateral_diameter_px": 5,
+              "normal_bilateral_sigma_px": 2.0,
+              "huber_m": 0.005,
+              "surface_spacing_m": 0.003,
+              "samples_across_object": 64,
+              "min_surface_spacing_m": 0.001,
+              "component_gap_m": 0.01,
+              "validation_tile_px": 4
+            },
+            "shape": {
+              "depth_tolerance_m": 0.005,
+              "surface_spacing_m": 0.003,
+              "mask_boundary_tolerance_px": 2.0,
+              "max_surface_distance_m": 0.03,
+              "max_evaluations": 50,
+              "solver_tolerance": 1e-05,
+              "max_fit_points": 2048,
+              "nn_queries_per_worker": 512,
+              "batch_jacobian": true,
+              "batch_query_workers": 8
+            },
+            "motion": {
+              "crop_min_px": 160,
+              "crop_max_px": 480,
+              "crop_extent_multiplier": 2.5,
+              "input_size_px": 320,
+              "grid_step_px": 4,
+              "covisibility_min": 0.5,
+              "min_ransac_pairs": 6,
+              "ransac_distance_m": 0.006,
+              "ransac_confidence": 0.99,
+              "refinement_steps": 2,
+              "connected_dilation_px": 7
+            }
+          },
+          "surface_experiment": {
+            "spacing_m": 0.003,
+            "agreement_m": 0.005,
+            "min_overlap": 0.25,
+            "patch_overlap": 0.5,
+            "image_weight": 1.0,
+            "confirmations": 2,
+            "max_patches": 32,
+            "max_pending": 8,
+            "points_per_patch": 1024,
+            "max_points": 8192,
+            "grow": true
+          },
+          "group_experiment": {
+            "context_radius_m": 0.25,
+            "min_inliers": 12,
+            "fit_threshold_m": 0.005,
+            "object_max_points": 120,
+            "object_max_frame_gap_s": 0.1,
+            "object_fb_threshold_px": 1.0,
+            "object_image_scale": 1.0,
+            "depth_support_radius_px": 1,
+            "support_confirmation_s": 1.0,
+            "point_evidence_weight": 1.0
+          },
+          "shared_matching": {
+            "backend": "lk",
+            "max_image_size_px": 640,
+            "scene_points": 800,
+            "object_points": 256,
+            "spacing_px": 5,
+            "history_frames": 64,
+            "depth_support_radius_px": 1,
+            "lk": {
+              "window_size_px": 21,
+              "pyramid_levels": 3,
+              "forward_backward_limit_px": 1.0
+            },
+            "ufm": {
+              "covisibility_min": 0.5
+            }
+          }
+        },
+        "code_snapshot": "/home/feit/.cache/flash-tracker-restart/shared-matching-20261102/lk-v2/000/code",
+        "key_source_sha256": {
+          "src/lerobot/policies/flash/surface_tracking.py": "786a0910727ddc5083c28c2bfdc80c5b844d533fd4188e636739efef07ec79cd",
+          "src/lerobot/policies/flash/surface_correspondence.py": "e8071d5493132aac53cd3d2ab1c07ad32f4e0ad091d6b538e6be63f34efc7d42",
+          "src/lerobot/policies/flash/experimental_surface_session.py": "f958b3396e9202050160b9b183ca15f161edb48554f4e8ee28e87bd06f105625",
+          "src/lerobot/policies/flash/image_matching.py": "15818b7bf88772502230c4f1fffda2178b3a473a8bb1306fd3e117ddf4b4b523",
+          "src/lerobot/policies/flash/shared_image_tracking.py": "c1e9ed95bd46bd69a6a47bb25a37117ed839b58b68e91d0f98a45ccb41ae47da",
+          "benchmarks/flash_experiment_groups.py": "72a2c837e4dd7431a765d1f616d0b6fc5f2300787d68aeddc03f9e320e19819b",
+          "benchmarks/flash_tracker_experiment.py": "ca8e65769ad86d18c7b68f6d4c20a99e20394ca2f42c5869a8e71472e59d64b8"
+        }
+      },
+      {
+        "case": "flash-demo-dowel-ring",
+        "source_run": "/home/feit/.cache/flash-tracker-restart/shared-matching-20261102/lk-v2/001/flash-demo-dowel-ring",
+        "summary_sha256": "017d049eb7a4221d1eff28cea82c3a20f82842c46529280c880296258e51162e",
+        "frames": 713,
+        "input_sha256": "9451f8b8a7129105375c6e6ab5ca84f561e86b6d327f83ce83550252bbdc8bf9",
+        "shared_matching": {
+          "config": {
+            "backend": "lk",
+            "max_image_size_px": 640,
+            "scene_points": 800,
+            "object_points": 256,
+            "spacing_px": 5,
+            "history_frames": 64,
+            "depth_support_radius_px": 1,
+            "lk": {
+              "window_size_px": 21,
+              "pyramid_levels": 3,
+              "forward_backward_limit_px": 1.0
+            },
+            "ufm": {
+              "covisibility_min": 0.5
+            }
+          },
+          "calls": 712,
+          "timing_ms": {
+            "median": 13.2968844845891,
+            "p90": 14.374512381618842
+          }
+        },
+        "roles": {
+          "dowel": {
+            "available_after_initialization": 712,
+            "total_after_initialization": 712,
+            "max_map_points": 568,
+            "pose_sources": {
+              "observed_candidate": 658,
+              "predicted": 54,
+              "lost": 0
+            }
+          },
+          "ring": {
+            "available_after_initialization": 712,
+            "total_after_initialization": 712,
+            "max_map_points": 492,
+            "pose_sources": {
+              "observed_candidate": 711,
+              "predicted": 1,
+              "lost": 0
+            }
+          }
+        },
+        "configuration": {
+          "config": {
+            "backend": "surface",
+            "sam_resolution": 504,
+            "min_similarity": 0.75,
+            "registration_threshold_m": 0.005,
+            "registration_min_inliers": 12,
+            "registration_trials": 100,
+            "visible_shape_fallback": false,
+            "parallel_surface_objects": true,
+            "pipeline_surface_frames": true,
+            "surface_object_workers": 2,
+            "surface_reference_max_points_per_view": 15000,
+            "compiled_surface_fit": true,
+            "reuse_surface_search": true,
+            "detection_correction": {
+              "enabled": false,
+              "offline_interval_frames": 16,
+              "runtime_interval_frames": 60,
+              "min_detector_score": 0.8,
+              "min_tracker_score": 0.8,
+              "min_mask_overlap": 0.5
+            },
+            "observation": {
+              "mask_margin_px": 2,
+              "depth_span_m": 0.01,
+              "depth_neighborhood_px": 3,
+              "normal_bilateral_diameter_px": 5,
+              "normal_bilateral_sigma_px": 2.0,
+              "huber_m": 0.005,
+              "surface_spacing_m": 0.003,
+              "samples_across_object": 64,
+              "min_surface_spacing_m": 0.001,
+              "component_gap_m": 0.01,
+              "validation_tile_px": 4
+            },
+            "shape": {
+              "depth_tolerance_m": 0.005,
+              "surface_spacing_m": 0.003,
+              "mask_boundary_tolerance_px": 2.0,
+              "max_surface_distance_m": 0.03,
+              "max_evaluations": 50,
+              "solver_tolerance": 1e-05,
+              "max_fit_points": 2048,
+              "nn_queries_per_worker": 512,
+              "batch_jacobian": true,
+              "batch_query_workers": 8
+            },
+            "motion": {
+              "crop_min_px": 160,
+              "crop_max_px": 480,
+              "crop_extent_multiplier": 2.5,
+              "input_size_px": 320,
+              "grid_step_px": 4,
+              "covisibility_min": 0.5,
+              "min_ransac_pairs": 6,
+              "ransac_distance_m": 0.006,
+              "ransac_confidence": 0.99,
+              "refinement_steps": 2,
+              "connected_dilation_px": 7
+            }
+          },
+          "surface_experiment": {
+            "spacing_m": 0.003,
+            "agreement_m": 0.005,
+            "min_overlap": 0.25,
+            "patch_overlap": 0.5,
+            "image_weight": 1.0,
+            "confirmations": 2,
+            "max_patches": 32,
+            "max_pending": 8,
+            "points_per_patch": 1024,
+            "max_points": 8192,
+            "grow": true
+          },
+          "group_experiment": {
+            "context_radius_m": 0.25,
+            "min_inliers": 12,
+            "fit_threshold_m": 0.005,
+            "object_max_points": 120,
+            "object_max_frame_gap_s": 0.1,
+            "object_fb_threshold_px": 1.0,
+            "object_image_scale": 1.0,
+            "depth_support_radius_px": 1,
+            "support_confirmation_s": 1.0,
+            "point_evidence_weight": 1.0
+          },
+          "shared_matching": {
+            "backend": "lk",
+            "max_image_size_px": 640,
+            "scene_points": 800,
+            "object_points": 256,
+            "spacing_px": 5,
+            "history_frames": 64,
+            "depth_support_radius_px": 1,
+            "lk": {
+              "window_size_px": 21,
+              "pyramid_levels": 3,
+              "forward_backward_limit_px": 1.0
+            },
+            "ufm": {
+              "covisibility_min": 0.5
+            }
+          }
+        },
+        "code_snapshot": "/home/feit/.cache/flash-tracker-restart/shared-matching-20261102/lk-v2/001/code",
+        "key_source_sha256": {
+          "src/lerobot/policies/flash/surface_tracking.py": "786a0910727ddc5083c28c2bfdc80c5b844d533fd4188e636739efef07ec79cd",
+          "src/lerobot/policies/flash/surface_correspondence.py": "e8071d5493132aac53cd3d2ab1c07ad32f4e0ad091d6b538e6be63f34efc7d42",
+          "src/lerobot/policies/flash/experimental_surface_session.py": "f958b3396e9202050160b9b183ca15f161edb48554f4e8ee28e87bd06f105625",
+          "src/lerobot/policies/flash/image_matching.py": "15818b7bf88772502230c4f1fffda2178b3a473a8bb1306fd3e117ddf4b4b523",
+          "src/lerobot/policies/flash/shared_image_tracking.py": "c1e9ed95bd46bd69a6a47bb25a37117ed839b58b68e91d0f98a45ccb41ae47da",
+          "benchmarks/flash_experiment_groups.py": "72a2c837e4dd7431a765d1f616d0b6fc5f2300787d68aeddc03f9e320e19819b",
+          "benchmarks/flash_tracker_experiment.py": "ca8e65769ad86d18c7b68f6d4c20a99e20394ca2f42c5869a8e71472e59d64b8"
+        }
+      },
+      {
+        "case": "ycb-bleach_hard_00_03_chaitanya",
+        "source_run": "/home/feit/.cache/flash-tracker-restart/shared-matching-20261102/lk-v2/002/ycb-bleach_hard_00_03_chaitanya",
+        "summary_sha256": "e9b8301be67048652444b1a6cb9c4904d7be4781decdfc308760ca916c71e489",
+        "frames": 181,
+        "input_sha256": "cd7c190df35d1c469584222b41829428ef61b2c3ee00ec276d61eb2d7c34f419",
+        "shared_matching": {
+          "config": {
+            "backend": "lk",
+            "max_image_size_px": 640,
+            "scene_points": 800,
+            "object_points": 256,
+            "spacing_px": 5,
+            "history_frames": 64,
+            "depth_support_radius_px": 1,
+            "lk": {
+              "window_size_px": 21,
+              "pyramid_levels": 3,
+              "forward_backward_limit_px": 1.0
+            },
+            "ufm": {
+              "covisibility_min": 0.5
+            }
+          },
+          "calls": 180,
+          "timing_ms": {
+            "median": 11.900274999788962,
+            "p90": 14.966511304373853
+          }
+        },
+        "roles": {
+          "object": {
+            "available_after_initialization": 180,
+            "total_after_initialization": 180,
+            "pose_error": {
+              "available": 180,
+              "total": 180,
+              "cloud_mm_median": 4.639145664469619,
+              "cloud_mm_p90": 9.764778748625332,
+              "angle_deg_median": 3.6483767734080583,
+              "angle_deg_p90": 9.13016976063469,
+              "center_mm_median": 3.4328064016224227,
+              "within_10mm_10deg": 165,
+              "within_20mm_20deg": 179,
+              "final_cloud_mm": 13.153272153445124,
+              "final_angle_deg": 9.035140979562554
+            },
+            "max_map_points": 1341,
+            "pose_sources": {
+              "observed_candidate": 3,
+              "predicted": 177,
+              "lost": 0
+            }
+          }
+        },
+        "configuration": {
+          "config": {
+            "backend": "surface",
+            "sam_resolution": 504,
+            "min_similarity": 0.75,
+            "registration_threshold_m": 0.005,
+            "registration_min_inliers": 12,
+            "registration_trials": 100,
+            "visible_shape_fallback": false,
+            "parallel_surface_objects": true,
+            "pipeline_surface_frames": true,
+            "surface_object_workers": 2,
+            "surface_reference_max_points_per_view": 15000,
+            "compiled_surface_fit": true,
+            "reuse_surface_search": true,
+            "detection_correction": {
+              "enabled": false,
+              "offline_interval_frames": 16,
+              "runtime_interval_frames": 60,
+              "min_detector_score": 0.8,
+              "min_tracker_score": 0.8,
+              "min_mask_overlap": 0.5
+            },
+            "observation": {
+              "mask_margin_px": 2,
+              "depth_span_m": 0.01,
+              "depth_neighborhood_px": 3,
+              "normal_bilateral_diameter_px": 5,
+              "normal_bilateral_sigma_px": 2.0,
+              "huber_m": 0.005,
+              "surface_spacing_m": 0.003,
+              "samples_across_object": 64,
+              "min_surface_spacing_m": 0.001,
+              "component_gap_m": 0.01,
+              "validation_tile_px": 4
+            },
+            "shape": {
+              "depth_tolerance_m": 0.005,
+              "surface_spacing_m": 0.003,
+              "mask_boundary_tolerance_px": 2.0,
+              "max_surface_distance_m": 0.03,
+              "max_evaluations": 50,
+              "solver_tolerance": 1e-05,
+              "max_fit_points": 2048,
+              "nn_queries_per_worker": 512,
+              "batch_jacobian": true,
+              "batch_query_workers": 8
+            },
+            "motion": {
+              "crop_min_px": 160,
+              "crop_max_px": 480,
+              "crop_extent_multiplier": 2.5,
+              "input_size_px": 320,
+              "grid_step_px": 4,
+              "covisibility_min": 0.5,
+              "min_ransac_pairs": 6,
+              "ransac_distance_m": 0.006,
+              "ransac_confidence": 0.99,
+              "refinement_steps": 2,
+              "connected_dilation_px": 7
+            }
+          },
+          "surface_experiment": {
+            "spacing_m": 0.003,
+            "agreement_m": 0.005,
+            "min_overlap": 0.25,
+            "patch_overlap": 0.5,
+            "image_weight": 1.0,
+            "confirmations": 2,
+            "max_patches": 32,
+            "max_pending": 8,
+            "points_per_patch": 1024,
+            "max_points": 8192,
+            "grow": true
+          },
+          "group_experiment": {
+            "context_radius_m": 0.25,
+            "min_inliers": 12,
+            "fit_threshold_m": 0.005,
+            "object_max_points": 120,
+            "object_max_frame_gap_s": 0.1,
+            "object_fb_threshold_px": 1.0,
+            "object_image_scale": 1.0,
+            "depth_support_radius_px": 1,
+            "support_confirmation_s": 1.0
+          },
+          "shared_matching": {
+            "backend": "lk",
+            "max_image_size_px": 640,
+            "scene_points": 800,
+            "object_points": 256,
+            "spacing_px": 5,
+            "history_frames": 64,
+            "depth_support_radius_px": 1,
+            "lk": {
+              "window_size_px": 21,
+              "pyramid_levels": 3,
+              "forward_backward_limit_px": 1.0
+            },
+            "ufm": {
+              "covisibility_min": 0.5
+            }
+          }
+        },
+        "code_snapshot": "/home/feit/.cache/flash-tracker-restart/shared-matching-20261102/lk-v2/002/code",
+        "key_source_sha256": {
+          "src/lerobot/policies/flash/surface_tracking.py": "786a0910727ddc5083c28c2bfdc80c5b844d533fd4188e636739efef07ec79cd",
+          "src/lerobot/policies/flash/surface_correspondence.py": "e8071d5493132aac53cd3d2ab1c07ad32f4e0ad091d6b538e6be63f34efc7d42",
+          "src/lerobot/policies/flash/experimental_surface_session.py": "f958b3396e9202050160b9b183ca15f161edb48554f4e8ee28e87bd06f105625",
+          "src/lerobot/policies/flash/image_matching.py": "15818b7bf88772502230c4f1fffda2178b3a473a8bb1306fd3e117ddf4b4b523",
+          "src/lerobot/policies/flash/shared_image_tracking.py": "c1e9ed95bd46bd69a6a47bb25a37117ed839b58b68e91d0f98a45ccb41ae47da",
+          "benchmarks/flash_experiment_groups.py": "72a2c837e4dd7431a765d1f616d0b6fc5f2300787d68aeddc03f9e320e19819b",
+          "benchmarks/flash_tracker_experiment.py": "ca8e65769ad86d18c7b68f6d4c20a99e20394ca2f42c5869a8e71472e59d64b8"
+        }
+      }
+    ]
+  },
+  "validation": {
+    "targeted_suite_passed": 203,
+    "additional_browser_backend_test_passed": 1,
+    "latest_export_and_cache_tests_passed": 2,
+    "mutation_checks": [
+      {
+        "mutation": "resize",
+        "test_rejected_mutation": true
+      },
+      {
+        "mutation": "second_tracker",
+        "test_rejected_mutation": true
+      },
+      {
+        "mutation": "object_budget",
+        "test_rejected_mutation": true
+      },
+      {
+        "mutation": "double_count",
+        "test_rejected_mutation": true
+      }
+    ]
+  },
+  "limitations": [
+    "Three complete clips, not the full corpus.",
+    "Changing to one scene-wide pass also changes image scale/crops and point sampling; need separate ablations before attributing regression to a model.",
+    "No robot trial.",
+    "All local changes remain uncommitted."
+  ],
+  "reproduction": "/home/feit/.cache/flash-tracker-restart/shared-matching-20261102/run_comparison.py"
+}

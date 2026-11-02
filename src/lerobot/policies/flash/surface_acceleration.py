@@ -56,6 +56,7 @@ def depth_blocks(
     target_distance,
     mask_distance,
     depth,
+    mask,
     uv,
     tolerance,
     maximum,
@@ -75,15 +76,18 @@ def depth_blocks(
         fx, fy = x - x0, y - y0
         weights = ((1 - fx) * (1 - fy), fx * (1 - fy), (1 - fx) * fy, fx * fy)
         rays = (depth[y0, x0], depth[y0, x1], depth[y1, x0], depth[y1, x1])
-        visible, unknown = 0.0, 0.0
+        object_rays = (mask[y0, x0], mask[y0, x1], mask[y1, x0], mask[y1, x1])
+        visible, free_space = 0.0, 0.0
         for j in range(4):
             known = rays[j] > 0 and inside
             visibility = min(max((rays[j] - predicted[i, 2] + tolerance) / tolerance, 0.0), 1.0)
-            visible += weights[j] * known * visibility
-            unknown += weights[j] * (not known)
+            visible += weights[j] * known * object_rays[j] * visibility
+            free_space += (
+                weights[j] * known * min(max((rays[j] - predicted[i, 2] - tolerance) / tolerance, 0.0), 1.0)
+            )
         result[i] = np.sqrt(visible / count) * min(model_distance[i], maximum) / tolerance
         silhouette = max(mask_distance[i] - margin, 0.0) * predicted[i, 2] / fx_camera
-        result[count + target_count + i] = np.sqrt((visible + unknown) / count) * silhouette / tolerance
+        result[count + target_count + i] = np.sqrt(free_space / count) * silhouette / tolerance
     for i in range(target_count):
         result[count + i] = min(target_distance[i], maximum) / (tolerance * np.sqrt(target_count))
     return result
@@ -132,6 +136,18 @@ def compiled_kernels():
     distances = np.zeros(3)
     uv = np.zeros((3, 2))
     for dtype in (np.float32, np.float64):
-        kernels[0](points, distances, distances, distances, np.ones((2, 2), dtype), uv, 0.005, 0.03, 2.0, 1.0)
+        kernels[0](
+            points,
+            distances,
+            distances,
+            distances,
+            np.ones((2, 2), dtype),
+            np.ones((2, 2), bool),
+            uv,
+            0.005,
+            0.03,
+            2.0,
+            1.0,
+        )
     kernels[1](uv, points[:, :2].copy(), 2.0)
     return kernels

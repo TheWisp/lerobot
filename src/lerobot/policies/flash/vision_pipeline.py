@@ -108,9 +108,10 @@ class VisionPipelineConfig:
                 self.compiled_surface_fit,
                 self.reuse_surface_search,
                 self.shape.batch_jacobian,
+                self.shape.require_full_mask_coverage,
             )
         ):
-            raise ValueError("surface acceleration settings must be booleans")
+            raise ValueError("surface acceleration and coverage settings must be booleans")
         if self.surface_object_workers < 1:
             raise ValueError("surface_object_workers must be positive")
         if self.surface_reference_max_points_per_view < 3:
@@ -128,7 +129,7 @@ class VisionPipelineConfig:
             ):
                 raise ValueError(f"invalid observation setting: {key}")
         for key, value in asdict(self.shape).items():
-            if key == "batch_jacobian":
+            if key in {"batch_jacobian", "require_full_mask_coverage"}:
                 continue
             if not np.isfinite(value) or value < 0 or (value == 0 and key != "mask_boundary_tolerance_px"):
                 raise ValueError(f"invalid shape setting: {key}")

@@ -56,6 +56,7 @@ class GpuWholeSurfaceFit:
         self.outline = tensor(cpu.mask_outline)
         self.k = tensor(cpu.k)
         self.depth = tensor(cpu.observation["depth"])
+        self.mask = tensor(cpu.observation["mask"])
         self.outside_mask = tensor(cpu.outside_mask)
         self.height, self.width = cpu.observation["depth"].shape
         self.identity = torch.eye(6, dtype=self.dtype, device=self.device)
@@ -128,8 +129,10 @@ class GpuWholeSurfaceFit:
         known = (rays > 0) & inside[..., None]
         tolerance = self.cpu.config.depth_tolerance_m
         ray_visibility = ((rays - predicted[..., 2, None] + tolerance) / tolerance).clamp(0, 1)
-        depth_visibility = (weights * known * ray_visibility).sum(-1)
-        visibility = depth_visibility + (weights * ~known).sum(-1)
+        object_rays = self._image_values(self.mask, x0, y0, x1, y1)
+        depth_visibility = (weights * known * object_rays * ray_visibility).sum(-1)
+        free_space = ((rays - predicted[..., 2, None] - tolerance) / tolerance).clamp(0, 1)
+        visibility = (weights * known * free_space).sum(-1)
 
         model_distance = self._nearest(predicted, self.target).clamp(
             max=self.cpu.config.max_surface_distance_m
@@ -144,7 +147,11 @@ class GpuWholeSurfaceFit:
         projected_envelope = self._project(
             self.envelope[None] @ rotation.transpose(1, 2) + translation[:, None]
         )
-        uncovered = self._uncovered_outline(projected_envelope, hull_indices)
+        uncovered = (
+            self._uncovered_outline(projected_envelope, hull_indices)
+            if self.cpu.config.require_full_mask_coverage
+            else torch.zeros((len(poses), len(self.outline)), dtype=self.dtype, device=self.device)
+        )
         z_sorted = predicted[..., 2].sort(dim=-1).values
         count = z_sorted.shape[-1]
         median_z = (z_sorted[:, (count - 1) // 2] + z_sorted[:, count // 2]) / 2

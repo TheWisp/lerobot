@@ -31,6 +31,9 @@ class ShapeConfig:
     depth_tolerance_m: float = 0.005
     surface_spacing_m: float = 0.003
     mask_boundary_tolerance_px: float = 2.0
+    # A surface reconstructed from partial observations cannot be required to
+    # cover the whole current silhouette. Enable only for a complete reference.
+    require_full_mask_coverage: bool = False
     max_surface_distance_m: float = 0.03
     max_evaluations: int = 50
     solver_tolerance: float = 1e-5
@@ -149,6 +152,8 @@ class WholeSurfaceFit:
         self.mask_outline = mask_pixels[ConvexHull(mask_pixels).vertices]
 
     def uncovered_mask(self, uv: np.ndarray) -> np.ndarray:
+        if not self.config.require_full_mask_coverage:
+            return np.zeros(len(self.mask_outline))
         # Containment in the projected convex envelope is a conservative check:
         # it enforces observed outer extent without inventing an unseen mesh or
         # requiring an occluder's cut-out to occur in the reference shape.
@@ -202,15 +207,21 @@ class WholeSurfaceFit:
                 target_distance,
                 mask_distance,
                 self.observation["depth"],
+                self.observation["mask"],
                 uv,
                 self.config.depth_tolerance_m,
                 self.config.max_surface_distance_m,
                 self.config.mask_boundary_tolerance_px,
                 self.k[0, 0],
             )
-            envelope = project(move(self.envelope, pose), self.k)
-            polygon = envelope[ConvexHull(envelope).vertices]
-            outline = self.fit_kernels[1](self.mask_outline, polygon, self.config.mask_boundary_tolerance_px)
+            if self.config.require_full_mask_coverage:
+                envelope = project(move(self.envelope, pose), self.k)
+                polygon = envelope[ConvexHull(envelope).vertices]
+                outline = self.fit_kernels[1](
+                    self.mask_outline, polygon, self.config.mask_boundary_tolerance_px
+                )
+            else:
+                outline = np.zeros(len(self.mask_outline))
             outline = (
                 outline
                 * np.median(predicted[:, 2])
@@ -230,10 +241,18 @@ class WholeSurfaceFit:
         weights = np.column_stack(((1 - fx) * (1 - fy), fx * (1 - fy), (1 - fx) * fy, fx * fy))
         depth = self.observation["depth"]
         rays = np.column_stack((depth[y0, x0], depth[y0, x1], depth[y1, x0], depth[y1, x1]))
+        mask = self.observation["mask"]
+        object_rays = np.column_stack((mask[y0, x0], mask[y0, x1], mask[y1, x0], mask[y1, x1]))
         known = (rays > 0) & inside[:, None]
         ray_visibility = np.clip((rays - predicted[:, 2, None] + tolerance) / tolerance, 0, 1)
-        depth_visibility = np.sum(weights * known * ray_visibility, axis=1)
-        visibility = depth_visibility + np.sum(weights * ~known, axis=1)
+        # Only rays belonging to the observed object require a nearest-surface
+        # match. A reference point behind an occluder has no visible counterpart.
+        depth_visibility = np.sum(weights * known * object_rays * ray_visibility, axis=1)
+        # Outside the visible mask, reject a projected reference only when
+        # measured depth proves space in front of a FARTHER surface is empty.
+        # Nearer/unknown depth, or a gap within depth uncertainty, cannot do so.
+        free_space = np.clip((rays - predicted[:, 2, None] - tolerance) / tolerance, 0, 1)
+        visibility = np.sum(weights * known * free_space, axis=1)
         model_distance = np.minimum(model_distance, self.config.max_surface_distance_m)
         target_distance = np.minimum(target_distance, self.config.max_surface_distance_m)
         silhouette_m = (

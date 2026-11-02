@@ -8,13 +8,24 @@ surface as new sides are observed. This is perception, not robot control.
 
 ## Core loop
 
+**Priority: usable mask + measured depth first; 2D tracking second.** When
+they disagree about position or orientation that the visible geometry constrains,
+the geometry wins. More image matches or higher matching confidence cannot
+override that evidence. This applies to UFM, LK and future 2D trackers alike.
+
 ![Geometry, image evidence and optional motion predictions feed one pose estimate](assets/tracking_pipeline/pipeline.png)
 
-- Fit the stored surface to this frame's mask and measured depth. Use image
-  matches to distinguish similar shapes. Neither source is automatically correct.
-- Prefer reliable direct observation. When it constrains only some pose directions,
-  preserve uncertainty in the others. When nothing is visible, a valid group or
-  gripper relationship can predict pose; otherwise report lost.
+- Fit the stored surface to this frame's visible mask and measured depth. Image
+  matches supply starting guesses and distinguish poses compatible with that
+  geometry; they do not replace the geometric checks.
+- A partial view may leave some position or rotation uncertain. Image matches
+  and group/gripper predictions help estimate those unresolved parts. When no
+  usable object observation remains, a valid group or gripper relationship can
+  still supply a **predicted** pose; otherwise report lost.
+- Apply the same mask/depth quality checks to every hypothesis. Bad or missing
+  depth is unknown, not evidence against an object behind it. Mask and depth
+  are not infallible; deciding their reliability remains part of the
+  [uncertainty problem](#uncertainty-and-correction).
 - Add **measured** new surface only after checking its alignment. Hidden frames
   can update pose through prediction, but provide no new object surface.
 
@@ -34,6 +45,93 @@ observation**) and, within a configured budget, older stored views.
 **Prediction source:** a timestamped pose inferred from a known co-movement
 relationship; it works even without object pixels. These sources record their
 frame IDs. A new mask does not by itself recover the old pose.
+
+## Shared image matching
+
+**Implemented foundation (2026-11-02):** `image_matching.py` gives LK and UFM
+one prepared-pair/query interface, explicit backend settings, and separate native
+diagnostics. Existing callers retain their original image coordinates, frame
+selection and filtering. The refactor is checked against the previous code.
+
+**Experimental implementation (2026-11-02):** `shared_image_tracking.py` runs
+one LK or UFM pass on consecutive full-scene images. The benchmark can opt in
+through `--shared-matching-config`; its existing paths remain comparison controls.
+This changes sampling and group evidence, so adapter equivalence does **not**
+establish equal tracking quality for this next step.
+The first full-clip comparison found regressions, including a sideways dowel
+estimate during rotation. Subsequent geometry fixes improved aggregate accuracy
+across 21 labelled scenes, with individual regressions and higher processing cost.
+It remains opt-in; see the
+[full-suite measurements](../../../../../docs/proofs/flash-tracker-restart/RESEARCH.md#2026-11-02--full-suite-validation-after-the-geometry-fixes).
+
+Select one configurable 2D matching backend, initially LK or UFM, for an experiment.
+Object tracking and surrounding-group tracking consume its same results. Group
+tracking maintains identities and co-movement relationships; it does not choose
+or invoke a second image tracker. Two consumers of the same matches are one source
+of evidence, not two independent votes.
+
+```text
+Consecutive RGB frames + requested points / image region
+                          ↓
+             Matching adapter: LK OR UFM
+                          ↓
+         Shared point identities + mask/depth checks
+                 ↙                         ↘
+        Object measurements          Surrounding groups
+                 ↘                         ↙
+                  Surface fit + pose estimate
+```
+
+The common result contains source/target frame IDs, source/target pixels in original
+image coordinates, valid matches, image coverage, processing time and backend
+reliability information. Dense UFM output can answer point queries by sampling its
+flow field; sparse LK can match the requested points directly. Neither adapter
+needs to invent a dense field, a 3D pose, or hidden-object observations. Native
+visibility, forward/backward error and other scores retain their meaning; a UFM
+visibility value is not interchangeable with an LK error or a probability of pose
+accuracy. Acceptance settings are explicit per backend.
+
+SAM identifies visible object pixels. Shared depth-cleaning and boundary-margin
+settings govern which pixels supply object geometry. Ownership remains separate
+from depth quality: a discarded boundary pixel does not become background. A point
+center inside SAM does not imply all image context used for matching is inside.
+Mask-aware matching is an experiment, including possible loss of useful context
+and artificial boundaries created by zeroing masked pixels.
+
+Matching continues over surrounding RGB when the object's mask is empty. Crop
+coverage and image scale are explicit; points outside coverage or without a valid
+match cannot be reported as observed. Matching the same pair/region is shared or
+batched across consumers. Older-frame recovery is explicitly separate from
+consecutive-frame identity tracking. Backend changes preserve point IDs only
+when correspondence continuity is retained; otherwise reseeding starts new IDs.
+
+Configuration selects the backend, image scale/resolution, point budget and its
+acceptance settings. The same configuration is recorded by the benchmark and used
+by the consumer. Compare LK and UFM on identical recordings and masks, including
+visible-point drift, mistaken retention through occlusion, pose quality and cost.
+The shared experiment does not run a second backend or silently retry image
+inference. Older observations can reconnect through surviving point IDs in a
+bounded history (default 64 frames); beyond it, no image correspondence is
+claimed. Other surface/group evidence may still provide a pose. New seeds have
+new IDs. Backend, resolution, point budgets and history length are saved with
+the result and preserved by GUI reruns and cache keys.
+
+**Current experiment, 2026-11-02:** both endpoints of object matches must pass
+the configured mask erosion (2 px by default) and depth checks. A match can
+still drift inside a valid surface. With `GrowingSurfaceConfig.surface_priority`,
+surface fitting and group-disagreement checks use the same geometric objective;
+image/group matches choose between equally fitting solutions, rather than
+outweighing a better measured-surface fit. The weighted objective is retained as
+an ablation. This is not a calibrated confidence model.
+
+Only the visible part of the saved surface must match the current measured
+surface. Outside the visible mask, nearer or unknown depth can hide a point;
+farther depth can contradict it. A partial saved surface is **not** required to
+cover the entire current outline. `ShapeConfig.require_full_mask_coverage` is
+off by default; enabling it assumes a complete reference, which our growing
+partial surfaces do not provide. No scene name or grasp timing selects these
+rules. The recorded gamepad regression checks approach occlusion and subsequent
+pickup; it does not establish accuracy throughout manipulation.
 
 ## What persists between frames
 

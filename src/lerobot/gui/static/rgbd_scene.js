@@ -166,19 +166,27 @@ export function createRgbdScene(canvas) {
             const object = new THREE.Group();
             const geometry = new THREE.BufferGeometry();
             geometry.setAttribute('position', new THREE.Float32BufferAttribute(description.points.flat(), 3));
-            const surface = new THREE.Points(geometry, new THREE.PointsMaterial({
-                color: description.color, size: 2.0, sizeAttenuation: false,
-                transparent: true, opacity: 0.9, depthTest: false, depthWrite: false,
-            }));
+            const appearance = {color: description.color, transparent: true, opacity: 0.9,
+                depthTest: false, depthWrite: false};
+            let surface;
+            if (description.links) {
+                geometry.setIndex(description.links.flat());
+                surface = new THREE.LineSegments(geometry, new THREE.LineBasicMaterial(appearance));
+            } else {
+                surface = new THREE.Points(geometry, new THREE.PointsMaterial({...appearance,
+                    size: description.pointSize ?? 2.0, sizeAttenuation: false}));
+            }
             object.add(surface);
             const reference = description.reference || description.points;
             const center = new THREE.Vector3();
             for (const p of reference) center.add(new THREE.Vector3(...p));
             center.divideScalar(reference.length);
             geometry.computeBoundingSphere();
-            const axes = new THREE.AxesHelper(Math.max(0.01, geometry.boundingSphere.radius * 0.6));
-            axes.position.copy(center); axes.userData.axis = true; axes.visible = options.axes;
-            axes.material.depthTest = false; object.add(axes);
+            if (description.axes !== false) {
+                const axes = new THREE.AxesHelper(Math.max(0.01, geometry.boundingSphere.radius * 0.6));
+                axes.position.copy(center); axes.userData.axis = true; axes.visible = options.axes;
+                axes.material.depthTest = false; object.add(axes);
+            }
             object.matrix.copy(opticalToView).multiply(new THREE.Matrix4().set(...description.pose.flat()));
             object.matrixAutoUpdate = false;
             group.add(object); object.updateMatrixWorld(true);

@@ -28,6 +28,9 @@ class SurfaceSupport:
     depth_residual_p90_m: float
     clean_depth_points: int | None = None
     clean_depth_residual_p90_m: float | None = None
+    # Valid depth inside this object's mask, including rays contradicting the
+    # proposed depth. Different from rays on which the model is supported.
+    tested_masked_depth_points: int = 0
 
 
 @dataclass(frozen=True)
@@ -192,6 +195,7 @@ def surface_support(
         float(np.percentile(np.abs(clean_residual), 90))
         if clean_residual is not None and len(clean_residual)
         else None,
+        int((testable & mask_flat & valid).sum()),
     )
 
 
@@ -244,8 +248,9 @@ def compare_pose_proposals(
         clean_depth_mask=clean_depth_mask,
     )
     if (
-        candidate.masked_depth_points < min_masked_depth_points
-        or prior.masked_depth_points < min_masked_depth_points
+        candidate.tested_masked_depth_points < min_masked_depth_points
+        or prior.tested_masked_depth_points < min_masked_depth_points
+        or max(candidate.masked_depth_points, prior.masked_depth_points) < min_masked_depth_points
     ):
         verdict = PoseComparisonVerdict.INSUFFICIENT_EVIDENCE
     elif difference <= max_agreement_offset_m and rotation_difference <= max_agreement_angle_rad:

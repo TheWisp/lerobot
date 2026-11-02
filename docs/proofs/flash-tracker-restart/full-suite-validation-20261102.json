@@ -1,0 +1,2338 @@
+{
+  "schema": "flash-full-suite-validation-v1",
+  "date": "2026-11-02",
+  "branch": "research/flash-tracker-restart",
+  "working_tree_base_commit": "718328e93aedf6dabcf786304db01a6b9605c515",
+  "scope": "All current fixes, including shared UFM, compared with the saved pre-shared baseline. Cached masks, unchanged label/scoring rules. No new temporal-stability preference.",
+  "execution": {
+    "state": "completed",
+    "completed": 42,
+    "total": 42,
+    "failures": [],
+    "current": "flash-demo-dowel-ring",
+    "frame": 0,
+    "frames": 713,
+    "elapsed_s": 3830.827158156986,
+    "changed_sources": []
+  },
+  "input_check_count": 42,
+  "all_input_label_and_initial_reference_checks_pass": true,
+  "runs": [
+    {
+      "case": "synthetic-plane-tilt-smooth",
+      "frames": 31,
+      "input_sha256": "3a066b14fd55314e68a40e6b9110e5c450eb94e7ffbc6301563c837b81322211",
+      "evaluation": {
+        "object": {
+          "format": "rigid_points_npz",
+          "path": "/home/feit/.cache/flash-visible-synthetic/plane-tilt-smooth/queries.npz",
+          "description": "Exact labelled rigid point trajectories from the synthetic renderer",
+          "sha256": "c7c49334dfc0921694ed1998287167d8a67539a07724d9f094f89a472449bcb9"
+        }
+      },
+      "before": "/home/feit/.cache/flash-tracker-restart/browser/.rebuild/rebuild-20261102-011645-c96e7bb4/runs/015/synthetic-plane-tilt-smooth",
+      "after": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/000/synthetic-plane-tilt-smooth",
+      "settings": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/000/provenance.json"
+    },
+    {
+      "case": "synthetic-plane-tilt-textured",
+      "frames": 31,
+      "input_sha256": "8247bc3729ce034a411400618c9cac38bcdcea99a74f48c5285f7643daf2973f",
+      "evaluation": {
+        "object": {
+          "format": "rigid_points_npz",
+          "path": "/home/feit/.cache/flash-visible-synthetic/plane-tilt-textured/queries.npz",
+          "description": "Exact labelled rigid point trajectories from the synthetic renderer",
+          "sha256": "c7c49334dfc0921694ed1998287167d8a67539a07724d9f094f89a472449bcb9"
+        }
+      },
+      "before": "/home/feit/.cache/flash-tracker-restart/browser/.rebuild/rebuild-20261102-011645-c96e7bb4/runs/016/synthetic-plane-tilt-textured",
+      "after": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/001/synthetic-plane-tilt-textured",
+      "settings": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/001/provenance.json"
+    },
+    {
+      "case": "synthetic-plane-translation",
+      "frames": 31,
+      "input_sha256": "84e245bcc90d775809c2ecf868b2a8ebecd213881263aeb9943449872c93304e",
+      "evaluation": {
+        "object": {
+          "format": "rigid_points_npz",
+          "path": "/home/feit/.cache/flash-visible-synthetic/plane-translation/queries.npz",
+          "description": "Exact labelled rigid point trajectories from the synthetic renderer",
+          "sha256": "d00e7f405cd92f6b5edf6312cfe47eee356bf40e2a80dd644c0188cb3c93597a"
+        }
+      },
+      "before": "/home/feit/.cache/flash-tracker-restart/browser/.rebuild/rebuild-20261102-011645-c96e7bb4/runs/017/synthetic-plane-translation",
+      "after": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/002/synthetic-plane-translation",
+      "settings": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/002/provenance.json"
+    },
+    {
+      "case": "dexycb-tomato-can-20201002_105506",
+      "frames": 68,
+      "input_sha256": "197e33c66de5adacf25e5278f8ef5c5c9b4ee80285eff937c86eb0f676e3d23f",
+      "evaluation": {
+        "object": {
+          "format": "poses_npy",
+          "path": "/home/feit/.cache/flash-tracker-restart/labelled-expansion-20261102/clips/dexycb-tomato-can-20201002_105506/evaluation/poses.npy",
+          "sha256": "d72c84d6db68cc30f2a659ceb9fc52a65b7457d123df9f0d7b357ba11721377b"
+        }
+      },
+      "before": "/home/feit/.cache/flash-tracker-restart/browser/.rebuild/rebuild-20261102-011645-c96e7bb4/runs/011/dexycb-tomato-can-20201002_105506",
+      "after": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/003/dexycb-tomato-can-20201002_105506",
+      "settings": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/003/provenance.json"
+    },
+    {
+      "case": "dexycb-banana-20201002_110832",
+      "frames": 72,
+      "input_sha256": "177d80f4bf075100d7b5f7a3dc32b630f782f4d4e3eeb6fae8d8721dfc360da7",
+      "evaluation": {
+        "object": {
+          "format": "poses_npy",
+          "path": "/home/feit/.cache/flash-tracker-restart/labelled-expansion-20261102/clips/dexycb-banana-20201002_110832/evaluation/poses.npy",
+          "sha256": "587d0baa1b0ed1ac7718bd5144259a9e490e7347294fc85da48d29dac17248e3"
+        }
+      },
+      "before": "/home/feit/.cache/flash-tracker-restart/browser/.rebuild/rebuild-20261102-011645-c96e7bb4/runs/006/dexycb-banana-20201002_110832",
+      "after": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/004/dexycb-banana-20201002_110832",
+      "settings": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/004/provenance.json"
+    },
+    {
+      "case": "dexycb-blue-mug",
+      "frames": 72,
+      "input_sha256": "939045756c8dd72101ff372d33d4e4f7d841daa2985b63669a69dd2330334d49",
+      "evaluation": {
+        "object": {
+          "format": "poses_npy",
+          "path": "/home/feit/.cache/flash-tracker-restart/dexycb-label-import/pitcher-006011-camera-poses.npy",
+          "description": "DexYCB BOP scene 006011, object 11 (pitcher). Verified against original camera 841412060263, all 72 source depth frames and relative raw labels. Metres.",
+          "sha256": "9e8f0ed0ccc5963533e8dbf87135f91942a2bad2c1f93c75011cb648a65fe252"
+        }
+      },
+      "before": "/home/feit/.cache/flash-tracker-restart/browser/.rebuild/rebuild-20261102-011645-c96e7bb4/runs/003/dexycb-blue-mug",
+      "after": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/005/dexycb-blue-mug",
+      "settings": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/005/provenance.json"
+    },
+    {
+      "case": "dexycb-bowl-20201002_111520",
+      "frames": 72,
+      "input_sha256": "b1b8c9bbfa0d5f7a7422ecc1cf9cd6b42db1740b1a241f0358df5e73b2c70b27",
+      "evaluation": {
+        "object": {
+          "format": "poses_npy",
+          "path": "/home/feit/.cache/flash-tracker-restart/labelled-expansion-20261102/clips/dexycb-bowl-20201002_111520/evaluation/poses.npy",
+          "sha256": "6b5f54eec82b86fc7f29109e0788f5c9239aab29c19da7b0d4f5c0729ca5908a"
+        }
+      },
+      "before": "/home/feit/.cache/flash-tracker-restart/browser/.rebuild/rebuild-20261102-011645-c96e7bb4/runs/007/dexycb-bowl-20201002_111520",
+      "after": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/006/dexycb-bowl-20201002_111520",
+      "settings": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/006/provenance.json"
+    },
+    {
+      "case": "dexycb-marker-20201002_112651",
+      "frames": 72,
+      "input_sha256": "061fb5047709222b81019e9f3f8bd7cd44c15d4d7a27378cd2e95e9d3f16df43",
+      "evaluation": {
+        "object": {
+          "format": "poses_npy",
+          "path": "/home/feit/.cache/flash-tracker-restart/labelled-expansion-20261102/clips/dexycb-marker-20201002_112651/evaluation/poses.npy",
+          "sha256": "b15c589eb2924952c00ef02c0a71b34a4f4532cedb2b8139618e574dc88b8888"
+        }
+      },
+      "before": "/home/feit/.cache/flash-tracker-restart/browser/.rebuild/rebuild-20261102-011645-c96e7bb4/runs/009/dexycb-marker-20201002_112651",
+      "after": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/007/dexycb-marker-20201002_112651",
+      "settings": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/007/provenance.json"
+    },
+    {
+      "case": "dexycb-tuna-can-20201002_105951",
+      "frames": 72,
+      "input_sha256": "1c60014dbaea0e287863a62f247a150c7f47b730249d1d08088fb99d4fadc2fd",
+      "evaluation": {
+        "object": {
+          "format": "poses_npy",
+          "path": "/home/feit/.cache/flash-tracker-restart/labelled-expansion-20261102/clips/dexycb-tuna-can-20201002_105951/evaluation/poses.npy",
+          "sha256": "9d655e79bce09abe48e928a389bff9b6a287682102f294b16385c45d9beb5a3b"
+        }
+      },
+      "before": "/home/feit/.cache/flash-tracker-restart/browser/.rebuild/rebuild-20261102-011645-c96e7bb4/runs/012/dexycb-tuna-can-20201002_105951",
+      "after": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/008/dexycb-tuna-can-20201002_105951",
+      "settings": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/008/provenance.json"
+    },
+    {
+      "case": "dexycb-drill-20201002_111923",
+      "frames": 74,
+      "input_sha256": "602e332520f1fc25f76127f4b882e3252f2df87b0bd65ab28569dd5cae5148cb",
+      "evaluation": {
+        "object": {
+          "format": "poses_npy",
+          "path": "/home/feit/.cache/flash-tracker-restart/labelled-expansion-20261102/clips/dexycb-drill-20201002_111923/evaluation/poses.npy",
+          "sha256": "8bee886f577e2d1d2eab3f3adf37905de99068af4dda8bc8ebc15950d5c4487c"
+        }
+      },
+      "before": "/home/feit/.cache/flash-tracker-restart/browser/.rebuild/rebuild-20261102-011645-c96e7bb4/runs/008/dexycb-drill-20201002_111923",
+      "after": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/009/dexycb-drill-20201002_111923",
+      "settings": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/009/provenance.json"
+    },
+    {
+      "case": "dexycb-mug-20201002_111710",
+      "frames": 74,
+      "input_sha256": "99ec42ccb5c6e53d55c51a68bd104808b86808f91f51a6cb696734955a0e84dc",
+      "evaluation": {
+        "object": {
+          "format": "poses_npy",
+          "path": "/home/feit/.cache/flash-tracker-restart/labelled-expansion-20261102/clips/dexycb-mug-20201002_111710/evaluation/poses.npy",
+          "sha256": "d3475d1a92a10833beb93ffff9026bbe0f06e3d5fcb10f2686303189a43ceae1"
+        }
+      },
+      "before": "/home/feit/.cache/flash-tracker-restart/browser/.rebuild/rebuild-20261102-011645-c96e7bb4/runs/010/dexycb-mug-20201002_111710",
+      "after": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/010/dexycb-mug-20201002_111710",
+      "settings": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/010/provenance.json"
+    },
+    {
+      "case": "bop-ycbv-000048-large-clamp",
+      "frames": 180,
+      "input_sha256": "43c38c7ba07ed568f9f4f19c9145bc7949a10cd4f2a7e5723fff836ee9d09026",
+      "evaluation": {
+        "object": {
+          "format": "poses_npy",
+          "path": "/home/feit/.cache/flash-tracker-restart/labelled-expansion-20261102/clips/bop-ycbv-000048-large-clamp/evaluation/poses.npy",
+          "sha256": "dfe1160f0270fa5530c7eca132d355a89f2853da04c3dd2639573ae65d30ac9d"
+        }
+      },
+      "before": "/home/feit/.cache/flash-tracker-restart/browser/.rebuild/rebuild-20261102-011645-c96e7bb4/runs/002/bop-ycbv-000048-large-clamp",
+      "after": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/011/bop-ycbv-000048-large-clamp",
+      "settings": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/011/provenance.json"
+    },
+    {
+      "case": "bop-ycbv-000052-mustard-bottle",
+      "frames": 180,
+      "input_sha256": "3f5b651b53c7350a0639ab4f18677afcc61fc4e2a2b41962e32da9a3888468ca",
+      "evaluation": {
+        "object": {
+          "format": "poses_npy",
+          "path": "/home/feit/.cache/flash-tracker-restart/labelled-expansion-20261102/clips/bop-ycbv-000052-mustard-bottle/evaluation/poses.npy",
+          "sha256": "d8dbde1823e652584a1823cc0039e088ce51af93de48588a327b2ea21f431741"
+        }
+      },
+      "before": "/home/feit/.cache/flash-tracker-restart/browser/.rebuild/rebuild-20261102-011645-c96e7bb4/runs/005/bop-ycbv-000052-mustard-bottle",
+      "after": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/012/bop-ycbv-000052-mustard-bottle",
+      "settings": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/012/provenance.json"
+    },
+    {
+      "case": "bop-ycbv-000055-bleach-bottle",
+      "frames": 180,
+      "input_sha256": "dddda10a80049c1a5f8999e0d661b4a69625ccbab8f27041d0c0ce018db178bb",
+      "evaluation": {
+        "object": {
+          "format": "poses_npy",
+          "path": "/home/feit/.cache/flash-tracker-restart/labelled-expansion-20261102/clips/bop-ycbv-000055-bleach-bottle/evaluation/poses.npy",
+          "sha256": "eb1e56a8a7244596cb0f7899dfb93adcb9487060830a06c3428bf474e774980d"
+        }
+      },
+      "before": "/home/feit/.cache/flash-tracker-restart/browser/.rebuild/rebuild-20261102-011645-c96e7bb4/runs/004/bop-ycbv-000055-bleach-bottle",
+      "after": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/013/bop-ycbv-000055-bleach-bottle",
+      "settings": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/013/provenance.json"
+    },
+    {
+      "case": "ycb-bleach0",
+      "frames": 181,
+      "input_sha256": "246104e8aa35b6b95dbb681829f2a7caa71876359f152997b9fc3b89d01a6411",
+      "evaluation": {
+        "object": {
+          "format": "ycb_annotated_pose",
+          "source": "/home/feit/.cache/ycbineoat/bleach0",
+          "start_frame": 241,
+          "sha256": "3e75785285cfc98d198571d0c8ca735549fd689d44fdc6b3742e3acf035bc770"
+        }
+      },
+      "before": "/home/feit/.cache/flash-tracker-restart/browser/.rebuild/rebuild-20261102-011645-c96e7bb4/runs/034/ycb-bleach0",
+      "after": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/014/ycb-bleach0",
+      "settings": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/014/provenance.json"
+    },
+    {
+      "case": "ycb-bleach_hard_00_03_chaitanya",
+      "frames": 181,
+      "input_sha256": "cd7c190df35d1c469584222b41829428ef61b2c3ee00ec276d61eb2d7c34f419",
+      "evaluation": {
+        "object": {
+          "format": "ycb_annotated_pose",
+          "source": "/home/feit/.cache/ycbineoat/bleach_hard_00_03_chaitanya",
+          "start_frame": 130,
+          "sha256": "36f7efcb155e03e6e48eec2551718ffcb950c354a94bda6ebd044ca605031958"
+        }
+      },
+      "before": "/home/feit/.cache/flash-tracker-restart/shared-matching-20261102/baseline-v2/002/ycb-bleach_hard_00_03_chaitanya",
+      "after": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/015/ycb-bleach_hard_00_03_chaitanya",
+      "settings": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/015/provenance.json"
+    },
+    {
+      "case": "ycb-cracker_box_reorient",
+      "frames": 181,
+      "input_sha256": "37139fcb5f7caed2950e89d43b6c79a5488464da3ee27fbf6ed2d7c924b1e54b",
+      "evaluation": {
+        "object": {
+          "format": "ycb_annotated_pose",
+          "source": "/home/feit/.cache/ycbineoat/cracker_box_reorient",
+          "start_frame": 97,
+          "sha256": "656727ad3e70469a40a0d0db2cb36197c2bf2540aff8dc76a23b9a0b459a214a"
+        }
+      },
+      "before": "/home/feit/.cache/flash-tracker-restart/browser/.rebuild/rebuild-20261102-011645-c96e7bb4/runs/035/ycb-cracker_box_reorient",
+      "after": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/016/ycb-cracker_box_reorient",
+      "settings": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/016/provenance.json"
+    },
+    {
+      "case": "ycb-cracker_box_yalehand0",
+      "frames": 181,
+      "input_sha256": "ccf12c6e31d08c51bd5109a809f68955cd750efca7663bf05c89437a14e4023b",
+      "evaluation": {
+        "object": {
+          "format": "ycb_annotated_pose",
+          "source": "/home/feit/.cache/ycbineoat/cracker_box_yalehand0",
+          "start_frame": 573,
+          "sha256": "92c094dffc286fb8ca7709b4d187074b27b8533b4dbe263542ff1d87e8fcd318"
+        }
+      },
+      "before": "/home/feit/.cache/flash-tracker-restart/browser/.rebuild/rebuild-20261102-011645-c96e7bb4/runs/036/ycb-cracker_box_yalehand0",
+      "after": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/017/ycb-cracker_box_yalehand0",
+      "settings": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/017/provenance.json"
+    },
+    {
+      "case": "ycb-mustard0",
+      "frames": 181,
+      "input_sha256": "cffeb62985ebc594e6ba657c9b127b3015d28fd5fd0e7e0771e5d73e5c28b844",
+      "evaluation": {
+        "object": {
+          "format": "ycb_annotated_pose",
+          "source": "/home/feit/.cache/ycbineoat/mustard0",
+          "start_frame": 278,
+          "sha256": "a1edc364b5935c69be789fa8b42232cd2ce378ecb75a234a20b9e4aa22c73fea"
+        }
+      },
+      "before": "/home/feit/.cache/flash-tracker-restart/browser/.rebuild/rebuild-20261102-011645-c96e7bb4/runs/038/ycb-mustard0",
+      "after": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/018/ycb-mustard0",
+      "settings": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/018/provenance.json"
+    },
+    {
+      "case": "ycb-mustard_easy_00_02",
+      "frames": 181,
+      "input_sha256": "2ca33583b95ed8d6e091777efe9285bd8e6343389d3d3ab90b2b48fef1399852",
+      "evaluation": {
+        "object": {
+          "format": "ycb_annotated_pose",
+          "source": "/home/feit/.cache/ycbineoat/mustard_easy_00_02",
+          "start_frame": 254,
+          "sha256": "332c01c27fec0b7a990805bed64c69ca3bd2b1e94f882a3ae14c3222e2f27812"
+        }
+      },
+      "before": "/home/feit/.cache/flash-tracker-restart/browser/.rebuild/rebuild-20261102-011645-c96e7bb4/runs/037/ycb-mustard_easy_00_02",
+      "after": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/019/ycb-mustard_easy_00_02",
+      "settings": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/019/provenance.json"
+    },
+    {
+      "case": "ycb-sugar_box1",
+      "frames": 181,
+      "input_sha256": "8466353aa621965cbfc98ac1b7f519689161a82a19c47c3b1005ab8a1f60e9ec",
+      "evaluation": {
+        "object": {
+          "format": "ycb_annotated_pose",
+          "source": "/home/feit/.cache/ycbineoat/sugar_box1",
+          "start_frame": 363,
+          "sha256": "1bcaa6b4260ed4b3360d8398df093efdb421ddb81b764ad86386e778c619a429"
+        }
+      },
+      "before": "/home/feit/.cache/flash-tracker-restart/browser/.rebuild/rebuild-20261102-011645-c96e7bb4/runs/040/ycb-sugar_box1",
+      "after": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/020/ycb-sugar_box1",
+      "settings": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/020/provenance.json"
+    },
+    {
+      "case": "ycb-sugar_box_yalehand0",
+      "frames": 181,
+      "input_sha256": "184ed159a216eea409615a66435a2740fd86429e1f35f16d783c22cfddfbed9a",
+      "evaluation": {
+        "object": {
+          "format": "ycb_annotated_pose",
+          "source": "/home/feit/.cache/ycbineoat/sugar_box_yalehand0",
+          "start_frame": 410,
+          "sha256": "acedcb1da55790dc338c3e4038fa1d675e5f05bc404ef349c81cf8ebc08e3e81"
+        }
+      },
+      "before": "/home/feit/.cache/flash-tracker-restart/browser/.rebuild/rebuild-20261102-011645-c96e7bb4/runs/039/ycb-sugar_box_yalehand0",
+      "after": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/021/ycb-sugar_box_yalehand0",
+      "settings": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/021/provenance.json"
+    },
+    {
+      "case": "ycb-tomato_soup_can_yalehand0",
+      "frames": 181,
+      "input_sha256": "594d180a733323dcffb726ca0b91432f28913d57a68e83e08f00c3718df1c314",
+      "evaluation": {
+        "object": {
+          "format": "ycb_annotated_pose",
+          "source": "/home/feit/.cache/ycbineoat/tomato_soup_can_yalehand0",
+          "start_frame": 563,
+          "sha256": "c804f74f20f5b2496dfa8ec7efd2ab6479c4525f0edd2a3e6948e0534ea6d6a7"
+        }
+      },
+      "before": "/home/feit/.cache/flash-tracker-restart/browser/.rebuild/rebuild-20261102-011645-c96e7bb4/runs/041/ycb-tomato_soup_can_yalehand0",
+      "after": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/022/ycb-tomato_soup_can_yalehand0",
+      "settings": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/022/provenance.json"
+    },
+    {
+      "case": "laval-clock-interaction-hard",
+      "frames": 203,
+      "input_sha256": "1e395c9078ea1819b600b06004d1c37a392353247f936b693b7f5b950fa2f6aa",
+      "evaluation": {
+        "clock": {
+          "format": "poses_npy",
+          "path": "/home/feit/.cache/flash-labeled-laval/sample/clock_interaction_hard/poses.npy",
+          "camera_from_label_camera": [
+            [
+              1,
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              -1,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              -1,
+              0
+            ],
+            [
+              0,
+              0,
+              0,
+              1
+            ]
+          ],
+          "description": "Laval supplied object poses; OpenGL camera to RGB-D camera",
+          "sha256": "97b1abd242a5f185cd393e2cf438cb2c58795fee726269b5a3bf4f5f9256bb07"
+        }
+      },
+      "before": "/home/feit/.cache/flash-tracker-restart/browser/.rebuild/rebuild-20261102-011645-c96e7bb4/runs/013/laval-clock-interaction-hard",
+      "after": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/023/laval-clock-interaction-hard",
+      "settings": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/023/provenance.json"
+    },
+    {
+      "case": "rig-yellow-block",
+      "frames": 75,
+      "input_sha256": "1aef5724a99226a5fe503fa1e85457ef4e76865796ef57c4f0fe0997efc61cc3",
+      "evaluation": {},
+      "before": "/home/feit/.cache/flash-tracker-restart/browser/.rebuild/rebuild-20261102-011645-c96e7bb4/runs/014/rig-yellow-block",
+      "after": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/024/rig-yellow-block",
+      "settings": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/024/provenance.json"
+    },
+    {
+      "case": "caryx-053",
+      "frames": 139,
+      "input_sha256": "71680411d3f72ca63ab98ff79f0b36f4cf197cb1ac11ada49426bdd75bcfec9b",
+      "evaluation": {},
+      "before": "/home/feit/.cache/flash-tracker-restart/browser/.rebuild/rebuild-20261102-011645-c96e7bb4/runs/030/caryx-053",
+      "after": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/025/caryx-053",
+      "settings": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/025/provenance.json"
+    },
+    {
+      "case": "caryx-110-device-dish",
+      "frames": 143,
+      "input_sha256": "ec418e5d5981425bab64591604aa779ced99870f1fab182577de3dbf55f411fb",
+      "evaluation": {},
+      "before": "/home/feit/.cache/flash-tracker-restart/browser/.rebuild/rebuild-20261102-011645-c96e7bb4/runs/032/caryx-110-device-dish",
+      "after": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/026/caryx-110-device-dish",
+      "settings": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/026/provenance.json"
+    },
+    {
+      "case": "caryx-031-lid-jar",
+      "frames": 154,
+      "input_sha256": "fb217439f7200bffa8357f4fc826ec199d56ea34acc4614574253a5e052b6471",
+      "evaluation": {},
+      "before": "/home/feit/.cache/flash-tracker-restart/browser/.rebuild/rebuild-20261102-011645-c96e7bb4/runs/026/caryx-031-lid-jar",
+      "after": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/027/caryx-031-lid-jar",
+      "settings": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/027/provenance.json"
+    },
+    {
+      "case": "caryx-032",
+      "frames": 174,
+      "input_sha256": "65656cd828810cae7e949d27ad47391fb11fa9cd338045ab4ddcd23740f1d4e4",
+      "evaluation": {},
+      "before": "/home/feit/.cache/flash-tracker-restart/browser/.rebuild/rebuild-20261102-011645-c96e7bb4/runs/027/caryx-032",
+      "after": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/028/caryx-032",
+      "settings": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/028/provenance.json"
+    },
+    {
+      "case": "caryx-014",
+      "frames": 194,
+      "input_sha256": "653dcfa5b8bb3df49acf4091ca1668c919d5ca04fdd0aed7412728ea174eb379",
+      "evaluation": {},
+      "before": "/home/feit/.cache/flash-tracker-restart/browser/.rebuild/rebuild-20261102-011645-c96e7bb4/runs/024/caryx-014",
+      "after": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/029/caryx-014",
+      "settings": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/029/provenance.json"
+    },
+    {
+      "case": "caryx-050-bottle-plate",
+      "frames": 194,
+      "input_sha256": "c63e2fe193f08f441a2aa36bfcab287a3450b818ee58c38d419ed2b30b3be341",
+      "evaluation": {},
+      "before": "/home/feit/.cache/flash-tracker-restart/browser/.rebuild/rebuild-20261102-011645-c96e7bb4/runs/029/caryx-050-bottle-plate",
+      "after": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/030/caryx-050-bottle-plate",
+      "settings": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/030/provenance.json"
+    },
+    {
+      "case": "caryx-007",
+      "frames": 200,
+      "input_sha256": "ab1fa844adbf3cd154763d6cbfb25eaec01132b6fc83bb3899bb4e44a5342db8",
+      "evaluation": {},
+      "before": "/home/feit/.cache/flash-tracker-restart/browser/.rebuild/rebuild-20261102-011645-c96e7bb4/runs/023/caryx-007",
+      "after": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/031/caryx-007",
+      "settings": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/031/provenance.json"
+    },
+    {
+      "case": "caryx-090",
+      "frames": 245,
+      "input_sha256": "1679e7eeaaad5201832077390ea5f557d9dcfe1ac6acf778d227afcbcd92eee7",
+      "evaluation": {},
+      "before": "/home/feit/.cache/flash-tracker-restart/browser/.rebuild/rebuild-20261102-011645-c96e7bb4/runs/031/caryx-090",
+      "after": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/032/caryx-090",
+      "settings": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/032/provenance.json"
+    },
+    {
+      "case": "wildrgbd-car-scene_002",
+      "frames": 300,
+      "input_sha256": "fe1ad7de78fcc6c05d9a207acdcfb1e41e5665dee060dbc0741e2139503a524a",
+      "evaluation": {},
+      "before": "/home/feit/.cache/flash-tracker-restart/browser/.rebuild/rebuild-20261102-011645-c96e7bb4/runs/018/wildrgbd-car-scene_002",
+      "after": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/033/wildrgbd-car-scene_002",
+      "settings": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/033/provenance.json"
+    },
+    {
+      "case": "caryx-015",
+      "frames": 318,
+      "input_sha256": "cf11505c3348b41cb48a70a29b714e42e3cc9e2a0715c684fd0000f848c9dcaa",
+      "evaluation": {},
+      "before": "/home/feit/.cache/flash-tracker-restart/browser/.rebuild/rebuild-20261102-011645-c96e7bb4/runs/025/caryx-015",
+      "after": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/034/caryx-015",
+      "settings": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/034/provenance.json"
+    },
+    {
+      "case": "caryx-003",
+      "frames": 323,
+      "input_sha256": "09724cace2a70ad9aa6db4a6e0438b4b23645a7343533a56fe97a78e5159615c",
+      "evaluation": {},
+      "before": "/home/feit/.cache/flash-tracker-restart/browser/.rebuild/rebuild-20261102-011645-c96e7bb4/runs/022/caryx-003",
+      "after": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/035/caryx-003",
+      "settings": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/035/provenance.json"
+    },
+    {
+      "case": "wildrgbd-car-scene_000",
+      "frames": 361,
+      "input_sha256": "96f8a080234ae298571e4180938200999a7e2013cfd6a96176251b6232977199",
+      "evaluation": {},
+      "before": "/home/feit/.cache/flash-tracker-restart/browser/.rebuild/rebuild-20261102-011645-c96e7bb4/runs/019/wildrgbd-car-scene_000",
+      "after": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/036/wildrgbd-car-scene_000",
+      "settings": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/036/provenance.json"
+    },
+    {
+      "case": "caryx-002",
+      "frames": 389,
+      "input_sha256": "fd0667e4899ebcccf3ee9d6117b02a765cdab3d66bba05fc3418be0b1553db25",
+      "evaluation": {},
+      "before": "/home/feit/.cache/flash-tracker-restart/browser/.rebuild/rebuild-20261102-011645-c96e7bb4/runs/021/caryx-002",
+      "after": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/037/caryx-002",
+      "settings": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/037/provenance.json"
+    },
+    {
+      "case": "caryx-000",
+      "frames": 455,
+      "input_sha256": "618763f517b6a51890855619abe4227c7d815c811135105df7aca003c7ab9e6c",
+      "evaluation": {},
+      "before": "/home/feit/.cache/flash-tracker-restart/browser/.rebuild/rebuild-20261102-011645-c96e7bb4/runs/020/caryx-000",
+      "after": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/038/caryx-000",
+      "settings": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/038/provenance.json"
+    },
+    {
+      "case": "caryx-041",
+      "frames": 565,
+      "input_sha256": "796b28b71cc351d1de953daadbdc447bbe6f2a4adb9c84813b532a3da86c355c",
+      "evaluation": {},
+      "before": "/home/feit/.cache/flash-tracker-restart/browser/.rebuild/rebuild-20261102-011645-c96e7bb4/runs/028/caryx-041",
+      "after": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/039/caryx-041",
+      "settings": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/039/provenance.json"
+    },
+    {
+      "case": "flash-demo-gamepad-cube",
+      "frames": 628,
+      "input_sha256": "fda3c6528b84615e7e04bed498cbec284fb4837a34f453f37c0b632a701d10cf",
+      "evaluation": {},
+      "before": "/home/feit/.cache/flash-tracker-restart/browser/.rebuild/rebuild-20261102-133839-joint-points/runs/001/flash-demo-gamepad-cube",
+      "after": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/040/flash-demo-gamepad-cube",
+      "settings": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/040/provenance.json"
+    },
+    {
+      "case": "flash-demo-dowel-ring",
+      "frames": 713,
+      "input_sha256": "9451f8b8a7129105375c6e6ab5ca84f561e86b6d327f83ce83550252bbdc8bf9",
+      "evaluation": {},
+      "before": "/home/feit/.cache/flash-tracker-restart/browser/.rebuild/rebuild-20261102-133839-joint-points/runs/000/flash-demo-dowel-ring",
+      "after": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/041/flash-demo-dowel-ring",
+      "settings": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/041/provenance.json"
+    }
+  ],
+  "source_sha256": {
+    "src/lerobot/policies/flash/__init__.py": "6d1238d4bd35e61e058c96c17f6a82b34b61f695c522d3cfb3868e8b3dc6ee16",
+    "src/lerobot/policies/flash/appearance.py": "5f3b9ed9e74e7154b2099da3f3c60f1d7b91adcee65666d3e96ce38a861322d0",
+    "src/lerobot/policies/flash/attachment_lifecycle.py": "c1bb731769176f95e2ad4332dd48381d37c9c7f737b760d8171328b1ff7c2593",
+    "src/lerobot/policies/flash/axis_constraint.py": "2d746617f951adc09f7c399a143f139d4e0bce10154c87770f01f83a43a9c5a8",
+    "src/lerobot/policies/flash/causal_points.py": "2ae17a5a6a5d5d2c9c970d60632c76ce839dd6a738dcf2779d1c446e7ca4082e",
+    "src/lerobot/policies/flash/causal_service.py": "20fe9651416835bc73b0904682693224c9d1405677c7f76d47e741a404bdc2f2",
+    "src/lerobot/policies/flash/compiler.py": "5cac7fcb1ee1e4a1470b7d6388ede06ee6534dcdca3502460eb628654efc1f47",
+    "src/lerobot/policies/flash/demo_replay.py": "e3ef57989dfe5a877b5180eca484ef283a0ba5a060d13922c989f00e95a6c232",
+    "src/lerobot/policies/flash/demo_scene.py": "3f6096037c297e76a52a596b07b15996099a39f9ffce5ec277b7e0e19d09b7b4",
+    "src/lerobot/policies/flash/demo_tracker_candidates.py": "27126a5ce3ce15ef865580b7e3a3e920d956ae71e7be06d36203c61ebfd70370",
+    "src/lerobot/policies/flash/depth_quality.py": "63d22df6aebc2d93a96025f65c04347656289309d6f946b5ed31aeddc90cf402",
+    "src/lerobot/policies/flash/dino_features.py": "a5abc346be3650a25aed988a6c87471e29783da31de5ef0f2f9c440d97003af8",
+    "src/lerobot/policies/flash/execution.py": "a7e499b8521a13720dc1ffb5b4a08ac822a430f0ffff029ad415e066fa5edc2c",
+    "src/lerobot/policies/flash/experimental_gpu_fit.py": "4fee5540752fd61e883e99050996043e39a59fc8c97943efb7aad7eb418d7f7f",
+    "src/lerobot/policies/flash/experimental_gpu_kdtree.py": "9919d3117e0f1ee1b58180c2511e61a60bce0e3fb61353555633accc4aa4838c",
+    "src/lerobot/policies/flash/experimental_surface_map.py": "1c6e67ff97acb3433077a35123442f7783f1ceb8846b79ba4a0961d9e5264aac",
+    "src/lerobot/policies/flash/experimental_surface_session.py": "f13527b3734b85e2436741e0a6d284b89da82ae0b6672183a52221e744403ef9",
+    "src/lerobot/policies/flash/geometry.py": "fd563766e991b2b183b5fe6720dac145e744d53b3f7e31d3275d08d5ce7d5251",
+    "src/lerobot/policies/flash/grasp_symmetry.py": "edf0eadfc47a42ba3d178f97e15d777ec7d91efda02549fcd73b84dc62490e01",
+    "src/lerobot/policies/flash/held_pose_diagnostics.py": "92c0dfef37fbd949ab617c0745a3dc0e2eefce4d64e3d1bd0d461d276d677dad",
+    "src/lerobot/policies/flash/image_matching.py": "15818b7bf88772502230c4f1fffda2178b3a473a8bb1306fd3e117ddf4b4b523",
+    "src/lerobot/policies/flash/inspect.py": "ff5af34ccdfcc9eced05f67d103c9f58b0269b6ab9d0ae4caa6eb91fb3741a31",
+    "src/lerobot/policies/flash/kinematics.py": "67811b84e952f2f0037e12a0a70346489456b03c6679d0f23584259a1b01376c",
+    "src/lerobot/policies/flash/live_telemetry.py": "ed7e02ce92729fd0642b3266136551e53a21a9866b5aac83dbec91dfdce4cbd3",
+    "src/lerobot/policies/flash/live_trial.py": "e403f51f9e8c42e3c6fb6cba7cf6440e7206290774d43cb6254d51571c377773",
+    "src/lerobot/policies/flash/matched_rgbd.py": "6a8e6f4d3881105f0fd73e2d75be97412ad60d73dffecfda9c25afa2f78c5ce2",
+    "src/lerobot/policies/flash/milestones.py": "0a5a9392c3e9d1b6d4c5351084e700e4d3d82ea51591d349c987c8ad647dccf1",
+    "src/lerobot/policies/flash/observation_annotations.py": "08dce3e48cbde10423ef1c68e45d1963f240f9f90a76b92098ae68392f869ac2",
+    "src/lerobot/policies/flash/observation_dataset.py": "a8c22f1a0301a3d101cad752f414a4fdb46ea7c9c8510196482615aff753e29d",
+    "src/lerobot/policies/flash/observation_processing.py": "2f6e8df33b7b44a4f33fbcb0dffab6ff4fc0167bf988f6bc6fdb876e30da42d6",
+    "src/lerobot/policies/flash/observation_replay.py": "0e51f25715d5d824ea58efa145aa5140377ba1170d6e09b1a2469f01bb4111d3",
+    "src/lerobot/policies/flash/offline_perception.py": "5148348973d5288da8d77c46400031a37e01daea10b005ba43ea6b2b0f317dd0",
+    "src/lerobot/policies/flash/perception.py": "4fb33de0a0865eef1dfd984258929db4a755fc41874872c3ccfcfa165bafc953",
+    "src/lerobot/policies/flash/perception_service.py": "ba3cb51ebe8b1305c45ea750f8be110993d7d1ecb9ff7466414dd77a20a98146",
+    "src/lerobot/policies/flash/perception_step.py": "458cfbbce4415d7f36ff99f01c0ed492544649cb7a9d527f50bc257a4c399313",
+    "src/lerobot/policies/flash/perception_worker.py": "fd47aba941aa0c791b7a03218c7745b9d47f20afc979f475a6b44a81e6291308",
+    "src/lerobot/policies/flash/planner.py": "2f4a9bb64002cd4ee550a0c5553eb3015bfa894a1ae06de9dfe6d45076e17feb",
+    "src/lerobot/policies/flash/planner_worker.py": "cf956185bf1d7a00692badb34c3e6d2ad29e217b5dedbc6f23af2ba8aa8159c5",
+    "src/lerobot/policies/flash/planning_belief.py": "234f9dd32c8e432383c98193b3f180b3200196e52ae976c7a5bbbede3874d3af",
+    "src/lerobot/policies/flash/planning_coordinator.py": "7fe3188be9418a314d48a11df4af4b310416c04a2d86ab1221ab9cbe8fb62b1e",
+    "src/lerobot/policies/flash/pose_disagreement.py": "b686d277bf441a866a856823c6676713e9e20dbcdf8b60a37ddd0a35a73d8ff4",
+    "src/lerobot/policies/flash/pose_evidence.py": "c708585689b4f577ed64c203cad312e6d383e7f624bb5ddb77ed08a2cb54a318",
+    "src/lerobot/policies/flash/prepared.py": "1427295ed016358d3d9308538dd93718320fd73d5e95f4f78b564465e4bb6eea",
+    "src/lerobot/policies/flash/progress.py": "c35248fb62e110281f10c523353adf75e8b222e4e096a147036bd90918bee484",
+    "src/lerobot/policies/flash/recorded_demo.py": "21737d798f569a86e26fcfb2e4f67322637bcb1fb1ad068e746a79e7b6452f62",
+    "src/lerobot/policies/flash/recorded_trial.py": "8623ea0977d14272a98c11ec017371604715b6bfd7ce4ca9ea4854786d1de130",
+    "src/lerobot/policies/flash/recording.py": "6c854127d612a6ed69ae9ceb33275e6dd6983ab5d779b1b565bc245c42f3ea9a",
+    "src/lerobot/policies/flash/recording_scene_replay.py": "ebe130e5162e4602ccafe357199bd1af42ca58fcc982b08ac755a253bc7cbc6f",
+    "src/lerobot/policies/flash/reference_view_candidates.py": "73182d2b5553475da6d14796b44ebe5896bae4f79f75d46e4ec965c9d2381fac",
+    "src/lerobot/policies/flash/reference_view_registration.py": "872f09958a569a4380c778464374c8610cd25e203291bbb2af047aafcea23593",
+    "src/lerobot/policies/flash/registration.py": "3733e0888e59b40ffa055d2c19f2e3a5889b357f0376cc2fc00fbbebbb0984c5",
+    "src/lerobot/policies/flash/rgbd_source.py": "b79d15937cfbd213c06164c163de34ca605c6b90735fc958f6302af49ace200f",
+    "src/lerobot/policies/flash/runtime.py": "b591b4cc64fd0516226459ee141465d9481263ef97a3ea0480c0625eba382348",
+    "src/lerobot/policies/flash/scene_evidence_writer.py": "f8c5148fbd38560ce5a028673029a1f19d38ca2c48010c7a730498126b1933af",
+    "src/lerobot/policies/flash/scene_groups.py": "2cff1c199f9050233b762d4adb71fd7dd688d06f8e6140731c1220790924de25",
+    "src/lerobot/policies/flash/sealed_demo_evidence.py": "9abddc31490a80f69a0c44bfde3833629f364979861d66b959c80f93f68ba1e9",
+    "src/lerobot/policies/flash/sealed_demo_import.py": "87b7c147c29304695f61cb596ae3b4bbb991998549525a101ebdcf01efe241ee",
+    "src/lerobot/policies/flash/sealed_reference_view_review.py": "600929e121c7da9e5bc06ddb1aa14b7378a420c15d7dfe84f7857b920354b77a",
+    "src/lerobot/policies/flash/session.py": "97664be6793f4d6a5ae446c52a7e35362c67167c9a1a276ca8bace1ccb94344a",
+    "src/lerobot/policies/flash/shape_registration.py": "9f8632c8d123a076fa6f2828316c6ddb540bbecb75a182693a1d7aaa6272b779",
+    "src/lerobot/policies/flash/shared_image_tracking.py": "c1e9ed95bd46bd69a6a47bb25a37117ed839b58b68e91d0f98a45ccb41ae47da",
+    "src/lerobot/policies/flash/skill.py": "7b7965bde5ec0c4a30bf65e991189be1efffdff434ff4d3d29d1798ae5357437",
+    "src/lerobot/policies/flash/so107_planner_factory.py": "38d67990b2cb1aa2a2a38124333eaffa5eedf7bb892c27581f24a6d87c2f5702",
+    "src/lerobot/policies/flash/surface_acceleration.py": "696dd7d53ddc5d2e36b9d40e3ac784f420a645621662583ca0fb415320631d85",
+    "src/lerobot/policies/flash/surface_correspondence.py": "e8071d5493132aac53cd3d2ab1c07ad32f4e0ad091d6b538e6be63f34efc7d42",
+    "src/lerobot/policies/flash/surface_grounding.py": "80aaef5c65c2a4d68a0bc570ea3fc75d110015a60984b0984635664554674f2d",
+    "src/lerobot/policies/flash/surface_motion.py": "8ddac6792dafbbdbff4544dca96ccd17e3498f10ce433ca207e1f7bb9f9a8305",
+    "src/lerobot/policies/flash/surface_observation.py": "cc8809a1bd3c5ff20167991ec32083414ac5903bbb28749a06479d776aaa0016",
+    "src/lerobot/policies/flash/surface_reference.py": "7b85c84ae3c152aab8992ffecc56ce50bc50e451d7d46c2eaed47beb96934f1f",
+    "src/lerobot/policies/flash/surface_tracking.py": "786a0910727ddc5083c28c2bfdc80c5b844d533fd4188e636739efef07ec79cd",
+    "src/lerobot/policies/flash/symmetry.py": "73e7cd110ad5afe9459ac88e82d742b643137107a8a84668b0a8114a027cae8f",
+    "src/lerobot/policies/flash/tracking_debug_worker.py": "611ffde8a231da85ab02b8f17e8517fb9030379a5ab7c86622800e24376cc2c0",
+    "src/lerobot/policies/flash/trajectory.py": "b08288974f1c7d33682188e59bb8b7b25f317b53991952fb85c3ecf45b43985d",
+    "src/lerobot/policies/flash/turn_choice.py": "d301b05d237d8b7f295efd2d0c5be621c1d725506be991d859ba5846e6da0731",
+    "src/lerobot/policies/flash/visible_points.py": "08d6ed6c2279e315c2353f4f86a326d350a701cef7eb6bdbe65d21a586e3c67c",
+    "src/lerobot/policies/flash/visible_rigid_tracking.py": "ec2fcad9c3a822a7347d0e9637cd349b6583546e52b9076029ddc3dd37d0e9c2",
+    "src/lerobot/policies/flash/vision_pipeline.py": "722d82f6d8972fd6729d89f21e3cf78b47ebbc8a8b3e8ca5048a1ff09b6e0cec",
+    "benchmarks/flash_tracker_experiment.py": "22eb09159b83da030d2d5c441ad1b8def4fd250b7ad21394f8fc7fe54daef346",
+    "benchmarks/flash_experiment_inputs.py": "deb75b9c99f7bf7f3bacbfcb7716a81233cb37fa68e84321c2e2b0ef1c3c2691",
+    "benchmarks/flash_experiment_labels.py": "4ef4e3c444522db7de383d60b9abb4fa408158482697dcb22cf9d610305d3955",
+    "benchmarks/flash_full_pose_score.py": "e1ca0e2ba1ff7d836979fea60bfc816ecde5e32d4035ccf72621931f490d888a",
+    "benchmarks/flash_flow_paths.py": "6450f303f6ddbb9e1c53f6aeb0156e16c211671481bfdf4e16bfdb11ce6269f2",
+    "benchmarks/flash_experiment_browser.py": "c14495f957b7f05f47f94ab06473a37c0e29d7c977ffe38723deaaae428d2a18",
+    "benchmarks/flash_rebuild_examples.py": "7d62526f25ce58c0919d0157b07bf8a4d4c9610431ddb7f729fa43ef5da1588a",
+    "benchmarks/flash_experiment_cache.py": "d25416917631185c9b92e1ba7c50f80e292055190b3db252192b89de61184b9a",
+    "benchmarks/flash_experiment_groups.py": "7476dd6c4cea2038369e14f999b36e2dac3299131074f415a42b7f3982521d40",
+    "src/lerobot/gui/flash_group_overlay.py": "f2f8d5f3f69f64c9d3edece5d974e63c3e3162ceb89b305a4ccd77ce4f1e2e58",
+    "src/lerobot/gui/group_wireframe.py": "2e25a808dd6824cad2663f5097bbba97ef5e783d04d3c41fec716b651d58a24d"
+  },
+  "real_labelled": {
+    "object_tracks": 21,
+    "frames": 2927,
+    "available_before": 2702,
+    "available_after": 2927,
+    "within_10mm_10deg": {
+      "before": 1229,
+      "after": 1622,
+      "improved": 12,
+      "worsened": 5,
+      "unchanged": 4,
+      "scene_mean_before_pct": 42.93905147330816,
+      "scene_mean_after_pct": 53.996320995320765
+    },
+    "within_20mm_20deg": {
+      "before": 1720,
+      "after": 2154,
+      "improved": 8,
+      "worsened": 8,
+      "unchanged": 5,
+      "scene_mean_before_pct": 61.45500157208847,
+      "scene_mean_after_pct": 71.5851618900065
+    }
+  },
+  "all_methods_real_labelled": [
+    {
+      "method": "conditioned_fixed",
+      "frames": 2927,
+      "availability_before": 2501,
+      "availability_after": 2694,
+      "within_10mm_10deg": {
+        "before": 958,
+        "after": 1609,
+        "improved": 10,
+        "worsened": 6,
+        "unchanged": 5,
+        "scene_mean_before_pct": 35.66361630099219,
+        "scene_mean_after_pct": 54.475311790079225,
+        "before_pct": 32.729757430816534,
+        "after_pct": 54.97096002733174
+      },
+      "within_20mm_20deg": {
+        "before": 2008,
+        "after": 2213,
+        "improved": 7,
+        "worsened": 7,
+        "unchanged": 7,
+        "scene_mean_before_pct": 68.87203487249955,
+        "scene_mean_after_pct": 73.01626287520952,
+        "before_pct": 68.60266484455073,
+        "after_pct": 75.60642295866074
+      }
+    },
+    {
+      "method": "conditioned_growing",
+      "frames": 2927,
+      "availability_before": 2689,
+      "availability_after": 2857,
+      "within_10mm_10deg": {
+        "before": 1035,
+        "after": 1623,
+        "improved": 12,
+        "worsened": 5,
+        "unchanged": 4,
+        "scene_mean_before_pct": 37.883866234001424,
+        "scene_mean_after_pct": 54.140614061623495,
+        "before_pct": 35.36043730782371,
+        "after_pct": 55.44926545951486
+      },
+      "within_20mm_20deg": {
+        "before": 1646,
+        "after": 2162,
+        "improved": 9,
+        "worsened": 7,
+        "unchanged": 5,
+        "scene_mean_before_pct": 59.49762520130428,
+        "scene_mean_after_pct": 71.87748638719533,
+        "before_pct": 56.23505295524428,
+        "after_pct": 73.86402459856508
+      }
+    },
+    {
+      "method": "group_fixed",
+      "frames": 2927,
+      "availability_before": 2538,
+      "availability_after": 2927,
+      "within_10mm_10deg": {
+        "before": 1144,
+        "after": 1628,
+        "improved": 9,
+        "worsened": 7,
+        "unchanged": 5,
+        "scene_mean_before_pct": 40.82808334326236,
+        "scene_mean_after_pct": 55.009281641711766,
+        "before_pct": 39.084386744106595,
+        "after_pct": 55.620088828151694
+      },
+      "within_20mm_20deg": {
+        "before": 2125,
+        "after": 2212,
+        "improved": 6,
+        "worsened": 8,
+        "unchanged": 7,
+        "scene_mean_before_pct": 71.8066542580161,
+        "scene_mean_after_pct": 72.90281725834738,
+        "before_pct": 72.59993167065255,
+        "after_pct": 75.57225828493338
+      }
+    },
+    {
+      "method": "group_growing",
+      "frames": 2927,
+      "availability_before": 2702,
+      "availability_after": 2927,
+      "within_10mm_10deg": {
+        "before": 1229,
+        "after": 1622,
+        "improved": 12,
+        "worsened": 5,
+        "unchanged": 4,
+        "scene_mean_before_pct": 42.93905147330816,
+        "scene_mean_after_pct": 53.996320995320765,
+        "before_pct": 41.9883840109327,
+        "after_pct": 55.415100785787494
+      },
+      "within_20mm_20deg": {
+        "before": 1720,
+        "after": 2154,
+        "improved": 8,
+        "worsened": 8,
+        "unchanged": 5,
+        "scene_mean_before_pct": 61.45500157208847,
+        "scene_mean_after_pct": 71.5851618900065,
+        "before_pct": 58.76323881106936,
+        "after_pct": 73.59070720874615
+      }
+    },
+    {
+      "method": "surface_corrected",
+      "frames": 2927,
+      "availability_before": 2926,
+      "availability_after": 2926,
+      "within_10mm_10deg": {
+        "before": 961,
+        "after": 1632,
+        "improved": 11,
+        "worsened": 4,
+        "unchanged": 6,
+        "scene_mean_before_pct": 36.42021921971955,
+        "scene_mean_after_pct": 54.99163929818391,
+        "before_pct": 32.83225145199863,
+        "after_pct": 55.75674752306116
+      },
+      "within_20mm_20deg": {
+        "before": 1983,
+        "after": 2228,
+        "improved": 7,
+        "worsened": 6,
+        "unchanged": 8,
+        "scene_mean_before_pct": 67.8546850057069,
+        "scene_mean_after_pct": 72.83744489142939,
+        "before_pct": 67.74854800136659,
+        "after_pct": 76.11889306457124
+      }
+    },
+    {
+      "method": "ufm_chain",
+      "frames": 2927,
+      "availability_before": 2283,
+      "availability_after": 2228,
+      "within_10mm_10deg": {
+        "before": 1487,
+        "after": 1600,
+        "improved": 8,
+        "worsened": 10,
+        "unchanged": 3,
+        "scene_mean_before_pct": 49.183097480076334,
+        "scene_mean_after_pct": 52.319835835271434,
+        "before_pct": 50.802869832593096,
+        "after_pct": 54.663477963785446
+      },
+      "within_20mm_20deg": {
+        "before": 1826,
+        "after": 1948,
+        "improved": 6,
+        "worsened": 7,
+        "unchanged": 8,
+        "scene_mean_before_pct": 60.42553910153044,
+        "scene_mean_after_pct": 62.39330493080152,
+        "before_pct": 62.38469422617014,
+        "after_pct": 66.55278442090878
+      }
+    },
+    {
+      "method": "ufm_retained_reference",
+      "frames": 2927,
+      "availability_before": 2483,
+      "availability_after": 2303,
+      "within_10mm_10deg": {
+        "before": 1499,
+        "after": 1609,
+        "improved": 9,
+        "worsened": 10,
+        "unchanged": 2,
+        "scene_mean_before_pct": 49.465982911476615,
+        "scene_mean_after_pct": 52.749476384839475,
+        "before_pct": 51.21284591732149,
+        "after_pct": 54.97096002733174
+      },
+      "within_20mm_20deg": {
+        "before": 1859,
+        "after": 1968,
+        "improved": 7,
+        "worsened": 8,
+        "unchanged": 6,
+        "scene_mean_before_pct": 61.245131824012084,
+        "scene_mean_after_pct": 63.56070537305903,
+        "before_pct": 63.51212845917321,
+        "after_pct": 67.23607789545609
+      }
+    }
+  ],
+  "same_frames_with_poses_before_and_after": {
+    "before": {
+      "point_mm": {
+        "frames": 2702,
+        "median": 10.421229452578503,
+        "p90": 48.45086226892349,
+        "p95": 50.430271288041865,
+        "max": 461.87503431826696
+      },
+      "rotation_deg": {
+        "frames": 2702,
+        "median": 9.46464157595284,
+        "p90": 36.64779534314508,
+        "p95": 76.78343979271904,
+        "max": 179.35175824626714
+      },
+      "center_mm": {
+        "frames": 2702,
+        "median": 8.7212507459497,
+        "p90": 45.5241058936438,
+        "p95": 47.66833887235863,
+        "max": 461.94198236861763
+      }
+    },
+    "after": {
+      "point_mm": {
+        "frames": 2702,
+        "median": 4.7790693161283535,
+        "p90": 34.45151024194369,
+        "p95": 49.158378158338905,
+        "max": 466.49542825332844
+      },
+      "rotation_deg": {
+        "frames": 2702,
+        "median": 4.6560204066593744,
+        "p90": 25.200792792150327,
+        "p95": 41.45334515910165,
+        "max": 179.09212228280123
+      },
+      "center_mm": {
+        "frames": 2702,
+        "median": 4.051736257336408,
+        "p90": 32.21871234249089,
+        "p95": 43.86051595343136,
+        "max": 464.69898176770755
+      }
+    }
+  },
+  "selected_path_ms_median_across_real_labelled_scenes": {
+    "before": 83.06469200761057,
+    "after": 194.7363129875157
+  },
+  "timing_note": "Sequential labelled cases only. Historical baseline timing was not remeasured under identical load. Tracking = scene matching + object preparation + group/growing update, excluding live SAM, display, I/O and other method branches. Some later unlabelled cases ran concurrently and are excluded.",
+  "real_labelled_per_scene": [
+    {
+      "case": "dexycb-tomato-can-20201002_105506",
+      "role": "object",
+      "frames": 67,
+      "available_before": 67,
+      "available_after": 67,
+      "before": {
+        "available": 67,
+        "total": 67,
+        "cloud_mm_median": 10.677274372468693,
+        "cloud_mm_p90": 30.55599610351196,
+        "angle_deg_median": 6.843432751239036,
+        "angle_deg_p90": 14.383357557721236,
+        "center_mm_median": 10.158472377852027,
+        "within_10mm_10deg": 33,
+        "within_20mm_20deg": 36,
+        "final_cloud_mm": 23.610115398917017,
+        "final_angle_deg": 14.058932143001144
+      },
+      "after": {
+        "available": 67,
+        "total": 67,
+        "cloud_mm_median": 25.50930287401434,
+        "cloud_mm_p90": 64.54373407092815,
+        "angle_deg_median": 40.268355422980235,
+        "angle_deg_p90": 115.37232982730741,
+        "center_mm_median": 18.126820270621014,
+        "within_10mm_10deg": 31,
+        "within_20mm_20deg": 31,
+        "final_cloud_mm": 60.86649756993544,
+        "final_angle_deg": 111.57010219181049
+      },
+      "within_10mm_10deg_delta_pp": -2.985074626865675,
+      "within_20mm_20deg_delta_pp": -7.462686567164184
+    },
+    {
+      "case": "dexycb-banana-20201002_110832",
+      "role": "object",
+      "frames": 71,
+      "available_before": 71,
+      "available_after": 71,
+      "before": {
+        "available": 71,
+        "total": 71,
+        "cloud_mm_median": 5.312783233345112,
+        "cloud_mm_p90": 42.98680029064195,
+        "angle_deg_median": 6.094669077651039,
+        "angle_deg_p90": 41.518613340901986,
+        "center_mm_median": 3.6716810202125556,
+        "within_10mm_10deg": 44,
+        "within_20mm_20deg": 46,
+        "final_cloud_mm": 38.54688686554653,
+        "final_angle_deg": 33.75893391156273
+      },
+      "after": {
+        "available": 71,
+        "total": 71,
+        "cloud_mm_median": 1.9217731590407874,
+        "cloud_mm_p90": 43.34236717434742,
+        "angle_deg_median": 2.7949460448176966,
+        "angle_deg_p90": 140.8365407480622,
+        "center_mm_median": 1.9230076865154413,
+        "within_10mm_10deg": 36,
+        "within_20mm_20deg": 39,
+        "final_cloud_mm": 35.070899687782116,
+        "final_angle_deg": 18.198747066517264
+      },
+      "within_10mm_10deg_delta_pp": -11.267605633802816,
+      "within_20mm_20deg_delta_pp": -9.859154929577457
+    },
+    {
+      "case": "dexycb-blue-mug",
+      "role": "object",
+      "frames": 71,
+      "available_before": 68,
+      "available_after": 71,
+      "before": {
+        "available": 68,
+        "total": 71,
+        "cloud_mm_median": 11.1588140994895,
+        "cloud_mm_p90": 18.808973674717542,
+        "angle_deg_median": 6.636766494207988,
+        "angle_deg_p90": 11.619563200978485,
+        "center_mm_median": 7.617033742237375,
+        "within_10mm_10deg": 31,
+        "within_20mm_20deg": 63,
+        "final_cloud_mm": 13.985155571691863,
+        "final_angle_deg": 11.108680735175525
+      },
+      "after": {
+        "available": 71,
+        "total": 71,
+        "cloud_mm_median": 11.233709952740018,
+        "cloud_mm_p90": 28.496426561428006,
+        "angle_deg_median": 5.492654809349779,
+        "angle_deg_p90": 19.89385909213278,
+        "center_mm_median": 9.29840662515418,
+        "within_10mm_10deg": 33,
+        "within_20mm_20deg": 59,
+        "final_cloud_mm": 15.984688556964311,
+        "final_angle_deg": 11.595427166789266
+      },
+      "within_10mm_10deg_delta_pp": 2.816901408450704,
+      "within_20mm_20deg_delta_pp": -5.633802816901408
+    },
+    {
+      "case": "dexycb-bowl-20201002_111520",
+      "role": "object",
+      "frames": 71,
+      "available_before": 71,
+      "available_after": 71,
+      "before": {
+        "available": 71,
+        "total": 71,
+        "cloud_mm_median": 0.9272133217357752,
+        "cloud_mm_p90": 19.634081622775554,
+        "angle_deg_median": 1.8656850625456745,
+        "angle_deg_p90": 21.486918405583395,
+        "center_mm_median": 0.4385292207634375,
+        "within_10mm_10deg": 52,
+        "within_20mm_20deg": 62,
+        "final_cloud_mm": 29.892543844020533,
+        "final_angle_deg": 24.56021767324976
+      },
+      "after": {
+        "available": 71,
+        "total": 71,
+        "cloud_mm_median": 0.7274811051970279,
+        "cloud_mm_p90": 21.540828463227193,
+        "angle_deg_median": 0.6049877609976354,
+        "angle_deg_p90": 19.918948796784875,
+        "center_mm_median": 0.5787533013266792,
+        "within_10mm_10deg": 51,
+        "within_20mm_20deg": 58,
+        "final_cloud_mm": 59.150603714179375,
+        "final_angle_deg": 71.24828532209902
+      },
+      "within_10mm_10deg_delta_pp": -1.408450704225345,
+      "within_20mm_20deg_delta_pp": -5.633802816901408
+    },
+    {
+      "case": "dexycb-marker-20201002_112651",
+      "role": "object",
+      "frames": 71,
+      "available_before": 70,
+      "available_after": 71,
+      "before": {
+        "available": 70,
+        "total": 71,
+        "cloud_mm_median": 2.271765679500727,
+        "cloud_mm_p90": 12.91440775664058,
+        "angle_deg_median": 8.750618333915455,
+        "angle_deg_p90": 21.43992352362325,
+        "center_mm_median": 1.8396579503546695,
+        "within_10mm_10deg": 34,
+        "within_20mm_20deg": 61,
+        "final_cloud_mm": 12.964411200935093,
+        "final_angle_deg": 7.466150090642808
+      },
+      "after": {
+        "available": 71,
+        "total": 71,
+        "cloud_mm_median": 2.6806298180958956,
+        "cloud_mm_p90": 15.131905622198934,
+        "angle_deg_median": 12.430849343647667,
+        "angle_deg_p90": 42.92878485932245,
+        "center_mm_median": 2.7422447104354433,
+        "within_10mm_10deg": 23,
+        "within_20mm_20deg": 54,
+        "final_cloud_mm": 13.266758696477108,
+        "final_angle_deg": 8.872652782728416
+      },
+      "within_10mm_10deg_delta_pp": -15.492957746478872,
+      "within_20mm_20deg_delta_pp": -9.859154929577471
+    },
+    {
+      "case": "dexycb-tuna-can-20201002_105951",
+      "role": "object",
+      "frames": 71,
+      "available_before": 68,
+      "available_after": 71,
+      "before": {
+        "available": 68,
+        "total": 71,
+        "cloud_mm_median": 43.29149901750904,
+        "cloud_mm_p90": 393.37219260525814,
+        "angle_deg_median": 55.53315262347601,
+        "angle_deg_p90": 160.42532929043827,
+        "center_mm_median": 24.827880562064195,
+        "within_10mm_10deg": 18,
+        "within_20mm_20deg": 28,
+        "final_cloud_mm": 57.968843357572254,
+        "final_angle_deg": 65.85715151051424
+      },
+      "after": {
+        "available": 71,
+        "total": 71,
+        "cloud_mm_median": 42.42386666391589,
+        "cloud_mm_p90": 407.5644959321261,
+        "angle_deg_median": 122.66941078333419,
+        "angle_deg_p90": 173.45692641876252,
+        "center_mm_median": 22.232538002927072,
+        "within_10mm_10deg": 28,
+        "within_20mm_20deg": 28,
+        "final_cloud_mm": 45.79828204198995,
+        "final_angle_deg": 176.18642602920974
+      },
+      "within_10mm_10deg_delta_pp": 14.084507042253517,
+      "within_20mm_20deg_delta_pp": 0.0
+    },
+    {
+      "case": "dexycb-drill-20201002_111923",
+      "role": "object",
+      "frames": 73,
+      "available_before": 72,
+      "available_after": 73,
+      "before": {
+        "available": 72,
+        "total": 73,
+        "cloud_mm_median": 9.393540043007004,
+        "cloud_mm_p90": 18.198160034264866,
+        "angle_deg_median": 4.547299066237274,
+        "angle_deg_p90": 9.399726864824897,
+        "center_mm_median": 9.20590749192749,
+        "within_10mm_10deg": 37,
+        "within_20mm_20deg": 68,
+        "final_cloud_mm": 14.057012720555191,
+        "final_angle_deg": 6.036920309058831
+      },
+      "after": {
+        "available": 73,
+        "total": 73,
+        "cloud_mm_median": 15.002119398573567,
+        "cloud_mm_p90": 24.75591242505271,
+        "angle_deg_median": 6.471183988002204,
+        "angle_deg_p90": 15.344761974187024,
+        "center_mm_median": 13.42034983613777,
+        "within_10mm_10deg": 30,
+        "within_20mm_20deg": 49,
+        "final_cloud_mm": 22.686675743409587,
+        "final_angle_deg": 21.07368799070579
+      },
+      "within_10mm_10deg_delta_pp": -9.589041095890416,
+      "within_20mm_20deg_delta_pp": -26.027397260273972
+    },
+    {
+      "case": "dexycb-mug-20201002_111710",
+      "role": "object",
+      "frames": 73,
+      "available_before": 69,
+      "available_after": 73,
+      "before": {
+        "available": 69,
+        "total": 73,
+        "cloud_mm_median": 12.323374260200977,
+        "cloud_mm_p90": 58.08187683814034,
+        "angle_deg_median": 22.027343932943797,
+        "angle_deg_p90": 163.65317773697294,
+        "center_mm_median": 7.576565823509559,
+        "within_10mm_10deg": 6,
+        "within_20mm_20deg": 30,
+        "final_cloud_mm": 58.05857350353759,
+        "final_angle_deg": 164.64340671630225
+      },
+      "after": {
+        "available": 73,
+        "total": 73,
+        "cloud_mm_median": 3.296452350746408,
+        "cloud_mm_p90": 50.82360590167247,
+        "angle_deg_median": 5.155357520846286,
+        "angle_deg_p90": 173.34355564931624,
+        "center_mm_median": 2.3555971195791168,
+        "within_10mm_10deg": 41,
+        "within_20mm_20deg": 43,
+        "final_cloud_mm": 48.189415247106474,
+        "final_angle_deg": 176.61576613842993
+      },
+      "within_10mm_10deg_delta_pp": 47.945205479452056,
+      "within_20mm_20deg_delta_pp": 17.808219178082197
+    },
+    {
+      "case": "bop-ycbv-000048-large-clamp",
+      "role": "object",
+      "frames": 179,
+      "available_before": 179,
+      "available_after": 179,
+      "before": {
+        "available": 179,
+        "total": 179,
+        "cloud_mm_median": 6.983400735955651,
+        "cloud_mm_p90": 12.168647314179958,
+        "angle_deg_median": 7.404812704453318,
+        "angle_deg_p90": 14.640542571550922,
+        "center_mm_median": 6.702848812721922,
+        "within_10mm_10deg": 125,
+        "within_20mm_20deg": 174,
+        "final_cloud_mm": 12.624866259132807,
+        "final_angle_deg": 11.563018158745287
+      },
+      "after": {
+        "available": 179,
+        "total": 179,
+        "cloud_mm_median": 2.9346428420991875,
+        "cloud_mm_p90": 4.427769109692817,
+        "angle_deg_median": 3.957935982743082,
+        "angle_deg_p90": 8.73878511055797,
+        "center_mm_median": 2.7927246636367387,
+        "within_10mm_10deg": 172,
+        "within_20mm_20deg": 179,
+        "final_cloud_mm": 3.9332387222546887,
+        "final_angle_deg": 4.2858845100474925
+      },
+      "within_10mm_10deg_delta_pp": 26.256983240223462,
+      "within_20mm_20deg_delta_pp": 2.7932960893854784
+    },
+    {
+      "case": "bop-ycbv-000052-mustard-bottle",
+      "role": "object",
+      "frames": 179,
+      "available_before": 179,
+      "available_after": 179,
+      "before": {
+        "available": 179,
+        "total": 179,
+        "cloud_mm_median": 5.24728555820963,
+        "cloud_mm_p90": 7.5609707485073105,
+        "angle_deg_median": 3.8471273109972595,
+        "angle_deg_p90": 5.27123680445798,
+        "center_mm_median": 5.2566857392219255,
+        "within_10mm_10deg": 179,
+        "within_20mm_20deg": 179,
+        "final_cloud_mm": 9.432568348584189,
+        "final_angle_deg": 6.746428689460414
+      },
+      "after": {
+        "available": 179,
+        "total": 179,
+        "cloud_mm_median": 3.623114196901328,
+        "cloud_mm_p90": 4.756647374239713,
+        "angle_deg_median": 3.2404533254998533,
+        "angle_deg_p90": 5.7227610604205115,
+        "center_mm_median": 3.3827860304711512,
+        "within_10mm_10deg": 179,
+        "within_20mm_20deg": 179,
+        "final_cloud_mm": 4.8297470371300495,
+        "final_angle_deg": 1.3049750239751294
+      },
+      "within_10mm_10deg_delta_pp": 0.0,
+      "within_20mm_20deg_delta_pp": 0.0
+    },
+    {
+      "case": "bop-ycbv-000055-bleach-bottle",
+      "role": "object",
+      "frames": 179,
+      "available_before": 179,
+      "available_after": 179,
+      "before": {
+        "available": 179,
+        "total": 179,
+        "cloud_mm_median": 47.90085725264273,
+        "cloud_mm_p90": 50.25190400951409,
+        "angle_deg_median": 21.835605916498626,
+        "angle_deg_p90": 25.86112232042862,
+        "center_mm_median": 47.164067982600606,
+        "within_10mm_10deg": 0,
+        "within_20mm_20deg": 3,
+        "final_cloud_mm": 50.61677123461345,
+        "final_angle_deg": 24.050479429488206
+      },
+      "after": {
+        "available": 179,
+        "total": 179,
+        "cloud_mm_median": 5.111986369966667,
+        "cloud_mm_p90": 7.996673466295178,
+        "angle_deg_median": 9.56790338161513,
+        "angle_deg_p90": 14.4759514151194,
+        "center_mm_median": 4.7138165151254485,
+        "within_10mm_10deg": 92,
+        "within_20mm_20deg": 179,
+        "final_cloud_mm": 7.544634213015848,
+        "final_angle_deg": 13.955112423834965
+      },
+      "within_10mm_10deg_delta_pp": 51.39664804469274,
+      "within_20mm_20deg_delta_pp": 98.32402234636872
+    },
+    {
+      "case": "ycb-bleach0",
+      "role": "object",
+      "frames": 180,
+      "available_before": 180,
+      "available_after": 180,
+      "before": {
+        "available": 180,
+        "total": 180,
+        "cloud_mm_median": 41.30786151482013,
+        "cloud_mm_p90": 49.95353899181271,
+        "angle_deg_median": 80.01125450964977,
+        "angle_deg_p90": 87.06960452160021,
+        "center_mm_median": 35.525914219610854,
+        "within_10mm_10deg": 0,
+        "within_20mm_20deg": 0,
+        "final_cloud_mm": 49.67108884341881,
+        "final_angle_deg": 87.56388439696086
+      },
+      "after": {
+        "available": 180,
+        "total": 180,
+        "cloud_mm_median": 16.700561525367092,
+        "cloud_mm_p90": 35.117097626341796,
+        "angle_deg_median": 11.61041428937277,
+        "angle_deg_p90": 22.425968735729597,
+        "center_mm_median": 16.30103514771922,
+        "within_10mm_10deg": 65,
+        "within_20mm_20deg": 94,
+        "final_cloud_mm": 34.698314975285335,
+        "final_angle_deg": 17.59593760122396
+      },
+      "within_10mm_10deg_delta_pp": 36.111111111111114,
+      "within_20mm_20deg_delta_pp": 52.22222222222222
+    },
+    {
+      "case": "ycb-bleach_hard_00_03_chaitanya",
+      "role": "object",
+      "frames": 180,
+      "available_before": 180,
+      "available_after": 180,
+      "before": {
+        "available": 180,
+        "total": 180,
+        "cloud_mm_median": 4.014939755590609,
+        "cloud_mm_p90": 7.798053803718749,
+        "angle_deg_median": 2.6889390500987727,
+        "angle_deg_p90": 5.634716431096033,
+        "center_mm_median": 3.4933966706859847,
+        "within_10mm_10deg": 168,
+        "within_20mm_20deg": 178,
+        "final_cloud_mm": 14.292138130228647,
+        "final_angle_deg": 9.409198494223242
+      },
+      "after": {
+        "available": 180,
+        "total": 180,
+        "cloud_mm_median": 4.4155175290232,
+        "cloud_mm_p90": 8.327106019835567,
+        "angle_deg_median": 3.9009377370788716,
+        "angle_deg_p90": 5.617082165357979,
+        "center_mm_median": 3.8050818641974455,
+        "within_10mm_10deg": 170,
+        "within_20mm_20deg": 177,
+        "final_cloud_mm": 16.85238668191375,
+        "final_angle_deg": 16.241402628641385
+      },
+      "within_10mm_10deg_delta_pp": 1.1111111111111143,
+      "within_20mm_20deg_delta_pp": -0.5555555555555571
+    },
+    {
+      "case": "ycb-cracker_box_reorient",
+      "role": "object",
+      "frames": 180,
+      "available_before": 180,
+      "available_after": 180,
+      "before": {
+        "available": 180,
+        "total": 180,
+        "cloud_mm_median": 8.322950245050691,
+        "cloud_mm_p90": 20.105710005594773,
+        "angle_deg_median": 3.729529383752361,
+        "angle_deg_p90": 9.43215095829471,
+        "center_mm_median": 7.552560772845532,
+        "within_10mm_10deg": 107,
+        "within_20mm_20deg": 160,
+        "final_cloud_mm": 19.462228358203166,
+        "final_angle_deg": 7.302069733294422
+      },
+      "after": {
+        "available": 180,
+        "total": 180,
+        "cloud_mm_median": 4.293061908810888,
+        "cloud_mm_p90": 17.279152926437476,
+        "angle_deg_median": 1.7713809846232462,
+        "angle_deg_p90": 11.570660927059404,
+        "center_mm_median": 3.3687837774982423,
+        "within_10mm_10deg": 135,
+        "within_20mm_20deg": 174,
+        "final_cloud_mm": 19.058408293179774,
+        "final_angle_deg": 11.479196361573901
+      },
+      "within_10mm_10deg_delta_pp": 15.555555555555557,
+      "within_20mm_20deg_delta_pp": 7.777777777777786
+    },
+    {
+      "case": "ycb-cracker_box_yalehand0",
+      "role": "object",
+      "frames": 180,
+      "available_before": 0,
+      "available_after": 180,
+      "before": {
+        "available": 0,
+        "total": 180
+      },
+      "after": {
+        "available": 180,
+        "total": 180,
+        "cloud_mm_median": 132.92222612034027,
+        "cloud_mm_p90": 161.38019122373592,
+        "angle_deg_median": 87.54894910505766,
+        "angle_deg_p90": 101.92861233536424,
+        "center_mm_median": 132.41604802285008,
+        "within_10mm_10deg": 0,
+        "within_20mm_20deg": 0,
+        "final_cloud_mm": 26.059164486926274,
+        "final_angle_deg": 87.81434210952422
+      },
+      "within_10mm_10deg_delta_pp": 0.0,
+      "within_20mm_20deg_delta_pp": 0.0
+    },
+    {
+      "case": "ycb-mustard0",
+      "role": "object",
+      "frames": 180,
+      "available_before": 180,
+      "available_after": 180,
+      "before": {
+        "available": 180,
+        "total": 180,
+        "cloud_mm_median": 13.677883586228774,
+        "cloud_mm_p90": 15.896714744265948,
+        "angle_deg_median": 14.420379626852743,
+        "angle_deg_p90": 15.903377546357062,
+        "center_mm_median": 12.443388217935704,
+        "within_10mm_10deg": 1,
+        "within_20mm_20deg": 180,
+        "final_cloud_mm": 12.995076110033342,
+        "final_angle_deg": 12.029558053801717
+      },
+      "after": {
+        "available": 180,
+        "total": 180,
+        "cloud_mm_median": 13.058194772540688,
+        "cloud_mm_p90": 15.23833623020914,
+        "angle_deg_median": 24.816879434742525,
+        "angle_deg_p90": 26.553505410099884,
+        "center_mm_median": 10.873277035739283,
+        "within_10mm_10deg": 4,
+        "within_20mm_20deg": 58,
+        "final_cloud_mm": 14.914559986641226,
+        "final_angle_deg": 25.906270398850218
+      },
+      "within_10mm_10deg_delta_pp": 1.6666666666666667,
+      "within_20mm_20deg_delta_pp": -67.77777777777777
+    },
+    {
+      "case": "ycb-mustard_easy_00_02",
+      "role": "object",
+      "frames": 180,
+      "available_before": 180,
+      "available_after": 180,
+      "before": {
+        "available": 180,
+        "total": 180,
+        "cloud_mm_median": 2.908153649737886,
+        "cloud_mm_p90": 5.575338104748848,
+        "angle_deg_median": 2.9935841370490683,
+        "angle_deg_p90": 6.084672063568326,
+        "center_mm_median": 1.6651306492598243,
+        "within_10mm_10deg": 180,
+        "within_20mm_20deg": 180,
+        "final_cloud_mm": 5.542598325224375,
+        "final_angle_deg": 5.4496064948796645
+      },
+      "after": {
+        "available": 180,
+        "total": 180,
+        "cloud_mm_median": 2.4246624246355344,
+        "cloud_mm_p90": 5.059282918002079,
+        "angle_deg_median": 2.2382291374553693,
+        "angle_deg_p90": 3.8704766491454925,
+        "center_mm_median": 1.7173569485682387,
+        "within_10mm_10deg": 180,
+        "within_20mm_20deg": 180,
+        "final_cloud_mm": 3.018330744717104,
+        "final_angle_deg": 4.386623536936411
+      },
+      "within_10mm_10deg_delta_pp": 0.0,
+      "within_20mm_20deg_delta_pp": 0.0
+    },
+    {
+      "case": "ycb-sugar_box1",
+      "role": "object",
+      "frames": 180,
+      "available_before": 180,
+      "available_after": 180,
+      "before": {
+        "available": 180,
+        "total": 180,
+        "cloud_mm_median": 1.5479919822089623,
+        "cloud_mm_p90": 3.48648210669964,
+        "angle_deg_median": 1.8931213110463305,
+        "angle_deg_p90": 2.5759365280145707,
+        "center_mm_median": 1.2179888189716004,
+        "within_10mm_10deg": 180,
+        "within_20mm_20deg": 180,
+        "final_cloud_mm": 4.34128871121365,
+        "final_angle_deg": 2.5731491574218204
+      },
+      "after": {
+        "available": 180,
+        "total": 180,
+        "cloud_mm_median": 0.8082450429791102,
+        "cloud_mm_p90": 0.9970198309597504,
+        "angle_deg_median": 0.0,
+        "angle_deg_p90": 0.7166757787599853,
+        "center_mm_median": 0.7587779097396882,
+        "within_10mm_10deg": 180,
+        "within_20mm_20deg": 180,
+        "final_cloud_mm": 0.8594812687435096,
+        "final_angle_deg": 0.0
+      },
+      "within_10mm_10deg_delta_pp": 0.0,
+      "within_20mm_20deg_delta_pp": 0.0
+    },
+    {
+      "case": "ycb-sugar_box_yalehand0",
+      "role": "object",
+      "frames": 180,
+      "available_before": 180,
+      "available_after": 180,
+      "before": {
+        "available": 180,
+        "total": 180,
+        "cloud_mm_median": 12.528072382931551,
+        "cloud_mm_p90": 13.377323049280356,
+        "angle_deg_median": 27.35679341365107,
+        "angle_deg_p90": 28.160433234658115,
+        "center_mm_median": 10.735468188388701,
+        "within_10mm_10deg": 10,
+        "within_20mm_20deg": 21,
+        "final_cloud_mm": 10.59208587656789,
+        "final_angle_deg": 24.111349330192628
+      },
+      "after": {
+        "available": 180,
+        "total": 180,
+        "cloud_mm_median": 6.627559457115078,
+        "cloud_mm_p90": 7.684603403743903,
+        "angle_deg_median": 13.364274917800293,
+        "angle_deg_p90": 16.54599893916803,
+        "center_mm_median": 3.221010364553994,
+        "within_10mm_10deg": 73,
+        "within_20mm_20deg": 180,
+        "final_cloud_mm": 8.066227192756147,
+        "final_angle_deg": 5.826229482270671
+      },
+      "within_10mm_10deg_delta_pp": 35.0,
+      "within_20mm_20deg_delta_pp": 88.33333333333333
+    },
+    {
+      "case": "ycb-tomato_soup_can_yalehand0",
+      "role": "object",
+      "frames": 180,
+      "available_before": 180,
+      "available_after": 180,
+      "before": {
+        "available": 180,
+        "total": 180,
+        "cloud_mm_median": 16.9976483885795,
+        "cloud_mm_p90": 22.30430174695018,
+        "angle_deg_median": 24.10340742406018,
+        "angle_deg_p90": 35.36398142017586,
+        "center_mm_median": 13.864941067666024,
+        "within_10mm_10deg": 14,
+        "within_20mm_20deg": 48,
+        "final_cloud_mm": 14.58159353843191,
+        "final_angle_deg": 35.399517224665885
+      },
+      "after": {
+        "available": 180,
+        "total": 180,
+        "cloud_mm_median": 6.680777804283151,
+        "cloud_mm_p90": 14.62530713293912,
+        "angle_deg_median": 5.285713201186815,
+        "angle_deg_p90": 11.349268642363873,
+        "center_mm_median": 5.915779225342966,
+        "within_10mm_10deg": 78,
+        "within_20mm_20deg": 180,
+        "final_cloud_mm": 7.2012707266641005,
+        "final_angle_deg": 13.689012381703568
+      },
+      "within_10mm_10deg_delta_pp": 35.55555555555556,
+      "within_20mm_20deg_delta_pp": 73.33333333333333
+    },
+    {
+      "case": "laval-clock-interaction-hard",
+      "role": "clock",
+      "frames": 202,
+      "available_before": 169,
+      "available_after": 202,
+      "before": {
+        "available": 169,
+        "total": 202,
+        "cloud_mm_median": 43.5896880605024,
+        "cloud_mm_p90": 57.33485866532824,
+        "angle_deg_median": 16.636000999836643,
+        "angle_deg_p90": 23.845714315425184,
+        "center_mm_median": 38.50831657216706,
+        "within_10mm_10deg": 10,
+        "within_20mm_20deg": 23,
+        "final_cloud_mm": 44.7678727263435,
+        "final_angle_deg": 16.781145596163693
+      },
+      "after": {
+        "available": 202,
+        "total": 202,
+        "cloud_mm_median": 43.87406330929127,
+        "cloud_mm_p90": 71.57495253503436,
+        "angle_deg_median": 21.69862318731527,
+        "angle_deg_p90": 49.62988275302723,
+        "center_mm_median": 41.604549285820255,
+        "within_10mm_10deg": 21,
+        "within_20mm_20deg": 33,
+        "final_cloud_mm": 91.02230912673613,
+        "final_angle_deg": 67.99167008711532
+      },
+      "within_10mm_10deg_delta_pp": 5.445544554455446,
+      "within_20mm_20deg_delta_pp": 4.95049504950495
+    }
+  ],
+  "gamepad_stationary_production_runner": {
+    "max_center_mm": 1.1466411712573419,
+    "max_rotation_deg": 3.9774719454313687,
+    "motion_by_frame_280_mm": 59.19470994450207,
+    "frames": [
+      0,
+      164
+    ],
+    "limits": {
+      "center_mm": 5.0,
+      "rotation_deg": 5.0,
+      "pickup_min_motion_mm": 30
+    },
+    "stationary_pass": true,
+    "movement_control_pass": true
+  },
+  "production_runner_vs_previous_integration": {
+    "flash-demo-gamepad-cube": {
+      "frames": 281,
+      "prior_result": "/tmp/flash-gamepad-final2/gamepad-integration0/result.json",
+      "prior_sha256": "1fd44f8188d16e63921220ec80289802f40ef77d6f3e4cbe13c267de9eeb02a9",
+      "max_matrix_difference": 0.0
+    },
+    "flash-demo-dowel-ring": {
+      "frames": 713,
+      "prior_result": "/home/feit/.cache/flash-tracker-restart/shared-matching-20261102/geometry-validation-final/flash-demo-dowel-ring.json",
+      "prior_sha256": "0108e85351817a2ed150d5c4af34ceb00b1485f389aca7187b82aea1b1c63051",
+      "max_matrix_difference": 0.0
+    }
+  },
+  "shared_ufm_before_latest_fix": [
+    {
+      "case": "ycb-bleach_hard_00_03_chaitanya",
+      "old_run": "/home/feit/.cache/flash-tracker-restart/shared-matching-20261102/ufm-v2/002/ycb-bleach_hard_00_03_chaitanya",
+      "new_run": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/015/ycb-bleach_hard_00_03_chaitanya",
+      "before": {
+        "object": {
+          "available_after_initialization": 180,
+          "total_after_initialization": 180,
+          "pose_error": {
+            "available": 180,
+            "total": 180,
+            "cloud_mm_median": 7.335872373900601,
+            "cloud_mm_p90": 22.807758588657375,
+            "angle_deg_median": 1.9945728082843532,
+            "angle_deg_p90": 4.654595767955898,
+            "center_mm_median": 7.317931934448358,
+            "within_10mm_10deg": 136,
+            "within_20mm_20deg": 156,
+            "final_cloud_mm": 23.029400550859677,
+            "final_angle_deg": 5.49827731213298
+          },
+          "max_map_points": 569,
+          "pose_sources": {
+            "observed_candidate": 0,
+            "predicted": 180,
+            "lost": 0
+          }
+        }
+      },
+      "after": {
+        "object": {
+          "available_after_initialization": 180,
+          "total_after_initialization": 180,
+          "pose_error": {
+            "available": 180,
+            "total": 180,
+            "cloud_mm_median": 4.4155175290232,
+            "cloud_mm_p90": 8.327106019835567,
+            "angle_deg_median": 3.9009377370788716,
+            "angle_deg_p90": 5.617082165357979,
+            "center_mm_median": 3.8050818641974455,
+            "within_10mm_10deg": 170,
+            "within_20mm_20deg": 177,
+            "final_cloud_mm": 16.85238668191375,
+            "final_angle_deg": 16.241402628641385
+          },
+          "max_map_points": 2959,
+          "pose_sources": {
+            "observed_candidate": 180,
+            "predicted": 0,
+            "lost": 0
+          }
+        }
+      }
+    },
+    {
+      "case": "flash-demo-dowel-ring",
+      "old_run": "/home/feit/.cache/flash-tracker-restart/shared-matching-20261102/ufm-v2/001/flash-demo-dowel-ring",
+      "new_run": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/041/flash-demo-dowel-ring",
+      "before": {
+        "dowel": {
+          "available_after_initialization": 712,
+          "total_after_initialization": 712,
+          "max_map_points": 676,
+          "pose_sources": {
+            "observed_candidate": 464,
+            "predicted": 248,
+            "lost": 0
+          }
+        },
+        "ring": {
+          "available_after_initialization": 712,
+          "total_after_initialization": 712,
+          "max_map_points": 505,
+          "pose_sources": {
+            "observed_candidate": 526,
+            "predicted": 186,
+            "lost": 0
+          }
+        }
+      },
+      "after": {
+        "dowel": {
+          "available_after_initialization": 712,
+          "total_after_initialization": 712,
+          "max_map_points": 397,
+          "pose_sources": {
+            "observed_candidate": 682,
+            "predicted": 30,
+            "lost": 0
+          }
+        },
+        "ring": {
+          "available_after_initialization": 712,
+          "total_after_initialization": 712,
+          "max_map_points": 486,
+          "pose_sources": {
+            "observed_candidate": 712,
+            "predicted": 0,
+            "lost": 0
+          }
+        }
+      }
+    },
+    {
+      "case": "flash-demo-gamepad-cube",
+      "old_run": "/home/feit/.cache/flash-tracker-restart/shared-matching-20261102/ufm-v2/000/flash-demo-gamepad-cube",
+      "new_run": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/040/flash-demo-gamepad-cube",
+      "before": {
+        "gamepad": {
+          "available_after_initialization": 627,
+          "total_after_initialization": 627,
+          "max_map_points": 541,
+          "pose_sources": {
+            "observed_candidate": 581,
+            "predicted": 46,
+            "lost": 0
+          }
+        },
+        "cube": {
+          "available_after_initialization": 627,
+          "total_after_initialization": 627,
+          "max_map_points": 260,
+          "pose_sources": {
+            "observed_candidate": 344,
+            "predicted": 283,
+            "lost": 0
+          }
+        }
+      },
+      "after": {
+        "gamepad": {
+          "available_after_initialization": 627,
+          "total_after_initialization": 627,
+          "max_map_points": 429,
+          "pose_sources": {
+            "observed_candidate": 599,
+            "predicted": 28,
+            "lost": 0
+          }
+        },
+        "cube": {
+          "available_after_initialization": 627,
+          "total_after_initialization": 627,
+          "max_map_points": 227,
+          "pose_sources": {
+            "observed_candidate": 521,
+            "predicted": 106,
+            "lost": 0
+          }
+        }
+      }
+    }
+  ],
+  "unlabelled": [
+    {
+      "case": "rig-yellow-block",
+      "role": "object",
+      "frames": 74,
+      "available_before": 74,
+      "available_after": 74,
+      "sources_before": {
+        "observed_candidate": 74,
+        "predicted": 0,
+        "lost": 0
+      },
+      "sources_after": {
+        "observed_candidate": 74,
+        "predicted": 0,
+        "lost": 0
+      }
+    },
+    {
+      "case": "caryx-053",
+      "role": "object_a",
+      "frames": 138,
+      "available_before": 138,
+      "available_after": 138,
+      "sources_before": {
+        "observed_candidate": 138,
+        "predicted": 0,
+        "lost": 0
+      },
+      "sources_after": {
+        "observed_candidate": 138,
+        "predicted": 0,
+        "lost": 0
+      }
+    },
+    {
+      "case": "caryx-053",
+      "role": "object_b",
+      "frames": 138,
+      "available_before": 138,
+      "available_after": 138,
+      "sources_before": {
+        "observed_candidate": 138,
+        "predicted": 0,
+        "lost": 0
+      },
+      "sources_after": {
+        "observed_candidate": 138,
+        "predicted": 0,
+        "lost": 0
+      }
+    },
+    {
+      "case": "caryx-110-device-dish",
+      "role": "device",
+      "frames": 142,
+      "available_before": 142,
+      "available_after": 142,
+      "sources_before": {
+        "observed_candidate": 142,
+        "predicted": 0,
+        "lost": 0
+      },
+      "sources_after": {
+        "observed_candidate": 142,
+        "predicted": 0,
+        "lost": 0
+      }
+    },
+    {
+      "case": "caryx-110-device-dish",
+      "role": "bowl",
+      "frames": 142,
+      "available_before": 142,
+      "available_after": 142,
+      "sources_before": {
+        "observed_candidate": 142,
+        "predicted": 0,
+        "lost": 0
+      },
+      "sources_after": {
+        "observed_candidate": 142,
+        "predicted": 0,
+        "lost": 0
+      }
+    },
+    {
+      "case": "caryx-031-lid-jar",
+      "role": "lid",
+      "frames": 153,
+      "available_before": 153,
+      "available_after": 153,
+      "sources_before": {
+        "observed_candidate": 153,
+        "predicted": 0,
+        "lost": 0
+      },
+      "sources_after": {
+        "observed_candidate": 153,
+        "predicted": 0,
+        "lost": 0
+      }
+    },
+    {
+      "case": "caryx-031-lid-jar",
+      "role": "jar",
+      "frames": 153,
+      "available_before": 151,
+      "available_after": 153,
+      "sources_before": {
+        "observed_candidate": 151,
+        "predicted": 0,
+        "lost": 2
+      },
+      "sources_after": {
+        "observed_candidate": 149,
+        "predicted": 4,
+        "lost": 0
+      }
+    },
+    {
+      "case": "caryx-032",
+      "role": "object_a",
+      "frames": 173,
+      "available_before": 173,
+      "available_after": 173,
+      "sources_before": {
+        "observed_candidate": 173,
+        "predicted": 0,
+        "lost": 0
+      },
+      "sources_after": {
+        "observed_candidate": 173,
+        "predicted": 0,
+        "lost": 0
+      }
+    },
+    {
+      "case": "caryx-032",
+      "role": "object_b",
+      "frames": 173,
+      "available_before": 164,
+      "available_after": 173,
+      "sources_before": {
+        "observed_candidate": 164,
+        "predicted": 0,
+        "lost": 9
+      },
+      "sources_after": {
+        "observed_candidate": 166,
+        "predicted": 7,
+        "lost": 0
+      }
+    },
+    {
+      "case": "caryx-014",
+      "role": "object_a",
+      "frames": 193,
+      "available_before": 193,
+      "available_after": 193,
+      "sources_before": {
+        "observed_candidate": 193,
+        "predicted": 0,
+        "lost": 0
+      },
+      "sources_after": {
+        "observed_candidate": 192,
+        "predicted": 1,
+        "lost": 0
+      }
+    },
+    {
+      "case": "caryx-050-bottle-plate",
+      "role": "bottle",
+      "frames": 193,
+      "available_before": 193,
+      "available_after": 193,
+      "sources_before": {
+        "observed_candidate": 193,
+        "predicted": 0,
+        "lost": 0
+      },
+      "sources_after": {
+        "observed_candidate": 193,
+        "predicted": 0,
+        "lost": 0
+      }
+    },
+    {
+      "case": "caryx-050-bottle-plate",
+      "role": "plate",
+      "frames": 193,
+      "available_before": 193,
+      "available_after": 193,
+      "sources_before": {
+        "observed_candidate": 193,
+        "predicted": 0,
+        "lost": 0
+      },
+      "sources_after": {
+        "observed_candidate": 193,
+        "predicted": 0,
+        "lost": 0
+      }
+    },
+    {
+      "case": "caryx-007",
+      "role": "object_a",
+      "frames": 149,
+      "available_before": 83,
+      "available_after": 149,
+      "sources_before": {
+        "observed_candidate": 83,
+        "predicted": 0,
+        "lost": 66
+      },
+      "sources_after": {
+        "observed_candidate": 112,
+        "predicted": 37,
+        "lost": 0
+      }
+    },
+    {
+      "case": "caryx-007",
+      "role": "object_b",
+      "frames": 199,
+      "available_before": 199,
+      "available_after": 199,
+      "sources_before": {
+        "observed_candidate": 199,
+        "predicted": 0,
+        "lost": 0
+      },
+      "sources_after": {
+        "observed_candidate": 199,
+        "predicted": 0,
+        "lost": 0
+      }
+    },
+    {
+      "case": "caryx-090",
+      "role": "object_a",
+      "frames": 244,
+      "available_before": 244,
+      "available_after": 244,
+      "sources_before": {
+        "observed_candidate": 244,
+        "predicted": 0,
+        "lost": 0
+      },
+      "sources_after": {
+        "observed_candidate": 244,
+        "predicted": 0,
+        "lost": 0
+      }
+    },
+    {
+      "case": "caryx-090",
+      "role": "object_b",
+      "frames": 244,
+      "available_before": 137,
+      "available_after": 244,
+      "sources_before": {
+        "observed_candidate": 137,
+        "predicted": 0,
+        "lost": 107
+      },
+      "sources_after": {
+        "observed_candidate": 241,
+        "predicted": 3,
+        "lost": 0
+      }
+    },
+    {
+      "case": "wildrgbd-car-scene_002",
+      "role": "car",
+      "frames": 299,
+      "available_before": 299,
+      "available_after": 299,
+      "sources_before": {
+        "observed_candidate": 299,
+        "predicted": 0,
+        "lost": 0
+      },
+      "sources_after": {
+        "observed_candidate": 299,
+        "predicted": 0,
+        "lost": 0
+      }
+    },
+    {
+      "case": "caryx-015",
+      "role": "object_a",
+      "frames": 317,
+      "available_before": 2,
+      "available_after": 317,
+      "sources_before": {
+        "observed_candidate": 2,
+        "predicted": 0,
+        "lost": 315
+      },
+      "sources_after": {
+        "observed_candidate": 297,
+        "predicted": 20,
+        "lost": 0
+      }
+    },
+    {
+      "case": "caryx-003",
+      "role": "object_a",
+      "frames": 322,
+      "available_before": 303,
+      "available_after": 322,
+      "sources_before": {
+        "observed_candidate": 303,
+        "predicted": 0,
+        "lost": 19
+      },
+      "sources_after": {
+        "observed_candidate": 307,
+        "predicted": 15,
+        "lost": 0
+      }
+    },
+    {
+      "case": "wildrgbd-car-scene_000",
+      "role": "car",
+      "frames": 360,
+      "available_before": 360,
+      "available_after": 360,
+      "sources_before": {
+        "observed_candidate": 360,
+        "predicted": 0,
+        "lost": 0
+      },
+      "sources_after": {
+        "observed_candidate": 360,
+        "predicted": 0,
+        "lost": 0
+      }
+    },
+    {
+      "case": "caryx-002",
+      "role": "object_a",
+      "frames": 388,
+      "available_before": 378,
+      "available_after": 388,
+      "sources_before": {
+        "observed_candidate": 378,
+        "predicted": 0,
+        "lost": 10
+      },
+      "sources_after": {
+        "observed_candidate": 372,
+        "predicted": 16,
+        "lost": 0
+      }
+    },
+    {
+      "case": "caryx-000",
+      "role": "object_a",
+      "frames": 454,
+      "available_before": 432,
+      "available_after": 454,
+      "sources_before": {
+        "observed_candidate": 430,
+        "predicted": 2,
+        "lost": 22
+      },
+      "sources_after": {
+        "observed_candidate": 434,
+        "predicted": 20,
+        "lost": 0
+      }
+    },
+    {
+      "case": "caryx-041",
+      "role": "object_a",
+      "frames": 564,
+      "available_before": 474,
+      "available_after": 564,
+      "sources_before": {
+        "observed_candidate": 474,
+        "predicted": 0,
+        "lost": 90
+      },
+      "sources_after": {
+        "observed_candidate": 481,
+        "predicted": 83,
+        "lost": 0
+      }
+    },
+    {
+      "case": "flash-demo-gamepad-cube",
+      "role": "gamepad",
+      "frames": 627,
+      "available_before": 627,
+      "available_after": 627,
+      "sources_before": {
+        "observed_candidate": 583,
+        "predicted": 44,
+        "lost": 0
+      },
+      "sources_after": {
+        "observed_candidate": 599,
+        "predicted": 28,
+        "lost": 0
+      }
+    },
+    {
+      "case": "flash-demo-gamepad-cube",
+      "role": "cube",
+      "frames": 627,
+      "available_before": 627,
+      "available_after": 627,
+      "sources_before": {
+        "observed_candidate": 351,
+        "predicted": 276,
+        "lost": 0
+      },
+      "sources_after": {
+        "observed_candidate": 521,
+        "predicted": 106,
+        "lost": 0
+      }
+    },
+    {
+      "case": "flash-demo-dowel-ring",
+      "role": "dowel",
+      "frames": 712,
+      "available_before": 712,
+      "available_after": 712,
+      "sources_before": {
+        "observed_candidate": 660,
+        "predicted": 52,
+        "lost": 0
+      },
+      "sources_after": {
+        "observed_candidate": 682,
+        "predicted": 30,
+        "lost": 0
+      }
+    },
+    {
+      "case": "flash-demo-dowel-ring",
+      "role": "ring",
+      "frames": 712,
+      "available_before": 712,
+      "available_after": 712,
+      "sources_before": {
+        "observed_candidate": 712,
+        "predicted": 0,
+        "lost": 0
+      },
+      "sources_after": {
+        "observed_candidate": 712,
+        "predicted": 0,
+        "lost": 0
+      }
+    }
+  ],
+  "limitations": [
+    "Missing returned poses count as failures at both existing accuracy limits.",
+    "Median/p90 errors are conditional on pose availability; use paired-frame analysis for changing availability.",
+    "External pose annotations are imperfect; unlabelled videos have no accuracy percentage.",
+    "Scores evaluate motion relative to initialization. They do not measure absolute initialization error or reconstructed-shape accuracy.",
+    "Timings exclude live segmentation and are additional method work, not independent end-to-end FPS.",
+    "The evaluated surface-motion error and angle use annotation poses without symmetry minimization.",
+    "Two deformable clips are negative controls, not evidence of rigid-object accuracy.",
+    "The full sweep measures accumulated changes including shared matching; it does not isolate each fix."
+  ],
+  "artifacts": {
+    "root": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102",
+    "report": "http://127.0.0.1:9102/api/run/flash/experiments/rebuild/rebuild-20261102-190550-2a2c9c58/report.html",
+    "chart": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/labelled-comparison.png"
+  }
+}

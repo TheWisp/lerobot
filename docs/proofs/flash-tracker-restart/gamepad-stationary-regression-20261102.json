@@ -1,0 +1,313 @@
+{
+  "date": "2026-11-02",
+  "base_commit": "718328e93aedf6dabcf786304db01a6b9605c515",
+  "scope": "Local research changes, not committed or deployed. Recorded masks supplied; segmentation and absolute gamepad pose accuracy are not tested.",
+  "gamepad": {
+    "before": {
+      "input_sha256": "c66268f6cf9eff2d7786b0b1c14243edad15a5f057d8f445b229c66dd31c71d3",
+      "frames_evaluated": 165,
+      "last_stationary_time_s": 7.236920118331909,
+      "max_center_mm": 9.220230926197438,
+      "median_center_mm": 0.8572283885140056,
+      "max_rotation_deg": 24.494463253738378,
+      "median_rotation_deg": 1.4545093778026221,
+      "max_center_frame": 161,
+      "max_rotation_frame": 163,
+      "movement_by_frame_280_mm": 58.795863526865425,
+      "settings": {
+        "matching": {
+          "backend": "ufm",
+          "max_image_size_px": 640,
+          "scene_points": 800,
+          "object_points": 256,
+          "spacing_px": 5,
+          "history_frames": 64,
+          "depth_support_radius_px": 1,
+          "lk": {
+            "window_size_px": 21,
+            "pyramid_levels": 3,
+            "forward_backward_limit_px": 1.0
+          },
+          "ufm": {
+            "covisibility_min": 0.5
+          }
+        },
+        "surface": {
+          "spacing_m": 0.003,
+          "agreement_m": 0.005,
+          "min_overlap": 0.25,
+          "patch_overlap": 0.5,
+          "image_weight": 1.0,
+          "confirmations": 2,
+          "max_patches": 32,
+          "max_pending": 8,
+          "points_per_patch": 1024,
+          "max_points": 8192,
+          "grow": true,
+          "retain_unobserved_pose": true
+        },
+        "groups": {
+          "context_radius_m": 0.25,
+          "min_inliers": 12,
+          "fit_threshold_m": 0.005,
+          "object_max_points": 120,
+          "object_max_frame_gap_s": 0.1,
+          "object_fb_threshold_px": 1.0,
+          "object_image_scale": 1.0,
+          "depth_support_radius_px": 1,
+          "support_confirmation_s": 1.0,
+          "point_evidence_weight": 1.0
+        },
+        "vision": {
+          "backend": "surface",
+          "sam_resolution": 504,
+          "min_similarity": 0.75,
+          "registration_threshold_m": 0.005,
+          "registration_min_inliers": 12,
+          "registration_trials": 100,
+          "visible_shape_fallback": false,
+          "parallel_surface_objects": true,
+          "pipeline_surface_frames": true,
+          "surface_object_workers": 2,
+          "surface_reference_max_points_per_view": 15000,
+          "compiled_surface_fit": true,
+          "reuse_surface_search": true,
+          "detection_correction": {
+            "enabled": false,
+            "offline_interval_frames": 16,
+            "runtime_interval_frames": 60,
+            "min_detector_score": 0.8,
+            "min_tracker_score": 0.8,
+            "min_mask_overlap": 0.5
+          },
+          "observation": {
+            "mask_margin_px": 2,
+            "depth_span_m": 0.01,
+            "depth_neighborhood_px": 3,
+            "normal_bilateral_diameter_px": 5,
+            "normal_bilateral_sigma_px": 2.0,
+            "huber_m": 0.005,
+            "surface_spacing_m": 0.003,
+            "samples_across_object": 64,
+            "min_surface_spacing_m": 0.001,
+            "component_gap_m": 0.01,
+            "validation_tile_px": 4
+          },
+          "shape": {
+            "depth_tolerance_m": 0.005,
+            "surface_spacing_m": 0.003,
+            "mask_boundary_tolerance_px": 2.0,
+            "max_surface_distance_m": 0.03,
+            "max_evaluations": 50,
+            "solver_tolerance": 1e-05,
+            "max_fit_points": 2048,
+            "nn_queries_per_worker": 512,
+            "batch_jacobian": true,
+            "batch_query_workers": 8
+          },
+          "motion": {
+            "crop_min_px": 160,
+            "crop_max_px": 480,
+            "crop_extent_multiplier": 2.5,
+            "input_size_px": 320,
+            "grid_step_px": 4,
+            "covisibility_min": 0.5,
+            "min_ransac_pairs": 6,
+            "ransac_distance_m": 0.006,
+            "ransac_confidence": 0.99,
+            "refinement_steps": 2,
+            "connected_dilation_px": 7
+          }
+        }
+      }
+    },
+    "after": {
+      "input_sha256": "c66268f6cf9eff2d7786b0b1c14243edad15a5f057d8f445b229c66dd31c71d3",
+      "frames_evaluated": 165,
+      "last_stationary_time_s": 7.236920118331909,
+      "max_center_mm": 1.146641171257348,
+      "median_center_mm": 0.2710446118514055,
+      "max_rotation_deg": 3.9774719454300733,
+      "median_rotation_deg": 0.4378440314913852,
+      "max_center_frame": 155,
+      "max_rotation_frame": 157,
+      "movement_by_frame_280_mm": 59.19470994450207,
+      "settings": {
+        "matching": {
+          "backend": "ufm",
+          "max_image_size_px": 640,
+          "scene_points": 800,
+          "object_points": 256,
+          "spacing_px": 5,
+          "history_frames": 64,
+          "depth_support_radius_px": 1,
+          "lk": {
+            "window_size_px": 21,
+            "pyramid_levels": 3,
+            "forward_backward_limit_px": 1.0
+          },
+          "ufm": {
+            "covisibility_min": 0.5
+          }
+        },
+        "surface": {
+          "spacing_m": 0.003,
+          "agreement_m": 0.005,
+          "min_overlap": 0.25,
+          "patch_overlap": 0.5,
+          "image_weight": 1.0,
+          "surface_priority": true,
+          "confirmations": 2,
+          "max_patches": 32,
+          "max_pending": 8,
+          "points_per_patch": 1024,
+          "max_points": 8192,
+          "grow": true,
+          "retain_unobserved_pose": true
+        },
+        "groups": {
+          "context_radius_m": 0.25,
+          "min_inliers": 12,
+          "fit_threshold_m": 0.005,
+          "object_max_points": 120,
+          "object_max_frame_gap_s": 0.1,
+          "object_fb_threshold_px": 1.0,
+          "object_image_scale": 1.0,
+          "depth_support_radius_px": 1,
+          "support_confirmation_s": 1.0,
+          "point_evidence_weight": 1.0
+        },
+        "vision": {
+          "backend": "surface",
+          "sam_resolution": 504,
+          "min_similarity": 0.75,
+          "registration_threshold_m": 0.005,
+          "registration_min_inliers": 12,
+          "registration_trials": 100,
+          "visible_shape_fallback": false,
+          "parallel_surface_objects": true,
+          "pipeline_surface_frames": true,
+          "surface_object_workers": 2,
+          "surface_reference_max_points_per_view": 15000,
+          "compiled_surface_fit": true,
+          "reuse_surface_search": true,
+          "detection_correction": {
+            "enabled": false,
+            "offline_interval_frames": 16,
+            "runtime_interval_frames": 60,
+            "min_detector_score": 0.8,
+            "min_tracker_score": 0.8,
+            "min_mask_overlap": 0.5
+          },
+          "observation": {
+            "mask_margin_px": 2,
+            "depth_span_m": 0.01,
+            "depth_neighborhood_px": 3,
+            "normal_bilateral_diameter_px": 5,
+            "normal_bilateral_sigma_px": 2.0,
+            "huber_m": 0.005,
+            "surface_spacing_m": 0.003,
+            "samples_across_object": 64,
+            "min_surface_spacing_m": 0.001,
+            "component_gap_m": 0.01,
+            "validation_tile_px": 4
+          },
+          "shape": {
+            "depth_tolerance_m": 0.005,
+            "surface_spacing_m": 0.003,
+            "mask_boundary_tolerance_px": 2.0,
+            "require_full_mask_coverage": false,
+            "max_surface_distance_m": 0.03,
+            "max_evaluations": 50,
+            "solver_tolerance": 1e-05,
+            "max_fit_points": 2048,
+            "nn_queries_per_worker": 512,
+            "batch_jacobian": true,
+            "batch_query_workers": 8
+          },
+          "motion": {
+            "crop_min_px": 160,
+            "crop_max_px": 480,
+            "crop_extent_multiplier": 2.5,
+            "input_size_px": 320,
+            "grid_step_px": 4,
+            "covisibility_min": 0.5,
+            "min_ransac_pairs": 6,
+            "ransac_distance_m": 0.006,
+            "ransac_confidence": 0.99,
+            "refinement_steps": 2,
+            "connected_dilation_px": 7
+          }
+        }
+      }
+    }
+  },
+  "labeled_crosscheck": {
+    "case": "ycb-bleach_hard_00_03_chaitanya",
+    "after": {
+      "available": 180,
+      "total": 180,
+      "cloud_mm_median": 4.4155175290232,
+      "cloud_mm_p90": 8.327106019835567,
+      "angle_deg_median": 3.9009377370788716,
+      "angle_deg_p90": 5.617082165357979,
+      "center_mm_median": 3.8050818641974455,
+      "within_10mm_10deg": 170,
+      "within_20mm_20deg": 177,
+      "final_cloud_mm": 16.85238668191375,
+      "final_angle_deg": 16.241402628641385
+    },
+    "before": {
+      "available": 180,
+      "total": 180,
+      "cloud_mm_median": 7.335872373900601,
+      "cloud_mm_p90": 22.807758588657375,
+      "angle_deg_median": 1.9945728082843532,
+      "angle_deg_p90": 4.654595767955898,
+      "center_mm_median": 7.317931934448358,
+      "within_10mm_10deg": 136,
+      "within_20mm_20deg": 156,
+      "final_cloud_mm": 23.029400550859677,
+      "final_angle_deg": 5.49827731213298
+    },
+    "tradeoff": "Median point error and success fraction improve; median angular error increases. This is not uniform improvement on every metric."
+  },
+  "dowel_crosscheck": {
+    "frames": 713,
+    "poses_available": 713,
+    "labels": false,
+    "qualitative": "At previously failing frame 350, the estimate is upright rather than sideways; this does not certify the whole clip."
+  },
+  "verification": {
+    "mutation_failures": {
+      "weighted_image_objective": 9,
+      "full_outline_assumed_for_partial_reference": 1,
+      "boundary_margin_removed": 2,
+      "unknown_depth_treated_as_empty_space": 1,
+      "freeze_every_output_pose": 1
+    },
+    "mutation_note": "Expected failures from in-process mutations, never committed. Freeze leaves stationary test green and pickup test red.",
+    "passed_total": 169,
+    "recorded_integration_tests_included": 2
+  },
+  "source_sha256": {
+    "src/lerobot/policies/flash/image_matching.py": "15818b7bf88772502230c4f1fffda2178b3a473a8bb1306fd3e117ddf4b4b523",
+    "src/lerobot/policies/flash/shared_image_tracking.py": "c1e9ed95bd46bd69a6a47bb25a37117ed839b58b68e91d0f98a45ccb41ae47da",
+    "src/lerobot/policies/flash/surface_tracking.py": "786a0910727ddc5083c28c2bfdc80c5b844d533fd4188e636739efef07ec79cd",
+    "src/lerobot/policies/flash/surface_grounding.py": "80aaef5c65c2a4d68a0bc570ea3fc75d110015a60984b0984635664554674f2d",
+    "src/lerobot/policies/flash/surface_acceleration.py": "696dd7d53ddc5d2e36b9d40e3ac784f420a645621662583ca0fb415320631d85",
+    "src/lerobot/policies/flash/surface_observation.py": "cc8809a1bd3c5ff20167991ec32083414ac5903bbb28749a06479d776aaa0016",
+    "src/lerobot/policies/flash/experimental_surface_session.py": "f13527b3734b85e2436741e0a6d284b89da82ae0b6672183a52221e744403ef9",
+    "src/lerobot/policies/flash/experimental_gpu_fit.py": "4fee5540752fd61e883e99050996043e39a59fc8c97943efb7aad7eb418d7f7f",
+    "src/lerobot/policies/flash/vision_pipeline.py": "722d82f6d8972fd6729d89f21e3cf78b47ebbc8a8b3e8ca5048a1ff09b6e0cec",
+    "benchmarks/flash_experiment_groups.py": "7476dd6c4cea2038369e14f999b36e2dac3299131074f415a42b7f3982521d40",
+    "benchmarks/flash_tracker_experiment.py": "22eb09159b83da030d2d5c441ad1b8def4fd250b7ad21394f8fc7fe54daef346",
+    "benchmarks/flash_experiment_inputs.py": "deb75b9c99f7bf7f3bacbfcb7716a81233cb37fa68e84321c2e2b0ef1c3c2691",
+    "tests/policies/flash/test_gamepad_stationary_integration.py": "c4ee71fb68dfce0a5d7cfb6381688f75ae5a571696ced5d1a8e00f9abbcfefe5",
+    "tests/policies/flash/test_surface_evidence_priority.py": "2720311767db0d5fbc91ce69535dd4e3cb0b5e860bd59fe8f517f5f975cd1a4a",
+    "tests/policies/flash/test_shared_image_tracking.py": "3ecc39fa9fa52b673e0b2a48ec4a9df5aa2e94b3fed96615c5fb1ec5aa1dc6d2",
+    "tests/policies/flash/fixtures/gamepad_stationary.json": "4befc9efe300c01dfffc76ec39a5b810c8b49fc6ec7bc7a630213ce02b86c633"
+  },
+  "local_diagnostics": "/home/feit/.cache/flash-tracker-restart/shared-matching-20261102/gamepad-regression-final",
+  "video": "https://github.com/TheWisp/lerobot/releases/download/flash-visible-tracking-20261023/FLASH_gamepad_stationary_regression_20261102.mp4"
+}

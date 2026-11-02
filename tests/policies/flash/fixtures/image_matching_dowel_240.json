@@ -1,0 +1,41 @@
+{
+  "case": {
+    "id": "flash-demo-dowel-ring",
+    "kind": "flash_prepared_demo",
+    "domain": "FLASH rig demonstrations (diagnostic; no independent labels)",
+    "artifact_root": "~/.cache/huggingface/lerobot/demos/insertion",
+    "evidence_dir": "~/.cache/huggingface/lerobot/demos/insertion/flash/v1/prepared/flash-dowel-ring-20261028-depth-audit-v11/scene-evidence",
+    "expected_frames": 713,
+    "tags": [
+      "rigid",
+      "manipulation",
+      "occlusion",
+      "diagnostic-only"
+    ],
+    "roles": [
+      "dowel",
+      "ring"
+    ],
+    "mask_evidence_dir": "/home/feit/.cache/huggingface/lerobot/demos/insertion/flash/v1/preparation-cache/flash-dowel-ring-20261031-gripper-scene-ddf83af436ff.scene-evidence"
+  },
+  "role": "dowel",
+  "source_frame": 239,
+  "target_frame": 240,
+  "before_sources": {
+    "src/lerobot/policies/flash/causal_points.py": "265ddba2767a195d56dfa1c7c92e47b99452bba5d99dc031c4ffc4823dcaa9fc",
+    "src/lerobot/policies/flash/scene_groups.py": "440da5b35da0768aaa4c00816148acebe8e155b7389a6f4ba9bd9ab88ccd49a1",
+    "src/lerobot/policies/flash/surface_correspondence.py": "650308498a9e4b746e3b5d931969526b59fbe56670c86fd4ef0f8aafb4ad03cc",
+    "src/lerobot/policies/flash/surface_tracking.py": "e8d9efe821335e9dcba03b2cf6a2ae6cc05e044d7d5121977dfbcf8530bf9bc6",
+    "benchmarks/flash_experiment_groups.py": "d4119c1fdbc9a3de7d6e5dcab9f9b6b246ef9d6b9c867346125dd59b1efc958c",
+    "benchmarks/flash_tracker_experiment.py": "92c1ddbbbc0bcabe03eaae4681898e32deddb7d55418f99ec59fc2f91412c443"
+  },
+  "note": "Original implementation outputs from real RGB-D and real UFM inference. No pose ground truth implied.",
+  "environment": {
+    "python": "3.12.13",
+    "opencv": "4.13.0",
+    "numpy": "2.2.6",
+    "torch": "2.10.0+cu128"
+  },
+  "ufm_checkpoint": "infinity1096/UFM-Base-DINOv2L-init",
+  "fixture_sha256": "2ef2b49204d72ed02879304cfeb2a9fe3f8b50f33d8d4e32ff8fb2a99d445ab5"
+}

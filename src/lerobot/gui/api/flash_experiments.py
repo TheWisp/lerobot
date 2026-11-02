@@ -139,7 +139,7 @@ def _cancel_rebuild():
     return _rebuild_status()
 
 
-def _start_rebuild(*, force=False):
+def _start_rebuild(*, force=False, identity=None):
     from benchmarks.flash_rebuild_examples import write_json
 
     directory = _root() / ".rebuild"
@@ -150,6 +150,11 @@ def _start_rebuild(*, force=False):
         except BlockingIOError as exc:
             raise HTTPException(409, "Examples are already rebuilding") from exc
         items = _list()
+        if identity is not None:
+            # Resolve against the currently published list, never a client path.
+            items = [item for item in items if item["id"] == identity]
+            if not items:
+                raise HTTPException(404, "Scene is unavailable. Refresh the list and select it again.")
         if not items:
             raise HTTPException(400, "No examples to rebuild")
         name = "rebuild-" + datetime.now(UTC).strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:8]
@@ -204,8 +209,10 @@ async def list_experiments():
 
 
 @router.post("/rebuild", status_code=202)
-async def rebuild_examples(force: bool = False):
-    return await asyncio.get_running_loop().run_in_executor(_jobs, partial(_start_rebuild, force=force))
+async def rebuild_examples(force: bool = False, identity: str | None = None):
+    return await asyncio.get_running_loop().run_in_executor(
+        _jobs, partial(_start_rebuild, force=force, identity=identity)
+    )
 
 
 @router.get("/rebuild")

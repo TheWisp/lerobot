@@ -13,6 +13,7 @@ import hashlib
 import json
 import shutil
 import tempfile
+from collections import defaultdict
 from contextlib import nullcontext
 from fractions import Fraction
 from pathlib import Path
@@ -23,6 +24,7 @@ import numpy as np
 
 from benchmarks.flash_experiment_inputs import samples
 from benchmarks.flash_flow_paths import FlowPaths
+from lerobot.gui.flash_group_overlay import GroupOverlay
 from lerobot.policies.flash.surface_grounding import project
 from lerobot.policies.flash.surface_observation import initial_landmarks, move, spatial_sample
 
@@ -106,11 +108,16 @@ def export(run: Path, output: Path = DEFAULT_OUTPUT, *, check_cancel=None):
     for name, label in (
         ("conditioned_fixed", "Image + surface: fixed model"),
         ("conditioned_growing", "Image + surface: growing model"),
+        ("group_fixed", "Depth + mask fit, UFM + groups"),
+        ("group_growing", "Depth + mask fit, UFM + groups — growing surface"),
     ):
         if any(name in obj for obj in rows[0]["objects"].values()):
             methods[name] = label
+    shared = summary.get("shared_matching", {}).get("config")
+    if shared:
+        methods = {name: label.replace("UFM", shared["backend"].upper()) for name, label in methods.items()}
     output.mkdir(parents=True, exist_ok=True)
-    identity = hashlib.sha256((str(run) + ":schema6").encode()).hexdigest()[:20]
+    identity = hashlib.sha256((str(run) + ":schema7").encode()).hexdigest()[:20]
     destination = output / identity
     if destination.exists():
         raise FileExistsError(destination)
@@ -120,6 +127,7 @@ def export(run: Path, output: Path = DEFAULT_OUTPUT, *, check_cancel=None):
     evidence_path = run / "correspondences.jsonl.gz"
     digest = hashlib.sha256()
     flow_paths = {}
+    group_overlays = defaultdict(GroupOverlay)
     model_cache = {}
     try:
         with (
@@ -188,7 +196,12 @@ def export(run: Path, output: Path = DEFAULT_OUTPUT, *, check_cancel=None):
                         reference = references.get(role)
                         details = row["objects"][role].get(name + "_details", {})
                         version = details.get("map_version_after", 0)
-                        if version and name in {"conditioned_fixed", "conditioned_growing"}:
+                        if version and name in {
+                            "conditioned_fixed",
+                            "conditioned_growing",
+                            "group_fixed",
+                            "group_growing",
+                        }:
                             key = (name, role)
                             if model_cache.get(key, (None,))[0] != version:
                                 model_path = run / "surface_models" / name / role / f"{version:06d}.npz"
@@ -209,11 +222,24 @@ def export(run: Path, output: Path = DEFAULT_OUTPUT, *, check_cancel=None):
                         "matches": matches,
                         "match_sources": {
                             name: row["objects"][role][name + "_details"].get("image_source_frame")
-                            for name in ("conditioned_fixed", "conditioned_growing")
+                            for name in (
+                                "conditioned_fixed",
+                                "conditioned_growing",
+                                "group_fixed",
+                                "group_growing",
+                            )
                             if name + "_details" in row["objects"][role]
                         },
                         "mask": [c[:, 0].tolist() for c in contours if len(c) >= 3],
                         "poses": posed,
+                        "group_tracks": {
+                            name: group_overlays[role, name].update(
+                                row["objects"][role].get(name + "_details", {}).get("group", {})
+                            )
+                            for name in methods
+                            if name.startswith("group_")
+                        },
+                        "pose_status": {name: row["objects"][role].get(name + "_status") for name in methods},
                     }
                 frames.append({"frame": frame.frame_id, "t": float(t), "objects": objects})
             if evidence is not None and next(evidence, None) is not None:
@@ -223,7 +249,8 @@ def export(run: Path, output: Path = DEFAULT_OUTPUT, *, check_cancel=None):
         if digest.hexdigest() != summary["input_sha256"]:
             raise ValueError("source RGB-D/masks changed since this experiment; refusing misaligned playback")
         data = {
-            "schema_version": 6,
+            "schema_version": 7,
+            "shared_matching": shared,
             "has_correspondences": evidence_path.exists(),
             "width": stream.width,
             "height": stream.height,
@@ -233,9 +260,11 @@ def export(run: Path, output: Path = DEFAULT_OUTPUT, *, check_cancel=None):
         (temporary / "overlays.json").write_text(json.dumps(data, separators=(",", ":"), allow_nan=False))
         manifest = {
             "id": identity,
+            "shared_matching": shared,
             "name": case.get("display_name", case["id"].replace("_", " "))
-            + (" (deformable control)" if "deformable" in case.get("tags", []) else ""),
-            "experiment": run.parent.name,
+            + (" (deformable control)" if "deformable" in case.get("tags", []) else "")
+            + (f" — shared {shared['backend'].upper()}" if shared else ""),
+            "experiment": f"Shared {shared['backend'].upper()} matching" if shared else run.parent.name,
             "source_run": str(run),
             "frames": len(frames),
             "duration_s": float(times[-1]),

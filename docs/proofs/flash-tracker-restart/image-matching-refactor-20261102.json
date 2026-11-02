@@ -1,0 +1,164 @@
+{
+  "scope": "Behavior-preserving image matcher adapter refactor; not a tracking quality benchmark",
+  "cases": [
+    {
+      "id": "flash-demo-dowel-ring",
+      "frames": 713,
+      "queries": 617393,
+      "measured_pairs": 440289,
+      "group_predictions": 1350,
+      "empty_masks": 20,
+      "bad_fit_frames": 12,
+      "reference_resets": 51,
+      "ufm_inferences": 1398,
+      "elapsed_s": 163.7416305099905,
+      "timings": {
+        "old_scene_ms": {
+          "median": 6.710670015309006,
+          "p95": 8.176352787995711
+        },
+        "new_scene_ms": {
+          "median": 6.656438985373825,
+          "p95": 8.085458993446082
+        },
+        "old_groups_ms": {
+          "median": 11.737531021935865,
+          "p95": 13.785058246867266
+        },
+        "new_groups_ms": {
+          "median": 11.361908487742767,
+          "p95": 13.48471575329313
+        }
+      },
+      "verdict": "all compared values exactly equal"
+    },
+    {
+      "id": "flash-demo-gamepad-cube",
+      "frames": 628,
+      "queries": 517116,
+      "measured_pairs": 320288,
+      "group_predictions": 1046,
+      "empty_masks": 93,
+      "bad_fit_frames": 49,
+      "reference_resets": 207,
+      "ufm_inferences": 1122,
+      "elapsed_s": 141.0748159159848,
+      "timings": {
+        "old_scene_ms": {
+          "median": 6.344926499878056,
+          "p95": 8.422336196235847
+        },
+        "new_scene_ms": {
+          "median": 6.290354009252042,
+          "p95": 8.300848846556619
+        },
+        "old_groups_ms": {
+          "median": 10.947854010737501,
+          "p95": 12.714438249531668
+        },
+        "new_groups_ms": {
+          "median": 10.49712099484168,
+          "p95": 12.331348749285098
+        }
+      },
+      "verdict": "all compared values exactly equal"
+    },
+    {
+      "id": "ycb-bleach_hard_00_03_chaitanya",
+      "frames": 181,
+      "queries": 57469,
+      "measured_pairs": 29876,
+      "group_predictions": 176,
+      "empty_masks": 0,
+      "bad_fit_frames": 0,
+      "reference_resets": 23,
+      "ufm_inferences": 180,
+      "elapsed_s": 15.899994958017487,
+      "timings": {
+        "old_scene_ms": {
+          "median": 2.7398339880164713,
+          "p95": 5.142827983945608
+        },
+        "new_scene_ms": {
+          "median": 2.6841500075533986,
+          "p95": 5.083857016870752
+        },
+        "old_groups_ms": {
+          "median": 10.07492101052776,
+          "p95": 10.591908008791506
+        },
+        "new_groups_ms": {
+          "median": 9.878704993752763,
+          "p95": 10.288471006788313
+        }
+      },
+      "verdict": "all compared values exactly equal"
+    }
+  ],
+  "total_frames": 1522,
+  "total_sampled_object_queries": 1191978,
+  "total_measured_3d_pairs": 790453,
+  "compared": [
+    "UFM input tensors and inference count",
+    "raw matched pixels and rejection stages",
+    "depth-lifted 3D pairs and rigid motion",
+    "scene IDs, subpixel locations and measured 3D points",
+    "group association state, point generations and predictions"
+  ],
+  "excluded": [
+    "wall-clock timestamps",
+    "new physical trials",
+    "re-optimization of unchanged final surface fitter"
+  ],
+  "group_audit": "Both versions consumed identical recorded final-fit feedback; all upstream matching, association and prediction were recomputed.",
+  "ufm_audit": "Real inference once per requested pair, identical returned tensors consumed by original and refactored implementations; avoids mistaking neural inference nondeterminism for a refactor difference.",
+  "postprocessing_timing": {
+    "flash-demo-dowel-ring-dowel-240": {
+      "old": {
+        "median_ms": 0.5558590055443347,
+        "p95_ms": 0.5631164909573272
+      },
+      "new": {
+        "median_ms": 0.6897999992361292,
+        "p95_ms": 0.6979436438996345
+      }
+    },
+    "flash-demo-gamepad-cube-gamepad-168": {
+      "old": {
+        "median_ms": 0.5533600051421672,
+        "p95_ms": 0.5622419761493802
+      },
+      "new": {
+        "median_ms": 0.6873704987810925,
+        "p95_ms": 0.6982770864851773
+      }
+    }
+  },
+  "timing_note": "CPU-only replay of captured UFM output, 200 alternating measured calls after warmup; excludes model inference. Scene/group paired timings favor the second call through cache warming, so no speedup is claimed.",
+  "tests": {
+    "targeted_passed": 150,
+    "mutation_tests": "A +1 pixel endpoint offset independently injected into each backend fails the golden consumer test; production files unchanged."
+  },
+  "before_sources": {
+    "src/lerobot/policies/flash/causal_points.py": "265ddba2767a195d56dfa1c7c92e47b99452bba5d99dc031c4ffc4823dcaa9fc",
+    "src/lerobot/policies/flash/scene_groups.py": "440da5b35da0768aaa4c00816148acebe8e155b7389a6f4ba9bd9ab88ccd49a1",
+    "src/lerobot/policies/flash/surface_correspondence.py": "650308498a9e4b746e3b5d931969526b59fbe56670c86fd4ef0f8aafb4ad03cc",
+    "src/lerobot/policies/flash/surface_tracking.py": "e8d9efe821335e9dcba03b2cf6a2ae6cc05e044d7d5121977dfbcf8530bf9bc6",
+    "benchmarks/flash_experiment_groups.py": "d4119c1fdbc9a3de7d6e5dcab9f9b6b246ef9d6b9c867346125dd59b1efc958c",
+    "benchmarks/flash_tracker_experiment.py": "92c1ddbbbc0bcabe03eaae4681898e32deddb7d55418f99ec59fc2f91412c443"
+  },
+  "after_sources": {
+    "src/lerobot/policies/flash/image_matching.py": "15818b7bf88772502230c4f1fffda2178b3a473a8bb1306fd3e117ddf4b4b523",
+    "src/lerobot/policies/flash/causal_points.py": "2ae17a5a6a5d5d2c9c970d60632c76ce839dd6a738dcf2779d1c446e7ca4082e",
+    "src/lerobot/policies/flash/scene_groups.py": "2cff1c199f9050233b762d4adb71fd7dd688d06f8e6140731c1220790924de25",
+    "src/lerobot/policies/flash/surface_correspondence.py": "27e3a818d692865fadd4b935390cc01720a53b7836d8274ff1812a314ec86c4e",
+    "tests/policies/flash/test_image_matching.py": "f7285fca79cc72646bd2e7a1478f8f53c14af34cd57deb8c625b7943c7c09390"
+  },
+  "environment": {
+    "python": "3.12.13",
+    "opencv": "4.13.0",
+    "numpy": "2.2.6",
+    "torch": "2.10.0+cu128"
+  },
+  "local_evidence": "/home/feit/.cache/flash-tracker-restart/image-matcher-refactor-20261102"
+}

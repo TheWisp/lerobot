@@ -5,8 +5,12 @@ const FLASH_POSE_METHODS = {
     ufm_retained_reference: 'UFM matching → Pose (last matched frame fallback)',
     conditioned_fixed: 'Depth + mask fit, UFM-assisted',
     conditioned_growing: 'Depth + mask fit, UFM-assisted — growing surface',
+    group_fixed: 'Depth + mask fit, UFM + groups',
+    group_growing: 'Depth + mask fit, UFM + groups — growing surface',
 };
 const FLASH_POSE_EXPLANATIONS = {
+    group_fixed: 'The same surface fit, initialized by tracked point groups when available. Groups can predict through missing observations; these frames are marked predicted.',
+    group_growing: 'The same group-assisted fit, adding newly observed surface. Predicted frames add no surface.',
     ufm_chain: 'RGB matches → depth at both ends → one 3D motion → accumulated pose.',
     surface_corrected: 'Start from UFM’s pose, then fit the surface to depth and mask without retaining the image matches.',
     ufm_retained_reference: 'After matching fails, retry from the last successfully matched frame.',
@@ -14,7 +18,21 @@ const FLASH_POSE_EXPLANATIONS = {
     conditioned_growing: 'The same UFM-assisted fit, adding newly measured surface over time. The current weights do not enforce strict depth-first priority.',
 };
 const flashExperiments = { items: [], selected: null, data: null, frame: 0, request: null, listRequest: null, initialized: false };
-const flashRebuild = { timer: null, request: null, starting: false, id: null, completed: null };
+
+function flashImageBackend(data = flashExperiments.data) {
+    return (data?.shared_matching?.backend || data?.metrics?.shared_matching?.config?.backend || 'ufm').toUpperCase();
+}
+function flashMethodLabel(method, data = flashExperiments.data) {
+    return (FLASH_POSE_METHODS[method] || data?.methods?.[method] || method).replaceAll('UFM', flashImageBackend(data));
+}
+function flashMethodExplanation(method, data = flashExperiments.data) {
+    if (method === 'ufm_retained_reference' && data?.shared_matching) {
+        return 'Use surviving point identities to reconnect to the last matched frame. No extra image inference.';
+    }
+    return (FLASH_POSE_EXPLANATIONS[method] || '').replaceAll('UFM', flashImageBackend(data));
+}
+
+const flashRebuild = { timer: null, request: null, starting: false, active: false, id: null, completed: null };
 
 async function showFlashExperiments() {
     flashUiMode = 'experiments';
@@ -64,14 +82,26 @@ async function loadFlashExperiments() {
     }
 }
 
-async function rebuildFlashExamples() {
+function updateFlashRerunControls(active = flashRebuild.active) {
+    const all = document.getElementById('flash-experiment-rebuild');
+    const scene = document.getElementById('flash-experiment-rerun-scene');
+    if (all) all.disabled = active || flashRebuild.starting;
+    if (scene) scene.disabled = active || flashRebuild.starting || !flashExperiments.selected;
+}
+
+async function rebuildFlashExamples(selectedOnly = false) {
     if (flashRebuild.starting) return;
+    const identity = selectedOnly ? flashExperiments.selected : null;
+    if (selectedOnly && !identity) return;
     flashRebuild.starting = true;
-    document.getElementById('flash-experiment-rebuild').disabled = true;
+    updateFlashRerunControls();
     document.getElementById('flash-experiment-rebuild-status').textContent = 'Starting benchmarks…';
     try {
         const force = document.getElementById('flash-experiment-ignore-cache')?.checked;
-        const response = await fetch('/api/run/flash/experiments/rebuild' + (force ? '?force=true' : ''), { method: 'POST' });
+        const query = new URLSearchParams();
+        if (force) query.set('force', 'true');
+        if (identity) query.set('identity', identity);
+        const response = await fetch('/api/run/flash/experiments/rebuild' + (query.size ? `?${query}` : ''), { method: 'POST' });
         if (!response.ok && response.status !== 409) {
             const error = await response.json();
             throw new Error(error.detail || `Cannot rerun (${response.status})`);
@@ -83,8 +113,7 @@ async function rebuildFlashExamples() {
         return;
     } finally {
         flashRebuild.starting = false;
-        const button = document.getElementById('flash-experiment-rebuild');
-        if (button) button.disabled = false;
+        updateFlashRerunControls();
     }
     await pollFlashRebuild();
 }
@@ -102,10 +131,11 @@ async function pollFlashRebuild() {
         const state = await response.json();
         if (selectedWorkflow !== 'flash' || flashUiMode !== 'experiments') return;
         active = ['starting', 'running', 'cancelling'].includes(state.state);
+        flashRebuild.active = active;
         // Loading saved Run settings can replace the form while a request is
         // pending. The job survives; a later poll attaches to the new controls.
         if (!document.getElementById('flash-experiment-rebuild')) return;
-        document.getElementById('flash-experiment-rebuild').disabled = active || flashRebuild.starting;
+        updateFlashRerunControls();
         const cancel = document.getElementById('flash-experiment-cancel');
         cancel.hidden = !active; cancel.disabled = state.state === 'cancelling';
         cancel.textContent = state.state === 'cancelling' ? 'Cancelling…' : 'Cancel rerun';
@@ -161,6 +191,7 @@ async function selectFlashExperiment(item) {
     video.load();
     flashExperiments.data = null;
     flashExperiments.selected = item.id;
+    updateFlashRerunControls();
     document.getElementById('flash-experiment-title').textContent = item.name;
     document.getElementById('flash-experiment-detail').textContent =
         `${item.experiment} · ${item.mask_source} mask · ${item.frames} frames`;
@@ -182,12 +213,17 @@ async function selectFlashExperiment(item) {
         canvas.height = data.height;
         const select = document.getElementById('flash-experiment-method');
         const previous = select.value;
-        select.replaceChildren(...Object.entries(data.methods).map(([value, label]) => new Option(FLASH_POSE_METHODS[value] || label, value)));
+        select.replaceChildren(...Object.entries(data.methods).map(([value, label]) => new Option(flashMethodLabel(value, data), value)));
         if (Object.hasOwn(data.methods, previous)) select.value = previous;
+        const groupRoles = document.getElementById('flash-experiment-group-role');
+        const previousRole = groupRoles.value;
+        groupRoles.replaceChildren(new Option('All objects', 'all'),
+            ...Object.keys(data.frames[0].objects).map(role => new Option(role, `object:${role}`)));
+        if (Array.from(groupRoles.options).some(option => option.value === previousRole)) groupRoles.value = previousRole;
         refreshFlashMetrics();
         const matches = document.getElementById('flash-experiment-matches');
         matches.disabled = !data.has_correspondences;
-        matches.title = data.has_correspondences ? 'Paths follow UFM predictions between images. Endpoints outside the current mask are retained.' : 'Raw matches were not recorded for this older result.';
+        matches.title = data.has_correspondences ? 'Paths follow image matches. Endpoints outside the current mask are retained.' : 'Raw matches were not recorded for this older result.';
         video.src = `/api/run/flash/experiments/${item.id}/video.mp4`;
         video.load();
     } catch (error) {
@@ -244,6 +280,12 @@ function initFlashExperimentPlayer() {
 function drawFlashExperiment() {
     const canvas = document.getElementById('flash-experiment-overlay');
     if (!canvas) return;
+    const hasGroups = document.getElementById('flash-experiment-method').value.startsWith('group_');
+    document.getElementById('flash-experiment-groups').disabled = !hasGroups;
+    document.getElementById('flash-experiment-group-control').title =
+        hasGroups ? 'Show measured group support as a wireframe; does not change the tracking result.' : 'Choose a pose calculation with groups to show its support.';
+    document.getElementById('flash-experiment-group-role').hidden =
+        !hasGroups || !document.getElementById('flash-experiment-groups').checked;
     const context = canvas.getContext('2d');
     context.resetTransform();
     context.clearRect(0, 0, canvas.width, canvas.height);
@@ -271,12 +313,12 @@ function drawFlashExperiment() {
     const trailFrames = Number(document.getElementById('flash-experiment-flow-trail').value);
     document.getElementById('flash-experiment-player').classList.toggle('flow-visible', matchMode !== 'off');
     const matchInfo = [];
-    const surfaceDescription = method === 'conditioned_growing' ?
+    const surfaceDescription = ['conditioned_growing', 'group_growing'].includes(method) ?
         ' White points: accumulated measured surface at this frame; axes keep their original reference.' :
         ' White points: depth measured in the first usable image, moved by the estimated pose.';
-    document.getElementById('flash-experiment-explanation').textContent = (FLASH_POSE_EXPLANATIONS[method] || '') +
-        (showPose ? surfaceDescription : '');
-    const lost = [];
+    document.getElementById('flash-experiment-explanation').textContent = flashMethodExplanation(method) +
+        (showPose ? surfaceDescription : '') + (hasGroups && document.getElementById('flash-experiment-groups').checked ? ' Purple wireframe: group support.' : '');
+    const lost = [], predicted = [];
     for (const [role, object] of Object.entries(row.objects)) {
         if (showMask) {
             context.beginPath();
@@ -296,11 +338,12 @@ function drawFlashExperiment() {
                 const total = pair.counts.reduce((a, b) => a + b, 0);
                 const gap = pair.target_frame - pair.source_frame;
                 matchInfo.push(`${role}: frame ${pair.source_frame + 1} → ${pair.target_frame + 1} · ${(pair.target_t - pair.source_t).toFixed(3)} s${gap > 1 ? ` · ${gap - 1} skipped frames` : ''} · ${pixels.length} samples available / ${matchMode === 'used' ? pair.counts[4] : total} matches`);
-                matchInfo.push(pair.path_sampling === 'full_ufm_output' ? 'Paths sampled from full UFM output.' : 'Older recording: paths interpolated from a sparse saved grid.');
+                matchInfo.push(pair.path_sampling === 'shared_point_identities' ? 'Actual shared point identities.' : pair.path_sampling === 'full_ufm_output' ? 'Paths sampled from full UFM output.' : 'Older recording: paths interpolated from a sparse saved grid.');
             } else matchInfo.push(`${role}: 2D matches unavailable for this estimate`);
         }
         const points = object.poses[method];
         if (!points) { lost.push(role); continue; }
+        if (object.pose_status?.[method] === 'predicted') predicted.push(role);
         if (!showPose) continue;
         // Same white point-cloud + coloured axes convention as flash_surface_cloud.js.
         // This is the moved reference cloud, never a current measurement or a UFM match.
@@ -331,25 +374,70 @@ function drawFlashExperiment() {
     if (matchMode !== 'off') {
         drawFlashPointPaths(context, data, flashExperiments.frame, method, matchMode, trailFrames, displayScale);
     }
+    if (method.startsWith('group_')) drawFlashGroupTracks(context, data, flashExperiments.frame, method, displayScale);
     // Keep detailed evidence available on hover, without a changing paragraph
     // below the player or a second label covering the video.
     document.getElementById('flash-experiment-matches').title = matchMode === 'off' ? '' :
-        'Connected paths follow UFM flow. Hollow dots: low UFM visibility; dim dots: little image motion. ' +
-        (matchMode === 'raw' ? 'Includes predictions outside the current mask. ' : 'Only matches agreeing with the initial UFM rigid fit. ') + matchInfo.join(' | ');
+        `${flashImageBackend()} point paths. Hollow dots: rejected image match; dim dots: little image motion. ` +
+        (matchMode === 'raw' ? 'Includes predictions outside the current mask. ' : 'Only matches agreeing with the initial rigid fit. ') + matchInfo.join(' | ');
     canvas.dataset.frame = String(row.frame);
     canvas.dataset.method = method;
     const next = data.frames[flashExperiments.frame + 1];
     document.getElementById('flash-experiment-status').textContent =
         `Frame ${row.frame + 1} / ${data.frames.length} · ${row.t.toFixed(2)} s` +
         (next ? ` · Next recorded image: +${(next.t - row.t).toFixed(2)} s` : '') +
-        (lost.length ? ` · No pose: ${lost.join(', ')}` : '');
+        (lost.length ? ` · No pose: ${lost.join(', ')}` : '') +
+        (predicted.length ? ` · Predicted: ${predicted.join(', ')}` : '');
+    if (method.startsWith('group_')) {
+        const counts = Object.entries(row.objects).filter(([role]) => flashGroupVisible(role)).map(([role, object]) => {
+            const group = object.group_tracks?.[method];
+            return group?.ids ? `${role} ${(group.display_ids || group.ids).length}` : `${role}: not recorded (rerun)`;
+        });
+        if (counts.length) document.getElementById('flash-experiment-status').textContent += ` · Group points: ${counts.join(', ')}`;
+    }
+}
+
+function flashGroupDisplay(group) {
+    return group?.display_ids ? {...group, ids: group.display_ids, pixels: group.display_pixels} : group;
+}
+
+function flashGroupVisible(role) {
+    if (!document.getElementById('flash-experiment-groups').checked) return false;
+    const selected = document.getElementById('flash-experiment-group-role').value;
+    return selected === 'all' || selected === `object:${role}`;
+}
+
+function changeFlashGroupDisplay() {
+    document.getElementById('flash-experiment-group-role').hidden =
+        !document.getElementById('flash-experiment-groups').checked ||
+        !document.getElementById('flash-experiment-method').value.startsWith('group_');
+    drawFlashExperiment();
+    if (flashSceneState.enabled) drawFlashExperimentScene(true);
+}
+
+function drawFlashGroupTracks(context, data, index, method, displayScale) {
+    // Measured object and surrounding-group inliers. Show borrowed support
+    // even while own-object motion is selected; never synthesize model points.
+    const scale = Math.max(displayScale, 0.1);
+    for (const [role, object] of Object.entries(data.frames[index].objects)) {
+        if (!flashGroupVisible(role)) continue;
+        const group = flashGroupDisplay(object.group_tracks?.[method]);
+        if (!group?.ids?.length) continue;
+        context.save(); context.strokeStyle = '#df8cff';
+        context.lineWidth = 1.5 / scale;
+        context.beginPath();
+        for (const [a, b] of group.links || []) {
+            context.moveTo(...group.pixels[a]); context.lineTo(...group.pixels[b]);
+        }
+        context.stroke(); context.restore();
+    }
 }
 
 function flashExperimentPair(object, method) {
     const pair = object?.matches?.[method === 'ufm_retained_reference' ? 'retry' : 'pair'];
     // A recovery may compare a different earlier image. Never show unrelated
     // previous-frame matches as if they were that estimator's recorded input.
-    if (method.startsWith('conditioned_') && object?.match_sources?.[method] !== pair?.source_frame) return null;
+    if ((method.startsWith('conditioned_') || method.startsWith('group_')) && object?.match_sources?.[method] !== pair?.source_frame) return null;
     return pair;
 }
 
@@ -416,8 +504,8 @@ function toggleFlashExperimentFullscreen() {
 }
 
 // Whole-recording scores are separate from per-frame playback and fit confidence.
-const FLASH_METHOD_COLORS = ['#72b7ff', '#ffbd69', '#b8a0ff', '#61d4c3', '#f48fa7'];
-const FLASH_METHOD_SHORT = { ufm_chain: 'UFM', surface_corrected: 'Corrected', ufm_retained_reference: 'Retry', conditioned_fixed: 'Joint fit', conditioned_growing: 'Growing' };
+const FLASH_METHOD_COLORS = ['#72b7ff', '#ffbd69', '#b8a0ff', '#61d4c3', '#f48fa7', '#c6dc67', '#e0a6ed'];
+const FLASH_METHOD_SHORT = { ufm_chain: 'UFM', surface_corrected: 'Corrected', ufm_retained_reference: 'Retry', conditioned_fixed: 'Joint fit', conditioned_growing: 'Growing', group_fixed: 'Groups', group_growing: 'Groups + growing' };
 
 function flashText(parent, tag, text, className = '') {
     const element = document.createElement(tag);
@@ -445,6 +533,8 @@ function flashMethodMetrics(item, role, method) {
         angle: errors.angle_deg_median,
         availability: total > 0 ? available / total * 100 : null,
         prepare: timing.prepare_ms?.median,
+        groups: method.startsWith('group_') ? timing.scene_point_tracking_ms?.median : null,
+        sources: data.pose_sources,
         fit: timing[method === 'surface_corrected' ? 'finish_ms' : method]?.median,
     };
 }
@@ -459,7 +549,9 @@ function refreshFlashMetrics() {
         const values = roles.map(role => [role, flashMethodMetrics(item, role, method)?.pass]);
         score.textContent = values.length && values.every(([,v]) => Number.isFinite(v))
             ? values.map(([role,v]) => `${roles.length > 1 ? role + ': ' : ''}${v.toFixed(0)}%`).join(' · ')
-            : !item.metrics ? 'No saved scores' : 'Accuracy unscored';
+            : !item.metrics ? 'No saved scores'
+            : roles.every(role => !item.metrics.roles[role].methods?.[method]) ? 'Not run for this method'
+            : 'Accuracy unscored';
         score.title = `Selected method · within ${flashLimit()} mm / ${flashLimit()}°. Missing poses fail. Initialization excluded.`;
     });
     renderFlashResults();
@@ -473,7 +565,9 @@ function renderFlashResults() {
     if (!item) return;
     flashText(panel, 'h3', 'Whole-clip results');
     const method = document.getElementById('flash-experiment-method').value;
-    flashText(panel, 'p', FLASH_POSE_METHODS[method] || method, 'flash-metric-muted');
+    flashText(panel, 'p', flashMethodLabel(method, item), 'flash-metric-muted');
+    const shared = item.metrics?.shared_matching;
+    if (shared) flashText(panel, 'p', `Shared ${flashImageBackend(item)} matching: ${flashNumber(shared.timing_ms.median)} ms/frame · all objects and groups`, 'flash-metric-muted');
     if (!item.metrics?.roles) { flashText(panel, 'p', 'No saved scores for this recording.'); return; }
     for (const role of Object.keys(item.metrics.roles)) {
         const card = flashText(panel, 'section', '', 'flash-metric-card');
@@ -490,6 +584,8 @@ function renderFlashResults() {
             ['Shared preparation', `${flashNumber(value.prepare)} ms`],
             ['Additional processing', `${flashNumber(value.fit)} ms`],
         ];
+        if (Number.isFinite(value.groups)) fields.push(['Scene point tracking (shared)', `${flashNumber(value.groups)} ms`]);
+        if (value.sources) fields.push(['Observed / predicted / lost', `${value.sources.observed_candidate} / ${value.sources.predicted} / ${value.sources.lost}`]);
         const dl = flashText(card, 'dl', '');
         for (const [label, text] of fields) { flashText(dl, 'dt', label); flashText(dl, 'dd', text); }
     }
@@ -521,7 +617,7 @@ function renderFlashComparison() {
     const methods = [...new Set(flashExperiments.items.flatMap(x => Object.keys(x.methods)))];
     const legend = document.getElementById('flash-experiment-legend'); legend.replaceChildren();
     methods.forEach((method, index) => {
-        const label = flashText(legend, 'span', FLASH_POSE_METHODS[method] || method);
+        const label = flashText(legend, 'span', (FLASH_POSE_METHODS[method] || method).replaceAll('UFM', 'image matching'));
         label.style.setProperty('--method-color', FLASH_METHOD_COLORS[index % FLASH_METHOD_COLORS.length]);
     });
     const notes = {
@@ -564,13 +660,13 @@ function renderFlashComparison() {
             const row = flashText(card, 'button', '', 'flash-chart-row');
             row.type = 'button'; row.dataset.method = method; row.disabled = !item.methods[method];
             row.style.setProperty('--method-color', FLASH_METHOD_COLORS[index % FLASH_METHOD_COLORS.length]);
-            flashText(row, 'span', FLASH_METHOD_SHORT[method] || method);
+            flashText(row, 'span', method === 'ufm_chain' ? flashImageBackend(item) : FLASH_METHOD_SHORT[method] || method);
             const track = flashText(row, 'span', '', 'flash-chart-track');
             const bar = flashText(track, 'span', '', 'flash-chart-bar');
             bar.style.width = `${Number.isFinite(value) ? Math.max(0, Math.min(100, value / scale * 100)) : 0}%`;
             const label = Number.isFinite(value) ? flashNumber(value) : '—';
             flashText(row, 'span', label, 'flash-chart-value');
-            row.title = `${FLASH_POSE_METHODS[method] || method}: ${label}${data ? ` · ${data.available}/${data.total} poses returned` : ' · no result'}`;
+            row.title = `${flashMethodLabel(method, item)}: ${label}${data ? ` · ${data.available}/${data.total} poses returned` : ' · no result'}`;
             row.onclick = async () => {
                 await selectFlashExperiment(item);
                 if (flashExperiments.selected !== item.id) return;
@@ -644,7 +740,7 @@ function toggleFlashExperiment3D() {
 
 function updateFlashSceneSurfaceControl() {
     document.getElementById('flash-scene-surface-control').hidden =
-        document.getElementById('flash-experiment-method').value !== 'conditioned_growing';
+        !['conditioned_growing', 'group_growing'].includes(document.getElementById('flash-experiment-method').value);
 }
 
 function drawFlashExperimentScene(rebuild = false) {
@@ -653,20 +749,26 @@ function drawFlashExperimentScene(rebuild = false) {
     if (rebuild) {
         const descriptions = [];
         updateFlashSceneSurfaceControl();
-        const expanded = state.packet.method === 'conditioned_growing' &&
+        const expanded = ['conditioned_growing', 'group_growing'].includes(state.packet.method) &&
             document.getElementById('flash-scene-surface').value === 'expanded';
-        for (const object of Object.values(state.packet.objects)) {
+        for (const [role, object] of Object.entries(state.packet.objects)) {
             descriptions.push({layer: 'estimate', color: 0xffa84b, pose: object.pose,
                 points: expanded ? object.surface : object.reference, reference: object.reference});
             descriptions.push({layer: 'labelled', color: 0x34e5a1, pose: object.labelled_pose,
                 points: object.labelled_surface, reference: object.reference});
+            const groupPoints = object.group_tracks?.display_camera_xyz || object.group_tracks?.camera_xyz;
+            const links = flashExperiments.data.frames[state.packet.frame].objects[role].group_tracks?.[state.packet.method]?.links;
+            if (state.packet.method.startsWith('group_') && flashGroupVisible(role) && groupPoints?.length) {
+                descriptions.push({layer: 'groups', color: 0xdf8cff, points: groupPoints,
+                    pose: [[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]], axes: false, links: links || []});
+            }
         }
         state.viewer.update(state.packet.depth, state.bitmap, state.packet.camera, descriptions);
     }
     state.viewer.setOptions({scene: document.getElementById('flash-scene-context').checked,
         estimate: document.getElementById('flash-scene-estimate').checked,
         labelled: document.getElementById('flash-scene-label').checked,
-        axes: document.getElementById('flash-scene-axes').checked});
+        axes: document.getElementById('flash-scene-axes').checked, groups: state.packet.method.startsWith('group_')});
 }
 
 async function requestFlashExperimentScene() {
@@ -699,7 +801,7 @@ async function requestFlashExperimentScene() {
         const bitmap = await createImageBitmap(new Blob([buffer.slice(depthStart + packet.depth_bytes)], {type: 'image/png'}));
         if (generation !== state.generation || !state.enabled || identity !== flashExperiments.selected ||
             method !== document.getElementById('flash-experiment-method').value) { bitmap.close(); return; }
-        const module = await import('/static/rgbd_scene.js?v=3');
+        const module = await import('/static/rgbd_scene.js?v=5');
         if (generation !== state.generation || !state.enabled || identity !== flashExperiments.selected ||
             method !== document.getElementById('flash-experiment-method').value) { bitmap.close(); return; }
         if (!state.viewer) state.viewer = module.createRgbdScene(document.getElementById('flash-experiment-scene'));

@@ -32,7 +32,7 @@
 <text x="622.5" y="500" font-size="18" fill="#18283e" font-weight="normal" text-anchor="middle">Existing surface (before adding frame t)</text>
 <rect x="155" y="526" width="850" height="100" rx="0" fill="#f5f7fb" stroke="#f5f7fb" stroke-width="2"/>
 <text x="170" y="553" font-size="20" fill="#18283e" font-weight="normal" text-anchor="start">Compare images: previous connected frame p → t.</text>
-<text x="170" y="583" font-size="20" fill="#18283e" font-weight="normal" text-anchor="start">Fit stored surface to current depth/mask; use image matches.</text>
+<text x="170" y="583" font-size="20" fill="#18283e" font-weight="normal" text-anchor="start">Fit current mask/depth first; image matches resolve remaining ambiguity.</text>
 <text x="170" y="613" font-size="20" fill="#bd742b" font-weight="normal" text-anchor="start">Optional group/gripper input: pose prediction at time t.</text>
 <path d="M455 664 L1000 664" stroke="#52647a" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
 <text x="727.5" y="654" font-size="18" fill="#18283e" font-weight="normal" text-anchor="middle">Pose + time + evidence, or predicted/lost</text>

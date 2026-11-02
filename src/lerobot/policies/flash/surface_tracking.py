@@ -148,8 +148,10 @@ class SurfaceTrackingSession:
         information_correspondence_m=None,
         registered_reference_camera_m=None,
         record_correspondences=False,
+        shared_matching=None,
     ):
         self.matcher = matcher
+        self.shared_matching = shared_matching
         self.record_correspondences = record_correspondences
         self.matcher_lock = matcher_lock
         self.fit_kernels = fit_kernels
@@ -231,6 +233,7 @@ class SurfaceTrackingSession:
             "obs": obs,
             "usable": obs["valid_image"] & connected,
             "frame_id": frame_id,
+            "intrinsics": intrinsics,
             "all_surface_points": all_points,
         }
         detail = {
@@ -251,6 +254,8 @@ class SurfaceTrackingSession:
             "step": None,
             "status": None,
         }
+        if self.shared_matching is not None:
+            prepared["shared_matches"] = True
         if not mask.any():
             prepared["status"] = "no_mask"
             return prepared
@@ -289,11 +294,25 @@ class SurfaceTrackingSession:
         detail["preprocess_ms"] = (time.perf_counter() - start) * 1000
         if self.previous is not None:
             start = time.perf_counter()
-            a, b, crop = crop_pair(self.previous, current, self.motion_config)
-            match_args = (self.matcher, a, b, crop, self.previous, current, intrinsics, self.motion_config)
+            if self.shared_matching is None:
+                a, b, crop = crop_pair(self.previous, current, self.motion_config)
+                match_args = (
+                    self.matcher,
+                    a,
+                    b,
+                    crop,
+                    self.previous,
+                    current,
+                    intrinsics,
+                    self.motion_config,
+                )
             evidence = {} if self.record_correspondences else None
             kwargs = {"evidence": evidence} if evidence is not None else {}
-            if self.matcher_lock is None:
+            if self.shared_matching is not None:
+                source, target = self.shared_matching.pairs(
+                    self.previous, current, intrinsics, evidence=evidence
+                )
+            elif self.matcher_lock is None:
                 source, target = ufm_pairs(*match_args, **kwargs)
             else:
                 wait_start = time.perf_counter()

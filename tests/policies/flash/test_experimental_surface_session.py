@@ -11,6 +11,7 @@ from lerobot.policies.flash.experimental_surface_session import (
     ImageConditionedFit,
     PoseHint,
     SurfaceStore,
+    SurfaceView,
 )
 from lerobot.policies.flash.surface_grounding import ShapeConfig
 from lerobot.policies.flash.surface_observation import move
@@ -133,9 +134,99 @@ def test_prediction_during_empty_mask_never_grows_or_reseeds_surface(monkeypatch
     assert result["diagnostics"]["covariance"] is None
 
 
-def test_no_overlap_does_not_reset_coordinate_origin(monkeypatch):
+def test_persistent_prediction_follows_group_then_world_camera_and_reacquires(monkeypatch):
     prepare, rgb, depth, mask, k = prepared_frames(monkeypatch)
-    tracker = GrowingSurfaceSession(prepare.shape_config)
+    tracker = GrowingSurfaceSession(prepare.shape_config, GrowingSurfaceConfig(retain_unobserved_pose=True))
+    empty = prepare.prepare(rgb, depth, mask & False, k, 0)
+    assert tracker.update(empty, 0.0)["camera_from_reference"] is None
+    tracker.update(prepare.prepare(rgb, depth, mask, k, 1), 0.1)
+    model = tracker.store.points.copy()
+    # Surrounding measurements continue moving the hidden object.
+    for i, x in [(2, 0.02), (3, 0.04)]:
+        hint = PoseHint(transform(x), "environment_point_group", i / 10, 0.1, 1)
+        result = tracker.update(prepare.prepare(rgb, depth, mask & False, k, i), i / 10, hint=hint)
+        np.testing.assert_allclose(result["camera_from_reference"], transform(x))
+    # Then all support disappears. Hold world state, including with a moving camera.
+    for i, camera_x in [(4, 0.01), (5, 0.03), (6, 0.05)]:
+        result = tracker.update(
+            prepare.prepare(rgb, depth, mask & False, k, i), i / 10, base_from_camera=transform(camera_x)
+        )
+        assert result["status"] == "predicted"
+        np.testing.assert_allclose(result["camera_from_reference"], transform(0.04 - camera_x), atol=1e-12)
+        assert result["diagnostics"]["prediction_source"] == "last_world_pose"
+        assert result["diagnostics"]["prediction_age_s"] == pytest.approx(i / 10 - 0.3)
+        assert result["diagnostics"]["observation_age_s"] == pytest.approx(i / 10 - 0.1)
+        np.testing.assert_array_equal(tracker.store.points, model)
+        assert tracker.connected_frame == 1
+    # Real surface fitting corrects the stale prediction; the coordinate origin stays fixed.
+    result = tracker.update(prepare.prepare(rgb, depth, mask, k, 7), 0.7)
+    assert result["status"] == "observed_candidate"
+    assert np.linalg.norm(np.asarray(result["camera_from_reference"])[:3, 3]) < 0.005
+    assert tracker.reference_frame == 1
+    assert result["diagnostics"]["observation_age_s"] == 0
+
+
+def test_growth_checks_previous_rays_without_removing_hidden_back_surface(monkeypatch):
+    prepare, rgb, depth, mask, k = prepared_frames(monkeypatch)
+    first = prepare.prepare(rgb, depth, mask, k, 0)
+    view = SurfaceView.from_observation(first["current"], k, prepare.shape_config)
+    store = SurfaceStore(GrowingSurfaceConfig())
+    store.add(first["current"]["obs"]["points"], np.eye(4), 0, active=True, view=view)
+    local = np.array([[0, 0, 0.97], [0, 0, 1.03], [0.08, 0, 1.0], [0, 0, 1.002]])
+    # In front of observed depth / behind it / outside silhouette / within noise.
+    np.testing.assert_array_equal(store.compatible_additions(local, np.eye(4)), [False, True, False, True])
+    pose = transform(0.05, 0.02)
+    np.testing.assert_array_equal(
+        store.compatible_additions(move(local, pose), pose), [False, True, False, True]
+    )
+    # No depth means unknown, not a reason to remove the back or complete it.
+    unknown = dict(first["current"], depth=np.zeros_like(depth))
+    empty_view = SurfaceView.from_observation(unknown, k, prepare.shape_config)
+    assert not empty_view.contradicts(local).any()
+
+
+@pytest.mark.parametrize("surface_priority", [False, True])
+def test_repeated_wrong_fit_cannot_confirm_geometry_in_previously_empty_space(monkeypatch, surface_priority):
+    prepare, rgb, depth, mask, k = prepared_frames(monkeypatch)
+    tracker = GrowingSurfaceSession(
+        prepare.shape_config, GrowingSurfaceConfig(surface_priority=surface_priority)
+    )
+    tracker.update(prepare.prepare(rgb, depth, mask, k, 0), 0.0)
+    initial = tracker.store.points.copy()
+    # A fit can overlap the old plane while placing a new strip 20 mm in front
+    # of a depth view that already ruled that space out. Repeat the bad fit.
+    monkeypatch.setattr(ImageConditionedFit, "correct", lambda self, seed: (np.eye(4), {}))
+    monkeypatch.setattr(
+        ImageConditionedFit, "correct_surface_first", lambda self, seed, previous: (np.eye(4), {})
+    )
+    rejected = []
+    for i in (1, 2, 3):
+        new_depth = depth.copy()
+        new_depth[20:35, 25:76] = np.linspace(0.98, 1.0, 15)[:, None]
+        # A small part of the same bad placement lands in space that was
+        # previously hidden. It must not survive a mostly contradicted patch.
+        new_depth[49:61, 30:40] = np.linspace(1.0, 1.012, 12)[:, None]
+        result = tracker.update(prepare.prepare(rgb, new_depth, mask, k, i), i / 10)
+        assert result["status"] == "observed_candidate"
+        rejected.append(result["diagnostics"]["growth"]["contradicted_by_retained_views"])
+    # Measurements within the configured depth noise budget may still be added.
+    assert tracker.store.points[:, 2].min() >= initial[:, 2].min() - prepare.shape_config.depth_tolerance_m
+    assert tracker.store.points[:, 2].max() <= initial[:, 2].max() + prepare.shape_config.depth_tolerance_m
+    assert all(count > 0 for count in rejected)
+    # A newly seen surface behind the old front surface is allowed and confirmed.
+    for i in (4, 5, 6):
+        new_depth = depth.copy()
+        new_depth[20:35, 25:76] = np.linspace(1.02, 1.0, 15)[:, None]
+        result = tracker.update(prepare.prepare(rgb, new_depth, mask, k, i), i / 10)
+    assert tracker.store.points[:, 2].max() > 1.015
+
+
+@pytest.mark.parametrize("surface_priority", [False, True])
+def test_no_overlap_does_not_reset_coordinate_origin(monkeypatch, surface_priority):
+    prepare, rgb, depth, mask, k = prepared_frames(monkeypatch)
+    tracker = GrowingSurfaceSession(
+        prepare.shape_config, GrowingSurfaceConfig(surface_priority=surface_priority)
+    )
     tracker.update(prepare.prepare(rgb, depth, mask, k, 0), 0.0)
     old = tracker.reference.copy()
     # Real solver receives a distant observation. Make its iteration budget one
@@ -143,6 +234,9 @@ def test_no_overlap_does_not_reset_coordinate_origin(monkeypatch):
     from lerobot.policies.flash import experimental_surface_session as module
 
     monkeypatch.setattr(module.ImageConditionedFit, "correct", lambda self, seed: (seed, {}))
+    monkeypatch.setattr(
+        module.ImageConditionedFit, "correct_surface_first", lambda self, seed, previous: (seed, {})
+    )
     new = prepare.prepare(rgb, depth + 0.5, mask, k, 1)
     new["step"] = None
     result = tracker.update(new, 0.1)
@@ -214,3 +308,162 @@ def test_addition_records_model_used_for_fit_before_other_promotions():
     assert store.version > before
     store.add(points() + [0, 0, 0.06], np.eye(4), 2, fitted_map_version=before)
     assert store.patches[2].fitted_map_version == before
+
+
+def test_visible_surface_corrects_wrong_group_prediction(monkeypatch):
+    from functools import partial
+
+    from benchmarks.flash_experiment_groups import GroupConfig, GroupHints
+    from lerobot.policies.flash.perception import RGBDFrame
+
+    prepare, rgb, depth, mask, k = prepared_frames(monkeypatch)
+    tracker = GrowingSurfaceSession(prepare.shape_config)
+    tracker.update(prepare.prepare(rgb, depth, mask, k, 0), 0.0)
+    from lerobot.policies.flash.experimental_surface_session import PointEvidence
+
+    evidence = PointEvidence(tracker.reference, tracker.reference + [0, 0, 0.02], "group", "predicted", 0.005)
+    hint = PoseHint(transform(0, 0, 0.02), "environment_point_group", 0.1, 0.0, 0, (evidence,))
+    frame = RGBDFrame(1, rgb, depth, k, 1.0, np.eye(4), 0.1, 0.1, "test")
+    prepared = prepare.prepare(rgb, depth, mask, k, 1)
+    check = partial(
+        GroupHints(GroupConfig()).compare_candidate,
+        frame,
+        mask,
+        hint,
+        observation=prepared["current"],
+        shape_config=prepare.shape_config,
+    )
+    result = tracker.update(prepared, 0.1, hint=hint, candidate_check=check)
+    assert result["status"] == "observed_candidate"
+    # Full RGB-D surface remains at the original depth; do not copy the prior.
+    pose = np.asarray(result["camera_from_reference"])
+    assert np.median(np.linalg.norm(move(tracker.reference, pose) - tracker.reference, axis=1)) < 0.005
+    assert result["diagnostics"]["hint_disagreement_mm"] > 15
+    assert result["diagnostics"]["group_comparison"]["verdict"] == "candidate_favored"
+
+
+@pytest.mark.parametrize(
+    "shared,kind,weight", [(True, "measured", 0), (True, "predicted", 1), (False, "measured", 1)]
+)
+def test_shared_object_matches_contribute_once_to_real_fit_residual(monkeypatch, shared, kind, weight):
+    from lerobot.policies.flash.experimental_surface_session import PointEvidence
+
+    prepare, rgb, depth, mask, k = prepared_frames(monkeypatch)
+    tracker = GrowingSurfaceSession(prepare.shape_config)
+    tracker.update(prepare.prepare(rgb, depth, mask, k, 0), 0.0)
+    current = prepare.prepare(rgb, depth, mask, k, 1)
+    current["shared_matches"] = shared
+    evidence = PointEvidence(points(), points(), "object_point_group", kind, 0.005)
+    hint = PoseHint(np.eye(4), "object_point_group", 0.1, 0.0, 0, (evidence,))
+    original = ImageConditionedFit.correct
+    checked = []
+
+    def check(self, seed):
+        # Cross the caller -> actual objective boundary. Both evidence sets
+        # would otherwise append a residual for the SAME point identities.
+        assert self.image_weight == weight
+        assert self.point_evidence == (evidence,)
+        checked.append(True)
+        return original(self, seed)
+
+    monkeypatch.setattr(ImageConditionedFit, "correct", check)
+    tracker.update(current, 0.1, hint=hint)
+    assert checked
+
+
+@pytest.mark.parametrize("surface_priority", [False, True])
+def test_ambiguous_surface_fit_cannot_change_group_anchor_or_grow_model(monkeypatch, surface_priority):
+    from functools import partial
+
+    from benchmarks.flash_experiment_groups import GroupConfig, GroupHints
+    from lerobot.policies.flash.perception import RGBDFrame
+
+    prepare, rgb, depth, mask, k = prepared_frames(monkeypatch)
+    tracker = GrowingSurfaceSession(
+        prepare.shape_config, GrowingSurfaceConfig(surface_priority=surface_priority)
+    )
+    tracker.update(prepare.prepare(rgb, depth, mask, k, 0), 0.0)
+    before = tracker.store.points.copy()
+    version = tracker.store.version
+    # A front-facing plane has no depth evidence for a twist about its normal.
+    # Simulate the fitter proposing an equally plausible 180-degree solution.
+    flip = np.diag([-1.0, -1.0, 1.0, 1.0])
+    center = tracker.reference.mean(axis=0)
+    flip[:3, 3] = center - flip[:3, :3] @ center
+    monkeypatch.setattr(ImageConditionedFit, "correct", lambda *_: (flip, {}))
+    hint = PoseHint(np.eye(4), "environment_point_group", 0.1, 0.0, 0)
+    frame = RGBDFrame(1, rgb, depth, k, 1.0, np.eye(4), 0.1, 0.1, "test")
+    prepared = prepare.prepare(rgb, depth, mask, k, 1)
+    check = partial(
+        GroupHints(GroupConfig()).compare_candidate,
+        frame,
+        mask,
+        hint,
+        observation=prepared["current"] if surface_priority else None,
+        shape_config=prepare.shape_config,
+    )
+    result = tracker.update(prepared, 0.1, hint=hint, candidate_check=check)
+    assert result["status"] == ("observed_candidate" if surface_priority else "predicted")
+    if not surface_priority:
+        assert result["diagnostics"]["group_comparison"]["verdict"] in {"ambiguous", "prior_favored"}
+    # The real geometry pass can adjust within discrete surface sampling. It
+    # must not accept the injected half-turn. The archived fallback is exact.
+    if surface_priority:
+        from scipy.spatial.transform import Rotation
+
+        pose = np.asarray(result["camera_from_reference"])
+        assert np.rad2deg(Rotation.from_matrix(pose[:3, :3]).magnitude()) < 1
+        assert np.max(np.linalg.norm(move(before, pose) - before, axis=1)) < 0.001
+    else:
+        np.testing.assert_array_equal(result["camera_from_reference"], np.eye(4))
+    np.testing.assert_array_equal(tracker.store.points, before)
+    assert tracker.store.version == version
+    assert tracker.connected_frame == (1 if surface_priority else 0)
+    if not surface_priority:
+        assert result["diagnostics"]["map_events"] == []
+    else:
+        assert all(event["event"] == "pending" for event in result["diagnostics"]["map_events"])
+
+
+def test_point_sources_constrain_pose_and_remain_normalized_and_batch_equivalent(monkeypatch):
+    from lerobot.policies.flash.experimental_surface_session import PointEvidence
+
+    prepare, rgb, depth, mask, k = prepared_frames(monkeypatch)
+    current = prepare.prepare(rgb, depth, mask, k, 0)["current"]
+    ref = current["obs"]["points"]
+    predicted = ref + [0.003, 0, 0]
+    source = PointEvidence(ref, predicted, "group", "predicted", 0.005)
+    fitter = ImageConditionedFit(
+        ref,
+        current,
+        k,
+        prepare.shape_config,
+        image_reference=np.empty((0, 3)),
+        image_current=np.empty((0, 3)),
+        image_scale_m=0.005,
+        image_weight=0.0,
+        point_evidence=(source,),
+    )
+    plain = ImageConditionedFit(
+        ref,
+        current,
+        k,
+        prepare.shape_config,
+        image_reference=np.empty((0, 3)),
+        image_current=np.empty((0, 3)),
+        image_scale_m=0.005,
+        image_weight=0.0,
+    )
+    base_pose, _ = plain.correct(np.eye(4))
+    pose, _ = fitter.correct(np.eye(4))
+    # Evidence influences the real optimizer, not only its initialization.
+    assert pose[0, 3] > base_pose[0, 3] + 0.0001
+    for p, residual in zip(
+        [pose, transform(0.002)], fitter.batch_residuals([pose, transform(0.002)]), strict=True
+    ):
+        np.testing.assert_allclose(residual, fitter.residual(p), atol=1e-12)
+    value = np.sum(fitter.residual(pose) ** 2)
+    fitter.point_evidence = (
+        PointEvidence(np.tile(ref, (4, 1)), np.tile(predicted, (4, 1)), "group", "predicted", 0.005),
+    )
+    assert np.sum(fitter.residual(pose) ** 2) == pytest.approx(value)

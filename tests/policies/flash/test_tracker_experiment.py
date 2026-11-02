@@ -7,6 +7,7 @@ import cv2
 import numpy as np
 import pytest
 
+from benchmarks.flash_experiment_groups import GroupConfig
 from benchmarks.flash_experiment_inputs import samples
 from benchmarks.flash_tracker_experiment import MotionChain, RetainedMotionReference, run_case, score_case
 from lerobot.policies.flash.experimental_surface_session import GrowingSurfaceConfig
@@ -160,7 +161,8 @@ def test_score_keeps_missing_poses_and_paired_accuracy_separate(tmp_path):
     assert result["methods"]["ufm_chain"]["available_after_initialization"] == 1
 
 
-def test_growing_experiment_keeps_baselines_and_archives_original_patches(tmp_path, monkeypatch):
+@pytest.mark.parametrize("groups", [False, True])
+def test_growing_experiment_keeps_baselines_and_archives_original_patches(tmp_path, monkeypatch, groups):
     from lerobot.policies.flash import surface_tracking
 
     points = np.random.default_rng(7).uniform(-0.05, 0.05, (24, 3)) + [0, 0, 1]
@@ -169,12 +171,22 @@ def test_growing_experiment_keeps_baselines_and_archives_original_patches(tmp_pa
     config = VisionPipelineConfig()
     base = run_case(case, tmp_path / "base", None, config, None, None)
     result = run_case(
-        case, tmp_path / "growth", None, config, None, None, surface_experiment=GrowingSurfaceConfig()
+        case,
+        tmp_path / "growth",
+        None,
+        config,
+        None,
+        None,
+        surface_experiment=GrowingSurfaceConfig(),
+        group_experiment=GroupConfig() if groups else None,
     )
     for method in ("ufm_chain", "surface_corrected"):
         assert base["roles"]["item"]["methods"][method] == result["roles"]["item"]["methods"][method]
     rows = [json.loads(line) for line in (tmp_path / "growth/frames.jsonl").read_text().splitlines()]
-    for method in ("conditioned_fixed", "conditioned_growing"):
+    methods = ["conditioned_fixed", "conditioned_growing"] + (
+        ["group_fixed", "group_growing"] if groups else []
+    )
+    for method in methods:
         assert rows[0]["objects"]["item"][method + "_status"] == "initialized"
         archive = tmp_path / f"growth/surface_patches/{method}/item/000000.npz"
         with np.load(archive) as patch:
@@ -207,6 +219,40 @@ def test_retry_connects_to_last_good_image_not_the_unregistered_one(monkeypatch)
     np.testing.assert_allclose(pose[:3, 3], [0.03, 0, 0], atol=1e-8)
     assert diagnostics["reference_frame"] == 0
     assert tracker.reference is current
+
+
+def test_group_benchmark_publishes_pose_when_mask_and_all_point_support_are_empty(tmp_path):
+    case = demo(tmp_path)
+    file = tmp_path / "masks/000001.json.gz"
+    with gzip.open(file, "rt") as stream:
+        row = json.load(stream)
+    row["masks_rle"] = {"item": []}
+    row["base_from_camera"][0][3] = 0.02
+    with gzip.open(file, "wt") as stream:
+        json.dump(row, stream)
+    # Flat RGB has no LK features. The neural matcher has no valid second mask.
+    run_case(
+        case,
+        tmp_path / "run",
+        None,
+        VisionPipelineConfig(),
+        None,
+        None,
+        surface_experiment=GrowingSurfaceConfig(),
+        group_experiment=GroupConfig(),
+    )
+    rows = [json.loads(line) for line in (tmp_path / "run/frames.jsonl").read_text().splitlines()]
+    for method in ("group_fixed", "group_growing"):
+        obj = rows[1]["objects"]["item"]
+        assert obj[method + "_status"] == "predicted"
+        expected = np.eye(4)
+        expected[0, 3] = -0.02
+        np.testing.assert_allclose(obj[method], expected)
+        details = obj[method + "_details"]
+        assert details["prediction_source"] == "last_world_pose"
+        assert details["map_version_after"] == details["map_version_used"] == 1
+        assert not details["group"]["source"]
+        assert not details["map_events"]
 
 
 def test_saved_2d_matches_preserve_raw_predictions_and_rejection_stages(monkeypatch):
