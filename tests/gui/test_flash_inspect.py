@@ -1664,6 +1664,7 @@ def test_rollout_replay_uses_recorded_metric_depth_in_the_shared_scene(gui_page,
     )
     page.evaluate("switchTab('run')")
     page.evaluate("() => selectWorkflow('flash')")
+    page.get_by_role("button", name="Demo / rollout editor", exact=True).click()
     page.evaluate(
         "datasets['/tmp/metric-rollout'] = {id: '/tmp/metric-rollout', root: '/tmp/metric-rollout'}"
     )
@@ -2430,6 +2431,7 @@ def test_3d_scene_projection_and_surface_pick_edit_the_prepared_keyframe(gui_pag
 
     page.evaluate("switchTab('run')")
     page.evaluate("() => selectWorkflow('flash')")
+    page.get_by_role("button", name="Demo / rollout editor", exact=True).click()
     page.locator("#run-flash-demos .flash-recording").click()
     page.locator("#flash-scene-toggle").click()
     page.wait_for_function("() => flashSceneMode === '3d' && flashSceneFrameCache?.frameIndex === 0")
@@ -2893,6 +2895,7 @@ def test_unprepared_regular_robot_demo_opens_timeline_editor_and_3d_scene(gui_pa
         ),
     )
     page.evaluate("switchTab('run'); selectWorkflow('flash')")
+    page.get_by_role("button", name="Demo / rollout editor", exact=True).click()
     page.evaluate(f"datasets[{json.dumps(root)}] = {{id: 'regular', root: {json.dumps(root)}}}")
     page.evaluate("_loadFlashRecordings()")
     page.get_by_role("button", name="regular-robot-demo").click()

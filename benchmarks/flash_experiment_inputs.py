@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import gzip
 import json
+from functools import lru_cache
 from pathlib import Path
 
 import cv2
@@ -40,7 +41,7 @@ def decode_mask(runs: list, shape: tuple[int, int]) -> np.ndarray:
     return flat.reshape(shape)
 
 
-def _ycb(case: dict):
+def _ycb(case: dict, index: int | None = None):
     root = path(case["source_root"])
     start, count = case["start_frame"], case["expected_frames"]
     names = sorted(p.name for p in (root / "rgb").glob("*.png"))[start : start + count]
@@ -49,7 +50,8 @@ def _ycb(case: dict):
     ns = np.asarray([int(Path(n).stem) for n in names], dtype=np.int64)
     times = (ns - ns[0]) * 1e-9
     k = np.loadtxt(root / "cam_K.txt").reshape(3, 3)
-    for i, (name, t) in enumerate(zip(names, times, strict=True)):
+    for i in range(count) if index is None else [index]:
+        name, t = names[i], times[i]
         frame = RGBDFrame(
             i,
             image(root / "rgb" / name, color=True),
@@ -64,7 +66,7 @@ def _ycb(case: dict):
         yield frame, {"object": image(root / "gt_mask" / name) > 0}
 
 
-def _recording(case: dict):
+def _recording(case: dict, index: int | None = None):
     root = path(case["artifact_root"]) / "recording"
     evidence = path(case["mask_evidence_dir"])
     manifest = json.loads((evidence / "manifest.json").read_text())
@@ -77,16 +79,16 @@ def _recording(case: dict):
     ):
         raise ValueError("demo masks and RGB-D have different frame counts")
     k = np.loadtxt(root / "cam_K.txt").reshape(3, 3)
-    offset = None
-    for i, t in enumerate(times):
+    with gzip.open(evidence / "000000.json.gz", "rt") as stream:
+        offset = json.load(stream)["source_time_s"]
+    for i in range(len(times)) if index is None else [index]:
+        t = times[i]
         rgb = image(root / "rgb" / f"{i:06d}.{case.get('rgb_extension', 'jpg')}", color=True)
         depth = image(root / "depth" / f"{i:06d}.png")
         with gzip.open(evidence / f"{i:06d}.json.gz", "rt") as stream:
             row = json.load(stream)
         if row["frame_index"] != i or row["image_size"] != list(depth.shape):
             raise ValueError("demo mask belongs to a different image")
-        if offset is None:
-            offset = row["source_time_s"]
         # The recorded clock may have a constant origin offset. Its intervals must match.
         if not np.isclose(row["source_time_s"] - offset, t, atol=1e-6, rtol=0):
             raise ValueError("demo mask time differs from recorded RGB-D time")
@@ -107,7 +109,16 @@ def _recording(case: dict):
         )
 
 
-def _lerobot(case: dict):
+@lru_cache(maxsize=2)
+def _local_dataset(root: Path, repo_id: str, modified_ns: int):
+    # Never fetch a missing recording while browsing. Two datasets bound the
+    # decoded-reader state; the ordinary dataset reader still owns decoding.
+    from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
+    return LeRobotDataset(repo_id, root=root, local_files_only=True)
+
+
+def _lerobot(case: dict, index: int | None = None):
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
     from lerobot.policies.flash.observation_dataset import (
         camera_feature_keys,
@@ -118,11 +129,16 @@ def _lerobot(case: dict):
 
     root = path(case["artifact_root"])
     source = json.loads((root / "flash/v1/source.json").read_text())
-    dataset = LeRobotDataset(source["repo_id"], root=root)
+    dataset = (
+        LeRobotDataset(source["repo_id"], root=root)
+        if index is None
+        else _local_dataset(root, source["repo_id"], (root / "meta/info.json").stat().st_mtime_ns)
+    )
     episode = case.get("episode", 0)
     rgb_key, depth_key = camera_feature_keys(dataset.meta.features, source)
     samples, _ = episode_camera_samples(root, dataset, source, episode)
-    for i, sample in enumerate(samples):
+    for i in range(len(samples)) if index is None else [index]:
+        sample = samples[i]
         row = dataset[sample.row_index]
         rgb = (row[rgb_key].numpy().transpose(1, 2, 0) * 255).clip(0, 255).astype(np.uint8)
         depth = row[depth_key].numpy().squeeze().astype(np.float32)
@@ -174,3 +190,19 @@ def samples(case: dict):
         count += 1
     if count != case["expected_frames"]:
         raise ValueError("source count differs from the case manifest")
+
+
+def sample_at(case: dict, index: int):
+    """Random access to the exact same RGB-D input used by the experiment."""
+    if not 0 <= index < case["expected_frames"]:
+        raise IndexError("Frame is outside this recording")
+    reader = {
+        "ycb_annotated_pose": _ycb,
+        "flash_prepared_demo": _recording,
+        "recorded_rgbd": _recording,
+        "lerobot_rgbd": _lerobot,
+    }[case["kind"]]
+    frame, masks = next(reader(case, index))
+    if frame.rgb.shape[:2] != frame.depth.shape or any(m.shape != frame.depth.shape for m in masks.values()):
+        raise ValueError("RGB, depth and masks do not align")
+    return frame, masks

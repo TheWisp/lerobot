@@ -697,3 +697,149 @@ The maintained design now distinguishes session state from frame updates and
 describes revisable surface additions. Automatic identification of a wrong
 addition and calibrated pose uncertainty remain explicitly unresolved. These
 are design proposals, not functionality exercised by the current benchmarks.
+
+### Reversible surface growth experiment (2026-11-01)
+
+This experiment follows pushed checkpoint `3b42021a1`.
+The maintained design was shortened, with a sequence diagram replacing the
+second flowchart. It describes pose estimation, not robot commands.
+
+The first causal implementation is
+[`experimental_surface_session.py`](../../../src/lerobot/policies/flash/experimental_surface_session.py).
+It reuses the baseline's mask/depth cleaning and surface objective, adds image
+correspondences to the fitting objective, and compares fixed versus growing
+surfaces. Patches retain sampled camera measurements and placement separately.
+A later aligned observation must support a pending patch before it affects
+fitting. Exclusion/repositioning rebuilds the surface; the coordinate origin is
+unchanged. This is repeatability evidence, not calibrated confidence.
+
+An initial age-based memory limit discarded the broad first view after 32 newer
+patches, even when they did not cover that surface. The corrected memory policy
+evicts the patch losing the fewest uniquely covered voxels. A regression test
+preserves an old broad view against redundant recent additions. This policy can
+still retain wrongly aligned geometry; it is not an accuracy test.
+
+Artifacts and exact inference source/config snapshots:
+`~/.cache/flash-tracker-restart/growing-surface-003/`. The two earlier interrupted
+runs and the smoke run are retained locally as implementation-debugging evidence.
+All thresholds and memory budgets are in
+[`flash_surface_experiment.json`](../../../benchmarks/flash_surface_experiment.json).
+
+On the eight labelled clips with comparable returned poses, growth improved
+median point displacement in four and worsened it in four. Comparisons use only
+frames where both variants return a pose. For example, mustard-easy improved
+from 6.1 to 2.9 mm; tomato-soup worsened from 9.0 to 16.9 mm. These are errors of
+the same initial surface points against annotated object motion, not nearest
+surface residuals. Rotation scoring does not remove symmetry-equivalent rotations.
+The remaining labelled clip has no post-initialization pose from either variant.
+
+![Same source images; fixed and growing surfaces with independently scored pose errors](growing-surface-comparison.png)
+
+The figure deliberately includes improvement and regression. At bleach clip
+frame 72, 99.4% of current measured points were within the configured 5 mm of the
+growing surface, yet pose error was 32.5 mm. Local surface agreement therefore
+does not establish correct coordinates for the accumulated model. Detecting and
+repairing such errors automatically remains unresolved.
+
+The session accepts an external timestamped pose prediction. Synthetic tests
+cover prediction with an empty mask, no hidden-shape growth, and return to visual
+tracking without resetting the reference. **These real-video comparisons do not
+include group or gripper predictions.** Direction-specific evidence fusion,
+calibrated covariance and automatic patch repair are not implemented; covariance
+is explicitly absent, with conditional surface sensitivity recorded separately.
+The local demos have no independent pose labels, so availability is not accuracy.
+
+Browser playback displays each frame's actual model version, while its axes keep
+the original reference. If recovery used another source image whose raw matches
+were not recorded, it does not substitute unrelated previous-frame trails.
+
+The completed sweep contains 32 examples and 7,567 frames. All were published
+into the existing FLASH list; its **View results** control opens the comparison,
+with a separate JSON download. The largest combined cloud contained 8,188 points, within the configured
+8,192 limit; retained patches stayed within the 32 active + 8 pending budget.
+Original sampled patches and model versions remain in the local run archive.
+
+Verification: 136 focused tests passed, including baseline equivalence, bounded
+storage, patch correction, prediction/recovery and playback provenance. The
+report test also passed after correcting its per-method timing labels. Repository
+checks passed. Headless playback against the actual port 9102 server opened both
+local demos at 10 seconds with the new growing model, found all 32 examples and
+the completed report, and reported no JavaScript errors. This verifies the
+experiment and display plumbing; it does not establish accurate tracking under
+occlusion. Live defaults remain unchanged.
+
+### Benchmark review UI (2026-11-01)
+
+FLASH now shows whole-clip scores beside the selected method's playback and
+per-scene comparison bars for accuracy, median/p90 error, availability and
+additional processing time. Accuracy percentages use the saved 10 mm / 10° or
+20 mm / 20° counts; missing poses fail, initialization is excluded, and unlabelled
+clips remain unscored. Clicking a bar opens that method's playback. Existing
+exports load only their own matching score file; reruns publish replacements as
+each example completes. Cancellation retains completed exports and earlier
+results. The user's active benchmark survived the port 9102 server update.
+
+The sidebar's **View results** opens this overview, including during reruns;
+selecting a recording returns to playback. All 32 scenes now have five-method
+results. Initially only nine had reference poses loaded for accuracy measurement.
+The remaining scenes explicitly show that limitation instead of empty accuracy bars;
+availability and timing remain accessible. This does not mean the original
+datasets necessarily lack pose annotations—only that this benchmark has not
+loaded them.
+
+113 GUI, JavaScript and asset checks passed, including real scoring through the
+browser and cancellation of a verified test worker while protecting an unrelated
+process. Headless review of the actual server found all 32 scenes, displayed the
+new panels/charts and reported no JavaScript errors. Inference is unchanged:
+“UFM-assisted” describes the current combined fit, not a guaranteed priority of
+depth over UFM.
+
+The scorer now also reads the Laval clock's supplied object poses and the three
+synthetic clips' exact 3D point trajectories: **13 of 32 scenes have accuracy
+scores**. All 203 imported clock images match resized source frames exactly;
+its label coordinates are converted from OpenGL to the RGB-D camera convention.
+Synthetic label motion agrees with the renderer's known transforms. Labels are
+evaluation-only and never reach the tracker. The nine YCB scores are unchanged.
+
+Saved predictions were rescored using `benchmarks.flash_rescore_experiment`;
+video, overlays and prediction files were verified unchanged. Previous summaries
+and scoring code are archived locally. The GUI and downloadable report now show
+the new scores, and future reruns retain the label configuration. The clock is
+still difficult: UFM returns only 3 of 202 post-initialization poses; surface
+correction meets 10 mm / 10° on 21 frames, and the growing fit on 10. The synthetic
+cases are controls, not evidence of robustness to real occlusion.
+
+130 targeted tests passed, covering camera conventions, delayed initialization,
+missing poses, role-specific labels, invalid frame/time mappings, saved-result
+rescoring and browser results.
+
+### Shared 3D inspection (2026-11-02)
+
+Benchmark playback and the demo/rollout scene now share calibrated RGB-D
+projection and orbit/pan/zoom controls. PR #266's GPU pixel-grid approach keeps
+RGB and depth aligned without rebuilding the background cloud on the CPU.
+Every displayed packet contains one frame's RGB, depth and saved poses.
+
+Orange shows the tracker estimate; green shows the independently labelled pose.
+Without a supplied object model, green uses the initial measured partial surface.
+Only Growing surface offers a drawing choice: **Starting surface** or **Expanded
+surface**. This changes the orange geometry, never the estimated pose or score.
+The same initial points are used by scoring throughout, so added geometry cannot
+hide their motion error. Optional dataset meshes remain evaluation-only.
+
+All 32 examples decoded at a middle frame with network access forbidden.
+Tests cover RGB/depth projection, missing depth, label coordinate conversion,
+frame/method switching during a request, growing geometry and local-only dataset
+loading. 107 dataset/GUI/asset checks passed, plus eight existing scene/editor
+checks. Tracking and scoring algorithms are unchanged by this viewer work.
+
+DexYCB's blue object is a **pitcher**, not a mug. The preview is now matched to
+BOP scene 006011 / original camera 841412060263: all 72 depth frames agree pixel
+for pixel; RGB differs slightly in encoding. BOP and raw DexYCB labels use a
+constant different model origin, but their relative motion agrees within
+1.5e-7. Local provenance records these checks. The supplied BOP model is available
+as the green 3D reference. There are now **14/32 scenes with accuracy labels**;
+rescoring changed no predictions, masks or videos. For this clip, growing surface
+meets 10 mm / 10° on 33/71 frames; surface correction on 41/71. UFM meets it on
+23/71 and returns no pose for the remainder, so its low median error alone is
+not evidence of better whole-clip tracking.

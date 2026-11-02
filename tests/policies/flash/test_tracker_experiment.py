@@ -9,6 +9,7 @@ import pytest
 
 from benchmarks.flash_experiment_inputs import samples
 from benchmarks.flash_tracker_experiment import MotionChain, RetainedMotionReference, run_case, score_case
+from lerobot.policies.flash.experimental_surface_session import GrowingSurfaceConfig
 from lerobot.policies.flash.surface_correspondence import SurfaceMotionConfig
 from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig
 
@@ -157,6 +158,29 @@ def test_score_keeps_missing_poses_and_paired_accuracy_separate(tmp_path):
     assert result["paired_point_error_mm"]["surface_corrected"]["median"] == pytest.approx(20)
     assert result["methods"]["ufm_chain"]["total_after_initialization"] == 2
     assert result["methods"]["ufm_chain"]["available_after_initialization"] == 1
+
+
+def test_growing_experiment_keeps_baselines_and_archives_original_patches(tmp_path, monkeypatch):
+    from lerobot.policies.flash import surface_tracking
+
+    points = np.random.default_rng(7).uniform(-0.05, 0.05, (24, 3)) + [0, 0, 1]
+    monkeypatch.setattr(surface_tracking, "ufm_pairs", lambda *_: (points, points.copy()))
+    case = demo(tmp_path)
+    config = VisionPipelineConfig()
+    base = run_case(case, tmp_path / "base", None, config, None, None)
+    result = run_case(
+        case, tmp_path / "growth", None, config, None, None, surface_experiment=GrowingSurfaceConfig()
+    )
+    for method in ("ufm_chain", "surface_corrected"):
+        assert base["roles"]["item"]["methods"][method] == result["roles"]["item"]["methods"][method]
+    rows = [json.loads(line) for line in (tmp_path / "growth/frames.jsonl").read_text().splitlines()]
+    for method in ("conditioned_fixed", "conditioned_growing"):
+        assert rows[0]["objects"]["item"][method + "_status"] == "initialized"
+        archive = tmp_path / f"growth/surface_patches/{method}/item/000000.npz"
+        with np.load(archive) as patch:
+            assert len(patch["measured"]) > 0
+            np.testing.assert_array_equal(patch["camera_from_reference"], np.eye(4))
+        assert (tmp_path / f"growth/surface_models/{method}/item/000001.npz").exists()
 
 
 def test_retry_connects_to_last_good_image_not_the_unregistered_one(monkeypatch):

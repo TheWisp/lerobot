@@ -1,0 +1,13 @@
+{
+  "spacing_m": 0.003,
+  "agreement_m": 0.005,
+  "min_overlap": 0.25,
+  "patch_overlap": 0.5,
+  "image_weight": 1.0,
+  "confirmations": 2,
+  "max_patches": 32,
+  "max_pending": 8,
+  "points_per_patch": 1024,
+  "max_points": 8192,
+  "grow": true
+}

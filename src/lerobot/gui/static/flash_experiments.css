@@ -13,6 +13,9 @@
 #flash-experiment-rebuild-status, #flash-experiment-rebuild-errors { font-size: 12px; overflow-wrap: anywhere; color: #b8c7d8; }
 #flash-experiment-rebuild-progress { width: 100%; }
 #flash-experiment-report a { color: #9fceff; }
+#flash-experiment-report { display: flex; align-items: center; gap: 10px; }
+#flash-experiment-report-download { font-size: 12px; }
+#flash-experiment-sidebar #flash-experiment-report-view[aria-pressed="true"] { background: #254363; border-color: #72b7ff; }
 #flash-experiment-rebuild-errors { max-height: 140px; overflow-y: auto; }
 #flash-experiment-list { overflow-y: auto; flex: 1; min-height: 0; }
 .flash-experiment-item { display: block; width: 100%; border: 0; border-radius: 4px; background: transparent; color: #c7d4e5; text-align: left; padding: 12px 8px; cursor: pointer; font: inherit; font-size: 13px; overflow-wrap: anywhere; }
@@ -40,3 +43,62 @@
 
 /* Dim RGB, as in TrackEverything, so small coloured heads and paths read clearly. */
 #flash-experiment-player.flow-visible #flash-experiment-video { filter: brightness(.7); }
+
+/* Playback keeps controls stable; scores describe the whole clip, not this frame. */
+#flash-experiment-playback { display: flex; flex-direction: column; flex: 1; min-height: 0; gap: 10px; }
+#flash-experiment-playback[hidden], #flash-experiment-comparison[hidden] { display: none; }
+#flash-experiment-body { display: flex; flex: 1; min-height: 0; gap: 14px; }
+#flash-experiment-results { width: 260px; flex: 0 0 260px; overflow-y: auto; padding: 12px; background: #142236; border-radius: 6px; font-size: 12px; }
+#flash-experiment-results h3 { margin: 0 0 8px; font-size: 15px; }
+#flash-experiment-results h4 { margin: 6px 0; font-size: 14px; }
+#flash-experiment-results p { margin: 6px 0; }
+.flash-metric-primary { display: block; font-size: 23px; }
+.flash-metric-card { padding: 10px 0; border-bottom: 1px solid #32445c; }
+.flash-metric-card dl { margin: 12px 0; }
+.flash-metric-card dt { color: #a7b5c8; margin-top: 10px; }
+.flash-metric-card dd { margin: 2px 0 0; font-size: 14px; }
+.flash-metric-muted { color: #a7b5c8; }
+#flash-experiment-results details { margin-top: 14px; color: #b8c7d8; }
+.flash-experiment-list-score { display: block; margin-top: 4px; font-size: 11px; color: #9fceff; }
+.flash-experiment-navigation { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 13px; }
+.flash-experiment-navigation button, .flash-experiment-navigation select { background: #16263c; color: #d8e4f3; border: 1px solid #31516c; padding: 6px 10px; border-radius: 4px; }
+.flash-experiment-navigation button { cursor: pointer; }
+#flash-experiment-comparison { flex: 1; overflow-y: auto; min-height: 0; }
+#flash-experiment-comparison-note { color: #b8c7d8; font-size: 13px; margin: 12px 0; }
+#flash-experiment-legend { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 12px; margin: 14px 0; }
+#flash-experiment-legend span::before { content: ''; display: inline-block; width: 10px; height: 10px; background: var(--method-color); margin-right: 6px; }
+#flash-experiment-charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(350px, 100%), 1fr)); gap: 14px; }
+.flash-comparison-card { border: 1px solid #31465f; border-radius: 6px; padding: 14px; background: #142236; }
+.flash-comparison-card h3 { margin: 0; font-size: 14px; overflow-wrap: anywhere; }
+.flash-comparison-card p { font-size: 12px; }
+.flash-comparison-availability { padding: 0; border: 0; color: #9fceff; background: none; font: inherit; font-size: 12px; cursor: pointer; text-decoration: underline; }
+.flash-chart-scale { text-align: right; color: #a7b5c8; margin: 5px 0 10px; }
+.flash-chart-row { display: grid; grid-template-columns: 70px minmax(20px, 1fr) 48px; align-items: center; gap: 8px; width: 100%; background: transparent; color: #d8e4f3; border: 0; text-align: left; padding: 5px 0; cursor: pointer; font-size: 12px; }
+.flash-chart-row:hover { background: #23354d; }
+.flash-chart-row:focus-visible { outline: 2px solid #72b7ff; }
+.flash-chart-track { height: 12px; background: #0b1523; border-radius: 2px; }
+.flash-chart-bar { display: block; height: 100%; background: var(--method-color); border-radius: 2px; }
+.flash-chart-value { text-align: right; font-variant-numeric: tabular-nums; }
+@media (max-width: 1100px) {
+    #flash-experiment-body { flex-direction: column; }
+    #flash-experiment-results { width: auto; flex: 0 1 170px; display: flex; flex-wrap: wrap; gap: 12px; }
+    #flash-experiment-results > h3, #flash-experiment-results > p { width: 100%; margin: 0; }
+    .flash-metric-card { flex: 1; min-width: 180px; }
+}
+
+#flash-experiment-scene { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; }
+#flash-experiment-scene[hidden], #flash-experiment-scene-tools[hidden] { display: none; }
+#flash-experiment-player.scene-visible #flash-experiment-video,
+#flash-experiment-player.scene-visible #flash-experiment-overlay { visibility: hidden; }
+#flash-experiment-scene-tools { position: absolute; top: 8px; left: 8px; right: 8px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; padding: 8px; background: #101923e8; border-radius: 5px; font-size: 12px; }
+#flash-experiment-scene-tools label { display: inline-flex; align-items: center; gap: 4px; }
+#flash-experiment-scene-tools label[hidden] { display: none; }
+#flash-experiment-scene-tools select { background: #16263c; color: #d8e4f3; border: 1px solid #31516c; border-radius: 4px; padding: 4px; }
+.flash-scene-estimate { color: #ffa84b; }
+.flash-scene-label { color: #34e5a1; }
+#flash-scene-note { width: 100%; color: #b8c7d8; }
+#flash-experiment-transport { display: flex; align-items: center; gap: 12px; font-size: 12px; }
+#flash-experiment-scrub { flex: 1; min-width: 40px; }
+#flash-experiment-scene-tools button, #flash-experiment-transport button { background: #16263c; color: #d8e4f3; border: 1px solid #31516c; border-radius: 4px; padding: 5px 9px; cursor: pointer; }
+#flash-experiment-3d-toggle[aria-pressed="true"] { background: #254363; border-color: #72b7ff; }
+#flash-experiment-playback.scene-visible .flash-experiment-2d-tool { display: none; }

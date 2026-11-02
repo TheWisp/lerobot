@@ -6,7 +6,7 @@
     <title>LeRobot GUI</title>
     <script>document.title = `LeRobot GUI [${window.location.host}]`;</script>
     <link rel="stylesheet" href="/static/style.css?v=172">
-    <link rel="stylesheet" href="/static/flash_experiments.css?v=8">
+    <link rel="stylesheet" href="/static/flash_experiments.css?v=12">
     <script type="importmap">{"imports":{"three":"/static/vendor/three.module.js"}}</script>
 </head>
 <body>
@@ -298,22 +298,57 @@
                 <section id="flash-experiment-view" aria-label="Tracker experiment playback">
                     <h2 id="flash-experiment-title">Tracking experiments</h2>
                     <div id="flash-experiment-detail">Select a recording from the list.</div>
+                    <div id="flash-experiment-playback">
                     <div class="flash-experiment-tools">
-                        <label>Pose calculation <select id="flash-experiment-method" onchange="drawFlashExperiment()" aria-label="Tracking method"></select></label>
-                        <label class="flash-experiment-mask-label"><input id="flash-experiment-mask" type="checkbox" onchange="drawFlashExperiment()">Input mask</label>
-                        <label class="flash-experiment-pose-label"><input id="flash-experiment-pose" type="checkbox" onchange="drawFlashExperiment()">3D reference surface + axes</label>
-                        <label class="flash-experiment-matches-label">UFM point trails <select id="flash-experiment-matches" onchange="drawFlashExperiment()"><option value="off">Off</option><option value="raw" selected>Raw predictions</option><option value="used">Agree with rigid fit</option></select></label>
-                        <label>Trail length <select id="flash-experiment-flow-trail" onchange="drawFlashExperiment()"><option value="0">Off</option><option value="5">5 frames</option><option value="10" selected>10 frames</option><option value="20">20 frames</option><option value="30">30 frames</option></select></label>
+                        <button type="button" id="flash-experiment-3d-toggle" onclick="toggleFlashExperiment3D()" aria-pressed="false">3D scene</button>
+                        <label>Pose calculation <select id="flash-experiment-method" onchange="changeFlashExperimentMethod()" aria-label="Tracking method"></select></label>
+                        <label class="flash-experiment-mask-label flash-experiment-2d-tool"><input id="flash-experiment-mask" type="checkbox" onchange="drawFlashExperiment()">Input mask</label>
+                        <label class="flash-experiment-pose-label flash-experiment-2d-tool"><input id="flash-experiment-pose" type="checkbox" onchange="drawFlashExperiment()">3D reference surface + axes</label>
+                        <label class="flash-experiment-matches-label flash-experiment-2d-tool">UFM point trails <select id="flash-experiment-matches" onchange="drawFlashExperiment()"><option value="off">Off</option><option value="raw" selected>Raw predictions</option><option value="used">Agree with rigid fit</option></select></label>
+                        <label class="flash-experiment-2d-tool">Trail length <select id="flash-experiment-flow-trail" onchange="drawFlashExperiment()"><option value="0">Off</option><option value="5">5 frames</option><option value="10" selected>10 frames</option><option value="20">20 frames</option><option value="30">30 frames</option></select></label>
                         <button type="button" onclick="stepFlashExperiment(-1)" aria-label="Previous experiment frame">‹</button>
                         <button type="button" onclick="stepFlashExperiment(1)" aria-label="Next experiment frame">›</button>
                         <button type="button" onclick="toggleFlashExperimentFullscreen()">Full screen</button>
                     </div>
                     <div id="flash-experiment-explanation" class="form-hint"></div>
+                    <div id="flash-experiment-body">
                     <div id="flash-experiment-player">
-                        <video id="flash-experiment-video" controls playsinline preload="auto"></video>
+                        <video id="flash-experiment-video" playsinline preload="auto"></video>
                         <canvas id="flash-experiment-overlay" aria-label="Frame-aligned masks and estimated object poses"></canvas>
+                        <canvas id="flash-experiment-scene" hidden aria-label="Rotate and pan the RGB-D scene"></canvas>
+                        <div id="flash-experiment-scene-tools" hidden>
+                            <label><input id="flash-scene-context" type="checkbox" checked onchange="drawFlashExperimentScene()">RGB-D</label>
+                            <label class="flash-scene-estimate"><input id="flash-scene-estimate" type="checkbox" checked onchange="drawFlashExperimentScene()">Tracker</label>
+                            <label class="flash-scene-label" title="The initial measured surface moved using the dataset's labelled poses. This is a partial observation, not a complete ground-truth mesh."><input id="flash-scene-label" type="checkbox" checked onchange="drawFlashExperimentScene()">Labelled reference</label>
+                            <label id="flash-scene-surface-control" hidden title="Changes only the orange drawing, not the calculated pose or accuracy score.">Tracker surface <select id="flash-scene-surface" onchange="drawFlashExperimentScene(true)"><option value="starting">Starting surface</option><option value="expanded" selected>Expanded surface</option></select></label>
+                            <label><input id="flash-scene-axes" type="checkbox" checked onchange="drawFlashExperimentScene()">Axes</label>
+                            <button type="button" onclick="flashSceneState.viewer?.reset()">Camera view</button>
+                            <button type="button" onclick="flashSceneState.viewer?.focus()">Focus objects</button>
+                            <span id="flash-scene-note" role="status"></span>
+                        </div>
+                    </div>
+                    <aside id="flash-experiment-results" aria-label="Selected method benchmark results"></aside>
+                    </div>
+                    <div id="flash-experiment-transport">
+                        <button type="button" id="flash-experiment-play" onclick="toggleFlashExperimentPlay()">Play</button>
+                        <input type="range" id="flash-experiment-scrub" min="0" max="0" value="0" step="1" aria-label="Experiment frame" oninput="seekFlashExperiment(Number(this.value))">
+                        <span id="flash-experiment-time"></span>
                     </div>
                     <div id="flash-experiment-status" role="status" title="Playback preserves the original timestamps. The image holds until the next recorded image; no inference runs during playback."></div>
+                    </div>
+                    <section id="flash-experiment-comparison" hidden aria-label="All scenes and methods">
+                        <div class="flash-experiment-navigation"><button type="button" onclick="showFlashComparison(false)">← Back to playback</button><label>Compare <select id="flash-experiment-metric" onchange="renderFlashComparison()">
+                            <option value="pass">Frames within accuracy limits (%) ↑</option>
+                            <option value="median">Median point error (mm) ↓</option>
+                            <option value="p90">90th percentile point error (mm) ↓</option>
+                            <option value="availability">Frames with a pose (%) ↑</option>
+                            <option value="fit">Additional processing time (ms) ↓</option>
+                        </select></label>
+                        <label>Accuracy limits <select id="flash-experiment-limits" onchange="refreshFlashMetrics()"><option value="10">10 mm / 10°</option><option value="20">20 mm / 20°</option></select></label></div>
+                        <p id="flash-experiment-comparison-note"></p>
+                        <div id="flash-experiment-legend"></div>
+                        <div id="flash-experiment-charts"></div>
+                    </section>
                 </section>
                 <div class="rerun-viewer" id="rerun-viewer">
                     <div class="rerun-placeholder" id="rerun-placeholder">Camera view will appear here when a process is running</div>
@@ -826,8 +861,8 @@ nebius iam auth-public-key generate \
     <script src="/static/charts.js?v=5"></script>
     <script src="/static/robot.js?v=27"></script>
     <script src="/static/flash_live_tracking.js?v=12"></script>
-    <script src="/static/run.js?v=184"></script>
-    <script src="/static/flash_experiments.js?v=13"></script>
+    <script src="/static/run.js?v=188"></script>
+    <script src="/static/flash_experiments.js?v=20"></script>
     <script src="/static/flash_demo_editor.js?v=41"></script>
     <script src="/static/flash_recorded_editor.js?v=7"></script>
     <script src="/static/flash_observation_editor.js?v=6"></script>

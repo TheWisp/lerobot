@@ -79,7 +79,7 @@ def display_matches(pair, times):
     }
 
 
-def export(run: Path, output: Path = DEFAULT_OUTPUT):
+def export(run: Path, output: Path = DEFAULT_OUTPUT, *, check_cancel=None):
     run = run.expanduser().resolve()
     case = json.loads((run / "case.json").read_text())
     summary = json.loads((run / "summary.json").read_text())  # Only completed results.
@@ -103,8 +103,14 @@ def export(run: Path, output: Path = DEFAULT_OUTPUT):
     methods = dict(METHODS)
     if any("ufm_retained_reference" in obj for obj in rows[0]["objects"].values()):
         methods["ufm_retained_reference"] = "Pose with earlier-frame recovery"
+    for name, label in (
+        ("conditioned_fixed", "Image + surface: fixed model"),
+        ("conditioned_growing", "Image + surface: growing model"),
+    ):
+        if any(name in obj for obj in rows[0]["objects"].values()):
+            methods[name] = label
     output.mkdir(parents=True, exist_ok=True)
-    identity = hashlib.sha256(str(run).encode()).hexdigest()[:20]
+    identity = hashlib.sha256((str(run) + ":schema6").encode()).hexdigest()[:20]
     destination = output / identity
     if destination.exists():
         raise FileExistsError(destination)
@@ -114,6 +120,7 @@ def export(run: Path, output: Path = DEFAULT_OUTPUT):
     evidence_path = run / "correspondences.jsonl.gz"
     digest = hashlib.sha256()
     flow_paths = {}
+    model_cache = {}
     try:
         with (
             av.open(str(temporary / "video.mp4"), "w", options={"movflags": "+faststart"}) as container,
@@ -126,6 +133,8 @@ def export(run: Path, output: Path = DEFAULT_OUTPUT):
             stream.options = {"crf": "20", "preset": "fast", "bf": "0"}
             width = height = None
             for (frame, masks), row, t in zip(samples(case), rows, times, strict=True):
+                if check_cancel is not None:
+                    check_cancel()
                 if frame.frame_id != row["frame"] or not np.isclose(frame.source_time_s, row["time_s"]):
                     raise ValueError("result does not belong to this camera frame")
                 for value in (
@@ -174,17 +183,37 @@ def export(run: Path, output: Path = DEFAULT_OUTPUT):
                     contours, _ = cv2.findContours(
                         masks[role].astype(np.uint8), cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE
                     )
+                    posed = {}
+                    for name in methods:
+                        reference = references.get(role)
+                        details = row["objects"][role].get(name + "_details", {})
+                        version = details.get("map_version_after", 0)
+                        if version and name in {"conditioned_fixed", "conditioned_growing"}:
+                            key = (name, role)
+                            if model_cache.get(key, (None,))[0] != version:
+                                model_path = run / "surface_models" / name / role / f"{version:06d}.npz"
+                                with np.load(model_path, allow_pickle=False) as model:
+                                    points = model["points"]
+                                    cloud = points[spatial_sample(points, DISPLAY_SURFACE_POINTS)]
+                                    # Axes stay attached to the original coordinate frame,
+                                    # while the displayed measured surface can grow.
+                                    geometry = np.concatenate((references[role][:4], cloud))
+                                model_cache[key] = (version, geometry)
+                            reference = model_cache[key][1]
+                        posed[name] = (
+                            projected_geometry(reference, row["objects"][role].get(name), frame.intrinsics)
+                            if reference is not None
+                            else None
+                        )
                     objects[role] = {
                         "matches": matches,
-                        "mask": [c[:, 0].tolist() for c in contours if len(c) >= 3],
-                        "poses": {
-                            name: projected_geometry(
-                                references[role], row["objects"][role].get(name), frame.intrinsics
-                            )
-                            if role in references
-                            else None
-                            for name in methods
+                        "match_sources": {
+                            name: row["objects"][role][name + "_details"].get("image_source_frame")
+                            for name in ("conditioned_fixed", "conditioned_growing")
+                            if name + "_details" in row["objects"][role]
                         },
+                        "mask": [c[:, 0].tolist() for c in contours if len(c) >= 3],
+                        "poses": posed,
                     }
                 frames.append({"frame": frame.frame_id, "t": float(t), "objects": objects})
             if evidence is not None and next(evidence, None) is not None:
@@ -194,7 +223,7 @@ def export(run: Path, output: Path = DEFAULT_OUTPUT):
         if digest.hexdigest() != summary["input_sha256"]:
             raise ValueError("source RGB-D/masks changed since this experiment; refusing misaligned playback")
         data = {
-            "schema_version": 5,
+            "schema_version": 6,
             "has_correspondences": evidence_path.exists(),
             "width": stream.width,
             "height": stream.height,
@@ -219,6 +248,7 @@ def export(run: Path, output: Path = DEFAULT_OUTPUT):
             ),
         }
         (temporary / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+        (temporary / "summary.json").write_text(json.dumps(summary, allow_nan=False) + "\n")
         temporary.rename(destination)
     except BaseException:
         shutil.rmtree(temporary)

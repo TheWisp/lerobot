@@ -21,9 +21,11 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from benchmarks.flash_experiment_inputs import path, samples
+from benchmarks.flash_experiment_inputs import samples
+from benchmarks.flash_experiment_labels import load_pose_labels
 from benchmarks.flash_flow_paths import DenseFlow, FlowPaths
 from benchmarks.flash_full_pose_score import score_transforms, summarize
+from lerobot.policies.flash.experimental_surface_session import GrowingSurfaceConfig, GrowingSurfaceSession
 from lerobot.policies.flash.surface_acceleration import SearchPool, compiled_kernels
 from lerobot.policies.flash.surface_correspondence import crop_pair, measured_pairs, robust_fit, ufm_pairs
 from lerobot.policies.flash.surface_tracking import SurfaceTrackingSession, load_ufm
@@ -163,18 +165,19 @@ def quantiles(values):
 
 def score_case(case, rows, references, reference_frames):
     """Only this function reads pose annotations, after all inference finishes."""
-    truth = None
-    if case["kind"] == "ycb_annotated_pose":
-        files = sorted((path(case["source_root"]) / "annotated_poses").glob("*.txt"))
-        start = case["start_frame"]
-        truth = np.stack([np.loadtxt(f).reshape(4, 4) for f in files[start : start + len(rows)]])
-        if len(truth) != len(rows):
-            raise ValueError("missing evaluation pose annotations")
-    report = {"case": case["id"], "frames": len(rows), "accuracy_labels": truth is not None, "roles": {}}
+    labels, provenance = load_pose_labels(case, rows)
+    report = {
+        "case": case["id"],
+        "frames": len(rows),
+        "accuracy_labels": bool(labels),
+        "evaluation": provenance,
+        "roles": {},
+    }
     for role in case["roles"]:
+        truth = labels.get(role)
         details = [row["objects"][role] for row in rows]
         first = reference_frames.get(role)
-        result = {"reference_frame": first, "methods": {}}
+        result = {"reference_frame": first, "accuracy_labels": truth is not None, "methods": {}}
         if first is None:
             report["roles"][role] = result
             continue
@@ -183,6 +186,7 @@ def score_case(case, rows, references, reference_frames):
         methods = ["ufm_chain", "surface_corrected"]
         if "ufm_retained_reference" in details[0]:
             methods.append("ufm_retained_reference")
+        methods += [name for name in ("conditioned_fixed", "conditioned_growing") if name in details[0]]
         for name in methods:
             poses = [item[name] for item in details[first:]]
             available = np.asarray([p is not None for p in poses])
@@ -205,10 +209,28 @@ def score_case(case, rows, references, reference_frames):
             result["paired_point_error_mm"] = {
                 name: quantiles(error[paired]) for name, error in errors.items()
             }
+            if "conditioned_growing" in errors:
+                compared = (
+                    available_by_method["conditioned_fixed"] & available_by_method["conditioned_growing"]
+                )
+                compared[0] = False
+                result["growth_comparison"] = {
+                    "paired_frames": int(compared.sum()),
+                    "point_error_mm": {
+                        name: quantiles(errors[name][compared])
+                        for name in ("conditioned_fixed", "conditioned_growing")
+                    },
+                }
         result["timing_ms"] = {
             key: quantiles([item[key] for item in details[first + 1 :]])
             for key in ("prepare_ms", "finish_ms")
         }
+        for name in ("conditioned_fixed", "conditioned_growing"):
+            if name in methods:
+                result["timing_ms"][name] = quantiles([item[name + "_ms"] for item in details[first + 1 :]])
+                result["methods"][name]["max_map_points"] = max(
+                    item[name + "_details"]["map_points"] for item in details
+                )
         report["roles"][role] = result
     return report
 
@@ -220,6 +242,7 @@ def code_snapshot(output):
     source_files += [
         Path(__file__).resolve(),
         repo / "benchmarks/flash_experiment_inputs.py",
+        repo / "benchmarks/flash_experiment_labels.py",
         repo / "benchmarks/flash_full_pose_score.py",
         repo / "benchmarks/flash_flow_paths.py",
         repo / "benchmarks/flash_experiment_browser.py",
@@ -252,6 +275,7 @@ def run_case(
     *,
     retain_motion_reference=False,
     record_correspondences=False,
+    surface_experiment=None,
     progress=None,
 ):
     output.mkdir(parents=True, exist_ok=False)
@@ -273,6 +297,22 @@ def run_case(
         role: RetainedMotionReference(model, config.motion, record_correspondences=record_correspondences)
         for role in sessions
     }
+    candidates = (
+        {
+            name: {
+                role: GrowingSurfaceSession(
+                    config.shape,
+                    GrowingSurfaceConfig(**{**asdict(surface_experiment), "grow": grow}),
+                    fit_kernels=kernels,
+                    search_pool=search_pool,
+                )
+                for role in sessions
+            }
+            for name, grow in (("conditioned_fixed", False), ("conditioned_growing", True))
+        }
+        if surface_experiment is not None
+        else {}
+    )
     digest, rows, references, reference_frames = hashlib.sha256(), [], {}, {}
     started = time.perf_counter()
     (output / "case.json").write_text(json.dumps(case, indent=2) + "\n")
@@ -341,6 +381,58 @@ def run_case(
                         ufm_retained_reference=retry_pose.tolist() if retry_pose is not None else None,
                         retained_reference_diagnostics=retry_diagnostics,
                     )
+                for name, tracks in candidates.items():
+                    begin = time.perf_counter()
+                    track = tracks[role]
+                    candidate_input = prepared
+                    # A missed frame cannot silently become the source of the next
+                    # motion estimate. Retry from this track's connected image.
+                    if (
+                        prepared["status"] is None
+                        and track.connected_observation is not None
+                        and prepared.get("match_source_frame") != track.connected_frame
+                    ):
+                        candidate_input = dict(prepared)
+                        old = track.connected_observation
+                        current = prepared["current"]
+                        a, b, crop = crop_pair(old, current, config.motion)
+                        source, target = ufm_pairs(
+                            model, a, b, crop, old, current, prepared["intrinsics"], config.motion
+                        )
+                        step, _, _ = robust_fit(source, target, config.motion)
+                        candidate_input.update(
+                            step=step, point_pairs=(source, target), match_source_frame=track.connected_frame
+                        )
+                    result = track.update(candidate_input, frame.source_time_s)
+                    details = result["diagnostics"]
+                    row["objects"][role].update(
+                        {
+                            name: result["camera_from_reference"],
+                            name + "_ms": (time.perf_counter() - begin) * 1000,
+                            name + "_status": result["status"],
+                            name + "_details": details,
+                        }
+                    )
+                    # Original sampled camera measurements and their placement are
+                    # separate from derived clouds, so an addition can be undone.
+                    archive = output / "surface_patches" / name / role
+                    for event in details["map_events"]:
+                        if event["event"] not in ("pending", "added"):
+                            continue
+                        patch = track.store.patches[event["frame"]]
+                        archive.mkdir(parents=True, exist_ok=True)
+                        np.savez_compressed(
+                            archive / f"{patch.frame:06d}.npz",
+                            measured=patch.measured,
+                            camera_from_reference=patch.camera_from_reference,
+                            fitted_map_version=patch.fitted_map_version,
+                        )
+                    if details["map_version_after"] != details["map_version_used"]:
+                        models = output / "surface_models" / name / role
+                        models.mkdir(parents=True, exist_ok=True)
+                        np.savez_compressed(
+                            models / f"{track.store.version:06d}.npz", points=track.store.points
+                        )
             if match_journal is not None:
                 match_journal.write(json.dumps(match_row, allow_nan=False, separators=(",", ":")) + "\n")
             journal.write(json.dumps(row, allow_nan=False) + "\n")
@@ -363,6 +455,11 @@ def main():
     parser.add_argument("--config", type=Path, default=Path(__file__).with_name("flash_tracking_config.json"))
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument(
+        "--surface-experiment-config",
+        type=Path,
+        help="Opt in to fixed/growing surfaces with retained image evidence; JSON GrowingSurfaceConfig",
+    )
+    parser.add_argument(
         "--retain-motion-reference",
         action="store_true",
         help="Also test retrying from the last successfully connected image",
@@ -380,6 +477,11 @@ def main():
     args.output = args.output.expanduser().resolve()
     args.output.mkdir(parents=True, exist_ok=False)
     config = VisionPipelineConfig.from_dict(json.loads(args.config.read_text())["vision_pipeline"])
+    surface_experiment = (
+        GrowingSurfaceConfig(**json.loads(args.surface_experiment_config.read_text()))
+        if args.surface_experiment_config
+        else None
+    )
     provenance = code_snapshot(args.output)
     provenance.update(
         config=asdict(config),
@@ -390,6 +492,7 @@ def main():
         certainty="uncalibrated diagnostics only",
         retain_motion_reference=args.retain_motion_reference,
         record_correspondences=args.record_correspondences,
+        surface_experiment=asdict(surface_experiment) if surface_experiment else None,
         packages={d.metadata["Name"]: d.version for d in importlib.metadata.distributions()},
     )
     (args.output / "provenance.json").write_text(json.dumps(provenance, indent=2) + "\n")
@@ -412,6 +515,7 @@ def main():
                     pool,
                     retain_motion_reference=args.retain_motion_reference,
                     record_correspondences=args.record_correspondences,
+                    surface_experiment=surface_experiment,
                 )
             )
     finally:

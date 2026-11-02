@@ -1,6 +1,6 @@
 /* Aligned RGB-D scene inspection for prepared FLASH demos. Geometry is display-only. */
 import * as THREE from '/static/vendor/three.module.js';
-import { OrbitControls } from '/static/vendor/OrbitControls.js';
+import {calibratedProjection, createRgbdCloud, sceneControls} from '/static/rgbd_scene.js?v=3';
 
 const groupColor = 0xe5b661;
 const gripperColor = 0xf2a578;
@@ -146,40 +146,6 @@ function makeDashedReference(geometry, color) {
     return group;
 }
 
-function makeContext(depth, rgb, camera) {
-    const {width, height, intrinsics: k} = camera;
-    if (depth.length !== width * height || rgb.length !== width * height * 4)
-        throw new Error('RGB and depth dimensions differ');
-    const step = 4; // Only a display sampling budget; it does not affect tracking.
-    const cols = Math.ceil(width / step), rows = Math.ceil(height / step);
-    const positions = new Float32Array(cols * rows * 3), colors = new Float32Array(cols * rows * 3);
-    const fx = k[0][0], fy = k[1][1], cx = k[0][2], cy = k[1][2];
-    let count = 0;
-    for (let row = 0; row < rows; row++) for (let col = 0; col < cols; col++) {
-        const u = col * step, v = row * step, pixel = v * width + u;
-        const depthM = depth[pixel] / 1000;
-        if (!(depthM > 0)) continue;
-        positions.set([(u - cx) * depthM / fx, -(v - cy) * depthM / fy, -depthM], count * 3);
-        const gray = (0.299 * rgb[pixel * 4] + 0.587 * rgb[pixel * 4 + 1] +
-            0.114 * rgb[pixel * 4 + 2]) / 255;
-        // Retain muted color as context; tracked surfaces have their own layer.
-        for (let channel = 0; channel < 3; channel++)
-            colors[count * 3 + channel] = 0.12 + 0.25 * gray + 0.28 * rgb[pixel * 4 + channel] / 255;
-        count++;
-    }
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.BufferAttribute(positions.subarray(0, count * 3), 3));
-    geometry.setAttribute('color', new THREE.BufferAttribute(colors.subarray(0, count * 3), 3));
-    // A single RGB-D view has holes and no measured surface behind silhouettes.
-    // Points preserve that uncertainty; triangles would bridge unrelated depths.
-    const context = new THREE.Points(geometry, new THREE.PointsMaterial({
-        vertexColors: true, size: 1.5, sizeAttenuation: false, transparent: true,
-        opacity: 0.14, depthWrite: false,
-    }));
-    context.renderOrder = -1;
-    return context;
-}
-
 function makePoseAxes(length) {
     const group = new THREE.Group();
     group.add(new THREE.AxesHelper(length));
@@ -242,7 +208,7 @@ export function createFlashSceneView(canvas, surfaces, reprocessedSurfaces = {})
     camera.lookAt(0, 0, -0.45);
     const renderer = new THREE.WebGLRenderer({canvas, antialias: true, alpha: true});
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-    const controls = new OrbitControls(camera, canvas);
+    const controls = sceneControls(camera, canvas);
     controls.target.set(0, 0, -0.45);
     controls.update();
     let context = null;
@@ -273,20 +239,7 @@ export function createFlashSceneView(canvas, surfaces, reprocessedSurfaces = {})
         }
         camera.aspect = width / height;
         if (frameCamera) {
-            const k = frameCamera.intrinsics;
-            const scale = Math.min(width / frameCamera.width, height / frameCamera.height);
-            const insetX = (width - frameCamera.width * scale) / 2;
-            const insetY = (height - frameCamera.height * scale) / 2;
-            const near = camera.near;
-            // Match CSS object-fit: contain and the recorded principal point.
-            // A centered-FOV camera shifts overlays whenever cx/cy are off-center.
-            const left = -near * (k[0][2] + insetX / scale) / k[0][0];
-            const right = near * ((width - insetX) / scale - k[0][2]) / k[0][0];
-            const top = near * (k[1][2] + insetY / scale) / k[1][1];
-            const bottom = near * (k[1][2] - (height - insetY) / scale) / k[1][1];
-            camera.projectionMatrix.makePerspective(left, right, top, bottom, near, camera.far);
-            camera.projectionMatrixInverse.copy(camera.projectionMatrix).invert();
-            camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan((top - bottom) / (2 * near)));
+            calibratedProjection(camera, frameCamera, width, height);
         } else {
             camera.updateProjectionMatrix();
         }
@@ -296,7 +249,6 @@ export function createFlashSceneView(canvas, surfaces, reprocessedSurfaces = {})
 
     function setCameraAligned(value) {
         cameraAligned = value;
-        if (context) context.visible = true;
         canvas.parentElement.classList.toggle('flash-scene-orbit', !value);
     }
 
@@ -315,16 +267,15 @@ export function createFlashSceneView(canvas, surfaces, reprocessedSurfaces = {})
     function update(depth, rgba, snapshot, options = {}, frameEvidence = null) {
         frameCamera = snapshot.camera;
         latestSnapshot = snapshot;
-        if (context) {
-            scene.remove(context);
-            context.geometry.dispose();
-            context.material.dispose();
-            context = null;
-        }
         if (options.showDepthScene) {
-            context = makeContext(depth, rgba, snapshot.camera);
-            scene.add(context);
-        }
+            if (!context) {
+                context = createRgbdCloud({stride: 4, opacity: 0.14, brightness: 0.65});
+                context.points.renderOrder = -1;
+                scene.add(context.points);
+            }
+            context.points.visible = true;
+            context.update(depth, rgba, snapshot.camera, 0.001);
+        } else if (context) context.points.visible = false;
         while (evidence.children.length) {
             const item = evidence.children[0];
             evidence.remove(item);
@@ -637,7 +588,7 @@ export function createFlashSceneView(canvas, surfaces, reprocessedSurfaces = {})
             evidence.remove(item);
             disposeEvidence(item, references);
         }
-        if (context) { context.geometry.dispose(); context.material.dispose(); }
+        if (context) context.dispose();
         for (const ref of Object.values(referenceBuffers)) {
             ref.geometry.dispose();
             ref.group.children.forEach(child => child.material.dispose());

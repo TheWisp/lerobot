@@ -9,10 +9,15 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import signal
 import time
 import traceback
 from html import escape
 from pathlib import Path
+
+
+class BenchmarkCancelled(BaseException):
+    """Unwind the current example without treating cancellation as a failure."""
 
 
 def write_json(path, value):
@@ -53,12 +58,13 @@ def write_report(job: Path, request: dict, state: dict, outcomes: dict):
                 )
             for method, data in methods.items():
                 errors = data.get("pose_error", {})
-                labels = summary["accuracy_labels"]
+                labels = result.get("accuracy_labels", summary["accuracy_labels"])
                 cloud = " / ".join(number(errors.get(f"cloud_mm_{q}")) for q in ("median", "p90"))
                 angle = " / ".join(number(errors.get(f"angle_deg_{q}")) for q in ("median", "p90"))
                 timing = result.get("timing_ms", {})
                 prepare = number((timing.get("prepare_ms") or {}).get("median"))
-                fit = number((timing.get("finish_ms") or {}).get("median"))
+                stage = timing.get("finish_ms") if method == "surface_corrected" else timing.get(method)
+                fit = number((stage or {}).get("median"))
                 cells = [
                     case["name"],
                     role,
@@ -82,7 +88,9 @@ def write_report(job: Path, request: dict, state: dict, outcomes: dict):
         "<p>Point error measures displacement of the same initial 3D points against annotated motion. "
         "Rotation error uses the annotated orientation without symmetry adjustment. "
         "Unlabelled examples have no accuracy score.</p>"
-        "<p>Times are per-object stages shared by the compared methods, not independent end-to-end FPS. "
+        "<p>Preparation includes the shared image matching and initial rigid fit. "
+        "The second time is each method's additional fitting stage when separately timed, "
+        "not independent end-to-end FPS. "
         "Saved masks and case configurations are reused; SAM is not rerun. "
         '<a href="report.json">Download full results (JSON)</a></p><main><table><thead><tr>'
         "<th>Example</th><th>Object</th><th>Method</th><th>Poses / frames</th>"
@@ -100,6 +108,7 @@ def rebuild(job: Path):
     # Import model/dataset dependencies only inside this process, never the GUI.
     from benchmarks.flash_experiment_browser import export
     from benchmarks.flash_tracker_experiment import code_snapshot, run_case
+    from lerobot.policies.flash.experimental_surface_session import GrowingSurfaceConfig
     from lerobot.policies.flash.surface_acceleration import SearchPool, compiled_kernels
     from lerobot.policies.flash.surface_tracking import load_ufm
     from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig
@@ -110,12 +119,19 @@ def rebuild(job: Path):
     root = Path(request["browser_root"])
     state.update(state="running", phase="Loading UFM", pid=os.getpid())
     write_json(job / "status.json", state)
+
+    def check_cancel():
+        if (job / "cancel").exists():
+            raise BenchmarkCancelled()
+
     try:
+        check_cancel()
         provenance = code_snapshot(job)
         write_json(job / "provenance.json", provenance)
         model = load_ufm()
         kernels = None
         for index, item in enumerate(request["items"]):
+            check_cancel()
             state.update(current=item["name"], frame=0, frames=item["frames"], phase="Tracking")
             write_json(job / "status.json", state)
             pool = None
@@ -124,6 +140,7 @@ def rebuild(job: Path):
                 case = json.loads((previous_run / "case.json").read_text())
                 previous_provenance = json.loads((previous_run.parent / "provenance.json").read_text())
                 config = VisionPipelineConfig.from_dict(previous_provenance["config"])
+                experimental = previous_provenance.get("surface_experiment")
                 case_dir = job / "runs" / f"{index:03d}"
                 case_dir.mkdir(parents=True)
                 write_json(
@@ -133,6 +150,7 @@ def rebuild(job: Path):
                         "source_run": str(previous_run),
                         "code_snapshot": str(job),
                         "record_correspondences": True,
+                        "surface_experiment": experimental,
                     },
                 )
                 if config.compiled_surface_fit and kernels is None:
@@ -143,6 +161,7 @@ def rebuild(job: Path):
 
                 def progress(frame, total):
                     nonlocal last_report
+                    check_cancel()
                     now = time.monotonic()
                     if now - last_report >= 0.5 or frame == total:
                         state.update(frame=frame, frames=total)
@@ -159,18 +178,20 @@ def rebuild(job: Path):
                     pool,
                     retain_motion_reference="ufm_retained_reference" in item["methods"],
                     record_correspondences=True,
+                    surface_experiment=GrowingSurfaceConfig(**experimental) if experimental else None,
                     progress=progress,
                 )
                 state.update(phase="Building playback")
                 write_json(job / "status.json", state)
                 # Stage the whole export outside the public catalogue. Publish
                 # only after adding its stable slot identity and build timestamp.
-                staged = export(run, job / "exports")
+                staged = export(run, job / "exports", check_cancel=check_cancel)
                 manifest = json.loads((staged / "manifest.json").read_text())
                 manifest.update(
                     slot_id=item.get("slot_id", item["id"]), built_at_ns=time.time_ns(), experiment=job.name
                 )
                 write_json(staged / "manifest.json", manifest)
+                check_cancel()
                 staged.rename(root / staged.name)
                 outcomes[item["id"]] = {
                     "status": "completed",
@@ -189,6 +210,8 @@ def rebuild(job: Path):
             state["completed"] += 1
             write_json(job / "status.json", state)
         state.update(state="completed" if not state["errors"] else "completed_with_errors", phase="Finished")
+    except BenchmarkCancelled:
+        state.update(state="cancelled", phase="Stopped", current="")
     except BaseException as exc:
         traceback.print_exc()
         state.update(state="failed", phase="Stopped", error=str(exc))
@@ -208,6 +231,7 @@ def main():
     args = parser.parse_args()
     os.fstat(args.lock_fd)
     job = args.job.resolve()
+    signal.signal(signal.SIGTERM, lambda *_: (job / "cancel").touch(exist_ok=True))
     try:
         rebuild(job)
     except Exception as exc:

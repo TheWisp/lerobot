@@ -158,3 +158,32 @@ MCP HTTP transport mounted at /mcp (token store: ~/.cache/huggingface/lerobot/_m
 
 See [`../mcp/README.md`](../mcp/README.md) for the available tools and how to
 connect an agent.
+
+### FLASH 3D inspection
+
+In **Run → FLASH**, select a recording and press **3D scene**. Left-drag rotates,
+right-drag pans, and the wheel zooms. **Camera view** restores the recorded
+calibration; **Focus objects** frames the compared surfaces. The bottom playback
+bar works in both 2D and 3D. Orange is the selected tracker's surface; green is a
+labelled reference. Only the Growing surface method offers **Tracker surface**:
+**Starting surface** draws the initial measured points at the estimated pose;
+**Expanded surface** also draws points added later. This changes only the orange
+drawing, not the pose or accuracy score. Other methods keep the initial surface.
+When no model is supplied, the green reference is only that initial measured
+surface, not a complete ground-truth shape. Each frame's error appears beside
+its frame number; whole-clip results remain in the right panel.
+
+[`rgbd_scene.js`](static/rgbd_scene.js) shares GPU depth unprojection, calibrated
+projection and navigation between benchmark inspection and the existing FLASH
+demo/rollout scene. It follows PR #266's pixel-grid/depth-texture approach.
+RGB-D packets contain one source frame's RGB, metric depth, intrinsics and saved
+poses. Late responses never overlay a newer RGB image; the displayed 3D frame
+number remains explicit. Reading uses a dedicated bounded worker and two-entry
+metadata cache, with no inference or sensor access. Missing depth remains a gap.
+
+A benchmark case may provide `evaluation_surfaces[role].points_m`: a local `.npy`
+array of model vertices in metres, in the same object coordinates as its pose
+labels. These evaluation-only surfaces are displayed at labelled poses; they are
+never supplied to the tracker. Without one, the viewer transports the initial
+measured surface using the labels. The original points remain independently
+available for score inspection.

@@ -17,11 +17,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 
 router = APIRouter(prefix="/api/run/flash/experiments", tags=["flash-experiments"])
 _files = ThreadPoolExecutor(max_workers=2, thread_name_prefix="flash-experiment-files")
 _jobs = ThreadPoolExecutor(max_workers=1, thread_name_prefix="flash-experiment-rebuild")
+_scenes = ThreadPoolExecutor(max_workers=1, thread_name_prefix="flash-experiment-scene")
+_scene_gate = asyncio.Semaphore(1)
 _logger = logging.getLogger(__name__)
 
 
@@ -60,7 +62,20 @@ def _list():
         slot = item.get("slot_id", item["id"])
         if slot not in latest or item.get("built_at_ns", 0) > latest[slot].get("built_at_ns", 0):
             latest[slot] = item
-    return sorted(latest.values(), key=lambda item: (item["name"], item["experiment"]))
+    result = sorted(latest.values(), key=lambda item: (item["name"], item["experiment"]))
+    for item in result:
+        try:
+            saved = _root() / item["id"] / "summary.json"
+            # Older exports predate the embedded score. Read their exact source
+            # result, never the most recent result for a similarly named case.
+            if not saved.is_file():
+                saved = Path(item["source_run"]) / "summary.json"
+            summary = json.loads(saved.read_text())
+            if summary.get("input_sha256") == item["input_sha256"] and summary["frames"] == item["frames"]:
+                item["metrics"] = summary
+        except (OSError, ValueError, KeyError):
+            pass  # Playback remains useful when an older score is unavailable.
+    return result
 
 
 def _rebuild_status():
@@ -76,10 +91,51 @@ def _rebuild_status():
             try:
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
-                pass
+                if (job / "cancel").exists():
+                    state.update(state="cancelling", phase="Stopping")
             else:
-                state.update(state="failed", error="Rebuild was interrupted. Previous results are available.")
+                if (job / "cancel").exists():
+                    state.update(state="cancelled", phase="Stopped")
+                else:
+                    state.update(
+                        state="failed", error="Rerun was interrupted. Previous results are available."
+                    )
     return state
+
+
+def _cancel_rebuild():
+    state = _rebuild_status()
+    if state["state"] not in {"starting", "running", "cancelling"}:
+        return state
+    job = Path(json.loads((_root() / ".rebuild/current.json").read_text())["job"])
+    (job / "cancel").touch(exist_ok=True)
+    try:
+        import psutil
+    except ImportError:
+        # Current workers observe the request at frame boundaries. Signalling
+        # additionally supports workers launched before cancellation existed.
+        return _rebuild_status()
+    identity = job / "worker.json"
+    pid = json.loads(identity.read_text())["pid"] if identity.exists() else state.get("pid")
+    if pid:
+        # psutil retains process creation time and checks PID reuse before
+        # signalling. Also verify the exact worker module and job directory.
+        try:
+            process = psutil.Process(pid)
+            args = process.cmdline()
+            module = "benchmarks.flash_rebuild_examples"
+            if module not in args or "--job" not in args:
+                raise HTTPException(
+                    409, "Cannot verify the benchmark process; cancellation remains requested"
+                )
+            if Path(args[args.index("--job") + 1]).resolve() != job.resolve():
+                raise HTTPException(409, "Benchmark process belongs to another run")
+            process.terminate()
+        except psutil.NoSuchProcess:
+            pass
+        except psutil.AccessDenied as exc:
+            raise HTTPException(409, "Cannot signal the worker; cancellation remains requested") from exc
+    return _rebuild_status()
 
 
 def _start_rebuild():
@@ -133,6 +189,7 @@ def _start_rebuild():
                     start_new_session=True,
                 )
             threading.Thread(target=process.wait, name="flash-rebuild-reaper", daemon=True).start()
+            write_json(job / "worker.json", {"pid": process.pid})
         except Exception as exc:
             state.update(state="failed", error=str(exc))
             write_json(job / "status.json", state)
@@ -153,6 +210,11 @@ async def rebuild_examples():
 @router.get("/rebuild")
 async def rebuild_status():
     return await asyncio.get_running_loop().run_in_executor(_files, _rebuild_status)
+
+
+@router.post("/rebuild/cancel", status_code=202)
+async def cancel_rebuild():
+    return await asyncio.get_running_loop().run_in_executor(_jobs, _cancel_rebuild)
 
 
 def _report_asset(job_id: str, asset: str):
@@ -184,3 +246,24 @@ async def experiment_asset(identity: str, asset: str):
         raise HTTPException(404, "Unknown experiment asset")
     path = await asyncio.get_running_loop().run_in_executor(_files, _asset, identity, asset)
     return FileResponse(path, media_type=types[asset])
+
+
+def _scene(identity: str, frame: int, method: str):
+    from lerobot.gui.flash_experiment_scene import scene_packet
+
+    manifest = json.loads(_asset(identity, "manifest.json").read_text())
+    try:
+        return scene_packet(manifest, frame, method)
+    except (OSError, ValueError, IndexError, KeyError) as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@router.get("/{identity}/scene/{frame}")
+async def experiment_scene(identity: str, frame: int, method: str):
+    # Do not queue obsolete scrubs behind disk decoding. The player retries its
+    # latest requested frame when another client is already reading one.
+    if _scene_gate.locked():
+        raise HTTPException(429, "Another scene frame is loading")
+    async with _scene_gate:
+        data = await asyncio.get_running_loop().run_in_executor(_scenes, _scene, identity, frame, method)
+    return Response(data, media_type="application/octet-stream", headers={"Cache-Control": "no-store"})

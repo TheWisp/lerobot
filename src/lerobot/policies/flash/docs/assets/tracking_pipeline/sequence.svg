@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="1060" viewBox="0 0 1120 1060">
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10Z" fill="#52647a"/></marker></defs>
+<rect width="1120" height="1060" fill="#f5f7fb"/>
+<g font-family="DejaVu Sans, sans-serif">
+<text x="30" y="42" font-size="29" fill="#18283e" font-weight="bold" text-anchor="start">One object: initialization, tracking and recovery</text>
+<text x="30" y="76" font-size="21" fill="#52647a" font-weight="normal" text-anchor="start">Perception only — these messages do not command the robot.</text>
+<rect x="40" y="100" width="200" height="48" rx="14" fill="white" stroke="#d8e0e9" stroke-width="2"/>
+<text x="140" y="131" font-size="21" fill="#18283e" font-weight="bold" text-anchor="middle">RGB-D + SAM</text>
+<path d="M140 154 L140 735" stroke="#52647a" stroke-width="1" fill="none" stroke-dasharray="7 7"/>
+<rect x="355" y="100" width="200" height="48" rx="14" fill="white" stroke="#d8e0e9" stroke-width="2"/>
+<text x="455" y="131" font-size="21" fill="#18283e" font-weight="bold" text-anchor="middle">Pose estimator</text>
+<path d="M455 154 L455 735" stroke="#52647a" stroke-width="1" fill="none" stroke-dasharray="7 7"/>
+<rect x="690" y="100" width="200" height="48" rx="14" fill="white" stroke="#d8e0e9" stroke-width="2"/>
+<text x="790" y="131" font-size="21" fill="#18283e" font-weight="bold" text-anchor="middle">Surface store</text>
+<path d="M790 154 L790 735" stroke="#52647a" stroke-width="1" fill="none" stroke-dasharray="7 7"/>
+<rect x="900" y="100" width="200" height="48" rx="14" fill="white" stroke="#d8e0e9" stroke-width="2"/>
+<text x="1000" y="131" font-size="21" fill="#18283e" font-weight="bold" text-anchor="middle">Consumer</text>
+<path d="M1000 154 L1000 735" stroke="#52647a" stroke-width="1" fill="none" stroke-dasharray="7 7"/>
+<rect x="20" y="170" width="1080" height="38" rx="4" fill="#e7edf5" stroke="#d8e0e9" stroke-width="2"/>
+<text x="35" y="196" font-size="21" fill="#18283e" font-weight="bold" text-anchor="start">Initialize once: wait for usable mask + depth</text>
+<path d="M140 248 L455 248" stroke="#52647a" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+<text x="297.5" y="238" font-size="18" fill="#18283e" font-weight="normal" text-anchor="middle">First measured surface</text>
+<path d="M455 300 L790 300" stroke="#52647a" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+<text x="622.5" y="290" font-size="18" fill="#18283e" font-weight="normal" text-anchor="middle">Save it; fix coordinate origin</text>
+<path d="M455 352 L1000 352" stroke="#52647a" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+<text x="727.5" y="342" font-size="18" fill="#18283e" font-weight="normal" text-anchor="middle">Initial pose + source frame</text>
+<rect x="20" y="380" width="1080" height="38" rx="4" fill="#e7edf5" stroke="#d8e0e9" stroke-width="2"/>
+<text x="35" y="406" font-size="21" fill="#18283e" font-weight="bold" text-anchor="start">Each frame t: use the same core loop</text>
+<path d="M140 456 L455 456" stroke="#52647a" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+<text x="297.5" y="446" font-size="18" fill="#18283e" font-weight="normal" text-anchor="middle">RGB + depth + mask at time t</text>
+<path d="M790 510 L455 510" stroke="#52647a" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+<text x="622.5" y="500" font-size="18" fill="#18283e" font-weight="normal" text-anchor="middle">Existing surface (before adding frame t)</text>
+<rect x="155" y="526" width="850" height="100" rx="0" fill="#f5f7fb" stroke="#f5f7fb" stroke-width="2"/>
+<text x="170" y="553" font-size="20" fill="#18283e" font-weight="normal" text-anchor="start">Compare images: previous connected frame p → t.</text>
+<text x="170" y="583" font-size="20" fill="#18283e" font-weight="normal" text-anchor="start">Fit stored surface to current depth/mask; use image matches.</text>
+<text x="170" y="613" font-size="20" fill="#bd742b" font-weight="normal" text-anchor="start">Optional group/gripper input: pose prediction at time t.</text>
+<path d="M455 664 L1000 664" stroke="#52647a" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+<text x="727.5" y="654" font-size="18" fill="#18283e" font-weight="normal" text-anchor="middle">Pose + time + evidence, or predicted/lost</text>
+<path d="M455 718 L790 718" stroke="#52647a" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+<text x="622.5" y="708" font-size="18" fill="#18283e" font-weight="normal" text-anchor="middle">Keep supported new measurements separately</text>
+<rect x="20" y="747" width="1080" height="38" rx="4" fill="#e7edf5" stroke="#d8e0e9" stroke-width="2"/>
+<text x="35" y="773" font-size="21" fill="#18283e" font-weight="bold" text-anchor="start">If tracking fails: preserve the origin and old surface</text>
+<text x="60" y="815" font-size="22" fill="#18283e" font-weight="normal" text-anchor="start">Missing mask: retry text detection or accept a click.</text>
+<text x="60" y="855" font-size="22" fill="#18283e" font-weight="normal" text-anchor="start">Mask restored: reconnect to the old surface / an older connected image.</text>
+<text x="60" y="895" font-size="22" fill="#18283e" font-weight="normal" text-anchor="start">No connection: report lost; do not reset A/B/C to this new view.</text>
+<text x="60" y="935" font-size="22" fill="#18283e" font-weight="normal" text-anchor="start">No object visible: a valid group/gripper prediction can still supply pose.</text>
+<text x="30" y="1030" font-size="21" fill="#18283e" font-weight="bold" text-anchor="start">p advances after a visual connection; prediction alone does not advance it.</text>
+</g></svg>

@@ -307,9 +307,12 @@ class SurfaceTrackingSession:
                 matcher_available=step is not None,
             )
             prepared["step"] = step
+            # Keep measured pairs available to experimental estimators. This
+            # does not change filtering or the archived finish() result.
+            prepared["point_pairs"] = (source, target)
+            prepared["match_source_frame"] = self.previous["frame_id"]
             if evidence is not None:
                 prepared["correspondences"] = evidence
-                prepared["match_source_frame"] = self.previous["frame_id"]
         self.previous = current
         return prepared
 

@@ -71,6 +71,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
         encoder_queue_maxsize: int = 30,
         record_images: bool = True,
         apply_saved_masks: bool = False,
+        local_files_only: bool = False,
     ):
         """
         2 modes are available for instantiating this class, depending on 2 different use cases:
@@ -192,6 +193,7 @@ class LeRobotDataset(torch.utils.data.Dataset):
             download_videos (bool, optional): Flag to download the videos. Note that when set to True but the
                 video files are already present on local disk, they won't be downloaded again. Defaults to
                 True.
+            local_files_only (bool, optional): Never contact the Hub to repair missing local files.
             video_backend (str | None, optional): Video backend to use for decoding videos. Defaults to torchcodec when available int the platform; otherwise, defaults to 'pyav'.
                 You can also use the 'pyav' decoder used by Torchvision, which used to be the default option, or 'video_reader' which is another decoder of Torchvision.
             batch_encoding_size (int, optional): Number of episodes to accumulate before batch encoding videos.
@@ -234,12 +236,16 @@ class LeRobotDataset(torch.utils.data.Dataset):
         self._decode_videos = True
         self._record_images = record_images
 
-        if self._requested_root is not None:
+        if self._requested_root is not None and not local_files_only:
             self._requested_root.mkdir(exist_ok=True, parents=True)
 
         # Load metadata (sets self.root once from the resolved metadata root)
         self.meta = LeRobotDatasetMetadata(
-            self.repo_id, self._requested_root, self.revision, force_cache_sync=force_cache_sync
+            self.repo_id,
+            self._requested_root,
+            self.revision,
+            force_cache_sync=force_cache_sync,
+            local_files_only=local_files_only,
         )
         self.root = self.meta.root
         self.revision = self.meta.revision
@@ -308,6 +314,8 @@ class LeRobotDataset(torch.utils.data.Dataset):
 
         # Load actual data
         if force_cache_sync or not self.reader.try_load():
+            if local_files_only:
+                raise FileNotFoundError(f"Local dataset is incomplete: {self.root}")
             if is_valid_version(self.revision):
                 self.revision = get_safe_version(self.repo_id, self.revision)
             self._download(download_videos)
