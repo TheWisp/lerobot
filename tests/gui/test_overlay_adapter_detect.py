@@ -21,6 +21,7 @@ gated weights) and checks the single-vs-union selection directly.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -202,6 +203,198 @@ def test_segment_does_not_override_the_flag():
     ad._seed_multi = False
     ad.segment(np.zeros((20, 40, 3), np.uint8))
     assert seen == [True, False]  # each call saw the current policy — neither changed it
+
+
+# ---------------------------------------------------------------------------
+# Identity after occlusion (#270): a hidden object must read as lost, and must not
+# come back under another object's name.
+# ---------------------------------------------------------------------------
+
+
+def _rect(h, w, rows, cols):
+    m = np.zeros((h, w), dtype=bool)
+    m[rows, cols] = True
+    return m
+
+
+def _iou(a, b):
+    return np.count_nonzero(a & b) / max(np.count_nonzero(a | b), 1)
+
+
+def _tracker_out(ids, masks, probs):
+    """What ``Sam3TrackerVideoModel`` returns, with full-resolution masks standing in
+    for the low-res prediction (the test's ``post_process_masks`` is the identity)."""
+    pm = torch.tensor(np.stack(masks).astype(np.float32))
+    logits = torch.logit(torch.tensor(probs, dtype=torch.float32))
+    return SimpleNamespace(object_ids=list(ids), pred_masks=pm, object_score_logits=logits)
+
+
+def test_read_output_treats_an_empty_mask_as_lost():
+    # The recording behind #270: the tracker scored the hidden cube 0.30-0.48 while
+    # placing it nowhere. Above LOST_THRESH, so every reader took it as held and the
+    # flush re-seeded an empty mask. No pixels is lost, whatever the score.
+    ad = _adapter_with_masks([])
+    ad.trk_proc = MagicMock()
+    ad.trk_proc.post_process_masks.side_effect = lambda pms, original_sizes: pms
+    gamepad, cube = _two_arms()
+    track = {"objs": {"green gamepad": 1, "green cube": 2}, "masks": {}, "scores": {}}
+    ad._concepts = ["green gamepad", "green cube"]
+
+    ad._read_output(track, _tracker_out([1, 2], [gamepad, np.zeros_like(cube)], [0.9, 0.45]), 20, 40)
+
+    assert (track["masks"]["green gamepad"] == gamepad).all()
+    assert track["scores"]["green gamepad"] > ad.LOST_THRESH
+    assert "green cube" not in track["masks"] and "green cube" not in track["scores"]
+    live = ad._live_masks_now(track)
+    assert live["green cube"] == [] and len(live["green gamepad"]) == 1
+
+    # The complement: a mask with pixels at the same 0.45 is stored and held as before.
+    ad._read_output(track, _tracker_out([1, 2], [gamepad, cube], [0.9, 0.45]), 20, 40)
+    assert (track["masks"]["green cube"] == cube).all()
+    assert len(ad._live_masks_now(track)["green cube"]) == 1
+
+
+def test_select_instances_skips_a_region_another_concept_holds():
+    h, w = 20, 40
+    gamepad = _rect(h, w, slice(2, 14), slice(2, 22))  # 240 px, held as "green gamepad"
+    offered = _rect(h, w, slice(3, 14), slice(2, 22))  # the detector's outline of that same gamepad
+    cube = _rect(h, w, slice(4, 12), slice(28, 36))  # 64 px, the real cube
+    assert _iou(offered, gamepad) > 0.5 > _iou(cube, gamepad)
+    ad = _adapter_with_masks([])
+    ad._cam = "cam"
+    taken = {"green gamepad": gamepad}
+
+    # Largest instance is the gamepad again: skipped, and the smaller real cube wins.
+    out = ad._select_instances({"masks": [offered, cube]}, h, w, taken=taken, concept="green cube")
+    assert (out == cube).all()
+    # Only the gamepad on offer: nothing, rather than a second label on the same object.
+    assert ad._select_instances({"masks": [offered]}, h, w, taken=taken, concept="green cube") is None
+    # Multi-instance unions what is left, not what another concept holds.
+    ad._seed_multi = True
+    out = ad._select_instances({"masks": [offered, cube]}, h, w, taken=taken, concept="green cube")
+    assert (out == cube).all()
+    ad._seed_multi = False
+    # A part of a held object is not that object: a gripper on the arm it sits on stays recoverable.
+    arm = _rect(h, w, slice(0, 20), slice(0, 30))
+    gripper = _rect(h, w, slice(5, 15), slice(20, 30))
+    out = ad._select_instances({"masks": [gripper]}, h, w, taken={"robot arm": arm}, concept="gripper")
+    assert (out == gripper).all()
+    # Nothing held (the initial seed): the largest instance, as before.
+    assert (ad._select_instances({"masks": [offered, cube]}, h, w) == offered).all()
+
+
+class _FakeSession:
+    def __init__(self):
+        self.seeded: dict[int, np.ndarray] = {}
+        self.obj_with_new_inputs: list[int] = []
+
+    def add_new_frame(self, pv):
+        return 0
+
+
+class _FakeTracker:
+    """Tier 2 stand-in. An object is whatever region it was seeded on; ``view`` says per
+    region what the tracker sees this frame (a mask, or None = hidden) and how sure it
+    is. Seeded on the wrong region (the gamepad as "green cube") it tracks that region
+    faithfully, which is how the wrong label persisted in #270."""
+
+    def __init__(self, regions: dict[str, np.ndarray]):
+        self.regions = regions
+        self.view: dict[str, tuple[np.ndarray | None, float]] = {}
+
+    def __call__(self, inference_session, frame=None, frame_idx=None):
+        ids = sorted(inference_session.seeded)
+        masks, probs = [], []
+        for i in ids:
+            seeded = inference_session.seeded[i]
+            name = next((n for n, r in self.regions.items() if _iou(seeded, r) > 0.5), None)
+            assert name is not None, "seeded on no known region"
+            m, p = self.view[name]
+            masks.append(m if m is not None else np.zeros_like(seeded))
+            probs.append(p)
+        return _tracker_out(ids, masks, probs)
+
+
+def test_hidden_object_stays_lost_and_recovers_only_on_itself():
+    # The whole #270 sequence through _infer_masks: both objects seeded; the cube
+    # hidden (tracker: empty mask, score 0.45); flush and recovery probes while the
+    # detector offers the tracked gamepad for "green cube"; then the cube back in view
+    # with the detector offering both, the gamepad larger.
+    h, w = 20, 40
+    gamepad = _rect(h, w, slice(2, 14), slice(2, 22))
+    offered = _rect(h, w, slice(3, 14), slice(2, 22))  # the detector's outline of the gamepad
+    cube = _rect(h, w, slice(4, 12), slice(28, 36))
+
+    ad = _adapter_with_masks([])
+    ad.prompt = "green gamepad . green cube"
+    ad._colors = {}
+    ad._signs = {}
+    ad._tracks = {}
+    ad._cam = "cam"
+    ad._pv = lambda frame: None
+    ad.FLUSH_EVERY = 10  # the production 150, shrunk so the flush path runs in-test
+    trk_proc = MagicMock()
+    trk_proc.init_video_session.side_effect = lambda **kw: _FakeSession()
+    trk_proc.process_new_mask_for_video_frame.side_effect = (
+        lambda inference_session, frame_idx, obj_ids, input_masks: (
+            inference_session.seeded.__setitem__(obj_ids[0], np.asarray(input_masks).astype(bool))
+        )
+    )
+    trk_proc.post_process_masks.side_effect = lambda pms, original_sizes: pms
+    ad.trk_proc = trk_proc
+    tracker = _FakeTracker({"gamepad": gamepad, "cube": cube})
+    tracker.view = {"gamepad": (gamepad, 0.9), "cube": (cube, 0.9)}
+    ad.trk = tracker
+
+    offers = {"green gamepad": [gamepad], "green cube": [cube]}
+    probes = []
+    orig_detect = ad._detect_many
+
+    def detect(frame, concepts, h, w, *, taken=None):
+        probes.append((list(concepts), sorted(taken or {})))
+        ad.det_proc.post_process_instance_segmentation.side_effect = lambda fwd, threshold, target_sizes: [
+            {"masks": offers[c]} for c in concepts
+        ]
+        return orig_detect(frame, concepts, h, w, taken=taken)
+
+    ad._detect_many = detect
+    seeded = []
+    orig_seed = ad._seed
+
+    def seed(track, seeds, pv, h, w):
+        seeded.append({c: int(np.count_nonzero(m)) for c, m in seeds.items()})
+        return orig_seed(track, seeds, pv, h, w)
+
+    ad._seed = seed
+
+    frame = np.zeros((h, w, 3), np.uint8)
+    live_cube = {}
+    for i in range(26):
+        if i == 3:  # the gamepad covers the cube: no pixels, score still above LOST_THRESH
+            tracker.view["cube"] = (None, 0.45)
+            offers["green cube"] = [offered]
+        if i == 18:  # the cube is back; the detector offers the gamepad too, and larger
+            tracker.view["cube"] = (cube, 0.9)
+            offers["green cube"] = [offered, cube]
+        masks, _, _ = ad._infer_masks(frame)
+        live_cube[i] = masks["green cube"]
+        # Never, on any frame, the gamepad's region under the cube's name.
+        for m in masks["green cube"]:
+            assert _iou(m, gamepad) < 0.5, f"frame {i}: 'green cube' drawn on the gamepad"
+
+    assert live_cube[2] and live_cube[3] == [], "hidden with a 0.45 score must read as lost at once"
+    assert all(live_cube[i] == [] for i in range(3, 18))
+    # Recovery asked the detector while telling it what the gamepad holds.
+    assert (["green cube"], ["green gamepad"]) in probes
+    # Seeds: the initial pair; the frame-10 flush with the cube left out (not an empty
+    # mask); the frame-20 flush that recovers the cube on the cube.
+    assert [sorted(s) for s in seeded] == [
+        ["green cube", "green gamepad"],
+        ["green gamepad"],
+        ["green cube", "green gamepad"],
+    ], seeded
+    assert all(px > 0 for s in seeded for px in s.values()), seeded
+    assert len(live_cube[25]) == 1 and _iou(live_cube[25][0], cube) > 0.5
 
 
 if __name__ == "__main__":
