@@ -83,6 +83,8 @@ def write_report(job: Path, request: dict, state: dict, outcomes: dict):
         "th{background:#eef3f8}main{overflow-x:auto}a{color:#1265a0}</style>"
         '<a href="/#/run/flash">Back to FLASH</a><h1>Benchmark results</h1>'
         f"<p>{state['succeeded']} / {state['total']} completed · {len(state['errors'])} failed.</p>"
+        f"<p>{state.get('reused', 0)} unchanged results reused. Cached timings are from their original runs; "
+        "select Ignore cache for fresh timing measurements.</p>"
         "<p>Pose availability is not correctness. Errors use labelled frames where a pose was returned; "
         "different methods may return poses on different frames. Initialization is excluded.</p>"
         "<p>Point error measures displacement of the same initial 3D points against annotated motion. "
@@ -107,6 +109,7 @@ def write_report(job: Path, request: dict, state: dict, outcomes: dict):
 def rebuild(job: Path):
     # Import model/dataset dependencies only inside this process, never the GUI.
     from benchmarks.flash_experiment_browser import export
+    from benchmarks.flash_experiment_cache import case_identity, execution_identity, reusable, seal_result
     from benchmarks.flash_tracker_experiment import code_snapshot, run_case
     from lerobot.policies.flash.experimental_surface_session import GrowingSurfaceConfig
     from lerobot.policies.flash.surface_acceleration import SearchPool, compiled_kernels
@@ -117,7 +120,7 @@ def rebuild(job: Path):
     state = json.loads((job / "status.json").read_text())
     outcomes = {}
     root = Path(request["browser_root"])
-    state.update(state="running", phase="Loading UFM", pid=os.getpid())
+    state.update(state="running", phase="Checking cache", reused=0, computed=0, pid=os.getpid())
     write_json(job / "status.json", state)
 
     def check_cancel():
@@ -127,12 +130,14 @@ def rebuild(job: Path):
     try:
         check_cancel()
         provenance = code_snapshot(job)
+        execution = execution_identity(provenance["source_sha256"])
+        provenance["execution"] = execution
         write_json(job / "provenance.json", provenance)
-        model = load_ufm()
+        model = None
         kernels = None
         for index, item in enumerate(request["items"]):
             check_cancel()
-            state.update(current=item["name"], frame=0, frames=item["frames"], phase="Tracking")
+            state.update(current=item["name"], frame=0, frames=item["frames"], phase="Checking inputs")
             write_json(job / "status.json", state)
             pool = None
             try:
@@ -141,6 +146,39 @@ def rebuild(job: Path):
                 previous_provenance = json.loads((previous_run.parent / "provenance.json").read_text())
                 config = VisionPipelineConfig.from_dict(previous_provenance["config"])
                 experimental = previous_provenance.get("surface_experiment")
+                retain = "ufm_retained_reference" in item["methods"]
+                identity = case_identity(
+                    case,
+                    {
+                        "config": previous_provenance["config"],
+                        "surface_experiment": experimental,
+                        "retain_motion_reference": retain,
+                        "record_correspondences": True,
+                    },
+                    execution,
+                    check_cancel=check_cancel,
+                )
+                if not request.get("force", False) and reusable(previous_run, identity):
+                    outcomes[item["id"]] = {
+                        "status": "completed",
+                        "cache": "reused",
+                        "run": str(previous_run),
+                        "config": previous_provenance["config"],
+                        "summary": json.loads((previous_run / "summary.json").read_text()),
+                    }
+                    state["reused"] += 1
+                    state["succeeded"] += 1
+                    state["completed"] += 1
+                    state.update(frame=item["frames"], phase="Reused unchanged result")
+                    write_json(job / "status.json", state)
+                    continue
+                check_cancel()
+                if model is None:
+                    state.update(phase="Loading UFM")
+                    write_json(job / "status.json", state)
+                    model = load_ufm(revision=execution["model_revision"])
+                state.update(phase="Tracking")
+                write_json(job / "status.json", state)
                 case_dir = job / "runs" / f"{index:03d}"
                 case_dir.mkdir(parents=True)
                 write_json(
@@ -176,11 +214,29 @@ def rebuild(job: Path):
                     config,
                     kernels if config.compiled_surface_fit else None,
                     pool,
-                    retain_motion_reference="ufm_retained_reference" in item["methods"],
+                    retain_motion_reference=retain,
                     record_correspondences=True,
                     surface_experiment=GrowingSurfaceConfig(**experimental) if experimental else None,
                     progress=progress,
                 )
+                # Re-read the inputs before certifying reuse, so an edit during
+                # inference cannot create a falsely valid cache entry.
+                if (
+                    case_identity(
+                        case,
+                        {
+                            "config": previous_provenance["config"],
+                            "surface_experiment": experimental,
+                            "retain_motion_reference": retain,
+                            "record_correspondences": True,
+                        },
+                        execution,
+                        check_cancel=check_cancel,
+                    )
+                    != identity
+                ):
+                    raise ValueError("Inputs changed during the benchmark; rerun this clip")
+                seal_result(run, identity)
                 state.update(phase="Building playback")
                 write_json(job / "status.json", state)
                 # Stage the whole export outside the public catalogue. Publish
@@ -195,11 +251,13 @@ def rebuild(job: Path):
                 staged.rename(root / staged.name)
                 outcomes[item["id"]] = {
                     "status": "completed",
+                    "cache": "computed",
                     "run": str(run),
                     "config": previous_provenance["config"],
                     "summary": json.loads((run / "summary.json").read_text()),
                 }
                 state["succeeded"] += 1
+                state["computed"] += 1
             except Exception as exc:
                 traceback.print_exc()
                 state["errors"].append({"name": item["name"], "error": str(exc)})

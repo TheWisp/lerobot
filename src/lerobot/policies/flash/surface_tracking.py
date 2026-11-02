@@ -30,7 +30,7 @@ from .surface_observation import (
 )
 
 
-def load_ufm():
+def load_ufm(*, revision=None):
     """Load the same published checkpoint as the offline comparison.
 
     Call only in the dedicated inference process: UFM's constructor initializes
@@ -48,7 +48,9 @@ def load_ufm():
 
     torch.hub.load = backbone
     try:
-        model = UniFlowMatchConfidence.from_pretrained("infinity1096/UFM-Base-DINOv2L-init")
+        model = UniFlowMatchConfidence.from_pretrained(
+            "infinity1096/UFM-Base-DINOv2L-init", **({"revision": revision} if revision else {})
+        )
     finally:
         torch.hub.load = original
     return model.cuda().float().eval()

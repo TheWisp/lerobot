@@ -843,3 +843,106 @@ rescoring changed no predictions, masks or videos. For this clip, growing surfac
 meets 10 mm / 10° on 33/71 frames; surface correction on 41/71. UFM meets it on
 23/71 and returns no pose for the remainder, so its low median error alone is
 not evidence of better whole-clip tracking.
+
+### More labelled clips and repeatable reruns (2026-11-02)
+
+Added seven DexYCB hand/object clips (tomato can, tuna can, banana, bowl, mug,
+drill, marker) and three BOP YCB-Video clips (clamp, mustard, bleach). They retain
+consecutive 640×480 RGB-D frames, source calibration and original depth units.
+Pose labels are evaluation-only. These ten clips use **dataset masks**, so they
+test tracking given those masks, not SAM's segmentation quality. Their timing is
+nominal 30 fps; source capture timestamps were not supplied. H2O remains pending
+approved access to its official download. Local input provenance and source
+hashes are under `~/.cache/flash-tracker-restart/labelled-expansion-20261102/`.
+
+The catalogue now contains 42 scenes, with pose labels for 24. The expanded
+five-method rerun is recorded in
+`browser/.rebuild/rebuild-20261102-002523-c7e32c1a/` under the same cache root.
+Its progress and completed results remain available in Run → FLASH.
+
+**Rerun all benchmarks** now reuses a completed clip only when decoded RGB,
+depth, masks, calibration, timing, labels, settings, tracker source, UFM/DINO
+source, checkpoint contents and execution environment match. Changed or corrupt
+results rerun. **Ignore cache** forces fresh computation, including fresh timing
+measurements; cached timing numbers describe the original run. Reuse is at clip
+level, not individual frames. A real unchanged-clip probe completed in 4.04 s
+without loading UFM or rerunning tracking/export. This first expanded run still
+recomputes older results because they lack a verified cache record.
+
+### Do the labels themselves match the observation? (2026-11-02)
+
+DexYCB supplies a previously scanned YCB object model. Its per-frame poses are
+fitted to real multi-camera depth and human-marked image points; they are not
+exact simulator states. See the [DexYCB annotation method, §2.3](https://dex-ycb.github.io/assets/chao_cvpr2021.pdf)
+and [YCB scanning description](https://registry.opendata.aws/ycb-benchmarks/).
+The paper's reported fingertip annotation errors concern hands, not object poses.
+
+![Pitcher label compared with RGB and measured depth](label-quality-pitcher.png)
+
+For the existing blue pitcher clip, the green viewer geometry agrees with the
+source model/pose to 0.00006 mm: the visible discrepancy is not introduced by
+that display transform. A separate triangle rendering check compares the
+model's nearest surface with the depth at the **same image pixel**. It uses the
+benchmark's visible-object mask, excludes missing depth, and does not refit the
+label or discard points based on their disagreement.
+
+Across all 72 frames, with a two-pixel mask edge excluded, the median absolute
+depth gap is **8.38 mm**, p90 **26.17 mm**, and **56.66%** of compared pixels are
+within 10 mm. Without excluding the edge: 8.69 mm, 29.31 mm and 55.22%.
+First-frame median: 6.01 mm; last-frame median: 17.05 mm. The dataset's own mask
+sometimes covers an unmodelled sleeve in front of the pitcher; using that mask
+would wrongly score the sleeve's depth as the object's surface.
+
+These numbers measure **depth agreement, not the percentage of correct poses**.
+They combine model-shape error, pose-label error, calibration, mask error and
+sensor error; this audit does not separate them. Our usual 10 mm / 10° score
+measures agreement with labelled _motion_, and labels compared with themselves
+necessarily score 100%. Constant model/pose offsets can cancel in relative
+motion, so this audit neither invalidates every tracking score nor proves the
+tracker is right when it disagrees. It establishes disagreement between the
+supplied model/poses and recorded measurements, not which one is wrong.
+
+`benchmarks.flash_label_depth_audit` reproduces the depth check from a case file,
+mesh and explicit metres-per-mesh-unit scale. Local reports and comparison
+rendering are in `~/.cache/flash-tracker-restart/label-quality-pitcher-20261102/`.
+Tests check an analytically known tilted plane, front/back surface selection,
+missing depth, and a deliberately incorrect pose through the real input readers.
+
+The three new BOP clips provide a useful comparison. Over **all projected model
+pixels with valid depth**, without using the supplied masks, clamp/mustard have
+median gaps of 1.36/1.48 mm and 96.30%/95.84% within 10 mm. Bleach has 74.39%
+within 10 mm; most remaining pixels have a nearer observed surface, consistent
+with occlusion, not automatically a wrong label. Its supplied visible-mask
+interior has a 2.29 mm median gap. These masks are not independent validation:
+[BOP generates them from the model, labelled pose and observed depth](https://github.com/thodan/bop_toolkit/blob/master/scripts/calc_gt_masks.py).
+Local reports, original meshes and download provenance are in
+`~/.cache/flash-tracker-restart/label-quality-bop-20261102/`.
+
+**Import audit, same pitcher clip.** All 72 imported RGB frames match their
+same-index original more closely than any other original frame. All unsaturated
+depth pixels are unchanged. The PNG adapter clears 53 pixels at the uint16
+maximum (65.535 m) to missing depth across three frames, all outside the object
+mask; these do not enter the reported comparisons. The 640×480 color intrinsics
+and millimetre depth units agree with the official loader. Already-aligned depth
+receives no second alignment.
+
+![Original DexYCB rendering versus our imported model](label-import-audit.png)
+
+An independent check downloads the original `textured_simple.obj` and executes
+the object-rendering portion of [DexYCB's example](https://github.com/NVlabs/dex-ycb-toolkit/blob/64551b001d360ad83bc383157a559ec248fb9100/examples/visualize_pose.py)
+with raw `pose_y`, bypassing FLASH and BOP conversion. It reproduces the visible
+offset: last-frame median depth gap **16.28 mm**, versus **17.05 mm** in our
+earlier rendering. The original/BOP surfaces, rendered with the same rasterizer,
+differ by a median **0.18 mm** in depth. The two rasterizers differ by about
+1.17 mm median on the same mesh; the last decimal is not meaningful accuracy.
+
+Testing pose offsets from −5 to +5 frames on identical measurement pixels finds
+that −2 reduces the moving-frame depth gap (frames 45–66) from 11.38 to 5.60 mm.
+However, the unshifted pose covers more of the visible blue object in RGB; this
+does **not** establish a timestamp correction. The source recording guide uses
+approximate synchronization, but hardware timestamps are unavailable here.
+No frames, poses or benchmark scores were shifted. **No import/convention bug
+was found for this clip; pose annotation, calibration, model shape, depth and
+capture timing remain possible contributors. Calling the labels themselves
+wrong was too strong.** Scripts, raw model provenance and per-frame comparisons
+are in `~/.cache/flash-tracker-restart/dexycb-alignment-audit/`.

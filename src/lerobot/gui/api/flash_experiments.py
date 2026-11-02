@@ -14,6 +14,7 @@ import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
@@ -138,7 +139,7 @@ def _cancel_rebuild():
     return _rebuild_status()
 
 
-def _start_rebuild():
+def _start_rebuild(*, force=False):
     from benchmarks.flash_rebuild_examples import write_json
 
     directory = _root() / ".rebuild"
@@ -166,7 +167,7 @@ def _start_rebuild():
             "frame": 0,
             "frames": 0,
         }
-        write_json(job / "request.json", {"browser_root": str(_root()), "items": items})
+        write_json(job / "request.json", {"browser_root": str(_root()), "items": items, "force": force})
         write_json(job / "status.json", state)
         write_json(directory / "current.json", {"job": str(job)})
         python = os.environ.get("LEROBOT_FLASH_TRACKING_PYTHON", sys.executable)
@@ -203,8 +204,8 @@ async def list_experiments():
 
 
 @router.post("/rebuild", status_code=202)
-async def rebuild_examples():
-    return await asyncio.get_running_loop().run_in_executor(_jobs, _start_rebuild)
+async def rebuild_examples(force: bool = False):
+    return await asyncio.get_running_loop().run_in_executor(_jobs, partial(_start_rebuild, force=force))
 
 
 @router.get("/rebuild")

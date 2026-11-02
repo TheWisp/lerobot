@@ -373,6 +373,7 @@ def test_rebuild_recomputes_then_publishes_without_erasing_failed_or_old_results
 
     import torch
 
+    from benchmarks import flash_experiment_cache
     from benchmarks.flash_rebuild_examples import rebuild, write_json
     from lerobot.policies.flash import surface_tracking
     from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig
@@ -408,7 +409,12 @@ def test_rebuild_recomputes_then_publishes_without_erasing_failed_or_old_results
         covisibility=SimpleNamespace(mask=torch.ones(1, 320, 320)),
     )
     model = SimpleNamespace(predict_correspondences_batched=lambda *_: output)
-    monkeypatch.setattr(surface_tracking, "load_ufm", lambda: model)
+    monkeypatch.setattr(surface_tracking, "load_ufm", lambda **_: model)
+    monkeypatch.setattr(
+        flash_experiment_cache,
+        "execution_identity",
+        lambda source: {"model_revision": "fixture", "source": source},
+    )
     monkeypatch.setattr(torch.Tensor, "cuda", lambda self: self)
     rebuild(job)
     state = json.loads((job / "status.json").read_text())
@@ -442,10 +448,40 @@ def test_rebuild_recomputes_then_publishes_without_erasing_failed_or_old_results
         != json.loads(old)["frames"][1]["objects"]["object"]["poses"]["ufm_chain"]
     )
 
+    # Cross the real worker/cache boundary: an unchanged rerun must not even
+    # load the network, while forced reruns and an altered input must do so.
+    def no_model(**_):
+        raise AssertionError("model loaded")
+
+    monkeypatch.setattr(surface_tracking, "load_ufm", no_model)
+
+    def rerun(name, force=False):
+        next_job = root / ".rebuild" / name
+        next_job.mkdir()
+        write_json(
+            next_job / "request.json", {"browser_root": str(root), "items": [replacement], "force": force}
+        )
+        write_json(
+            next_job / "status.json",
+            {"id": name, "state": "starting", "total": 1, "completed": 0, "succeeded": 0, "errors": []},
+        )
+        rebuild(next_job)
+        return json.loads((next_job / "status.json").read_text())
+
+    cached = rerun("cached")
+    assert cached["state"] == "completed" and cached["reused"] == 1 and cached["computed"] == 0
+    assert rerun("forced", force=True)["errors"][0]["error"] == "model loaded"
+    depth_path = next((runs[0][0].parents[1] / "source/depth").glob("*.png"))
+    depth = cv2.imread(str(depth_path), cv2.IMREAD_UNCHANGED)
+    depth[0, 0] += 1
+    cv2.imwrite(str(depth_path), depth)
+    assert rerun("changed")["errors"][0]["error"] == "model loaded"
+
 
 def test_rebuild_lock_survives_launcher_and_detects_worker_exit(tmp_path, monkeypatch):
     import subprocess
     import sys
+    from pathlib import Path
 
     root = tmp_path / "browser"
     run, _ = completed_run(tmp_path)
@@ -469,7 +505,9 @@ def test_rebuild_lock_survives_launcher_and_detects_worker_exit(tmp_path, monkey
         with TestClient(app) as client:
             base = "/api/run/flash/experiments/rebuild"
             assert client.get(base).json()["state"] == "idle"
-            assert client.post(base).status_code == 202
+            assert client.post(base + "?force=true").status_code == 202
+            job = Path(json.loads((root / ".rebuild/current.json").read_text())["job"])
+            assert json.loads((job / "request.json").read_text())["force"] is True
             assert client.get(base).json()["state"] == "starting"
             assert client.post(base).status_code == 409
             assert len(children) == 1

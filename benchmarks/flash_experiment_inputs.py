@@ -109,6 +109,41 @@ def _recording(case: dict, index: int | None = None):
         )
 
 
+def _rgbd_sequence(case: dict, index: int | None = None):
+    """Imported consecutive frames; preserve sensor depth units and per-frame K.
+
+    The calibration archive has no object poses. Evaluation annotations live
+    separately and are never loaded on this observation path.
+    """
+    root = path(case["source_root"])
+    with np.load(root / "calibration.npz", allow_pickle=False) as data:
+        times = data["times_s"]
+        intrinsics = data["intrinsics"]
+        cameras = data["world_from_camera"]
+        scales = data["depth_m_per_unit"]
+    count = case["expected_frames"]
+    if (
+        times.shape != (count,)
+        or intrinsics.shape != (count, 3, 3)
+        or cameras.shape != (count, 4, 4)
+        or scales.shape != (count,)
+    ):
+        raise ValueError("RGB-D calibration and frame count disagree")
+    for i in range(count) if index is None else [index]:
+        frame = RGBDFrame(
+            i,
+            image(root / "rgb" / f"{i:06d}.{case.get('rgb_extension', 'png')}", color=True),
+            image(root / "depth" / f"{i:06d}.png"),
+            intrinsics[i],
+            float(scales[i]),
+            cameras[i],
+            float(times[i]),
+            float(times[i]),
+            "imported-rgbd-sequence",
+        )
+        yield frame, {role: image(root / "masks" / role / f"{i:06d}.png") > 0 for role in case["roles"]}
+
+
 @lru_cache(maxsize=2)
 def _local_dataset(root: Path, repo_id: str, modified_ns: int):
     # Never fetch a missing recording while browsing. Two datasets bound the
@@ -169,6 +204,7 @@ def samples(case: dict):
         "flash_prepared_demo": _recording,
         "recorded_rgbd": _recording,
         "lerobot_rgbd": _lerobot,
+        "rgbd_sequence": _rgbd_sequence,
     }[case["kind"]]
     previous_time = -np.inf
     count = 0
@@ -201,6 +237,7 @@ def sample_at(case: dict, index: int):
         "flash_prepared_demo": _recording,
         "recorded_rgbd": _recording,
         "lerobot_rgbd": _lerobot,
+        "rgbd_sequence": _rgbd_sequence,
     }[case["kind"]]
     frame, masks = next(reader(case, index))
     if frame.rgb.shape[:2] != frame.depth.shape or any(m.shape != frame.depth.shape for m in masks.values()):

@@ -247,6 +247,7 @@ def code_snapshot(output):
         repo / "benchmarks/flash_flow_paths.py",
         repo / "benchmarks/flash_experiment_browser.py",
         repo / "benchmarks/flash_rebuild_examples.py",
+        repo / "benchmarks/flash_experiment_cache.py",
     ]
     hashes = {}
     for file in source_files:

@@ -70,7 +70,8 @@ async function rebuildFlashExamples() {
     document.getElementById('flash-experiment-rebuild').disabled = true;
     document.getElementById('flash-experiment-rebuild-status').textContent = 'Starting benchmarks…';
     try {
-        const response = await fetch('/api/run/flash/experiments/rebuild', { method: 'POST' });
+        const force = document.getElementById('flash-experiment-ignore-cache')?.checked;
+        const response = await fetch('/api/run/flash/experiments/rebuild' + (force ? '?force=true' : ''), { method: 'POST' });
         if (!response.ok && response.status !== 409) {
             const error = await response.json();
             throw new Error(error.detail || `Cannot rerun (${response.status})`);
@@ -118,7 +119,8 @@ async function pollFlashRebuild() {
         else if (state.state === 'idle') text.textContent = '';
         else if (state.state === 'cancelled') text.textContent = `Cancelled · ${state.succeeded} / ${state.total} completed. Previous results retained.`;
         else if (state.state === 'failed') text.textContent = state.error || 'Rerun stopped.';
-        else text.textContent = `${state.succeeded} / ${state.total} benchmarked` + (state.errors.length ? ` · ${state.errors.length} failed` : '');
+        else text.textContent = `${state.succeeded} / ${state.total} benchmarked` +
+            (state.reused ? ` · ${state.reused} reused` : '') + (state.errors.length ? ` · ${state.errors.length} failed` : '');
         const download = document.getElementById('flash-experiment-report-download');
         download.hidden = !state.report_ready;
         if (state.report_ready) {
