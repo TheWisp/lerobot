@@ -1,0 +1,2762 @@
+{
+  "provenance": {
+    "commit": "79676e43053be9f866309e0493062c2df047e4b9",
+    "source_sha256": {
+      "src/lerobot/policies/flash/surface_grounding.py": "80aaef5c65c2a4d68a0bc570ea3fc75d110015a60984b0984635664554674f2d",
+      "src/lerobot/policies/flash/surface_tracking.py": "786a0910727ddc5083c28c2bfdc80c5b844d533fd4188e636739efef07ec79cd",
+      "src/lerobot/policies/flash/surface_observation.py": "cc8809a1bd3c5ff20167991ec32083414ac5903bbb28749a06479d776aaa0016",
+      "src/lerobot/policies/flash/surface_uncertainty.py": "3ece9d9a553b5c14c58c5d10ee859410caa1789156faa9c0a933754291e67b19",
+      "src/lerobot/policies/flash/experimental_surface_session.py": "780e0763f5d3d167556522cb4afa54d66cbc6af63f78e01c14a73fef970c17b8"
+    },
+    "prototype_sha256": {
+      "visibility_fit.py": "5b2088f042e5ed808a5aa6305d4d117ee046dc58b3eb2b481aa14a482bd3feb6",
+      "frame_probe.py": "2ae79ad56086769e10f828d22c6bf9103bb88394a5e1f7646461b7d8ebfb1303",
+      "run_clips.py": "2ddb3352e0b35499082557d68d81f29335c6ce3b91d2df7b638ac33a433ad840",
+      "real_two_view.py": "81b01d658bca7e4856ee844bb0be71e427d998a4a05d08041ebc8c78434e1107",
+      "reference_probe.py": "e1855eb6015e4541170bde347827d0e851e01cf7c11700d66e47b5982c1bbc1a",
+      "known_shape_probe.py": "e1079fdcb2ec8752a07abf1f674c25bf085ac5fe7c9161ed5d52908336db7ffe",
+      "visibility_fit_probe.py": "97acfe852acf850e2f3fdc82ffff556e41865b34be85f341ddc33bf3e0b4f8ba",
+      "visibility_probe.py": "eba23be43ebc87d1bfd385f6d07fd8fc0e112ea1740b0e692d43016a87b3b6c9"
+    },
+    "scope": "Local depth-fitting investigation. No segmentation, tracker default, or production algorithm changes. Experimental all-parts reruns changed only observation.component_gap_m; their RGBD, saved masks, timestamps, and evaluation labels match the baseline. Changing this setting also changes which pairs pass the existing downstream image-match lifting filter, so these are full-pipeline ablations, not fixed-correspondence fitter-only comparisons."
+  },
+  "frame_probe": {
+    "frame": 42,
+    "source": "/home/feit/.cache/flash-tracker-restart/kalman-accept25-all-20261103/runs/005-accept25/dexycb-drill-20201002_111923",
+    "counts": {
+      "original_reference": 508,
+      "all_reference": 509,
+      "original_fitter_target": 820,
+      "original_checked_target": 323,
+      "all_checked_target": 820
+    },
+    "variants": {
+      "original_mixed": [
+        {
+          "source": "previous",
+          "stage": "initial",
+          "score": 14.836372539694715,
+          "checks": {
+            "accepted": false,
+            "observed_outlier_fraction": 0.25386996904024767,
+            "free_space_outlier_fraction": 0.0
+          },
+          "all_observed_median_mm": 6.584087995743162,
+          "all_observed_p90_mm": 125.76924952261324,
+          "all_observed_overlap": 0.38658536585365855,
+          "pose": [
+            [
+              0.9434212694240224,
+              0.24403041549314747,
+              -0.22451161375886244,
+              0.23508622302872226
+            ],
+            [
+              -0.14269247897444948,
+              0.9099340537653848,
+              0.3894340435069981,
+              -0.4257978637020106
+            ],
+            [
+              0.29932451426920115,
+              -0.33536424095649686,
+              0.8932724450273726,
+              0.08689920767805355
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "blocks_squared": {
+            "stored_to_current": 2.6820873650314967,
+            "current_to_stored": 12.149452917510821,
+            "free_space_outline": 0.004832257152400064
+          },
+          "change_from_previous_mm": 0.0,
+          "change_from_previous_deg": 0.0
+        },
+        {
+          "source": "previous",
+          "stage": "refined",
+          "score": 13.321622104879772,
+          "checks": {
+            "accepted": false,
+            "observed_outlier_fraction": 0.4117647058823529,
+            "free_space_outlier_fraction": 0.011811023622047244
+          },
+          "all_observed_median_mm": 5.1918268417131905,
+          "all_observed_p90_mm": 127.443677424421,
+          "all_observed_overlap": 0.4768292682926829,
+          "pose": [
+            [
+              0.9446133466683024,
+              0.16179606458564524,
+              -0.28553048660468394,
+              0.3010111212808756
+            ],
+            [
+              -0.07223969802523551,
+              0.9511974750494198,
+              0.3000079823751725,
+              -0.33626941343346195
+            ],
+            [
+              0.32013598880059213,
+              -0.26276490812929715,
+              0.9102019290962143,
+              0.06348766188480263
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "blocks_squared": {
+            "stored_to_current": 1.1841045300511919,
+            "current_to_stored": 12.068318018821035,
+            "free_space_outline": 0.06919955600754835
+          },
+          "change_from_previous_mm": 6.9567759820309165,
+          "change_from_previous_deg": 7.154104342896402
+        },
+        {
+          "source": "group",
+          "stage": "initial",
+          "score": 16.20462074020027,
+          "checks": {
+            "accepted": false,
+            "observed_outlier_fraction": 0.30340557275541796,
+            "free_space_outlier_fraction": 0.07086614173228346
+          },
+          "all_observed_median_mm": 8.27689847819345,
+          "all_observed_p90_mm": 129.64780606545432,
+          "all_observed_overlap": 0.35853658536585364,
+          "pose": [
+            [
+              0.9561617922660011,
+              0.16141656167873514,
+              -0.2443344442081053,
+              0.2579315666384533
+            ],
+            [
+              -0.10050705345939187,
+              0.9645740214667999,
+              0.24391656220166014,
+              -0.2884932032659428
+            ],
+            [
+              0.2750508302397569,
+              -0.20866636223210605,
+              0.9385123281327955,
+              0.03667688906368364
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "blocks_squared": {
+            "stored_to_current": 2.9454797211956154,
+            "current_to_stored": 12.78306258162237,
+            "free_space_outline": 0.4760784373822838
+          },
+          "change_from_previous_mm": 4.400562327933235,
+          "change_from_previous_deg": 9.249506793368584
+        },
+        {
+          "source": "group",
+          "stage": "refined",
+          "score": 14.928087994365223,
+          "checks": {
+            "accepted": false,
+            "observed_outlier_fraction": 0.3065015479876161,
+            "free_space_outlier_fraction": 0.07086614173228346
+          },
+          "all_observed_median_mm": 7.227037468105363,
+          "all_observed_p90_mm": 129.76894670532133,
+          "all_observed_overlap": 0.37926829268292683,
+          "pose": [
+            [
+              0.9344927874750891,
+              0.15566611600431066,
+              -0.3201426096057354,
+              0.33472195722595455
+            ],
+            [
+              -0.0891578897101263,
+              0.9730056966265128,
+              0.212863301286979,
+              -0.25566782138188426
+            ],
+            [
+              0.3446361862304577,
+              -0.17037598029207857,
+              0.9231456680719672,
+              0.04939616937173834
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "blocks_squared": {
+            "stored_to_current": 1.934589007178811,
+            "current_to_stored": 12.496604789585604,
+            "free_space_outline": 0.4968941976008095
+          },
+          "change_from_previous_mm": 6.224298997173383,
+          "change_from_previous_deg": 11.848283067061002
+        }
+      ],
+      "largest_consistent": [
+        {
+          "source": "previous",
+          "stage": "initial",
+          "score": 15.74952400733529,
+          "checks": {
+            "accepted": false,
+            "observed_outlier_fraction": 0.25386996904024767,
+            "free_space_outlier_fraction": 0.0
+          },
+          "all_observed_median_mm": 6.584087995743162,
+          "all_observed_p90_mm": 125.76924952261324,
+          "all_observed_overlap": 0.38658536585365855,
+          "pose": [
+            [
+              0.9434212694240224,
+              0.24403041549314747,
+              -0.22451161375886244,
+              0.23508622302872226
+            ],
+            [
+              -0.14269247897444948,
+              0.9099340537653848,
+              0.3894340435069981,
+              -0.4257978637020106
+            ],
+            [
+              0.29932451426920115,
+              -0.33536424095649686,
+              0.8932724450273726,
+              0.08689920767805355
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "blocks_squared": {
+            "stored_to_current": 14.401208203397871,
+            "current_to_stored": 1.343483546785017,
+            "free_space_outline": 0.004832257152400064
+          },
+          "change_from_previous_mm": 0.0,
+          "change_from_previous_deg": 0.0
+        },
+        {
+          "source": "previous",
+          "stage": "refined",
+          "score": 1.6187063660059269,
+          "checks": {
+            "accepted": false,
+            "observed_outlier_fraction": 0.39009287925696595,
+            "free_space_outlier_fraction": 0.003937007874015748
+          },
+          "all_observed_median_mm": 8.422788110581445,
+          "all_observed_p90_mm": 121.98102542242133,
+          "all_observed_overlap": 0.2524390243902439,
+          "pose": [
+            [
+              0.9250235106946558,
+              0.2840938799427685,
+              -0.2522343593589073,
+              0.26180727311510277
+            ],
+            [
+              -0.08766707580804473,
+              0.8056344361616193,
+              0.585890466802292,
+              -0.6101038067396192
+            ],
+            [
+              0.36965658181804534,
+              -0.5198498077806756,
+              0.7701364741842796,
+              0.21959919358636895
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "blocks_squared": {
+            "stored_to_current": 0.14164294404817898,
+            "current_to_stored": 1.4621914251274621,
+            "free_space_outline": 0.014871996830285854
+          },
+          "change_from_previous_mm": 11.251894376301943,
+          "change_from_previous_deg": 13.428460562559113
+        },
+        {
+          "source": "group",
+          "stage": "initial",
+          "score": 15.394270707014718,
+          "checks": {
+            "accepted": false,
+            "observed_outlier_fraction": 0.30340557275541796,
+            "free_space_outlier_fraction": 0.07086614173228346
+          },
+          "all_observed_median_mm": 8.27689847819345,
+          "all_observed_p90_mm": 129.64780606545432,
+          "all_observed_overlap": 0.35853658536585364,
+          "pose": [
+            [
+              0.9561617922660011,
+              0.16141656167873514,
+              -0.2443344442081053,
+              0.2579315666384533
+            ],
+            [
+              -0.10050705345939187,
+              0.9645740214667999,
+              0.24391656220166014,
+              -0.2884932032659428
+            ],
+            [
+              0.2750508302397569,
+              -0.20866636223210605,
+              0.9385123281327955,
+              0.03667688906368364
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "blocks_squared": {
+            "stored_to_current": 13.156981383328803,
+            "current_to_stored": 1.761210886303631,
+            "free_space_outline": 0.4760784373822838
+          },
+          "change_from_previous_mm": 4.400562327933235,
+          "change_from_previous_deg": 9.249506793368584
+        },
+        {
+          "source": "group",
+          "stage": "refined",
+          "score": 10.41155168390154,
+          "checks": {
+            "accepted": false,
+            "observed_outlier_fraction": 0.5201238390092879,
+            "free_space_outlier_fraction": 0.08267716535433071
+          },
+          "all_observed_median_mm": 11.596512680004109,
+          "all_observed_p90_mm": 128.23154950744978,
+          "all_observed_overlap": 0.2658536585365854,
+          "pose": [
+            [
+              0.8902192228664946,
+              0.16259176753945187,
+              -0.42552749895555697,
+              0.4356478380825144
+            ],
+            [
+              -0.07822798166931812,
+              0.9748207292358683,
+              0.20881793202690996,
+              -0.25408460706071273
+            ],
+            [
+              0.44876510350395954,
+              -0.15260557978149814,
+              0.8805233778251622,
+              0.09411344393045461
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "blocks_squared": {
+            "stored_to_current": 6.668232394705889,
+            "current_to_stored": 2.8143186354501113,
+            "free_space_outline": 0.92900065374554
+          },
+          "change_from_previous_mm": 16.12915675514243,
+          "change_from_previous_deg": 15.568236147021905
+        }
+      ],
+      "all_reference_largest_check": [
+        {
+          "source": "previous",
+          "stage": "initial",
+          "score": 14.831094404574403,
+          "checks": {
+            "accepted": false,
+            "observed_outlier_fraction": 0.25386996904024767,
+            "free_space_outlier_fraction": 0.0
+          },
+          "all_observed_median_mm": 6.584087995743162,
+          "all_observed_p90_mm": 125.76924952261324,
+          "all_observed_overlap": 0.38658536585365855,
+          "pose": [
+            [
+              0.9434212694240224,
+              0.24403041549314747,
+              -0.22451161375886244,
+              0.23508622302872226
+            ],
+            [
+              -0.14269247897444948,
+              0.9099340537653848,
+              0.3894340435069981,
+              -0.4257978637020106
+            ],
+            [
+              0.29932451426920115,
+              -0.33536424095649686,
+              0.8932724450273726,
+              0.08689920767805355
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "blocks_squared": {
+            "stored_to_current": 2.6768180381846767,
+            "current_to_stored": 12.149452917510821,
+            "free_space_outline": 0.004823448878908125
+          },
+          "change_from_previous_mm": 0.0,
+          "change_from_previous_deg": 0.0
+        },
+        {
+          "source": "previous",
+          "stage": "refined",
+          "score": 13.310977469444476,
+          "checks": {
+            "accepted": false,
+            "observed_outlier_fraction": 0.4148606811145511,
+            "free_space_outlier_fraction": 0.015717092337917484
+          },
+          "all_observed_median_mm": 5.331054124660267,
+          "all_observed_p90_mm": 127.68633055386077,
+          "all_observed_overlap": 0.4695121951219512,
+          "pose": [
+            [
+              0.9443100125986658,
+              0.16175448102625992,
+              -0.2865555582672125,
+              0.3026149309602516
+            ],
+            [
+              -0.07379834732784377,
+              0.9527608466255252,
+              0.2946193698131242,
+              -0.33035055125370505
+            ],
+            [
+              0.3206749195643271,
+              -0.2570646942023156,
+              0.9116388204530803,
+              0.0612445132296831
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "blocks_squared": {
+            "stored_to_current": 1.1372354118364232,
+            "current_to_stored": 12.091848191826188,
+            "free_space_outline": 0.08189386578186673
+          },
+          "change_from_previous_mm": 7.835762204862064,
+          "change_from_previous_deg": 7.377563150574103
+        },
+        {
+          "source": "group",
+          "stage": "initial",
+          "score": 16.204143643495286,
+          "checks": {
+            "accepted": false,
+            "observed_outlier_fraction": 0.30340557275541796,
+            "free_space_outlier_fraction": 0.07269155206286837
+          },
+          "all_observed_median_mm": 8.27689847819345,
+          "all_observed_p90_mm": 129.64780606545432,
+          "all_observed_overlap": 0.35853658536585364,
+          "pose": [
+            [
+              0.9561617922660011,
+              0.16141656167873514,
+              -0.2443344442081053,
+              0.2579315666384533
+            ],
+            [
+              -0.10050705345939187,
+              0.9645740214667999,
+              0.24391656220166014,
+              -0.2884932032659428
+            ],
+            [
+              0.2750508302397569,
+              -0.20866636223210605,
+              0.9385123281327955,
+              0.03667688906368364
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "blocks_squared": {
+            "stored_to_current": 2.9396929241009278,
+            "current_to_stored": 12.78306258162237,
+            "free_space_outline": 0.4813881377719868
+          },
+          "change_from_previous_mm": 4.400562327933235,
+          "change_from_previous_deg": 9.249506793368584
+        },
+        {
+          "source": "group",
+          "stage": "refined",
+          "score": 13.637452349072014,
+          "checks": {
+            "accepted": false,
+            "observed_outlier_fraction": 0.3746130030959752,
+            "free_space_outlier_fraction": 0.03929273084479371
+          },
+          "all_observed_median_mm": 5.824458085469565,
+          "all_observed_p90_mm": 128.64968660031528,
+          "all_observed_overlap": 0.41341463414634144,
+          "pose": [
+            [
+              0.9429743512713291,
+              0.14075008995257154,
+              -0.30164347336343833,
+              0.3174125608301028
+            ],
+            [
+              -0.06527269740066033,
+              0.9667973273925562,
+              0.2470676075908221,
+              -0.2859484532086934
+            ],
+            [
+              0.3264028918659548,
+              -0.2132893338283789,
+              0.9208522206394404,
+              0.0515022877603064
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "blocks_squared": {
+            "stored_to_current": 1.2237613790900417,
+            "current_to_stored": 12.25805709557655,
+            "free_space_outline": 0.1556338744054241
+          },
+          "change_from_previous_mm": 6.8569806441675825,
+          "change_from_previous_deg": 10.14244177672021
+        }
+      ],
+      "all_consistent": [
+        {
+          "source": "previous",
+          "stage": "initial",
+          "score": 14.831094404574403,
+          "checks": {
+            "accepted": false,
+            "observed_outlier_fraction": 0.6134146341463415,
+            "free_space_outlier_fraction": 0.0
+          },
+          "all_observed_median_mm": 6.584087995743162,
+          "all_observed_p90_mm": 125.76924952261324,
+          "all_observed_overlap": 0.38658536585365855,
+          "pose": [
+            [
+              0.9434212694240224,
+              0.24403041549314747,
+              -0.22451161375886244,
+              0.23508622302872226
+            ],
+            [
+              -0.14269247897444948,
+              0.9099340537653848,
+              0.3894340435069981,
+              -0.4257978637020106
+            ],
+            [
+              0.29932451426920115,
+              -0.33536424095649686,
+              0.8932724450273726,
+              0.08689920767805355
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "blocks_squared": {
+            "stored_to_current": 2.6768180381846767,
+            "current_to_stored": 12.149452917510821,
+            "free_space_outline": 0.004823448878908125
+          },
+          "change_from_previous_mm": 0.0,
+          "change_from_previous_deg": 0.0
+        },
+        {
+          "source": "previous",
+          "stage": "refined",
+          "score": 13.310977469444476,
+          "checks": {
+            "accepted": false,
+            "observed_outlier_fraction": 0.5304878048780488,
+            "free_space_outlier_fraction": 0.015717092337917484
+          },
+          "all_observed_median_mm": 5.331054124660267,
+          "all_observed_p90_mm": 127.68633055386077,
+          "all_observed_overlap": 0.4695121951219512,
+          "pose": [
+            [
+              0.9443100125986658,
+              0.16175448102625992,
+              -0.2865555582672125,
+              0.3026149309602516
+            ],
+            [
+              -0.07379834732784377,
+              0.9527608466255252,
+              0.2946193698131242,
+              -0.33035055125370505
+            ],
+            [
+              0.3206749195643271,
+              -0.2570646942023156,
+              0.9116388204530803,
+              0.0612445132296831
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "blocks_squared": {
+            "stored_to_current": 1.1372354118364232,
+            "current_to_stored": 12.091848191826188,
+            "free_space_outline": 0.08189386578186673
+          },
+          "change_from_previous_mm": 7.835762204862064,
+          "change_from_previous_deg": 7.377563150574103
+        },
+        {
+          "source": "group",
+          "stage": "initial",
+          "score": 16.204143643495286,
+          "checks": {
+            "accepted": false,
+            "observed_outlier_fraction": 0.6414634146341464,
+            "free_space_outlier_fraction": 0.07269155206286837
+          },
+          "all_observed_median_mm": 8.27689847819345,
+          "all_observed_p90_mm": 129.64780606545432,
+          "all_observed_overlap": 0.35853658536585364,
+          "pose": [
+            [
+              0.9561617922660011,
+              0.16141656167873514,
+              -0.2443344442081053,
+              0.2579315666384533
+            ],
+            [
+              -0.10050705345939187,
+              0.9645740214667999,
+              0.24391656220166014,
+              -0.2884932032659428
+            ],
+            [
+              0.2750508302397569,
+              -0.20866636223210605,
+              0.9385123281327955,
+              0.03667688906368364
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "blocks_squared": {
+            "stored_to_current": 2.9396929241009278,
+            "current_to_stored": 12.78306258162237,
+            "free_space_outline": 0.4813881377719868
+          },
+          "change_from_previous_mm": 4.400562327933235,
+          "change_from_previous_deg": 9.249506793368584
+        },
+        {
+          "source": "group",
+          "stage": "refined",
+          "score": 13.637452349072014,
+          "checks": {
+            "accepted": false,
+            "observed_outlier_fraction": 0.5865853658536585,
+            "free_space_outlier_fraction": 0.03929273084479371
+          },
+          "all_observed_median_mm": 5.824458085469565,
+          "all_observed_p90_mm": 128.64968660031528,
+          "all_observed_overlap": 0.41341463414634144,
+          "pose": [
+            [
+              0.9429743512713291,
+              0.14075008995257154,
+              -0.30164347336343833,
+              0.3174125608301028
+            ],
+            [
+              -0.06527269740066033,
+              0.9667973273925562,
+              0.2470676075908221,
+              -0.2859484532086934
+            ],
+            [
+              0.3264028918659548,
+              -0.2132893338283789,
+              0.9208522206394404,
+              0.0515022877603064
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "blocks_squared": {
+            "stored_to_current": 1.2237613790900417,
+            "current_to_stored": 12.25805709557655,
+            "free_space_outline": 0.1556338744054241
+          },
+          "change_from_previous_mm": 6.8569806441675825,
+          "change_from_previous_deg": 10.14244177672021
+        }
+      ]
+    }
+  },
+  "reference_probe": [
+    {
+      "reference_frame": 0,
+      "stage": "initial",
+      "reference_points": 509,
+      "pose": [
+        [
+          0.9434212694240224,
+          0.24403041549314747,
+          -0.22451161375886244,
+          0.23508622302872226
+        ],
+        [
+          -0.14269247897444948,
+          0.9099340537653848,
+          0.3894340435069981,
+          -0.4257978637020106
+        ],
+        [
+          0.29932451426920115,
+          -0.33536424095649686,
+          0.8932724450273726,
+          0.08689920767805355
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "score": 14.831094404574403,
+      "check": {
+        "accepted": false,
+        "observed_outlier_fraction": 0.6134146341463415,
+        "free_space_outlier_fraction": 0.0
+      },
+      "unmatched_points": 503,
+      "unmatched_contradicts_earlier_view": 265,
+      "unmatched_not_contradicted": 238,
+      "median_mm": 6.584087995743162,
+      "p90_mm": 125.76924952261324
+    },
+    {
+      "reference_frame": 0,
+      "stage": "refined",
+      "reference_points": 509,
+      "pose": [
+        [
+          0.9443100125986658,
+          0.16175448102625992,
+          -0.2865555582672125,
+          0.3026149309602516
+        ],
+        [
+          -0.07379834732784377,
+          0.9527608466255252,
+          0.2946193698131242,
+          -0.33035055125370505
+        ],
+        [
+          0.3206749195643271,
+          -0.2570646942023156,
+          0.9116388204530803,
+          0.0612445132296831
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "score": 13.310977469444476,
+      "check": {
+        "accepted": false,
+        "observed_outlier_fraction": 0.5304878048780488,
+        "free_space_outlier_fraction": 0.015717092337917484
+      },
+      "unmatched_points": 435,
+      "unmatched_contradicts_earlier_view": 252,
+      "unmatched_not_contradicted": 183,
+      "median_mm": 5.331054124660267,
+      "p90_mm": 127.68633055386077
+    },
+    {
+      "reference_frame": 30,
+      "stage": "initial",
+      "reference_points": 938,
+      "pose": [
+        [
+          0.9323909329348041,
+          0.2691421258766852,
+          -0.24126679062719267,
+          0.2543754270408273
+        ],
+        [
+          -0.16647998275587866,
+          0.9122505609357777,
+          0.37427707572594193,
+          -0.40812135651311005
+        ],
+        [
+          0.3208294929126198,
+          -0.3088064606690394,
+          0.8953809280560392,
+          0.08249390230060132
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "score": 178.06160881763253,
+      "check": {
+        "accepted": false,
+        "observed_outlier_fraction": 0.8939024390243903,
+        "free_space_outlier_fraction": 0.291044776119403
+      },
+      "unmatched_points": 733,
+      "unmatched_contradicts_earlier_view": 149,
+      "unmatched_not_contradicted": 584,
+      "median_mm": 126.28152549194982,
+      "p90_mm": 136.9120653299126
+    },
+    {
+      "reference_frame": 30,
+      "stage": "refined",
+      "reference_points": 938,
+      "pose": [
+        [
+          0.9195014166871541,
+          0.30153225680581713,
+          -0.2521813688913372,
+          0.26658019936691774
+        ],
+        [
+          -0.27794250062622944,
+          0.9523862643222386,
+          0.12533303585236613,
+          -0.1352266443901878
+        ],
+        [
+          0.2779660250029771,
+          -0.04515198374294815,
+          0.959529148753764,
+          0.008562347968787873
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "score": 27.513949009251245,
+      "check": {
+        "accepted": false,
+        "observed_outlier_fraction": 0.8170731707317073,
+        "free_space_outlier_fraction": 0.15245202558635396
+      },
+      "unmatched_points": 670,
+      "unmatched_contradicts_earlier_view": 95,
+      "unmatched_not_contradicted": 575,
+      "median_mm": 123.30441476006749,
+      "p90_mm": 142.08790325727682
+    },
+    {
+      "reference_frame": 38,
+      "stage": "initial",
+      "reference_points": 895,
+      "pose": [
+        [
+          0.9756423838905073,
+          0.21830660713586894,
+          -0.02154446651170033,
+          0.02883073777047504
+        ],
+        [
+          -0.21836725940907556,
+          0.9758665452586407,
+          -0.0004752506025643046,
+          -0.010669316105665183
+        ],
+        [
+          0.020920773757627895,
+          0.005168280738422797,
+          0.9997677780862867,
+          -0.007595998685882371
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "score": 14.166698249454825,
+      "check": {
+        "accepted": false,
+        "observed_outlier_fraction": 0.5353658536585366,
+        "free_space_outlier_fraction": 0.0
+      },
+      "unmatched_points": 439,
+      "unmatched_contradicts_earlier_view": 0,
+      "unmatched_not_contradicted": 439,
+      "median_mm": 5.936718908000274,
+      "p90_mm": 133.87513644730672
+    },
+    {
+      "reference_frame": 38,
+      "stage": "refined",
+      "reference_points": 895,
+      "pose": [
+        [
+          0.9925537559320123,
+          0.11894019434579445,
+          -0.026273023317465335,
+          0.030582535825687707
+        ],
+        [
+          -0.12045472881666845,
+          0.9904827771026314,
+          -0.06659224105526104,
+          0.05143584163165593
+        ],
+        [
+          0.018102483005330027,
+          0.06926108887422956,
+          0.9974343094545112,
+          -0.00095610575464509
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "score": 10.460988275783947,
+      "check": {
+        "accepted": false,
+        "observed_outlier_fraction": 0.4548780487804878,
+        "free_space_outlier_fraction": 0.01899441340782123
+      },
+      "unmatched_points": 373,
+      "unmatched_contradicts_earlier_view": 39,
+      "unmatched_not_contradicted": 334,
+      "median_mm": 4.326441548200315,
+      "p90_mm": 131.90551212526717
+    },
+    {
+      "reference_frame": 40,
+      "stage": "initial",
+      "reference_points": 822,
+      "pose": [
+        [
+          0.9873504311835338,
+          0.1583526822331615,
+          -0.007972080735474065,
+          0.010769972572733127
+        ],
+        [
+          -0.1585032779874658,
+          0.9870529200216184,
+          -0.024561024897688896,
+          0.013709592449120622
+        ],
+        [
+          0.003979561397652728,
+          0.02551393945199662,
+          0.9996665453963745,
+          -0.0022706077582262812
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "score": 10.801967589205457,
+      "check": {
+        "accepted": false,
+        "observed_outlier_fraction": 0.5902439024390244,
+        "free_space_outlier_fraction": 0.012165450121654502
+      },
+      "unmatched_points": 484,
+      "unmatched_contradicts_earlier_view": 21,
+      "unmatched_not_contradicted": 463,
+      "median_mm": 7.237130005179578,
+      "p90_mm": 38.910314597954965
+    },
+    {
+      "reference_frame": 40,
+      "stage": "refined",
+      "reference_points": 822,
+      "pose": [
+        [
+          0.9911202308386984,
+          0.13291117352136547,
+          0.003912540788055613,
+          -0.0004943386741407355
+        ],
+        [
+          -0.13220102657070115,
+          0.9881284840902901,
+          -0.07826229937254657,
+          0.06924245479977639
+        ],
+        [
+          -0.014268027049928958,
+          0.07705010631140563,
+          0.9969251248321024,
+          0.002594820204235161
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "score": 9.08004521202249,
+      "check": {
+        "accepted": false,
+        "observed_outlier_fraction": 0.46463414634146344,
+        "free_space_outlier_fraction": 0.019464720194647202
+      },
+      "unmatched_points": 381,
+      "unmatched_contradicts_earlier_view": 45,
+      "unmatched_not_contradicted": 336,
+      "median_mm": 4.6350386687273515,
+      "p90_mm": 40.327922496886536
+    },
+    {
+      "reference_frame": 41,
+      "stage": "initial",
+      "reference_points": 833,
+      "pose": [
+        [
+          0.997333358836064,
+          0.06969680326549066,
+          -0.021645483763271783,
+          0.0226732926276636
+        ],
+        [
+          -0.07112226736794787,
+          0.994709279167535,
+          -0.07412875975250433,
+          0.06287617856748301
+        ],
+        [
+          0.01636442596661102,
+          0.07547056083383717,
+          0.9970137411340974,
+          0.0003416313492816403
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "score": 7.442077130485194,
+      "check": {
+        "accepted": false,
+        "observed_outlier_fraction": 0.4865853658536585,
+        "free_space_outlier_fraction": 0.08043217286914765
+      },
+      "unmatched_points": 399,
+      "unmatched_contradicts_earlier_view": 18,
+      "unmatched_not_contradicted": 381,
+      "median_mm": 4.643314820378773,
+      "p90_mm": 27.26267054722401
+    },
+    {
+      "reference_frame": 41,
+      "stage": "refined",
+      "reference_points": 833,
+      "pose": [
+        [
+          0.9995219453671068,
+          0.01640429144695419,
+          -0.026206486824402183,
+          0.024705197914857476
+        ],
+        [
+          -0.01673802291733029,
+          0.9997809370612127,
+          -0.012566482316943009,
+          0.005994871470610114
+        ],
+        [
+          0.025994601715992487,
+          0.012999119628902168,
+          0.9995775625585539,
+          0.003947965908925521
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "score": 1.5006299371279488,
+      "check": {
+        "accepted": false,
+        "observed_outlier_fraction": 0.3280487804878049,
+        "free_space_outlier_fraction": 0.0
+      },
+      "unmatched_points": 269,
+      "unmatched_contradicts_earlier_view": 118,
+      "unmatched_not_contradicted": 151,
+      "median_mm": 3.0408228382422693,
+      "p90_mm": 9.000071928542221
+    }
+  ],
+  "visibility_probe": {
+    "largest": {
+      "measured_points": 323,
+      "near_stored": 241,
+      "unmatched": 82,
+      "unmatched_contradicted_by_initial_view": 27,
+      "unmatched_not_contradicted_by_initial_view": 55
+    },
+    "all": {
+      "measured_points": 820,
+      "near_stored": 317,
+      "unmatched": 503,
+      "unmatched_contradicted_by_initial_view": 265,
+      "unmatched_not_contradicted_by_initial_view": 238
+    }
+  },
+  "known_shape_probe": {
+    "scope": "Synthetic exact rigid box poses and noiseless ray-cast depth; fitter receives only first partial measured surface, not the box model. No image matching or segmentation errors. Diagnostic, not performance benchmark.",
+    "results": [
+      {
+        "angle": 20,
+        "correct_pose_check": {
+          "accepted": true,
+          "observed_outlier_fraction": 0.2490948587979725,
+          "free_space_outlier_fraction": 0.0
+        },
+        "correct_pose_score": 9.605721579323538,
+        "incorrect_pose_check": {
+          "accepted": false,
+          "observed_outlier_fraction": 0.9630702389572773,
+          "free_space_outlier_fraction": 0.08695652173913043
+        },
+        "fit_from_correct_pose_check": {
+          "accepted": false,
+          "observed_outlier_fraction": 0.5228095582910934,
+          "free_space_outlier_fraction": 0.0
+        },
+        "fit_median_displacement_mm": 5.581918914096767,
+        "fit_rotation_error_deg": 6.789493050286993,
+        "correct_current_points_contradicted_by_prior_depth": 0,
+        "points": 2762
+      },
+      {
+        "angle": 40,
+        "correct_pose_check": {
+          "accepted": false,
+          "observed_outlier_fraction": 0.40283140283140284,
+          "free_space_outlier_fraction": 0.0
+        },
+        "correct_pose_score": 12.830826219138544,
+        "incorrect_pose_check": {
+          "accepted": false,
+          "observed_outlier_fraction": 0.9568854568854569,
+          "free_space_outlier_fraction": 0.0
+        },
+        "fit_from_correct_pose_check": {
+          "accepted": false,
+          "observed_outlier_fraction": 0.685971685971686,
+          "free_space_outlier_fraction": 0.0
+        },
+        "fit_median_displacement_mm": 7.792737337554384,
+        "fit_rotation_error_deg": 9.03913171694513,
+        "correct_current_points_contradicted_by_prior_depth": 0,
+        "points": 3108
+      },
+      {
+        "angle": 60,
+        "correct_pose_check": {
+          "accepted": false,
+          "observed_outlier_fraction": 0.5131736526946108,
+          "free_space_outlier_fraction": 0.0
+        },
+        "correct_pose_score": 12.636062209273948,
+        "incorrect_pose_check": {
+          "accepted": false,
+          "observed_outlier_fraction": 0.9461077844311377,
+          "free_space_outlier_fraction": 0.0
+        },
+        "fit_from_correct_pose_check": {
+          "accepted": false,
+          "observed_outlier_fraction": 0.7215568862275449,
+          "free_space_outlier_fraction": 0.0
+        },
+        "fit_median_displacement_mm": 7.970019542358514,
+        "fit_rotation_error_deg": 9.961175051177788,
+        "correct_current_points_contradicted_by_prior_depth": 0,
+        "points": 3340
+      }
+    ]
+  },
+  "visibility_fit_probe": [
+    {
+      "angle": 20,
+      "method": "current",
+      "seed": "correct",
+      "fitted_pose": [
+        [
+          0.973469399807782,
+          0.0058913060551846535,
+          0.22874138268105468,
+          -0.16066958562134862
+        ],
+        [
+          -0.006625708751502044,
+          0.9999750660865409,
+          0.0024427829945212185,
+          -0.0019613288425354646
+        ],
+        [
+          -0.22872128808096728,
+          -0.0038935482765977696,
+          0.9734841614840998,
+          0.022154521832855715
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "error_mm": 5.581918914096767,
+      "error_deg": 6.789493050286993,
+      "truth_score": 9.605721579323538,
+      "final_score": 8.807608695436402
+    },
+    {
+      "angle": 20,
+      "method": "current",
+      "seed": "perturbed",
+      "fitted_pose": [
+        [
+          0.9735089602232162,
+          0.005492569652155944,
+          0.22858288659418155,
+          -0.1605665606008108
+        ],
+        [
+          -0.006237370143601921,
+          0.9999773316533478,
+          0.0025360191525245048,
+          -0.001953661649494851
+        ],
+        [
+          -0.22856377573623507,
+          -0.0038945934404611845,
+          0.973521151574597,
+          0.022131833889972665
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "error_mm": 5.577478561038683,
+      "error_deg": 6.797698442282375,
+      "truth_score": 9.605721579323538,
+      "final_score": 8.807543819914912
+    },
+    {
+      "angle": 20,
+      "method": "two_view",
+      "seed": "correct",
+      "fitted_pose": [
+        [
+          0.93930935093547,
+          0.0019460729228635545,
+          0.3430658188239754,
+          -0.239841419787635
+        ],
+        [
+          -0.002270509983935674,
+          0.9999972743953809,
+          0.000544046157978451,
+          -0.0005422063400504583
+        ],
+        [
+          -0.34306382500869814,
+          -0.0012899620103165783,
+          0.9393112093275652,
+          0.042368525813444746
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "error_mm": 0.3402799500437443,
+      "error_deg": 0.14818187195204732,
+      "truth_score": 0.053842873281237685,
+      "final_score": 0.05112873571660594
+    },
+    {
+      "angle": 20,
+      "method": "two_view",
+      "seed": "perturbed",
+      "fitted_pose": [
+        [
+          0.9404475877235304,
+          7.852906064517845e-05,
+          0.3399387129736461,
+          -0.24091839805946916
+        ],
+        [
+          -0.0001838830005498934,
+          0.9999999445330059,
+          0.0002777067288844595,
+          -0.0017009972370781248
+        ],
+        [
+          -0.33993867231021896,
+          -0.00032367757381864546,
+          0.9404475499998891,
+          0.042729657508664386
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "error_mm": 3.3899601566017896,
+      "error_deg": 0.12828779173832086,
+      "truth_score": 0.053842873281237685,
+      "final_score": 0.05390637981714023
+    },
+    {
+      "angle": 40,
+      "method": "current",
+      "seed": "correct",
+      "fitted_pose": [
+        [
+          0.8575178545178579,
+          -0.000260293677302145,
+          0.5144541392877422,
+          -0.3589498692742433
+        ],
+        [
+          -0.00016290315908991263,
+          0.9999996844813257,
+          0.0007774958584362248,
+          -0.00016163978900550887
+        ],
+        [
+          -0.5144541793451102,
+          -0.0007505227849196065,
+          0.857517541552299,
+          0.10421502025263811
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "error_mm": 7.792737337554384,
+      "error_deg": 9.03913171694513,
+      "truth_score": 12.830826219138544,
+      "final_score": 11.646117415724955
+    },
+    {
+      "angle": 40,
+      "method": "current",
+      "seed": "perturbed",
+      "fitted_pose": [
+        [
+          0.8575223389310067,
+          0.0008636708728503881,
+          0.5144460052395388,
+          -0.3587931789669978
+        ],
+        [
+          -0.0022651448541829385,
+          0.9999952360380525,
+          0.0020969072439759396,
+          -0.002678730977871751
+        ],
+        [
+          -0.5144417434006359,
+          -0.0029634395258989286,
+          0.8575202100668481,
+          0.10412903313533121
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "error_mm": 8.018098979857747,
+      "error_deg": 9.041354423898257,
+      "truth_score": 12.830826219138544,
+      "final_score": 11.64506942603581
+    },
+    {
+      "angle": 40,
+      "method": "two_view",
+      "seed": "correct",
+      "fitted_pose": [
+        [
+          0.766135665267734,
+          -0.002450212355784675,
+          0.6426742089614134,
+          -0.44980361146641307
+        ],
+        [
+          0.0034722804780197443,
+          0.999993918209139,
+          -0.0003268226062123981,
+          0.00043886306537303387
+        ],
+        [
+          -0.6426694995664948,
+          0.002481935564338567,
+          0.7661395136153767,
+          0.16373642935586202
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "error_mm": 0.2537673937333027,
+      "error_deg": 0.20000790823158512,
+      "truth_score": 0.06868444413157838,
+      "final_score": 0.06657099926036687
+    },
+    {
+      "angle": 40,
+      "method": "two_view",
+      "seed": "perturbed",
+      "fitted_pose": [
+        [
+          0.7669120590209254,
+          0.0003068898426973771,
+          0.6417521324833363,
+          -0.45129979313672547
+        ],
+        [
+          -0.001769544638319267,
+          0.9999970953650883,
+          0.0016364513924473968,
+          -0.0023629511604071765
+        ],
+        [
+          -0.641749766217377,
+          -0.0023906233520353364,
+          0.7669103744766601,
+          0.16490451084859659
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "error_mm": 2.944410067911507,
+      "error_deg": 0.15831927816952493,
+      "truth_score": 0.06868444413157838,
+      "final_score": 0.053369809259895803
+    },
+    {
+      "angle": 60,
+      "method": "current",
+      "seed": "correct",
+      "fitted_pose": [
+        [
+          0.6422328954968847,
+          -0.0011250373686045659,
+          0.7665087359140839,
+          -0.5342416657013065
+        ],
+        [
+          0.003585371159488689,
+          0.9999923923646835,
+          -0.001536335381819955,
+          0.0005037772357651254
+        ],
+        [
+          -0.766501176160439,
+          0.0037349034359630295,
+          0.6422320432997622,
+          0.2551719214683894
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "error_mm": 7.970019542358514,
+      "error_deg": 9.961175051177788,
+      "truth_score": 12.636062209273948,
+      "final_score": 11.025062533233761
+    },
+    {
+      "angle": 60,
+      "method": "current",
+      "seed": "perturbed",
+      "fitted_pose": [
+        [
+          0.6422626695101235,
+          -0.00021548354671147946,
+          0.7664845836157249,
+          -0.534212919079784
+        ],
+        [
+          0.0029841767950989245,
+          0.9999930844308696,
+          -0.0022194096718364635,
+          0.0008608168131588561
+        ],
+        [
+          -0.7664788046923318,
+          0.003712769488797382,
+          0.6422588709392324,
+          0.25511383401676757
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "error_mm": 7.987652464996575,
+      "error_deg": 9.963045952822686,
+      "truth_score": 12.636062209273948,
+      "final_score": 11.025081932908735
+    },
+    {
+      "angle": 60,
+      "method": "two_view",
+      "seed": "correct",
+      "fitted_pose": [
+        [
+          0.4979374524191491,
+          0.0006695351358121521,
+          0.8672126874077832,
+          -0.6065968442480685
+        ],
+        [
+          -0.001143675386702885,
+          0.999999339347229,
+          -0.00011537640821615538,
+          -0.0006060321193842664
+        ],
+        [
+          -0.8672121917298774,
+          -0.0009343595708483205,
+          0.4979378891862467,
+          0.3508724783317485
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "error_mm": 0.9187608802462309,
+      "error_deg": 0.1514123247348197,
+      "truth_score": 0.0742066209729132,
+      "final_score": 0.06239477547022918
+    },
+    {
+      "angle": 60,
+      "method": "two_view",
+      "seed": "perturbed",
+      "fitted_pose": [
+        [
+          0.5081816543138458,
+          0.00035691037361904157,
+          0.8612498353171563,
+          -0.6045124163604296
+        ],
+        [
+          -0.0032046719299447645,
+          0.9999937749729251,
+          0.001476513874260292,
+          -0.002200252910126793
+        ],
+        [
+          -0.8612439470304943,
+          -0.003510360435149382,
+          0.5081796346499443,
+          0.3469037805587354
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "error_mm": 2.9222505504927727,
+      "error_deg": 0.5792488316786392,
+      "truth_score": 0.0742066209729132,
+      "final_score": 0.0664865774365215
+    }
+  ],
+  "real_two_view": [
+    {
+      "method": "current",
+      "seed": "previous",
+      "pose": [
+        [
+          0.9446133466683024,
+          0.16179606458564524,
+          -0.28553048660468394,
+          0.3010111212808756
+        ],
+        [
+          -0.07223969802523551,
+          0.9511974750494198,
+          0.3000079823751725,
+          -0.33626941343346195
+        ],
+        [
+          0.32013598880059213,
+          -0.26276490812929715,
+          0.9102019290962143,
+          0.06348766188480263
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "legacy_check": {
+        "accepted": false,
+        "observed_outlier_fraction": 0.4117647058823529,
+        "free_space_outlier_fraction": 0.011811023622047244
+      },
+      "all_measured_overlap": 0.4768292682926829,
+      "all_median_distance_mm": 5.1918268417131905,
+      "all_current_points_conflicting_with_first_view": 251,
+      "score": 13.321622104879772,
+      "shift_from_previous_mm": 6.9567759820309165,
+      "turn_from_previous_deg": 7.154104342896402
+    },
+    {
+      "method": "current",
+      "seed": "group",
+      "pose": [
+        [
+          0.9344927874750891,
+          0.15566611600431066,
+          -0.3201426096057354,
+          0.33472195722595455
+        ],
+        [
+          -0.0891578897101263,
+          0.9730056966265128,
+          0.212863301286979,
+          -0.25566782138188426
+        ],
+        [
+          0.3446361862304577,
+          -0.17037598029207857,
+          0.9231456680719672,
+          0.04939616937173834
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "legacy_check": {
+        "accepted": false,
+        "observed_outlier_fraction": 0.3065015479876161,
+        "free_space_outlier_fraction": 0.07086614173228346
+      },
+      "all_measured_overlap": 0.37926829268292683,
+      "all_median_distance_mm": 7.227037468105363,
+      "all_current_points_conflicting_with_first_view": 166,
+      "score": 14.928087994365223,
+      "shift_from_previous_mm": 6.224298997173383,
+      "turn_from_previous_deg": 11.848283067061002
+    },
+    {
+      "method": "two_view",
+      "seed": "previous",
+      "pose": [
+        [
+          0.974116268959316,
+          0.140089789838513,
+          -0.17740446818438335,
+          0.18088458785799444
+        ],
+        [
+          -0.08937891871804925,
+          0.9595560576623908,
+          0.26695239480512956,
+          -0.3079995528361534
+        ],
+        [
+          0.20762683698783985,
+          -0.24418645127525782,
+          0.9472402406866075,
+          0.03809507411591694
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "legacy_check": {
+        "accepted": false,
+        "observed_outlier_fraction": 0.5851393188854489,
+        "free_space_outlier_fraction": 0.047244094488188976
+      },
+      "all_measured_overlap": 0.2817073170731707,
+      "all_median_distance_mm": 8.157449042030422,
+      "all_current_points_conflicting_with_first_view": 182,
+      "score": 3.849407277829888,
+      "shift_from_previous_mm": 12.514300672422044,
+      "turn_from_previous_deg": 9.417031775085551
+    },
+    {
+      "method": "two_view",
+      "seed": "group",
+      "pose": [
+        [
+          0.9421166798599124,
+          0.1434588883687865,
+          -0.30304407085063984,
+          0.31632985140748443
+        ],
+        [
+          -0.08091932005133443,
+          0.9744088822436322,
+          0.20971264589229047,
+          -0.2534574872898057
+        ],
+        [
+          0.32537397740471696,
+          -0.17305166151385998,
+          0.9296154566675016,
+          0.04253188971076116
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "legacy_check": {
+        "accepted": false,
+        "observed_outlier_fraction": 0.3591331269349845,
+        "free_space_outlier_fraction": 0.07283464566929133
+      },
+      "all_measured_overlap": 0.374390243902439,
+      "all_median_distance_mm": 7.189355620947571,
+      "all_current_points_conflicting_with_first_view": 142,
+      "score": 6.038602462096854,
+      "shift_from_previous_mm": 5.547307755364543,
+      "turn_from_previous_deg": 11.825938018576087
+    }
+  ],
+  "clip_comparison": [
+    {
+      "case": "dexycb-drill-20201002_111923",
+      "run": "/home/feit/.cache/flash-tracker-restart/depth-fit-audit-20261103/all-parts/005/dexycb-drill-20201002_111923",
+      "baseline": "/home/feit/.cache/flash-tracker-restart/kalman-accept25-all-20261103/runs/005-accept25/dexycb-drill-20201002_111923",
+      "same_rgb_depth_masks_labels": true,
+      "baseline_score": {
+        "available_after_initialization": 64,
+        "total_after_initialization": 73,
+        "pose_error": {
+          "available": 64,
+          "total": 73,
+          "cloud_mm_median": 10.386022971681328,
+          "cloud_mm_p90": 20.83235009470905,
+          "angle_deg_median": 3.9565318899094684,
+          "angle_deg_p90": 10.246748745752017,
+          "center_mm_median": 7.8097137909883205,
+          "within_10mm_10deg": 31,
+          "within_20mm_20deg": 56,
+          "final_cloud_mm": 11.639098432379404,
+          "final_angle_deg": 6.997538831121546
+        },
+        "max_map_points": 508,
+        "pose_sources": {
+          "observed_candidate": 64,
+          "predicted": 0,
+          "lost": 9
+        }
+      },
+      "all_parts_score": {
+        "available_after_initialization": 34,
+        "total_after_initialization": 73,
+        "pose_error": {
+          "available": 34,
+          "total": 73,
+          "cloud_mm_median": 1.687711561212198,
+          "cloud_mm_p90": 14.62237365528935,
+          "angle_deg_median": 0.9131541942928489,
+          "angle_deg_p90": 9.140699031570822,
+          "center_mm_median": 1.3375164285352787,
+          "within_10mm_10deg": 24,
+          "within_20mm_20deg": 34,
+          "final_cloud_mm": 11.773988099074748,
+          "final_angle_deg": 7.33328102510071
+        },
+        "max_map_points": 509,
+        "pose_sources": {
+          "observed_candidate": 34,
+          "predicted": 0,
+          "lost": 39
+        }
+      }
+    },
+    {
+      "case": "dexycb-mug-20201002_111710",
+      "run": "/home/feit/.cache/flash-tracker-restart/depth-fit-audit-20261103/all-parts/007/dexycb-mug-20201002_111710",
+      "baseline": "/home/feit/.cache/flash-tracker-restart/kalman-accept25-all-20261103/runs/007-accept25/dexycb-mug-20201002_111710",
+      "same_rgb_depth_masks_labels": true,
+      "baseline_score": {
+        "available_after_initialization": 46,
+        "total_after_initialization": 73,
+        "pose_error": {
+          "available": 46,
+          "total": 73,
+          "cloud_mm_median": 1.154899445642826,
+          "cloud_mm_p90": 10.793897097585502,
+          "angle_deg_median": 0.9539055340573983,
+          "angle_deg_p90": 13.414844542509547,
+          "center_mm_median": 1.1407466434379554,
+          "within_10mm_10deg": 41,
+          "within_20mm_20deg": 42,
+          "final_cloud_mm": null,
+          "final_angle_deg": null
+        },
+        "max_map_points": 854,
+        "pose_sources": {
+          "observed_candidate": 46,
+          "predicted": 0,
+          "lost": 27
+        }
+      },
+      "all_parts_score": {
+        "available_after_initialization": 35,
+        "total_after_initialization": 73,
+        "pose_error": {
+          "available": 35,
+          "total": 73,
+          "cloud_mm_median": 1.0126486649639983,
+          "cloud_mm_p90": 1.964518709562587,
+          "angle_deg_median": 1.2461719780228684,
+          "angle_deg_p90": 2.2929166628510833,
+          "center_mm_median": 1.038714878720598,
+          "within_10mm_10deg": 35,
+          "within_20mm_20deg": 35,
+          "final_cloud_mm": null,
+          "final_angle_deg": null
+        },
+        "max_map_points": 848,
+        "pose_sources": {
+          "observed_candidate": 35,
+          "predicted": 0,
+          "lost": 38
+        }
+      }
+    }
+  ],
+  "limits": [
+    "No production algorithm or defaults changed.",
+    "The synthetic exact-pose failure establishes a mechanism, not the cause of every real rejection.",
+    "Real drill frame 42 remains unresolved. Two-view fitting does not pass the existing gate.",
+    "The two full-clip component ablations also affect downstream image-pair filtering; input images, depth, masks, timestamps, and labels are identical.",
+    "Prototype uses a real earlier depth image and is not integrated with growing-map or Kalman state."
+  ],
+  "controlled_shared_fitter_fix": {
+    "results": [
+      {
+        "turn_deg": 20,
+        "method": "legacy",
+        "seed": "exact",
+        "median_point_error_mm": 5.581918914096767,
+        "rotation_error_deg": 6.789493050286993,
+        "exact_pose_check": {
+          "accepted": true,
+          "observed_outlier_fraction": 0.2490948587979725,
+          "free_space_outlier_fraction": 0.0
+        },
+        "result_check": {
+          "accepted": false,
+          "observed_outlier_fraction": 0.5228095582910934,
+          "free_space_outlier_fraction": 0.0
+        },
+        "wrong_pose_check": {
+          "accepted": false,
+          "observed_outlier_fraction": 0.9630702389572773,
+          "free_space_outlier_fraction": 0.08695652173913043
+        },
+        "pose": [
+          [
+            0.973469399807782,
+            0.0058913060551846535,
+            0.22874138268105468,
+            -0.16066958562134862
+          ],
+          [
+            -0.006625708751502044,
+            0.9999750660865409,
+            0.0024427829945212185,
+            -0.0019613288425354646
+          ],
+          [
+            -0.22872128808096728,
+            -0.0038935482765977696,
+            0.9734841614840998,
+            0.022154521832855715
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "fit": {
+          "initial_cost": 9.605721579323538,
+          "cost": 8.807608695436402,
+          "evaluations": 13,
+          "converged": true,
+          "batched_jacobian": true,
+          "fit_reference_points": 1380,
+          "fit_target_points": 1466,
+          "used_coarse": false
+        }
+      },
+      {
+        "turn_deg": 20,
+        "method": "legacy",
+        "seed": "perturbed",
+        "median_point_error_mm": 5.577478561038683,
+        "rotation_error_deg": 6.797698442282375,
+        "exact_pose_check": {
+          "accepted": true,
+          "observed_outlier_fraction": 0.2490948587979725,
+          "free_space_outlier_fraction": 0.0
+        },
+        "result_check": {
+          "accepted": false,
+          "observed_outlier_fraction": 0.5228095582910934,
+          "free_space_outlier_fraction": 0.0
+        },
+        "wrong_pose_check": {
+          "accepted": false,
+          "observed_outlier_fraction": 0.9630702389572773,
+          "free_space_outlier_fraction": 0.08695652173913043
+        },
+        "pose": [
+          [
+            0.9735089602232162,
+            0.005492569652155944,
+            0.22858288659418155,
+            -0.1605665606008108
+          ],
+          [
+            -0.006237370143601921,
+            0.9999773316533478,
+            0.0025360191525245048,
+            -0.001953661649494851
+          ],
+          [
+            -0.22856377573623507,
+            -0.0038945934404611845,
+            0.973521151574597,
+            0.022131833889972665
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "fit": {
+          "initial_cost": 10.558072063514905,
+          "cost": 8.807543819914912,
+          "evaluations": 12,
+          "converged": true,
+          "batched_jacobian": true,
+          "fit_reference_points": 1380,
+          "fit_target_points": 1466,
+          "used_coarse": false
+        }
+      },
+      {
+        "turn_deg": 20,
+        "method": "two_measured_views",
+        "seed": "exact",
+        "median_point_error_mm": 0.34029582043578954,
+        "rotation_error_deg": 0.14818808368325467,
+        "exact_pose_check": {
+          "accepted": true,
+          "observed_outlier_fraction": 0.0,
+          "free_space_outlier_fraction": 0.0,
+          "visible_reference_weight": 1362.7728675347794,
+          "visible_current_weight": 981.3768219459283,
+          "has_visible_overlap": true
+        },
+        "result_check": {
+          "accepted": true,
+          "observed_outlier_fraction": 0.0,
+          "free_space_outlier_fraction": 0.0,
+          "visible_reference_weight": 1360.6428788996914,
+          "visible_current_weight": 977.6791257211654,
+          "has_visible_overlap": true
+        },
+        "wrong_pose_check": {
+          "accepted": false,
+          "observed_outlier_fraction": 0.9363286676306152,
+          "free_space_outlier_fraction": 0.1664392905866303,
+          "visible_reference_weight": 249.71136067423396,
+          "visible_current_weight": 761.4847485170462,
+          "has_visible_overlap": true
+        },
+        "pose": [
+          [
+            0.9393091374405508,
+            0.001946297407409155,
+            0.3430664020959938,
+            -0.23984178614683627
+          ],
+          [
+            -0.002270495547511869,
+            0.9999972748066892,
+            0.0005433499456217437,
+            -0.0005417695259333347
+          ],
+          [
+            -0.3430644096531392,
+            -0.001289304307210201,
+            0.9393109967011705,
+            0.042368676801255854
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "fit": {
+          "initial_cost": 0.053842873281237685,
+          "cost": 0.05112857581955359,
+          "evaluations": 50,
+          "converged": false,
+          "batched_jacobian": true,
+          "fit_reference_points": 1380,
+          "fit_target_points": 1466,
+          "used_coarse": false
+        }
+      },
+      {
+        "turn_deg": 20,
+        "method": "two_measured_views",
+        "seed": "perturbed",
+        "median_point_error_mm": 3.393658612275521,
+        "rotation_error_deg": 0.1320633118237164,
+        "exact_pose_check": {
+          "accepted": true,
+          "observed_outlier_fraction": 0.0,
+          "free_space_outlier_fraction": 0.0,
+          "visible_reference_weight": 1362.7728675347794,
+          "visible_current_weight": 981.3768219459283,
+          "has_visible_overlap": true
+        },
+        "result_check": {
+          "accepted": true,
+          "observed_outlier_fraction": 0.0,
+          "free_space_outlier_fraction": 0.0,
+          "visible_reference_weight": 1337.6264358345786,
+          "visible_current_weight": 947.0471414813921,
+          "has_visible_overlap": true
+        },
+        "wrong_pose_check": {
+          "accepted": false,
+          "observed_outlier_fraction": 0.9363286676306152,
+          "free_space_outlier_fraction": 0.1664392905866303,
+          "visible_reference_weight": 249.71136067423396,
+          "visible_current_weight": 761.4847485170462,
+          "has_visible_overlap": true
+        },
+        "pose": [
+          [
+            0.940471735787435,
+            -8.484491589339746e-05,
+            0.339871897906122,
+            -0.240874844117187
+          ],
+          [
+            -1.8488814294539248e-05,
+            0.9999999545890685,
+            0.00030079897732817576,
+            -0.0017237578054255995
+          ],
+          [
+            -0.33987190799348643,
+            -0.0002891767647352336,
+            0.9404716915110556,
+            0.0427156359520478
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "fit": {
+          "initial_cost": 0.3626981083105513,
+          "cost": 0.05391093556960566,
+          "evaluations": 29,
+          "converged": true,
+          "batched_jacobian": true,
+          "fit_reference_points": 1380,
+          "fit_target_points": 1466,
+          "used_coarse": false
+        }
+      },
+      {
+        "turn_deg": 40,
+        "method": "legacy",
+        "seed": "exact",
+        "median_point_error_mm": 7.792737337554384,
+        "rotation_error_deg": 9.03913171694513,
+        "exact_pose_check": {
+          "accepted": false,
+          "observed_outlier_fraction": 0.40283140283140284,
+          "free_space_outlier_fraction": 0.0
+        },
+        "result_check": {
+          "accepted": false,
+          "observed_outlier_fraction": 0.685971685971686,
+          "free_space_outlier_fraction": 0.0
+        },
+        "wrong_pose_check": {
+          "accepted": false,
+          "observed_outlier_fraction": 0.9568854568854569,
+          "free_space_outlier_fraction": 0.0
+        },
+        "pose": [
+          [
+            0.8575178545178579,
+            -0.000260293677302145,
+            0.5144541392877422,
+            -0.3589498692742433
+          ],
+          [
+            -0.00016290315908991263,
+            0.9999996844813257,
+            0.0007774958584362248,
+            -0.00016163978900550887
+          ],
+          [
+            -0.5144541793451102,
+            -0.0007505227849196065,
+            0.857517541552299,
+            0.10421502025263811
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "fit": {
+          "initial_cost": 12.830826219138544,
+          "cost": 11.646117415724955,
+          "evaluations": 14,
+          "converged": true,
+          "batched_jacobian": true,
+          "fit_reference_points": 1380,
+          "fit_target_points": 1452,
+          "used_coarse": false
+        }
+      },
+      {
+        "turn_deg": 40,
+        "method": "legacy",
+        "seed": "perturbed",
+        "median_point_error_mm": 8.018098979857747,
+        "rotation_error_deg": 9.041354423898257,
+        "exact_pose_check": {
+          "accepted": false,
+          "observed_outlier_fraction": 0.40283140283140284,
+          "free_space_outlier_fraction": 0.0
+        },
+        "result_check": {
+          "accepted": false,
+          "observed_outlier_fraction": 0.6907979407979408,
+          "free_space_outlier_fraction": 0.0
+        },
+        "wrong_pose_check": {
+          "accepted": false,
+          "observed_outlier_fraction": 0.9568854568854569,
+          "free_space_outlier_fraction": 0.0
+        },
+        "pose": [
+          [
+            0.8575223389310067,
+            0.0008636708728503881,
+            0.5144460052395388,
+            -0.3587931789669978
+          ],
+          [
+            -0.0022651448541829385,
+            0.9999952360380525,
+            0.0020969072439759396,
+            -0.002678730977871751
+          ],
+          [
+            -0.5144417434006359,
+            -0.0029634395258989286,
+            0.8575202100668481,
+            0.10412903313533121
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "fit": {
+          "initial_cost": 13.594472427802899,
+          "cost": 11.64506942603581,
+          "evaluations": 14,
+          "converged": true,
+          "batched_jacobian": true,
+          "fit_reference_points": 1380,
+          "fit_target_points": 1452,
+          "used_coarse": false
+        }
+      },
+      {
+        "turn_deg": 40,
+        "method": "two_measured_views",
+        "seed": "exact",
+        "median_point_error_mm": 0.2537673937333027,
+        "rotation_error_deg": 0.20000790823158512,
+        "exact_pose_check": {
+          "accepted": true,
+          "observed_outlier_fraction": 0.0,
+          "free_space_outlier_fraction": 0.0,
+          "visible_reference_weight": 1331.8024739203172,
+          "visible_current_weight": 841.6269583909673,
+          "has_visible_overlap": true
+        },
+        "result_check": {
+          "accepted": true,
+          "observed_outlier_fraction": 0.0,
+          "free_space_outlier_fraction": 0.0,
+          "visible_reference_weight": 1318.0461482195778,
+          "visible_current_weight": 842.3887369930653,
+          "has_visible_overlap": true
+        },
+        "wrong_pose_check": {
+          "accepted": false,
+          "observed_outlier_fraction": 0.9484218518144675,
+          "free_space_outlier_fraction": 0.09504132231404959,
+          "visible_reference_weight": 363.42757557857544,
+          "visible_current_weight": 801.7305875155763,
+          "has_visible_overlap": true
+        },
+        "pose": [
+          [
+            0.766135665267734,
+            -0.002450212355784675,
+            0.6426742089614134,
+            -0.44980361146641307
+          ],
+          [
+            0.0034722804780197443,
+            0.999993918209139,
+            -0.0003268226062123981,
+            0.00043886306537303387
+          ],
+          [
+            -0.6426694995664948,
+            0.002481935564338567,
+            0.7661395136153767,
+            0.16373642935586202
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "fit": {
+          "initial_cost": 0.06868444413157838,
+          "cost": 0.06657099926036687,
+          "evaluations": 50,
+          "converged": false,
+          "batched_jacobian": true,
+          "fit_reference_points": 1380,
+          "fit_target_points": 1452,
+          "used_coarse": false
+        }
+      },
+      {
+        "turn_deg": 40,
+        "method": "two_measured_views",
+        "seed": "perturbed",
+        "median_point_error_mm": 2.944410067911507,
+        "rotation_error_deg": 0.15831927816952493,
+        "exact_pose_check": {
+          "accepted": true,
+          "observed_outlier_fraction": 0.0,
+          "free_space_outlier_fraction": 0.0,
+          "visible_reference_weight": 1331.8024739203172,
+          "visible_current_weight": 841.6269583909673,
+          "has_visible_overlap": true
+        },
+        "result_check": {
+          "accepted": true,
+          "observed_outlier_fraction": 4.361756560579034e-07,
+          "free_space_outlier_fraction": 0.0,
+          "visible_reference_weight": 1304.4540058815428,
+          "visible_current_weight": 802.5735102003531,
+          "has_visible_overlap": true
+        },
+        "wrong_pose_check": {
+          "accepted": false,
+          "observed_outlier_fraction": 0.9484218518144675,
+          "free_space_outlier_fraction": 0.09504132231404959,
+          "visible_reference_weight": 363.42757557857544,
+          "visible_current_weight": 801.7305875155763,
+          "has_visible_overlap": true
+        },
+        "pose": [
+          [
+            0.7669120590209254,
+            0.0003068898426973771,
+            0.6417521324833363,
+            -0.45129979313672547
+          ],
+          [
+            -0.001769544638319267,
+            0.9999970953650883,
+            0.0016364513924473968,
+            -0.0023629511604071765
+          ],
+          [
+            -0.641749766217377,
+            -0.0023906233520353364,
+            0.7669103744766601,
+            0.16490451084859659
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "fit": {
+          "initial_cost": 0.32494323028786576,
+          "cost": 0.05336980925989579,
+          "evaluations": 23,
+          "converged": true,
+          "batched_jacobian": true,
+          "fit_reference_points": 1380,
+          "fit_target_points": 1452,
+          "used_coarse": false
+        }
+      },
+      {
+        "turn_deg": 60,
+        "method": "legacy",
+        "seed": "exact",
+        "median_point_error_mm": 7.970019542358514,
+        "rotation_error_deg": 9.961175051177788,
+        "exact_pose_check": {
+          "accepted": false,
+          "observed_outlier_fraction": 0.5131736526946108,
+          "free_space_outlier_fraction": 0.0
+        },
+        "result_check": {
+          "accepted": false,
+          "observed_outlier_fraction": 0.7215568862275449,
+          "free_space_outlier_fraction": 0.0
+        },
+        "wrong_pose_check": {
+          "accepted": false,
+          "observed_outlier_fraction": 0.9461077844311377,
+          "free_space_outlier_fraction": 0.0
+        },
+        "pose": [
+          [
+            0.6422328954968847,
+            -0.0011250373686045659,
+            0.7665087359140839,
+            -0.5342416657013065
+          ],
+          [
+            0.003585371159488689,
+            0.9999923923646835,
+            -0.001536335381819955,
+            0.0005037772357651254
+          ],
+          [
+            -0.766501176160439,
+            0.0037349034359630295,
+            0.6422320432997622,
+            0.2551719214683894
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "fit": {
+          "initial_cost": 12.636062209273948,
+          "cost": 11.025062533233761,
+          "evaluations": 10,
+          "converged": true,
+          "batched_jacobian": true,
+          "fit_reference_points": 1380,
+          "fit_target_points": 1635,
+          "used_coarse": false
+        }
+      },
+      {
+        "turn_deg": 60,
+        "method": "legacy",
+        "seed": "perturbed",
+        "median_point_error_mm": 7.987652464996575,
+        "rotation_error_deg": 9.963045952822686,
+        "exact_pose_check": {
+          "accepted": false,
+          "observed_outlier_fraction": 0.5131736526946108,
+          "free_space_outlier_fraction": 0.0
+        },
+        "result_check": {
+          "accepted": false,
+          "observed_outlier_fraction": 0.7215568862275449,
+          "free_space_outlier_fraction": 0.0
+        },
+        "wrong_pose_check": {
+          "accepted": false,
+          "observed_outlier_fraction": 0.9461077844311377,
+          "free_space_outlier_fraction": 0.0
+        },
+        "pose": [
+          [
+            0.6422626695101235,
+            -0.00021548354671147946,
+            0.7664845836157249,
+            -0.534212919079784
+          ],
+          [
+            0.0029841767950989245,
+            0.9999930844308696,
+            -0.0022194096718364635,
+            0.0008608168131588561
+          ],
+          [
+            -0.7664788046923318,
+            0.003712769488797382,
+            0.6422588709392324,
+            0.25511383401676757
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "fit": {
+          "initial_cost": 13.53618873075453,
+          "cost": 11.025081932908735,
+          "evaluations": 12,
+          "converged": true,
+          "batched_jacobian": true,
+          "fit_reference_points": 1380,
+          "fit_target_points": 1635,
+          "used_coarse": false
+        }
+      },
+      {
+        "turn_deg": 60,
+        "method": "two_measured_views",
+        "seed": "exact",
+        "median_point_error_mm": 0.9187608749567538,
+        "rotation_error_deg": 0.15141230721069615,
+        "exact_pose_check": {
+          "accepted": true,
+          "observed_outlier_fraction": 0.0,
+          "free_space_outlier_fraction": 0.0,
+          "visible_reference_weight": 1279.3419528289069,
+          "visible_current_weight": 932.0421766831394,
+          "has_visible_overlap": true
+        },
+        "result_check": {
+          "accepted": true,
+          "observed_outlier_fraction": 0.0,
+          "free_space_outlier_fraction": 0.0,
+          "visible_reference_weight": 1246.5447314454696,
+          "visible_current_weight": 932.3829143562803,
+          "has_visible_overlap": true
+        },
+        "wrong_pose_check": {
+          "accepted": false,
+          "observed_outlier_fraction": 0.9561454521632287,
+          "free_space_outlier_fraction": 0.05932721712538226,
+          "visible_reference_weight": 247.1362369121238,
+          "visible_current_weight": 1056.029614861326,
+          "has_visible_overlap": true
+        },
+        "pose": [
+          [
+            0.4979374524978941,
+            0.0006695339178869472,
+            0.8672126873635096,
+            -0.6065968442157762
+          ],
+          [
+            -0.001143674985352628,
+            0.9999993393478234,
+            -0.00011537523415396367,
+            -0.0006060328793974459
+          ],
+          [
+            -0.8672121916851928,
+            -0.0009343598073421022,
+            0.4979378892636261,
+            0.3508724782847731
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "fit": {
+          "initial_cost": 0.0742066209729132,
+          "cost": 0.06239477547211029,
+          "evaluations": 50,
+          "converged": false,
+          "batched_jacobian": true,
+          "fit_reference_points": 1380,
+          "fit_target_points": 1635,
+          "used_coarse": false
+        }
+      },
+      {
+        "turn_deg": 60,
+        "method": "two_measured_views",
+        "seed": "perturbed",
+        "median_point_error_mm": 2.9213006296407795,
+        "rotation_error_deg": 0.5800555816852332,
+        "exact_pose_check": {
+          "accepted": true,
+          "observed_outlier_fraction": 0.0,
+          "free_space_outlier_fraction": 0.0,
+          "visible_reference_weight": 1279.3419528289069,
+          "visible_current_weight": 932.0421766831394,
+          "has_visible_overlap": true
+        },
+        "result_check": {
+          "accepted": true,
+          "observed_outlier_fraction": 1.2398611528117934e-07,
+          "free_space_outlier_fraction": 0.0,
+          "visible_reference_weight": 1249.3577116415827,
+          "visible_current_weight": 857.9595993185308,
+          "has_visible_overlap": true
+        },
+        "wrong_pose_check": {
+          "accepted": false,
+          "observed_outlier_fraction": 0.9561454521632287,
+          "free_space_outlier_fraction": 0.05932721712538226,
+          "visible_reference_weight": 247.1362369121238,
+          "visible_current_weight": 1056.029614861326,
+          "has_visible_overlap": true
+        },
+        "pose": [
+          [
+            0.5082123547755903,
+            0.00035133043080014557,
+            0.8612317220239734,
+            -0.6044988533705626
+          ],
+          [
+            -0.003153873624932335,
+            0.9999939706824744,
+            0.0014531620202434088,
+            -0.0021835102650775537
+          ],
+          [
+            -0.8612260188444193,
+            -0.003454730905224822,
+            0.5082103986537121,
+            0.34688456543623675
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "fit": {
+          "initial_cost": 0.35265225240855547,
+          "cost": 0.06648076207238517,
+          "evaluations": 24,
+          "converged": true,
+          "batched_jacobian": true,
+          "fit_reference_points": 1380,
+          "fit_target_points": 1635,
+          "used_coarse": false
+        }
+      }
+    ],
+    "source_sha256": {
+      "src/lerobot/policies/flash/surface_grounding.py": "81ceb62aac95ee33d071c8af1bd28eda54bd38ce8df0c71e4344eb6badce5812",
+      "src/lerobot/policies/flash/surface_uncertainty.py": "9a540be4544a0ea368de37af5417ea2500b5aa3091a6a7e31cc3b75bd0b319a2",
+      "src/lerobot/policies/flash/experimental_surface_session.py": "613b486e3251f8cb2d80bc22672e0f981769817a1c1e299b11244142c511b397",
+      "benchmarks/flash_partial_surface_control.py": "4574d4d9bafa192660b641283f040302148cb4185beed62606efae0312f94df4",
+      "tests/policies/flash/test_partial_surface_fitting.py": "f16b31e0c07b49975f2b1151ec7f05dd1f783239fcc11617b9dca35177d4488c"
+    },
+    "verification": {
+      "new_regression_tests": 16,
+      "existing_focused_tests": 73,
+      "old_objective_restored": "fails rotation error assertion: 6.789493 deg > 1 deg",
+      "old_acceptance_restored": "rejects exact 40 degree pose",
+      "lint_format": "pass"
+    },
+    "scope": "Two measured views in shared fitter, exercised by controlled benchmark. Full growing-map benchmark/live callers unchanged; no real-drill improvement claimed."
+  }
+}

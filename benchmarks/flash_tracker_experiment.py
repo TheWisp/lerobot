@@ -493,6 +493,10 @@ def run_case(
                             **({"object_usable": prepared["current"]["usable"]} if shared else {}),
                             observation=prepared["current"] if prepared["status"] is None else None,
                             shape_config=config.shape,
+                            reference_views=track._fit_views(),
+                            surface_reference=track.store.points
+                            if track.config.partial_surface_matching
+                            else None,
                         )
                     candidate_check = (
                         partial(
@@ -502,6 +506,7 @@ def run_case(
                             hint,
                             observation=prepared["current"] if track.config.surface_priority else None,
                             shape_config=config.shape,
+                            reference_views=track._fit_views(),
                         )
                         if hint is not None
                         else None

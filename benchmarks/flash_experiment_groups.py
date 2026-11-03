@@ -139,6 +139,8 @@ class GroupHints:
         object_usable=None,
         observation=None,
         shape_config=None,
+        reference_views=(),
+        surface_reference=None,
     ):
         previous_scene, previous_object_support = self.previous_scene, self.object_support
         self.previous_scene = scene
@@ -222,7 +224,11 @@ class GroupHints:
         environment_pose, environment_indices = self._predict(self.environment, environment_scene)
         if environment_pose is not None and observation is not None and self.uncertainty_config.enabled:
             geometry = WholeSurfaceFit(
-                self.reference, observation, frame.intrinsics, shape_config or ShapeConfig()
+                self.reference if surface_reference is None else surface_reference,
+                observation,
+                frame.intrinsics,
+                shape_config or ShapeConfig(),
+                reference_views=reference_views,
             )
             check = check_surface_contradiction(
                 geometry, camera_from_base @ environment_pose, self.uncertainty_config
@@ -264,7 +270,11 @@ class GroupHints:
                 object_supported = True
                 if observation is not None:
                     geometry = WholeSurfaceFit(
-                        self.reference, observation, frame.intrinsics, shape_config or ShapeConfig()
+                        self.reference if surface_reference is None else surface_reference,
+                        observation,
+                        frame.intrinsics,
+                        shape_config or ShapeConfig(),
+                        reference_views=reference_views,
                     )
                     object_cost = geometry.score(camera_from_base @ object_pose)
                     environment_cost = geometry.score(camera_from_base @ environment_pose)
@@ -389,7 +399,9 @@ class GroupHints:
             motion,
         ), details
 
-    def compare_candidate(self, frame, mask, hint, points, candidate, *, observation=None, shape_config=None):
+    def compare_candidate(
+        self, frame, mask, hint, points, candidate, *, observation=None, shape_config=None, reference_views=()
+    ):
         """Compare hypotheses using the fitter's geometry objective when supplied.
 
         The archived Pareto comparison remains available for the weighted-sum
@@ -425,7 +437,13 @@ class GroupHints:
             "rotation_difference_deg": float(np.rad2deg(comparison.rotation_difference_rad)),
         }
         if observation is not None:
-            geometry = WholeSurfaceFit(points, observation, frame.intrinsics, shape_config or ShapeConfig())
+            geometry = WholeSurfaceFit(
+                points,
+                observation,
+                frame.intrinsics,
+                shape_config or ShapeConfig(),
+                reference_views=reference_views,
+            )
             candidate_cost = geometry.score(candidate)
             hint_cost = geometry.score(hint.camera_from_reference)
             accepted = candidate_cost <= hint_cost + geometry.config.solver_tolerance

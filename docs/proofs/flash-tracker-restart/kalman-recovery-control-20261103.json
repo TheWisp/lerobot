@@ -1,0 +1,186 @@
+{
+  "rendered_scene": {
+    "fps": 30,
+    "hidden_frames": 12,
+    "motion_m": 0.04,
+    "exact_mask": true,
+    "depth_noise": false,
+    "image_or_group_motion": false,
+    "surface_growth": false
+  },
+  "comparisons": [
+    {
+      "mode": "current_reset",
+      "first_visible": {
+        "status": "observed_candidate",
+        "available": true,
+        "error": {
+          "median_point_error_mm": 1.9702989705706058,
+          "rotation_error_deg": 0.019888943805534177
+        },
+        "candidate_error": {
+          "median_point_error_mm": 1.9702989705706058,
+          "rotation_error_deg": 0.019888943805534177
+        },
+        "kalman": {
+          "accepted": true,
+          "reason": "reinitialized_after_contradiction",
+          "innovation_squared": 593.3434591875031,
+          "innovation_limit": 12.591587243743977,
+          "prior_rejected_by_depth_mask": true,
+          "prediction_failed_geometry": null
+        }
+      },
+      "final": {
+        "status": "observed_candidate",
+        "available": true,
+        "error": {
+          "median_point_error_mm": 1.9697349539487405,
+          "rotation_error_deg": 0.03331796819113333
+        }
+      }
+    },
+    {
+      "mode": "strict",
+      "first_visible": {
+        "status": "predicted",
+        "available": false,
+        "error": {
+          "median_point_error_mm": 40.00000000000002,
+          "rotation_error_deg": 4.065581140793925e-16
+        },
+        "candidate_error": {
+          "median_point_error_mm": 1.9702989705706058,
+          "rotation_error_deg": 0.019888943805534177
+        },
+        "kalman": {
+          "accepted": false,
+          "reason": "fused_pose_contradicts_observation",
+          "innovation_squared": 593.3434591875031,
+          "innovation_limit": 12.591587243743977,
+          "prior_rejected_by_depth_mask": false,
+          "prediction_failed_geometry": true
+        }
+      },
+      "final": {
+        "status": "predicted",
+        "available": false,
+        "error": {
+          "median_point_error_mm": 40.00000000000002,
+          "rotation_error_deg": 4.065581140793925e-16
+        }
+      }
+    },
+    {
+      "mode": "strict_broader_motion",
+      "first_visible": {
+        "status": "observed_candidate",
+        "available": true,
+        "error": {
+          "median_point_error_mm": 1.973919085194364,
+          "rotation_error_deg": 0.021616483883974427
+        },
+        "candidate_error": {
+          "median_point_error_mm": 1.9702989705706058,
+          "rotation_error_deg": 0.019888943805534177
+        },
+        "kalman": {
+          "accepted": true,
+          "reason": "corrected",
+          "innovation_squared": 3.728666330216918,
+          "innovation_limit": 12.591587243743977,
+          "prior_rejected_by_depth_mask": false,
+          "prediction_failed_geometry": true
+        }
+      },
+      "final": {
+        "status": "observed_candidate",
+        "available": true,
+        "error": {
+          "median_point_error_mm": 1.673800292710206,
+          "rotation_error_deg": 0.21022859062746857
+        }
+      }
+    }
+  ],
+  "controls": [
+    {
+      "case": "small_hidden_motion",
+      "mode": "strict",
+      "first_visible": {
+        "status": "observed_candidate",
+        "available": true,
+        "error": {
+          "median_point_error_mm": 3.02072419248822,
+          "rotation_error_deg": 0.13542237311506805
+        },
+        "candidate_error": {
+          "median_point_error_mm": 3.8217611653226253,
+          "rotation_error_deg": 0.1712835179784569
+        },
+        "kalman": {
+          "accepted": true,
+          "reason": "corrected",
+          "innovation_squared": 0.5504460325624986,
+          "innovation_limit": 12.591587243743977,
+          "prior_rejected_by_depth_mask": false,
+          "prediction_failed_geometry": false
+        }
+      },
+      "final": {
+        "status": "observed_candidate",
+        "available": true,
+        "error": {
+          "median_point_error_mm": 2.3966341428329936,
+          "rotation_error_deg": 0.15719005047743206
+        }
+      }
+    },
+    {
+      "case": "visible_motion",
+      "mode": "strict",
+      "first_visible": {
+        "status": "lost",
+        "available": false,
+        "error": {
+          "median_point_error_mm": 39.42946358200458,
+          "rotation_error_deg": 0.19197385465137978
+        },
+        "candidate_error": null,
+        "kalman": {
+          "accepted": false,
+          "reason": "lost",
+          "innovation_squared": null,
+          "innovation_limit": null,
+          "prior_rejected_by_depth_mask": null,
+          "prediction_failed_geometry": null
+        }
+      },
+      "final": {
+        "status": "lost",
+        "available": false,
+        "error": {
+          "median_point_error_mm": 39.42946358200458,
+          "rotation_error_deg": 0.19197385465137978
+        }
+      }
+    }
+  ],
+  "interpretation": "No necessity for a bypass established. Broader motion uncertainty accepts real recovery without skipping rejection; not a new default.",
+  "metric": "Median displacement of the initial measured surface from its true transformed position, millimetres; orientation error in degrees.",
+  "limitations": [
+    "Exact masks and noiseless rendered depth",
+    "No image or group motion",
+    "No surface growth",
+    "Visible-motion control fails with strict current uncertainty",
+    "Broader uncertainty has not been evaluated across the real benchmark suite"
+  ],
+  "source_sha256": {
+    "benchmarks/flash_kalman_recovery_control.py": "851a6b70127a1e6721b785a1b9d5623c7a66ce36d18e30706c1c7a5f10aa449e",
+    "benchmarks/flash_partial_surface_control.py": "a69b1bd55d4dd74e2dfb867b8a603cbdc98f616ac6f1e0eace393e0acf052c83",
+    "src/lerobot/policies/flash/experimental_surface_session.py": "f8b3ed7b6958ceeec5562210c5eceecf4edbcc5b081f2a9c5692bed3d0fc4692",
+    "src/lerobot/policies/flash/surface_grounding.py": "98989093a6dcc0ec27f3ff05b155c64751ad0c1099713767030c6fd684f13307",
+    "src/lerobot/policies/flash/surface_uncertainty.py": "674e302ec2a3324107980bf84895d84bcf169938ecea6e1f49e440377a6456a2",
+    "src/lerobot/policies/flash/surface_kalman.py": "f4a99d7abbc7c12f41c6a0d37cd95c242e6528d6dd39f47a643f770845defd1e"
+  }
+}

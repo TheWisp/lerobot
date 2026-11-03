@@ -159,6 +159,14 @@ class SurfacePoseUncertainty:
 
 def check_surface_contradiction(geometry, pose, config):
     """Absolute observed-shape check, independent of covariance magnitude."""
+    if geometry.reverse_fits:
+        direct = geometry.partial_surface_check(pose)
+        accepted = (
+            direct["has_visible_overlap"]
+            and max(direct["observed_outlier_fraction"], direct["free_space_outlier_fraction"])
+            <= config.max_visible_outlier_fraction
+        )
+        return {"accepted": accepted, **direct}
     distance = cKDTree(move(geometry.reference, pose)).query(geometry.observation["obs"]["points"])[0]
     outliers = float(np.mean(distance > geometry.config.depth_tolerance_m))
     residual = geometry.residual(pose)

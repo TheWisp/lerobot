@@ -16,7 +16,7 @@ from scipy.spatial.transform import Rotation
 
 from .geometry import transform
 from .surface_correspondence import rigid_fit
-from .surface_grounding import WholeSurfaceFit, project
+from .surface_grounding import SurfaceFitView, WholeSurfaceFit, project
 from .surface_kalman import MeasuredGroupMotion, PoseKalmanFilter
 from .surface_motion import measured_surface_information
 from .surface_observation import move, spatial_sample, voxel_sample
@@ -44,6 +44,9 @@ class GrowingSurfaceConfig:
     # Geometry is the primary objective; image/group evidence breaks ties.
     # False retains the earlier weighted-sum experiment for paired comparison.
     surface_priority: bool = True
+    # Experiment: use retained measured views to distinguish newly visible
+    # surface from contradictions. False preserves the published baseline.
+    partial_surface_matching: bool = False
     # One later view checks an addition before it can influence fitting.
     confirmations: int = 2
     max_patches: int = 32
@@ -85,9 +88,9 @@ class GrowingSurfaceConfig:
             raise ValueError("a surface needs at least three points")
         if any(
             type(getattr(self, key)) is not bool
-            for key in ("grow", "retain_unobserved_pose", "surface_priority")
+            for key in ("grow", "retain_unobserved_pose", "surface_priority", "partial_surface_matching")
         ):
-            raise ValueError("grow, retain_unobserved_pose and surface_priority must be booleans")
+            raise ValueError("surface experiment switches must be booleans")
 
 
 def checked_pose(value):
@@ -173,9 +176,12 @@ class SurfaceView:
     outside_mask: np.ndarray
     intrinsics: np.ndarray
     tolerance_m: float
+    depth: np.ndarray | None = None
+    mask: np.ndarray | None = None
+    measured_points: np.ndarray | None = None
 
     @classmethod
-    def from_observation(cls, observation, intrinsics, shape_config):
+    def from_observation(cls, observation, intrinsics, shape_config, *, retain_measurement=False):
         radius = int(np.ceil(shape_config.mask_boundary_tolerance_px))
         kernel = np.ones((2 * radius + 1, 2 * radius + 1), np.uint8)
         depth = np.asarray(observation["depth"], dtype=np.float32)
@@ -187,6 +193,11 @@ class SurfaceView:
             outside > shape_config.mask_boundary_tolerance_px,
             intrinsics.copy(),
             shape_config.depth_tolerance_m,
+            depth.copy() if retain_measurement else None,
+            observation["mask"].copy() if retain_measurement else None,
+            observation.get("all_surface_points", observation["obs"]["points"]).copy()
+            if retain_measurement
+            else None,
         )
 
     def contradicts(self, camera_points):
@@ -421,6 +432,7 @@ class ImageConditionedFit(WholeSurfaceFit):
             self.k,
             self.config,
             fit_kernels=self.fit_kernels,
+            reference_views=self.reference_views,
         )
         candidates = [(joint, joint_detail), (proposal, {"unrefined_proposal": True})]
         for initial in (joint, previous):
@@ -542,6 +554,7 @@ class GrowingSurfaceSession:
         self.connected_frame = None
         self.connected_pose = None
         self.connected_observation = None
+        self.connected_intrinsics = None
         self.last_time = self.last_frame = None
         self.base_from_camera = np.eye(4)
         self.last_observed_time = None
@@ -599,7 +612,12 @@ class GrowingSurfaceSession:
                 self.pose,
                 frame,
                 active=True,
-                view=SurfaceView.from_observation(current, prepared["intrinsics"], self.growth_shape_config),
+                view=SurfaceView.from_observation(
+                    current,
+                    prepared["intrinsics"],
+                    self.growth_shape_config,
+                    retain_measurement=self.config.partial_surface_matching,
+                ),
             )
             self.last_observed_time = self.last_supported_time = time_s
             self._connect(prepared)
@@ -641,6 +659,7 @@ class GrowingSurfaceSession:
             point_evidence=hint.points if hint else (),
             fit_kernels=self.fit_kernels,
             search_pool=self.search_pool,
+            reference_views=self._fit_views(),
         )
         candidate, fit = (
             fitter.correct_surface_first(
@@ -660,7 +679,13 @@ class GrowingSurfaceSession:
             return self._result("lost", time_s, details, available=False)
         kalman_prior = None
         if self.kalman is not None:
-            geometry = WholeSurfaceFit(self.store.points, current, prepared["intrinsics"], self.shape_config)
+            geometry = WholeSurfaceFit(
+                self.store.points,
+                current,
+                prepared["intrinsics"],
+                self.shape_config,
+                reference_views=self._fit_views(),
+            )
             prior_valid = check_surface_contradiction(geometry, self.pose, self.config.uncertainty)[
                 "accepted"
             ]
@@ -738,7 +763,12 @@ class GrowingSurfaceSession:
                 points,
                 self.pose,
                 frame,
-                view=SurfaceView.from_observation(current, prepared["intrinsics"], self.growth_shape_config),
+                view=SurfaceView.from_observation(
+                    current,
+                    prepared["intrinsics"],
+                    self.growth_shape_config,
+                    retain_measurement=self.config.partial_surface_matching,
+                ),
             )
         # Deliberately named candidate: overlap alone is not calibrated reliability.
         return self._result("observed_candidate", time_s, details)
@@ -747,6 +777,31 @@ class GrowingSurfaceSession:
         self.connected_frame = prepared["frame_id"]
         self.connected_pose = self.pose.copy()
         self.connected_observation = prepared["current"]
+        self.connected_intrinsics = prepared["intrinsics"].copy()
+
+    def _fit_views(self):
+        if not self.config.partial_surface_matching:
+            return ()
+        views = {
+            patch.frame: SurfaceFitView(
+                {
+                    "depth": patch.view.depth,
+                    "mask": patch.view.mask,
+                    "obs": {"points": patch.view.measured_points},
+                },
+                patch.view.intrinsics,
+                patch.camera_from_reference,
+            )
+            for patch in self.store.patches.values()
+            if patch.active and patch.view is not None
+        }
+        if self.connected_observation is not None:
+            # Last accepted measurement may reveal a useful view without
+            # qualifying for surface growth. Never retain a rejected candidate.
+            views[self.connected_frame] = SurfaceFitView(
+                self.connected_observation, self.connected_intrinsics, self.connected_pose
+            )
+        return tuple(views.values())
 
     def _missing(self, hint, time_s, details, reason):
         details["reason"] = reason

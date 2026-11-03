@@ -11,6 +11,7 @@ from lerobot.policies.flash.surface_uncertainty import PoseUncertaintyConfig
 from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig
 
 OPTION_HELP = {
+    "partial_surface_matching": "Experimental fitting using depth/mask visibility in current and retained measured views.",
     "backend": "Backend selection (surface/appearance for vision; lk/ufm for shared matching).",
     "sam_resolution": "SAM input resolution in pixels; unused when replaying saved masks.",
     "min_similarity": "Minimum appearance-match similarity; appearance backend only.",

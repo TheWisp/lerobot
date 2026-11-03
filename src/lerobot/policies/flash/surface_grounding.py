@@ -1,9 +1,10 @@
 """Rigid whole-surface correction using measured RGB-D and an object mask.
 
-The reference is a fixed observed surface, not a CAD model or a cylinder.
-Foreground occlusion may hide reference samples. Target-to-reference coverage
-prevents an incorrect candidate from evading all checks by moving behind an
-occluder. Unseen reference geometry remains a limitation, not invented geometry.
+The reference is an observed surface, not a CAD model or a cylinder. When its
+source depth and mask are supplied, both observations are treated as partial:
+only mutually visible surface requires a correspondence. Either image can still
+rule out a placement in measured empty space. Callers without the source view
+retain the older, unconditional current-to-reference coverage objective.
 """
 
 from __future__ import annotations
@@ -73,6 +74,15 @@ class PreparedReferenceSurface:
         )
 
 
+@dataclass(frozen=True)
+class SurfaceFitView:
+    """An actual earlier depth/mask and its camera relative to the stored map."""
+
+    observation: dict
+    intrinsics: np.ndarray
+    camera_from_reference: np.ndarray
+
+
 def project(points: np.ndarray, k: np.ndarray) -> np.ndarray:
     return points[:, :2] / points[:, 2, None] @ k[:2, :2].T + k[:2, 2]
 
@@ -105,7 +115,17 @@ class WholeSurfaceFit:
         prepared_reference: PreparedReferenceSurface | None = None,
         fit_kernels=None,
         search_pool=None,
+        reference_observation: dict | None = None,
+        reference_intrinsics: np.ndarray | None = None,
+        reference_views: tuple[SurfaceFitView, ...] = (),
     ):
+        """Fit reference-camera points into the current camera.
+
+        ``reference_observation`` must be the actual depth/mask measurement in
+        the reference points' camera coordinates, not a rendering of the fitted
+        map. A growing map in arbitrary object coordinates cannot use this
+        two-view contract without carrying the source camera transforms too.
+        """
         prepared_reference = prepared_reference or PreparedReferenceSurface.build(reference, config)
         if prepared_reference.points is not reference or prepared_reference.config != config:
             raise ValueError("prepared reference belongs to another surface or fit configuration")
@@ -150,6 +170,28 @@ class WholeSurfaceFit:
         )
         mask_pixels = np.concatenate(contours)[:, 0].astype(float)
         self.mask_outline = mask_pixels[ConvexHull(mask_pixels).vertices]
+        if reference_observation is not None and reference_views:
+            raise ValueError("supply one source observation or retained source views, not both")
+        if reference_observation is not None:
+            reference_views = (
+                SurfaceFitView(
+                    reference_observation,
+                    k if reference_intrinsics is None else reference_intrinsics,
+                    np.eye(4),
+                ),
+            )
+        self.reference_views = tuple(reference_views)
+        self.reverse_fits = []
+        for view in self.reference_views:
+            reverse = WholeSurfaceFit(
+                self.target,
+                view.observation,
+                view.intrinsics,
+                config,
+                fit_kernels=fit_kernels,
+                search_pool=search_pool,
+            )
+            self.reverse_fits.append((view.camera_from_reference, reverse))
 
     def uncovered_mask(self, uv: np.ndarray) -> np.ndarray:
         if not self.config.require_full_mask_coverage:
@@ -196,11 +238,31 @@ class WholeSurfaceFit:
         ]
 
     def _residual_with_distances(self, pose, predicted, model_distance, target_distance):
-        uv = project(predicted, self.k)
-        height, width = self.observation["depth"].shape
-        coordinates = (np.clip(uv[:, 1], 0, height - 1), np.clip(uv[:, 0], 0, width - 1))
-        mask_distance = map_coordinates(self.outside_mask, coordinates, order=1, mode="nearest")
+        forward = self._one_view_residual(pose, predicted, model_distance, target_distance)
+        if not self.reverse_fits:
+            return forward
+        n, m = len(self.reference_queries), len(self.target_queries)
+        inverse = np.linalg.inv(pose)
+        reverse = [
+            (fit.residual(camera @ inverse), len(fit.target_queries)) for camera, fit in self.reverse_fits
+        ]
+        # Keep the visibility-tested distance and silhouette terms from BOTH
+        # cameras. Drop both unconditional coverage terms: a newly exposed side
+        # need not coincide with the previously measured side of the object.
+        # Seeing the same point in many retained views must not multiply its
+        # weight. Any view that measured it can require a correspondence; any
+        # measured empty space can contradict it. Unknown/hidden views add none.
+        matched = np.maximum.reduce([r[:m] for r, _ in reverse])
+        free = np.maximum.reduce([r[m + count : m + count + m] for r, count in reverse])
+        outlines = [r[m + count + m :] / np.sqrt(len(reverse)) for r, count in reverse]
+        return np.concatenate((forward[:n], matched, forward[n + m :], free, *outlines))
+
+    def _one_view_residual(self, pose, predicted, model_distance, target_distance):
         if self.fit_kernels is not None:
+            uv = project(predicted, self.k)
+            height, width = self.observation["depth"].shape
+            coordinates = (np.clip(uv[:, 1], 0, height - 1), np.clip(uv[:, 0], 0, width - 1))
+            mask_distance = map_coordinates(self.outside_mask, coordinates, order=1, mode="nearest")
             measured = self.fit_kernels[0](
                 predicted,
                 model_distance,
@@ -228,10 +290,32 @@ class WholeSurfaceFit:
                 / (self.k[0, 0] * self.config.depth_tolerance_m * np.sqrt(len(self.mask_outline)))
             )
             return np.concatenate((measured, outline))
+        tolerance = self.config.depth_tolerance_m
+        depth_visibility, visibility, silhouette_m = self._projection_evidence(predicted)
+        model_distance = np.minimum(model_distance, self.config.max_surface_distance_m)
+        target_distance = np.minimum(target_distance, self.config.max_surface_distance_m)
+        return np.concatenate(
+            (
+                np.sqrt(depth_visibility / len(predicted)) * model_distance / tolerance,
+                target_distance / (tolerance * np.sqrt(len(self.target_queries))),
+                np.sqrt(visibility / len(predicted)) * silhouette_m / tolerance,
+                self.uncovered_mask(project(move(self.envelope, pose), self.k))
+                * np.median(predicted[:, 2])
+                / (self.k[0, 0] * tolerance * np.sqrt(len(self.mask_outline))),
+            )
+        )
+
+    def _projection_evidence(self, predicted):
+        """Visibility and empty-space evidence, without blending measured depths."""
+        uv = project(predicted, self.k)
+        height, width = self.observation["depth"].shape
+        coordinates = (np.clip(uv[:, 1], 0, height - 1), np.clip(uv[:, 0], 0, width - 1))
+        mask_distance = map_coordinates(self.outside_mask, coordinates, order=1, mode="nearest")
         inside = (uv[:, 0] >= 0) & (uv[:, 0] <= width - 1) & (uv[:, 1] >= 0) & (uv[:, 1] <= height - 1)
         tolerance = self.config.depth_tolerance_m
         # A nearer measured surface may hide a model point. Smoothly suppress
-        # its one-sided residual; do not suppress current observed object data.
+        # its one-sided residual. The reverse view applies the same test to
+        # current data when the earlier measurement is available.
         # Interpolate visibility evidence from four rays, never their depths:
         # blending a foreground edge or a zero reading invents false geometry.
         cy, cx = coordinates
@@ -253,25 +337,56 @@ class WholeSurfaceFit:
         # Nearer/unknown depth, or a gap within depth uncertainty, cannot do so.
         free_space = np.clip((rays - predicted[:, 2, None] - tolerance) / tolerance, 0, 1)
         visibility = np.sum(weights * known * free_space, axis=1)
-        model_distance = np.minimum(model_distance, self.config.max_surface_distance_m)
-        target_distance = np.minimum(target_distance, self.config.max_surface_distance_m)
         silhouette_m = (
             np.maximum(mask_distance - self.config.mask_boundary_tolerance_px, 0)
             * predicted[:, 2]
             / self.k[0, 0]
         )
-        # Match the full observed surface in both directions. Each block gets
-        # equal total weight regardless of cloud density or visible point count.
-        return np.concatenate(
+        return depth_visibility, visibility, silhouette_m
+
+    def partial_surface_check(self, pose):
+        """Direct agreement for a pair of measured views; no covariance involved.
+
+        Unseen samples neither pass nor fail a surface correspondence. If neither
+        view has any visible overlap, this check cannot validate a pose.
+        """
+        if not self.reverse_fits:
+            raise ValueError("partial surface checks require the source depth and mask")
+        outliers, free_space, visible = [], [], []
+        predicted = move(self.reference_queries, pose)
+        weight, empty, silhouette = self._projection_evidence(predicted)
+        inverse = np.linalg.inv(pose)
+        previous = []
+        for camera, fit in self.reverse_fits:
+            old_points = move(fit.reference_queries, camera @ inverse)
+            old_weight, old_empty, old_silhouette = fit._projection_evidence(old_points)
+            distances = fit.target_tree.query(old_points)[0]
+            previous.append((old_weight, old_empty, old_silhouette, distances))
+        directions = [
+            (weight, np.sqrt(empty) * silhouette, self.target_tree.query(predicted)[0]),
             (
-                np.sqrt(depth_visibility / len(predicted)) * model_distance / tolerance,
-                target_distance / (tolerance * np.sqrt(len(self.target_queries))),
-                np.sqrt(visibility / len(predicted)) * silhouette_m / tolerance,
-                self.uncovered_mask(project(move(self.envelope, pose), self.k))
-                * np.median(predicted[:, 2])
-                / (self.k[0, 0] * tolerance * np.sqrt(len(self.mask_outline))),
+                np.maximum.reduce([p[0] for p in previous]),
+                np.maximum.reduce([np.sqrt(p[1]) * p[2] for p in previous]),
+                None,
+            ),
+        ]
+        for direction, (weight, empty_distance, distance) in enumerate(directions):
+            count = float(weight.sum())
+            visible.append(count)
+            bad_weight = (
+                weight * (distance > self.config.depth_tolerance_m)
+                if direction == 0
+                else np.maximum.reduce([p[0] * (p[3] > self.config.depth_tolerance_m) for p in previous])
             )
-        )
+            outliers.append(float(bad_weight.sum() / count) if count else 0.0)
+            free_space.append(float(np.mean(empty_distance > self.config.depth_tolerance_m)))
+        return {
+            "observed_outlier_fraction": max(outliers),
+            "free_space_outlier_fraction": max(free_space),
+            "visible_reference_weight": visible[0],
+            "visible_current_weight": visible[1],
+            "has_visible_overlap": any(count > 0 for count in visible),
+        }
 
     def score(self, pose: np.ndarray) -> float:
         residual = self.residual(pose)

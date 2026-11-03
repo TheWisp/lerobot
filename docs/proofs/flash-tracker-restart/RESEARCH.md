@@ -2291,3 +2291,198 @@ innovation but retain a pose. This distinguishes pre-filter acceptance loss from
 Kalman's weighting. The synthetic plane separately exposes missing directional
 information even with continuous pose availability. The default promotion changes
 configuration only; neither remaining algorithmic limitation is claimed fixed.
+
+## 2026-11-03 — Isolate depth-fitting errors with unchanged masks
+
+**Correction to the drill explanation:** the fitter uses all cleaned depth
+patches, while the stored surface and acceptance check use the largest connected
+patch. The displayed red points measured distance to the stored surface; they
+did not establish incorrect depth or a falsely rejected correct pose. Of the 82
+unmatched points in frame 42's largest patch, 27 conflict with the first depth
+view under that candidate alignment; the other 55 are not ruled out by it.
+Neither category certifies point ownership or pose accuracy.
+
+Simply disabling connected-patch removal regresses the full drill and mug clips.
+At unchanged Kalman settings, returned poses fall 64→34 and 46→35 of 73 frames;
+10 mm/10° successes fall 31→24 and 41→35. RGB-D, masks, times and labels match.
+The depth-selection change also affects image-pair filtering, so these are
+pipeline ablations, not isolated changes to the fitting objective.
+
+A separate noiseless box control establishes an actual fitting flaw. The fitter
+receives only the first measured face, then the box turns and exposes a new side.
+Starting from the exact pose at a 40° turn, fitting introduces 7.79 mm / 9.04°
+error: the unconditional current-to-stored distance tries to match the new side
+to a surface that never measured it. The existing gate also rejects the exact
+pose. This conflicts with the [partial-observation design](../../../src/lerobot/policies/flash/docs/tracking_pipeline.md#core-loop).
+
+**Local prototype, not integrated:** apply the existing depth-visibility logic
+in both frame directions, using the earlier depth image to identify which
+current points had a visible counterpart. Error becomes 0.25 mm / 0.20° on that
+control. It improves all three tested turns (20/40/60°) from both exact and
+perturbed initial poses, but does not resolve the real drill frame. Neither the
+acceptance rule, growing-map implementation nor production defaults changed.
+
+![Exact synthetic pose, existing fit, and local two-view depth fit](depth-fitting-known-shape-20261103.jpg)
+
+[Measurements and provenance](depth-fitting-audit-20261103.json).
+Reproduction scripts and full traces remain local in
+`~/.cache/flash-tracker-restart/depth-fit-audit-20261103/`.
+
+**Controlled fix implemented next:** the shared `WholeSurfaceFit` now accepts
+the actual earlier depth/mask and camera intrinsics. It checks visibility in
+both images; the acceptance check likewise excludes genuinely unobserved surface
+from correspondence failures. No visible overlap is insufficient to validate a
+pose. This does not lower the existing depth or outlier tolerances.
+
+The [reproducible control](../../../benchmarks/flash_partial_surface_control.py)
+passes all 20/40/60° turns, starting both at the exact pose and 5° away. Exact-seed
+rotation errors fall from 6.79/9.04/9.96° to 0.15/0.20/0.15°; point errors are
+0.34/0.25/0.92 mm. Perturbed seeds finish within 0.58° and 3.39 mm. Deliberate
+position errors are rejected. Regression tests cover disappearing/new surfaces,
+different camera intrinsics, image-assisted selection, and compiled/batched
+parity. Restoring the old objective or the old acceptance check independently
+makes its regression test fail.
+
+**Scope at the controlled milestone:** only the two-measurement path was tested.
+The following experiment extends it to the benchmark's growing-map sessions;
+the server default remains unchanged.
+
+### Apply the partial-surface correction to real recordings
+
+`GrowingSurfaceConfig.partial_surface_matching` enables the same correction in
+fitting, candidate acceptance and group comparisons. It retains the original
+depth, mask, measured points and camera transform for active surface patches,
+plus the last accepted observation. The existing patch limit bounds retention.
+An earlier observation can contain a newly visible side even if that side has
+not passed the stricter surface-growth checks. Reverse matching must use those
+actual measured points, not replace them with the incomplete stored model.
+
+A regression test caught precisely that integration error: the stored model has
+only a box's first face, an accepted later view sees its side, and a further turn
+must still match. The test failed before the correction and passes after it.
+Duplicate source views do not multiply their contribution. Rejected candidates
+do not become retained source views. No mask, depth-selection, Kalman or
+acceptance thresholds change in the paired experiment.
+
+Results and exact source snapshots are kept locally under
+`~/.cache/flash-tracker-restart/depth-fit-audit-20261103/partial-measurements/`.
+The interrupted `partial-views` and `partial-views-complete` runs are marked
+invalid development comparisons and must not be used as results of this fix.
+
+**Completed result: keep disabled.** Both full DexYCB clips were rerun with
+identical recorded inputs and settings except the new flag. All three unchanged
+UFM control methods reproduce their previous poses and availability exactly.
+For group tracking with a growing surface, counts out of 73 scored frames are:
+
+| Clip  | Poses returned, before → after | Within 10 mm / 10°, before → after | Within 20 mm / 20°, before → after |
+| ----- | -----------------------------: | ---------------------------------: | ---------------------------------: |
+| Drill |                        64 → 33 |                            31 → 33 |                            56 → 33 |
+| Mug   |                        46 → 61 |                            41 → 37 |                            42 → 37 |
+
+The drill loses previously usable poses. The mug returns more poses but also
+accepts a wrong alignment after loss: frame 49 is 83.2 mm / 153.8° from the
+label, passes the direct checks, and reinitializes Kalman. Later predictions
+continue from that incorrect alignment. This is not an overall tracking gain.
+Disabling growth does not rescue the result: the mug's group-assisted fixed
+surface falls from 42 to 37 accurate frames at the tighter threshold.
+
+The remaining drill rejection is not explained by optimizer initialization
+alone: even the labelled pose fails the checks at frame 42. At labelled motion,
+adjacent measurements 41→42 agree to a median 1.88 mm among visible source
+samples, while 0→42 disagrees by 16.61 mm. Many projected old points land in
+regions excluded by depth cleanup; the visibility check still reads the raw
+depth image. These measurements identify an evidence-consistency problem to
+investigate, not proof that the dataset labels or depth sensor are wrong.
+
+Retaining many measured views is also expensive: median group/growing method
+time rises from 167 to 814 ms on the drill and 192 to 5,480 ms on the mug;
+the mug's 90th percentile reaches 34.2 seconds. These are offline method timings,
+not end-to-end live FPS. No full-suite rollout or server/default change follows
+this experiment. The perfect-depth control and 156 focused tests pass; neither
+substitutes for this failed real-data evaluation.
+
+![Drill loses a usable estimate; mug accepts an incorrect recovered pose](partial-surface-real-clips-20261103.jpg)
+
+[Full before/after scores, common-frame errors, timings, hashes and diagnostic checks](partial-surface-real-clips-20261103.json).
+
+#### Why the mug's recovered pose is wrong
+
+Reconstructed the exact retained measurements and transforms at frame 49 from
+the saved patch events. The recomputed fitting cost matches the recorded cost
+(0.3391051442). This is an acceptance failure, not a replay display discrepancy.
+
+- The old surface can fit another visible patch of the mug. Of 842 stored
+  samples, 539 receive zero current-image correspondence weight because the
+  proposed pose places them behind measured depth or outside usable visibility.
+  The two-direction check reports 16.6% visible correspondence conflicts and
+  1.1% empty-space conflicts, passing the existing 25% allowance. There are no
+  usable image pairs or group point constraints at this frame. A compatible
+  partial patch does not establish that its identity/orientation is correct.
+- The preceding estimate is contradicted by the new image. The Kalman recovery
+  branch therefore resets to the selected fit, bypassing its jump rejection.
+  Replaying the saved correction with that branch disabled rejects the jump:
+  squared innovation 2314.3 versus limit 12.59. Enabling the branch reproduces
+  the reset. This establishes why the wrong candidate becomes the output; simply
+  disabling recovery would leave the tracker lost rather than recover its pose.
+- Surface growth does **not** cause this particular jump: the map remains at
+  version 18 / 842 points and rejects the frame's proposed additions. The
+  limitation is consistent with `surface_uncertainty.py`'s stated contract:
+  local covariance assumes the selected surface correspondences are correct;
+  it does not measure uncertainty between different surface assignments.
+
+The initial loss is not fully explained yet. At frame 38 the UFM estimate is
+rejected by the new empty-space check (37.3%); at frame 49 even the dataset pose
+fails reverse correspondence checks (97.2%). Masking out same-object depth
+pixels already excluded by cleanup does not resolve either rejection and still
+accepts the bad frame-49 pose. Replacing retained estimated camera transforms
+with label transforms also leaves the large reverse mismatch. These rule out
+two simple explanations, but do not establish whether the remaining mismatch
+comes from depth/label inconsistency or the visibility test. No production
+change or acceptance-threshold tuning was made during this audit.
+
+Local reproducible probes: `audit_mug_failure.py`, `audit_mug_views.py`,
+`audit_mug_cleanup.py`, and `render_mug_audit.py` in the depth-fit audit directory;
+their outputs are in its `partial-measurements/` subdirectory.
+
+#### Does recovery require skipping Kalman's check?
+
+**Controlled experiment, not a runtime change.** Rendered a rigid box moving
+40 mm behind a screen for 0.4 seconds, then reappearing. The actual observation
+builder, surface fitter and Kalman filter receive depth, an exact visible mask
+and intrinsics. True pose is used only to render and evaluate. Image/group
+motion, depth noise and surface growth are disabled to isolate recovery.
+
+| Filter setting                       | First visible frame after hiding                |
+| ------------------------------------ | ----------------------------------------------- |
+| Current automatic reset              | Accepts; 1.97 mm surface error                  |
+| No reset, current uncertainty        | Rejects the same accurate fit; no pose returned |
+| No reset, broader motion uncertainty | Accepts normally; 1.97 mm surface error         |
+
+The strict filter's squared innovation is 593.34 against a 12.59 limit.
+Changing position process uncertainty from 2 to 30 mm/√s reduces it to 3.73,
+without disabling the rejection. This setting was specified before the run;
+it is an ablation, not a calibrated or recommended default. Larger uncertainty
+can also admit wrong matches. The real mug failure above remains the negative
+example where the current reset accepts a wrong match.
+
+**This does not demonstrate that a bypass is necessary.** It demonstrates that
+the current uncertainty can reject real movement. Removing the bypass alone
+also fails the visible-motion control: with no image/group motion, the strict
+filter falls behind and the fitter eventually finds no acceptable candidate.
+A smaller 3 mm hidden movement is accepted normally, ending at 2.40 mm error.
+These controls prevent interpreting a frozen estimate as successful tracking.
+
+The old prediction's depth/mask check remains useful: it tests whether that
+prediction can still explain what is visible. Its failure does not establish
+that the replacement fit is correct. A fully hidden object supplies no such
+test. The current automatic reset conflates distrust of the old prediction
+with approval of the replacement; recovery without that shortcut is still
+experimental, not deployed.
+
+![A correct recovery can pass Kalman without a reset](kalman-recovery-control-20261103.png)
+
+Blue shows the internal prediction; after reappearance it is withheld from
+the output. [Results and controls](kalman-recovery-control-20261103.json).
+Reproduce with `python -m benchmarks.flash_kalman_recovery_control --output DIR`;
+`tests/policies/flash/test_kalman_recovery_control.py` runs the real rendered
+comparison and checks that recovery moves the estimate while the map stays fixed.
