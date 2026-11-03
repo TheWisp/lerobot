@@ -282,6 +282,7 @@ def code_snapshot(output):
         repo / "benchmarks/flash_rebuild_examples.py",
         repo / "benchmarks/flash_experiment_cache.py",
         repo / "benchmarks/flash_experiment_groups.py",
+        repo / "benchmarks/flash_pipeline_settings.py",
         repo / "src/lerobot/gui/flash_group_overlay.py",
         repo / "src/lerobot/gui/group_wireframe.py",
     ]
@@ -370,7 +371,12 @@ def run_case(
     scene_tracker = ScenePointTracker() if group_experiment is not None and shared is None else None
     groups = {
         name: {
-            role: GroupHints(group_experiment, shared_image_points=shared is not None) for role in sessions
+            role: GroupHints(
+                group_experiment,
+                shared_image_points=shared is not None,
+                uncertainty_config=surface_experiment.uncertainty,
+            )
+            for role in sessions
         }
         for name in candidates
         if name.startswith("group_")
@@ -557,6 +563,7 @@ def run_case(
                 print(f"{case['id']}: {frame.frame_id + 1}/{case['expected_frames']}", flush=True)
     report = score_case(case, rows, references, reference_frames)
     report.update(input_sha256=digest.hexdigest(), offline_wall_s=time.perf_counter() - started)
+    report["surface_experiment"] = asdict(surface_experiment) if surface_experiment else None
     if shared is not None:
         report["shared_matching"] = {
             "config": asdict(shared.config),

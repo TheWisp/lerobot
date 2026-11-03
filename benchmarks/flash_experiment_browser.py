@@ -250,6 +250,7 @@ def export(run: Path, output: Path = DEFAULT_OUTPUT, *, check_cancel=None):
             raise ValueError("source RGB-D/masks changed since this experiment; refusing misaligned playback")
         data = {
             "schema_version": 7,
+            "surface_experiment": summary.get("surface_experiment"),
             "shared_matching": shared,
             "has_correspondences": evidence_path.exists(),
             "width": stream.width,

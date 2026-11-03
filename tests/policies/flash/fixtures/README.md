@@ -120,8 +120,11 @@ These two recorded fixtures use Git LFS; run `git lfs pull` after checkout.
 
 `gamepad_stationary.json` identifies the **real recorded integration test**, not
 a saved tracker answer. It pins the RGB-D/mask input hash and UFM checkpoint.
-Visual annotation: the gamepad stays on the tray through frame 164 (7.24 s),
-including approach occlusion; it starts turning in frames 165–170. The test runs
+Visual evidence covers stillness through frame 164 (7.24 s). The demonstrator
+reports grasp around 9 s (±0.5 s), so the stationary check now extends through
+frame 192 (8.47 s), before the earliest reported grasp. That occluded extension
+uses a human annotation; it has no independent 6D pose labels. The earlier claim
+of pickup in frames 165–170 was unsupported. The test runs
 through frame 280 and requires subsequent movement, so freezing cannot pass.
 The 5 mm / 5° stationary budgets were fixed before the fix and are never inputs
 to inference. This does not certify absolute pose or post-grasp accuracy.

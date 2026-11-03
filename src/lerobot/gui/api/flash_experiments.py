@@ -17,7 +17,7 @@ from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Body, HTTPException
 from fastapi.responses import FileResponse, Response
 
 router = APIRouter(prefix="/api/run/flash/experiments", tags=["flash-experiments"])
@@ -139,8 +139,29 @@ def _cancel_rebuild():
     return _rebuild_status()
 
 
-def _start_rebuild(*, force=False, identity=None):
+def _settings(identity):
+    from benchmarks.flash_pipeline_settings import catalog, from_recording
+
+    items = [item for item in _list() if item["id"] == identity]
+    if not items:
+        raise HTTPException(404, "Scene is unavailable")
+    item = items[0]
+    provenance = json.loads((Path(item["source_run"]).parent / "provenance.json").read_text())
+    return {"settings": from_recording(provenance, item["methods"]), "options": catalog()}
+
+
+def _start_rebuild(*, force=False, identity=None, settings=None):
     from benchmarks.flash_rebuild_examples import write_json
+
+    if settings is not None:
+        if identity is None:
+            raise HTTPException(400, "Edited settings apply to one selected scene")
+        from benchmarks.flash_pipeline_settings import validate
+
+        try:
+            settings = validate(settings)
+        except (ValueError, TypeError, KeyError) as exc:
+            raise HTTPException(422, str(exc)) from exc
 
     directory = _root() / ".rebuild"
     directory.mkdir(parents=True, exist_ok=True)
@@ -172,7 +193,10 @@ def _start_rebuild(*, force=False, identity=None):
             "frame": 0,
             "frames": 0,
         }
-        write_json(job / "request.json", {"browser_root": str(_root()), "items": items, "force": force})
+        write_json(
+            job / "request.json",
+            {"browser_root": str(_root()), "items": items, "force": force, "settings": settings},
+        )
         write_json(job / "status.json", state)
         write_json(directory / "current.json", {"job": str(job)})
         python = os.environ.get("LEROBOT_FLASH_TRACKING_PYTHON", sys.executable)
@@ -209,9 +233,11 @@ async def list_experiments():
 
 
 @router.post("/rebuild", status_code=202)
-async def rebuild_examples(force: bool = False, identity: str | None = None):
+async def rebuild_examples(
+    force: bool = False, identity: str | None = None, settings: dict | None = Body(default=None)
+):
     return await asyncio.get_running_loop().run_in_executor(
-        _jobs, partial(_start_rebuild, force=force, identity=identity)
+        _jobs, partial(_start_rebuild, force=force, identity=identity, settings=settings)
     )
 
 
@@ -245,6 +271,11 @@ async def benchmark_report(job_id: str, asset: str):
         media_type="application/json" if asset == "report.json" else "text/html",
         filename="flash-benchmark-results.json" if asset == "report.json" else None,
     )
+
+
+@router.get("/{identity}/settings")
+async def experiment_settings(identity: str):
+    return await asyncio.get_running_loop().run_in_executor(_files, partial(_settings, identity))
 
 
 @router.get("/{identity}/{asset}")

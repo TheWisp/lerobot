@@ -23,9 +23,18 @@ function flashImageBackend(data = flashExperiments.data) {
     return (data?.shared_matching?.backend || data?.metrics?.shared_matching?.config?.backend || 'ufm').toUpperCase();
 }
 function flashMethodLabel(method, data = flashExperiments.data) {
-    return (FLASH_POSE_METHODS[method] || data?.methods?.[method] || method).replaceAll('UFM', flashImageBackend(data));
+    const covariance = data?.surface_experiment?.uncertainty?.enabled && /^(conditioned|group)_/.test(method);
+    const mode = data?.surface_experiment?.uncertainty?.mode || 'selection';
+    return (FLASH_POSE_METHODS[method] || data?.methods?.[method] || method).replaceAll('UFM', flashImageBackend(data)) + (covariance ? (mode === 'kalman' ? ' · Kalman filter' : ' · covariance selection') : '');
 }
 function flashMethodExplanation(method, data = flashExperiments.data) {
+    if (/^(conditioned|group)_/.test(method) && data?.surface_experiment?.surface_priority) {
+        if (data.surface_experiment.uncertainty?.enabled && data.surface_experiment.uncertainty.mode === 'kalman')
+            return 'Carry pose and uncertainty between frames. Measured group motion predicts; visible depth corrects. Direct depth/mask contradictions reject the prediction. Noise settings are experimental.';
+        return data.surface_experiment.uncertainty?.enabled
+            ? 'Reject depth/mask contradictions; use conditional covariance to choose among compatible poses. Group support is a hypothesis, not calibrated confidence.'
+            : 'Depth and mask fit first. Image/group evidence chooses among fits with effectively equal surface error.';
+    }
     if (method === 'ufm_retained_reference' && data?.shared_matching) {
         return 'Use surviving point identities to reconnect to the last matched frame. No extra image inference.';
     }
@@ -835,4 +844,77 @@ async function requestFlashExperimentScene() {
                 state.retry = setTimeout(requestFlashExperimentScene, retry ? 250 : 0);
         }
     }
+}
+
+
+async function showFlashPipelineSettings() {
+    const identity = flashExperiments.selected;
+    if (!identity) return;
+    const dialog = document.createElement('dialog');
+    dialog.className = 'flash-pipeline-settings';
+    document.body.append(dialog);
+    const title = flashText(dialog, 'h2', 'Pipeline settings');
+    const close = document.createElement('button'); close.textContent = 'Close';
+    close.onclick = () => dialog.close(); title.append(close);
+    const status = flashText(dialog, 'p', 'Loading settings…');
+    dialog.addEventListener('close', () => dialog.remove());
+    dialog.showModal();
+    try {
+        const response = await fetch(`/api/run/flash/experiments/${identity}/settings`);
+        if (!response.ok) throw new Error('Could not load pipeline settings');
+        const data = await response.json();
+        if (!dialog.isConnected) return;
+        status.textContent = 'Settings from this recording. Changes take effect only after rerunning this scene. Saved masks are reused; SAM and robot-control settings are not executed by this benchmark.';
+        const label = document.createElement('label');
+        const toggle = document.createElement('input'); toggle.type = 'checkbox';
+        toggle.checked = !!data.settings.surface_experiment?.uncertainty?.enabled;
+        toggle.disabled = !data.settings.surface_experiment;
+        label.append(toggle, ' Use pose uncertainty (experimental)'); dialog.append(label);
+        const mode = document.createElement('select'); mode.setAttribute('aria-label', 'Pose uncertainty method');
+        for (const [value, text] of [['selection', 'Candidate selection'], ['kalman', 'Kalman filter']]) {
+            const option = document.createElement('option'); option.value = value; option.textContent = text; mode.append(option);
+        }
+        mode.value = data.settings.surface_experiment?.uncertainty?.mode || 'selection';
+        mode.disabled = toggle.disabled; dialog.append(mode);
+        flashText(dialog, 'p', 'Kalman filtering carries pose covariance between frames, predicts with measured group motion and corrects with depth. Noise settings are assumptions, not calibrated confidence.');
+        const editor = document.createElement('textarea');
+        editor.setAttribute('aria-label', 'Pipeline configuration JSON');
+        editor.value = JSON.stringify(data.settings, null, 2); dialog.append(editor);
+        toggle.onchange = mode.onchange = () => {
+            try {
+                const value = JSON.parse(editor.value);
+                value.surface_experiment.uncertainty.enabled = toggle.checked;
+                value.surface_experiment.uncertainty.mode = mode.value;
+                editor.value = JSON.stringify(value, null, 2);
+            } catch (error) { status.textContent = error.message; }
+        };
+        editor.oninput = () => {
+            try {
+                const value = JSON.parse(editor.value).surface_experiment?.uncertainty;
+                toggle.checked = !!value?.enabled; mode.value = value?.mode || 'selection';
+            }
+            catch (_) { /* Preserve unfinished JSON while editing. */ }
+        };
+        const run = document.createElement('button'); run.textContent = 'Rerun this scene with these settings';
+        run.onclick = async () => {
+            try {
+                const settings = JSON.parse(editor.value);
+                run.disabled = true;
+                const response = await fetch(`/api/run/flash/experiments/rebuild?identity=${identity}`, {
+                    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(settings),
+                });
+                if (!response.ok) { const body = await response.json(); throw new Error(body.detail || 'Could not start rerun'); }
+                dialog.close(); flashRebuild.completed = null; await pollFlashRebuild();
+            } catch (error) { status.textContent = String(error.message); run.disabled = false; }
+        }; dialog.append(run);
+        const details = document.createElement('details');
+        flashText(details, 'summary', `All ${data.options.length} options and defaults`);
+        const table = document.createElement('table');
+        for (const option of data.options) {
+            const row = document.createElement('tr');
+            flashText(row, 'th', option.path); flashText(row, 'td', JSON.stringify(option.default));
+            flashText(row, 'td', option.description); table.append(row);
+        }
+        details.append(table); dialog.append(details);
+    } catch (error) { status.textContent = error.message; }
 }

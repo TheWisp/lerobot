@@ -1,0 +1,373 @@
+{
+  "method": "Depth + mask fit, shared UFM and surrounding groups, growing surface",
+  "comparison": "Current default versus optional Kalman mode, including the direct contradiction checks enabled by uncertainty. Not an isolated gain-only ablation.",
+  "independent_6d_labels": false,
+  "gamepad": {
+    "before": "/home/feit/.cache/flash-tracker-restart/full-validation-20261102/runs/040/flash-demo-gamepad-cube",
+    "after": "/home/feit/.cache/flash-tracker-restart/browser/.rebuild/rebuild-20261102-233536-d1d631c8/runs/000/flash-demo-gamepad-cube",
+    "video": "/home/feit/.cache/flash-tracker-restart/kalman-two-demos-20261102/gamepad-video/comparison.mp4",
+    "stationary_interval_frames": [
+      0,
+      192
+    ],
+    "stationary_max_translation_mm": {
+      "off": 2.114000527675268,
+      "on": 1.2403050990093
+    },
+    "stationary_max_rotation_deg": {
+      "off": 9.56205567264308,
+      "on": 3.622762744497308
+    },
+    "availability": {
+      "case": "flash-demo-gamepad-cube",
+      "frames": 628,
+      "roles": {
+        "gamepad": {
+          "off": {
+            "missing_frames": [],
+            "available": 628
+          },
+          "on": {
+            "missing_frames": [
+              275,
+              276,
+              277,
+              278,
+              279,
+              280,
+              281,
+              282,
+              283,
+              314,
+              323,
+              324,
+              328,
+              426,
+              427,
+              428
+            ],
+            "available": 612
+          }
+        },
+        "cube": {
+          "off": {
+            "missing_frames": [],
+            "available": 628
+          },
+          "on": {
+            "missing_frames": [
+              331,
+              350,
+              351,
+              353,
+              354,
+              355,
+              356,
+              364,
+              366,
+              497,
+              498,
+              499,
+              500,
+              501,
+              502,
+              503,
+              504,
+              505,
+              506,
+              507,
+              508,
+              509,
+              510,
+              511,
+              512,
+              513,
+              514,
+              515,
+              516,
+              517,
+              518,
+              519,
+              520,
+              521,
+              522,
+              523,
+              524,
+              525,
+              526,
+              527,
+              528,
+              529,
+              530,
+              531,
+              532,
+              533,
+              534,
+              535,
+              536,
+              537,
+              538,
+              539,
+              540,
+              541,
+              542,
+              543,
+              544,
+              545,
+              546,
+              547,
+              548,
+              549,
+              550,
+              551,
+              552,
+              553,
+              554,
+              555,
+              556,
+              558,
+              559,
+              560,
+              561,
+              562,
+              564,
+              565,
+              566,
+              567,
+              568,
+              569,
+              572,
+              573,
+              574,
+              575,
+              576,
+              577,
+              578,
+              580,
+              581,
+              585,
+              586,
+              587,
+              589,
+              591,
+              592,
+              593,
+              594,
+              595,
+              597,
+              598,
+              599,
+              600,
+              601,
+              602,
+              603,
+              604,
+              605,
+              606,
+              607,
+              608,
+              609,
+              610,
+              611,
+              612,
+              613,
+              614,
+              615,
+              616,
+              617,
+              618,
+              619,
+              620,
+              621,
+              622,
+              623,
+              624,
+              625,
+              626,
+              627
+            ],
+            "available": 499
+          }
+        }
+      }
+    },
+    "visual_findings": [
+      "Less wobble before pickup",
+      "Wrong orientation remains during placement around 17s",
+      "Saved cube mask moves to the white container; off follows it and on rejects the incompatible shape"
+    ]
+  },
+  "runner_sha256": "632fa6fa7d64ddffcc1e75ad8f83cbfd0b4547a7039f945b73d61269be0ce6e8",
+  "render_sha256": "bbe763297508170887a96b499e2e9e3ba8e9f1052b180fd39acb6a0102ccfcb8",
+  "dowel": {
+    "paired_run": "/home/feit/.cache/flash-tracker-restart/kalman-two-demos-20261102/dowel",
+    "video": "/home/feit/.cache/flash-tracker-restart/kalman-two-demos-20261102/dowel-video/comparison.mp4",
+    "run_summary": {
+      "input_sha256": "13c92a4df0a8f5208a566f5cc842c78e14835fdc954a5be12d3deba52ecd5a36",
+      "frames": 713,
+      "wall_s": 434.89835758600384,
+      "matching_calls": 712,
+      "roles": {
+        "dowel": {
+          "off": {
+            "missing_frames": [],
+            "median_fit_ms": 130.59370098926593
+          },
+          "on": {
+            "missing_frames": [
+              260,
+              261,
+              265,
+              266,
+              267,
+              268,
+              269,
+              270,
+              271
+            ],
+            "median_fit_ms": 128.156784499879
+          }
+        },
+        "ring": {
+          "off": {
+            "missing_frames": [],
+            "median_fit_ms": 124.31906700658146
+          },
+          "on": {
+            "missing_frames": [],
+            "median_fit_ms": 147.21666101831943
+          }
+        }
+      }
+    },
+    "availability": {
+      "case": "flash-demo-dowel-ring",
+      "frames": 713,
+      "roles": {
+        "dowel": {
+          "off": {
+            "missing_frames": [],
+            "available": 713
+          },
+          "on": {
+            "missing_frames": [
+              260,
+              261,
+              265,
+              266,
+              267,
+              268,
+              269,
+              270,
+              271
+            ],
+            "available": 704
+          }
+        },
+        "ring": {
+          "off": {
+            "missing_frames": [],
+            "available": 713
+          },
+          "on": {
+            "missing_frames": [],
+            "available": 713
+          }
+        }
+      }
+    },
+    "visual_findings": [
+      "No clear overall improvement: carrying, insertion and released poses look similar at inspected timestamps.",
+      "Kalman mode returns no dowel pose in nine frames during rotation (frames 260, 261, 265-271, approximately 8.67-9.03s).",
+      "Both methods keep a ring pose throughout; availability alone does not prove accuracy."
+    ],
+    "reviewed_frames": [
+      225,
+      270,
+      330,
+      445,
+      712
+    ]
+  },
+  "verdict": "Mixed: less stationary gamepad wobble, unresolved placement error, no clear dowel improvement and brief added dowel pose loss. Keep experimental and disabled by default.",
+  "surface_audit": {
+    "visualization_difference": "Original comparison videos render the initial surface at the estimated pose. The GUI growing method renders the accumulated surface.",
+    "older_gui_dowel_run": "/home/feit/.cache/flash-tracker-restart/shared-matching-20261102/ufm-v2/001/flash-demo-dowel-ring",
+    "older_gui_version": "718328e93",
+    "replayed_current_map_frames": 713,
+    "replay_validation": "Every map version, point count and patch event equals the recorded off/on execution.",
+    "frame_400_extent_in_initial_axes_mm": {
+      "initial": [
+        105.2,
+        24.12,
+        13.44
+      ],
+      "older_gui": [
+        108.9,
+        50.37,
+        77.03
+      ],
+      "latest_kalman": [
+        108.95,
+        27.29,
+        16.61
+      ]
+    },
+    "branch_source_frames": [
+      291,
+      337,
+      347
+    ],
+    "branch_confirmation_frames": [
+      298,
+      347,
+      348
+    ],
+    "same_measurement_median_placement_change_mm": [
+      41.39,
+      67.8,
+      70.26
+    ],
+    "caution": "Initial surface distance is a consistency diagnostic, not ground-truth accuracy. Latest off also avoids the large branch: this is not attributable to Kalman alone.",
+    "gamepad_frame_391": {
+      "time_s": 17.31,
+      "group_motion_source": null,
+      "reason": "innovation_conflict",
+      "map_points": 422,
+      "shape_extent_in_initial_axes_mm": [
+        71.7,
+        39.4,
+        16.1
+      ]
+    },
+    "picture": "/home/feit/.cache/flash-tracker-restart/kalman-two-demos-20261102/surface-audit/old-vs-latest-surface.png",
+    "patch_source_picture": "/home/feit/.cache/flash-tracker-restart/kalman-two-demos-20261102/surface-audit/older-admitted-points.jpg",
+    "gui_dowel_rebuild": "rebuild-20261102-235536-ce24cd05",
+    "gui_verification": {
+      "job": "rebuild-20261102-235536-ce24cd05",
+      "state": "completed",
+      "run": "/home/feit/.cache/flash-tracker-restart/browser/.rebuild/rebuild-20261102-235536-ce24cd05/runs/000/flash-demo-dowel-ring",
+      "growing_dowel_missing_frames": [
+        260,
+        261,
+        262,
+        265,
+        266,
+        267,
+        268,
+        269,
+        270,
+        271
+      ],
+      "growing_ring_missing_frames": [],
+      "frame_400_extent_in_initial_axes_mm": [
+        108.95,
+        28.07,
+        16.63
+      ],
+      "display_verified": "Run > FLASH, shared UFM dowel, growing surface + Kalman, frame400 at13.34s. The picture now uses this GUI run.",
+      "full_suite_started": false,
+      "reason": "Gamepad placement remains worse in part of the clip; two-case no-regression gate not met."
+    }
+  }
+}

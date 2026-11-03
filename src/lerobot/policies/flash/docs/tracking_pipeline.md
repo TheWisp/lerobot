@@ -149,6 +149,25 @@ letting that patch influence fitting**. Otherwise, a badly placed patch could
 make the next fit look good simply because it matches its own wrong placement.
 This check reduces one source of circular evidence; it does not prove correctness.
 
+Tracking and surface growth have separate thresholds. Tracking requires 25% of
+the observed points within 5 mm of the stored surface. Growth requires 75% within
+3 mm **before either adding a patch or confirming an earlier pending patch**.
+At least 95% of a proposed addition must avoid contradicting retained depth images
+and masks; 80% of its points must then be measured again within 3 mm in a later
+frame. Every threshold is configurable in `surface_experiment`; growth cannot be
+configured to require less overlap or a larger match distance than tracking.
+These are conservative experiment defaults, not measured confidence. They can
+defer legitimate growth when the newly visible area is large. Initializing the
+first partial surface necessarily has no older surface to compare with.
+
+The retained-view check projects a proposed addition into earlier camera views.
+It rejects points in space that their depth/masks showed was empty. Points behind
+an observed foreground surface, or at missing depth, remain unknown. Geometry is
+also used in the current-frame fit; this extra check uses earlier observations.
+**A fit with high overlap can still have ambiguous rotation.** A separate gate
+that bounds the placement uncertainty of new points is not implemented; stricter
+overlap and repeatability alone do not establish that certainty.
+
 ## Uncertainty and correction
 
 **We have not solved confidence estimation.** Initially record mask/depth quality,
@@ -156,10 +175,66 @@ geometric and image disagreement, visible coverage, pose sensitivity in all six
 directions, and time without observation. Test whether those quantities predict
 actual error on labelled clips. Do not call a fit score an accuracy probability.
 
-Position and orientation are one 6D pose. A 6 × 6 covariance could represent local
-uncertainty and correlations in all six directions; separate pictures below are
-only illustrations. A Kalman filter is a possible later experiment, not a remedy
-for a wrong surface or ambiguous identity. [Explanation and prior art](#e3-surface-and-pose-uncertainty).
+Position and orientation are one 6D pose. The optional Kalman filter carries a
+6 × 6 covariance between frames, including correlations between directions.
+It describes uncertainty around one estimate; it cannot represent several
+symmetric answers or prove that an object/group association is correct.
+[Illustration and prior art](#e3-surface-and-pose-uncertainty).
+
+**New surface experiments default to `kalman` with a 25% geometry rejection
+allowance.** This empirical setting balances measured pose availability and error;
+it does not relax surface growth. `selection` preserves the earlier candidate
+selector, and `enabled=false` preserves the filter-off comparison. Saved recordings
+retain their settings, including filter-off for recordings predating uncertainty.
+The earlier selector did not implement temporal fusion.
+
+```text
+Previous corrected pose + covariance
+    → compensate for camera movement
+    → advance using consecutive measured group-point pairs, when available
+    → add group-motion uncertainty and elapsed-time process noise
+    → correct using the current surface fit and its directional uncertainty
+    → retain corrected pose + covariance for the next frame
+```
+
+The observation is a surface fit against the current cleaned depth and mask.
+Its information matrix comes from point-to-plane residuals, including an assumed
+spatial correlation between nearby depth samples. A narrow visible strip can
+therefore correct well-constrained directions without equally constraining all
+six. All calculations use one fixed object point as the coordinate origin;
+growing the surface or changing visibility does not move that origin.
+
+Group motion uses actual 3D point pairs in consecutive frames. Their spread,
+residuals and configured measurement noise determine motion covariance. A group
+prediction advances the previous **corrected** estimate; it does not restore an
+older absolute group pose. With no observation, only prediction runs and its
+covariance grows. No measured motion means a stationary-world prediction,
+compensated for known camera motion, with increasing uncertainty.
+
+The correction uses inverse covariance as directional weight. Its compatibility
+test uses the sum of prediction and observation covariance. If current depth and
+mask clearly contradict the prediction, the filter restarts at a valid observed
+fit with broad uncertainty. The final fused pose is checked against depth and
+mask again. When every fitted candidate contradicts the observation, the output
+is lost rather than presenting a contradicted pose as valid. Predictions and
+rejected corrections never add surface measurements.
+
+**Limitations:** the information matrix describes depth-normal constraints only.
+Outline/image constraints used by the fitter are not yet represented, so the filter
+can underweight real sideways motion even when the outline locates it. The geometry
+check also conflates newly visible, unmatched surface with contradiction of known
+surface. The 25% allowance reduces rejection but does not resolve this distinction.
+Noise settings are assumptions, not calibration. Shared evidence
+between group motion and fitting, and errors correlated across time, are not
+fully modeled. Wrong normals, a wrong reconstructed surface, a local optimizer
+minimum or a wrong group relationship can still produce an overconfident estimate.
+A well-tracked tray does not prove that an object remains on it. There is no
+conversion from a group's scalar score to a calibrated pose probability.
+
+[Recorded Kalman comparison, including remaining pickup failures](../../../../../docs/proofs/flash-tracker-restart/RESEARCH.md#2026-11-02--temporal-kalman-filter-on-recorded-occlusion-and-pickup).
+[Earlier candidate-selection experiment](../../../../../docs/proofs/flash-tracker-restart/RESEARCH.md#2026-11-02--covariance-for-candidate-selection-with-direct-contradiction-checks).
+
+[All pipeline options, defaults and where they apply](pipeline_settings.md).
 
 To undo an addition, exclude its patch and rebuild the surface. To reposition it,
 change that patch's transform and rebuild. Retained raw patches make this possible;

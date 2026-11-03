@@ -1670,7 +1670,9 @@ increasing a group tolerance is not a demonstrated fix. The local
 
 Added a real RGB-D → pinned UFM → shared groups → growing-surface integration
 test. The visually annotated stationary interval is frames 0–164 (0–7.24 s),
-including gripper occlusion. Frames 165–170 show pickup beginning. Inference runs
+including gripper occlusion. **Correction from later review:** the original
+claim that frames 165–170 showed pickup beginning was unsupported; the user
+places grasp around 9 ± 0.5 s. The results below cover only 0–7.24 s. Inference runs
 through frame 280; the annotation is used only afterward. Inputs are hashed.
 
 | Maximum false motion before pickup |  Before |   After | Test limit |
@@ -1747,8 +1749,9 @@ Historical versus current selected-path timing is about **83 → 195 ms/frame**
 ran sequentially; later concurrent unlabelled runs are excluded from timing.
 
 The full runner exactly reproduces the earlier post-fix integration outputs:
-gamepad frames 0–280 and all 713 dowel frames. Gamepad false pre-pickup motion
-remains 1.15 mm/3.98°; motion by frame 280 is 59.19 mm. Both complete demos retain
+gamepad frames 0–280 and all 713 dowel frames. Gamepad false motion over the
+original 0–7.24 s test window remains 1.15 mm/3.98°; motion by frame 280 is
+59.19 mm. This does not cover the whole pre-grasp interval. Both complete demos retain
 poses throughout, but have no independent full-motion accuracy labels.
 
 This compares accumulated changes, including separate LK/UFM → shared UFM,
@@ -1777,3 +1780,514 @@ new result merely because the server runs the new code.
 [Inputs, settings, hashes, per-scene scores and integration checks](full-suite-validation-20261102.json).
 Full traces, baseline summaries, paired-frame checks and the HTML report are in
 `~/.cache/flash-tracker-restart/full-validation-20261102/`.
+
+### 2026-11-02 — Gamepad test missed the later pre-grasp interval
+
+The user reports grasp at about 9 ± 0.5 s. The old test stopped its stationary
+check at 7.24 s, then only required movement by frame 280. That second check
+catches a frozen tracker, but also passes an incorrectly moving one. The old
+pass therefore did **not** establish stable tracking through grasp.
+
+Extended the stationary annotation through frame 192 (8.47149 s), just before
+the earliest reported grasp at 8.5 s. This uses human timing evidence in the
+heavily occluded interval, not independent 6D pose labels. The unchanged 5 mm /
+5° limits now produce a real UFM integration **failure: 2.11 mm / 9.56°** maximum
+false motion; the rotation maximum is at frame 171 (7.54 s). No runtime code or
+runtime grasp-time rule changed. Post-grasp accuracy remains untested by these
+two assertions.
+
+Two implementation gaps remain. UFM discards surrounding support at frame 144
+after comparing uncorrected image-derived poses; its final depth/mask fit is
+nearly stationary. But losing that support is not the entire cause: a fresh LK
+run keeps roughly 200 surrounding points and still wobbles. Both paths allow
+a small improvement in fitting a tiny visible fragment to override a much
+steadier prediction. The estimator records which pose directions the fragment
+constrains, but does not use that information to restrict the accepted change.
+These are diagnosis results, **not a new fix**.
+
+Replaced the shared UFM/LK playback entries with current-code results, retaining
+their historical exports. Full traces, the separation audit, test log and fresh
+LK run are local under `~/.cache/flash-tracker-restart/gamepad-review-20261102/`;
+the extended test's raw output is
+`/tmp/flash-gamepad-grasp-window-20261102/gamepad-integration0/result.json`.
+
+### 2026-11-02 — Isolating the false turn before grasp
+
+Replayed current LK and UFM with read-only instrumentation. At frame 171
+(7.54 s), LK still has 201 surrounding supports: their prediction rotates only
+0.49°. Fitting with that support included gives 1.97°, but
+`ImageConditionedFit.correct_surface_first` selects a geometry-only result at
+9.07°. Its geometry cost is 0.08375 versus 0.10421. Image/group evidence only
+breaks ties within **solver tolerance (1e-5)**, not measurement uncertainty.
+`GroupHints.compare_candidate` then accepts the same lower geometry cost.
+The recorded surface-information diagnostic does not constrain this update.
+
+To separate that failure from image drift or accumulated map errors, fit the
+original measured surface to this frame starting at identity, with **no image
+matches, groups or grown geometry**. It still turns 8.27°. Repeat with the
+**same 310 target pixels, same mask and same reference**, replacing their depth
+with frame-0 readings: the turn falls to 0.12°. Current readings differ by at
+most 4 mm; 90% are within 2 mm. Similar paired checks at frames 164/168/170
+give 3.64°/8.96°/6.96° with current depth versus 0.27°/0.30°/0.13° with initial
+depth (see exact measurements below). The inference does not receive frame-0
+depth in these locations; replacement is an offline diagnostic only.
+
+This establishes that small depth changes in the remaining fragment can drive
+the false turn, and that the ranking discards useful group constraints to fit
+them. It does **not** establish the physical origin of every depth change:
+sensor effects, RGB/depth edge alignment and small true motion are not fully
+separated. The stationary claim uses the user's timing annotation. RGB at
+frames 164/168 correlates best with zero shift; the nearly hidden later patch
+is inconclusive. No independent full-object 6D label is available.
+
+UFM also loses its group at frame 144: comparing the **uncorrected** object
+and surrounding proposals favors the drifting image proposal (costs 0.32086
+versus 0.34851). Subsequent surface fitting returns nearly the original pose,
+but the support has already been discarded. LK retains its support, so this
+additional fault cannot explain the common false turn by itself.
+
+**No tracker fix applied.** Retaining group constraints in directions poorly
+determined by current geometry needs testing with real object movement as well
+as stationary occlusion; making the entire pose stick would be a false fix.
+
+![Same frame: observed fragment, surrounding-group prediction and selected fit](gamepad-depth-selection-audit-20261102.jpg)
+
+[Paired experiments, measurements, caveats and source hashes](gamepad-depth-selection-audit-20261102.json).
+
+## 2026-11-02 — Local pose covariance on the gamepad occlusion
+
+**Result: useful evidence, not a deployable fix.** The design's proposed 6 × 6
+covariance is now tested in an isolated offline ablation. The current defaults
+are unchanged. This is a local Gaussian update, not a temporal Kalman filter.
+
+`benchmarks/flash_pose_covariance.py` calculates point-to-plane information from
+the current measured surface, then combines the existing geometric candidate
+with image/group evidence in six pose directions. It tests independent depth
+error versus spatially correlated error. All variants retain the same masks,
+depth cleaning, LK/UFM matching, group relationships, map growth and acceptance
+checks. No scene name, stationary interval or grasp time enters the estimator.
+
+The noise settings are **assumptions, not calibrated sensor specifications**:
+1 mm independent standard deviation, plus 0 / 2 / 5 mm correlated error with a
+10 mm correlation length. The point-evidence scale is provisionally interpreted
+as uncertainty per source. Normal uncertainty, bad correspondences, changing
+group validity and errors in the stored surface are not represented adequately.
+The returned covariance must not be shown as an accuracy probability.
+
+Actual causal runs: 281 frames, 0–12.374 s, including pickup. Score the human-
+annotated stationary interval through frame 192 / 8.471 s. Every run has the same
+input hash `c66268f6cf9eff2d7786b0b1c14243edad15a5f057d8f445b229c66dd31c71d3`.
+These are false rotations relative to the first estimate, not labelled 6D errors.
+
+| Depth uncertainty assumption | LK + groups: worst false turn | UFM + groups: worst false turn |
+| ---------------------------- | ----------------------------: | -----------------------------: |
+| Current estimator            |                         9.07° |                          9.56° |
+| Independent 1 mm errors      |                         8.66° |                          8.14° |
+| Add 2 mm correlated error    |                         7.28° |                          6.93° |
+| Add 5 mm correlated error    |                         5.30° |                     **38.38°** |
+
+**No variant passes the unchanged 5° stationary limit.** The stronger LK setting
+also fails the movement control: only 24.1 mm estimated travel by frame 280,
+versus the required >30 mm. Its surrounding tray group remains active after
+pickup when object image tracks are unavailable. A separate 99% Gaussian
+consistency-check ablation rejects strongly contradicted support and restores
+61.2 mm travel, but does not improve the pre-grasp numbers or repair UFM's severe
+regression. Movement-control success does not establish accurate pickup pose.
+
+This exposes why merely reducing trust in depth is insufficient: the alternatives
+can also be wrong, and a locally derived covariance does not validate their
+identity or co-movement relationship. Measure/calibrate uncertainty for both
+sources and address contradictory support before treating this as a solution.
+
+![Stationary-interval rotation for both matchers and three noise assumptions](gamepad-covariance-comparison-20261102.png)
+
+[All twelve runs, settings, hashes and checks](gamepad-covariance-comparison-20261102.json).
+Local causal traces and a timestamp-correct six-panel comparison video are under
+`~/.cache/flash-tracker-restart/pose-covariance-20261102/` (`runs/*.json.gz`,
+`comparison.mp4`). The video includes the severe regression, not only improvements.
+Reproduce with `python -m benchmarks.flash_pose_covariance_run --backend lk
+--output /tmp/covariance --frames 281` (also `--backend ufm`); add
+`--variants gated2 gated5` for the consistency-check ablations.
+
+Verification: six numerical controls cover unobservable directions, correlated
+samples, coordinate origins and normal signs, actual motion overriding wrong
+support, and rejection of contradicted predictions. Together with existing
+surface-session/group tests: 54 passed. Real recorded stationary checks remain
+failing as reported above. No new model training or SAM inference was performed.
+
+Prior art: [ICP covariance and correspondence caveats](https://arxiv.org/abs/1410.7632),
+[noise-aware degeneracy detection](https://arxiv.org/abs/2410.10784).
+This experiment does **not** implement DRPM's normal-noise model or claim its
+results; those papers motivate checking the assumptions of a covariance estimate.
+
+## 2026-11-02 — Covariance for candidate selection, with direct contradiction checks
+
+**Experimental, off by default.** First reject poses that contradict visible
+depth/mask geometry, independently of uncertainty. Then use local covariance to
+identify candidates the visible surface cannot distinguish. Prefer compatible
+point predictions, otherwise the candidate changing the stored surface least.
+This selects an existing pose; it does not average poses or run a Kalman filter.
+The same checks decide whether surrounding support contradicts the observation.
+
+Same 281 recorded frames and input hash as above, same 5 mm / 5° stationary limits,
+same 1 mm independent + 2 mm correlated noise assumptions. No object name,
+grasp time or stationary annotation enters estimation. The disabled LK path
+matches the previous baseline exactly across all 281 pose matrices.
+
+| Matcher + groups | Worst stationary turn, before → after | Worst stationary displacement, before → after | Frames without a pose after pickup, before → after |
+| ---------------- | ------------------------------------: | --------------------------------------------: | -------------------------------------------------: |
+| LK               |                     9.07° → **1.11°** |                                2.15 → 2.87 mm |                                              0 → 6 |
+| UFM              |                     9.56° → **5.80°** |                                2.11 → 3.99 mm |                                              0 → 5 |
+
+LK passes the stationary check; UFM still fails 5°. At UFM frame 145, surrounding
+support passes the direct geometry check, but the covariance test rejects it
+(20.51 versus 12.59 limit), selecting a tilted fit. The assumed noise and fixed
+surface normals/correspondences remain an imperfect uncertainty model.
+
+**The pickup portion is not fixed.** Both new runs move after pickup, but their
+poses still jump and become visibly wrong; LK frame 280 is substantially worse
+than its baseline. Passing a >30 mm movement check cannot certify carried pose
+accuracy. The new mode must remain experimental, not replace the default based
+on its improved stationary score. The comparison video includes these failures.
+
+LK runtime: 35.94 → 39.02 s for 281 frames (about 11 ms/frame extra in this paired
+run). This is offline wall time, not a live frame-rate measurement.
+
+![Stationary gamepad: baseline and covariance candidate selection](gamepad-covariance-selection-20261102.png)
+
+[Measurements](gamepad-covariance-selection-20261102.json). Full traces, settings,
+source snapshots and `visuals/comparison.mp4` are preserved locally under
+`~/.cache/flash-tracker-restart/pose-selection-20261102/`. Reproduce with
+`python -m benchmarks.flash_pose_selection_run --backend lk --mode covariance
+--output <directory>`; also test `--backend ufm` and `--mode baseline`.
+
+Verification: 101 focused tests passed, including real fitter checks for large
+contradictions, weak directions, actual motion, empty observations, map growth
+and the HTTP settings-to-worker path. The GUI exposes a selected-scene rerun with
+settings and a generated overview of all 95 restart-pipeline options. This does
+not imply the recorded UFM case or the broader benchmark now passes.
+
+## 2026-11-02 — Temporal Kalman filter on recorded occlusion and pickup
+
+The optional `surface_experiment.uncertainty.mode="kalman"` now carries a pose
+and 6×6 covariance between frames. Consecutive measured group point pairs predict
+motion; a direct-valid depth/mask surface fit corrects it. The gain uses both
+prediction covariance and surface information. The older `selection` experiment
+only chose a candidate. Both remain configurable; the default is still disabled.
+
+Same 281 recorded gamepad frames (0–12.37 s), identical input hash, both real
+image matchers, no timing/object rules or robot commands. The human annotation
+marks frames 0–192 (through 8.47 s) stationary and is used only for scoring.
+The existing stationary check stays at 5 mm / 5°. There is no independent 6D
+truth during pickup.
+
+| Matcher / method         | Worst false position | Worst false rotation | Frames without a pose, entire 281-frame clip | Processing time |
+| ------------------------ | -------------------: | -------------------: | -------------------------------------------: | --------------: |
+| LK baseline              |              2.15 mm |                9.07° |                                            0 |         35.94 s |
+| LK covariance selection  |              2.87 mm |                1.11° |                                            6 |         39.02 s |
+| LK Kalman                |              1.23 mm |                3.66° |                                            6 |         37.64 s |
+| UFM baseline             |              2.11 mm |                9.56° |                                            0 |         42.35 s |
+| UFM covariance selection |              3.99 mm |                5.80° |                                            5 |         48.43 s |
+| UFM Kalman               |              1.61 mm |                3.54° |                                           11 |         45.58 s |
+
+**Verdict:** Kalman passes the stationary check with both matchers, but is not a
+complete tracking fix. LK selection had less false rotation than LK Kalman;
+Kalman had less false translation. Visual inspection after pickup still shows
+wrong alignment, and Kalman rejects frames 275–280 with both matchers (plus
+261–265 with UFM). Every candidate fails the current observation check there.
+The baseline's uninterrupted output is not evidence of correct pickup tracking.
+Keep this experimental; no claim of improvement across all scenes. Timings are
+single runs, exclude mask generation and model startup, and are not a controlled
+throughput benchmark.
+
+![False rotation before pickup, same initial surface and frame timestamps](gamepad-kalman-20261102.png)
+
+[Machine-readable measurements](gamepad-kalman-20261102.json). Full traces,
+source snapshots, settings and 1× comparison video are local under
+`~/.cache/flash-tracker-restart/kalman-20261102/` (`visuals/comparison.mp4`).
+Reproduce with `python -m benchmarks.flash_pose_selection_run --backend lk
+--mode kalman --output /tmp/kalman-lk`, and again with `--backend ufm`.
+The figure/video compare baseline against Kalman, not the earlier selector.
+
+115 focused tests pass, including analytic covariance-weighting controls,
+partial observability, elapsed-time uncertainty growth, camera changes, measured
+group rotation, fixed-origin invariance, empty observation/reappearance, and the
+HTTP-settings → benchmark-worker → actual-fitter path. Replacing the gain by
+zero fails both analytic weighting controls. With uncertainty disabled, all 281
+LK poses exactly match the earlier saved baseline. No scene-specific constants
+were added. Initial/process/measurement noise and compatibility checks are exposed
+in Pipeline settings and its generated options reference. Their calibration,
+temporal/shared-source correlations and wrong surface normals remain unresolved.
+
+### Full recordings: gamepad–cube and dowel–ring
+
+Completed both recordings with shared UFM, surrounding groups and growing
+surfaces: gamepad 628 frames / 27.82 s; dowel 713 frames / 23.75 s. Compare the
+current default with optional Kalman mode, including its observation rejection
+checks. This is not a gain-only ablation. Both sides use the same RGB-D, saved
+masks and initial surface; no gripper motion input or robot commands are used.
+The dowel comparison reruns both sides on current code, sharing each UFM result.
+The gamepad comparison uses the validated current baseline and a complete run
+launched through the GUI. These demos have no independent 6D pose labels.
+
+**Result: mixed, insufficient to change the default.** Before gamepad pickup
+(annotated frames 0–192), worst false rotation falls from 9.56° to 3.62°, and
+center displacement from 2.11 to 1.24 mm. During placement, however, the Kalman
+estimate still has a visibly wrong tilt around 17.3 s. It omits 16 gamepad poses.
+Late in the recording the saved cube mask jumps to the white container: the
+baseline follows that wrong region, whereas the new mode rejects it. Therefore
+its 129 missing cube poses must not be read simply as 129 accuracy regressions.
+
+The dowel comparison shows no clear overall alignment improvement in the
+inspected carrying, insertion and released views. Kalman adds nine frames with
+no dowel pose during rotation, at approximately 8.67–9.03 s; the baseline returns
+a pose throughout. Both retain all ring poses. Returning a pose is not proof
+that it is accurate. Covariance fusion has not resolved the remaining geometry,
+segmentation and correspondence errors.
+
+[Measurements and evidence paths](kalman-two-demos-20261102.json). Full side-by-side
+videos at original timing, traces, configurations and source snapshots are local
+under `~/.cache/flash-tracker-restart/kalman-two-demos-20261102/`:
+`gamepad-video/comparison.mp4` and `dowel-video/comparison.mp4`. Both show the same
+initial surface transformed by each estimate, axes and the observed mask, with
+explicit labels where no pose is returned. Keep this optional and disabled by
+default; the full recordings do not establish a general tracking improvement.
+
+**Viewer/surface audit after user review:** the comparison videos above draw the
+initial surface at each estimated pose, whereas the GUI's growing methods draw
+the accumulated surface. The dowel entry still pointed to an older UFM run; the
+gamepad entry had been updated. This made the two presentations incomparable for
+surface quality. Replayed every map update of the latest paired dowel experiment
+from its recorded poses and original RGB-D; all 713 map versions, point counts
+and patch events match. At frame 400, the older GUI's stored dowel has a large
+false branch (77 mm extent along the initial surface's thinnest axis, versus
+13 mm initially). The latest Kalman shape is 17 mm along that same axis, and the
+latest filter-off shape also avoids the large branch. This improvement predates
+Kalman and must not be attributed to it.
+
+The old branch is formed by measurements from frames 291, 337 and 347, confirmed
+at 298, 347 and 348. Their image locations lie on the dowel, but the old poses
+place them far from the initial surface; the latest poses move those same stored
+measurements by median 41, 68 and 70 mm in object coordinates. Confirmation by a
+later frame did not prevent repeated misplacement. Source-point images, aligned
+shape comparisons and exact map-replay checks are saved under the same local
+evidence root in `surface-audit/`. These are consistency checks, not independent
+shape labels. Separately, the latest gamepad at 17.31 s has no usable group-motion
+source: Kalman rejects the proposed observation as incompatible with its prior
+and retains an already wrong pose. Its remaining failure is not just map growth.
+
+The full GUI dowel rerun `rebuild-20261102-235536-ce24cd05` completed and replaced
+the stale shared-UFM entry on 9102. Verified its actual growing-surface display
+at 13.34 s; the large branch is absent. This rerun omits 10 dowel poses around
+8.67–9.03 s and retains all ring poses. It is a fresh worker run, separate from
+the paired experiment above. The wider Kalman sweep was not started: the user's
+condition of promising results on both demos is not yet met during gamepad
+placement. No algorithm parameters were changed during this display audit.
+
+## 2026-11-03 — Separate tracking and surface-growth acceptance
+
+An accepted pose previously permitted adding/confirming geometry using the same
+5 mm agreement distance as tracking. Growth now requires 75% overlap within 3 mm,
+versus tracking's 25% within 5 mm. Both are configurable. Pending additions cannot
+be confirmed by a frame that fails the growth overlap check. New additions need
+95% consistency with retained depth/masks; later confirmation requires 80% of the
+patch within 3 mm. The 3 mm default matches storage spacing; the fractions are
+conservative experimental choices, not calibrated certainty. Large newly visible
+areas can therefore be deferred. No object names, grasp times or phase rules enter
+these checks.
+
+Growth-only replay used all 713 dowel/ring and 628 gamepad/cube frames with their
+recorded Kalman poses fixed. The previous map's point counts, versions and events
+were reproduced exactly before comparison. Stricter growth deferred 17/659 eligible
+dowel frames, 0/711 ring frames, 187/554 gamepad frames and 12/391 cube frames.
+It still confirmed 82, 156, 69 and 42 additions respectively. This demonstrates
+separation without disabling all growth; it does **not** establish pose improvement.
+The gamepad's placement pose remains wrong in the fixed-pose comparison.
+
+121 focused tests passed, including HTTP settings → worker → actual growth
+diagnostics. Bypassing the new overlap gate makes both the store and complete
+session regression tests fail. A configuration-only test was updated to construct
+a real ShapeConfig rather than passing None.
+
+**Remaining limitation:** overlap, repeatability and retained-view consistency can
+all pass a correlated wrong alignment. A gate that bounds the placement uncertainty
+of proposed new points is not implemented. Kalman covariance is not currently that
+gate. [Recorded evidence](growth-thresholds-20261103.json); local comparison images
+and the reproducer are under `~/.cache/flash-tracker-restart/growth-thresholds-20261103/`.
+
+## 2026-11-03 — Kalman off/on across all examples
+
+Completed **48/48 entries, zero execution failures**: 42 unique recordings,
+11,655 input frames processed twice. Both sides use identical current code,
+RGB-D, saved masks and stricter growth settings. Shared UFM is used except for
+explicit LK variants. No gripper input, robot movement or parameter tuning.
+This compares the current Kalman mode **including its rejection checks**, not
+the filter equations alone. All 48 input/label/initial-surface/timing checks
+pass; the three unaffected matching baselines remain numerically identical.
+
+Primary results count each of the 21 real labelled recordings once, excluding
+initialization and treating missing poses as failures. For depth/mask fitting
+with UFM, groups and growing surface:
+
+| Measurement                   | Kalman off | Kalman on |
+| ----------------------------- | ---------: | --------: |
+| Frames within 10 mm and 10°   |      53.4% |     51.2% |
+| Frames within 20 mm and 20°   |      75.9% |     61.6% |
+| Poses returned / 2,927 frames |      2,927 |     1,870 |
+
+At 20 mm/20°, three recordings improve, twelve worsen and six tie. Of the 1,057
+newly missing estimates, 437 previously passed that criterion. On the same
+1,870 frames where both return poses, median point error is 2.05 → 2.16 mm and
+rotation error 2.40 → 2.20°. These measure agreement with dataset-labelled
+motion from initialization, not absolute initial alignment or shape accuracy.
+Label errors and unadjusted symmetry remain limitations.
+
+Two failures were traced concretely:
+
+- **Rejection before fusion:** drill frame 37 loses a previously usable pose.
+  The check requires 90% of observed points to lie within 5 mm of the incomplete
+  stored surface. Even the labelled pose fails it, with 28.2% outside that
+  distance. New visible surface is not necessarily contradictory geometry.
+- **Missing outline information in covariance:** on the synthetic translating
+  plane, the fitted observation is 6.1 mm from truth, but the filtered result is
+  25.8 mm off. Point-to-plane depth residuals give almost no confidence to the
+  sideways correction, although the outline helps locate it. The filter
+  therefore preserves an incorrect prediction.
+
+The gamepad stationary interval still improves: maximum false movement
+1.98 → 1.20 mm and rotation 8.33 → 3.93°, with all 193 poses present. Placement
+remains visibly wrong. Both own demos have full new playbacks but no independent
+full-clip accuracy labels. The old dowel surface branch is absent with Kalman
+both off and on; that improvement predates this comparison.
+
+**Conclusion:** keep Kalman optional; this implementation is not a general
+improvement yet. Separate the acceptance-check problem from covariance fusion
+before judging or tuning the filter. No estimator changes were made in this sweep.
+
+[Scores and provenance](kalman-all-examples-20261103.json) ·
+[Per-scene chart](kalman-all-examples-20261103.png) ·
+[Drill rejection](kalman-dexycb-drill-20201002_111923-frame-37.jpg) ·
+[Translation failure](kalman-synthetic-plane-translation-frame-29.jpg) ·
+[Clock improvement](kalman-laval-clock-interaction-hard-frame-26.jpg).
+The full comparison is served by job `rebuild-20261103-064305-f2be40a5` on 9102;
+paired traces, code snapshot, configurations and diagnostic scripts remain under
+`~/.cache/flash-tracker-restart/kalman-all-20261103/` and the job's `.rebuild/`
+directory. Batch timings are not live FPS measurements.
+
+### Configuration ablation on the strongest gains and losses
+
+Tested acceptance allowances of 25%, 30% and 50%, versus the current 10%;
+separately increased process standard deviations fivefold (2 → 10 mm/√s,
+2 → 10°/√s), with and without the 25% allowance. The 25% and 50% settings were
+tested on mustard, bleach, tomato can and clock. The 30% and process-noise tests
+used mustard and tomato can. Both full own demos were also run with 25%.
+Code, inputs, measurement noise and strict surface-growth settings stayed fixed.
+These selected-case results are tuning evidence, not validation on unseen scenes.
+
+Each table entry is **within 10 mm/10° / within 20 mm/20°**; missing poses fail:
+
+| Recording    |           Off | Current Kalman | 25% allowance | 30% allowance |
+| ------------ | ------------: | -------------: | ------------: | ------------: |
+| Mustard easy | 20.0 / 100.0% |   11.7 / 11.7% |  64.4 / 97.2% | 30.0 / 100.0% |
+| Tomato can   | 38.9 / 100.0% |  53.3 / 100.0% | 53.3 / 100.0% | 53.3 / 100.0% |
+| Bleach hard  |  81.1 / 86.1% |   36.1 / 36.1% |  81.1 / 85.6% |    Not tested |
+| Clock        |    3.5 / 3.5% |   10.4 / 10.4% |  10.9 / 12.4% |    Not tested |
+
+**Acceptance caused the main mustard regression:** all 159 missing poses were
+rejected before fusion. Raising process noise alone leaves its score at 11.7%.
+Allowing 25% unmatched observations returns 175/180 poses; the remaining five
+have best candidate outlier fractions of 25.6–26.5%. At 30%, all 180 poses return
+and pass 20 mm/20°, while tomato retains its tighter-threshold gain.
+
+Looser is not uniformly better: at 50%, mustard's tighter score drops to 21.7%.
+The acceptance parameter also controls rejection of the prior and fused pose;
+it is not an isolated coverage filter. At 25%, mustard reinitializes from vision
+20 times; at 50% it never does. Higher process noise reduces tomato's tighter
+score to 45.6%, or 46.1% with the 25% allowance. This supports testing acceptance
+separately rather than inflating all covariance values. The covariance model's
+missing outline constraints remain a separate unresolved issue.
+
+The 25% gamepad run retains the same pre-grasp maxima (1.20 mm, 3.93°, all 193
+poses), but placement still looks wrong. Dowel estimates differ by 178.2° at
+13.34 s despite similar surface alignment; both traces have large orientation
+jumps near occlusion. There is no independent full-demo pose truth to decide
+which end assignment is correct. More available poses are not proof of accuracy.
+
+No default or existing GUI playback was replaced. The next broad comparison can
+test these candidates, but these results do not justify calling them a universal
+fix. [Configurations, scores and checks](kalman-config-ablation-20261103.json) ·
+[Labelled scene comparison](kalman-config-ablation-20261103.jpg) ·
+[Own demo comparison](kalman-config-own-demos-20261103.jpg).
+Reproducers, full traces and source snapshot remain under
+`~/.cache/flash-tracker-restart/kalman-config-20261103/`.
+
+### 2026-11-03 — Full 25% validation and experimental default
+
+Completed all 48 entries (42 unique recordings), reusing six exact selected-case
+runs and computing the other 42. Source hashes stayed unchanged throughout the
+sweep. All 48 checks confirm identical inputs, labels, initial surfaces and frame
+times; the three unaffected baseline methods remain numerically identical.
+Only `uncertainty.max_visible_outlier_fraction` changed from 0.10 to 0.25.
+
+For groups + growing surface, count each of the 21 real labelled recordings once:
+
+| Measurement                   | Filter off | Kalman 10% | Kalman 25% |
+| ----------------------------- | ---------: | ---------: | ---------: |
+| Frames within 10 mm and 10°   |      53.4% |      51.2% |  **59.7%** |
+| Frames within 20 mm and 20°   |      75.9% |      61.6% |  **74.2%** |
+| Poses returned / 2,927 frames |      2,927 |      1,870 |  **2,345** |
+
+Missing poses fail both accuracy measures; initialization is excluded. Compared
+with 10%, the 25% setting improves twelve recordings and ties nine at 20 mm/20°.
+At 10 mm/10°, eight improve, one worsens (mustard0: 32.2% → 26.1%) and twelve tie.
+Against filter-off, the tighter measure improves eight, worsens five and ties
+eight. This is a compromise, not universal dominance. On the same 1,862 frames
+returned by all three, median point errors are 2.04 / 2.14 / 2.07 mm and median
+rotation errors 2.38 / 2.18 / 2.04°. Much of the improvement over 10% is recovered
+availability, not a large change in errors of already accepted estimates.
+
+The synthetic sideways plane is a clear regression: 20 mm/20° success falls
+100% → 73.3% → 50%. Its depth-normal information does not constrain translation
+along the plane, even though the outline helps the fitter locate it. The looser
+geometry check delays the reset that otherwise corrects this lag. In real data,
+DexYCB pitcher and cracker-box reorientation still regress against filter-off.
+Our own gamepad retains the improved pre-grasp stability but has a wrong placement
+pose; dowel end assignment remains unstable near occlusion. Whole-demo accuracy
+is not independently labelled. Surface-growth settings stayed unchanged.
+
+**Decision:** use Kalman with 25% allowance as the default for **new surface
+experiments**, preserving filter-off and candidate selection for comparisons.
+Saved configurations remain authoritative; recordings predating uncertainty load
+with filtering disabled. This is an empirical research baseline. It does not
+configure the robot controller or certify held-object tracking. Previously
+reported recommendations to leave the filter off describe the earlier 10% result.
+
+Two measured limitations remain distinct: the geometry gate can reject newly
+visible surface merely because the stored surface is incomplete; and covariance
+omits outline/image information used by the fitter. Increasing the allowance
+cannot fix the latter. The plane control isolates that missing information
+without segmentation, group-identity or label ambiguity.
+
+![One recovered pose and one remaining regression; green is labelled motion of the initial surface, orange is the estimate](kalman-default-recovery-regression-20261103.jpg)
+
+[All scores, source hashes, common-frame errors and validation](kalman-default-validation-20261103.json).
+Full local traces and report: `~/.cache/flash-tracker-restart/kalman-accept25-all-20261103/`;
+GUI report `rebuild-20261103-093519-e69e3059`. These use saved masks and include the
+recordings used for tuning; they are not fresh segmentation or held-out evaluation.
+Concurrent processing times must not be interpreted as live FPS.
+
+Promotion checks: 123 focused tests pass, including the default settings → HTTP
+worker → nonzero Kalman correction path and historical-setting preservation.
+The two recorded integration checks also pass with the new defaults: gamepad
+false motion is at most 1.20 mm / 3.93° through frame 192, and it subsequently
+moves. Frame 277 has no pose; the movement control now checks its two endpoints
+rather than incorrectly requiring availability on every intervening frame. The
+strict pre-grasp availability assertion is unchanged. This does not certify the
+post-grasp pose. Python lint/format, GUI async lint and JavaScript syntax pass.
+
+The completed trace audit finds all 582 missing real-labelled estimates rejected
+before fusion (`no_observation_compatible_candidate`); 76 other updates reject
+innovation but retain a pose. This distinguishes pre-filter acceptance loss from
+Kalman's weighting. The synthetic plane separately exposes missing directional
+information even with continuous pose availability. The default promotion changes
+configuration only; neither remaining algorithmic limitation is claimed fixed.

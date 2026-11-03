@@ -301,6 +301,7 @@
                     <div id="flash-experiment-playback">
                     <div class="flash-experiment-tools">
                         <button type="button" id="flash-experiment-rerun-scene" onclick="rebuildFlashExamples(true)" disabled>Rerun this scene</button>
+                        <button type="button" onclick="showFlashPipelineSettings()">Pipeline settings</button>
                         <button type="button" id="flash-experiment-3d-toggle" onclick="toggleFlashExperiment3D()" aria-pressed="false">3D scene</button>
                         <label>Pose calculation <select id="flash-experiment-method" onchange="changeFlashExperimentMethod()" aria-label="Tracking method"></select></label>
                         <label id="flash-experiment-group-control"><input id="flash-experiment-groups" type="checkbox" checked onchange="changeFlashGroupDisplay()">Group tracking</label>
@@ -865,7 +866,7 @@ nebius iam auth-public-key generate \
     <script src="/static/robot.js?v=27"></script>
     <script src="/static/flash_live_tracking.js?v=12"></script>
     <script src="/static/run.js?v=191"></script>
-    <script src="/static/flash_experiments.js?v=28"></script>
+    <script src="/static/flash_experiments.js?v=29"></script>
     <script src="/static/flash_demo_editor.js?v=41"></script>
     <script src="/static/flash_recorded_editor.js?v=7"></script>
     <script src="/static/flash_observation_editor.js?v=6"></script>

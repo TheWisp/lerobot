@@ -12,7 +12,6 @@ import os
 import signal
 import time
 import traceback
-from dataclasses import asdict
 from html import escape
 from pathlib import Path
 
@@ -147,15 +146,19 @@ def rebuild(job: Path):
                 previous_run = Path(item["source_run"])
                 case = json.loads((previous_run / "case.json").read_text())
                 previous_provenance = json.loads((previous_run.parent / "provenance.json").read_text())
-                config = VisionPipelineConfig.from_dict(previous_provenance["config"])
-                experimental = previous_provenance.get("surface_experiment")
-                shared = previous_provenance.get("shared_matching")
-                groups = (
-                    asdict(GroupConfig.from_dict(previous_provenance.get("group_experiment") or {}))
-                    if experimental
-                    else None
+                from benchmarks.flash_pipeline_settings import from_recording, validate
+
+                settings = (
+                    validate(request["settings"])
+                    if request.get("settings") is not None
+                    else from_recording(previous_provenance, item["methods"])
                 )
-                retain = "ufm_retained_reference" in item["methods"]
+                previous_provenance = {**previous_provenance, **settings}
+                config = VisionPipelineConfig.from_dict(settings["config"])
+                experimental = settings["surface_experiment"]
+                shared = settings["shared_matching"]
+                groups = settings["group_experiment"]
+                retain = settings["retain_motion_reference"]
                 identity = case_identity(
                     case,
                     {

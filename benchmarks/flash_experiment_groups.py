@@ -17,7 +17,9 @@ from lerobot.policies.flash.geometry import transform
 from lerobot.policies.flash.pose_disagreement import PoseComparisonVerdict, compare_pose_proposals
 from lerobot.policies.flash.scene_groups import EnvironmentRelationship, SceneTracks
 from lerobot.policies.flash.surface_grounding import ShapeConfig, WholeSurfaceFit
+from lerobot.policies.flash.surface_kalman import MeasuredGroupMotion
 from lerobot.policies.flash.surface_observation import move, spatial_sample
+from lerobot.policies.flash.surface_uncertainty import PoseUncertaintyConfig, check_surface_contradiction
 
 
 @dataclass(frozen=True)
@@ -89,7 +91,8 @@ class GroupHints:
     all independent sources fail is explicit and starts a new point generation.
     """
 
-    def __init__(self, config, *, shared_image_points=False):
+    def __init__(self, config, *, shared_image_points=False, uncertainty_config=None):
+        self.uncertainty_config = uncertainty_config or PoseUncertaintyConfig()
         self.shared_image_points = shared_image_points
         self.config = config
         self.object_points = None
@@ -104,6 +107,7 @@ class GroupHints:
         self.reference = None
         self.support_evidence = {}
         self.separated_ids = set()
+        self.previous_scene = None
 
     def _predict(self, relation, scene):
         if relation is None:
@@ -136,6 +140,8 @@ class GroupHints:
         observation=None,
         shape_config=None,
     ):
+        previous_scene, previous_object_support = self.previous_scene, self.object_support
+        self.previous_scene = scene
         self.environment_prediction = None
         self.object_prediction = None
         self.point_motion = None
@@ -214,6 +220,22 @@ class GroupHints:
         outside = ~inside(scene, masks[role])
         environment_scene = select(scene, outside)
         environment_pose, environment_indices = self._predict(self.environment, environment_scene)
+        if environment_pose is not None and observation is not None and self.uncertainty_config.enabled:
+            geometry = WholeSurfaceFit(
+                self.reference, observation, frame.intrinsics, shape_config or ShapeConfig()
+            )
+            check = check_surface_contradiction(
+                geometry, camera_from_base @ environment_pose, self.uncertainty_config
+            )
+            details["environment_observation_check"] = check
+            if not check["accepted"]:
+                # Current measured pixels, not a fitted object's pose, disprove
+                # this relationship even when object image tracks disappeared.
+                self.separated_ids = set(self.environment.ids.tolist())
+                self.environment = None
+                self.support_evidence = {}
+                environment_pose, environment_indices = None, np.empty(0, dtype=int)
+                details["environment_separated"] = True
         if object_pose is not None and environment_pose is not None:
             # Test the measurements themselves. Extrapolating the rotation of
             # a tiny visible fragment to hidden object points (or to distant
@@ -251,6 +273,12 @@ class GroupHints:
                         "surrounding_group": environment_cost,
                     }
                     object_supported = object_cost <= environment_cost
+                    if self.uncertainty_config.enabled:
+                        # A lower scalar cost alone does not establish separation
+                        # when the visible geometry cannot distinguish the poses.
+                        object_supported = not check_surface_contradiction(
+                            geometry, camera_from_base @ environment_pose, self.uncertainty_config
+                        )["accepted"]
                 if object_supported:
                     self.separated_ids = set(self.environment.ids.tolist())
                     self.environment = None
@@ -315,6 +343,42 @@ class GroupHints:
         camera_pose = transform(np.linalg.inv(frame.base_from_camera) @ pose)
         camera_pose[:3, :3] = Rotation.from_matrix(camera_pose[:3, :3]).as_matrix()
         details["camera_from_reference"] = camera_pose.tolist()
+        motion = None
+        if self.uncertainty_config.enabled and self.uncertainty_config.mode == "kalman":
+            # A surrounding group's measured step takes precedence over object
+            # image matches when its relationship survived observation checks.
+            motion_support = environment_support if environment_pose is not None else object_support
+            motion_source = (
+                "environment_point_group" if environment_pose is not None else "object_point_group"
+            )
+            old = (
+                previous_object_support
+                if len(motion_support.ids) and np.all(motion_support.ids < 0)
+                else previous_scene
+            )
+            if old is not None and len(motion_support.ids):
+                _, left, right = np.intersect1d(old.ids, motion_support.ids, return_indices=True)
+                if len(left) >= self.config.min_inliers:
+                    fitted = EnvironmentRelationship._fit_motion(
+                        old.base_xyz[left],
+                        motion_support.base_xyz[right],
+                        self.config.fit_threshold_m,
+                        self.config.min_inliers,
+                    )
+                    if fitted is not None:
+                        _, inliers = fitted
+                        motion = MeasuredGroupMotion(
+                            old.base_xyz[left[inliers]],
+                            motion_support.base_xyz[right[inliers]],
+                            old.source_time_s,
+                            frame.source_time_s,
+                            motion_source,
+                        )
+                        details["kalman_motion"] = {
+                            "source": motion_source,
+                            "points": len(inliers),
+                            "from_time_s": old.source_time_s,
+                        }
         return PoseHint(
             camera_pose,
             source,
@@ -322,6 +386,7 @@ class GroupHints:
             relation.anchor_time_s,
             reference_frame,
             tuple(evidence),
+            motion,
         ), details
 
     def compare_candidate(self, frame, mask, hint, points, candidate, *, observation=None, shape_config=None):
@@ -364,6 +429,12 @@ class GroupHints:
             candidate_cost = geometry.score(candidate)
             hint_cost = geometry.score(hint.camera_from_reference)
             accepted = candidate_cost <= hint_cost + geometry.config.solver_tolerance
+            if self.uncertainty_config.enabled:
+                # The session already selected among covariance-compatible
+                # candidates. Recheck contradiction, not solver-precision cost.
+                check = check_surface_contradiction(geometry, candidate, self.uncertainty_config)
+                accepted = check["accepted"]
+                details["observation_check"] = check
             details["surface_priority"] = {
                 "candidate_cost": candidate_cost,
                 "hint_cost": hint_cost,

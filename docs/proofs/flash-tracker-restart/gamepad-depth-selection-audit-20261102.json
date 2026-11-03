@@ -1,0 +1,413 @@
+{
+  "source_commit": "e99de544c2331b1670c6f251d11f22c459c5ae7f",
+  "tracked_source_modified": false,
+  "input_annotation": {
+    "case": {
+      "id": "flash-demo-gamepad-cube",
+      "kind": "flash_prepared_demo",
+      "artifact_root": "~/.cache/huggingface/lerobot/demos/pick_place",
+      "mask_evidence_dir": "~/.cache/huggingface/lerobot/demos/pick_place/flash/v1/preparation-cache/flash-gamepad-cube-20261031-gripper-scene-2ddfef845654.scene-evidence",
+      "expected_frames": 628,
+      "roles": [
+        "gamepad",
+        "cube"
+      ]
+    },
+    "role": "gamepad",
+    "stationary_last_frame": 192,
+    "run_last_frame": 280,
+    "input_sha256": "c66268f6cf9eff2d7786b0b1c14243edad15a5f057d8f445b229c66dd31c71d3",
+    "annotation": "The body and visible buttons remain fixed through frame 164 (7.24 s). The demonstrator reports grasp around 9 s with approximately 0.5 s uncertainty, so the stationary check extends through frame 192 (8.47149 s), the last frame before the earliest reported grasp at 8.5 s. The later part is heavily occluded and uses that human annotation, not independent 6D pose labels. The earlier claim that pickup began at frames 165-170 was unsupported.",
+    "max_center_displacement_mm": 5.0,
+    "max_rotation_deg": 5.0,
+    "tolerance_rationale": "Regression acceptance budgets fixed before the fix: 5 mm matches the existing surface depth budget; 5 degrees limits false rotation of this roughly 90 mm object to about 4 mm at its extremity. Neither value is passed to the tracker.",
+    "ufm_revision": "980825b59331413bb51e5773f9272bfce525bce2"
+  },
+  "method": "Capture current LK/UFM inference without changing outputs. Refit selected frames from identity using the first measured surface, no image matches and no group. For the paired depth experiment use identical target pixels, masks and reference; replace only visible depth with frame-0 readings.",
+  "paired_depth_checks": {
+    "164": {
+      "time_s": 7.236920118331909,
+      "points_total": 1099,
+      "points_compared": 1099,
+      "depth_change_median_mm": 0.0,
+      "depth_change_p90_abs_mm": 1.0000169277191162,
+      "depth_change_min_mm": -16.9999897480011,
+      "depth_change_max_mm": 1.0000169277191162,
+      "observed_extent_mm": [
+        45.706909249835256,
+        28.513074582914825,
+        23.99998903274536
+      ],
+      "known_same_pixel_fit_deg": 3.8463735641534744,
+      "variants": {
+        "current_depth": {
+          "rotation_deg": 3.6439558226033926,
+          "cost_before": 0.0870655803196273,
+          "cost_after": 0.07214244684386104,
+          "pose": [
+            [
+              0.9987035204180135,
+              -0.050289343834304834,
+              -0.007890513378849138,
+              0.005642512269105622
+            ],
+            [
+              0.04995228954434455,
+              0.9980174239577173,
+              -0.03828825206352594,
+              0.022087506110130002
+            ],
+            [
+              0.009800360908900109,
+              0.03784446291754183,
+              0.9992355826092956,
+              -0.00037947770590504045
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ]
+        },
+        "frame0_depth": {
+          "rotation_deg": 0.2684288902933246,
+          "cost_before": 0.01875703166232508,
+          "cost_after": 0.015399599536453673,
+          "pose": [
+            [
+              0.9999997793051442,
+              -0.00022394423616452943,
+              -0.0006254907208187293,
+              0.0004860522915049435
+            ],
+            [
+              0.0002210410489381943,
+              0.999989221500991,
+              -0.004637674276659141,
+              0.0021011912710312336
+            ],
+            [
+              0.0006265225593910811,
+              0.004637534994023255,
+              0.9999890503093829,
+              -0.00011553932541012257
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ]
+        }
+      }
+    },
+    "168": {
+      "time_s": 7.405468940734863,
+      "points_total": 855,
+      "points_compared": 855,
+      "depth_change_median_mm": 0.0,
+      "depth_change_p90_abs_mm": 4.999995231628418,
+      "depth_change_min_mm": -42.999982833862305,
+      "depth_change_max_mm": 1.0000169277191162,
+      "observed_extent_mm": [
+        42.165796091623726,
+        26.435068696789283,
+        49.99998211860657
+      ],
+      "known_same_pixel_fit_deg": 13.008129349026634,
+      "variants": {
+        "current_depth": {
+          "rotation_deg": 8.962088859081623,
+          "cost_before": 0.48343508923473866,
+          "cost_after": 0.3803031151651341,
+          "pose": [
+            [
+              0.993764412025464,
+              -0.08491938700902359,
+              -0.07225642602354199,
+              0.03321526797659478
+            ],
+            [
+              0.07651279319902106,
+              0.9907496706357053,
+              -0.11207534346199971,
+              0.05588906255615075
+            ],
+            [
+              0.08110539974975622,
+              0.10584794681642642,
+              0.9910691834005229,
+              0.008158360149642588
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ]
+        },
+        "frame0_depth": {
+          "rotation_deg": 0.29495147020031026,
+          "cost_before": 0.017953453517624538,
+          "cost_after": 0.015066860083380425,
+          "pose": [
+            [
+              0.9999997846745274,
+              -0.0006558422475572166,
+              -2.284392166921131e-05,
+              0.00025676679051626016
+            ],
+            [
+              0.0006557170609832196,
+              0.9999867500249864,
+              -0.0051058603193854125,
+              0.002329996632599529
+            ],
+            [
+              2.6192257895398917e-05,
+              0.005105844240814448,
+              0.9999869647493181,
+              -0.00018277037200596617
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ]
+        }
+      }
+    },
+    "170": {
+      "time_s": 7.503445148468018,
+      "points_total": 420,
+      "points_compared": 420,
+      "depth_change_median_mm": 0.0,
+      "depth_change_p90_abs_mm": 2.0000040531158447,
+      "depth_change_min_mm": -6.000012159347534,
+      "depth_change_max_mm": 1.0000169277191162,
+      "observed_extent_mm": [
+        41.696353738998006,
+        20.506747355175058,
+        9.000003337860107
+      ],
+      "known_same_pixel_fit_deg": 6.6243934933007,
+      "variants": {
+        "current_depth": {
+          "rotation_deg": 6.960229363201488,
+          "cost_before": 0.046013331522903336,
+          "cost_after": 0.025919763874163674,
+          "pose": [
+            [
+              0.999539900801981,
+              -0.03033125747362235,
+              -3.9049137713572084e-05,
+              0.0016464165902006752
+            ],
+            [
+              0.030117055657056198,
+              0.9926321656605119,
+              -0.11736416256537581,
+              0.052741075561281076
+            ],
+            [
+              0.003598564063082282,
+              0.11730898736324942,
+              0.9930889445666451,
+              -0.0015015357520171094
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ]
+        },
+        "frame0_depth": {
+          "rotation_deg": 0.12720348178672972,
+          "cost_before": 0.013592614788024884,
+          "cost_after": 0.011987984578842457,
+          "pose": [
+            [
+              0.9999998826620144,
+              0.00017669624259279254,
+              -0.0004510591925770776,
+              0.00040511296571990824
+            ],
+            [
+              -0.00017767310230293592,
+              0.9999976371763059,
+              -0.0021665811948641924,
+              0.0009524685948968038
+            ],
+            [
+              0.0004506753000473253,
+              0.0021666610817279866,
+              0.9999975512327671,
+              -8.550314663995602e-06
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ]
+        }
+      }
+    },
+    "171": {
+      "time_s": 7.537806987762451,
+      "points_total": 310,
+      "points_compared": 310,
+      "depth_change_median_mm": 0.0,
+      "depth_change_p90_abs_mm": 2.0000040531158447,
+      "depth_change_min_mm": -4.0000081062316895,
+      "depth_change_max_mm": 2.0000040531158447,
+      "observed_extent_mm": [
+        39.83770269899815,
+        18.54544845134852,
+        9.000003337860107
+      ],
+      "known_same_pixel_fit_deg": 8.443570912056591,
+      "variants": {
+        "current_depth": {
+          "rotation_deg": 8.269150948206791,
+          "cost_before": 0.0434276455915102,
+          "cost_after": 0.022313814129525128,
+          "pose": [
+            [
+              0.9997808917956177,
+              -0.018289728165435934,
+              -0.010181072831187282,
+              0.00476675402885061
+            ],
+            [
+              0.01665464031032294,
+              0.9896690415286707,
+              -0.14240017976061725,
+              0.06137931146607392
+            ],
+            [
+              0.01268035316910561,
+              0.14219941660694957,
+              0.9897568057660174,
+              0.00023908652316157733
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ]
+        },
+        "frame0_depth": {
+          "rotation_deg": 0.11828688640280247,
+          "cost_before": 0.01212327557143865,
+          "cost_after": 0.011269942342627523,
+          "pose": [
+            [
+              0.9999989341878827,
+              0.0001417658166861472,
+              -0.0014531089264316925,
+              0.0007329774671500391
+            ],
+            [
+              -0.00014388666541845178,
+              0.9999989245420936,
+              -0.00145952433485459,
+              0.0006100608905515372
+            ],
+            [
+              0.0014529004530149047,
+              0.0014597318622737825,
+              0.999997879129333,
+              0.0001602451593505676
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ]
+        }
+      }
+    }
+  },
+  "candidate_selection": {
+    "group_prediction": {
+      "rotation_deg": 0.4869474950571202,
+      "geometry_cost": 0.14466090380884014,
+      "joint_cost": 0.14466090380884014
+    },
+    "with_group_in_objective": {
+      "rotation_deg": 1.9682473135132605,
+      "geometry_cost": 0.10421204575171192,
+      "joint_cost": 0.11414701476591149
+    },
+    "final_surface_first": {
+      "rotation_deg": 9.073411823846074,
+      "geometry_cost": 0.08374930536732349,
+      "joint_cost": 0.6132462260071325
+    }
+  },
+  "rgb_checks": {
+    "164": {
+      "ncc_zero": 0.922316939200667,
+      "best": [
+        0.922316939200667,
+        0,
+        0
+      ],
+      "pixels": 1859
+    },
+    "168": {
+      "ncc_zero": 0.8832082195663423,
+      "best": [
+        0.8832082195663423,
+        0,
+        0
+      ],
+      "pixels": 1352
+    },
+    "170": {
+      "ncc_zero": 0.6480420858592294,
+      "best": [
+        0.6482350958280594,
+        1,
+        0
+      ],
+      "pixels": 624
+    },
+    "171": {
+      "ncc_zero": 0.658201329462642,
+      "best": [
+        0.6584400243403031,
+        2,
+        1
+      ],
+      "pixels": 437
+    }
+  },
+  "limits": [
+    "The stationary interval is human-annotated, not an independent 6D label.",
+    "Depth replacement is a diagnostic, never a runtime rule.",
+    "This isolates sensitivity to recorded depth changes; their physical origin (sensor error, registration, foreground contamination or small true motion) is not fully established.",
+    "Image correlation is not a 6D ground-truth measurement.",
+    "No tracker fix or score-threshold change was made."
+  ],
+  "audit_scripts": {
+    "root_cause.py": "94bd6d3cb9c17be76ded22063f3baaa66f55ab8cbedd511d883796383fc6514b",
+    "paired_depth_audit.py": "37ae3ccfa06caa22fdb6b91430a912c6f05c0c6916c0a203db57d7ae21beffa7",
+    "audit_separation.py": "31bae04fce3e0de5b54c7824eb4983930785448000c621191c60347413ced760"
+  },
+  "local_artifacts": "/home/feit/.cache/flash-tracker-restart/gamepad-review-20261102"
+}

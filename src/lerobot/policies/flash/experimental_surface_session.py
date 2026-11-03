@@ -7,7 +7,7 @@ acceptance thresholds are experimental, not calibrated pose confidence.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 
 import cv2
 import numpy as np
@@ -15,9 +15,12 @@ from scipy.spatial import cKDTree
 from scipy.spatial.transform import Rotation
 
 from .geometry import transform
+from .surface_correspondence import rigid_fit
 from .surface_grounding import WholeSurfaceFit, project
+from .surface_kalman import MeasuredGroupMotion, PoseKalmanFilter
 from .surface_motion import measured_surface_information
 from .surface_observation import move, spatial_sample, voxel_sample
+from .surface_uncertainty import PoseUncertaintyConfig, SurfacePoseUncertainty, check_surface_contradiction
 
 
 @dataclass(frozen=True)
@@ -28,9 +31,15 @@ class GrowingSurfaceConfig:
     # Require an overlapping portion, not a single accidental nearest neighbour.
     # These fractions are hypotheses to benchmark, not object-specific rules.
     min_overlap: float = 0.25
-    # Fraction of a proposed patch consistent with retained views, and later
-    # supported by an independent frame. Experimental, not pose confidence.
-    patch_overlap: float = 0.5
+    # Growth needs a tighter match to more of the already stored surface.
+    # 3 mm matches the storage spacing; 75% requires a substantial overlap.
+    # These are conservative experiment defaults, not calibrated certainty.
+    growth_agreement_m: float = 0.003
+    growth_min_overlap: float = 0.75
+    # Fraction of a proposed addition not contradicted by earlier depth/masks.
+    patch_consistency: float = 0.95
+    # Fraction of a pending patch measured again within growth_agreement_m.
+    patch_overlap: float = 0.8
     image_weight: float = 1.0
     # Geometry is the primary objective; image/group evidence breaks ties.
     # False retains the earlier weighted-sum experiment for paired comparison.
@@ -43,14 +52,29 @@ class GrowingSurfaceConfig:
     max_points: int = 8192
     grow: bool = True
     retain_unobserved_pose: bool = False
+    uncertainty: PoseUncertaintyConfig = field(
+        default_factory=lambda: PoseUncertaintyConfig(
+            enabled=True, mode="kalman", max_visible_outlier_fraction=0.25
+        )
+    )
 
     def __post_init__(self):
-        for name in ("spacing_m", "agreement_m"):
+        if isinstance(self.uncertainty, dict):
+            object.__setattr__(self, "uncertainty", PoseUncertaintyConfig(**self.uncertainty))
+        if not isinstance(self.uncertainty, PoseUncertaintyConfig):
+            raise ValueError("uncertainty must be a PoseUncertaintyConfig or its JSON object")
+        if self.uncertainty.enabled and not self.surface_priority:
+            raise ValueError("uncertainty requires surface_priority")
+        for name in ("spacing_m", "agreement_m", "growth_agreement_m"):
             if not np.isfinite(getattr(self, name)) or getattr(self, name) <= 0:
                 raise ValueError(f"{name} must be finite and positive")
-        for name in ("min_overlap", "patch_overlap"):
+        for name in ("min_overlap", "growth_min_overlap", "patch_consistency", "patch_overlap"):
             if not 0 < getattr(self, name) <= 1:
                 raise ValueError(f"{name} must be in (0, 1]")
+        if self.growth_agreement_m > self.agreement_m or self.growth_min_overlap < self.min_overlap:
+            raise ValueError(
+                "growth must require at least as much overlap within at most the tracking distance"
+            )
         if not np.isfinite(self.image_weight) or self.image_weight < 0:
             raise ValueError("image_weight must be finite and nonnegative")
         for name in ("confirmations", "max_patches", "max_pending", "points_per_patch", "max_points"):
@@ -124,6 +148,7 @@ class PoseHint:
     observed_time_s: float
     reference_frame: int
     points: tuple[PointEvidence, ...] = ()
+    motion: MeasuredGroupMotion | None = None
 
     def __post_init__(self):
         object.__setattr__(self, "camera_from_reference", checked_pose(self.camera_from_reference))
@@ -303,7 +328,7 @@ class SurfaceStore:
             if patch.active or frame in patch.support_frames:
                 continue
             distances = tree.query(move(patch.points(), pose))[0]
-            agreement = np.mean(distances <= self.config.agreement_m) if len(distances) else 0
+            agreement = np.mean(distances <= self.config.growth_agreement_m) if len(distances) else 0
             if agreement >= self.config.patch_overlap:
                 patch.support_frames.add(frame)
                 if len(patch.support_frames) >= self.config.confirmations:
@@ -313,6 +338,47 @@ class SurfaceStore:
         if changed:
             self._bound()
             self._rebuild()
+
+    def extend(self, measured, pose, frame, *, view):
+        """An accepted tracking pose still needs stronger overlap to alter shape.
+
+        Check against the active surface *before* confirming any pending patch.
+        A weakly aligned frame can neither add nor confirm geometry. This tests
+        geometric agreement, not uniqueness of the alignment or calibrated confidence.
+        """
+        before = self.version
+        distances = cKDTree(move(self.points, pose)).query(measured)[0]
+        overlap = float(np.mean(distances <= self.config.growth_agreement_m)) if len(distances) else 0.0
+        accepted = overlap >= self.config.growth_min_overlap
+        details = {
+            "alignment_accepted": accepted,
+            "observed_overlap": overlap,
+            "required_overlap": self.config.growth_min_overlap,
+            "agreement_m": self.config.growth_agreement_m,
+            "reason": "sufficient_growth_overlap" if accepted else "insufficient_growth_overlap",
+            "new_measured_points": 0,
+            "contradicted_by_retained_views": 0,
+            "patch_consistent": None,
+            "admitted_points": 0,
+        }
+        if not accepted:
+            return details
+        self.confirm(measured, pose, frame)
+        distances = cKDTree(move(self.points, pose)).query(measured)[0]
+        novel = measured[distances > self.config.spacing_m]
+        keep = self.compatible_additions(novel, pose)
+        consistent = not len(novel) or float(np.mean(keep)) >= self.config.patch_consistency
+        details.update(
+            new_measured_points=len(novel),
+            contradicted_by_retained_views=int((~keep).sum()),
+            patch_consistent=consistent,
+            admitted_points=int(keep.sum()) if consistent else 0,
+        )
+        # A mostly contradicted extension cannot contribute its unobserved tail.
+        novel = novel[keep] if consistent else novel[:0]
+        if len(novel):
+            self.add(novel, pose, frame, fitted_map_version=before, view=view)
+        return details
 
 
 class ImageConditionedFit(WholeSurfaceFit):
@@ -340,7 +406,7 @@ class ImageConditionedFit(WholeSurfaceFit):
             blocks.append(residual.ravel() * np.sqrt(weight / len(residual)))
         return np.concatenate(blocks)
 
-    def correct_surface_first(self, proposal, previous):
+    def correct_surface_first(self, proposal, previous, *, uncertainty=None):
         """Image evidence may choose a geometric fit, not pay to violate it.
 
         Refine from the new motion proposal and the previous estimate. The
@@ -359,6 +425,89 @@ class ImageConditionedFit(WholeSurfaceFit):
         candidates = [(joint, joint_detail), (proposal, {"unrefined_proposal": True})]
         for initial in (joint, previous):
             candidates.append(geometry.correct(initial))
+        if uncertainty is not None and uncertainty.enabled:
+            names = ["joint_fit", "proposal", "surface_from_joint", "surface_from_previous"]
+            candidates.append((previous, {}))
+            names.append("previous")
+            supported = []
+            for evidence in self.point_evidence:
+                if evidence.weight <= 0:
+                    continue
+                index = len(candidates)
+                candidates.append((rigid_fit(evidence.reference, evidence.current), {}))
+                names.append(evidence.source)
+                if evidence.kind == "predicted":
+                    supported.append(index)
+            costs = np.asarray([geometry.score(pose) for pose, _ in candidates])
+            direct_checks = [
+                check_surface_contradiction(geometry, pose, uncertainty) for pose, _ in candidates
+            ]
+            valid = [i for i, check in enumerate(direct_checks) if check["accepted"]]
+            if not valid:
+                return None, {
+                    "surface_priority": True,
+                    "geometry_costs": costs.tolist(),
+                    "uncertainty": {
+                        "covariance": None,
+                        "selected": None,
+                        "candidates": [
+                            {
+                                "name": name,
+                                **check,
+                                "reason": "visible_surface_contradiction",
+                                "covariance_tested": False,
+                            }
+                            for name, check in zip(names, direct_checks, strict=True)
+                        ],
+                    },
+                }
+            best = min(valid, key=lambda i: costs[i])
+            estimator = SurfacePoseUncertainty(geometry, candidates[best][0], uncertainty)
+            if uncertainty.mode == "kalman":
+                # Supply the measured estimate AND its information to the
+                # temporal filter. No group-first candidate selection here.
+                return candidates[best][0], {
+                    "surface_priority": True,
+                    "geometry_costs": costs.tolist(),
+                    "uncertainty": {**estimator.diagnostics(), "mode": "kalman", "selected": names[best]},
+                }
+            checks = [
+                estimator.check(pose, direct=check)
+                for (pose, _), check in zip(candidates, direct_checks, strict=True)
+            ]
+            eligible = [i for i, check in enumerate(checks) if check["accepted"]]
+            preferred = (
+                [i for i in supported if i in eligible] if uncertainty.prefer_supported_prediction else []
+            )
+            chosen = (
+                min(
+                    preferred or eligible,
+                    key=lambda i: float(
+                        np.mean(
+                            np.sum(
+                                (move(self.reference, candidates[i][0]) - move(self.reference, previous))
+                                ** 2,
+                                axis=1,
+                            )
+                        )
+                    ),
+                )
+                if eligible
+                else None
+            )
+            detail = {
+                "surface_priority": True,
+                "geometry_costs": costs.tolist(),
+                "selected_candidate": chosen,
+                "uncertainty": {
+                    **estimator.diagnostics(),
+                    "candidates": [
+                        {"name": name, **check} for name, check in zip(names, checks, strict=True)
+                    ],
+                    "selected": names[chosen] if chosen is not None else None,
+                },
+            }
+            return (candidates[chosen][0] if chosen is not None else None), detail
         costs = np.asarray([geometry.score(pose) for pose, _ in candidates])
         best = float(costs.min())
         tolerance = self.config.solver_tolerance * max(1.0, abs(best))
@@ -381,6 +530,10 @@ class GrowingSurfaceSession:
     def __init__(self, shape_config, config=None, *, fit_kernels=None, search_pool=None):
         self.config = config or GrowingSurfaceConfig()
         self.shape_config = shape_config
+        self.growth_shape_config = replace(
+            shape_config,
+            depth_tolerance_m=min(shape_config.depth_tolerance_m, self.config.growth_agreement_m),
+        )
         self.fit_kernels, self.search_pool = fit_kernels, search_pool
         self.store = SurfaceStore(self.config)
         self.pose = None
@@ -393,6 +546,7 @@ class GrowingSurfaceSession:
         self.base_from_camera = np.eye(4)
         self.last_observed_time = None
         self.last_supported_time = None
+        self.kalman = None
 
     def update(self, prepared, time_s, *, hint=None, candidate_check=None, base_from_camera=None):
         """Fit, verify against independent evidence, then commit pose/map changes.
@@ -414,8 +568,12 @@ class GrowingSurfaceSession:
         # Recorded extrinsics may be rounded. Reject actual scale/shear above,
         # then remove roundoff before composing a persistent world-space state.
         camera[:3, :3] = Rotation.from_matrix(camera[:3, :3]).as_matrix()
-        if self.pose is not None:
-            self.pose = np.linalg.inv(camera) @ self.base_from_camera @ self.pose
+        camera_change = np.linalg.inv(camera) @ self.base_from_camera
+        if self.kalman is not None:
+            self.kalman.predict(time_s, camera_change, camera, hint.motion if hint else None)
+            self.pose = self.kalman.pose.copy()
+        elif self.pose is not None:
+            self.pose = camera_change @ self.pose
         self.base_from_camera = camera
         self.last_frame, self.last_time = frame, time_s
         before = self.store.version
@@ -432,12 +590,16 @@ class GrowingSurfaceSession:
             self.reference = points.copy()
             self.pose = np.eye(4)
             self.reference_frame = frame
+            if self.config.uncertainty.enabled and self.config.uncertainty.mode == "kalman":
+                self.kalman = PoseKalmanFilter(
+                    self.pose, self.reference.mean(0), time_s, self.config.uncertainty
+                )
             self.store.add(
                 points,
                 self.pose,
                 frame,
                 active=True,
-                view=SurfaceView.from_observation(current, prepared["intrinsics"], self.shape_config),
+                view=SurfaceView.from_observation(current, prepared["intrinsics"], self.growth_shape_config),
             )
             self.last_observed_time = self.last_supported_time = time_s
             self._connect(prepared)
@@ -481,10 +643,44 @@ class GrowingSurfaceSession:
             search_pool=self.search_pool,
         )
         candidate, fit = (
-            fitter.correct_surface_first(seed, self.pose)
+            fitter.correct_surface_first(
+                seed,
+                self.pose,
+                **({"uncertainty": self.config.uncertainty} if self.config.uncertainty.enabled else {}),
+            )
             if self.config.surface_priority
             else fitter.correct(seed)
         )
+        if "uncertainty" in fit:
+            details["covariance"] = fit["uncertainty"]["covariance"]
+        if candidate is None:
+            # Every candidate contradicted measured geometry. Do not return the
+            # rejected hint through the missing-observation fallback.
+            details.update(fit=fit, reason="no_observation_compatible_candidate")
+            return self._result("lost", time_s, details, available=False)
+        kalman_prior = None
+        if self.kalman is not None:
+            geometry = WholeSurfaceFit(self.store.points, current, prepared["intrinsics"], self.shape_config)
+            prior_valid = check_surface_contradiction(geometry, self.pose, self.config.uncertainty)[
+                "accepted"
+            ]
+            kalman_prior = self.kalman.pose.copy(), self.kalman.covariance.copy()
+            measured = fit["uncertainty"]
+            correction = self.kalman.correct(
+                candidate,
+                np.asarray(measured["information"]),
+                np.asarray(measured["pivot_m"]),
+                contradicted=not prior_valid,
+            )
+            details["kalman"] = correction
+            candidate = self.kalman.pose.copy()
+            if not check_surface_contradiction(geometry, candidate, self.config.uncertainty)["accepted"]:
+                self.kalman.pose, self.kalman.covariance = kalman_prior
+                details["kalman"].update(accepted=False, reason="fused_pose_contradicts_observation")
+            self.pose = self.kalman.pose.copy()
+            if not details["kalman"]["accepted"]:
+                details.update(fit=fit, reason=details["kalman"]["reason"])
+                return self._result("predicted", time_s, details, available=prior_valid)
         distances = cKDTree(move(self.store.points, candidate)).query(points)[0]
         overlap = float(np.mean(distances <= self.config.agreement_m))
         details.update(
@@ -501,6 +697,8 @@ class GrowingSurfaceSession:
             else [],
         )
         if overlap < self.config.min_overlap:
+            if kalman_prior is not None:
+                self.kalman.pose, self.kalman.covariance = kalman_prior
             return self._missing(hint, time_s, details, "insufficient_surface_overlap")
         if hint is not None:
             details["hint_disagreement_mm"] = float(
@@ -516,6 +714,8 @@ class GrowingSurfaceSession:
                 accepted, comparison = candidate_check(self.store.points, candidate)
                 details["group_comparison"] = comparison
                 if not accepted:
+                    if kalman_prior is not None:
+                        self.kalman.pose, self.kalman.covariance = kalman_prior
                     return self._missing(hint, time_s, details, "surface_group_disagreement")
         self.pose = candidate
         self.last_observed_time = self.last_supported_time = time_s
@@ -534,29 +734,12 @@ class GrowingSurfaceSession:
             "matched_points": info.matched_points,
         }
         if self.config.grow:
-            self.store.confirm(points, self.pose, frame)
-            distances = cKDTree(move(self.store.points, self.pose)).query(points)[0]
-            novel = points[distances > self.config.spacing_m]
-            keep = self.store.compatible_additions(novel, self.pose)
-            consistent = not len(novel) or float(np.mean(keep)) >= self.config.patch_overlap
-            details["growth"] = {
-                "new_measured_points": len(novel),
-                "contradicted_by_retained_views": int((~keep).sum()),
-                "patch_consistent": consistent,
-                "admitted_points": int(keep.sum()) if consistent else 0,
-            }
-            # If most of this proposed extension contradicts earlier views,
-            # its small unobserved remainder is not evidence of a valid new
-            # surface. Defer the whole extension instead of retaining that tail.
-            novel = novel[keep] if consistent else novel[:0]
-            if len(novel):
-                self.store.add(
-                    novel,
-                    self.pose,
-                    frame,
-                    fitted_map_version=before,
-                    view=SurfaceView.from_observation(current, prepared["intrinsics"], self.shape_config),
-                )
+            details["growth"] = self.store.extend(
+                points,
+                self.pose,
+                frame,
+                view=SurfaceView.from_observation(current, prepared["intrinsics"], self.growth_shape_config),
+            )
         # Deliberately named candidate: overlap alone is not calibrated reliability.
         return self._result("observed_candidate", time_s, details)
 
@@ -567,6 +750,17 @@ class GrowingSurfaceSession:
 
     def _missing(self, hint, time_s, details, reason):
         details["reason"] = reason
+        if self.kalman is not None:
+            # Prediction already propagated the posterior and group-motion
+            # noise. Never replace it with an old absolute group anchor.
+            self.pose = self.kalman.pose.copy()
+            details.update(
+                prediction_source=self.kalman.last_prediction.get("motion_source") or "last_world_pose",
+                prediction_age_s=time_s - self.last_observed_time,
+            )
+            return self._result(
+                "predicted", time_s, details, available=hint is not None or self.config.retain_unobserved_pose
+            )
         if hint is not None and self.pose is not None:
             self.pose = hint.camera_from_reference.copy()
             self.last_supported_time = time_s
@@ -580,6 +774,14 @@ class GrowingSurfaceSession:
         return self._result("lost", time_s, details, available=False)
 
     def _result(self, status, time_s, details, *, available=True):
+        if self.kalman is not None:
+            details["covariance"] = self.kalman.covariance.tolist()
+            details.setdefault("kalman", {**self.kalman.last_prediction, "accepted": False, "reason": status})
+            details["kalman"].update(
+                posterior_covariance=self.kalman.covariance.tolist(),
+                pivot_m=self.kalman.center().tolist(),
+                calibrated=False,
+            )
         details.update(
             map_version_after=self.store.version,
             map_points=len(self.store.points),

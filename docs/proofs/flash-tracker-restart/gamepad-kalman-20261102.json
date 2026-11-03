@@ -1,0 +1,145 @@
+{
+  "case": "flash-demo-gamepad-cube",
+  "frames": 281,
+  "stationary_frames": [
+    0,
+    192
+  ],
+  "stationary_end_time_s": 8.471,
+  "meaning": "False movement relative to initial estimate while human-annotated object remains stationary. No independent pose truth after pickup.",
+  "variants": {
+    "lk-baseline": {
+      "missing_frames": [],
+      "elapsed_s": 35.944862510979874,
+      "input_sha256": "c66268f6cf9eff2d7786b0b1c14243edad15a5f057d8f445b229c66dd31c71d3",
+      "max_center_mm": 2.154767633636538,
+      "max_rotation_deg": 9.073411823846074,
+      "rotation_frame": 171,
+      "stationary_passed": false,
+      "final_center_travel_mm": 56.059662573092815,
+      "rows": 281
+    },
+    "lk-covariance": {
+      "missing_frames": [
+        251,
+        252,
+        253,
+        261,
+        275,
+        277
+      ],
+      "elapsed_s": 39.02021409798181,
+      "input_sha256": "c66268f6cf9eff2d7786b0b1c14243edad15a5f057d8f445b229c66dd31c71d3",
+      "max_center_mm": 2.865970843733849,
+      "max_rotation_deg": 1.1146686449949148,
+      "rotation_frame": 107,
+      "stationary_passed": true,
+      "final_center_travel_mm": 34.10609697616665,
+      "rows": 281
+    },
+    "lk-kalman": {
+      "missing_frames": [
+        275,
+        276,
+        277,
+        278,
+        279,
+        280
+      ],
+      "elapsed_s": 37.635361632012064,
+      "input_sha256": "c66268f6cf9eff2d7786b0b1c14243edad15a5f057d8f445b229c66dd31c71d3",
+      "max_center_mm": 1.2271780426756977,
+      "max_rotation_deg": 3.661870702391819,
+      "rotation_frame": 184,
+      "stationary_passed": true,
+      "rows": 281,
+      "kalman_reasons": {
+        "initialized": 1,
+        "corrected": 235,
+        "predicted": 27,
+        "reinitialized_after_contradiction": 11,
+        "innovation_conflict": 1,
+        "lost": 6
+      },
+      "observation_ranks": {
+        "6": 246,
+        "4": 1
+      }
+    },
+    "ufm-baseline": {
+      "max_center_mm": 2.114000527675268,
+      "max_rotation_deg": 9.56205567264308,
+      "rotation_frame": 171,
+      "center_frame": 168,
+      "rotation_p95_deg": 6.388715840124034,
+      "final_center_travel_mm": 59.19470994450207,
+      "elapsed_s": 42.35322290100157,
+      "covariance_updates": 0,
+      "input_sha256": "c66268f6cf9eff2d7786b0b1c14243edad15a5f057d8f445b229c66dd31c71d3",
+      "matching_calls": 280,
+      "rows": 281,
+      "missing_frames": []
+    },
+    "ufm-covariance": {
+      "missing_frames": [
+        251,
+        252,
+        271,
+        275,
+        277
+      ],
+      "elapsed_s": 48.433145779010374,
+      "input_sha256": "c66268f6cf9eff2d7786b0b1c14243edad15a5f057d8f445b229c66dd31c71d3",
+      "max_center_mm": 3.986158070439435,
+      "max_rotation_deg": 5.79549594535124,
+      "rotation_frame": 145,
+      "stationary_passed": false,
+      "final_center_travel_mm": 49.457171314920636,
+      "rows": 281
+    },
+    "ufm-kalman": {
+      "missing_frames": [
+        261,
+        262,
+        263,
+        264,
+        265,
+        275,
+        276,
+        277,
+        278,
+        279,
+        280
+      ],
+      "elapsed_s": 45.57934328200645,
+      "input_sha256": "c66268f6cf9eff2d7786b0b1c14243edad15a5f057d8f445b229c66dd31c71d3",
+      "max_center_mm": 1.6146213353783303,
+      "max_rotation_deg": 3.540104960031298,
+      "rotation_frame": 177,
+      "stationary_passed": true,
+      "rows": 281,
+      "kalman_reasons": {
+        "initialized": 1,
+        "corrected": 232,
+        "predicted": 27,
+        "reinitialized_after_contradiction": 10,
+        "lost": 11
+      },
+      "observation_ranks": {
+        "6": 240,
+        "4": 1,
+        "5": 1
+      }
+    }
+  },
+  "checks": {
+    "disabled_lk_identical_all_281_poses": true,
+    "kalman_gain_mutation_detected": true,
+    "focused_tests_passed": 115
+  },
+  "limitations": [
+    "Kalman noise assumptions are uncalibrated",
+    "Later pickup retains wrong fits and missing poses; stationary pass is not end-to-end tracking success",
+    "Runtime excludes segmentation and model startup; one run per variant, not a controlled speed benchmark"
+  ]
+}

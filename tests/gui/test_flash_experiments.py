@@ -629,6 +629,8 @@ def test_browser_rebuild_button_reports_progress_and_failure(gui_page, tmp_path,
     page.wait_for_function(
         "document.getElementById('flash-experiment-rebuild-status').textContent.includes('2/20')"
     )
+    # Status polling and selecting the first loaded scene complete independently.
+    page.wait_for_function("flashExperiments.selected !== null")
     assert len(posts) == 1
     assert posts[0].endswith("?identity=" + page.evaluate("flashExperiments.selected"))
     state.update(
@@ -1294,3 +1296,88 @@ def test_browser_names_matching_backend_from_selected_recording(gui_page, tmp_pa
     assert "Shared LK matching: 2.5 ms/frame" in page.locator("#flash-experiment-results").inner_text()
     page.get_by_role("button", name="Next experiment frame").click()
     assert "LK point paths" in page.locator("#flash-experiment-matches").get_attribute("title")
+
+
+@pytest.mark.parametrize("mode", ["selection", "kalman", "default"])
+def test_pipeline_settings_roundtrip_through_http_worker_and_real_fitter(tmp_path, monkeypatch, mode):
+    """Edit covariance through the HTTP contract and inspect real saved fitting diagnostics."""
+    from pathlib import Path
+
+    from benchmarks import flash_experiment_cache
+    from benchmarks.flash_pipeline_settings import defaults
+    from benchmarks.flash_rebuild_examples import rebuild, write_json
+
+    root = tmp_path / "browser"
+    monkeypatch.setenv("LEROBOT_FLASH_EXPERIMENT_DIR", str(root))
+    run, source = completed_run(tmp_path)
+    (source / "annotated_poses").mkdir()
+    for i in range(3):
+        np.savetxt(source / "annotated_poses" / f"{i:03d}.txt", np.eye(4))
+    settings = defaults()
+    settings["shared_matching"]["backend"] = "lk"
+    settings["config"].update(compiled_surface_fit=False, reuse_surface_search=False)
+    write_json(run.parent / "provenance.json", settings)
+    export(run, root)
+    item = flash_experiments._list()[0]
+    app = FastAPI()
+    app.include_router(flash_experiments.router)
+    client = TestClient(app)
+    result = client.get(f"/api/run/flash/experiments/{item['id']}/settings")
+    assert result.status_code == 200
+    data = result.json()
+    assert any(o["path"] == "surface_experiment.uncertainty.enabled" for o in data["options"])
+    edited = data["settings"]
+    if mode != "default":
+        edited["surface_experiment"]["uncertainty"]["enabled"] = True
+        edited["surface_experiment"]["uncertainty"]["mode"] = mode
+    edited["surface_experiment"]["growth_min_overlap"] = 0.9
+    edited["surface_experiment"]["growth_agreement_m"] = 0.0025
+    assert client.post("/api/run/flash/experiments/rebuild", json=edited).status_code == 400
+    invalid = json.loads(json.dumps(edited))
+    invalid["surface_experiment"]["uncertainty"]["max_measurements"] = 0
+    assert (
+        client.post(f"/api/run/flash/experiments/rebuild?identity={item['id']}", json=invalid).status_code
+        == 422
+    )
+    # The worker request is the same contract emitted by the endpoint. Run the
+    # real consumers without neural inference (LK is a real algorithm here).
+    monkeypatch.setattr(
+        flash_experiment_cache,
+        "execution_identity",
+        lambda source: {"model_revision": "unused-lk", "source": source},
+    )
+    job = root / ".rebuild" / "settings-test"
+    job.mkdir(parents=True)
+    write_json(job / "request.json", {"browser_root": str(root), "items": [item], "settings": edited})
+    write_json(
+        job / "status.json",
+        {
+            "id": "settings-test",
+            "state": "starting",
+            "total": 1,
+            "completed": 0,
+            "succeeded": 0,
+            "errors": [],
+        },
+    )
+    rebuild(job)
+    state = json.loads((job / "status.json").read_text())
+    assert state["state"] == "completed", state
+    latest = flash_experiments._list()[0]
+    new_run = Path(latest["source_run"])
+    saved = json.loads((new_run.parent / "provenance.json").read_text())
+    assert saved["surface_experiment"]["uncertainty"]["enabled"]
+    rows = [json.loads(line) for line in (new_run / "frames.jsonl").read_text().splitlines()]
+    # Check the actual fit ran the new mode, not merely a saved setting.
+    assert "uncertainty" in rows[1]["objects"]["object"]["group_growing_details"]["fit"]
+    growth = rows[1]["objects"]["object"]["group_growing_details"]["growth"]
+    assert growth["required_overlap"] == 0.9
+    assert growth["agreement_m"] == 0.0025
+    if mode in {"kalman", "default"}:
+        details = rows[1]["objects"]["object"]["group_growing_details"]
+        assert "gain" in details["kalman"]
+        assert np.linalg.norm(np.asarray(details["kalman"]["gain"])) > 0
+        assert details["covariance"] == details["kalman"]["posterior_covariance"]
+        if mode == "default":
+            assert saved["surface_experiment"]["uncertainty"]["max_visible_outlier_fraction"] == 0.25
+    assert new_run != run

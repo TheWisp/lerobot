@@ -102,3 +102,10 @@
 #flash-experiment-scene-tools button, #flash-experiment-transport button { background: #16263c; color: #d8e4f3; border: 1px solid #31516c; border-radius: 4px; padding: 5px 9px; cursor: pointer; }
 #flash-experiment-3d-toggle[aria-pressed="true"] { background: #254363; border-color: #72b7ff; }
 #flash-experiment-playback.scene-visible .flash-experiment-2d-tool { display: none; }
+
+.flash-pipeline-settings { width: min(1000px, 90vw); max-height: 85vh; overflow: auto; background: var(--bg-secondary, #17202b); color: var(--text-primary, #eee); border: 1px solid #657488; border-radius: 8px; }
+.flash-pipeline-settings::backdrop { background: #0009; }
+.flash-pipeline-settings h2 { display: flex; justify-content: space-between; }
+.flash-pipeline-settings textarea { display: block; box-sizing: border-box; width: 100%; height: 38vh; margin: 12px 0; font: 13px monospace; background: #101820; color: #eee; padding: 12px; }
+.flash-pipeline-settings table { width: 100%; font-size: 12px; border-collapse: collapse; }
+.flash-pipeline-settings th, .flash-pipeline-settings td { text-align: left; border-bottom: 1px solid #657488; padding: 6px; overflow-wrap: anywhere; }

@@ -1,0 +1,280 @@
+{
+  "scope": "Growth-only replay using identical recorded poses; not a full tracking rerun or accuracy claim.",
+  "cases": {
+    "dowel": {
+      "source": "/home/feit/.cache/flash-tracker-restart/browser/.rebuild/rebuild-20261102-235536-ce24cd05/runs/000/flash-demo-dowel-ring",
+      "frames": 713,
+      "old_map_reproduced_exactly": true,
+      "configs": {
+        "old": {
+          "spacing_m": 0.003,
+          "agreement_m": 0.005,
+          "min_overlap": 0.25,
+          "growth_agreement_m": 0.005,
+          "growth_min_overlap": 0.25,
+          "patch_consistency": 0.5,
+          "patch_overlap": 0.5,
+          "image_weight": 1,
+          "surface_priority": true,
+          "confirmations": 2,
+          "max_patches": 32,
+          "max_pending": 8,
+          "points_per_patch": 1024,
+          "max_points": 8192,
+          "grow": true,
+          "retain_unobserved_pose": false,
+          "uncertainty": {
+            "enabled": true,
+            "mode": "kalman",
+            "initial_position_std_m": 0.005,
+            "initial_rotation_std_deg": 10,
+            "position_process_std_m_sqrt_s": 0.002,
+            "rotation_process_std_deg_sqrt_s": 2,
+            "independent_error_m": 0.001,
+            "correlated_error_m": 0.002,
+            "correlation_length_m": 0.01,
+            "max_measurements": 256,
+            "compatibility_probability": 0.95,
+            "max_visible_outlier_fraction": 0.1,
+            "prefer_supported_prediction": true
+          }
+        },
+        "strict": {
+          "spacing_m": 0.003,
+          "agreement_m": 0.005,
+          "min_overlap": 0.25,
+          "growth_agreement_m": 0.003,
+          "growth_min_overlap": 0.75,
+          "patch_consistency": 0.95,
+          "patch_overlap": 0.8,
+          "image_weight": 1,
+          "surface_priority": true,
+          "confirmations": 2,
+          "max_patches": 32,
+          "max_pending": 8,
+          "points_per_patch": 1024,
+          "max_points": 8192,
+          "grow": true,
+          "retain_unobserved_pose": false,
+          "uncertainty": {
+            "enabled": true,
+            "mode": "kalman",
+            "initial_position_std_m": 0.005,
+            "initial_rotation_std_deg": 10,
+            "position_process_std_m_sqrt_s": 0.002,
+            "rotation_process_std_deg_sqrt_s": 2,
+            "independent_error_m": 0.001,
+            "correlated_error_m": 0.002,
+            "correlation_length_m": 0.01,
+            "max_measurements": 256,
+            "compatibility_probability": 0.95,
+            "max_visible_outlier_fraction": 0.1,
+            "prefer_supported_prediction": true
+          }
+        }
+      },
+      "roles": {
+        "dowel": {
+          "old": {
+            "added": 1,
+            "max_points": 415,
+            "pending": 103,
+            "confirmed": 103,
+            "evicted": 72,
+            "final_points": 415,
+            "max_extent_initial_axes_mm": [
+              108.95487765065542,
+              28.1056620026528,
+              17.661887925723263
+            ]
+          },
+          "strict": {
+            "added": 1,
+            "max_points": 343,
+            "eligible_frames": 659,
+            "deferred_frames": 17,
+            "pending": 82,
+            "confirmed": 82,
+            "evicted": 51,
+            "final_points": 343,
+            "max_extent_initial_axes_mm": [
+              108.95487765065542,
+              27.30087242568935,
+              15.818812012108442
+            ]
+          }
+        },
+        "ring": {
+          "old": {
+            "added": 1,
+            "max_points": 516,
+            "pending": 188,
+            "confirmed": 188,
+            "evicted": 157,
+            "final_points": 516,
+            "max_extent_initial_axes_mm": [
+              56.660324178286814,
+              47.564308743241526,
+              24.66031957960302
+            ]
+          },
+          "strict": {
+            "added": 1,
+            "max_points": 396,
+            "eligible_frames": 711,
+            "deferred_frames": 0,
+            "pending": 156,
+            "confirmed": 156,
+            "evicted": 125,
+            "final_points": 396,
+            "max_extent_initial_axes_mm": [
+              55.37557030623577,
+              47.14210801586388,
+              18.307673720069918
+            ]
+          }
+        }
+      }
+    },
+    "gamepad": {
+      "source": "/home/feit/.cache/flash-tracker-restart/browser/.rebuild/rebuild-20261102-233536-d1d631c8/runs/000/flash-demo-gamepad-cube",
+      "frames": 628,
+      "old_map_reproduced_exactly": true,
+      "configs": {
+        "old": {
+          "spacing_m": 0.003,
+          "agreement_m": 0.005,
+          "min_overlap": 0.25,
+          "growth_agreement_m": 0.005,
+          "growth_min_overlap": 0.25,
+          "patch_consistency": 0.5,
+          "patch_overlap": 0.5,
+          "image_weight": 1,
+          "surface_priority": true,
+          "confirmations": 2,
+          "max_patches": 32,
+          "max_pending": 8,
+          "points_per_patch": 1024,
+          "max_points": 8192,
+          "grow": true,
+          "retain_unobserved_pose": false,
+          "uncertainty": {
+            "enabled": true,
+            "mode": "kalman",
+            "initial_position_std_m": 0.005,
+            "initial_rotation_std_deg": 10,
+            "position_process_std_m_sqrt_s": 0.002,
+            "rotation_process_std_deg_sqrt_s": 2,
+            "independent_error_m": 0.001,
+            "correlated_error_m": 0.002,
+            "correlation_length_m": 0.01,
+            "max_measurements": 256,
+            "compatibility_probability": 0.95,
+            "max_visible_outlier_fraction": 0.1,
+            "prefer_supported_prediction": true
+          }
+        },
+        "strict": {
+          "spacing_m": 0.003,
+          "agreement_m": 0.005,
+          "min_overlap": 0.25,
+          "growth_agreement_m": 0.003,
+          "growth_min_overlap": 0.75,
+          "patch_consistency": 0.95,
+          "patch_overlap": 0.8,
+          "image_weight": 1,
+          "surface_priority": true,
+          "confirmations": 2,
+          "max_patches": 32,
+          "max_pending": 8,
+          "points_per_patch": 1024,
+          "max_points": 8192,
+          "grow": true,
+          "retain_unobserved_pose": false,
+          "uncertainty": {
+            "enabled": true,
+            "mode": "kalman",
+            "initial_position_std_m": 0.005,
+            "initial_rotation_std_deg": 10,
+            "position_process_std_m_sqrt_s": 0.002,
+            "rotation_process_std_deg_sqrt_s": 2,
+            "independent_error_m": 0.001,
+            "correlated_error_m": 0.002,
+            "correlation_length_m": 0.01,
+            "max_measurements": 256,
+            "compatibility_probability": 0.95,
+            "max_visible_outlier_fraction": 0.1,
+            "prefer_supported_prediction": true
+          }
+        }
+      },
+      "roles": {
+        "gamepad": {
+          "old": {
+            "added": 1,
+            "max_points": 452,
+            "pending": 96,
+            "confirmed": 94,
+            "evicted": 63,
+            "final_points": 452,
+            "max_extent_initial_axes_mm": [
+              71.882603333357,
+              39.19141615963467,
+              15.62299764833136
+            ]
+          },
+          "strict": {
+            "added": 1,
+            "max_points": 388,
+            "eligible_frames": 554,
+            "deferred_frames": 187,
+            "pending": 73,
+            "confirmed": 69,
+            "evicted": 38,
+            "final_points": 388,
+            "max_extent_initial_axes_mm": [
+              71.882603333357,
+              39.19141615963467,
+              14.292306304390989
+            ]
+          }
+        },
+        "cube": {
+          "old": {
+            "added": 1,
+            "max_points": 225,
+            "pending": 45,
+            "confirmed": 44,
+            "evicted": 13,
+            "final_points": 225,
+            "max_extent_initial_axes_mm": [
+              42.0972587289644,
+              33.50049558155075,
+              19.955734679382775
+            ]
+          },
+          "strict": {
+            "added": 1,
+            "max_points": 221,
+            "eligible_frames": 391,
+            "deferred_frames": 12,
+            "pending": 44,
+            "confirmed": 42,
+            "evicted": 11,
+            "final_points": 221,
+            "max_extent_initial_axes_mm": [
+              41.49112405645451,
+              33.50049558155075,
+              19.53072781739229
+            ]
+          }
+        }
+      }
+    }
+  },
+  "validation": {
+    "focused_tests": 121,
+    "mutation": "Bypassing the growth-overlap gate makes both the store and session regression tests fail.",
+    "limits": "Fixed recorded poses isolate surface accumulation. No full tracking rerun or labelled accuracy claim; no calibrated alignment-confidence gate."
+  }
+}

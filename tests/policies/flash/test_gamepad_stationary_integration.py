@@ -58,7 +58,9 @@ def _track_sequence(sequence, role, model, matching_config, surface_config, conf
         fit_kernels=kernels,
         search_pool=pool,
     )
-    groups = GroupHints(GroupConfig(), shared_image_points=True)
+    groups = GroupHints(
+        GroupConfig(), shared_image_points=True, uncertainty_config=estimator.config.uncertainty
+    )
     rows, digest = [], hashlib.sha256()
     for frame, masks in sequence:
         for value in (frame.rgb, frame.depth, frame.intrinsics, frame.base_from_camera, *masks.values()):
@@ -190,6 +192,12 @@ def test_recorded_gamepad_stays_still_through_pregrasp_occlusion(recording_resul
 def test_recorded_gamepad_is_not_frozen_after_pickup(recording_result):
     # A necessary positive control, NOT a claim of accurate post-grasp 6D pose.
     # The final frame visibly has the gamepad lifted and transported beside the cube.
-    displacement, _ = stationary_errors(recording_result, recording_result["annotation"]["run_last_frame"])
-    assert displacement[-1] > 30, "freezing at the initial pose must not pass"
+    # Availability after pickup is measured by the full benchmark separately.
+    # A missing intervening pose must not masquerade as a failure to move.
+    rows = recording_result["rows"]
+    first, last = rows[0]["camera_from_reference"], rows[-1]["camera_from_reference"]
+    assert first is not None and last is not None, "movement needs both endpoint estimates"
+    center = np.asarray(recording_result["reference"]).mean(0, keepdims=True)
+    displacement = np.linalg.norm(move(center, np.asarray(last)) - move(center, np.asarray(first))) * 1000
+    assert displacement > 30, "freezing at the initial pose must not pass"
     assert recording_result["matching_calls"] == recording_result["annotation"]["run_last_frame"]

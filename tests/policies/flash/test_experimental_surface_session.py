@@ -16,6 +16,7 @@ from lerobot.policies.flash.experimental_surface_session import (
 from lerobot.policies.flash.surface_grounding import ShapeConfig
 from lerobot.policies.flash.surface_observation import move
 from lerobot.policies.flash.surface_tracking import SurfaceTrackingSession
+from lerobot.policies.flash.surface_uncertainty import PoseUncertaintyConfig
 
 
 def transform(x=0, y=0, z=0):
@@ -107,7 +108,9 @@ def prepared_frames(monkeypatch):
 
 def test_prediction_during_empty_mask_never_grows_or_reseeds_surface(monkeypatch):
     prepare, rgb, depth, mask, k = prepared_frames(monkeypatch)
-    tracker = GrowingSurfaceSession(prepare.shape_config)
+    tracker = GrowingSurfaceSession(
+        prepare.shape_config, GrowingSurfaceConfig(uncertainty=PoseUncertaintyConfig(enabled=False))
+    )
     empty = prepare.prepare(rgb, depth, mask & False, k, 0)
     assert tracker.update(empty, 0.0)["status"] == "lost"
     first = tracker.update(prepare.prepare(rgb, depth, mask, k, 1), 0.1)
@@ -136,7 +139,10 @@ def test_prediction_during_empty_mask_never_grows_or_reseeds_surface(monkeypatch
 
 def test_persistent_prediction_follows_group_then_world_camera_and_reacquires(monkeypatch):
     prepare, rgb, depth, mask, k = prepared_frames(monkeypatch)
-    tracker = GrowingSurfaceSession(prepare.shape_config, GrowingSurfaceConfig(retain_unobserved_pose=True))
+    tracker = GrowingSurfaceSession(
+        prepare.shape_config,
+        GrowingSurfaceConfig(uncertainty=PoseUncertaintyConfig(enabled=False), retain_unobserved_pose=True),
+    )
     empty = prepare.prepare(rgb, depth, mask & False, k, 0)
     assert tracker.update(empty, 0.0)["camera_from_reference"] is None
     tracker.update(prepare.prepare(rgb, depth, mask, k, 1), 0.1)
@@ -188,8 +194,14 @@ def test_growth_checks_previous_rays_without_removing_hidden_back_surface(monkey
 @pytest.mark.parametrize("surface_priority", [False, True])
 def test_repeated_wrong_fit_cannot_confirm_geometry_in_previously_empty_space(monkeypatch, surface_priority):
     prepare, rgb, depth, mask, k = prepared_frames(monkeypatch)
+    # Isolate the retained-view veto even when overlap is deliberately permissive.
     tracker = GrowingSurfaceSession(
-        prepare.shape_config, GrowingSurfaceConfig(surface_priority=surface_priority)
+        prepare.shape_config,
+        GrowingSurfaceConfig(
+            uncertainty=PoseUncertaintyConfig(enabled=False),
+            surface_priority=surface_priority,
+            growth_min_overlap=0.25,
+        ),
     )
     tracker.update(prepare.prepare(rgb, depth, mask, k, 0), 0.0)
     initial = tracker.store.points.copy()
@@ -225,7 +237,10 @@ def test_repeated_wrong_fit_cannot_confirm_geometry_in_previously_empty_space(mo
 def test_no_overlap_does_not_reset_coordinate_origin(monkeypatch, surface_priority):
     prepare, rgb, depth, mask, k = prepared_frames(monkeypatch)
     tracker = GrowingSurfaceSession(
-        prepare.shape_config, GrowingSurfaceConfig(surface_priority=surface_priority)
+        prepare.shape_config,
+        GrowingSurfaceConfig(
+            uncertainty=PoseUncertaintyConfig(enabled=False), surface_priority=surface_priority
+        ),
     )
     tracker.update(prepare.prepare(rgb, depth, mask, k, 0), 0.0)
     old = tracker.reference.copy()
@@ -285,7 +300,9 @@ def test_invalid_config_and_prediction_do_not_silently_enter_session():
 
 def test_invalid_hint_can_be_retried_and_removing_model_does_not_reinitialize(monkeypatch):
     prepare, rgb, depth, mask, k = prepared_frames(monkeypatch)
-    tracker = GrowingSurfaceSession(prepare.shape_config)
+    tracker = GrowingSurfaceSession(
+        prepare.shape_config, GrowingSurfaceConfig(uncertainty=PoseUncertaintyConfig(enabled=False))
+    )
     tracker.update(prepare.prepare(rgb, depth, mask, k, 0), 0.0)
     current = prepare.prepare(rgb, depth, mask, k, 1)
     with pytest.raises(ValueError, match="another time"):
@@ -380,7 +397,10 @@ def test_ambiguous_surface_fit_cannot_change_group_anchor_or_grow_model(monkeypa
 
     prepare, rgb, depth, mask, k = prepared_frames(monkeypatch)
     tracker = GrowingSurfaceSession(
-        prepare.shape_config, GrowingSurfaceConfig(surface_priority=surface_priority)
+        prepare.shape_config,
+        GrowingSurfaceConfig(
+            uncertainty=PoseUncertaintyConfig(enabled=False), surface_priority=surface_priority
+        ),
     )
     tracker.update(prepare.prepare(rgb, depth, mask, k, 0), 0.0)
     before = tracker.store.points.copy()
@@ -467,3 +487,109 @@ def test_point_sources_constrain_pose_and_remain_normalized_and_batch_equivalent
         PointEvidence(np.tile(ref, (4, 1)), np.tile(predicted, (4, 1)), "group", "predicted", 0.005),
     )
     assert np.sum(fitter.residual(pose) ** 2) == pytest.approx(value)
+
+
+def test_growth_requires_stronger_overlap_before_addition_and_confirmation():
+    original = points()
+    new = original + [0, 0, 0.02]
+    measured = np.concatenate((original, new))
+    strict = SurfaceStore(GrowingSurfaceConfig())
+    legacy = SurfaceStore(
+        GrowingSurfaceConfig(
+            growth_agreement_m=0.005, growth_min_overlap=0.25, patch_consistency=0.5, patch_overlap=0.5
+        )
+    )
+    for store in (strict, legacy):
+        store.add(original, np.eye(4), 0, active=True)
+        store.add(new, np.eye(4), 1)
+    initial = strict.points.copy()
+    weak = strict.extend(measured, np.eye(4), 2, view=None)
+    assert weak["observed_overlap"] == 0.5
+    assert not weak["alignment_accepted"]
+    np.testing.assert_array_equal(strict.points, initial)
+    assert not strict.patches[1].active
+    assert strict.patches[1].support_frames == {1}
+    assert 2 not in strict.patches  # Neither confirmation nor a new patch.
+    legacy.extend(measured, np.eye(4), 2, view=None)
+    assert legacy.patches[1].active
+    assert legacy.points[:, 2].max() > 1.01
+
+    # Clear overlap must still grow, including after rigid movement of the object.
+    store = SurfaceStore(GrowingSurfaceConfig())
+    store.add(original, np.eye(4), 0, active=True)
+    measured = np.concatenate((original, new[:8]))
+    for i in (1, 2):
+        pose = transform(x=i * 0.01)
+        result = store.extend(move(measured, pose), pose, i, view=None)
+        assert result["alignment_accepted"]
+    assert store.patches[1].active
+    np.testing.assert_allclose(store.patches[1].points(), new[:8], atol=1e-12)
+    assert store.points[:, 2].max() > 1.01
+
+
+@pytest.mark.parametrize("distance,fraction", [(0.004, 1.0), (0.0, 0.6)])
+def test_patch_confirmation_has_its_own_tighter_distance_and_fraction(distance, fraction):
+    patch = points()
+    count = int(len(patch) * fraction)
+    measured = patch.copy()
+    measured[:count, 2] += distance
+    measured[count:, 2] += 0.02
+    strict = SurfaceStore(GrowingSurfaceConfig())
+    legacy = SurfaceStore(GrowingSurfaceConfig(growth_agreement_m=0.005, patch_overlap=0.5))
+    for store in (strict, legacy):
+        store.add(patch, np.eye(4), 1)
+        store.confirm(measured, np.eye(4), 2)
+    assert not strict.patches[1].active
+    assert legacy.patches[1].active
+
+
+def test_growth_thresholds_cannot_be_weaker_than_tracking():
+    for settings in ({"growth_agreement_m": 0.006}, {"growth_min_overlap": 0.2}):
+        with pytest.raises(ValueError, match="growth must require"):
+            GrowingSurfaceConfig(**settings)
+    for name in ("growth_agreement_m", "growth_min_overlap", "patch_consistency"):
+        with pytest.raises(ValueError):
+            GrowingSurfaceConfig(**{name: float("nan")})
+
+
+def test_tracking_can_accept_a_pose_without_accepting_surface_growth(monkeypatch):
+    prepare, rgb, depth, mask, k = prepared_frames(monkeypatch)
+    tracker = GrowingSurfaceSession(
+        prepare.shape_config, GrowingSurfaceConfig(uncertainty=PoseUncertaintyConfig(enabled=False))
+    )
+    tracker.update(prepare.prepare(rgb, depth, mask, k, 0), 0.0)
+    initial = tracker.store.points.copy()
+    # Accept a known pose at the fitter boundary. Actual RGB-D cleanup and both
+    # downstream acceptance paths run on a continuous surface with partial overlap.
+    pose = transform(x=0.001)
+    monkeypatch.setattr(ImageConditionedFit, "correct_surface_first", lambda *_: (pose.copy(), {}))
+    changed = depth.copy()
+    changed[20:61, 25:76] = np.linspace(1.012, 1.0, 41)[:, None]
+    for i in (1, 2, 3):
+        result = tracker.update(prepare.prepare(rgb, changed, mask, k, i), i / 10)
+        assert result["status"] == "observed_candidate"
+        np.testing.assert_allclose(result["camera_from_reference"], pose)
+        assert tracker.connected_frame == i
+        assert result["diagnostics"]["growth"]["reason"] == "insufficient_growth_overlap"
+        np.testing.assert_array_equal(tracker.store.points, initial)
+        assert tracker.store.version == 1
+
+
+def test_addition_consistency_is_distinct_from_later_patch_confirmation(monkeypatch):
+    prepare, rgb, depth, mask, k = prepared_frames(monkeypatch)
+    first = prepare.prepare(rgb, depth, mask, k, 0)
+    original = first["current"]["obs"]["points"]
+    view = SurfaceView.from_observation(first["current"], k, prepare.shape_config)
+    novel = points()[:10] + [0, 0, 0.025]
+    novel[:2, 2] = 0.975  # Two points contradict previously measured empty space.
+    measured = np.concatenate((original, novel))
+    for consistency, expected in [(0.95, False), (0.5, True)]:
+        store = SurfaceStore(GrowingSurfaceConfig(patch_consistency=consistency))
+        store.add(original, np.eye(4), 0, active=True, view=view)
+        result = store.extend(measured, np.eye(4), 1, view=None)
+        assert result["alignment_accepted"]
+        assert result["contradicted_by_retained_views"] == 2
+        assert result["patch_consistent"] is expected
+        assert (1 in store.patches) is expected
+        if expected:
+            np.testing.assert_allclose(store.patches[1].points(), novel[2:])
