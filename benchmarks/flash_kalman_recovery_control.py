@@ -8,13 +8,18 @@ not a new default. No tracking configuration is selected by the scene label.
 """
 
 from dataclasses import asdict, replace
+from time import perf_counter
 
 import numpy as np
 
 from benchmarks.flash_partial_surface_control import box_observation, pose_error
-from lerobot.policies.flash.experimental_surface_session import GrowingSurfaceConfig, GrowingSurfaceSession
+from lerobot.policies.flash.experimental_surface_session import (
+    GrowingSurfaceConfig,
+    GrowingSurfaceSession,
+    PoseHint,
+)
 from lerobot.policies.flash.surface_grounding import ShapeConfig
-from lerobot.policies.flash.surface_kalman import PoseKalmanFilter
+from lerobot.policies.flash.surface_kalman import MeasuredGroupMotion, PoseKalmanFilter
 from lerobot.policies.flash.surface_tracking import SurfaceTrackingSession
 from lerobot.policies.flash.surface_uncertainty import PoseUncertaintyConfig
 
@@ -37,14 +42,18 @@ class StrictPoseKalmanFilter(PoseKalmanFilter):
         return result
 
 
-def scene(displacement_m=0.04, *, occluded=True):
+def scene(
+    displacement_m=0.04, *, occluded=True, camera_displacement_m=0.0, group_motion=False, strip_px=None
+):
     initial = box_observation(20)[2]
     frames = []
     for i in range(WARMUP + HIDDEN + AFTER):
         progress = float(np.clip((i - WARMUP + 1) / HIDDEN, 0, 1))
         # Smooth physical movement during the hidden interval, not teleportation.
         progress = progress * progress * (3 - 2 * progress)
-        current, k, pose = box_observation(20, displacement_m=[displacement_m * progress, 0, 0])
+        current, k, pose = box_observation(
+            20, displacement_m=[(displacement_m - camera_displacement_m) * progress, 0, 0]
+        )
         depth, mask = current["depth"].copy(), current["mask"].copy()
         rgb = np.full((*mask.shape, 3), (37, 45, 56), dtype=np.uint8)
         shade = np.clip((0.77 - depth) / 0.15, 0, 1)
@@ -55,9 +64,16 @@ def scene(displacement_m=0.04, *, occluded=True):
         if hidden:
             # A nearer rectangular screen hides the whole object. No hidden
             # object points or motion are provided to the tracking pipeline.
-            depth[20:160, 5:235] = 0.5
-            rgb[20:160, 5:235] = (155, 122, 73)
-            mask[:] = False
+            screen = np.zeros_like(mask)
+            screen[20:160, 5:235] = True
+            if strip_px is not None:
+                left = np.where(mask)[1].min()
+                screen[:, : left + strip_px] = False
+            depth[screen] = 0.5
+            rgb[screen] = (155, 122, 73)
+            mask[screen] = False
+        camera = np.eye(4)
+        camera[0, 3] = camera_displacement_m * progress
         frames.append(
             {
                 "index": i,
@@ -67,32 +83,62 @@ def scene(displacement_m=0.04, *, occluded=True):
                 "mask": mask,
                 "intrinsics": k,
                 "truth": pose @ np.linalg.inv(initial),
-                "hidden": hidden,
+                "hidden": hidden and not mask.any(),
+                "base_from_camera": camera,
             }
         )
+        if group_motion:
+            # Ideal measured supporting markers, supplied at the public motion
+            # interface. This tests fusion, not a neural 2D tracker or membership.
+            support = np.array([[x, y, z] for x in (-0.1, 0.1) for y in (-0.06, 0.06) for z in (0.6, 0.7)])
+            frames[-1]["support_points"] = support + [displacement_m * progress, 0, 0]
     return frames
 
 
-def run_scene(frames, mode):
+def run_scene(frames, mode, *, grow=False, config=None):
     if mode not in MODES:
         raise ValueError(mode)
     uncertainty = PoseUncertaintyConfig(enabled=True, mode="kalman", max_visible_outlier_fraction=0.25)
     if mode == "strict_broader_motion":
         uncertainty = replace(uncertainty, position_process_std_m_sqrt_s=0.03)
     shape = ShapeConfig()
-    config = GrowingSurfaceConfig(
-        grow=False, partial_surface_matching=True, retain_unobserved_pose=True, uncertainty=uncertainty
+    config = config or GrowingSurfaceConfig(
+        grow=grow, partial_surface_matching=True, retain_unobserved_pose=True
     )
+    config = replace(config, uncertainty=uncertainty)
     session = GrowingSurfaceSession(shape, config)
     rows = []
     for frame in frames:
+        started = perf_counter()
         # A fresh observation builder deliberately supplies no image matches.
         # The GrowingSurfaceSession still retains the real temporal pose/map.
         preparation = SurfaceTrackingSession(None, shape_config=shape)
         prepared = preparation.prepare(
             frame["rgb"], frame["depth"], frame["mask"], frame["intrinsics"], frame["index"]
         )
-        result = session.update(prepared, frame["time_s"])
+        prepare_ms = (perf_counter() - started) * 1000
+        hint = None
+        if frame["index"] and "support_points" in frame:
+            previous = frames[frame["index"] - 1]
+            hint = PoseHint(
+                session.pose,
+                "synthetic measured markers",
+                frame["time_s"],
+                frame["time_s"],
+                session.reference_frame,
+                motion=MeasuredGroupMotion(
+                    previous["support_points"],
+                    frame["support_points"],
+                    previous["time_s"],
+                    frame["time_s"],
+                    "synthetic measured markers",
+                ),
+            )
+        started = perf_counter()
+        result = session.update(
+            prepared, frame["time_s"], hint=hint, base_from_camera=frame.get("base_from_camera")
+        )
+        update_ms = (perf_counter() - started) * 1000
         if frame["index"] == 0 and mode != "current_reset":
             old = session.kalman
             strict = StrictPoseKalmanFilter(old.pose, old.center_object, old.time_s, old.config)
@@ -106,11 +152,19 @@ def run_scene(frames, mode):
             "index": frame["index"],
             "time_s": frame["time_s"],
             "hidden": frame["hidden"],
+            "visible_pixels": int(frame["mask"].sum()),
             "status": result["status"],
             "available": result["camera_from_reference"] is not None,
             "reason": details.get("reason"),
             "pose": session.pose.tolist(),
             "map_points": len(session.store.points),
+            "map_version": session.store.version,
+            "retained_patches": len(session.store.patches),
+            "prepare_ms": prepare_ms,
+            "update_ms": update_ms,
+            "covariance": session.kalman.covariance.tolist(),
+            "growth": details.get("growth"),
+            "measurement_count": details.get("fit", {}).get("uncertainty", {}).get("measurement_count"),
             "kalman": {
                 key: details.get("kalman", {}).get(key)
                 for key in [

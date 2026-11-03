@@ -2486,3 +2486,77 @@ the output. [Results and controls](kalman-recovery-control-20261103.json).
 Reproduce with `python -m benchmarks.flash_kalman_recovery_control --output DIR`;
 `tests/policies/flash/test_kalman_recovery_control.py` runs the real rendered
 comparison and checks that recovery moves the estimate while the map stays fixed.
+
+#### Recovery acceptance tests, before changing runtime behavior
+
+The checkpoint at `8a4f8ef4b` preserves the experiments above. The new
+[integration tests](../../../tests/policies/flash/test_recovery_acceptance_integration.py)
+exercise the real RGB-D observation builder, surface fitter, Kalman update and
+surface-growth checks. They cover a stationary hidden object, motion while
+visible or hidden, a 12-pixel visible strip, simultaneous camera and supporting
+group motion, and corrupted depth followed by clear observations. A saved
+DexYCB mug checkpoint reproduces the wrong recovery without downloading a
+dataset or loading a neural model. Its original mask and depth are retained;
+labelled poses only evaluate the output.
+All comparisons enable the experimental partial-surface objective; its runtime
+default remains disabled.
+
+The rendered controls keep the pre-existing 5 mm median surface-point error /
+1° rotation-error requirement.
+Tests also check bounded fitting work, one filter correction per frame, no
+surface changes after rejected measurements, and bounded retained memory for
+one and three objects over 300 hidden frames. Known failures are strict expected
+failures: removing the marker exposes the actual failing assertion, and an
+unexpected pass requires review.
+
+**Experimental comparison, not a new default:** the same three filter settings
+run on every case. The broader setting changes only position process uncertainty
+from 2 to 30 mm/√s and uses the normal Kalman rejection. On the real mug
+checkpoint it adds the corresponding uncertainty since the last accepted
+observation; it does not replay the earlier clip with that setting.
+
+| Case                                                   | Current automatic reset      | No reset, current uncertainty | No reset, broader uncertainty |
+| ------------------------------------------------------ | ---------------------------- | ----------------------------- | ----------------------------- |
+| Visible motion, 26 frames                              | 11 within accuracy limits    | 8 within limits, then lost    | All 26 within limits          |
+| Reappearance after 40 mm hidden motion                 | Recovers immediately         | Does not recover              | Recovers immediately          |
+| Wrong mug recovery                                     | Publishes the wrong pose     | Rejects it                    | Rejects it                    |
+| Stationary object, narrow strip, camera + group motion | Pass                         | Pass                          | Pass                          |
+| Corrupted depth, then clear again                      | Rejects bad frames; recovers | Same                          | Same                          |
+
+The broader setting is a candidate for the next fix, not evidence that its
+uncertainty is calibrated or that it will improve every recording. The real mug
+remains lost when its bad fit is rejected. These tests do not solve that initial
+loss or test segmentation and 2D matching. Supporting markers in the camera
+control are exact synthetic inputs; group membership and point drift are outside
+that control's scope.
+
+Both fresh passes produced identical poses and availability. The visible-motion
+control ends at 5.21 mm error with the current reset and 1.89 mm with broader
+uncertainty. The mug's wrong recovery remains 83.25 mm / 153.79° from its label;
+both no-reset variants withhold it, and none of the three changes its stored
+surface at that frame.
+
+![Visible motion with the three filter settings](recovery-visible-motion-20261103.png)
+
+The graph shows the horizontal movement of a fixed point at the centre of the
+first measured surface. Scoring uses all three spatial directions and rotation.
+A line ends when that method stops returning an estimate.
+
+Performance is dominated by fitting: the real mug update takes 22–23 seconds,
+of which Kalman correction takes about 0.3–0.4 ms. This expensive multi-view
+experiment is not suitable for live use yet. With already prepared empty masks,
+600 frames of prediction take median 0.054 ms for one object and 0.160 ms for
+three; no fitting or map growth occurs. Process RSS increases by 64 KiB and
+92 KiB respectively. This bounds the hidden-object path only, not memory during
+surface reconstruction or neural inference.
+
+[Repeated results, timings, environment and input hashes](recovery-acceptance-20261103.json).
+
+Verification: 81 related tests pass; the new integration suite has 15 passes
+and three strict expected failures (wrong mug reset, current-reset motion error,
+and no-reset tracking loss with tight uncertainty). Production code is unchanged.
+
+Reproduce fresh timing with `python -m benchmarks.flash_recovery_matrix --output
+DIR --repeats 2`. Use `--hidden-objects 1` or `--hidden-objects 3` in separate
+processes for prediction-only memory and latency. Stage times overlap and must
+not be added; total frame time is observation preparation plus session update.
