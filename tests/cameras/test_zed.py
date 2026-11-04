@@ -159,6 +159,7 @@ def make_fake_sdk(*, open_ok=True, grab_ok=True, grab_stall_s=0.0, stall_at_grab
             assert measure == sl.MEASURE.DEPTH_U16_MM
             depth = np.tile(np.linspace(300, 1500, W, dtype=np.float32), (H, 1)).astype(np.uint16)
             depth[:, :100] = 0  # no measurement
+            depth[-1, -1] = self.grabs  # the grab counter, bottom-right
             mat._data = depth
 
     sl.InitParameters = InitParameters
@@ -240,6 +241,20 @@ def test_frames_are_rgb_eyes_and_uint16_depth_from_one_grab(fake_sdk):
         assert cam.read_latest_depth().shape == (H, W, 1)
         colour, d2 = cam.read_latest_color_and_depth()
         assert colour.shape == (H, W, 3) and d2.shape == (H, W, 1)
+    finally:
+        cam.disconnect()
+
+
+def test_the_blocking_pair_is_one_grab(fake_sdk):
+    """What a robot falls back to when the peek is too old: wait for the next
+    grab and take its left eye and depth together. Two single reads would
+    each consume the new-frame event and so span two grabs."""
+    cam = ZEDCamera(_config())
+    cam.connect()
+    try:
+        left, depth = cam.read_color_and_aligned_depth()
+        assert left.shape == (H, W, 3) and depth.shape == (H, W, 1) and depth.dtype == np.uint16
+        assert int(left[0, 0, 2]) == int(depth[-1, -1, 0]) % 256  # the grab counter in both
     finally:
         cam.disconnect()
 

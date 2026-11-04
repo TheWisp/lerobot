@@ -89,7 +89,8 @@ class ZEDCamera(Camera):
     Reads mirror the other drivers: ``read_latest`` is the left eye,
     ``read_latest_right`` and ``read_latest_stereo`` the right eye and the pair
     (when ``stereo_split``), ``read_latest_depth`` the depth map, and
-    ``read_latest_stereo_and_depth`` all three from one grab.
+    ``read_latest_stereo_and_depth`` all three from one grab;
+    ``read_color_and_aligned_depth`` waits for the next grab's eye and depth.
     """
 
     def __init__(self, config: ZEDCameraConfig):
@@ -338,31 +339,50 @@ class ZEDCamera(Camera):
             raise ValueError(f"{self} publishes {self.color_mode}; per-read colour modes are not supported.")
         return self.async_read(timeout_ms=timeout_ms)
 
-    def _async_read(self, timeout_ms: float, which: str) -> NDArray[Any]:
+    def _async_read(self, timeout_ms: float, *which: str) -> tuple[NDArray[Any], ...]:
+        """The next grab's frames, named ``left``, ``right`` or ``depth``, taken
+        under one lock: frames asked for together are one grab's."""
         if self.thread is None or not self.thread.is_alive():
             raise RuntimeError(f"{self} read thread is not running.")
         if not self.new_frame_event.wait(timeout=timeout_ms / 1000.0):
             raise TimeoutError(f"Timed out waiting for frame from camera {self} after {timeout_ms} ms.")
         with self.frame_lock:
-            frame = {
+            frames = {
                 "left": self.latest_color_frame,
                 "right": self.latest_right_frame,
                 "depth": self.latest_depth_frame,
-            }[which]
+            }
+            out = tuple(frames[name] for name in which)
             self.new_frame_event.clear()
-        if frame is None:
-            raise RuntimeError(f"Internal error: event set but no {which} frame available for {self}.")
-        return frame
+        for name, frame in zip(which, out, strict=True):
+            if frame is None:
+                raise RuntimeError(f"Internal error: event set but no {name} frame available for {self}.")
+        return out
 
     @check_if_not_connected
     def async_read(self, timeout_ms: float = 200) -> NDArray[Any]:
-        return self._async_read(timeout_ms, "left")
+        return self._async_read(timeout_ms, "left")[0]
 
     @check_if_not_connected
     def async_read_depth(self, timeout_ms: float = 200) -> NDArray[np.uint16]:
         if not self.use_depth:
             raise RuntimeError(f"{self}: cannot read depth — camera was configured with use_depth=False.")
-        return self._async_read(timeout_ms, "depth")
+        return self._async_read(timeout_ms, "depth")[0]
+
+    @check_if_not_connected
+    def read_color_and_aligned_depth(
+        self, color_mode: ColorMode | None = None, timeout_ms: int = 200
+    ) -> tuple[NDArray[Any], NDArray[np.uint16]]:
+        """The next grab's left eye and its depth, waited for: the blocking pair
+        a robot falls back to when the peek is too old. Two single reads would
+        span two grabs, since each consumes the new-frame event; this takes
+        both under one wait. The SDK computes depth in the left eye's frame."""
+        if color_mode is not None and color_mode != self.color_mode:
+            raise ValueError(f"{self} publishes {self.color_mode}; per-read colour modes are not supported.")
+        if not self.use_depth:
+            raise RuntimeError(f"{self}: cannot read depth — camera was configured with use_depth=False.")
+        left, depth = self._async_read(timeout_ms, "left", "depth")
+        return left, depth
 
     def _latest_frames(
         self, max_age_ms: int
