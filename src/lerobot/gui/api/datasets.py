@@ -3428,7 +3428,7 @@ def _depth_cameras(dataset) -> list[dict[str, Any]]:
         name = key.split(".")[-1]
         name = name[: -len("_depth")] if name.endswith("_depth") else name
         color_key = block.get("aligned_to")
-        if color_key is None:
+        if color_key not in dataset.meta.features:  # none recorded, or one the robot never published
             twin = f"{OBS_IMAGES}.{name}"
             color_key = twin if twin in dataset.meta.features else None
         out.append(

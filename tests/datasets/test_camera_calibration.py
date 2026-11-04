@@ -127,3 +127,28 @@ def test_feature_names_route_a_per_arm_camera_to_its_prefixed_features(tmp_path)
         features["observation.images.right_wrist_depth"]["info"]["camera"]["aligned_to"]
         == "observation.images.right_wrist"
     )
+
+
+def test_a_stereo_camera_on_a_robot_that_publishes_one_eye_lands_on_the_bare_feature(tmp_path):
+    """Which colour features exist is the robot's call. The SO-107 followers
+    publish a stereo camera's left eye under the bare name; the block goes
+    there, and the depth's ``aligned_to`` names that feature rather than a
+    ``_l`` one the dataset does not have."""
+    cam = SimpleNamespace(
+        intrinsics=CameraIntrinsics(W, H, 300.0, 300.0, 64.0, 48.0),
+        intrinsics_right=CameraIntrinsics(W, H, 301.0, 301.0, 64.0, 48.0),
+        stereo_split=True,
+    )
+    features = {
+        "observation.images.top": {"shape": [H, W, 3], "info": {}},
+        "observation.images.top_depth": {"shape": [H, W, 1], "info": {"is_depth_map": True}},
+    }
+    meta = SimpleNamespace(
+        features=features, info=SimpleNamespace(to_dict=lambda: {"features": features}), root=tmp_path
+    )
+    written = attach_camera_intrinsics(meta, {"top": cam})
+    assert written == ["observation.images.top", "observation.images.top_depth"]
+    assert features["observation.images.top"]["info"]["camera"]["intrinsics"]["fx"] == 300.0
+    assert (
+        features["observation.images.top_depth"]["info"]["camera"]["aligned_to"] == "observation.images.top"
+    )

@@ -234,6 +234,28 @@ class TestPointCloudFeeds:
         assert cams[0]["extrinsics"]["source"] == "click_target_file"
         assert cams[0]["extrinsics"]["T_parent_camera"][2][3] == 0.5
 
+        # A depth block may name a colour feature the dataset does not have: a
+        # stereo camera's left eye, on a robot that published the bare name.
+        # The cloud is coloured from the feature that is there, or from none.
+        e_depth, e = "observation.images.e_depth", "observation.images.e"
+        dataset.meta.features[e_depth] = {
+            "dtype": "video", "shape": [H, W, 1],
+            "info": {"is_depth_map": True, "camera": {"aligned_to": "observation.images.e_l"}},
+        }  # fmt: skip
+        try:
+            by_name = lambda: {  # noqa: E731
+                c["name"]: c
+                for c in _get(app, f"/api/datasets/{dataset_id}/episodes/0/urdf-viz/cameras").json()[
+                    "cameras"
+                ]
+            }
+            assert by_name()["e"]["color_key"] is None
+            dataset.meta.features[e] = {"dtype": "video", "shape": [H, W, 3], "info": {}}
+            assert by_name()["e"]["color_key"] == e
+        finally:
+            dataset.meta.features.pop(e_depth)
+            dataset.meta.features.pop(e, None)
+
 
 class TestAutoRange:
     def test_the_episode_range_is_the_recorded_percentiles_in_metres(self, app_with_state, dataset):

@@ -50,27 +50,34 @@ def camera_info_block(cam: Any, intrinsics: Any = None) -> dict[str, Any] | None
     return block
 
 
-def _feature_blocks(cam_key: str, cam: Any) -> list[tuple[str, dict[str, Any], str | None]]:
+def _feature_blocks(
+    cam_key: str, cam: Any, features: Mapping[str, Any]
+) -> list[tuple[str, dict[str, Any], str | None]]:
     """``(feature key, block, aligned_to)`` for every feature this camera
     publishes: its colour feature, or both eyes of a stereo camera, and the
     depth feature, which shares the left (or only) colour feature's geometry
     and, when the driver says what it did to the pixels (``depth_processing``),
-    carries that too, so a reader knows whether a hole is the sensor's own."""
+    carries that too, so a reader knows whether a hole is the sensor's own.
+
+    Which colour features exist is the robot's call, not the camera's: a
+    stereo camera on a robot that publishes only its left eye under the bare
+    name gets the bare name, so ``aligned_to`` never names a feature the
+    dataset does not have."""
     block = camera_info_block(cam)
     if block is None:
         return []
+    colour_key = f"{OBS_IMAGES}.{cam_key}"
+    out = [(colour_key, block, None)]
     if getattr(cam, "stereo_split", False):
         from lerobot.cameras.stereo import stereo_channel_keys
 
         left_key, right_key = (f"{OBS_IMAGES}.{k}" for k in stereo_channel_keys(cam_key))
-        out = [(left_key, block, None)]
-        right_block = camera_info_block(cam, getattr(cam, "intrinsics_right", None))
-        if right_block is not None:
-            out.append((right_key, right_block, None))
-        colour_key = left_key
-    else:
-        colour_key = f"{OBS_IMAGES}.{cam_key}"
-        out = [(colour_key, block, None)]
+        if left_key in features:
+            out = [(left_key, block, None)]
+            right_block = camera_info_block(cam, getattr(cam, "intrinsics_right", None))
+            if right_block is not None:
+                out.append((right_key, right_block, None))
+            colour_key = left_key
     depth_block = block
     processing = getattr(cam, "depth_processing", None)
     if processing:
@@ -103,7 +110,7 @@ def attach_camera_intrinsics(
     written: list[str] = []
     for cam_key, cam in cameras.items():
         name = (feature_names or {}).get(cam_key, cam_key)
-        for key, block, aligned_to in _feature_blocks(name, cam):
+        for key, block, aligned_to in _feature_blocks(name, cam, meta.features):
             feature = meta.features.get(key)
             if feature is None:
                 continue
