@@ -108,4 +108,41 @@ assert.deepStrictEqual(get("currentProfile.data.cameras.side"), {
   fps: 30,
   stereo_split: true,
 });
+// A role that changes type sheds the old type's keys. The launch parses each
+// camera as its type and refuses a key from another ("The fields
+// `enable_hole_filling` are not valid for ZEDCameraConfig"), so a reassignment
+// that kept them broke the next record or teleop. The states below are printed
+// for the Python wrapper, which hands them to that parser.
+vm.runInContext(
+  `currentProfile.data.cameras = {
+     top: { type: "intelrealsense", serial_number_or_name: "031422250818", width: 1280, height: 720, fps: 30,
+            use_depth: true, enable_hole_filling: false, enable_temporal: false },
+     wrist: { type: "opencv", index_or_path: "/dev/video2", width: 640, height: 480, fps: 30, fourcc: "MJPG" },
+   };
+   detectedCameras = [
+     { name: "Stereolabs ZED-M", type: "ZED", id: "11975257", default_stream_profile: { width: 1280, height: 720, fps: 30 } },
+     { name: "Arducam", type: "OpenCV", id: "/dev/video6", default_stream_profile: { width: 640, height: 480, fps: 30, fourcc: "MJPG" } },
+   ];`,
+  context,
+);
+const states = [];
+// The ZED takes the RealSense's role: depth stays on (both types have it), the filters go.
+get(`assignCameraRole(0, "top")`);
+states.push(get("currentProfile.data.cameras"));
+assert.deepStrictEqual(states[0].top, {
+  type: "zed", serial_number: 11975257, width: 1280, height: 720, fps: 30, use_depth: true, stereo_split: true,
+});
+// The ZED moves to the UVC camera's role and the UVC camera is swapped into the
+// ZED's: each role keeps its size and sheds the other type's keys. The split
+// does not follow the role onto a UVC camera, which would be opened at twice
+// its width.
+get(`assignCameraRole(0, "wrist")`);
+states.push(get("currentProfile.data.cameras"));
+assert.deepStrictEqual(states[1].top, { type: "opencv", index_or_path: "/dev/video2", width: 1280, height: 720, fps: 30 });
+assert.deepStrictEqual(states[1].wrist, { type: "zed", serial_number: 11975257, width: 1280, height: 720, fps: 30, stereo_split: true });
+// A UVC camera takes the ZED's role outright.
+get(`assignCameraRole(1, "wrist")`);
+states.push(get("currentProfile.data.cameras"));
+assert.deepStrictEqual(states[2].wrist, { type: "opencv", index_or_path: "/dev/video6", width: 1280, height: 720, fps: 30, fourcc: "MJPG" });
+console.log("cameras " + JSON.stringify(states));
 console.log("robot_zed_camera.test.js ok");

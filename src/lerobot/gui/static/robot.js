@@ -902,6 +902,7 @@ async function assignCameraRole(cameraIndex, role) {
             delete oldRoleConfig.index_or_path;
             delete oldRoleConfig.serial_number_or_name;
         }
+        _shedKeysOfOtherTypes(oldRoleConfig, currentProfile.data.cameras[oldRole].type);
         currentProfile.data.cameras[oldRole] = oldRoleConfig;
     } else if (oldRole) {
         // No swap target — just remove old role
@@ -936,6 +937,7 @@ async function assignCameraRole(cameraIndex, role) {
             delete camConfig.width; delete camConfig.height; delete camConfig.fps;
         }
     }
+    _shedKeysOfOtherTypes(camConfig, existing.type);
     // Only fill in settings from detected defaults if not already configured
     const profile = cam.default_stream_profile || {};
     if (!camConfig.width && profile.width) camConfig.width = profile.width;
@@ -981,6 +983,32 @@ const DEPTH_PROCESSING_FLAGS = {
     zed: [['fill_holes', 'Fill holes', false]],
 };
 const DEPTH_PROCESSING_KEYS = new Set(Object.values(DEPTH_PROCESSING_FLAGS).flat().map(([key]) => key));
+
+// The keys each camera type accepts beyond the size and rate every type
+// shares. A role that changes type keeps the shared keys and the new type's
+// own and sheds the rest: the launch parses each camera as its type and
+// refuses a key from another ('The fields `enable_hole_filling` are not
+// valid for ZEDCameraConfig'). tests/gui/test_robot_zed_camera_js.py hands
+// what a reassignment leaves to that parser.
+const CAMERA_SHARED_KEYS = new Set(['type', 'width', 'height', 'fps', 'color_mode', 'rotation', 'warmup_s']);
+// stereo_split is a fact about the unit, not the role: a ZED sets it below,
+// and a UVC camera dropped into a split role must not be opened at twice its
+// width, so it does not cross to opencv.
+const CAMERA_TYPE_KEYS = {
+    opencv: ['index_or_path', 'fourcc', 'backend'],
+    intelrealsense: ['serial_number_or_name', 'use_rgb', 'use_depth',
+                     ...DEPTH_PROCESSING_FLAGS.intelrealsense.map(([key]) => key)],
+    zed: ['serial_number', 'use_depth', 'depth_mode', 'stereo_split', 'depth_min_m', 'depth_max_m',
+          ...DEPTH_PROCESSING_FLAGS.zed.map(([key]) => key)],
+};
+
+function _shedKeysOfOtherTypes(cfg, wasType) {
+    if (!wasType || wasType === cfg.type) return;
+    const own = new Set(CAMERA_TYPE_KEYS[cfg.type] || []);
+    for (const key of Object.keys(cfg)) {
+        if (!CAMERA_SHARED_KEYS.has(key) && !own.has(key)) delete cfg[key];
+    }
+}
 
 function depthProcessingControls(role, cam) {
     const flags = DEPTH_PROCESSING_FLAGS[cam.type] || [];
