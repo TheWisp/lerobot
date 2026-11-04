@@ -1024,7 +1024,9 @@ def test_scene_http_uses_same_frame_units_and_relative_label_origin(tmp_path, mo
         )
 
 
-@pytest.mark.parametrize("method", ["conditioned_growing", "group_fixed", "group_growing"])
+@pytest.mark.parametrize(
+    "method", ["conditioned_fixed", "conditioned_growing", "group_fixed", "group_growing"]
+)
 def test_scene_growth_never_changes_labelled_reference(tmp_path, method):
     from lerobot.gui.flash_experiment_scene import scene_packet
 
@@ -1044,8 +1046,52 @@ def test_scene_growth_never_changes_labelled_reference(tmp_path, method):
         data, _, _ = decode_scene_packet(scene_packet(manifest, index, method))
         obj = data["objects"]["object"]
         np.testing.assert_array_equal(obj["surface"], np.full((7, 3), index + 0.25))
+        np.testing.assert_array_equal(obj["initial_surface"], np.full((7, 3), 0.25))
         assert len(obj["reference"]) == 4
         assert np.array(obj["labelled_pose"])[:3, 3] == pytest.approx([0, index * 0.02, 0])
+
+
+@pytest.mark.requires_playwright
+def test_scene_surface_switch_sends_initial_map_not_dense_reference_to_renderer(
+    gui_page, tmp_path, monkeypatch
+):
+    run, _ = completed_run(tmp_path)
+    rows = [json.loads(line) for line in (run / "frames.jsonl").read_text().splitlines()]
+    models = run / "surface_models/group_growing/object"
+    models.mkdir(parents=True)
+    initial = np.array([[-0.01, 0, 1], [0, 0.01, 1], [0.01, 0, 1]])
+    for i, row in enumerate(rows):
+        model = np.concatenate((initial, [[0.02 + j * 0.01, 0, 1] for j in range(i)])) if i else initial
+        np.savez(models / f"{i + 1:06d}.npz", points=model)
+        row["objects"]["object"].update(
+            group_growing=np.eye(4).tolist(), group_growing_details={"map_version_after": i + 1}
+        )
+    (run / "frames.jsonl").write_text("\n".join(json.dumps(row) for row in rows))
+    root = tmp_path / "browser"
+    result = export(run, root)
+    monkeypatch.setenv("LEROBOT_FLASH_EXPERIMENT_DIR", str(root))
+    page = gui_page
+    page.evaluate("async () => { switchTab('run'); await runTabInit(); await selectWorkflow('flash'); }")
+    page.locator(f'.flash-experiment-item[data-id="{result.name}"]').click()
+    page.select_option("#flash-experiment-method", "group_growing")
+    page.get_by_role("button", name="3D scene", exact=True).click()
+    page.wait_for_selector('#flash-experiment-scene[data-method="group_growing"][data-frame="0"]')
+    page.evaluate("seekFlashExperiment(2)")
+    page.wait_for_selector('#flash-experiment-scene[data-frame="2"]')
+    # Observe the real renderer boundary without replacing its rendering.
+    page.evaluate("""() => {
+        const viewer=flashSceneState.viewer, update=viewer.update.bind(viewer);
+        viewer.update=(depth,rgb,camera,objects)=>{
+            window.displayedEstimate=objects.find(o=>o.layer==='estimate').points;
+            return update(depth,rgb,camera,objects);
+        };
+    }""")
+    page.select_option("#flash-scene-surface", "starting")
+    np.testing.assert_allclose(page.evaluate("window.displayedEstimate"), initial)
+    page.select_option("#flash-scene-surface", "expanded")
+    assert len(page.evaluate("window.displayedEstimate")) == 5
+    page.select_option("#flash-scene-surface", "starting")
+    np.testing.assert_allclose(page.evaluate("window.displayedEstimate"), initial)
 
 
 @pytest.mark.requires_playwright
@@ -1299,7 +1345,10 @@ def test_browser_names_matching_backend_from_selected_recording(gui_page, tmp_pa
 
 
 @pytest.mark.parametrize("mode", ["selection", "kalman", "default"])
-def test_pipeline_settings_roundtrip_through_http_worker_and_real_fitter(tmp_path, monkeypatch, mode):
+@pytest.mark.parametrize("settings_location", ["request", "item"])
+def test_pipeline_settings_roundtrip_through_http_worker_and_real_fitter(
+    tmp_path, monkeypatch, mode, settings_location
+):
     """Edit covariance through the HTTP contract and inspect real saved fitting diagnostics."""
     from pathlib import Path
 
@@ -1332,6 +1381,8 @@ def test_pipeline_settings_roundtrip_through_http_worker_and_real_fitter(tmp_pat
         edited["surface_experiment"]["uncertainty"]["mode"] = mode
     edited["surface_experiment"]["growth_min_overlap"] = 0.9
     edited["surface_experiment"]["growth_agreement_m"] = 0.0025
+    edited["surface_experiment"]["uncertainty"]["reset_on_geometry_conflict"] = False
+    edited["config"]["shape"]["mask_coverage_weight"] = 0.5
     assert client.post("/api/run/flash/experiments/rebuild", json=edited).status_code == 400
     invalid = json.loads(json.dumps(edited))
     invalid["surface_experiment"]["uncertainty"]["max_measurements"] = 0
@@ -1348,7 +1399,12 @@ def test_pipeline_settings_roundtrip_through_http_worker_and_real_fitter(tmp_pat
     )
     job = root / ".rebuild" / "settings-test"
     job.mkdir(parents=True)
-    write_json(job / "request.json", {"browser_root": str(root), "items": [item], "settings": edited})
+    request = {"browser_root": str(root), "items": [item], "settings": None}
+    if settings_location == "request":
+        request["settings"] = edited
+    else:
+        item["settings"] = edited
+    write_json(job / "request.json", request)
     write_json(
         job / "status.json",
         {
@@ -1367,6 +1423,8 @@ def test_pipeline_settings_roundtrip_through_http_worker_and_real_fitter(tmp_pat
     new_run = Path(latest["source_run"])
     saved = json.loads((new_run.parent / "provenance.json").read_text())
     assert saved["surface_experiment"]["uncertainty"]["enabled"]
+    assert saved["surface_experiment"]["uncertainty"]["reset_on_geometry_conflict"] is False
+    assert saved["config"]["shape"]["mask_coverage_weight"] == 0.5
     rows = [json.loads(line) for line in (new_run / "frames.jsonl").read_text().splitlines()]
     # Check the actual fit ran the new mode, not merely a saved setting.
     assert "uncertainty" in rows[1]["objects"]["object"]["group_growing_details"]["fit"]

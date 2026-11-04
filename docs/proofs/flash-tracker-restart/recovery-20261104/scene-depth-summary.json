@@ -1,0 +1,680 @@
+{
+  "scope": "Independent frame search, not causal tracking recovery; no gamepad ground truth",
+  "recorded_12s_pose": {
+    "old_accepted": true,
+    "old_conflict_fraction": 0.0744680851,
+    "new_accepted": false,
+    "new_exposed_conflict_fraction": 0.7419816074,
+    "frozen_replay_corrected_pose": null,
+    "grew_surface": false
+  },
+  "controls_passed": 155,
+  "regression_mutation_caught": true,
+  "experiments": {
+    "scene-depth-search2": [
+      {
+        "frame": 271,
+        "selected": 8,
+        "accepted_candidates": 1,
+        "wall_s": 8.038768684025854,
+        "selected_result": {
+          "seed": 8,
+          "pose": [
+            [
+              -0.44081945052340205,
+              -0.8115219987039608,
+              0.3835495504622246,
+              -0.2893692538753528
+            ],
+            [
+              -0.29843572432564625,
+              -0.2704872504121624,
+              -0.9152992766361692,
+              0.38529277561724784
+            ],
+            [
+              0.8465307616894214,
+              -0.517946612098194,
+              -0.12295111438913765,
+              0.48807285779601717
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "detail": {
+            "initial_cost": 360.72984216994803,
+            "cost": 0.02297912167967111,
+            "evaluations": 50,
+            "converged": false,
+            "batched_jacobian": true,
+            "fit_reference_points": 400,
+            "fit_target_points": 124,
+            "retained_admissible_iterate": true
+          },
+          "check": {
+            "accepted": true,
+            "observed_outlier_fraction": 0.0,
+            "free_space_outlier_fraction": 0.0,
+            "visible_reference_weight": 2.0447896272405,
+            "visible_current_weight": 23.841654047205637,
+            "has_visible_overlap": true,
+            "scene_depth_outlier_fraction": 0.03153082352603441,
+            "scene_depth_exposed_weights": [
+              11.292238838870947,
+              31.71499783931488
+            ]
+          }
+        }
+      },
+      {
+        "frame": 316,
+        "selected": 0,
+        "accepted_candidates": 3,
+        "wall_s": 6.995932972000446,
+        "selected_result": {
+          "seed": 0,
+          "pose": [
+            [
+              0.9665624170785806,
+              0.11026851778545149,
+              0.23151230610188228,
+              -0.07587606097914432
+            ],
+            [
+              -0.10020176926666564,
+              0.9934548145128335,
+              -0.0548373682547337,
+              -0.04892654225619463
+            ],
+            [
+              -0.23604385043258874,
+              0.029805796528107588,
+              0.9712851873503874,
+              -0.06233220948485606
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "detail": {
+            "initial_cost": 0.06165273267322781,
+            "cost": 0.026123947998066548,
+            "evaluations": 30,
+            "converged": true,
+            "batched_jacobian": true,
+            "fit_reference_points": 400,
+            "fit_target_points": 169,
+            "retained_admissible_iterate": true
+          },
+          "check": {
+            "accepted": true,
+            "observed_outlier_fraction": 0.0,
+            "free_space_outlier_fraction": 0.0,
+            "visible_reference_weight": 12.529803575705923,
+            "visible_current_weight": 114.69285684622851,
+            "has_visible_overlap": true,
+            "scene_depth_outlier_fraction": 0.006774378659410107,
+            "scene_depth_exposed_weights": [
+              38.02858527334657,
+              128.34240728844372
+            ]
+          }
+        }
+      },
+      {
+        "frame": 451,
+        "selected": 19,
+        "accepted_candidates": 11,
+        "wall_s": 7.96081934904214,
+        "selected_result": {
+          "seed": 19,
+          "pose": [
+            [
+              0.5749685674261572,
+              -0.3515192293286543,
+              0.738813493301321,
+              -0.271239852094106
+            ],
+            [
+              -0.2948277734045783,
+              -0.9313519377153725,
+              -0.2136823627329114,
+              0.07751466352389971
+            ],
+            [
+              0.7632088380654476,
+              -0.0949620952065082,
+              -0.6391357210896438,
+              0.7950193711529432
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "detail": {
+            "initial_cost": 10.388740587115832,
+            "cost": 3.9493440764605437e-07,
+            "evaluations": 28,
+            "converged": true,
+            "batched_jacobian": true,
+            "fit_reference_points": 400,
+            "fit_target_points": 294,
+            "retained_admissible_iterate": true
+          },
+          "check": {
+            "accepted": true,
+            "observed_outlier_fraction": 0.0,
+            "free_space_outlier_fraction": 0.0,
+            "visible_reference_weight": 0.0,
+            "visible_current_weight": 0.00024311345136728167,
+            "has_visible_overlap": true,
+            "scene_depth_outlier_fraction": 0.0,
+            "scene_depth_exposed_weights": [
+              0.15832470850868383,
+              2.8114844162163486
+            ]
+          }
+        }
+      },
+      {
+        "frame": 627,
+        "selected": 3,
+        "accepted_candidates": 20,
+        "wall_s": 35.0237140529789,
+        "selected_result": {
+          "seed": 3,
+          "pose": [
+            [
+              -0.5081377579530233,
+              -0.7593902226265051,
+              0.4063526900633754,
+              -0.27960176169516965
+            ],
+            [
+              -0.8314950881453422,
+              0.3095410017907427,
+              -0.4613028144294722,
+              0.04074286369862178
+            ],
+            [
+              0.2245260281852498,
+              -0.572285643703955,
+              -0.7887187107440181,
+              0.7924711357388503
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "detail": {
+            "initial_cost": 0.31267130294485357,
+            "cost": 0.000192046227063588,
+            "evaluations": 50,
+            "converged": false,
+            "batched_jacobian": true,
+            "fit_reference_points": 400,
+            "fit_target_points": 1262,
+            "retained_admissible_iterate": true
+          },
+          "check": {
+            "accepted": true,
+            "observed_outlier_fraction": 0.04429784589690059,
+            "free_space_outlier_fraction": 0.0,
+            "visible_reference_weight": 0.0,
+            "visible_current_weight": 0.3339101274405075,
+            "has_visible_overlap": true,
+            "scene_depth_outlier_fraction": 0.0,
+            "scene_depth_exposed_weights": [
+              0.01585995969485277,
+              0.0
+            ]
+          }
+        }
+      }
+    ],
+    "scene-depth-overlap-search": [
+      {
+        "frame": 271,
+        "selected": null,
+        "accepted_candidates": 0,
+        "wall_s": 9.39956503798021,
+        "selected_result": null
+      },
+      {
+        "frame": 316,
+        "selected": 0,
+        "accepted_candidates": 4,
+        "wall_s": 7.751506190979853,
+        "selected_result": {
+          "seed": 0,
+          "pose": [
+            [
+              0.9859743614475807,
+              -0.01838003451488207,
+              0.16588168343511414,
+              -0.03594379799679269
+            ],
+            [
+              0.0338996599401136,
+              0.9952537807403319,
+              -0.09121800797004724,
+              -0.021457946795450437
+            ],
+            [
+              -0.16341778245950042,
+              0.09556194981953035,
+              0.9819177878634762,
+              -0.05932335745141614
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "detail": {
+            "initial_cost": 1.511285297678222,
+            "cost": 1.0461929726565131,
+            "evaluations": 29,
+            "converged": true,
+            "batched_jacobian": true,
+            "fit_reference_points": 400,
+            "fit_target_points": 169,
+            "retained_admissible_iterate": true
+          },
+          "check": {
+            "accepted": true,
+            "observed_outlier_fraction": 0.006088599280961313,
+            "free_space_outlier_fraction": 0.0,
+            "visible_reference_weight": 16.528239493270767,
+            "visible_current_weight": 164.24138851228727,
+            "has_visible_overlap": true,
+            "scene_depth_outlier_fraction": 0.006810873470610041,
+            "scene_depth_exposed_weights": [
+              22.96403872955049,
+              149.80432277536167
+            ]
+          }
+        }
+      },
+      {
+        "frame": 451,
+        "selected": 0,
+        "accepted_candidates": 13,
+        "wall_s": 8.528715109976474,
+        "selected_result": {
+          "seed": 0,
+          "pose": [
+            [
+              0.8399184901865264,
+              0.2548364856538964,
+              0.479161032871366,
+              -0.1735836185623188
+            ],
+            [
+              0.423037292502548,
+              0.2456412173352997,
+              -0.8721810829742555,
+              0.3991524922112944
+            ],
+            [
+              -0.3399652614531245,
+              0.9352640043996067,
+              0.0985132634699567,
+              0.27386290152647386
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "detail": {
+            "initial_cost": 1.3589340311428273,
+            "cost": 1.1353721258194513,
+            "evaluations": 24,
+            "converged": true,
+            "batched_jacobian": true,
+            "fit_reference_points": 400,
+            "fit_target_points": 294,
+            "retained_admissible_iterate": true
+          },
+          "check": {
+            "accepted": true,
+            "observed_outlier_fraction": 0.007617536859688007,
+            "free_space_outlier_fraction": 0.0,
+            "visible_reference_weight": 29.382550982686,
+            "visible_current_weight": 262.12493070793687,
+            "has_visible_overlap": true,
+            "scene_depth_outlier_fraction": 0.006338237851468055,
+            "scene_depth_exposed_weights": [
+              28.40494691998283,
+              209.7817544044734
+            ]
+          }
+        }
+      },
+      {
+        "frame": 627,
+        "selected": 4,
+        "accepted_candidates": 17,
+        "wall_s": 29.07568127004197,
+        "selected_result": {
+          "seed": 4,
+          "pose": [
+            [
+              -0.9634798953512208,
+              0.2220888344603175,
+              -0.14960962823982346,
+              -0.1594706105306282
+            ],
+            [
+              -0.2619527656776059,
+              -0.6657613723730033,
+              0.6986719857056441,
+              -0.3100611813444437
+            ],
+            [
+              0.055562935558282386,
+              0.7123470675619239,
+              0.6996244817958229,
+              0.09031151402577034
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "detail": {
+            "initial_cost": 0.5259909422828544,
+            "cost": 0.43179775733942505,
+            "evaluations": 21,
+            "converged": true,
+            "batched_jacobian": true,
+            "fit_reference_points": 400,
+            "fit_target_points": 1262,
+            "retained_admissible_iterate": true
+          },
+          "check": {
+            "accepted": true,
+            "observed_outlier_fraction": 0.0018302914350826322,
+            "free_space_outlier_fraction": 0.0,
+            "visible_reference_weight": 314.88800199564673,
+            "visible_current_weight": 1092.7221543326,
+            "has_visible_overlap": true,
+            "scene_depth_outlier_fraction": 0.0010333510702682448,
+            "scene_depth_exposed_weights": [
+              278.9632226755532,
+              967.7253246957132
+            ]
+          }
+        }
+      }
+    ],
+    "scene-depth-keep-ranges": [
+      {
+        "frame": 316,
+        "selected": 4,
+        "accepted_candidates": 4,
+        "wall_s": 7.092865535989404,
+        "selected_result": {
+          "seed": 4,
+          "pose": [
+            [
+              0.322368365037607,
+              0.3450759843196336,
+              -0.8814767168047134,
+              0.29250289597531687
+            ],
+            [
+              0.2740068385087691,
+              -0.9253407694980479,
+              -0.26203952517738816,
+              0.18569549591706377
+            ],
+            [
+              -0.9060898905039222,
+              -0.157057395084083,
+              -0.3928537704744511,
+              0.4303037969573795
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "detail": {
+            "initial_cost": 75.99237441606243,
+            "cost": 1.3694811889583616,
+            "evaluations": 38,
+            "converged": true,
+            "batched_jacobian": true,
+            "fit_reference_points": 407,
+            "fit_target_points": 72,
+            "retained_admissible_iterate": true
+          },
+          "check": {
+            "accepted": true,
+            "observed_outlier_fraction": 0.0009543144163938974,
+            "free_space_outlier_fraction": 0.0,
+            "visible_reference_weight": 14.335713106247798,
+            "visible_current_weight": 48.974549999377686,
+            "has_visible_overlap": true,
+            "scene_depth_outlier_fraction": 0.002492184577708479,
+            "scene_depth_exposed_weights": [
+              25.38421611784745,
+              46.740292196359846
+            ]
+          }
+        }
+      },
+      {
+        "frame": 451,
+        "selected": 11,
+        "accepted_candidates": 12,
+        "wall_s": 5.966856352984905,
+        "selected_result": {
+          "seed": 11,
+          "pose": [
+            [
+              0.6681602576745476,
+              0.3280081887679956,
+              -0.6678117235908795,
+              0.275987295512685
+            ],
+            [
+              0.2534660937387848,
+              0.7435339793335279,
+              0.6187989664675034,
+              -0.255010855014621
+            ],
+            [
+              0.6995118364896219,
+              -0.5827245058152166,
+              0.4136609008999137,
+              0.3616920758163057
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "detail": {
+            "initial_cost": 34.3189846653364,
+            "cost": 1.406026963594989,
+            "evaluations": 41,
+            "converged": true,
+            "batched_jacobian": true,
+            "fit_reference_points": 407,
+            "fit_target_points": 88,
+            "retained_admissible_iterate": true
+          },
+          "check": {
+            "accepted": true,
+            "observed_outlier_fraction": 0.15158908901086046,
+            "free_space_outlier_fraction": 0.002457002457002457,
+            "visible_reference_weight": 26.592429303843925,
+            "visible_current_weight": 65.96780853590036,
+            "has_visible_overlap": true,
+            "scene_depth_outlier_fraction": 0.17368467876228702,
+            "scene_depth_exposed_weights": [
+              30.623816301006677,
+              63.333162593202104
+            ]
+          }
+        }
+      }
+    ]
+  },
+  "depth_evidence": [
+    {
+      "frame": 271,
+      "mask": 1682,
+      "valid_depth": 815,
+      "clean": 382,
+      "samples": 124,
+      "shape_singular_m": [
+        0.07013509787865739,
+        0.015411389551975562,
+        0.005948808985166344
+      ],
+      "depth_range_m": [
+        0.2630000114440918,
+        0.2639999985694885,
+        0.2680000066757202,
+        0.2720000147819519,
+        0.27300000190734863
+      ]
+    },
+    {
+      "frame": 316,
+      "mask": 2522,
+      "valid_depth": 958,
+      "clean": 340,
+      "samples": 169,
+      "shape_singular_m": [
+        0.09632176041814036,
+        0.03958253543433843,
+        0.012322885375040216
+      ],
+      "depth_range_m": [
+        0.3540000021457672,
+        0.359000027179718,
+        0.3620000183582306,
+        0.36400002241134644,
+        0.36500000953674316
+      ]
+    },
+    {
+      "frame": 451,
+      "mask": 3126,
+      "valid_depth": 1102,
+      "clean": 528,
+      "samples": 294,
+      "shape_singular_m": [
+        0.2170429416569483,
+        0.05651904055984607,
+        0.037699790771088024
+      ],
+      "depth_range_m": [
+        0.3850000202655792,
+        0.3920000195503235,
+        0.3930000066757202,
+        0.39570002257823944,
+        0.398000031709671
+      ]
+    },
+    {
+      "frame": 627,
+      "mask": 5994,
+      "valid_depth": 5865,
+      "clean": 5153,
+      "samples": 2448,
+      "shape_singular_m": [
+        0.9378712098857364,
+        0.5267892037990493,
+        0.06034071811324484
+      ],
+      "depth_range_m": [
+        0.3920000195503235,
+        0.39400002360343933,
+        0.4000000059604645,
+        0.40800002217292786,
+        0.41100001335144043
+      ]
+    }
+  ],
+  "defaults_changed": false,
+  "published_to_gui": false,
+  "outline_coverage_test": [
+    {
+      "frame": 316,
+      "method": "scene-depth-overlap-search",
+      "mask": 2522,
+      "uncovered": 25,
+      "uncovered_after_2px": 0
+    },
+    {
+      "frame": 316,
+      "method": "scene-depth-outline-search",
+      "mask": 2522,
+      "uncovered": 25,
+      "uncovered_after_2px": 0
+    },
+    {
+      "frame": 451,
+      "method": "scene-depth-overlap-search",
+      "mask": 3126,
+      "uncovered": 1444,
+      "uncovered_after_2px": 1231
+    },
+    {
+      "frame": 451,
+      "method": "scene-depth-outline-search",
+      "mask": 3126,
+      "uncovered": 185,
+      "uncovered_after_2px": 40
+    },
+    {
+      "frame": 627,
+      "method": "scene-depth-overlap-search",
+      "mask": 5994,
+      "uncovered": 928,
+      "uncovered_after_2px": 318
+    },
+    {
+      "frame": 627,
+      "method": "scene-depth-outline-search",
+      "mask": 5994,
+      "uncovered": 879,
+      "uncovered_after_2px": 220
+    }
+  ],
+  "source_surface_uncovered_mask": {
+    "mask": 6028,
+    "uncovered": 744,
+    "uncovered_after_2px": 110
+  },
+  "extra_outline_control_passed": true
+}

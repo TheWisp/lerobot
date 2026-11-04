@@ -1,0 +1,1310 @@
+{
+  "20": {
+    "previous_frame": 19,
+    "map_version": 17,
+    "model_points": 943,
+    "observed_points": 2445,
+    "poses": {
+      "label": {
+        "cloud_mm": 0.0,
+        "rotation_deg": 0.017595552240702687,
+        "geometry": {
+          "accepted": true,
+          "observed_outlier_fraction": 0.008206890825671175,
+          "free_space_outlier_fraction": 0.0,
+          "visible_reference_weight": 725.4801782445046,
+          "visible_current_weight": 1414.2148808163286,
+          "has_visible_overlap": true,
+          "scene_depth_outlier_fraction": 0.018176845449020228,
+          "scene_depth_exposed_weights": [
+            306.34303315089034,
+            559.3077576565188
+          ]
+        },
+        "score": 0.7804321743683744,
+        "outline_cost": 0.30741796669112403,
+        "outline_max_gap_px_after_allowance": 3.9771325665015755
+      },
+      "prior": {
+        "cloud_mm": 1.3279642397478009,
+        "rotation_deg": 2.3549024650042436,
+        "geometry": {
+          "accepted": true,
+          "observed_outlier_fraction": 0.013513290668919858,
+          "free_space_outlier_fraction": 0.0,
+          "visible_reference_weight": 753.1411757811118,
+          "visible_current_weight": 1444.1620357947868,
+          "has_visible_overlap": true,
+          "scene_depth_outlier_fraction": 0.024930528865166838,
+          "scene_depth_exposed_weights": [
+            306.468546170924,
+            535.6409084504351
+          ]
+        },
+        "score": 0.7571176668247982,
+        "outline_cost": 0.3280682613863314,
+        "outline_max_gap_px_after_allowance": 3.875338548418765
+      },
+      "candidate": {
+        "cloud_mm": 1.2142766461748529,
+        "rotation_deg": 2.1360889925871023,
+        "geometry": {
+          "accepted": true,
+          "observed_outlier_fraction": 0.012322662154008901,
+          "free_space_outlier_fraction": 0.0,
+          "visible_reference_weight": 749.2310920838175,
+          "visible_current_weight": 1454.266643125753,
+          "has_visible_overlap": true,
+          "scene_depth_outlier_fraction": 0.02517963108876878,
+          "scene_depth_exposed_weights": [
+            315.99440384922747,
+            516.7031446572946
+          ]
+        },
+        "score": 0.7420218401286915,
+        "outline_cost": 0.3159710366814419,
+        "outline_max_gap_px_after_allowance": 3.7276943425629394
+      },
+      "output": {
+        "cloud_mm": 1.278776723488082,
+        "rotation_deg": 2.1954529954639272,
+        "geometry": {
+          "accepted": true,
+          "observed_outlier_fraction": 0.012355981720829218,
+          "free_space_outlier_fraction": 0.0,
+          "visible_reference_weight": 753.1134227975656,
+          "visible_current_weight": 1448.3439089178878,
+          "has_visible_overlap": true,
+          "scene_depth_outlier_fraction": 0.025384471241879574,
+          "scene_depth_exposed_weights": [
+            317.31416995526376,
+            513.9283931657448
+          ]
+        },
+        "score": 0.74457996054431,
+        "outline_cost": 0.3182046837375322,
+        "outline_max_gap_px_after_allowance": 3.742097434206041
+      }
+    },
+    "label_checked_with_labelled_previous_alignment": {
+      "accepted": true,
+      "observed_outlier_fraction": 0.010548441958845,
+      "free_space_outlier_fraction": 0.0,
+      "visible_reference_weight": 725.4801782445046,
+      "visible_current_weight": 1424.37770055065,
+      "has_visible_overlap": true,
+      "scene_depth_outlier_fraction": 0.020603002465436362,
+      "scene_depth_exposed_weights": [
+        306.34303315089034,
+        487.0982552884619
+      ]
+    },
+    "kalman": {
+      "accepted": true,
+      "innovation_squared": 0.11434421311285412,
+      "innovation_limit": 12.591587243743977,
+      "motion_points": 70,
+      "motion_residual_mm": 0.6831862933204762,
+      "prior_rejected_by_depth_mask": false
+    }
+  },
+  "24": {
+    "previous_frame": 23,
+    "map_version": 18,
+    "model_points": 964,
+    "observed_points": 2299,
+    "poses": {
+      "label": {
+        "cloud_mm": 0.0,
+        "rotation_deg": 0.0168561212901042,
+        "geometry": {
+          "accepted": true,
+          "observed_outlier_fraction": 0.035957460865712436,
+          "free_space_outlier_fraction": 0.0,
+          "visible_reference_weight": 588.5673932963455,
+          "visible_current_weight": 1352.0579000313408,
+          "has_visible_overlap": true,
+          "scene_depth_outlier_fraction": 0.02903791006805097,
+          "scene_depth_exposed_weights": [
+            186.89426551753488,
+            790.5833941851392
+          ]
+        },
+        "score": 0.7897021946200412,
+        "outline_cost": 0.17410128372893988,
+        "outline_max_gap_px_after_allowance": 2.7007556562596085
+      },
+      "prior": {
+        "cloud_mm": 2.1865127611815685,
+        "rotation_deg": 3.8286182312571864,
+        "geometry": {
+          "accepted": true,
+          "observed_outlier_fraction": 0.01368923774859728,
+          "free_space_outlier_fraction": 0.0,
+          "visible_reference_weight": 717.6104908601199,
+          "visible_current_weight": 1220.9000707337386,
+          "has_visible_overlap": true,
+          "scene_depth_outlier_fraction": 0.007783704946727472,
+          "scene_depth_exposed_weights": [
+            364.41737184005433,
+            451.2787938684708
+          ]
+        },
+        "score": 0.6382704909814522,
+        "outline_cost": 0.10144043364026839,
+        "outline_max_gap_px_after_allowance": 2.3724078243296853
+      },
+      "candidate": {
+        "cloud_mm": 2.080748364754471,
+        "rotation_deg": 4.5967118794851,
+        "geometry": {
+          "accepted": true,
+          "observed_outlier_fraction": 0.01964422700076011,
+          "free_space_outlier_fraction": 0.0,
+          "visible_reference_weight": 695.1896051797547,
+          "visible_current_weight": 1293.435250270149,
+          "has_visible_overlap": true,
+          "scene_depth_outlier_fraction": 0.01080926767152109,
+          "scene_depth_exposed_weights": [
+            317.88877249505015,
+            535.2782614816213
+          ]
+        },
+        "score": 0.6044053388112434,
+        "outline_cost": 0.10148948131074699,
+        "outline_max_gap_px_after_allowance": 2.1844419196100295
+      },
+      "output": {
+        "cloud_mm": 2.013198582481704,
+        "rotation_deg": 4.177835826602904,
+        "geometry": {
+          "accepted": true,
+          "observed_outlier_fraction": 0.01898001127144097,
+          "free_space_outlier_fraction": 0.0,
+          "visible_reference_weight": 693.3966920154712,
+          "visible_current_weight": 1289.7305864801656,
+          "has_visible_overlap": true,
+          "scene_depth_outlier_fraction": 0.013029916039953203,
+          "scene_depth_exposed_weights": [
+            319.0172395931994,
+            532.9151287548466
+          ]
+        },
+        "score": 0.6116503380146994,
+        "outline_cost": 0.10323065518399942,
+        "outline_max_gap_px_after_allowance": 2.3773888232174327
+      }
+    },
+    "label_checked_with_labelled_previous_alignment": {
+      "accepted": true,
+      "observed_outlier_fraction": 0.02493930178158141,
+      "free_space_outlier_fraction": 0.0,
+      "visible_reference_weight": 588.5673932963455,
+      "visible_current_weight": 1330.4243097125814,
+      "has_visible_overlap": true,
+      "scene_depth_outlier_fraction": 0.02025044201232439,
+      "scene_depth_exposed_weights": [
+        186.89426551753488,
+        593.9545678871312
+      ]
+    },
+    "kalman": {
+      "accepted": true,
+      "innovation_squared": 0.31805864626119834,
+      "innovation_limit": 12.591587243743977,
+      "motion_points": 69,
+      "motion_residual_mm": 1.0072381069222955,
+      "prior_rejected_by_depth_mask": false
+    }
+  },
+  "28": {
+    "previous_frame": 27,
+    "map_version": 21,
+    "model_points": 1092,
+    "observed_points": 2275,
+    "poses": {
+      "label": {
+        "cloud_mm": 0.0,
+        "rotation_deg": 0.014369834019477497,
+        "geometry": {
+          "accepted": true,
+          "observed_outlier_fraction": 0.015946513969118878,
+          "free_space_outlier_fraction": 0.0,
+          "visible_reference_weight": 760.6289251443902,
+          "visible_current_weight": 1043.5727432691187,
+          "has_visible_overlap": true,
+          "scene_depth_outlier_fraction": 0.01672209456818523,
+          "scene_depth_exposed_weights": [
+            424.97450919469344,
+            370.9526358452754
+          ]
+        },
+        "score": 0.8381203308558303,
+        "outline_cost": 0.12709030816292985,
+        "outline_max_gap_px_after_allowance": 2.105608914919083
+      },
+      "prior": {
+        "cloud_mm": 4.276230130361087,
+        "rotation_deg": 6.528378711378114,
+        "geometry": {
+          "accepted": true,
+          "observed_outlier_fraction": 0.004099181099887705,
+          "free_space_outlier_fraction": 0.0,
+          "visible_reference_weight": 724.9722252449121,
+          "visible_current_weight": 1256.2247675224353,
+          "has_visible_overlap": true,
+          "scene_depth_outlier_fraction": 0.0,
+          "scene_depth_exposed_weights": [
+            331.56551569530774,
+            444.40423458179714
+          ]
+        },
+        "score": 0.752903013787674,
+        "outline_cost": 0.19048050586889548,
+        "outline_max_gap_px_after_allowance": 3.5554885446941826
+      },
+      "candidate": {
+        "cloud_mm": 4.198347319754072,
+        "rotation_deg": 7.172686216282799,
+        "geometry": {
+          "accepted": true,
+          "observed_outlier_fraction": 0.005617391869047667,
+          "free_space_outlier_fraction": 0.0,
+          "visible_reference_weight": 722.6340573996595,
+          "visible_current_weight": 1263.9522107470464,
+          "has_visible_overlap": true,
+          "scene_depth_outlier_fraction": 0.0,
+          "scene_depth_exposed_weights": [
+            334.38825891720984,
+            455.4116775292774
+          ]
+        },
+        "score": 0.7136504268744407,
+        "outline_cost": 0.15407811011734043,
+        "outline_max_gap_px_after_allowance": 2.8596201174782037
+      },
+      "output": {
+        "cloud_mm": 4.117473484567165,
+        "rotation_deg": 6.815432826539185,
+        "geometry": {
+          "accepted": true,
+          "observed_outlier_fraction": 0.004947354639950848,
+          "free_space_outlier_fraction": 0.0,
+          "visible_reference_weight": 723.1774761690468,
+          "visible_current_weight": 1267.097004873707,
+          "has_visible_overlap": true,
+          "scene_depth_outlier_fraction": 0.0,
+          "scene_depth_exposed_weights": [
+            332.1427752488315,
+            450.85277439657773
+          ]
+        },
+        "score": 0.7193750699818288,
+        "outline_cost": 0.16555193316580802,
+        "outline_max_gap_px_after_allowance": 3.1392924965363544
+      }
+    },
+    "label_checked_with_labelled_previous_alignment": {
+      "accepted": true,
+      "observed_outlier_fraction": 0.015946513969118878,
+      "free_space_outlier_fraction": 0.0,
+      "visible_reference_weight": 760.6289251443902,
+      "visible_current_weight": 986.546112877541,
+      "has_visible_overlap": true,
+      "scene_depth_outlier_fraction": 0.01672209456818523,
+      "scene_depth_exposed_weights": [
+        424.97450919469344,
+        239.74701456225736
+      ]
+    },
+    "kalman": {
+      "accepted": true,
+      "innovation_squared": 0.4798935385864962,
+      "innovation_limit": 12.591587243743977,
+      "motion_points": 71,
+      "motion_residual_mm": 0.9332509570792672,
+      "prior_rejected_by_depth_mask": false
+    }
+  },
+  "29": {
+    "previous_frame": 28,
+    "map_version": 22,
+    "model_points": 1109,
+    "observed_points": 2313,
+    "poses": {
+      "label": {
+        "cloud_mm": 0.0,
+        "rotation_deg": 0.014394721446609872,
+        "geometry": {
+          "accepted": true,
+          "observed_outlier_fraction": 0.053392669429417665,
+          "free_space_outlier_fraction": 0.0,
+          "visible_reference_weight": 854.960427095064,
+          "visible_current_weight": 849.260399964644,
+          "has_visible_overlap": true,
+          "scene_depth_outlier_fraction": 0.048512964537852934,
+          "scene_depth_exposed_weights": [
+            541.7483944796163,
+            266.33798514912417
+          ]
+        },
+        "score": 0.9644946422687761,
+        "outline_cost": 0.13187141383137016,
+        "outline_max_gap_px_after_allowance": 2.051900942073633
+      },
+      "prior": {
+        "cloud_mm": 4.535570929230154,
+        "rotation_deg": 5.850775975592301,
+        "geometry": {
+          "accepted": true,
+          "observed_outlier_fraction": 0.01804054831138934,
+          "free_space_outlier_fraction": 0.0,
+          "visible_reference_weight": 741.0323545991528,
+          "visible_current_weight": 1233.2513759467274,
+          "has_visible_overlap": true,
+          "scene_depth_outlier_fraction": 0.004291276921851029,
+          "scene_depth_exposed_weights": [
+            312.22047371741405,
+            520.4307137326812
+          ]
+        },
+        "score": 0.7895388445331635,
+        "outline_cost": 0.1873208927487968,
+        "outline_max_gap_px_after_allowance": 3.351146295445808
+      },
+      "candidate": {
+        "cloud_mm": 5.4589953817904995,
+        "rotation_deg": 9.833277884009629,
+        "geometry": {
+          "accepted": true,
+          "observed_outlier_fraction": 0.024462163235229893,
+          "free_space_outlier_fraction": 0.0,
+          "visible_reference_weight": 779.8018220221948,
+          "visible_current_weight": 1209.8916771481477,
+          "has_visible_overlap": true,
+          "scene_depth_outlier_fraction": 0.02848914979962571,
+          "scene_depth_exposed_weights": [
+            362.4029582378026,
+            464.55572849590646
+          ]
+        },
+        "score": 0.7382083926570572,
+        "outline_cost": 0.14308965359932455,
+        "outline_max_gap_px_after_allowance": 2.4896634579242205
+      },
+      "output": {
+        "cloud_mm": 4.973606711075532,
+        "rotation_deg": 8.208237325367264,
+        "geometry": {
+          "accepted": true,
+          "observed_outlier_fraction": 0.021094208779159556,
+          "free_space_outlier_fraction": 0.0,
+          "visible_reference_weight": 782.5936600208781,
+          "visible_current_weight": 1203.9800279181536,
+          "has_visible_overlap": true,
+          "scene_depth_outlier_fraction": 0.023031424793402935,
+          "scene_depth_exposed_weights": [
+            357.8850323854623,
+            461.62691960676875
+          ]
+        },
+        "score": 0.7474331178913187,
+        "outline_cost": 0.15396940140871868,
+        "outline_max_gap_px_after_allowance": 2.9612460342151756
+      }
+    },
+    "label_checked_with_labelled_previous_alignment": {
+      "accepted": true,
+      "observed_outlier_fraction": 0.053392669429417665,
+      "free_space_outlier_fraction": 0.0,
+      "visible_reference_weight": 854.960427095064,
+      "visible_current_weight": 1070.0768553450164,
+      "has_visible_overlap": true,
+      "scene_depth_outlier_fraction": 0.048512964537852934,
+      "scene_depth_exposed_weights": [
+        541.7483944796163,
+        329.90383120187835
+      ]
+    },
+    "kalman": {
+      "accepted": true,
+      "innovation_squared": 2.445062536477711,
+      "innovation_limit": 12.591587243743977,
+      "motion_points": 69,
+      "motion_residual_mm": 1.032235771656253,
+      "prior_rejected_by_depth_mask": false
+    }
+  },
+  "30": {
+    "previous_frame": 29,
+    "map_version": 22,
+    "model_points": 1109,
+    "observed_points": 2341,
+    "poses": {
+      "label": {
+        "cloud_mm": 0.0,
+        "rotation_deg": 0.011834326626166096,
+        "geometry": {
+          "accepted": true,
+          "observed_outlier_fraction": 0.04920364874068458,
+          "free_space_outlier_fraction": 0.0,
+          "visible_reference_weight": 793.9662898148658,
+          "visible_current_weight": 767.3524121760031,
+          "has_visible_overlap": true,
+          "scene_depth_outlier_fraction": 0.0563326782154173,
+          "scene_depth_exposed_weights": [
+            579.9102573195246,
+            234.5788307017822
+          ]
+        },
+        "score": 1.2078872928093705,
+        "outline_cost": 0.23212052172516826,
+        "outline_max_gap_px_after_allowance": 3.1930765114785427
+      },
+      "prior": {
+        "cloud_mm": 7.513783798671777,
+        "rotation_deg": 10.904762666449574,
+        "geometry": {
+          "accepted": true,
+          "observed_outlier_fraction": 0.02825815906829794,
+          "free_space_outlier_fraction": 0.0,
+          "visible_reference_weight": 672.5954980914569,
+          "visible_current_weight": 1207.8966215233818,
+          "has_visible_overlap": true,
+          "scene_depth_outlier_fraction": 0.016142637794383827,
+          "scene_depth_exposed_weights": [
+            344.83811439548117,
+            566.1785770626905
+          ]
+        },
+        "score": 0.9198896938313931,
+        "outline_cost": 0.2100190487768564,
+        "outline_max_gap_px_after_allowance": 3.7881992208629764
+      },
+      "candidate": {
+        "cloud_mm": 7.362649630119663,
+        "rotation_deg": 11.85697047693873,
+        "geometry": {
+          "accepted": true,
+          "observed_outlier_fraction": 0.029944519720147594,
+          "free_space_outlier_fraction": 0.0,
+          "visible_reference_weight": 701.4275965508806,
+          "visible_current_weight": 1242.1665330867795,
+          "has_visible_overlap": true,
+          "scene_depth_outlier_fraction": 0.049385825100552234,
+          "scene_depth_exposed_weights": [
+            360.494187708948,
+            532.5301506495866
+          ]
+        },
+        "score": 0.8643773762495695,
+        "outline_cost": 0.20358579755261222,
+        "outline_max_gap_px_after_allowance": 2.932175661439161
+      },
+      "output": {
+        "cloud_mm": 7.289225111522703,
+        "rotation_deg": 11.353737983571943,
+        "geometry": {
+          "accepted": true,
+          "observed_outlier_fraction": 0.02984566017917347,
+          "free_space_outlier_fraction": 0.0,
+          "visible_reference_weight": 703.6198855689565,
+          "visible_current_weight": 1233.4151343784888,
+          "has_visible_overlap": true,
+          "scene_depth_outlier_fraction": 0.040632624174893016,
+          "scene_depth_exposed_weights": [
+            361.942097863861,
+            520.748423169197
+          ]
+        },
+        "score": 0.8713665425959799,
+        "outline_cost": 0.2103237933449413,
+        "outline_max_gap_px_after_allowance": 3.301287233836712
+      }
+    },
+    "label_checked_with_labelled_previous_alignment": {
+      "accepted": true,
+      "observed_outlier_fraction": 0.04920364874068458,
+      "free_space_outlier_fraction": 0.0,
+      "visible_reference_weight": 793.9662898148658,
+      "visible_current_weight": 1108.5660780989424,
+      "has_visible_overlap": true,
+      "scene_depth_outlier_fraction": 0.0563326782154173,
+      "scene_depth_exposed_weights": [
+        579.9102573195246,
+        427.1837379119725
+      ]
+    },
+    "kalman": {
+      "accepted": true,
+      "innovation_squared": 1.7301516455510166,
+      "innovation_limit": 12.591587243743977,
+      "motion_points": 70,
+      "motion_residual_mm": 1.2463741300278606,
+      "prior_rejected_by_depth_mask": false
+    }
+  },
+  "31": {
+    "previous_frame": 30,
+    "map_version": 22,
+    "model_points": 1109,
+    "observed_points": 2233,
+    "poses": {
+      "label": {
+        "cloud_mm": 0.0,
+        "rotation_deg": 0.01760001675008759,
+        "geometry": {
+          "accepted": true,
+          "observed_outlier_fraction": 0.08130507972148938,
+          "free_space_outlier_fraction": 0.0,
+          "visible_reference_weight": 669.8939548852309,
+          "visible_current_weight": 723.0013970856728,
+          "has_visible_overlap": true,
+          "scene_depth_outlier_fraction": 0.11786749227302956,
+          "scene_depth_exposed_weights": [
+            489.0577810681833,
+            456.49374092895954
+          ]
+        },
+        "score": 1.5868573095547436,
+        "outline_cost": 0.4410670051816789,
+        "outline_max_gap_px_after_allowance": 3.9756411482140583
+      },
+      "prior": {
+        "cloud_mm": 8.416357064723908,
+        "rotation_deg": 11.751863524062857,
+        "geometry": {
+          "accepted": true,
+          "observed_outlier_fraction": 0.03614652326350978,
+          "free_space_outlier_fraction": 0.0,
+          "visible_reference_weight": 614.0703286676085,
+          "visible_current_weight": 1146.9315373889106,
+          "has_visible_overlap": true,
+          "scene_depth_outlier_fraction": 0.05553307295312278,
+          "scene_depth_exposed_weights": [
+            370.9519903939066,
+            557.7285926980585
+          ]
+        },
+        "score": 1.0271506923891494,
+        "outline_cost": 0.2586510000261489,
+        "outline_max_gap_px_after_allowance": 3.0168227928041604
+      },
+      "candidate": {
+        "cloud_mm": 8.556674124399294,
+        "rotation_deg": 10.5866546398208,
+        "geometry": {
+          "accepted": true,
+          "observed_outlier_fraction": 0.039422373031448264,
+          "free_space_outlier_fraction": 0.0,
+          "visible_reference_weight": 603.1256771144775,
+          "visible_current_weight": 1180.6060887791225,
+          "has_visible_overlap": true,
+          "scene_depth_outlier_fraction": 0.05915878145373311,
+          "scene_depth_exposed_weights": [
+            349.18544380310266,
+            610.8982106066458
+          ]
+        },
+        "score": 0.9918539228750405,
+        "outline_cost": 0.24186793384002367,
+        "outline_max_gap_px_after_allowance": 3.205527310227893
+      },
+      "output": {
+        "cloud_mm": 8.648903766947283,
+        "rotation_deg": 10.93082622211047,
+        "geometry": {
+          "accepted": true,
+          "observed_outlier_fraction": 0.03852788762978707,
+          "free_space_outlier_fraction": 0.0,
+          "visible_reference_weight": 600.4256911137625,
+          "visible_current_weight": 1179.6575385249184,
+          "has_visible_overlap": true,
+          "scene_depth_outlier_fraction": 0.05707480448557184,
+          "scene_depth_exposed_weights": [
+            351.5900047097828,
+            603.7966682010551
+          ]
+        },
+        "score": 0.998027256952872,
+        "outline_cost": 0.24515641387167453,
+        "outline_max_gap_px_after_allowance": 3.0777052136420853
+      }
+    },
+    "label_checked_with_labelled_previous_alignment": {
+      "accepted": true,
+      "observed_outlier_fraction": 0.08130507972148938,
+      "free_space_outlier_fraction": 0.0,
+      "visible_reference_weight": 669.8939548852309,
+      "visible_current_weight": 1176.95005865446,
+      "has_visible_overlap": true,
+      "scene_depth_outlier_fraction": 0.11786749227302956,
+      "scene_depth_exposed_weights": [
+        489.0577810681833,
+        709.6963370752401
+      ]
+    },
+    "kalman": {
+      "accepted": true,
+      "innovation_squared": 1.0860344285070997,
+      "innovation_limit": 12.591587243743977,
+      "motion_points": 68,
+      "motion_residual_mm": 1.162674081303817,
+      "prior_rejected_by_depth_mask": false
+    }
+  },
+  "32": {
+    "previous_frame": 31,
+    "map_version": 22,
+    "model_points": 1109,
+    "observed_points": 2161,
+    "poses": {
+      "label": {
+        "cloud_mm": 0.0,
+        "rotation_deg": 0.029816246354757124,
+        "geometry": {
+          "accepted": true,
+          "observed_outlier_fraction": 0.05056586428256841,
+          "free_space_outlier_fraction": 0.0,
+          "visible_reference_weight": 422.5572927574682,
+          "visible_current_weight": 685.6421012143861,
+          "has_visible_overlap": true,
+          "scene_depth_outlier_fraction": 0.0955876669059563,
+          "scene_depth_exposed_weights": [
+            354.83526070182404,
+            535.3852608803029
+          ]
+        },
+        "score": 2.7878676123811115,
+        "outline_cost": 1.4766841838226739,
+        "outline_max_gap_px_after_allowance": 10.002989877498388
+      },
+      "prior": {
+        "cloud_mm": 10.834960034662553,
+        "rotation_deg": 20.05358662394317,
+        "geometry": {
+          "accepted": true,
+          "observed_outlier_fraction": 0.04974894985394634,
+          "free_space_outlier_fraction": 0.0,
+          "visible_reference_weight": 505.7110699382089,
+          "visible_current_weight": 956.0399329701816,
+          "has_visible_overlap": true,
+          "scene_depth_outlier_fraction": 0.06214898324076897,
+          "scene_depth_exposed_weights": [
+            383.9102582754157,
+            581.5069407586923
+          ]
+        },
+        "score": 1.5960822047387715,
+        "outline_cost": 0.6136220824574746,
+        "outline_max_gap_px_after_allowance": 6.777681004719206
+      },
+      "candidate": {
+        "cloud_mm": 15.749086924607434,
+        "rotation_deg": 25.819854735318252,
+        "geometry": {
+          "accepted": true,
+          "observed_outlier_fraction": 0.057918801399881856,
+          "free_space_outlier_fraction": 0.0,
+          "visible_reference_weight": 518.1202527802297,
+          "visible_current_weight": 1035.2094083452673,
+          "has_visible_overlap": true,
+          "scene_depth_outlier_fraction": 0.05933572726314585,
+          "scene_depth_exposed_weights": [
+            343.1703344184292,
+            732.1099722801753
+          ]
+        },
+        "score": 1.19287329016838,
+        "outline_cost": 0.2709046874656273,
+        "outline_max_gap_px_after_allowance": 3.8212792924414476
+      },
+      "output": {
+        "cloud_mm": 14.933659104164168,
+        "rotation_deg": 23.832640101809762,
+        "geometry": {
+          "accepted": true,
+          "observed_outlier_fraction": 0.05745551844873211,
+          "free_space_outlier_fraction": 0.0,
+          "visible_reference_weight": 513.73098335486,
+          "visible_current_weight": 1034.1069393397922,
+          "has_visible_overlap": true,
+          "scene_depth_outlier_fraction": 0.06403548097470164,
+          "scene_depth_exposed_weights": [
+            335.15169804213804,
+            734.0920339091192
+          ]
+        },
+        "score": 1.2129622993289013,
+        "outline_cost": 0.28677006542098116,
+        "outline_max_gap_px_after_allowance": 3.736001874735922
+      }
+    },
+    "label_checked_with_labelled_previous_alignment": {
+      "accepted": true,
+      "observed_outlier_fraction": 0.05056586428256841,
+      "free_space_outlier_fraction": 0.0,
+      "visible_reference_weight": 422.5572927574682,
+      "visible_current_weight": 918.5373894934116,
+      "has_visible_overlap": true,
+      "scene_depth_outlier_fraction": 0.0955876669059563,
+      "scene_depth_exposed_weights": [
+        354.83526070182404,
+        597.6373850113571
+      ]
+    },
+    "kalman": {
+      "accepted": true,
+      "innovation_squared": 4.941382839164364,
+      "innovation_limit": 12.591587243743977,
+      "motion_points": 53,
+      "motion_residual_mm": 1.0200766532135777,
+      "prior_rejected_by_depth_mask": false
+    }
+  },
+  "33": {
+    "previous_frame": 32,
+    "map_version": 22,
+    "model_points": 1109,
+    "observed_points": 1810,
+    "poses": {
+      "label": {
+        "cloud_mm": 0.0,
+        "rotation_deg": 0.0,
+        "geometry": {
+          "accepted": true,
+          "observed_outlier_fraction": 0.09209956871302485,
+          "free_space_outlier_fraction": 0.0036068530207394047,
+          "visible_reference_weight": 336.1868567251182,
+          "visible_current_weight": 867.933195359206,
+          "has_visible_overlap": true,
+          "scene_depth_outlier_fraction": 0.10265153147314282,
+          "scene_depth_exposed_weights": [
+            268.11816456753627,
+            839.0230924356274
+          ]
+        },
+        "score": 5.744898037880177,
+        "outline_cost": 4.285055019679129,
+        "outline_max_gap_px_after_allowance": 14.724626326906805
+      },
+      "prior": {
+        "cloud_mm": 18.66877134278148,
+        "rotation_deg": 31.462524465129523,
+        "geometry": {
+          "accepted": true,
+          "observed_outlier_fraction": 0.01182831051704424,
+          "free_space_outlier_fraction": 0.0,
+          "visible_reference_weight": 394.7450520137231,
+          "visible_current_weight": 1445.7046728113633,
+          "has_visible_overlap": true,
+          "scene_depth_outlier_fraction": 0.0003478794660548315,
+          "scene_depth_exposed_weights": [
+            297.0518012920024,
+            1020.113940883234
+          ]
+        },
+        "score": 1.5791334953662737,
+        "outline_cost": 0.5916126245540648,
+        "outline_max_gap_px_after_allowance": 5.4978497169631595
+      },
+      "candidate": {
+        "cloud_mm": 21.035486382727314,
+        "rotation_deg": 34.655783247947134,
+        "geometry": {
+          "accepted": true,
+          "observed_outlier_fraction": 0.031173260421069087,
+          "free_space_outlier_fraction": 0.0,
+          "visible_reference_weight": 400.4895169095886,
+          "visible_current_weight": 1541.288276470299,
+          "has_visible_overlap": true,
+          "scene_depth_outlier_fraction": 0.009006786398701698,
+          "scene_depth_exposed_weights": [
+            269.8186857224579,
+            1179.9172598155756
+          ]
+        },
+        "score": 1.2820459468022107,
+        "outline_cost": 0.3422289071210639,
+        "outline_max_gap_px_after_allowance": 3.8941423046361354
+      },
+      "output": {
+        "cloud_mm": 20.419567645127245,
+        "rotation_deg": 33.2783604092346,
+        "geometry": {
+          "accepted": true,
+          "observed_outlier_fraction": 0.02653902011717558,
+          "free_space_outlier_fraction": 0.0,
+          "visible_reference_weight": 389.9639890930409,
+          "visible_current_weight": 1543.9198295353003,
+          "has_visible_overlap": true,
+          "scene_depth_outlier_fraction": 0.007406045814219002,
+          "scene_depth_exposed_weights": [
+            267.53655619839816,
+            1181.0248798583893
+          ]
+        },
+        "score": 1.2988292120978697,
+        "outline_cost": 0.35059291244208884,
+        "outline_max_gap_px_after_allowance": 3.6059452653922133
+      }
+    },
+    "label_checked_with_labelled_previous_alignment": {
+      "accepted": true,
+      "observed_outlier_fraction": 0.03456588916093809,
+      "free_space_outlier_fraction": 0.0036068530207394047,
+      "visible_reference_weight": 336.1868567251182,
+      "visible_current_weight": 1319.7716922097898,
+      "has_visible_overlap": true,
+      "scene_depth_outlier_fraction": 0.058266551254978045,
+      "scene_depth_exposed_weights": [
+        268.11816456753627,
+        876.3206056527157
+      ]
+    },
+    "kalman": {
+      "accepted": true,
+      "innovation_squared": 2.3570545973826107,
+      "innovation_limit": 12.591587243743977,
+      "motion_points": 58,
+      "motion_residual_mm": 1.1909836376177247,
+      "prior_rejected_by_depth_mask": false
+    }
+  },
+  "36": {
+    "previous_frame": 35,
+    "map_version": 22,
+    "model_points": 1109,
+    "observed_points": 1803,
+    "poses": {
+      "label": {
+        "cloud_mm": 0.0,
+        "rotation_deg": 0.009876556509192148,
+        "geometry": {
+          "accepted": false,
+          "observed_outlier_fraction": 0.11555020433549572,
+          "free_space_outlier_fraction": 0.21797004991680533,
+          "visible_reference_weight": 171.17270857918706,
+          "visible_current_weight": 339.43606517432306,
+          "has_visible_overlap": true,
+          "scene_depth_outlier_fraction": 0.7360500893475628,
+          "scene_depth_exposed_weights": [
+            145.79451908853724,
+            1018.7823341944845
+          ]
+        },
+        "score": 125.22229153705484,
+        "outline_cost": 7.731333407987891,
+        "outline_max_gap_px_after_allowance": 25.604732101312162
+      },
+      "prior": {
+        "cloud_mm": 29.66638647097349,
+        "rotation_deg": 40.28527690713667,
+        "geometry": {
+          "accepted": true,
+          "observed_outlier_fraction": 0.012171753679053909,
+          "free_space_outlier_fraction": 0.0,
+          "visible_reference_weight": 332.57748213502873,
+          "visible_current_weight": 1340.0621434172376,
+          "has_visible_overlap": true,
+          "scene_depth_outlier_fraction": 0.024386475533005346,
+          "scene_depth_exposed_weights": [
+            251.23016122348866,
+            968.8605883603861
+          ]
+        },
+        "score": 1.6463738038835363,
+        "outline_cost": 0.5694072877662478,
+        "outline_max_gap_px_after_allowance": 5.3006170206624255
+      },
+      "candidate": {
+        "cloud_mm": 31.771631564974278,
+        "rotation_deg": 49.892020011984876,
+        "geometry": {
+          "accepted": true,
+          "observed_outlier_fraction": 0.032535524528383014,
+          "free_space_outlier_fraction": 0.0,
+          "visible_reference_weight": 327.72312044092837,
+          "visible_current_weight": 1351.0614418944676,
+          "has_visible_overlap": true,
+          "scene_depth_outlier_fraction": 0.01806631034369699,
+          "scene_depth_exposed_weights": [
+            235.97627140844605,
+            1050.6935405212646
+          ]
+        },
+        "score": 1.5043907087675072,
+        "outline_cost": 0.40929088428002014,
+        "outline_max_gap_px_after_allowance": 4.7046365494268585
+      },
+      "output": {
+        "cloud_mm": 31.022264609205862,
+        "rotation_deg": 47.12195652038237,
+        "geometry": {
+          "accepted": true,
+          "observed_outlier_fraction": 0.02794703740752818,
+          "free_space_outlier_fraction": 0.0,
+          "visible_reference_weight": 327.71171339634907,
+          "visible_current_weight": 1350.0768994666878,
+          "has_visible_overlap": true,
+          "scene_depth_outlier_fraction": 0.019808826769242675,
+          "scene_depth_exposed_weights": [
+            239.66638795325454,
+            1024.8583301070266
+          ]
+        },
+        "score": 1.5176515330921332,
+        "outline_cost": 0.43074103290723254,
+        "outline_max_gap_px_after_allowance": 4.884826738618481
+      }
+    },
+    "label_checked_with_labelled_previous_alignment": {
+      "accepted": true,
+      "observed_outlier_fraction": 0.11555020433549572,
+      "free_space_outlier_fraction": 0.010820559062218215,
+      "visible_reference_weight": 171.17270857918706,
+      "visible_current_weight": 1227.4966612781795,
+      "has_visible_overlap": true,
+      "scene_depth_outlier_fraction": 0.15793149556967448,
+      "scene_depth_exposed_weights": [
+        145.79451908853724,
+        1081.0011200641313
+      ]
+    },
+    "kalman": {
+      "accepted": true,
+      "innovation_squared": 5.924875994487682,
+      "innovation_limit": 12.591587243743977,
+      "motion_points": 50,
+      "motion_residual_mm": 1.0813577430262549,
+      "prior_rejected_by_depth_mask": false
+    }
+  },
+  "40": {
+    "previous_frame": 39,
+    "map_version": 22,
+    "model_points": 1109,
+    "observed_points": 1662,
+    "poses": {
+      "label": {
+        "cloud_mm": 0.0,
+        "rotation_deg": 0.0,
+        "geometry": {
+          "accepted": false,
+          "observed_outlier_fraction": 0.0,
+          "free_space_outlier_fraction": 0.5318892900120337,
+          "visible_reference_weight": 0.0,
+          "visible_current_weight": 0.0,
+          "has_visible_overlap": false,
+          "scene_depth_outlier_fraction": 1.0,
+          "scene_depth_exposed_weights": [
+            95.37778038564505,
+            959.5707522961563
+          ]
+        },
+        "score": 2980.1588314494293,
+        "outline_cost": 18.108594207914432,
+        "outline_max_gap_px_after_allowance": 29.367636881041
+      },
+      "prior": {
+        "cloud_mm": 51.29141525313064,
+        "rotation_deg": 73.33688850771667,
+        "geometry": {
+          "accepted": true,
+          "observed_outlier_fraction": 0.030176580473896625,
+          "free_space_outlier_fraction": 0.0,
+          "visible_reference_weight": 146.22729143177335,
+          "visible_current_weight": 1322.6182015385905,
+          "has_visible_overlap": true,
+          "scene_depth_outlier_fraction": 2.3597253014628398e-05,
+          "scene_depth_exposed_weights": [
+            85.24473153552563,
+            975.5129923503524
+          ]
+        },
+        "score": 1.2999844914060221,
+        "outline_cost": 0.15238054507151644,
+        "outline_max_gap_px_after_allowance": 3.6689916028530574
+      },
+      "candidate": {
+        "cloud_mm": 51.02179363410619,
+        "rotation_deg": 73.06589600773442,
+        "geometry": {
+          "accepted": true,
+          "observed_outlier_fraction": 0.02225817798109825,
+          "free_space_outlier_fraction": 0.0,
+          "visible_reference_weight": 124.67257242727162,
+          "visible_current_weight": 1458.3406234808845,
+          "has_visible_overlap": true,
+          "scene_depth_outlier_fraction": 0.0008288780959317109,
+          "scene_depth_exposed_weights": [
+            68.24622806319135,
+            1238.5250013812206
+          ]
+        },
+        "score": 1.1811401598701419,
+        "outline_cost": 0.07566370626140716,
+        "outline_max_gap_px_after_allowance": 2.3957713968722274
+      },
+      "output": {
+        "cloud_mm": 51.19774780105335,
+        "rotation_deg": 72.99282914345405,
+        "geometry": {
+          "accepted": true,
+          "observed_outlier_fraction": 0.009360302862014142,
+          "free_space_outlier_fraction": 0.0,
+          "visible_reference_weight": 126.2769179863443,
+          "visible_current_weight": 1445.9558741782062,
+          "has_visible_overlap": true,
+          "scene_depth_outlier_fraction": 0.00017049892869896774,
+          "scene_depth_exposed_weights": [
+            68.47207814628041,
+            1194.98446456498
+          ]
+        },
+        "score": 1.1867446403748088,
+        "outline_cost": 0.08459082016105207,
+        "outline_max_gap_px_after_allowance": 2.4208782557232444
+      }
+    },
+    "label_checked_with_labelled_previous_alignment": {
+      "accepted": false,
+      "observed_outlier_fraction": 0.3210704137232851,
+      "free_space_outlier_fraction": 0.027051397655545536,
+      "visible_reference_weight": 0.0,
+      "visible_current_weight": 1575.7441985719279,
+      "has_visible_overlap": true,
+      "scene_depth_outlier_fraction": 1.0,
+      "scene_depth_exposed_weights": [
+        95.37778038564505,
+        1514.184093039682
+      ]
+    },
+    "kalman": {
+      "accepted": true,
+      "innovation_squared": 0.37188030871411015,
+      "innovation_limit": 12.591587243743977,
+      "motion_points": 51,
+      "motion_residual_mm": 1.031718250920425,
+      "prior_rejected_by_depth_mask": false
+    }
+  },
+  "45": {
+    "previous_frame": 44,
+    "map_version": 22,
+    "model_points": 1109,
+    "observed_points": 1687,
+    "poses": {
+      "label": {
+        "cloud_mm": 0.0,
+        "rotation_deg": 0.0,
+        "geometry": {
+          "accepted": false,
+          "observed_outlier_fraction": 0.0,
+          "free_space_outlier_fraction": 0.5560165975103735,
+          "visible_reference_weight": 0.0,
+          "visible_current_weight": 0.0,
+          "has_visible_overlap": false,
+          "scene_depth_outlier_fraction": 0.9203506807008253,
+          "scene_depth_exposed_weights": [
+            0.0,
+            951.0504496561385
+          ]
+        },
+        "score": 829.1179765015174,
+        "outline_cost": 8.681623892466348,
+        "outline_max_gap_px_after_allowance": 22.761578125689855
+      },
+      "prior": {
+        "cloud_mm": 56.40338615574529,
+        "rotation_deg": 83.67750198302055,
+        "geometry": {
+          "accepted": true,
+          "observed_outlier_fraction": 0.013249875299978746,
+          "free_space_outlier_fraction": 0.0,
+          "visible_reference_weight": 207.51890325086615,
+          "visible_current_weight": 1292.3239069337992,
+          "has_visible_overlap": true,
+          "scene_depth_outlier_fraction": 0.01495977101034127,
+          "scene_depth_exposed_weights": [
+            138.6166793446819,
+            853.5420122702612
+          ]
+        },
+        "score": 1.5197747131499069,
+        "outline_cost": 0.37044173041139705,
+        "outline_max_gap_px_after_allowance": 4.644935566957153
+      },
+      "candidate": {
+        "cloud_mm": 55.29894384718004,
+        "rotation_deg": 80.38925865110514,
+        "geometry": {
+          "accepted": true,
+          "observed_outlier_fraction": 0.02634341360253813,
+          "free_space_outlier_fraction": 0.0,
+          "visible_reference_weight": 198.2868225674946,
+          "visible_current_weight": 1337.987253502651,
+          "has_visible_overlap": true,
+          "scene_depth_outlier_fraction": 0.014048777959010083,
+          "scene_depth_exposed_weights": [
+            138.51529532758474,
+            991.4790625285234
+          ]
+        },
+        "score": 1.4144623375711278,
+        "outline_cost": 0.2293146591727747,
+        "outline_max_gap_px_after_allowance": 4.191521504347615
+      },
+      "output": {
+        "cloud_mm": 56.06528385274702,
+        "rotation_deg": 81.74858161213474,
+        "geometry": {
+          "accepted": true,
+          "observed_outlier_fraction": 0.015936584849534627,
+          "free_space_outlier_fraction": 0.0,
+          "visible_reference_weight": 205.05024643763238,
+          "visible_current_weight": 1312.939474666199,
+          "has_visible_overlap": true,
+          "scene_depth_outlier_fraction": 0.01062196902550178,
+          "scene_depth_exposed_weights": [
+            137.0755453169136,
+            917.080684817161
+          ]
+        },
+        "score": 1.4395126453751135,
+        "outline_cost": 0.28616735954891576,
+        "outline_max_gap_px_after_allowance": 4.46974188282651
+      }
+    },
+    "label_checked_with_labelled_previous_alignment": {
+      "accepted": true,
+      "observed_outlier_fraction": 0.00825598018394998,
+      "free_space_outlier_fraction": 0.0,
+      "visible_reference_weight": 0.0,
+      "visible_current_weight": 1359.7358713765775,
+      "has_visible_overlap": true,
+      "scene_depth_outlier_fraction": 0.004417413718982902,
+      "scene_depth_exposed_weights": [
+        0.0,
+        1092.899220814109
+      ]
+    },
+    "kalman": {
+      "accepted": true,
+      "innovation_squared": 2.509346175278525,
+      "innovation_limit": 12.591587243743977,
+      "motion_points": 66,
+      "motion_residual_mm": 1.3445686672166113,
+      "prior_rejected_by_depth_mask": false
+    }
+  },
+  "67": {
+    "previous_frame": 66,
+    "map_version": 22,
+    "model_points": 1109,
+    "observed_points": 1386,
+    "poses": {
+      "label": {
+        "cloud_mm": 0.0,
+        "rotation_deg": 0.01622836503698286,
+        "geometry": {
+          "accepted": false,
+          "observed_outlier_fraction": 0.0,
+          "free_space_outlier_fraction": 0.016594516594516596,
+          "visible_reference_weight": 0.6251095008365275,
+          "visible_current_weight": 0.6020302340571333,
+          "has_visible_overlap": true,
+          "scene_depth_outlier_fraction": 0.7405357013098786,
+          "scene_depth_exposed_weights": [
+            0.0,
+            30.0353238265884
+          ]
+        },
+        "score": 109980.60950013134,
+        "outline_cost": 12.938547882570981,
+        "outline_max_gap_px_after_allowance": 22.3301052580243
+      },
+      "prior": {
+        "cloud_mm": 47.37270460891124,
+        "rotation_deg": 94.2194145936228,
+        "geometry": {
+          "accepted": true,
+          "observed_outlier_fraction": 2.710190296514051e-06,
+          "free_space_outlier_fraction": 0.0,
+          "visible_reference_weight": 83.82538024792711,
+          "visible_current_weight": 1190.8469989111338,
+          "has_visible_overlap": true,
+          "scene_depth_outlier_fraction": 0.0,
+          "scene_depth_exposed_weights": [
+            19.508710000430703,
+            475.6422036461754
+          ]
+        },
+        "score": 1.3685121703486511,
+        "outline_cost": 0.25933228112964196,
+        "outline_max_gap_px_after_allowance": 3.9688606159863618
+      },
+      "candidate": {
+        "cloud_mm": 47.218134755634935,
+        "rotation_deg": 95.66133907264968,
+        "geometry": {
+          "accepted": true,
+          "observed_outlier_fraction": 0.00013317476999847054,
+          "free_space_outlier_fraction": 0.0,
+          "visible_reference_weight": 83.59924454284157,
+          "visible_current_weight": 1252.6091729467707,
+          "has_visible_overlap": true,
+          "scene_depth_outlier_fraction": 0.0,
+          "scene_depth_exposed_weights": [
+            18.366448040264924,
+            679.0287039150253
+          ]
+        },
+        "score": 1.3474870957664664,
+        "outline_cost": 0.24237749866820665,
+        "outline_max_gap_px_after_allowance": 3.8501642441784414
+      },
+      "output": {
+        "cloud_mm": 47.786469447749916,
+        "rotation_deg": 94.75165160720944,
+        "geometry": {
+          "accepted": true,
+          "observed_outlier_fraction": 4.146653207868526e-05,
+          "free_space_outlier_fraction": 0.0,
+          "visible_reference_weight": 83.75532314640782,
+          "visible_current_weight": 1162.0233549360441,
+          "has_visible_overlap": true,
+          "scene_depth_outlier_fraction": 0.0,
+          "scene_depth_exposed_weights": [
+            17.955923229769564,
+            514.1180501243958
+          ]
+        },
+        "score": 1.3904649289665731,
+        "outline_cost": 0.24795643624703462,
+        "outline_max_gap_px_after_allowance": 3.5687332870358324
+      }
+    },
+    "label_checked_with_labelled_previous_alignment": {
+      "accepted": true,
+      "observed_outlier_fraction": 0.0,
+      "free_space_outlier_fraction": 0.0,
+      "visible_reference_weight": 0.6251095008365275,
+      "visible_current_weight": 1187.5864295657507,
+      "has_visible_overlap": true,
+      "scene_depth_outlier_fraction": 0.0,
+      "scene_depth_exposed_weights": [
+        0.0,
+        501.903637463545
+      ]
+    },
+    "kalman": {
+      "accepted": true,
+      "innovation_squared": 0.1825437845512145,
+      "innovation_limit": 12.591587243743977,
+      "motion_points": 66,
+      "motion_residual_mm": 1.0100939615010427,
+      "prior_rejected_by_depth_mask": false
+    }
+  }
+}

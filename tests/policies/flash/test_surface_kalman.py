@@ -1,5 +1,7 @@
 """Analytical controls plus real surface-session consumption of a temporal EKF."""
 
+from dataclasses import replace
+
 import numpy as np
 import pytest
 from scipy.spatial.transform import Rotation
@@ -13,6 +15,39 @@ from lerobot.policies.flash.surface_kalman import MeasuredGroupMotion, PoseKalma
 from lerobot.policies.flash.surface_observation import move
 from lerobot.policies.flash.surface_uncertainty import PoseUncertaintyConfig
 from tests.policies.flash.test_experimental_surface_session import points, prepared_frames, transform
+
+
+@pytest.mark.parametrize("contradicted", [False, True])
+@pytest.mark.parametrize("distance", [0.001, 0.1])
+@pytest.mark.parametrize("information_scale", [0.0, 1e4, 1e6])
+def test_saved_no_reset_setting_matches_the_tested_filter(contradicted, distance, information_scale):
+    from benchmarks.flash_kalman_recovery_control import StrictPoseKalmanFilter
+
+    old = StrictPoseKalmanFilter(np.eye(4), np.zeros(3), 0.0, config())
+    new = PoseKalmanFilter(np.eye(4), np.zeros(3), 0.0, config(reset_on_geometry_conflict=False))
+    for time_s in (0.1, 0.2):
+        for f in (old, new):
+            f.predict(time_s, np.eye(4), np.eye(4))
+        measured = transform(z=distance)
+        a = old.correct(measured, np.eye(6) * information_scale, measured[:3, 3], contradicted=contradicted)
+        b = new.correct(measured, np.eye(6) * information_scale, measured[:3, 3], contradicted=contradicted)
+        assert a == b
+        np.testing.assert_array_equal(old.pose, new.pose)
+        np.testing.assert_array_equal(old.covariance, new.covariance)
+
+
+def test_no_reset_setting_rejects_the_jump_even_when_old_prediction_fails_geometry():
+    f = PoseKalmanFilter(np.eye(4), np.zeros(3), 0.0, config(reset_on_geometry_conflict=False))
+    before = f.snapshot()
+    rejected = f.correct(transform(z=0.1), np.eye(6) * 1e6, np.array([0, 0, 0.1]), contradicted=True)
+    assert not rejected["accepted"] and rejected["filter_reason"] == "innovation_conflict"
+    np.testing.assert_array_equal(f.pose, before["pose"])
+    np.testing.assert_array_equal(f.covariance, before["covariance"])
+    # This configuration must still allow ordinary measured corrections.
+    accepted = f.correct(transform(z=0.001), np.eye(6) * 1e6, np.array([0, 0, 0.001]), contradicted=True)
+    assert accepted["accepted"] and f.pose[2, 3] > 0
+    with pytest.raises(ValueError, match="booleans"):
+        replace(config(), reset_on_geometry_conflict="false")
 
 
 def config(**kwargs):

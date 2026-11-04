@@ -148,9 +148,12 @@ def rebuild(job: Path):
                 previous_provenance = json.loads((previous_run.parent / "provenance.json").read_text())
                 from benchmarks.flash_pipeline_settings import from_recording, validate
 
+                requested_settings = request.get("settings")
+                if requested_settings is None:
+                    requested_settings = item.get("settings")
                 settings = (
-                    validate(request["settings"])
-                    if request.get("settings") is not None
+                    validate(requested_settings)
+                    if requested_settings is not None
                     else from_recording(previous_provenance, item["methods"])
                 )
                 previous_provenance = {**previous_provenance, **settings}
@@ -264,7 +267,10 @@ def rebuild(job: Path):
                 staged = export(run, job / "exports", check_cancel=check_cancel)
                 manifest = json.loads((staged / "manifest.json").read_text())
                 manifest.update(
-                    slot_id=item.get("slot_id", item["id"]), built_at_ns=time.time_ns(), experiment=job.name
+                    slot_id=item.get("slot_id", item["id"]),
+                    built_at_ns=time.time_ns(),
+                    name=item["name"],
+                    experiment=request.get("experiment_name", job.name),
                 )
                 write_json(staged / "manifest.json", manifest)
                 check_cancel()
@@ -287,6 +293,7 @@ def rebuild(job: Path):
                     pool.close()
             state["completed"] += 1
             write_json(job / "status.json", state)
+            write_report(job, request, state, outcomes)
         state.update(state="completed" if not state["errors"] else "completed_with_errors", phase="Finished")
     except BenchmarkCancelled:
         state.update(state="cancelled", phase="Stopped", current="")

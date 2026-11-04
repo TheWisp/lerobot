@@ -149,7 +149,7 @@ class GpuWholeSurfaceFit:
         )
         uncovered = (
             self._uncovered_outline(projected_envelope, hull_indices)
-            if self.cpu.config.require_full_mask_coverage
+            if self.cpu.coverage_enabled
             else torch.zeros((len(poses), len(self.outline)), dtype=self.dtype, device=self.device)
         )
         z_sorted = predicted[..., 2].sort(dim=-1).values

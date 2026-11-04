@@ -762,7 +762,7 @@ function drawFlashExperimentScene(rebuild = false) {
             document.getElementById('flash-scene-surface').value === 'expanded';
         for (const [role, object] of Object.entries(state.packet.objects)) {
             descriptions.push({layer: 'estimate', color: 0xffa84b, pose: object.pose,
-                points: expanded ? object.surface : object.reference, reference: object.reference});
+                points: expanded ? object.surface : object.initial_surface, reference: object.reference});
             descriptions.push({layer: 'labelled', color: 0x34e5a1, pose: object.labelled_pose,
                 points: object.labelled_surface, reference: object.reference});
             const groupPoints = object.group_tracks?.display_camera_xyz || object.group_tracks?.camera_xyz;

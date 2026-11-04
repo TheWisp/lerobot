@@ -1,0 +1,354 @@
+{
+  "name": "gamepad_271",
+  "case": "flash-demo-gamepad-cube",
+  "frame": 271,
+  "reference_frame": 0,
+  "connected_frame": 270,
+  "time_s": 11.973294973373413,
+  "previous_time_s": 11.940008163452148,
+  "last_observed_time_s": 11.973294973373413,
+  "map_version": 65,
+  "patches": {
+    "0": {
+      "active": true,
+      "support_frames": [
+        0
+      ]
+    },
+    "1": {
+      "active": true,
+      "support_frames": [
+        1,
+        2
+      ]
+    },
+    "2": {
+      "active": true,
+      "support_frames": [
+        2,
+        3
+      ]
+    },
+    "13": {
+      "active": true,
+      "support_frames": [
+        13,
+        14
+      ]
+    },
+    "17": {
+      "active": true,
+      "support_frames": [
+        17,
+        18
+      ]
+    },
+    "18": {
+      "active": true,
+      "support_frames": [
+        18,
+        19
+      ]
+    },
+    "20": {
+      "active": true,
+      "support_frames": [
+        20,
+        21
+      ]
+    },
+    "21": {
+      "active": true,
+      "support_frames": [
+        21,
+        22
+      ]
+    },
+    "28": {
+      "active": true,
+      "support_frames": [
+        28,
+        29
+      ]
+    },
+    "30": {
+      "active": true,
+      "support_frames": [
+        30,
+        31
+      ]
+    },
+    "31": {
+      "active": true,
+      "support_frames": [
+        31,
+        32
+      ]
+    },
+    "32": {
+      "active": true,
+      "support_frames": [
+        32,
+        33
+      ]
+    },
+    "39": {
+      "active": true,
+      "support_frames": [
+        39,
+        40
+      ]
+    },
+    "46": {
+      "active": true,
+      "support_frames": [
+        46,
+        47
+      ]
+    },
+    "56": {
+      "active": true,
+      "support_frames": [
+        56,
+        57
+      ]
+    },
+    "59": {
+      "active": true,
+      "support_frames": [
+        59,
+        60
+      ]
+    },
+    "61": {
+      "active": true,
+      "support_frames": [
+        61,
+        62
+      ]
+    },
+    "62": {
+      "active": true,
+      "support_frames": [
+        62,
+        63
+      ]
+    },
+    "107": {
+      "active": true,
+      "support_frames": [
+        107,
+        108
+      ]
+    },
+    "109": {
+      "active": true,
+      "support_frames": [
+        109,
+        110
+      ]
+    },
+    "120": {
+      "active": true,
+      "support_frames": [
+        120,
+        121
+      ]
+    },
+    "128": {
+      "active": true,
+      "support_frames": [
+        128,
+        129
+      ]
+    },
+    "129": {
+      "active": true,
+      "support_frames": [
+        129,
+        130
+      ]
+    },
+    "130": {
+      "active": false,
+      "support_frames": [
+        130
+      ]
+    },
+    "143": {
+      "active": false,
+      "support_frames": [
+        143
+      ]
+    },
+    "144": {
+      "active": true,
+      "support_frames": [
+        144,
+        145
+      ]
+    },
+    "146": {
+      "active": true,
+      "support_frames": [
+        146,
+        147
+      ]
+    },
+    "155": {
+      "active": true,
+      "support_frames": [
+        155,
+        156
+      ]
+    },
+    "158": {
+      "active": true,
+      "support_frames": [
+        158,
+        159
+      ]
+    },
+    "172": {
+      "active": true,
+      "support_frames": [
+        172,
+        206
+      ]
+    },
+    "205": {
+      "active": false,
+      "support_frames": [
+        205
+      ]
+    },
+    "214": {
+      "active": true,
+      "support_frames": [
+        214,
+        215
+      ]
+    },
+    "227": {
+      "active": true,
+      "support_frames": [
+        227,
+        228
+      ]
+    },
+    "253": {
+      "active": true,
+      "support_frames": [
+        253,
+        254
+      ]
+    },
+    "255": {
+      "active": true,
+      "support_frames": [
+        255,
+        256
+      ]
+    }
+  },
+  "vision": {
+    "backend": "surface",
+    "sam_resolution": 504,
+    "min_similarity": 0.75,
+    "registration_threshold_m": 0.005,
+    "registration_min_inliers": 12,
+    "registration_trials": 100,
+    "visible_shape_fallback": false,
+    "parallel_surface_objects": true,
+    "pipeline_surface_frames": true,
+    "surface_object_workers": 2,
+    "surface_reference_max_points_per_view": 15000,
+    "compiled_surface_fit": true,
+    "reuse_surface_search": true,
+    "detection_correction": {
+      "enabled": false,
+      "offline_interval_frames": 16,
+      "runtime_interval_frames": 60,
+      "min_detector_score": 0.8,
+      "min_tracker_score": 0.8,
+      "min_mask_overlap": 0.5
+    },
+    "observation": {
+      "mask_margin_px": 2,
+      "depth_span_m": 0.01,
+      "depth_neighborhood_px": 3,
+      "normal_bilateral_diameter_px": 5,
+      "normal_bilateral_sigma_px": 2.0,
+      "huber_m": 0.005,
+      "surface_spacing_m": 0.003,
+      "samples_across_object": 64,
+      "min_surface_spacing_m": 0.001,
+      "component_gap_m": 0.01,
+      "validation_tile_px": 4
+    },
+    "shape": {
+      "depth_tolerance_m": 0.005,
+      "surface_spacing_m": 0.003,
+      "mask_boundary_tolerance_px": 2.0,
+      "require_full_mask_coverage": false,
+      "max_surface_distance_m": 0.03,
+      "max_evaluations": 50,
+      "solver_tolerance": 1e-05,
+      "max_fit_points": 2048,
+      "nn_queries_per_worker": 512,
+      "batch_jacobian": true,
+      "batch_query_workers": 8
+    },
+    "motion": {
+      "crop_min_px": 160,
+      "crop_max_px": 480,
+      "crop_extent_multiplier": 2.5,
+      "input_size_px": 320,
+      "grid_step_px": 4,
+      "covisibility_min": 0.5,
+      "min_ransac_pairs": 6,
+      "ransac_distance_m": 0.006,
+      "ransac_confidence": 0.99,
+      "refinement_steps": 2,
+      "connected_dilation_px": 7
+    }
+  },
+  "surface": {
+    "spacing_m": 0.003,
+    "agreement_m": 0.005,
+    "min_overlap": 0.25,
+    "growth_agreement_m": 0.003,
+    "growth_min_overlap": 0.75,
+    "patch_consistency": 0.95,
+    "patch_overlap": 0.8,
+    "image_weight": 1.0,
+    "surface_priority": true,
+    "confirmations": 2,
+    "max_patches": 32,
+    "max_pending": 8,
+    "points_per_patch": 1024,
+    "max_points": 8192,
+    "grow": true,
+    "retain_unobserved_pose": false,
+    "uncertainty": {
+      "enabled": true,
+      "mode": "kalman",
+      "initial_position_std_m": 0.005,
+      "initial_rotation_std_deg": 10.0,
+      "position_process_std_m_sqrt_s": 0.002,
+      "rotation_process_std_deg_sqrt_s": 2.0,
+      "independent_error_m": 0.001,
+      "correlated_error_m": 0.002,
+      "correlation_length_m": 0.01,
+      "max_measurements": 256,
+      "compatibility_probability": 0.95,
+      "max_visible_outlier_fraction": 0.25,
+      "prefer_supported_prediction": true
+    }
+  },
+  "label_source": null,
+  "source_run": "/home/feit/.cache/flash-tracker-restart/kalman-accept25-all-20261103/runs/034-accept25/flash-demo-gamepad-cube",
+  "recorded_status": "observed_candidate",
+  "scope": "Frozen pre-fitting pose/covariance and optional group seed; no image pairs or group residuals. Real RGB-D preparation, fitting, Kalman and growth follow. Labels are evaluation only.",
+  "sha256": "ff01429c5f7b0824fec6b92b8980784787f8fad7d763822731c65f12f18e0669"
+}

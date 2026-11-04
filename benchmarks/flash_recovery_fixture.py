@@ -130,7 +130,7 @@ def export(run, output=FIXTURE, frame=49):
     return write_fixture(output, arrays, metadata)
 
 
-def restore(mode, path=FIXTURE):
+def restore(mode, path=FIXTURE, *, filter_factory=None):
     if mode not in MODES:
         raise ValueError(mode)
     metadata = json.loads((path / "manifest.json").read_text())
@@ -187,7 +187,7 @@ def restore(mode, path=FIXTURE):
     session.last_frame = metadata["frame"] - 1
     session.last_time = metadata["previous_time_s"]
     session.last_observed_time = session.last_supported_time = metadata["observed_time_s"]
-    filter_type = PoseKalmanFilter if mode == "current_reset" else StrictPoseKalmanFilter
+    filter_type = filter_factory or (PoseKalmanFilter if mode == "current_reset" else StrictPoseKalmanFilter)
     session.kalman = filter_type(
         session.pose, session.reference.mean(0), session.last_time, config.uncertainty
     )

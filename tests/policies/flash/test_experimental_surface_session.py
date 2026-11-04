@@ -30,6 +30,49 @@ def points():
     return np.column_stack((x.ravel(), y.ravel(), np.ones(x.size)))
 
 
+def test_initial_sampling_keeps_each_cell_when_only_duplicate_measurements_exceed_budget():
+    spacing = 0.003
+    x, y = np.meshgrid(np.arange(40), np.arange(24))
+    cells = np.column_stack((x.ravel(), y.ravel(), np.full(x.size, 100)))
+    dense = np.concatenate([(cells + offset) * spacing for offset in (0.2, 0.4, 0.6)])
+    store = SurfaceStore(GrowingSurfaceConfig(spacing_m=spacing, points_per_patch=1024))
+    store.add(dense, np.eye(4), 0, active=True)
+    # 2,880 readings describe only 960 cells; the 1,024-point budget must not
+    # discard unique surface just because the camera oversampled those cells.
+    assert len(store.points) == len(cells)
+    assert {tuple(c) for c in np.floor(store.points / spacing).astype(int)} == {tuple(c) for c in cells}
+
+
+@pytest.mark.parametrize("rotated", [False, True])
+def test_growth_fills_adjacent_cells_at_same_density_as_initial_surface(rotated):
+    from scipy.spatial.transform import Rotation
+
+    spacing = 0.003
+    x, y = np.meshgrid(np.arange(24), np.arange(10))
+    cells = np.column_stack((x.ravel(), y.ravel(), np.full(x.size, 100)))
+    old = cells[:, 0] < 20
+    cloud = (cells + 0.1) * spacing
+    cloud[old, 0] += 0.8 * spacing
+    store = SurfaceStore(GrowingSurfaceConfig(spacing_m=spacing))
+    store.add(cloud[old], np.eye(4), 0, active=True)
+    initial = store.points.copy()
+    pose = transform(0.021, -0.034, 0.012)
+    if rotated:
+        pose[:3, :3] = Rotation.from_euler("xyz", [24, -37, 16], degrees=True).as_matrix()
+    observed = move(cloud, pose)
+    store.extend(observed, pose, 1, view=None)
+    np.testing.assert_array_equal(store.points, initial)  # Still needs confirmation.
+    store.extend(observed, pose, 2, view=None)
+    actual = {tuple(c) for c in np.floor(store.points / spacing).astype(int)}
+    assert actual == {tuple(c) for c in cells}
+    assert len(store.points) == len(cells)
+    # Repeated overlap neither adds duplicates nor inflates the surface.
+    count = len(store.patches)
+    store.extend(observed, pose, 3, view=None)
+    assert len(store.patches) == count
+    assert len(store.points) == len(cells)
+
+
 def test_patch_confirmation_is_later_and_does_not_contaminate_the_fit_target():
     store = SurfaceStore(GrowingSurfaceConfig())
     original = points()
@@ -104,6 +147,51 @@ def prepared_frames(monkeypatch):
     mask[20:61, 25:76] = True
     k = np.array([[500.0, 0, 50], [0, 500.0, 40], [0, 0, 1]])
     return prepare, rgb, depth, mask, k
+
+
+def test_recent_view_budget_keeps_map_and_uses_latest_accepted_measurement(monkeypatch):
+    prepare, rgb, depth, mask, k = prepared_frames(monkeypatch)
+    tracker = GrowingSurfaceSession(
+        prepare.shape_config, GrowingSurfaceConfig(partial_surface_matching=True, fit_view_limit=1)
+    )
+    tracker.update(prepare.prepare(rgb, depth, mask, k, 0), 0.0)
+    original = tracker.store.points.copy()
+    # A later accepted measurement need not grow the surface to be a useful
+    # source view. Keep its actual pixels/calibration and its mapped pose.
+    latest = prepare.prepare(rgb, depth, mask, k, 1)
+    tracker.connected_frame = 1
+    tracker.connected_observation = latest["current"]
+    tracker.connected_intrinsics = latest["intrinsics"]
+    tracker.connected_pose = transform(x=0.01)
+    views = tracker._fit_views()
+    assert len(views) == 1
+    assert views[0].observation is latest["current"]
+    np.testing.assert_array_equal(views[0].camera_from_reference, tracker.connected_pose)
+    np.testing.assert_array_equal(tracker.store.points, original)
+    assert 0 in tracker.store.patches
+    tracker.config = replace(tracker.config, fit_view_limit=None)
+    assert len(tracker._fit_views()) == 2
+
+
+def test_rejected_filter_update_keeps_its_reason_in_session_diagnostics(monkeypatch):
+    prepare, rgb, depth, mask, k = prepared_frames(monkeypatch)
+    tracker = GrowingSurfaceSession(prepare.shape_config, GrowingSurfaceConfig())
+    tracker.update(prepare.prepare(rgb, depth, mask, k, 0), 0.0)
+    # Isolate the filter/session boundary: a candidate can pass geometric
+    # checks but provide no directional information for the Kalman update.
+    # This is what the recorded clock's back view exposed.
+    tracker.pose = tracker.kalman.pose = transform(x=0.1)
+    correct = tracker.kalman.correct
+
+    def no_information(pose, information, pivot, **kwargs):
+        return correct(pose, np.zeros_like(information), pivot, **kwargs)
+
+    monkeypatch.setattr(tracker.kalman, "correct", no_information)
+    result = tracker.update(prepare.prepare(rgb, depth, mask, k, 1), 0.1)
+    assert result["camera_from_reference"] is None
+    assert result["diagnostics"]["kalman"]["observable_rank"] == 0
+    assert result["diagnostics"]["reason"] == "no_observation_information"
+    np.testing.assert_array_equal(tracker.pose, transform(x=0.1))
 
 
 def test_prediction_during_empty_mask_never_grows_or_reseeds_surface(monkeypatch):
@@ -209,7 +297,7 @@ def test_repeated_wrong_fit_cannot_confirm_geometry_in_previously_empty_space(mo
     # of a depth view that already ruled that space out. Repeat the bad fit.
     monkeypatch.setattr(ImageConditionedFit, "correct", lambda self, seed: (np.eye(4), {}))
     monkeypatch.setattr(
-        ImageConditionedFit, "correct_surface_first", lambda self, seed, previous: (np.eye(4), {})
+        ImageConditionedFit, "correct_surface_first", lambda self, seed, previous, **_: (np.eye(4), {})
     )
     rejected = []
     for i in (1, 2, 3):
@@ -250,7 +338,7 @@ def test_no_overlap_does_not_reset_coordinate_origin(monkeypatch, surface_priori
 
     monkeypatch.setattr(module.ImageConditionedFit, "correct", lambda self, seed: (seed, {}))
     monkeypatch.setattr(
-        module.ImageConditionedFit, "correct_surface_first", lambda self, seed, previous: (seed, {})
+        module.ImageConditionedFit, "correct_surface_first", lambda self, seed, previous, **_: (seed, {})
     )
     new = prepare.prepare(rgb, depth + 0.5, mask, k, 1)
     new["step"] = None
@@ -562,7 +650,7 @@ def test_tracking_can_accept_a_pose_without_accepting_surface_growth(monkeypatch
     # Accept a known pose at the fitter boundary. Actual RGB-D cleanup and both
     # downstream acceptance paths run on a continuous surface with partial overlap.
     pose = transform(x=0.001)
-    monkeypatch.setattr(ImageConditionedFit, "correct_surface_first", lambda *_: (pose.copy(), {}))
+    monkeypatch.setattr(ImageConditionedFit, "correct_surface_first", lambda *_, **__: (pose.copy(), {}))
     changed = depth.copy()
     changed[20:61, 25:76] = np.linspace(1.012, 1.0, 41)[:, None]
     for i in (1, 2, 3):

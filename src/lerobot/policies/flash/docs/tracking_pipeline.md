@@ -127,17 +127,33 @@ an ablation. This is not a calibrated confidence model.
 Only the visible part of the saved surface must match the current measured
 surface. Outside the visible mask, nearer or unknown depth can hide a point;
 farther depth can contradict it. A partial saved surface is **not** required to
-cover the entire current outline. `ShapeConfig.require_full_mask_coverage` is
-off by default; enabling it assumes a complete reference, which our growing
-partial surfaces do not provide. No scene name or grasp timing selects these
-rules. The recorded gamepad regression checks approach occlusion and subsequent
+cover the entire current outline. Despite its legacy name,
+`ShapeConfig.require_full_mask_coverage` enables a soft outer-extent penalty
+for partial measured surfaces when explicitly enabled. `mask_coverage_weight`
+scales that preference; it is not a rejection threshold. This remains opt-in:
+a strong preference can pull an incomplete surface away from the measured fit. An uncovered
+region may be newly visible surface absent from the stored model; coverage
+alone cannot establish a pose or a contradiction. The opt-in
+`prefer_observed_overlap` cost favors alignment with measured surface over
+hiding the reference; it does not require unseen surface to exist.
+Projected saved surface outside measured object pixels remains subject to depth
+and mask checks. With `scene_depth_constraints` enabled, a connected patch
+projecting beyond the mask into measured empty space is rejected even below
+the global outlier allowance. This check depends on surface sampling; small or
+sparse conflicts can escape it. Isolated contradictions remain tolerable.
+No scene name or grasp timing selects these rules.
+The recorded gamepad regression checks approach occlusion and subsequent
 pickup; it does not establish accuracy throughout manipulation.
 
 ## What persists between frames
 
 1. **Surface patches:** retain sampled camera measurements, source frame and the
    transform placing each patch in fixed object coordinates. The combined surface
-   is a rebuildable cache, with explicit point/patch budgets.
+   is a rebuildable cache, with explicit point/patch budgets. Initial and added
+   points use the same fixed object-coordinate grid. A new measurement fills an
+   unoccupied cell; nearby occupied cells do not prevent it. Sampling precedes
+   the per-patch memory cap. The viewer compares the initial stored map with
+   its expansion, while the original observation remains separate for scoring.
 2. **Pose and evidence:** estimated rotation/translation, source time, model
    version, observed/predicted/lost status, fit diagnostics and source frame IDs.
    Adding a side never changes the coordinate origin or the A/B/C landmarks.

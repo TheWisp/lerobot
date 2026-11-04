@@ -1,0 +1,290 @@
+{
+  "metric": "Distance from each estimated partial-surface point to nearest triangle of full model at dataset label; no point identity constraint or refitting",
+  "partial_surface": "Identical 2405 initial measured points for every weight and frame",
+  "units": "millimetres",
+  "model": "BOP YCBV model 4, 005_tomato_soup_can",
+  "conversion": {
+    "subtract_from_vertices_m": [
+      -2.4e-05,
+      -0.001527,
+      0.0084035
+    ],
+    "source": "https://github.com/NVlabs/dex-ycb-toolkit/blob/master/dex_ycb_toolkit/bop_eval.py"
+  },
+  "initial_measurement_to_full_model": {
+    "signed_median_mm": 2.6447632118871036,
+    "median_mm": 2.6447632118871036,
+    "p90_mm": 4.400550038400972,
+    "within_2mm_pct": 31.683991683991685,
+    "within_5mm_pct": 96.54885654885655,
+    "within_10mm_pct": 100.0,
+    "within_20mm_pct": 100.0,
+    "points": 2405
+  },
+  "variants": {
+    "0": {
+      "30": {
+        "signed_median_mm": 1.4387633777722397,
+        "median_mm": 1.4387633777722397,
+        "p90_mm": 4.634030417288102,
+        "within_2mm_pct": 61.78794178794179,
+        "within_5mm_pct": 92.3076923076923,
+        "within_10mm_pct": 100.0,
+        "within_20mm_pct": 100.0,
+        "points": 2405
+      },
+      "40": {
+        "signed_median_mm": 12.108633838774004,
+        "median_mm": 12.108633838774004,
+        "p90_mm": 20.821573039932414,
+        "within_2mm_pct": 9.18918918918919,
+        "within_5mm_pct": 19.293139293139294,
+        "within_10mm_pct": 40.24948024948025,
+        "within_20mm_pct": 87.9002079002079,
+        "points": 2405
+      },
+      "67": {
+        "signed_median_mm": 3.717823701420738,
+        "median_mm": 3.717823701420738,
+        "p90_mm": 11.514191440569796,
+        "within_2mm_pct": 28.024948024948028,
+        "within_5mm_pct": 66.07068607068607,
+        "within_10mm_pct": 86.4033264033264,
+        "within_20mm_pct": 100.0,
+        "points": 2405
+      }
+    },
+    "0.1": {
+      "30": {
+        "signed_median_mm": 1.4590496718497967,
+        "median_mm": 1.4590496718497967,
+        "p90_mm": 4.586015718390399,
+        "within_2mm_pct": 59.83367983367983,
+        "within_5mm_pct": 92.84823284823285,
+        "within_10mm_pct": 100.0,
+        "within_20mm_pct": 100.0,
+        "points": 2405
+      },
+      "40": {
+        "signed_median_mm": 10.005997951264547,
+        "median_mm": 10.005997951264547,
+        "p90_mm": 21.52198944343569,
+        "within_2mm_pct": 11.01871101871102,
+        "within_5mm_pct": 25.904365904365907,
+        "within_10mm_pct": 49.8960498960499,
+        "within_20mm_pct": 86.02910602910603,
+        "points": 2405
+      },
+      "67": {
+        "signed_median_mm": 4.314114663602808,
+        "median_mm": 4.314114663602808,
+        "p90_mm": 10.462820436285195,
+        "within_2mm_pct": 22.785862785862786,
+        "within_5mm_pct": 57.25571725571725,
+        "within_10mm_pct": 87.77546777546777,
+        "within_20mm_pct": 100.0,
+        "points": 2405
+      }
+    },
+    "0.25": {
+      "30": {
+        "signed_median_mm": 1.4754959015267508,
+        "median_mm": 1.4754959015267508,
+        "p90_mm": 4.494737186662615,
+        "within_2mm_pct": 60.87318087318088,
+        "within_5mm_pct": 94.01247401247402,
+        "within_10mm_pct": 100.0,
+        "within_20mm_pct": 100.0,
+        "points": 2405
+      },
+      "40": {
+        "signed_median_mm": 11.555479242464436,
+        "median_mm": 11.555479242464436,
+        "p90_mm": 20.040091220772076,
+        "within_2mm_pct": 11.517671517671518,
+        "within_5mm_pct": 23.035343035343036,
+        "within_10mm_pct": 40.74844074844075,
+        "within_20mm_pct": 89.77130977130977,
+        "points": 2405
+      },
+      "67": {
+        "signed_median_mm": 4.9374221304686365,
+        "median_mm": 4.9374221304686365,
+        "p90_mm": 10.393484344279653,
+        "within_2mm_pct": 20.74844074844075,
+        "within_5mm_pct": 50.51975051975052,
+        "within_10mm_pct": 88.60706860706861,
+        "within_20mm_pct": 100.0,
+        "points": 2405
+      }
+    },
+    "0.5": {
+      "30": {
+        "signed_median_mm": 1.5169216830432082,
+        "median_mm": 1.5169216830432082,
+        "p90_mm": 4.487779219064146,
+        "within_2mm_pct": 60.91476091476091,
+        "within_5mm_pct": 94.92723492723492,
+        "within_10mm_pct": 100.0,
+        "within_20mm_pct": 100.0,
+        "points": 2405
+      },
+      "40": {
+        "signed_median_mm": 10.020350653986855,
+        "median_mm": 10.020350653986855,
+        "p90_mm": 19.786250950221767,
+        "within_2mm_pct": 12.765072765072766,
+        "within_5mm_pct": 25.904365904365907,
+        "within_10mm_pct": 49.93762993762994,
+        "within_20mm_pct": 90.72765072765073,
+        "points": 2405
+      },
+      "67": {
+        "signed_median_mm": 5.419919322339954,
+        "median_mm": 5.419919322339954,
+        "p90_mm": 12.440910353482806,
+        "within_2mm_pct": 18.41995841995842,
+        "within_5mm_pct": 46.32016632016632,
+        "within_10mm_pct": 82.28690228690229,
+        "within_20mm_pct": 100.0,
+        "points": 2405
+      }
+    },
+    "1": {
+      "30": {
+        "signed_median_mm": 1.8231541751312184,
+        "median_mm": 1.8231541751312184,
+        "p90_mm": 4.149922299101054,
+        "within_2mm_pct": 55.01039501039501,
+        "within_5mm_pct": 97.96257796257797,
+        "within_10mm_pct": 100.0,
+        "within_20mm_pct": 100.0,
+        "points": 2405
+      },
+      "40": {
+        "signed_median_mm": 9.908112351144279,
+        "median_mm": 9.908112351144279,
+        "p90_mm": 19.139058085397707,
+        "within_2mm_pct": 12.0997920997921,
+        "within_5mm_pct": 23.2016632016632,
+        "within_10mm_pct": 50.76923076923077,
+        "within_20mm_pct": 94.01247401247402,
+        "points": 2405
+      },
+      "67": {
+        "signed_median_mm": 5.676266631866136,
+        "median_mm": 5.676266631866136,
+        "p90_mm": 12.47253987190476,
+        "within_2mm_pct": 18.08731808731809,
+        "within_5mm_pct": 44.82328482328482,
+        "within_10mm_pct": 83.36798336798337,
+        "within_20mm_pct": 100.0,
+        "points": 2405
+      }
+    },
+    "2": {
+      "30": {
+        "signed_median_mm": 1.9581507781835836,
+        "median_mm": 1.9581507781835836,
+        "p90_mm": 3.538249481275547,
+        "within_2mm_pct": 51.725571725571726,
+        "within_5mm_pct": 99.83367983367984,
+        "within_10mm_pct": 100.0,
+        "within_20mm_pct": 100.0,
+        "points": 2405
+      },
+      "40": {
+        "signed_median_mm": 9.286416155646366,
+        "median_mm": 9.286416155646366,
+        "p90_mm": 19.373624451892603,
+        "within_2mm_pct": 11.933471933471933,
+        "within_5mm_pct": 25.23908523908524,
+        "within_10mm_pct": 54.17879417879418,
+        "within_20mm_pct": 92.55717255717256,
+        "points": 2405
+      },
+      "67": {
+        "signed_median_mm": 6.155814444321125,
+        "median_mm": 6.155814444321125,
+        "p90_mm": 13.372619098190084,
+        "within_2mm_pct": 16.839916839916842,
+        "within_5mm_pct": 41.58004158004158,
+        "within_10mm_pct": 79.62577962577963,
+        "within_20mm_pct": 99.91683991683992,
+        "points": 2405
+      }
+    }
+  },
+  "observation_check": {
+    "label": {
+      "depth_gap": {
+        "pixels": 1517,
+        "signed_median_mm": 13.79957027293055,
+        "median_mm": 13.79957027293055,
+        "p90_mm": 22.141322353008167,
+        "within_2mm_pct": 1.3183915622940012,
+        "within_5mm_pct": 5.1417270929466055,
+        "within_10mm_pct": 15.029663810151614,
+        "within_20mm_pct": 87.21160184574819
+      },
+      "counts": {
+        "mask_pixels": 1517,
+        "depth_valid_pixels": 1517,
+        "mesh_and_depth_pixels": 1517,
+        "valid_depth_without_mesh_pixels": 0
+      }
+    },
+    "0.5": {
+      "depth_gap": {
+        "pixels": 1473,
+        "signed_median_mm": 20.805640312173246,
+        "median_mm": 20.805640312173246,
+        "p90_mm": 41.35160097962171,
+        "within_2mm_pct": 5.227427019687712,
+        "within_5mm_pct": 14.392396469789546,
+        "within_10mm_pct": 25.254582484725052,
+        "within_20mm_pct": 48.74405974202308
+      },
+      "counts": {
+        "mask_pixels": 1517,
+        "depth_valid_pixels": 1517,
+        "mesh_and_depth_pixels": 1473,
+        "valid_depth_without_mesh_pixels": 44
+      }
+    },
+    "1": {
+      "depth_gap": {
+        "pixels": 1444,
+        "signed_median_mm": 22.966093341403095,
+        "median_mm": 22.966093341403095,
+        "p90_mm": 42.30569813480856,
+        "within_2mm_pct": 9.764542936288088,
+        "within_5mm_pct": 16.343490304709142,
+        "within_10mm_pct": 25.069252077562325,
+        "within_20mm_pct": 44.94459833795014
+      },
+      "counts": {
+        "mask_pixels": 1517,
+        "depth_valid_pixels": 1517,
+        "mesh_and_depth_pixels": 1444,
+        "valid_depth_without_mesh_pixels": 73
+      }
+    }
+  },
+  "axial_spin_90deg_control": {
+    "signed_median_mm": 2.7047880311266006,
+    "median_mm": 2.7047880311266006,
+    "p90_mm": 4.4086182108113015,
+    "within_2mm_pct": 34.67775467775468,
+    "within_5mm_pct": 96.5072765072765,
+    "within_10mm_pct": 100.0,
+    "within_20mm_pct": 100.0,
+    "points": 2405
+  },
+  "model_sha256": "fea7ae381b760b4852463fce4effa53fe9535dc5c8c1ee89de2be85a30b32211",
+  "model_source": {
+    "url": "https://huggingface.co/datasets/bop-benchmark/ycbv/resolve/main/ycbv_models.zip",
+    "object": 4,
+    "original_name": "005_tomato_soup_can"
+  }
+}

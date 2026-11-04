@@ -9,14 +9,17 @@ retain the older, unconditional current-to-reference coverage objective.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from inspect import signature
+from itertools import permutations
 from os import cpu_count
 
 import cv2
 import numpy as np
 from scipy.ndimage import map_coordinates
 from scipy.optimize import least_squares
+from scipy.sparse import csr_matrix
+from scipy.sparse.csgraph import connected_components
 from scipy.spatial import ConvexHull, cKDTree
 from scipy.spatial.transform import Rotation
 
@@ -32,9 +35,18 @@ class ShapeConfig:
     depth_tolerance_m: float = 0.005
     surface_spacing_m: float = 0.003
     mask_boundary_tolerance_px: float = 2.0
-    # A surface reconstructed from partial observations cannot be required to
-    # cover the whole current silhouette. Enable only for a complete reference.
+    # Legacy name: enables a soft cost for uncovered current outline. Missing
+    # coverage is not a contradiction: measured RGB-D surfaces are partial.
+    # This experiment remains opt-in because a strong cost can bias a partial fit.
     require_full_mask_coverage: bool = False
+    # Multiplier of that squared-error cost: 0 disables the preference; 1 keeps
+    # the previous strength. This does not weaken depth/free-space checks.
+    mask_coverage_weight: float = 1.0
+    # Experimental: use surrounding depth as an empty-space constraint, keeping
+    # depth holes and a nearer foreground surface explicitly uninformative.
+    scene_depth_constraints: bool = False
+    # Experimental search preference: unknown surface is not a perfect match.
+    prefer_observed_overlap: bool = False
     max_surface_distance_m: float = 0.03
     max_evaluations: int = 50
     solver_tolerance: float = 1e-5
@@ -87,20 +99,23 @@ def project(points: np.ndarray, k: np.ndarray) -> np.ndarray:
     return points[:, :2] / points[:, 2, None] @ k[:2, :2].T + k[:2, 2]
 
 
-def pca_candidates(source: np.ndarray, target: np.ndarray) -> list[np.ndarray]:
+def pca_candidates(source: np.ndarray, target: np.ndarray, *, all_axis_orders=False) -> list[np.ndarray]:
     """Generic coarse initializations; never used as a pose or axis measurement."""
     source_center, target_center = source.mean(0), target.mean(0)
     _, _, source_basis = np.linalg.svd(source - source_center, full_matrices=False)
     _, _, target_basis = np.linalg.svd(target - target_center, full_matrices=False)
     candidates = []
-    for signs in ((1, 1, 1), (1, -1, -1), (-1, 1, -1), (-1, -1, 1)):
-        rotation = target_basis.T @ np.diag(signs) @ source_basis
-        if np.linalg.det(rotation) < 0:
-            rotation = target_basis.T @ np.diag(np.array(signs) * [1, 1, -1]) @ source_basis
-        pose = np.eye(4)
-        pose[:3, :3] = rotation
-        pose[:3, 3] = target_center - rotation @ source_center
-        candidates.append(pose)
+    orders = permutations(range(3)) if all_axis_orders else [(0, 1, 2)]
+    for order in orders:
+        basis = target_basis[list(order)]
+        for signs in ((1, 1, 1), (1, -1, -1), (-1, 1, -1), (-1, -1, 1)):
+            rotation = basis.T @ np.diag(signs) @ source_basis
+            if np.linalg.det(rotation) < 0:
+                rotation = basis.T @ np.diag(np.array(signs) * [1, 1, -1]) @ source_basis
+            pose = np.eye(4)
+            pose[:3, :3] = rotation
+            pose[:3, 3] = target_center - rotation @ source_center
+            candidates.append(pose)
     return candidates
 
 
@@ -165,6 +180,20 @@ class WholeSurfaceFit:
         # residual sampling, including small but distinctive extremities.
         self.envelope = prepared_reference.envelope
         self.outside_mask = cv2.distanceTransform((~observation["mask"]).astype(np.uint8), cv2.DIST_L2, 5)
+        self.scene_nearest_depth = None
+        if config.scene_depth_constraints:
+            raw = observation.get("scene_depth", observation["depth"])
+            raw = np.where(np.isfinite(raw) & (raw > 0), raw, 0).astype(np.float32)
+            radius = int(np.ceil(config.mask_boundary_tolerance_px))
+            # Conservative depth bound within the existing image-alignment
+            # tolerance. A hole makes this bound unknown (zero); a foreground
+            # wire makes it near. Neither is replaced with farther background.
+            self.scene_nearest_depth = cv2.erode(
+                raw,
+                np.ones((2 * radius + 1,) * 2, np.uint8),
+                borderType=cv2.BORDER_CONSTANT,
+                borderValue=0,
+            )
         contours, _ = cv2.findContours(
             observation["mask"].astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
         )
@@ -187,18 +216,21 @@ class WholeSurfaceFit:
                 self.target,
                 view.observation,
                 view.intrinsics,
-                config,
+                replace(config, require_full_mask_coverage=False),
                 fit_kernels=fit_kernels,
                 search_pool=search_pool,
             )
             self.reverse_fits.append((view.camera_from_reference, reverse))
 
+    @property
+    def coverage_enabled(self) -> bool:
+        return self.config.require_full_mask_coverage
+
     def uncovered_mask(self, uv: np.ndarray) -> np.ndarray:
-        if not self.config.require_full_mask_coverage:
+        if not self.coverage_enabled:
             return np.zeros(len(self.mask_outline))
-        # Containment in the projected convex envelope is a conservative check:
-        # it enforces observed outer extent without inventing an unseen mesh or
-        # requiring an occluder's cut-out to occur in the reference shape.
+        # Distance outside the projected outer envelope, not a complete mesh
+        # silhouette. This is a search preference, not proof of a contradiction.
         polygon = uv[ConvexHull(uv).vertices]
         start, end = polygon, np.roll(polygon, -1, axis=0)
         edge = end - start
@@ -258,6 +290,23 @@ class WholeSurfaceFit:
         return np.concatenate((forward[:n], matched, forward[n + m :], free, *outlines))
 
     def _one_view_residual(self, pose, predicted, model_distance, target_distance):
+        residual = self._legacy_view_residual(pose, predicted, model_distance, target_distance)
+        if self.config.prefer_observed_overlap:
+            visible, _, _ = self._projection_evidence(predicted)
+            agreement = visible * np.exp(-((model_distance / self.config.depth_tolerance_m) ** 2))
+            residual[: len(predicted)] = np.sqrt(np.clip(1 - agreement, 0, 1) / len(predicted))
+        if self.config.scene_depth_constraints:
+            free, exposed, _ = self._scene_depth_evidence(predicted)
+            n, m = len(predicted), len(self.target_queries)
+            # Keep a fixed residual layout for the optimizer and reverse-view
+            # composition. The same augmentation runs with native/Python fits.
+            residual[n + m : n + m + n] = np.maximum(
+                residual[n + m : n + m + n],
+                free / (self.config.depth_tolerance_m * np.sqrt(max(exposed.sum(), 1.0))),
+            )
+        return residual
+
+    def _legacy_view_residual(self, pose, predicted, model_distance, target_distance):
         if self.fit_kernels is not None:
             uv = project(predicted, self.k)
             height, width = self.observation["depth"].shape
@@ -276,7 +325,7 @@ class WholeSurfaceFit:
                 self.config.mask_boundary_tolerance_px,
                 self.k[0, 0],
             )
-            if self.config.require_full_mask_coverage:
+            if self.coverage_enabled:
                 envelope = project(move(self.envelope, pose), self.k)
                 polygon = envelope[ConvexHull(envelope).vertices]
                 outline = self.fit_kernels[1](
@@ -286,6 +335,7 @@ class WholeSurfaceFit:
                 outline = np.zeros(len(self.mask_outline))
             outline = (
                 outline
+                * np.sqrt(self.config.mask_coverage_weight)
                 * np.median(predicted[:, 2])
                 / (self.k[0, 0] * self.config.depth_tolerance_m * np.sqrt(len(self.mask_outline)))
             )
@@ -300,6 +350,7 @@ class WholeSurfaceFit:
                 target_distance / (tolerance * np.sqrt(len(self.target_queries))),
                 np.sqrt(visibility / len(predicted)) * silhouette_m / tolerance,
                 self.uncovered_mask(project(move(self.envelope, pose), self.k))
+                * np.sqrt(self.config.mask_coverage_weight)
                 * np.median(predicted[:, 2])
                 / (self.k[0, 0] * tolerance * np.sqrt(len(self.mask_outline))),
             )
@@ -388,12 +439,120 @@ class WholeSurfaceFit:
             "has_visible_overlap": any(count > 0 for count in visible),
         }
 
+    def _scene_depth_evidence(self, predicted):
+        """Depth bounds along rays, independent of object point-cloud trimming.
+
+        Returns metric free-space violation, exposed weight and contradicted
+        weight. Hidden/unknown samples contribute to neither denominator nor
+        numerator. Interpolation combines evidence, never depth across a cliff.
+        """
+        uv = project(predicted, self.k)
+        h, w = self.scene_nearest_depth.shape
+        valid = (
+            np.isfinite(uv).all(1)
+            & (predicted[:, 2] > 0)
+            & (uv[:, 0] >= 0)
+            & (uv[:, 0] <= w - 1)
+            & (uv[:, 1] >= 0)
+            & (uv[:, 1] <= h - 1)
+        )
+        x, y = np.nan_to_num(uv[:, 0]).clip(0, w - 1), np.nan_to_num(uv[:, 1]).clip(0, h - 1)
+        x0, y0 = x.astype(int), y.astype(int)
+        x1, y1 = np.minimum(x0 + 1, w - 1), np.minimum(y0 + 1, h - 1)
+        fx, fy = x - x0, y - y0
+        weights = np.column_stack(((1 - fx) * (1 - fy), fx * (1 - fy), (1 - fx) * fy, fx * fy))
+        depth = self.scene_nearest_depth
+        near = np.column_stack((depth[y0, x0], depth[y0, x1], depth[y1, x0], depth[y1, x1]))
+        known = (near > 0) & valid[:, None]
+        gap = near - predicted[:, 2, None]
+        tolerance = self.config.depth_tolerance_m
+        exposed = np.sum(weights * known * np.clip((gap + tolerance) / tolerance, 0, 1), axis=1)
+        contradicted = np.sum(weights * known * (gap > tolerance), axis=1)
+        free = np.sqrt(np.sum(weights * known * np.maximum(gap - tolerance, 0) ** 2, axis=1))
+        return free, exposed, contradicted
+
+    def scene_depth_check(self, pose):
+        directions = [(self, move(self.reference_queries, pose))]
+        inverse = np.linalg.inv(pose)
+        directions.extend(
+            (fit, move(fit.reference_queries, camera @ inverse)) for camera, fit in self.reverse_fits
+        )
+        fractions, exposed_counts, coherent_protrusions = [], [], []
+        for fit, predicted in directions:
+            _, exposed, bad = fit._scene_depth_evidence(predicted)
+            count = float(exposed.sum())
+            exposed_counts.append(count)
+            fractions.append(float(bad.sum() / count) if count else 0.0)
+            coherent_protrusions.append(fit._coherent_protrusion(predicted, bad))
+        return {
+            "scene_depth_outlier_fraction": max(fractions),
+            "scene_depth_exposed_weights": exposed_counts,
+            "scene_depth_coherent_protrusion": any(coherent_protrusions),
+        }
+
+    def _coherent_protrusion(self, predicted, contradicted):
+        """Find a connected patch protruding into measured background.
+
+        A single depth disagreement can be a bad map point or sensor reading.
+        A patch wider than one surface-sample neighborhood is pose evidence.
+        Only points outside the observed mask and beyond its existing boundary
+        tolerance count; disagreements *inside* the mask are handled by the
+        ordinary robust surface-fit allowance.
+        """
+        indices = np.flatnonzero(contradicted > 0)
+        if len(indices) < 2:
+            return False
+        uv = project(predicted[indices], self.k)
+        h, w = self.outside_mask.shape
+        valid = np.isfinite(uv).all(axis=1) & (predicted[indices, 2] > 0)
+        valid &= (uv[:, 0] >= 0) & (uv[:, 0] < w) & (uv[:, 1] >= 0) & (uv[:, 1] < h)
+        uv = uv[valid]
+        depth = predicted[indices[valid], 2]
+        if len(uv) < 2:
+            return False
+        outside = map_coordinates(
+            self.outside_mask,
+            (uv[:, 1], uv[:, 0]),
+            order=1,
+            mode="nearest",
+        )
+        uv = uv[outside > self.config.mask_boundary_tolerance_px]
+        depth = depth[outside > self.config.mask_boundary_tolerance_px]
+        if len(uv) < 2:
+            return False
+        # One projected surface-sample neighborhood sets both connectivity
+        # and the minimum span. No independent pixel/count threshold is added.
+        neighborhood = max(
+            self.config.mask_boundary_tolerance_px,
+            self.k[0, 0] * self.config.surface_spacing_m / np.median(depth),
+        )
+        pairs = np.asarray(list(cKDTree(uv).query_pairs(neighborhood)), dtype=np.intp).reshape(-1, 2)
+        if not len(pairs):
+            return False
+        edges = np.concatenate((pairs, pairs[:, ::-1]))
+        graph = csr_matrix((np.ones(len(edges)), (edges[:, 0], edges[:, 1])), shape=(len(uv), len(uv)))
+        _, labels = connected_components(graph, directed=False)
+        return any(
+            np.linalg.norm(np.ptp(uv[labels == label], axis=0)) > 2 * neighborhood
+            for label in np.unique(labels)
+        )
+
     def score(self, pose: np.ndarray) -> float:
         residual = self.residual(pose)
         return float(np.dot(residual, residual))
 
-    def refine(self, initial: np.ndarray) -> tuple[np.ndarray, dict]:
+    def refine(self, initial: np.ndarray, *, admissible=None) -> tuple[np.ndarray, dict]:
         center = move(self.reference, initial).mean(0)
+        best_admissible = None
+
+        def record(pose, residual):
+            nonlocal best_admissible
+            if admissible is None:
+                return residual
+            cost = float(residual @ residual)
+            if (best_admissible is None or cost < best_admissible[0]) and admissible(pose):
+                best_admissible = cost, pose.copy()
+            return residual
 
         def pose_from_delta(delta):
             rotation = Rotation.from_rotvec(delta[:3]).as_matrix()
@@ -403,11 +562,16 @@ class WholeSurfaceFit:
             return pose
 
         def batch_map(_fun, deltas):
-            return self.batch_residuals([pose_from_delta(delta) for delta in deltas])
+            poses = [pose_from_delta(delta) for delta in deltas]
+            return [record(p, r) for p, r in zip(poses, self.batch_residuals(poses), strict=True)]
+
+        def residual(delta):
+            pose = pose_from_delta(delta)
+            return record(pose, self.residual(pose))
 
         batched = self.config.batch_jacobian and _HAS_SOLVER_WORKERS
         solution = least_squares(
-            lambda delta: self.residual(pose_from_delta(delta)),
+            residual,
             np.zeros(6),
             x_scale="jac",
             max_nfev=self.config.max_evaluations,
@@ -417,6 +581,8 @@ class WholeSurfaceFit:
             **({"workers": batch_map} if batched else {}),
         )
         pose = pose_from_delta(solution.x)
+        if best_admissible is not None:
+            pose = best_admissible[1]
         return pose, {
             "initial_cost": self.score(initial),
             "cost": self.score(pose),
@@ -425,6 +591,7 @@ class WholeSurfaceFit:
             "batched_jacobian": batched,
             "fit_reference_points": len(self.reference_queries),
             "fit_target_points": len(self.target_queries),
+            **({"retained_admissible_iterate": best_admissible is not None} if admissible else {}),
         }
 
     def correct(self, proposal: np.ndarray) -> tuple[np.ndarray, dict]:

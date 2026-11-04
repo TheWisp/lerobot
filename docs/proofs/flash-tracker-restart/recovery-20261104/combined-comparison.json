@@ -1,0 +1,942 @@
+{
+  "criterion": "Within 20 mm median transported-surface error AND 20 degrees of dataset pose; missing frames fail; initialization excluded. No labelled accuracy for gamepad/cube or yellow.",
+  "runs": {
+    "baseline": {
+      "gamepad": {
+        "complete": true,
+        "path": "/home/feit/.cache/flash-tracker-restart/kalman-accept25-all-20261103/runs/034-accept25/flash-demo-gamepad-cube",
+        "frames": 628,
+        "input_sha256": "fda3c6528b84615e7e04bed498cbec284fb4837a34f453f37c0b632a701d10cf",
+        "roles": {
+          "gamepad": {
+            "available_after_initialization": 613,
+            "total_after_initialization": 627,
+            "max_map_points": 388,
+            "pose_sources": {
+              "observed_candidate": 567,
+              "predicted": 46,
+              "lost": 14
+            }
+          },
+          "cube": {
+            "available_after_initialization": 625,
+            "total_after_initialization": 627,
+            "max_map_points": 225,
+            "pose_sources": {
+              "observed_candidate": 520,
+              "predicted": 105,
+              "lost": 2
+            }
+          }
+        }
+      },
+      "mustard": {
+        "complete": true,
+        "path": "/home/feit/.cache/flash-tracker-restart/kalman-config-20261103/runs/043-accept25/ycb-mustard_easy_00_02",
+        "frames": 181,
+        "input_sha256": "2ca33583b95ed8d6e091777efe9285bd8e6343389d3d3ab90b2b48fef1399852",
+        "roles": {
+          "object": {
+            "available_after_initialization": 175,
+            "total_after_initialization": 180,
+            "pose_error": {
+              "available": 175,
+              "total": 180,
+              "cloud_mm_median": 8.08924331245054,
+              "cloud_mm_p90": 11.909054106631654,
+              "angle_deg_median": 6.890316489344662,
+              "angle_deg_p90": 9.780769402716542,
+              "center_mm_median": 7.429015068882655,
+              "within_10mm_10deg": 116,
+              "within_20mm_20deg": 175,
+              "final_cloud_mm": null,
+              "final_angle_deg": null
+            },
+            "max_map_points": 394,
+            "pose_sources": {
+              "observed_candidate": 161,
+              "predicted": 14,
+              "lost": 5
+            }
+          }
+        }
+      },
+      "yellow": {
+        "complete": true,
+        "path": "/home/feit/.cache/flash-tracker-restart/kalman-accept25-all-20261103/runs/012-accept25/rig-yellow-block",
+        "frames": 75,
+        "input_sha256": "1aef5724a99226a5fe503fa1e85457ef4e76865796ef57c4f0fe0997efc61cc3",
+        "roles": {
+          "object": {
+            "available_after_initialization": 62,
+            "total_after_initialization": 74,
+            "max_map_points": 234,
+            "pose_sources": {
+              "observed_candidate": 62,
+              "predicted": 0,
+              "lost": 12
+            }
+          }
+        }
+      },
+      "clock": {
+        "complete": true,
+        "path": "/home/feit/.cache/flash-tracker-restart/kalman-config-20261103/runs/011-accept25/laval-clock-interaction-hard",
+        "frames": 203,
+        "input_sha256": "1e395c9078ea1819b600b06004d1c37a392353247f936b693b7f5b950fa2f6aa",
+        "roles": {
+          "clock": {
+            "available_after_initialization": 27,
+            "total_after_initialization": 202,
+            "pose_error": {
+              "available": 27,
+              "total": 202,
+              "cloud_mm_median": 5.761526044608969,
+              "cloud_mm_p90": 13.499040947759884,
+              "angle_deg_median": 5.266438792464803,
+              "angle_deg_p90": 12.241454288132159,
+              "center_mm_median": 5.091083701389932,
+              "within_10mm_10deg": 22,
+              "within_20mm_20deg": 25,
+              "final_cloud_mm": null,
+              "final_angle_deg": null
+            },
+            "max_map_points": 681,
+            "pose_sources": {
+              "observed_candidate": 20,
+              "predicted": 7,
+              "lost": 175
+            }
+          }
+        }
+      },
+      "drill": {
+        "complete": true,
+        "path": "/home/feit/.cache/flash-tracker-restart/kalman-accept25-all-20261103/runs/005-accept25/dexycb-drill-20201002_111923",
+        "frames": 74,
+        "input_sha256": "602e332520f1fc25f76127f4b882e3252f2df87b0bd65ab28569dd5cae5148cb",
+        "roles": {
+          "object": {
+            "available_after_initialization": 64,
+            "total_after_initialization": 73,
+            "pose_error": {
+              "available": 64,
+              "total": 73,
+              "cloud_mm_median": 10.386022971681328,
+              "cloud_mm_p90": 20.83235009470905,
+              "angle_deg_median": 3.9565318899094684,
+              "angle_deg_p90": 10.246748745752017,
+              "center_mm_median": 7.8097137909883205,
+              "within_10mm_10deg": 31,
+              "within_20mm_20deg": 56,
+              "final_cloud_mm": 11.639098432379404,
+              "final_angle_deg": 6.997538831121546
+            },
+            "max_map_points": 508,
+            "pose_sources": {
+              "observed_candidate": 64,
+              "predicted": 0,
+              "lost": 9
+            }
+          }
+        }
+      }
+    },
+    "sequential-filtered-depth-last-view": {
+      "gamepad": {
+        "complete": true,
+        "path": "/home/feit/.cache/flash-tracker-restart/recovery-audit-20261104/sequential-filtered-depth-last-view/flash-demo-gamepad-cube",
+        "frames": 628,
+        "input_sha256": "fda3c6528b84615e7e04bed498cbec284fb4837a34f453f37c0b632a701d10cf",
+        "roles": {
+          "gamepad": {
+            "available_after_initialization": 627,
+            "total_after_initialization": 627,
+            "max_map_points": 379,
+            "pose_sources": {
+              "observed_candidate": 576,
+              "predicted": 51,
+              "lost": 0
+            }
+          },
+          "cube": {
+            "available_after_initialization": 627,
+            "total_after_initialization": 627,
+            "max_map_points": 225,
+            "pose_sources": {
+              "observed_candidate": 522,
+              "predicted": 105,
+              "lost": 0
+            }
+          }
+        }
+      },
+      "mustard": {
+        "complete": true,
+        "path": "/home/feit/.cache/flash-tracker-restart/recovery-audit-20261104/sequential-filtered-depth-last-view/ycb-mustard_easy_00_02",
+        "frames": 181,
+        "input_sha256": "2ca33583b95ed8d6e091777efe9285bd8e6343389d3d3ab90b2b48fef1399852",
+        "roles": {
+          "object": {
+            "available_after_initialization": 180,
+            "total_after_initialization": 180,
+            "pose_error": {
+              "available": 180,
+              "total": 180,
+              "cloud_mm_median": 2.264304559404656,
+              "cloud_mm_p90": 6.2625284039328335,
+              "angle_deg_median": 2.6542431893500593,
+              "angle_deg_p90": 7.897281214698437,
+              "center_mm_median": 1.5953196963940193,
+              "within_10mm_10deg": 166,
+              "within_20mm_20deg": 180,
+              "final_cloud_mm": 6.958906943086748,
+              "final_angle_deg": 10.426977638653307
+            },
+            "max_map_points": 392,
+            "pose_sources": {
+              "observed_candidate": 180,
+              "predicted": 0,
+              "lost": 0
+            }
+          }
+        }
+      },
+      "yellow": {
+        "complete": true,
+        "path": "/home/feit/.cache/flash-tracker-restart/recovery-audit-20261104/sequential-filtered-depth-last-view/rig-yellow-block",
+        "frames": 75,
+        "input_sha256": "1aef5724a99226a5fe503fa1e85457ef4e76865796ef57c4f0fe0997efc61cc3",
+        "roles": {
+          "object": {
+            "available_after_initialization": 74,
+            "total_after_initialization": 74,
+            "max_map_points": 250,
+            "pose_sources": {
+              "observed_candidate": 73,
+              "predicted": 1,
+              "lost": 0
+            }
+          }
+        }
+      },
+      "clock": {
+        "complete": true,
+        "path": "/home/feit/.cache/flash-tracker-restart/recovery-audit-20261104/sequential-filtered-depth-last-view/laval-clock-interaction-hard",
+        "frames": 203,
+        "input_sha256": "1e395c9078ea1819b600b06004d1c37a392353247f936b693b7f5b950fa2f6aa",
+        "roles": {
+          "clock": {
+            "available_after_initialization": 198,
+            "total_after_initialization": 202,
+            "pose_error": {
+              "available": 198,
+              "total": 202,
+              "cloud_mm_median": 69.24744611018897,
+              "cloud_mm_p90": 98.4498164072258,
+              "angle_deg_median": 138.06082970025963,
+              "angle_deg_p90": 166.87033096443793,
+              "center_mm_median": 45.9677593309099,
+              "within_10mm_10deg": 15,
+              "within_20mm_20deg": 31,
+              "final_cloud_mm": 55.41881917728406,
+              "final_angle_deg": 160.6489192657349
+            },
+            "max_map_points": 1125,
+            "pose_sources": {
+              "observed_candidate": 153,
+              "predicted": 46,
+              "lost": 3
+            }
+          }
+        }
+      },
+      "drill": {
+        "complete": true,
+        "path": "/home/feit/.cache/flash-tracker-restart/recovery-audit-20261104/sequential-filtered-depth-last-view/dexycb-drill-20201002_111923",
+        "frames": 74,
+        "input_sha256": "602e332520f1fc25f76127f4b882e3252f2df87b0bd65ab28569dd5cae5148cb",
+        "roles": {
+          "object": {
+            "available_after_initialization": 72,
+            "total_after_initialization": 73,
+            "pose_error": {
+              "available": 72,
+              "total": 73,
+              "cloud_mm_median": 11.551399249221166,
+              "cloud_mm_p90": 27.424303518795735,
+              "angle_deg_median": 2.93471383030466,
+              "angle_deg_p90": 11.38757522800135,
+              "center_mm_median": 10.080170762577849,
+              "within_10mm_10deg": 35,
+              "within_20mm_20deg": 43,
+              "final_cloud_mm": 16.969338952192516,
+              "final_angle_deg": 5.648880525596835
+            },
+            "max_map_points": 502,
+            "pose_sources": {
+              "observed_candidate": 71,
+              "predicted": 1,
+              "lost": 1
+            }
+          }
+        }
+      }
+    },
+    "combined-strict-broader": {
+      "gamepad": {
+        "complete": true,
+        "path": "/home/feit/.cache/flash-tracker-restart/recovery-audit-20261104/combined-strict-broader/flash-demo-gamepad-cube",
+        "frames": 628,
+        "input_sha256": "fda3c6528b84615e7e04bed498cbec284fb4837a34f453f37c0b632a701d10cf",
+        "roles": {
+          "gamepad": {
+            "available_after_initialization": 544,
+            "total_after_initialization": 627,
+            "max_map_points": 370,
+            "pose_sources": {
+              "observed_candidate": 495,
+              "predicted": 132,
+              "lost": 0
+            }
+          },
+          "cube": {
+            "available_after_initialization": 458,
+            "total_after_initialization": 627,
+            "max_map_points": 215,
+            "pose_sources": {
+              "observed_candidate": 353,
+              "predicted": 273,
+              "lost": 1
+            }
+          }
+        }
+      },
+      "mustard": {
+        "complete": true,
+        "path": "/home/feit/.cache/flash-tracker-restart/recovery-audit-20261104/combined-strict-broader/ycb-mustard_easy_00_02",
+        "frames": 181,
+        "input_sha256": "2ca33583b95ed8d6e091777efe9285bd8e6343389d3d3ab90b2b48fef1399852",
+        "roles": {
+          "object": {
+            "available_after_initialization": 180,
+            "total_after_initialization": 180,
+            "pose_error": {
+              "available": 180,
+              "total": 180,
+              "cloud_mm_median": 2.437906174163513,
+              "cloud_mm_p90": 6.230831484402868,
+              "angle_deg_median": 2.816438157057993,
+              "angle_deg_p90": 7.806762173679294,
+              "center_mm_median": 1.458266713634679,
+              "within_10mm_10deg": 177,
+              "within_20mm_20deg": 180,
+              "final_cloud_mm": 8.070708084990814,
+              "final_angle_deg": 10.07014994509344
+            },
+            "max_map_points": 392,
+            "pose_sources": {
+              "observed_candidate": 180,
+              "predicted": 0,
+              "lost": 0
+            }
+          }
+        }
+      },
+      "yellow": {
+        "complete": true,
+        "path": "/home/feit/.cache/flash-tracker-restart/recovery-audit-20261104/combined-strict-broader/rig-yellow-block",
+        "frames": 75,
+        "input_sha256": "1aef5724a99226a5fe503fa1e85457ef4e76865796ef57c4f0fe0997efc61cc3",
+        "roles": {
+          "object": {
+            "available_after_initialization": 71,
+            "total_after_initialization": 74,
+            "max_map_points": 263,
+            "pose_sources": {
+              "observed_candidate": 70,
+              "predicted": 4,
+              "lost": 0
+            }
+          }
+        }
+      },
+      "clock": {
+        "complete": true,
+        "path": "/home/feit/.cache/flash-tracker-restart/recovery-audit-20261104/combined-strict-broader/laval-clock-interaction-hard",
+        "frames": 203,
+        "input_sha256": "1e395c9078ea1819b600b06004d1c37a392353247f936b693b7f5b950fa2f6aa",
+        "roles": {
+          "clock": {
+            "available_after_initialization": 46,
+            "total_after_initialization": 202,
+            "pose_error": {
+              "available": 46,
+              "total": 202,
+              "cloud_mm_median": 23.14583764703555,
+              "cloud_mm_p90": 48.46669454009207,
+              "angle_deg_median": 23.955119495168162,
+              "angle_deg_p90": 48.02547554338874,
+              "center_mm_median": 9.42047251955183,
+              "within_10mm_10deg": 15,
+              "within_20mm_20deg": 21,
+              "final_cloud_mm": null,
+              "final_angle_deg": null
+            },
+            "max_map_points": 1127,
+            "pose_sources": {
+              "observed_candidate": 45,
+              "predicted": 126,
+              "lost": 31
+            }
+          }
+        }
+      },
+      "drill": {
+        "complete": true,
+        "path": "/home/feit/.cache/flash-tracker-restart/recovery-audit-20261104/combined-strict-broader/dexycb-drill-20201002_111923",
+        "frames": 74,
+        "input_sha256": "602e332520f1fc25f76127f4b882e3252f2df87b0bd65ab28569dd5cae5148cb",
+        "roles": {
+          "object": {
+            "available_after_initialization": 70,
+            "total_after_initialization": 73,
+            "pose_error": {
+              "available": 70,
+              "total": 73,
+              "cloud_mm_median": 9.578565878431784,
+              "cloud_mm_p90": 32.45722869376509,
+              "angle_deg_median": 3.477406682715867,
+              "angle_deg_p90": 10.514676181104921,
+              "center_mm_median": 7.080733537653312,
+              "within_10mm_10deg": 36,
+              "within_20mm_20deg": 42,
+              "final_cloud_mm": 19.349431168306648,
+              "final_angle_deg": 6.695319671527369
+            },
+            "max_map_points": 502,
+            "pose_sources": {
+              "observed_candidate": 70,
+              "predicted": 1,
+              "lost": 2
+            }
+          }
+        }
+      }
+    },
+    "combined-velocity": {
+      "gamepad": {
+        "complete": true,
+        "path": "/home/feit/.cache/flash-tracker-restart/recovery-audit-20261104/combined-velocity/flash-demo-gamepad-cube",
+        "frames": 628,
+        "input_sha256": "fda3c6528b84615e7e04bed498cbec284fb4837a34f453f37c0b632a701d10cf",
+        "roles": {
+          "gamepad": {
+            "available_after_initialization": 520,
+            "total_after_initialization": 627,
+            "max_map_points": 379,
+            "pose_sources": {
+              "observed_candidate": 465,
+              "predicted": 161,
+              "lost": 1
+            }
+          },
+          "cube": {
+            "available_after_initialization": 577,
+            "total_after_initialization": 627,
+            "max_map_points": 218,
+            "pose_sources": {
+              "observed_candidate": 469,
+              "predicted": 158,
+              "lost": 0
+            }
+          }
+        }
+      },
+      "mustard": {
+        "complete": true,
+        "path": "/home/feit/.cache/flash-tracker-restart/recovery-audit-20261104/combined-velocity/ycb-mustard_easy_00_02",
+        "frames": 181,
+        "input_sha256": "2ca33583b95ed8d6e091777efe9285bd8e6343389d3d3ab90b2b48fef1399852",
+        "roles": {
+          "object": {
+            "available_after_initialization": 180,
+            "total_after_initialization": 180,
+            "pose_error": {
+              "available": 180,
+              "total": 180,
+              "cloud_mm_median": 2.2329597033919173,
+              "cloud_mm_p90": 8.137314590014425,
+              "angle_deg_median": 2.462314136584021,
+              "angle_deg_p90": 9.942443271179089,
+              "center_mm_median": 1.7770944016171766,
+              "within_10mm_10deg": 162,
+              "within_20mm_20deg": 180,
+              "final_cloud_mm": 8.098818920094844,
+              "final_angle_deg": 12.272812843731286
+            },
+            "max_map_points": 392,
+            "pose_sources": {
+              "observed_candidate": 180,
+              "predicted": 0,
+              "lost": 0
+            }
+          }
+        }
+      },
+      "yellow": {
+        "complete": true,
+        "path": "/home/feit/.cache/flash-tracker-restart/recovery-audit-20261104/combined-velocity/rig-yellow-block",
+        "frames": 75,
+        "input_sha256": "1aef5724a99226a5fe503fa1e85457ef4e76865796ef57c4f0fe0997efc61cc3",
+        "roles": {
+          "object": {
+            "available_after_initialization": 68,
+            "total_after_initialization": 74,
+            "max_map_points": 254,
+            "pose_sources": {
+              "observed_candidate": 65,
+              "predicted": 9,
+              "lost": 0
+            }
+          }
+        }
+      },
+      "clock": {
+        "complete": true,
+        "path": "/home/feit/.cache/flash-tracker-restart/recovery-audit-20261104/combined-velocity/laval-clock-interaction-hard",
+        "frames": 203,
+        "input_sha256": "1e395c9078ea1819b600b06004d1c37a392353247f936b693b7f5b950fa2f6aa",
+        "roles": {
+          "clock": {
+            "available_after_initialization": 64,
+            "total_after_initialization": 202,
+            "pose_error": {
+              "available": 64,
+              "total": 202,
+              "cloud_mm_median": 74.32462712209491,
+              "cloud_mm_p90": 100.60790577099313,
+              "angle_deg_median": 72.84917874325237,
+              "angle_deg_p90": 119.93994739980411,
+              "center_mm_median": 30.081298008154214,
+              "within_10mm_10deg": 16,
+              "within_20mm_20deg": 17,
+              "final_cloud_mm": null,
+              "final_angle_deg": null
+            },
+            "max_map_points": 1122,
+            "pose_sources": {
+              "observed_candidate": 56,
+              "predicted": 122,
+              "lost": 24
+            }
+          }
+        }
+      },
+      "drill": {
+        "complete": true,
+        "path": "/home/feit/.cache/flash-tracker-restart/recovery-audit-20261104/combined-velocity/dexycb-drill-20201002_111923",
+        "frames": 74,
+        "input_sha256": "602e332520f1fc25f76127f4b882e3252f2df87b0bd65ab28569dd5cae5148cb",
+        "roles": {
+          "object": {
+            "available_after_initialization": 62,
+            "total_after_initialization": 73,
+            "pose_error": {
+              "available": 62,
+              "total": 73,
+              "cloud_mm_median": 5.510676000162626,
+              "cloud_mm_p90": 31.086909752342702,
+              "angle_deg_median": 2.7707606735636197,
+              "angle_deg_p90": 13.987217040760413,
+              "center_mm_median": 6.27507614989216,
+              "within_10mm_10deg": 35,
+              "within_20mm_20deg": 39,
+              "final_cloud_mm": 28.04859785479104,
+              "final_angle_deg": 12.380993849801587
+            },
+            "max_map_points": 502,
+            "pose_sources": {
+              "observed_candidate": 60,
+              "predicted": 10,
+              "lost": 3
+            }
+          }
+        }
+      }
+    },
+    "combined-partial-strict-broader": {
+      "gamepad": {
+        "complete": false,
+        "reason": "Stopped unlabelled replay after labelled no-regression failure"
+      },
+      "mustard": {
+        "complete": true,
+        "path": "/home/feit/.cache/flash-tracker-restart/recovery-audit-20261104/combined-partial-strict-broader/ycb-mustard_easy_00_02",
+        "frames": 181,
+        "input_sha256": "2ca33583b95ed8d6e091777efe9285bd8e6343389d3d3ab90b2b48fef1399852",
+        "roles": {
+          "object": {
+            "available_after_initialization": 180,
+            "total_after_initialization": 180,
+            "pose_error": {
+              "available": 180,
+              "total": 180,
+              "cloud_mm_median": 2.188295547063277,
+              "cloud_mm_p90": 7.5972964786783255,
+              "angle_deg_median": 1.9837350473758146,
+              "angle_deg_p90": 7.611171655945261,
+              "center_mm_median": 1.616553505219057,
+              "within_10mm_10deg": 180,
+              "within_20mm_20deg": 180,
+              "final_cloud_mm": 7.180572182457821,
+              "final_angle_deg": 7.0661314595911495
+            },
+            "max_map_points": 394,
+            "pose_sources": {
+              "observed_candidate": 180,
+              "predicted": 0,
+              "lost": 0
+            }
+          }
+        }
+      },
+      "yellow": {
+        "complete": true,
+        "path": "/home/feit/.cache/flash-tracker-restart/recovery-audit-20261104/combined-partial-strict-broader/rig-yellow-block",
+        "frames": 75,
+        "input_sha256": "1aef5724a99226a5fe503fa1e85457ef4e76865796ef57c4f0fe0997efc61cc3",
+        "roles": {
+          "object": {
+            "available_after_initialization": 74,
+            "total_after_initialization": 74,
+            "max_map_points": 276,
+            "pose_sources": {
+              "observed_candidate": 74,
+              "predicted": 0,
+              "lost": 0
+            }
+          }
+        }
+      },
+      "clock": {
+        "complete": true,
+        "path": "/home/feit/.cache/flash-tracker-restart/recovery-audit-20261104/combined-partial-strict-broader/laval-clock-interaction-hard",
+        "frames": 203,
+        "input_sha256": "1e395c9078ea1819b600b06004d1c37a392353247f936b693b7f5b950fa2f6aa",
+        "roles": {
+          "clock": {
+            "available_after_initialization": 10,
+            "total_after_initialization": 202,
+            "pose_error": {
+              "available": 10,
+              "total": 202,
+              "cloud_mm_median": 1.1945488303131895,
+              "cloud_mm_p90": 2.868186045471445,
+              "angle_deg_median": 0.6851584843514248,
+              "angle_deg_p90": 0.9517406290210478,
+              "center_mm_median": 1.3330136840179168,
+              "within_10mm_10deg": 10,
+              "within_20mm_20deg": 10,
+              "final_cloud_mm": null,
+              "final_angle_deg": null
+            },
+            "max_map_points": 645,
+            "pose_sources": {
+              "observed_candidate": 7,
+              "predicted": 17,
+              "lost": 178
+            }
+          }
+        }
+      },
+      "drill": {
+        "complete": true,
+        "path": "/home/feit/.cache/flash-tracker-restart/recovery-audit-20261104/combined-partial-strict-broader/dexycb-drill-20201002_111923",
+        "frames": 74,
+        "input_sha256": "602e332520f1fc25f76127f4b882e3252f2df87b0bd65ab28569dd5cae5148cb",
+        "roles": {
+          "object": {
+            "available_after_initialization": 34,
+            "total_after_initialization": 73,
+            "pose_error": {
+              "available": 34,
+              "total": 73,
+              "cloud_mm_median": 1.6473637429792332,
+              "cloud_mm_p90": 7.010521852100311,
+              "angle_deg_median": 0.9792291763986194,
+              "angle_deg_p90": 5.894416188769076,
+              "center_mm_median": 1.483697805054002,
+              "within_10mm_10deg": 32,
+              "within_20mm_20deg": 34,
+              "final_cloud_mm": null,
+              "final_angle_deg": null
+            },
+            "max_map_points": 508,
+            "pose_sources": {
+              "observed_candidate": 34,
+              "predicted": 0,
+              "lost": 39
+            }
+          }
+        }
+      }
+    },
+    "combined-partial-both-broader": {
+      "gamepad": {
+        "complete": false,
+        "reason": "Stopped unlabelled replay after labelled no-regression failure"
+      },
+      "mustard": {
+        "complete": true,
+        "path": "/home/feit/.cache/flash-tracker-restart/recovery-audit-20261104/combined-partial-both-broader/ycb-mustard_easy_00_02",
+        "frames": 181,
+        "input_sha256": "2ca33583b95ed8d6e091777efe9285bd8e6343389d3d3ab90b2b48fef1399852",
+        "roles": {
+          "object": {
+            "available_after_initialization": 180,
+            "total_after_initialization": 180,
+            "pose_error": {
+              "available": 180,
+              "total": 180,
+              "cloud_mm_median": 2.3575667990114773,
+              "cloud_mm_p90": 6.99630389742625,
+              "angle_deg_median": 1.6587340371872301,
+              "angle_deg_p90": 7.121193506045531,
+              "center_mm_median": 1.4036263002561573,
+              "within_10mm_10deg": 180,
+              "within_20mm_20deg": 180,
+              "final_cloud_mm": 6.018911839663608,
+              "final_angle_deg": 6.891924602779527
+            },
+            "max_map_points": 394,
+            "pose_sources": {
+              "observed_candidate": 180,
+              "predicted": 0,
+              "lost": 0
+            }
+          }
+        }
+      },
+      "yellow": {
+        "complete": true,
+        "path": "/home/feit/.cache/flash-tracker-restart/recovery-audit-20261104/combined-partial-both-broader/rig-yellow-block",
+        "frames": 75,
+        "input_sha256": "1aef5724a99226a5fe503fa1e85457ef4e76865796ef57c4f0fe0997efc61cc3",
+        "roles": {
+          "object": {
+            "available_after_initialization": 65,
+            "total_after_initialization": 74,
+            "max_map_points": 247,
+            "pose_sources": {
+              "observed_candidate": 65,
+              "predicted": 3,
+              "lost": 6
+            }
+          }
+        }
+      },
+      "clock": {
+        "complete": true,
+        "path": "/home/feit/.cache/flash-tracker-restart/recovery-audit-20261104/combined-partial-both-broader/laval-clock-interaction-hard",
+        "frames": 203,
+        "input_sha256": "1e395c9078ea1819b600b06004d1c37a392353247f936b693b7f5b950fa2f6aa",
+        "roles": {
+          "clock": {
+            "available_after_initialization": 11,
+            "total_after_initialization": 202,
+            "pose_error": {
+              "available": 11,
+              "total": 202,
+              "cloud_mm_median": 1.6154998754105048,
+              "cloud_mm_p90": 4.315585163405761,
+              "angle_deg_median": 1.5244505775621189,
+              "angle_deg_p90": 1.8733015354132425,
+              "center_mm_median": 1.46191440501186,
+              "within_10mm_10deg": 11,
+              "within_20mm_20deg": 11,
+              "final_cloud_mm": null,
+              "final_angle_deg": null
+            },
+            "max_map_points": 558,
+            "pose_sources": {
+              "observed_candidate": 8,
+              "predicted": 17,
+              "lost": 177
+            }
+          }
+        }
+      },
+      "drill": {
+        "complete": true,
+        "path": "/home/feit/.cache/flash-tracker-restart/recovery-audit-20261104/combined-partial-both-broader/dexycb-drill-20201002_111923",
+        "frames": 74,
+        "input_sha256": "602e332520f1fc25f76127f4b882e3252f2df87b0bd65ab28569dd5cae5148cb",
+        "roles": {
+          "object": {
+            "available_after_initialization": 33,
+            "total_after_initialization": 73,
+            "pose_error": {
+              "available": 33,
+              "total": 73,
+              "cloud_mm_median": 1.4395322818125904,
+              "cloud_mm_p90": 6.5860292165503775,
+              "angle_deg_median": 1.0336260978708722,
+              "angle_deg_p90": 5.696727055960278,
+              "center_mm_median": 1.2840920573415375,
+              "within_10mm_10deg": 32,
+              "within_20mm_20deg": 33,
+              "final_cloud_mm": null,
+              "final_angle_deg": null
+            },
+            "max_map_points": 508,
+            "pose_sources": {
+              "observed_candidate": 33,
+              "predicted": 0,
+              "lost": 40
+            }
+          }
+        }
+      }
+    }
+  },
+  "proposal_audit": {
+    "combined-strict-broader": {
+      "laval-clock-interaction-hard": {
+        "counts": {
+          "good_accepted": 21,
+          "bad_accepted": 24,
+          "bad_rejected": 124,
+          "no_filter_proposal": 31,
+          "good_rejected": 2
+        },
+        "examples": {
+          "good_accepted": {
+            "frame": 1,
+            "cloud_mm": 0.6203194418088708,
+            "angle_deg": 0.26384620753572813,
+            "reason": "corrected"
+          },
+          "bad_accepted": {
+            "frame": 18,
+            "cloud_mm": 25.473612992113992,
+            "angle_deg": 25.932710211964846,
+            "reason": "corrected"
+          },
+          "bad_rejected": {
+            "frame": 20,
+            "cloud_mm": 67.6130936630523,
+            "angle_deg": 172.94067296370756,
+            "reason": "innovation_conflict"
+          },
+          "good_rejected": {
+            "frame": 46,
+            "cloud_mm": 16.73522433599783,
+            "angle_deg": 14.674294702937416,
+            "reason": "innovation_conflict"
+          }
+        }
+      },
+      "dexycb-drill-20201002_111923": {
+        "counts": {
+          "good_accepted": 42,
+          "bad_rejected": 1,
+          "bad_accepted": 28,
+          "no_filter_proposal": 2
+        },
+        "examples": {
+          "good_accepted": {
+            "frame": 1,
+            "cloud_mm": 0.18531646766928606,
+            "angle_deg": 0.20653255575427476,
+            "reason": "corrected"
+          },
+          "bad_rejected": {
+            "frame": 40,
+            "cloud_mm": 21.930305083168953,
+            "angle_deg": 10.926957481076581,
+            "reason": "fused_pose_contradicts_observation"
+          },
+          "bad_accepted": {
+            "frame": 41,
+            "cloud_mm": 22.214595701777363,
+            "angle_deg": 9.583762965165674,
+            "reason": "corrected"
+          }
+        }
+      }
+    },
+    "combined-velocity": {
+      "laval-clock-interaction-hard": {
+        "counts": {
+          "good_accepted": 17,
+          "bad_accepted": 39,
+          "bad_rejected": 118,
+          "good_rejected": 4,
+          "no_filter_proposal": 24
+        },
+        "examples": {
+          "good_accepted": {
+            "frame": 1,
+            "cloud_mm": 0.612488669306507,
+            "angle_deg": 0.26486049945931717,
+            "reason": "corrected"
+          },
+          "bad_accepted": {
+            "frame": 18,
+            "cloud_mm": 22.7023252868454,
+            "angle_deg": 22.84595036496955,
+            "reason": "corrected"
+          },
+          "bad_rejected": {
+            "frame": 20,
+            "cloud_mm": 53.70110157407951,
+            "angle_deg": 148.73683592920716,
+            "reason": "no_observation_information"
+          },
+          "good_rejected": {
+            "frame": 50,
+            "cloud_mm": 9.792814875530217,
+            "angle_deg": 8.310624427583566,
+            "reason": "innovation_conflict"
+          }
+        }
+      },
+      "dexycb-drill-20201002_111923": {
+        "counts": {
+          "good_accepted": 37,
+          "good_rejected": 1,
+          "bad_rejected": 9,
+          "no_filter_proposal": 3,
+          "bad_accepted": 23
+        },
+        "examples": {
+          "good_accepted": {
+            "frame": 1,
+            "cloud_mm": 0.18427654117888356,
+            "angle_deg": 0.2072625758118901,
+            "reason": "corrected"
+          },
+          "good_rejected": {
+            "frame": 38,
+            "cloud_mm": 15.340011124226214,
+            "angle_deg": 3.1067161307048763,
+            "reason": "innovation_conflict"
+          },
+          "bad_rejected": {
+            "frame": 39,
+            "cloud_mm": 28.23901919818274,
+            "angle_deg": 9.890611063699613,
+            "reason": "innovation_conflict"
+          },
+          "bad_accepted": {
+            "frame": 50,
+            "cloud_mm": 33.3329819393772,
+            "angle_deg": 5.776334488620921,
+            "reason": "corrected"
+          }
+        }
+      }
+    }
+  }
+}

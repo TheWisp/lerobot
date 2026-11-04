@@ -82,6 +82,14 @@ class PoseKalmanFilter:
     def center(self, pose=None):
         return move(self.center_object[None], self.pose if pose is None else pose)[0]
 
+    def snapshot(self):
+        """State that a downstream geometry rejection must roll back together."""
+        return {"pose": self.pose.copy(), "covariance": self.covariance.copy()}
+
+    def restore(self, state):
+        self.pose = state["pose"].copy()
+        self.covariance = state["covariance"].copy()
+
     def predict(self, time_s, camera_change, base_from_camera, motion=None):
         dt = time_s - self.time_s
         if dt <= 0:
@@ -141,6 +149,19 @@ class PoseKalmanFilter:
         }
 
     def correct(self, observation_pose, information, observation_pivot, *, contradicted=False):
+        """Apply the saved reset policy and retain the actual filter decision."""
+        result = self._correct(
+            observation_pose,
+            information,
+            observation_pivot,
+            contradicted=contradicted and self.config.reset_on_geometry_conflict,
+        )
+        result["filter_reason"] = result["reason"]
+        result["prediction_failed_geometry"] = bool(contradicted)
+        result["prior_rejected_by_depth_mask"] = bool(contradicted)
+        return result
+
+    def _correct(self, observation_pose, information, observation_pivot, *, contradicted=False):
         """Information-form EKF update; zero measurement information means no correction.
 
         A contradicted motion relationship starts a new broad prior at the visible

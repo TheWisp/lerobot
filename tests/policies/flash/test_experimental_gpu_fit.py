@@ -39,8 +39,8 @@ def test_cuda_tree_keeps_unsplittable_duplicate_points():
 
 @pytest.mark.parametrize("name", ["ring", "dowel"])
 @pytest.mark.parametrize("nearest_method", ["brute_force", "tree"])
-@pytest.mark.parametrize("complete", [False, True])
-def test_cuda_residual_matches_cpu_for_multiple_poses(name, nearest_method, complete):
+@pytest.mark.parametrize("coverage", [False, True])
+def test_cuda_residual_matches_cpu_for_multiple_poses(name, nearest_method, coverage):
     from lerobot.policies.flash.experimental_gpu_fit import (
         GpuResidualScipyFit,
         GpuSolverConfig,
@@ -64,7 +64,7 @@ def test_cuda_residual_matches_cpu_for_multiple_poses(name, nearest_method, comp
         reference,
         {"obs": observed, "mask": mask, "depth": depth, "all_surface_points": observed["points"]},
         k,
-        ShapeConfig(require_full_mask_coverage=complete),
+        ShapeConfig(require_full_mask_coverage=coverage),
     )
     config = GpuSolverConfig(nearest_method=nearest_method)
     gpu = GpuWholeSurfaceFit(cpu, config)

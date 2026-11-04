@@ -1,0 +1,230 @@
+{
+  "gamepad": {
+    "baseline": {
+      "available_after_initialization": 613,
+      "total_after_initialization": 627,
+      "max_map_points": 388,
+      "pose_sources": {
+        "observed_candidate": 567,
+        "predicted": 46,
+        "lost": 14
+      },
+      "timing_ms": {
+        "median": 148.76412699231878,
+        "p90": 237.2281134070363
+      }
+    },
+    "candidate": {
+      "available_after_initialization": 627,
+      "total_after_initialization": 627,
+      "max_map_points": 379,
+      "pose_sources": {
+        "observed_candidate": 576,
+        "predicted": 51,
+        "lost": 0
+      },
+      "timing_ms": {
+        "median": 299.05520897591487,
+        "p90": 704.1898307856171
+      }
+    }
+  },
+  "mustard": {
+    "baseline": {
+      "available_after_initialization": 175,
+      "total_after_initialization": 180,
+      "pose_error": {
+        "available": 175,
+        "total": 180,
+        "cloud_mm_median": 8.08924331245054,
+        "cloud_mm_p90": 11.909054106631654,
+        "angle_deg_median": 6.890316489344662,
+        "angle_deg_p90": 9.780769402716542,
+        "center_mm_median": 7.429015068882655,
+        "within_10mm_10deg": 116,
+        "within_20mm_20deg": 175,
+        "final_cloud_mm": null,
+        "final_angle_deg": null
+      },
+      "max_map_points": 394,
+      "pose_sources": {
+        "observed_candidate": 161,
+        "predicted": 14,
+        "lost": 5
+      },
+      "timing_ms": {
+        "median": 131.15104899043217,
+        "p90": 180.61757670657244
+      }
+    },
+    "candidate": {
+      "available_after_initialization": 180,
+      "total_after_initialization": 180,
+      "pose_error": {
+        "available": 180,
+        "total": 180,
+        "cloud_mm_median": 2.264304559404656,
+        "cloud_mm_p90": 6.2625284039328335,
+        "angle_deg_median": 2.6542431893500593,
+        "angle_deg_p90": 7.897281214698437,
+        "center_mm_median": 1.5953196963940193,
+        "within_10mm_10deg": 166,
+        "within_20mm_20deg": 180,
+        "final_cloud_mm": 6.958906943086748,
+        "final_angle_deg": 10.426977638653307
+      },
+      "max_map_points": 392,
+      "pose_sources": {
+        "observed_candidate": 180,
+        "predicted": 0,
+        "lost": 0
+      },
+      "timing_ms": {
+        "median": 302.5670434872154,
+        "p90": 425.16925936797634
+      }
+    }
+  },
+  "yellow": {
+    "baseline": {
+      "available_after_initialization": 62,
+      "total_after_initialization": 74,
+      "max_map_points": 234,
+      "pose_sources": {
+        "observed_candidate": 62,
+        "predicted": 0,
+        "lost": 12
+      },
+      "timing_ms": {
+        "median": 171.8178724986501,
+        "p90": 233.8217419135617
+      }
+    },
+    "candidate": {
+      "available_after_initialization": 74,
+      "total_after_initialization": 74,
+      "max_map_points": 250,
+      "pose_sources": {
+        "observed_candidate": 73,
+        "predicted": 1,
+        "lost": 0
+      },
+      "timing_ms": {
+        "median": 509.9815200082958,
+        "p90": 843.5738192754799
+      }
+    }
+  },
+  "clock": {
+    "baseline": {
+      "available_after_initialization": 27,
+      "total_after_initialization": 202,
+      "pose_error": {
+        "available": 27,
+        "total": 202,
+        "cloud_mm_median": 5.761526044608969,
+        "cloud_mm_p90": 13.499040947759884,
+        "angle_deg_median": 5.266438792464803,
+        "angle_deg_p90": 12.241454288132159,
+        "center_mm_median": 5.091083701389932,
+        "within_10mm_10deg": 22,
+        "within_20mm_20deg": 25,
+        "final_cloud_mm": null,
+        "final_angle_deg": null
+      },
+      "max_map_points": 681,
+      "pose_sources": {
+        "observed_candidate": 20,
+        "predicted": 7,
+        "lost": 175
+      },
+      "timing_ms": {
+        "median": 337.6801370031899,
+        "p90": 592.0708835066762
+      }
+    },
+    "candidate": {
+      "available_after_initialization": 198,
+      "total_after_initialization": 202,
+      "pose_error": {
+        "available": 198,
+        "total": 202,
+        "cloud_mm_median": 69.24744611018897,
+        "cloud_mm_p90": 98.4498164072258,
+        "angle_deg_median": 138.06082970025963,
+        "angle_deg_p90": 166.87033096443793,
+        "center_mm_median": 45.9677593309099,
+        "within_10mm_10deg": 15,
+        "within_20mm_20deg": 31,
+        "final_cloud_mm": 55.41881917728406,
+        "final_angle_deg": 160.6489192657349
+      },
+      "max_map_points": 1125,
+      "pose_sources": {
+        "observed_candidate": 153,
+        "predicted": 46,
+        "lost": 3
+      },
+      "timing_ms": {
+        "median": 547.7953914669342,
+        "p90": 1267.248947336339
+      }
+    }
+  },
+  "drill": {
+    "baseline": {
+      "available_after_initialization": 64,
+      "total_after_initialization": 73,
+      "pose_error": {
+        "available": 64,
+        "total": 73,
+        "cloud_mm_median": 10.386022971681328,
+        "cloud_mm_p90": 20.83235009470905,
+        "angle_deg_median": 3.9565318899094684,
+        "angle_deg_p90": 10.246748745752017,
+        "center_mm_median": 7.8097137909883205,
+        "within_10mm_10deg": 31,
+        "within_20mm_20deg": 56,
+        "final_cloud_mm": 11.639098432379404,
+        "final_angle_deg": 6.997538831121546
+      },
+      "max_map_points": 508,
+      "pose_sources": {
+        "observed_candidate": 64,
+        "predicted": 0,
+        "lost": 9
+      },
+      "timing_ms": {
+        "median": 167.2130480001215,
+        "p90": 242.0122584037017
+      }
+    },
+    "candidate": {
+      "available_after_initialization": 72,
+      "total_after_initialization": 73,
+      "pose_error": {
+        "available": 72,
+        "total": 73,
+        "cloud_mm_median": 11.551399249221166,
+        "cloud_mm_p90": 27.424303518795735,
+        "angle_deg_median": 2.93471383030466,
+        "angle_deg_p90": 11.38757522800135,
+        "center_mm_median": 10.080170762577849,
+        "within_10mm_10deg": 35,
+        "within_20mm_20deg": 43,
+        "final_cloud_mm": 16.969338952192516,
+        "final_angle_deg": 5.648880525596835
+      },
+      "max_map_points": 502,
+      "pose_sources": {
+        "observed_candidate": 71,
+        "predicted": 1,
+        "lost": 1
+      },
+      "timing_ms": {
+        "median": 334.5216080197133,
+        "p90": 529.3126295786351
+      }
+    }
+  }
+}

@@ -109,6 +109,9 @@ class VisionPipelineConfig:
                 self.reuse_surface_search,
                 self.shape.batch_jacobian,
                 self.shape.require_full_mask_coverage,
+                self.shape.scene_depth_constraints,
+                self.shape.prefer_observed_overlap,
+                self.observation.filtered_depth_for_fitting,
             )
         ):
             raise ValueError("surface acceleration and coverage settings must be booleans")
@@ -124,14 +127,25 @@ class VisionPipelineConfig:
             raise ValueError("invalid registration sampling")
 
         for key, value in asdict(self.observation).items():
+            if key == "filtered_depth_for_fitting":
+                continue
             if value is not None and (
                 not np.isfinite(value) or value < 0 or (value == 0 and key != "mask_margin_px")
             ):
                 raise ValueError(f"invalid observation setting: {key}")
         for key, value in asdict(self.shape).items():
-            if key in {"batch_jacobian", "require_full_mask_coverage"}:
+            if key in {
+                "batch_jacobian",
+                "require_full_mask_coverage",
+                "scene_depth_constraints",
+                "prefer_observed_overlap",
+            }:
                 continue
-            if not np.isfinite(value) or value < 0 or (value == 0 and key != "mask_boundary_tolerance_px"):
+            if (
+                not np.isfinite(value)
+                or value < 0
+                or (value == 0 and key not in {"mask_boundary_tolerance_px", "mask_coverage_weight"})
+            ):
                 raise ValueError(f"invalid shape setting: {key}")
         if self.observation.min_surface_spacing_m > self.observation.surface_spacing_m:
             raise ValueError("minimum surface spacing exceeds maximum spacing")

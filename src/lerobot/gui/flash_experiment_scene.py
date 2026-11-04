@@ -71,6 +71,7 @@ def scene_packet(manifest: dict, index: int, method: str) -> bytes:
     for role, reference in references.items():
         result = row["objects"][role]
         model = reference
+        initial_surface = reference
         version = result.get(method + "_details", {}).get("map_version_after", 0)
         if version and method in {"conditioned_fixed", "conditioned_growing", "group_fixed", "group_growing"}:
             model_path = (run / "surface_models" / method / role / f"{int(version):06d}.npz").resolve()
@@ -78,6 +79,10 @@ def scene_packet(manifest: dict, index: int, method: str) -> bytes:
                 raise ValueError("Surface is outside its experiment")
             with np.load(model_path, allow_pickle=False) as saved:
                 model = saved["points"]
+            # Show the initial stored map at its actual sampling density, not
+            # the denser observation retained separately for scoring and axes.
+            with np.load(model_path.with_name("000001.npz"), allow_pickle=False) as saved:
+                initial_surface = saved["points"]
         first = summary.get("roles", {}).get(role, {}).get("reference_frame")
         if first is None:
             first = next((i for i, r in enumerate(rows) if r["objects"][role].get(method) is not None), None)
@@ -103,6 +108,7 @@ def scene_packet(manifest: dict, index: int, method: str) -> bytes:
             label_kind = "dataset_model"
         objects[role] = {
             "surface": _points(model),
+            "initial_surface": _points(initial_surface),
             "pose": result.get(method),
             "reference": _points(reference),
             "labelled_pose": labelled_pose,

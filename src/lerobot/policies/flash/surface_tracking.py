@@ -236,6 +236,13 @@ class SurfaceTrackingSession:
             "intrinsics": intrinsics,
             "all_surface_points": all_points,
         }
+        if self.shape_config.scene_depth_constraints:
+            # Boundary trimming removes precise correspondences, not scene
+            # evidence. Explicit depth-range outliers remain unknown in both.
+            current["scene_depth"] = np.where(obs["depth_range_rejected"], 0, depth_m)
+        if self.observation_config.filtered_depth_for_fitting:
+            reliable_depth = np.where(mask, obs["valid_image"], obs["depth_reliable"])
+            current["depth"] = np.where(reliable_depth, depth_m, 0)
         detail = {
             key: obs[key]
             for key in ("raw_count", "boundary_count", "edge_count", "clean_count", "detached_count")

@@ -1,0 +1,1971 @@
+{
+  "protocol": {
+    "purpose": "Quality comparison; not a performance benchmark",
+    "cases": [
+      "tomato",
+      "tuna",
+      "banana",
+      "drill",
+      "yellow",
+      "mustard",
+      "clock",
+      "cracker"
+    ],
+    "strict": "No reset bypass, position process std 0.03 m/sqrt(s)",
+    "reset": "Legacy reset bypass, same position process std 0.03 m/sqrt(s)",
+    "geometry": "All three scene-depth, overlap-preference, forward-outline options enabled; recovery settings identical",
+    "inference": "Full causal replay from frame zero with UFM, object/environment groups and growing surface; same masks/input hashes",
+    "evaluation": "Dataset labels withheld from inference, same baseline initial measured points used in all scores, initialization excluded",
+    "timing_caution": "Independent cases/arms overlap on the same 32-core host (three processes at peak). Times are diagnostic, not a controlled speed comparison.",
+    "reset_outputs": "First six cases in geometry-matrix-reset, clock/cracker in geometry-matrix-reset-long; duplicate remaining cases in first worker explicitly cancelled.",
+    "rotation_trial": "Same strict configuration, rotation process std changed from 2 to 30 degrees/sqrt(s), on clock/tuna/banana/drill/tomato/mustard. All six completed; no defaults changed."
+  },
+  "limits": {
+    "cloud_mm": 20,
+    "rotation_deg": 20
+  },
+  "cases": {
+    "tomato": {
+      "case": "dexycb-tomato-can-20201002_105506",
+      "labels": {
+        "object": {
+          "format": "poses_npy",
+          "path": "/home/feit/.cache/flash-tracker-restart/labelled-expansion-20261102/clips/dexycb-tomato-can-20201002_105506/evaluation/poses.npy",
+          "sha256": "d72c84d6db68cc30f2a659ceb9fc52a65b7457d123df9f0d7b357ba11721377b"
+        }
+      },
+      "input_sha256": "197e33c66de5adacf25e5278f8ef5c5c9b4ee80285eff937c86eb0f676e3d23f",
+      "evaluation_reference_points": 2405,
+      "evaluation_reference_extent_m": [
+        0.08868656927726931,
+        0.09788496693240197,
+        0.06699997186660767
+      ],
+      "variants": {
+        "baseline": {
+          "run": "/home/feit/.cache/flash-tracker-restart/kalman-accept25-all-20261103/runs/008-accept25/dexycb-tomato-can-20201002_105506",
+          "available": 63,
+          "total": 67,
+          "counts": {
+            "within": 32,
+            "outside": 31,
+            "missing": 4
+          },
+          "severe_count": 28,
+          "cloud_mm_median": 11.14296410929889,
+          "angle_deg_median": 19.143394121917005,
+          "filter_decisions": {
+            "initialized": 1,
+            "corrected": 52,
+            "innovation_conflict": 10,
+            "reinitialized_after_contradiction": 1,
+            "lost": 4
+          },
+          "correct_candidate_rejected": [],
+          "wrong_candidate_accepted": [
+            36,
+            37,
+            39,
+            40,
+            41,
+            42,
+            43,
+            44,
+            47,
+            48,
+            49,
+            51,
+            52,
+            54,
+            55,
+            56,
+            57,
+            58,
+            59,
+            61,
+            64,
+            67
+          ],
+          "correct_candidate_wrong_output": [],
+          "accepted_over_innovation_limit": [
+            36
+          ]
+        },
+        "strict": {
+          "run": "/home/feit/.cache/flash-tracker-restart/recovery-audit-20261104/geometry-matrix-strict/dexycb-tomato-can-20201002_105506",
+          "available": 67,
+          "total": 67,
+          "counts": {
+            "within": 31,
+            "outside": 36
+          },
+          "severe_count": 32,
+          "cloud_mm_median": 22.05291746188037,
+          "angle_deg_median": 33.5946870738009,
+          "filter_decisions": {
+            "initialized": 1,
+            "corrected": 67
+          },
+          "correct_candidate_rejected": [],
+          "wrong_candidate_accepted": [
+            32,
+            33,
+            34,
+            35,
+            36,
+            37,
+            38,
+            39,
+            40,
+            41,
+            42,
+            43,
+            44,
+            45,
+            46,
+            47,
+            48,
+            49,
+            50,
+            51,
+            52,
+            53,
+            54,
+            55,
+            56,
+            57,
+            58,
+            59,
+            60,
+            61,
+            62,
+            63,
+            64,
+            65,
+            66,
+            67
+          ],
+          "correct_candidate_wrong_output": [],
+          "accepted_over_innovation_limit": []
+        },
+        "reset": {
+          "run": "/home/feit/.cache/flash-tracker-restart/recovery-audit-20261104/geometry-matrix-reset/dexycb-tomato-can-20201002_105506",
+          "available": 67,
+          "total": 67,
+          "counts": {
+            "within": 31,
+            "outside": 36
+          },
+          "severe_count": 32,
+          "cloud_mm_median": 22.05291746188037,
+          "angle_deg_median": 33.5946870738009,
+          "filter_decisions": {
+            "initialized": 1,
+            "corrected": 67
+          },
+          "correct_candidate_rejected": [],
+          "wrong_candidate_accepted": [
+            32,
+            33,
+            34,
+            35,
+            36,
+            37,
+            38,
+            39,
+            40,
+            41,
+            42,
+            43,
+            44,
+            45,
+            46,
+            47,
+            48,
+            49,
+            50,
+            51,
+            52,
+            53,
+            54,
+            55,
+            56,
+            57,
+            58,
+            59,
+            60,
+            61,
+            62,
+            63,
+            64,
+            65,
+            66,
+            67
+          ],
+          "correct_candidate_wrong_output": [],
+          "accepted_over_innovation_limit": []
+        },
+        "rotation30": {
+          "run": "/home/feit/.cache/flash-tracker-restart/recovery-audit-20261104/geometry-matrix-rotation30/dexycb-tomato-can-20201002_105506",
+          "available": 67,
+          "total": 67,
+          "counts": {
+            "within": 31,
+            "outside": 36
+          },
+          "severe_count": 32,
+          "cloud_mm_median": 23.218905112433045,
+          "angle_deg_median": 36.33445757164786,
+          "filter_decisions": {
+            "initialized": 1,
+            "corrected": 67
+          },
+          "correct_candidate_rejected": [],
+          "wrong_candidate_accepted": [
+            32,
+            33,
+            34,
+            35,
+            36,
+            37,
+            38,
+            39,
+            40,
+            41,
+            42,
+            43,
+            44,
+            45,
+            46,
+            47,
+            48,
+            49,
+            50,
+            51,
+            52,
+            53,
+            54,
+            55,
+            56,
+            57,
+            58,
+            59,
+            60,
+            61,
+            62,
+            63,
+            64,
+            65,
+            66,
+            67
+          ],
+          "correct_candidate_wrong_output": [],
+          "accepted_over_innovation_limit": []
+        }
+      }
+    },
+    "tuna": {
+      "case": "dexycb-tuna-can-20201002_105951",
+      "labels": {
+        "object": {
+          "format": "poses_npy",
+          "path": "/home/feit/.cache/flash-tracker-restart/labelled-expansion-20261102/clips/dexycb-tuna-can-20201002_105951/evaluation/poses.npy",
+          "sha256": "9d655e79bce09abe48e928a389bff9b6a287682102f294b16385c45d9beb5a3b"
+        }
+      },
+      "input_sha256": "1c60014dbaea0e287863a62f247a150c7f47b730249d1d08088fb99d4fadc2fd",
+      "evaluation_reference_points": 1297,
+      "evaluation_reference_extent_m": [
+        0.07612678503923809,
+        0.0603249892927307,
+        0.042999982833862305
+      ],
+      "variants": {
+        "baseline": {
+          "run": "/home/feit/.cache/flash-tracker-restart/kalman-accept25-all-20261103/runs/009-accept25/dexycb-tuna-can-20201002_105951",
+          "available": 50,
+          "total": 71,
+          "counts": {
+            "within": 28,
+            "outside": 22,
+            "missing": 21
+          },
+          "severe_count": 13,
+          "cloud_mm_median": 2.1332034917069924,
+          "angle_deg_median": 3.7671512134677627,
+          "filter_decisions": {
+            "initialized": 1,
+            "corrected": 34,
+            "reinitialized_after_contradiction": 13,
+            "lost": 21,
+            "innovation_conflict": 3
+          },
+          "correct_candidate_rejected": [],
+          "wrong_candidate_accepted": [
+            29,
+            44,
+            45,
+            46,
+            47,
+            48,
+            49,
+            52,
+            55,
+            56,
+            57,
+            61,
+            62,
+            64,
+            65,
+            68,
+            69,
+            70,
+            71
+          ],
+          "correct_candidate_wrong_output": [],
+          "accepted_over_innovation_limit": [
+            29,
+            44,
+            47,
+            48,
+            49,
+            52,
+            55,
+            56,
+            57,
+            61,
+            64,
+            65,
+            68
+          ]
+        },
+        "strict": {
+          "run": "/home/feit/.cache/flash-tracker-restart/recovery-audit-20261104/geometry-matrix-strict/dexycb-tuna-can-20201002_105951",
+          "available": 28,
+          "total": 71,
+          "counts": {
+            "within": 28,
+            "missing": 43
+          },
+          "severe_count": 0,
+          "cloud_mm_median": 1.3522721918916296,
+          "angle_deg_median": 4.415119905739058,
+          "filter_decisions": {
+            "initialized": 1,
+            "corrected": 28,
+            "innovation_conflict": 28,
+            "lost": 15
+          },
+          "correct_candidate_rejected": [],
+          "wrong_candidate_accepted": [],
+          "correct_candidate_wrong_output": [],
+          "accepted_over_innovation_limit": []
+        },
+        "reset": {
+          "run": "/home/feit/.cache/flash-tracker-restart/recovery-audit-20261104/geometry-matrix-reset/dexycb-tuna-can-20201002_105951",
+          "available": 53,
+          "total": 71,
+          "counts": {
+            "within": 28,
+            "outside": 25,
+            "missing": 18
+          },
+          "severe_count": 25,
+          "cloud_mm_median": 1.8868836928621169,
+          "angle_deg_median": 6.180984698679882,
+          "filter_decisions": {
+            "initialized": 1,
+            "corrected": 34,
+            "reinitialized_after_contradiction": 15,
+            "lost": 18,
+            "no_observation_information": 3,
+            "innovation_conflict": 1
+          },
+          "correct_candidate_rejected": [],
+          "wrong_candidate_accepted": [
+            29,
+            31,
+            32,
+            43,
+            53,
+            54,
+            55,
+            56,
+            57,
+            58,
+            59,
+            60,
+            62,
+            63,
+            65,
+            66,
+            67,
+            68,
+            69,
+            70,
+            71
+          ],
+          "correct_candidate_wrong_output": [],
+          "accepted_over_innovation_limit": [
+            29,
+            43,
+            53,
+            55,
+            60,
+            63,
+            66
+          ]
+        },
+        "rotation30": {
+          "run": "/home/feit/.cache/flash-tracker-restart/recovery-audit-20261104/geometry-matrix-rotation30/dexycb-tuna-can-20201002_105951",
+          "available": 28,
+          "total": 71,
+          "counts": {
+            "within": 28,
+            "missing": 43
+          },
+          "severe_count": 0,
+          "cloud_mm_median": 1.3631003522390517,
+          "angle_deg_median": 4.5679272923177265,
+          "filter_decisions": {
+            "initialized": 1,
+            "corrected": 28,
+            "lost": 15,
+            "innovation_conflict": 28
+          },
+          "correct_candidate_rejected": [],
+          "wrong_candidate_accepted": [],
+          "correct_candidate_wrong_output": [],
+          "accepted_over_innovation_limit": []
+        }
+      }
+    },
+    "banana": {
+      "case": "dexycb-banana-20201002_110832",
+      "labels": {
+        "object": {
+          "format": "poses_npy",
+          "path": "/home/feit/.cache/flash-tracker-restart/labelled-expansion-20261102/clips/dexycb-banana-20201002_110832/evaluation/poses.npy",
+          "sha256": "587d0baa1b0ed1ac7718bd5144259a9e490e7347294fc85da48d29dac17248e3"
+        }
+      },
+      "input_sha256": "177d80f4bf075100d7b5f7a3dc32b630f782f4d4e3eeb6fae8d8721dfc360da7",
+      "evaluation_reference_points": 691,
+      "evaluation_reference_extent_m": [
+        0.13232698098708015,
+        0.09105202640661988,
+        0.10199999809265137
+      ],
+      "variants": {
+        "baseline": {
+          "run": "/home/feit/.cache/flash-tracker-restart/kalman-accept25-all-20261103/runs/003-accept25/dexycb-banana-20201002_110832",
+          "available": 59,
+          "total": 71,
+          "counts": {
+            "within": 39,
+            "outside": 20,
+            "missing": 12
+          },
+          "severe_count": 16,
+          "cloud_mm_median": 1.0273996967973815,
+          "angle_deg_median": 2.639458193081575,
+          "filter_decisions": {
+            "initialized": 1,
+            "corrected": 56,
+            "lost": 12,
+            "reinitialized_after_contradiction": 3
+          },
+          "correct_candidate_rejected": [],
+          "wrong_candidate_accepted": [
+            39,
+            40,
+            41,
+            42,
+            43,
+            56,
+            57,
+            58,
+            59,
+            60,
+            61,
+            62,
+            63,
+            64,
+            65,
+            66,
+            67,
+            68,
+            69,
+            70,
+            71
+          ],
+          "correct_candidate_wrong_output": [],
+          "accepted_over_innovation_limit": [
+            56
+          ]
+        },
+        "strict": {
+          "run": "/home/feit/.cache/flash-tracker-restart/recovery-audit-20261104/geometry-matrix-strict/dexycb-banana-20201002_110832",
+          "available": 46,
+          "total": 71,
+          "counts": {
+            "within": 44,
+            "outside": 2,
+            "missing": 25
+          },
+          "severe_count": 0,
+          "cloud_mm_median": 6.153080654876668,
+          "angle_deg_median": 10.954704249523807,
+          "filter_decisions": {
+            "initialized": 1,
+            "corrected": 46,
+            "innovation_conflict": 15,
+            "lost": 10
+          },
+          "correct_candidate_rejected": [],
+          "wrong_candidate_accepted": [
+            45,
+            46
+          ],
+          "correct_candidate_wrong_output": [],
+          "accepted_over_innovation_limit": []
+        },
+        "reset": {
+          "run": "/home/feit/.cache/flash-tracker-restart/recovery-audit-20261104/geometry-matrix-reset/dexycb-banana-20201002_110832",
+          "available": 66,
+          "total": 71,
+          "counts": {
+            "within": 44,
+            "outside": 22,
+            "missing": 5
+          },
+          "severe_count": 4,
+          "cloud_mm_median": 7.661493287677548,
+          "angle_deg_median": 11.887915068980252,
+          "filter_decisions": {
+            "initialized": 1,
+            "corrected": 57,
+            "reinitialized_after_contradiction": 9,
+            "lost": 5
+          },
+          "correct_candidate_rejected": [],
+          "wrong_candidate_accepted": [
+            45,
+            46,
+            47,
+            48,
+            54,
+            55,
+            56,
+            57,
+            58,
+            59,
+            60,
+            61,
+            62,
+            63,
+            64,
+            65,
+            66,
+            67,
+            68,
+            69,
+            70,
+            71
+          ],
+          "correct_candidate_wrong_output": [],
+          "accepted_over_innovation_limit": [
+            47,
+            48,
+            54
+          ]
+        },
+        "rotation30": {
+          "run": "/home/feit/.cache/flash-tracker-restart/recovery-audit-20261104/geometry-matrix-rotation30/dexycb-banana-20201002_110832",
+          "available": 45,
+          "total": 71,
+          "counts": {
+            "within": 43,
+            "missing": 26,
+            "outside": 2
+          },
+          "severe_count": 0,
+          "cloud_mm_median": 5.185413493636118,
+          "angle_deg_median": 10.913478376003658,
+          "filter_decisions": {
+            "initialized": 1,
+            "corrected": 46,
+            "innovation_conflict": 12,
+            "lost": 13
+          },
+          "correct_candidate_rejected": [
+            28
+          ],
+          "wrong_candidate_accepted": [
+            45,
+            46
+          ],
+          "correct_candidate_wrong_output": [],
+          "accepted_over_innovation_limit": []
+        }
+      }
+    },
+    "drill": {
+      "case": "dexycb-drill-20201002_111923",
+      "labels": {
+        "object": {
+          "format": "poses_npy",
+          "path": "/home/feit/.cache/flash-tracker-restart/labelled-expansion-20261102/clips/dexycb-drill-20201002_111923/evaluation/poses.npy",
+          "sha256": "8bee886f577e2d1d2eab3f3adf37905de99068af4dda8bc8ebc15950d5c4487c"
+        }
+      },
+      "input_sha256": "602e332520f1fc25f76127f4b882e3252f2df87b0bd65ab28569dd5cae5148cb",
+      "evaluation_reference_points": 1753,
+      "evaluation_reference_extent_m": [
+        0.19928742132486618,
+        0.12984986932143744,
+        0.1329999566078186
+      ],
+      "variants": {
+        "baseline": {
+          "run": "/home/feit/.cache/flash-tracker-restart/kalman-accept25-all-20261103/runs/005-accept25/dexycb-drill-20201002_111923",
+          "available": 64,
+          "total": 73,
+          "counts": {
+            "within": 56,
+            "outside": 8,
+            "missing": 9
+          },
+          "severe_count": 0,
+          "cloud_mm_median": 10.386022971681328,
+          "angle_deg_median": 3.9565318899094684,
+          "filter_decisions": {
+            "initialized": 1,
+            "corrected": 53,
+            "reinitialized_after_contradiction": 11,
+            "lost": 9
+          },
+          "correct_candidate_rejected": [],
+          "wrong_candidate_accepted": [
+            41,
+            51,
+            52,
+            53,
+            54,
+            55,
+            56,
+            57
+          ],
+          "correct_candidate_wrong_output": [],
+          "accepted_over_innovation_limit": [
+            51
+          ]
+        },
+        "strict": {
+          "run": "/home/feit/.cache/flash-tracker-restart/recovery-audit-20261104/geometry-matrix-strict/dexycb-drill-20201002_111923",
+          "available": 37,
+          "total": 73,
+          "counts": {
+            "within": 37,
+            "missing": 36
+          },
+          "severe_count": 0,
+          "cloud_mm_median": 2.113798738609853,
+          "angle_deg_median": 3.154583829101695,
+          "filter_decisions": {
+            "initialized": 1,
+            "corrected": 41,
+            "lost": 32
+          },
+          "correct_candidate_rejected": [
+            35,
+            39,
+            40,
+            41
+          ],
+          "wrong_candidate_accepted": [],
+          "correct_candidate_wrong_output": [],
+          "accepted_over_innovation_limit": []
+        },
+        "reset": {
+          "run": "/home/feit/.cache/flash-tracker-restart/recovery-audit-20261104/geometry-matrix-reset/dexycb-drill-20201002_111923",
+          "available": 66,
+          "total": 73,
+          "counts": {
+            "within": 55,
+            "missing": 7,
+            "outside": 11
+          },
+          "severe_count": 0,
+          "cloud_mm_median": 10.992196871436452,
+          "angle_deg_median": 5.3325047014647,
+          "filter_decisions": {
+            "initialized": 1,
+            "corrected": 55,
+            "reinitialized_after_contradiction": 10,
+            "lost": 7,
+            "innovation_conflict": 1
+          },
+          "correct_candidate_rejected": [
+            58
+          ],
+          "wrong_candidate_accepted": [
+            49,
+            50,
+            51,
+            55,
+            56,
+            57,
+            60,
+            63,
+            64,
+            65
+          ],
+          "correct_candidate_wrong_output": [
+            58
+          ],
+          "accepted_over_innovation_limit": []
+        },
+        "rotation30": {
+          "run": "/home/feit/.cache/flash-tracker-restart/recovery-audit-20261104/geometry-matrix-rotation30/dexycb-drill-20201002_111923",
+          "available": 64,
+          "total": 73,
+          "counts": {
+            "within": 53,
+            "missing": 9,
+            "outside": 11
+          },
+          "severe_count": 0,
+          "cloud_mm_median": 9.376887068054788,
+          "angle_deg_median": 4.691231374209983,
+          "filter_decisions": {
+            "initialized": 1,
+            "corrected": 64,
+            "lost": 8,
+            "innovation_conflict": 1
+          },
+          "correct_candidate_rejected": [],
+          "wrong_candidate_accepted": [
+            50,
+            51,
+            52,
+            53,
+            54,
+            55,
+            56,
+            57,
+            58,
+            59,
+            60
+          ],
+          "correct_candidate_wrong_output": [],
+          "accepted_over_innovation_limit": []
+        }
+      }
+    },
+    "yellow": {
+      "case": "rig-yellow-block",
+      "labels": {},
+      "input_sha256": "1aef5724a99226a5fe503fa1e85457ef4e76865796ef57c4f0fe0997efc61cc3",
+      "evaluation_reference_points": 1099,
+      "evaluation_reference_extent_m": [
+        0.032688150192918805,
+        0.033223877101471566,
+        0.02399998903274536
+      ],
+      "variants": {
+        "baseline": {
+          "run": "/home/feit/.cache/flash-tracker-restart/kalman-accept25-all-20261103/runs/012-accept25/rig-yellow-block",
+          "available": 62,
+          "total": 74,
+          "filter_decisions": {
+            "initialized": 1,
+            "corrected": 57,
+            "reinitialized_after_contradiction": 5,
+            "lost": 12
+          },
+          "accepted_over_innovation_limit": [
+            49,
+            50,
+            52,
+            55
+          ]
+        },
+        "strict": {
+          "run": "/home/feit/.cache/flash-tracker-restart/recovery-audit-20261104/geometry-matrix-strict/rig-yellow-block",
+          "available": 64,
+          "total": 74,
+          "filter_decisions": {
+            "initialized": 1,
+            "corrected": 67,
+            "innovation_conflict": 7
+          },
+          "accepted_over_innovation_limit": []
+        },
+        "reset": {
+          "run": "/home/feit/.cache/flash-tracker-restart/recovery-audit-20261104/geometry-matrix-reset/rig-yellow-block",
+          "available": 74,
+          "total": 74,
+          "filter_decisions": {
+            "initialized": 1,
+            "corrected": 70,
+            "reinitialized_after_contradiction": 4
+          },
+          "accepted_over_innovation_limit": [
+            49,
+            50
+          ]
+        }
+      }
+    },
+    "mustard": {
+      "case": "ycb-mustard_easy_00_02",
+      "labels": {
+        "object": {
+          "format": "ycb_annotated_pose",
+          "source": "/home/feit/.cache/ycbineoat/mustard_easy_00_02",
+          "start_frame": 254,
+          "sha256": "332c01c27fec0b7a990805bed64c69ca3bd2b1e94f882a3ae14c3222e2f27812"
+        }
+      },
+      "input_sha256": "2ca33583b95ed8d6e091777efe9285bd8e6343389d3d3ab90b2b48fef1399852",
+      "evaluation_reference_points": 1397,
+      "evaluation_reference_extent_m": [
+        0.18647867669075746,
+        0.11559718989436107,
+        0.05199998617172241
+      ],
+      "variants": {
+        "baseline": {
+          "run": "/home/feit/.cache/flash-tracker-restart/kalman-config-20261103/runs/043-accept25/ycb-mustard_easy_00_02",
+          "available": 175,
+          "total": 180,
+          "counts": {
+            "within": 175,
+            "missing": 5
+          },
+          "severe_count": 0,
+          "cloud_mm_median": 8.08924331245054,
+          "angle_deg_median": 6.890316489344662,
+          "filter_decisions": {
+            "initialized": 1,
+            "corrected": 141,
+            "reinitialized_after_contradiction": 20,
+            "innovation_conflict": 12,
+            "fused_pose_contradicts_observation": 2,
+            "lost": 5
+          },
+          "correct_candidate_rejected": [
+            42,
+            66,
+            67,
+            71,
+            77,
+            78,
+            81,
+            86,
+            87,
+            90,
+            92,
+            94,
+            100,
+            103
+          ],
+          "wrong_candidate_accepted": [],
+          "correct_candidate_wrong_output": [],
+          "accepted_over_innovation_limit": [
+            62
+          ]
+        },
+        "strict": {
+          "run": "/home/feit/.cache/flash-tracker-restart/recovery-audit-20261104/geometry-matrix-strict/ycb-mustard_easy_00_02",
+          "available": 180,
+          "total": 180,
+          "counts": {
+            "within": 180
+          },
+          "severe_count": 0,
+          "cloud_mm_median": 2.9995378174087524,
+          "angle_deg_median": 5.360628877536562,
+          "filter_decisions": {
+            "initialized": 1,
+            "corrected": 180
+          },
+          "correct_candidate_rejected": [],
+          "wrong_candidate_accepted": [],
+          "correct_candidate_wrong_output": [],
+          "accepted_over_innovation_limit": []
+        },
+        "reset": {
+          "run": "/home/feit/.cache/flash-tracker-restart/recovery-audit-20261104/geometry-matrix-reset/ycb-mustard_easy_00_02",
+          "available": 180,
+          "total": 180,
+          "counts": {
+            "within": 180
+          },
+          "severe_count": 0,
+          "cloud_mm_median": 2.9995378174087524,
+          "angle_deg_median": 5.360628877536562,
+          "filter_decisions": {
+            "initialized": 1,
+            "corrected": 180
+          },
+          "correct_candidate_rejected": [],
+          "wrong_candidate_accepted": [],
+          "correct_candidate_wrong_output": [],
+          "accepted_over_innovation_limit": []
+        },
+        "rotation30": {
+          "run": "/home/feit/.cache/flash-tracker-restart/recovery-audit-20261104/geometry-matrix-rotation30/ycb-mustard_easy_00_02",
+          "available": 180,
+          "total": 180,
+          "counts": {
+            "within": 180
+          },
+          "severe_count": 0,
+          "cloud_mm_median": 3.3687414572886007,
+          "angle_deg_median": 6.195223691519103,
+          "filter_decisions": {
+            "initialized": 1,
+            "corrected": 180
+          },
+          "correct_candidate_rejected": [],
+          "wrong_candidate_accepted": [],
+          "correct_candidate_wrong_output": [],
+          "accepted_over_innovation_limit": []
+        }
+      }
+    },
+    "clock": {
+      "case": "laval-clock-interaction-hard",
+      "labels": {
+        "clock": {
+          "format": "poses_npy",
+          "path": "/home/feit/.cache/flash-labeled-laval/sample/clock_interaction_hard/poses.npy",
+          "camera_from_label_camera": [
+            [
+              1,
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              -1,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              -1,
+              0
+            ],
+            [
+              0,
+              0,
+              0,
+              1
+            ]
+          ],
+          "description": "Laval supplied object poses; OpenGL camera to RGB-D camera",
+          "sha256": "97b1abd242a5f185cd393e2cf438cb2c58795fee726269b5a3bf4f5f9256bb07"
+        }
+      },
+      "input_sha256": "1e395c9078ea1819b600b06004d1c37a392353247f936b693b7f5b950fa2f6aa",
+      "evaluation_reference_points": 558,
+      "evaluation_reference_extent_m": [
+        0.11858475813826022,
+        0.16804333279367148,
+        0.07999992370605469
+      ],
+      "variants": {
+        "baseline": {
+          "run": "/home/feit/.cache/flash-tracker-restart/kalman-config-20261103/runs/011-accept25/laval-clock-interaction-hard",
+          "available": 27,
+          "total": 202,
+          "counts": {
+            "within": 25,
+            "missing": 175,
+            "outside": 2
+          },
+          "severe_count": 1,
+          "cloud_mm_median": 5.761526044608969,
+          "angle_deg_median": 5.266438792464803,
+          "filter_decisions": {
+            "initialized": 1,
+            "corrected": 10,
+            "lost": 175,
+            "innovation_conflict": 7,
+            "reinitialized_after_contradiction": 10
+          },
+          "correct_candidate_rejected": [
+            7,
+            8,
+            9,
+            24,
+            25,
+            29,
+            33
+          ],
+          "wrong_candidate_accepted": [
+            172
+          ],
+          "correct_candidate_wrong_output": [
+            25
+          ],
+          "accepted_over_innovation_limit": [
+            20,
+            22,
+            26,
+            27,
+            30,
+            32,
+            34,
+            36,
+            172
+          ]
+        },
+        "strict": {
+          "run": "/home/feit/.cache/flash-tracker-restart/recovery-audit-20261104/geometry-matrix-strict/laval-clock-interaction-hard",
+          "available": 29,
+          "total": 202,
+          "counts": {
+            "within": 23,
+            "outside": 6,
+            "missing": 173
+          },
+          "severe_count": 0,
+          "cloud_mm_median": 8.848875422835405,
+          "angle_deg_median": 6.692574951988404,
+          "filter_decisions": {
+            "initialized": 1,
+            "corrected": 29,
+            "innovation_conflict": 34,
+            "lost": 138,
+            "no_observation_information": 1
+          },
+          "correct_candidate_rejected": [
+            16,
+            17,
+            18,
+            19,
+            20,
+            23,
+            47,
+            48,
+            51,
+            52,
+            113
+          ],
+          "wrong_candidate_accepted": [
+            60,
+            62,
+            63
+          ],
+          "correct_candidate_wrong_output": [
+            17,
+            18,
+            61
+          ],
+          "accepted_over_innovation_limit": []
+        },
+        "reset": {
+          "run": "/home/feit/.cache/flash-tracker-restart/recovery-audit-20261104/geometry-matrix-reset-long/laval-clock-interaction-hard",
+          "available": 121,
+          "total": 202,
+          "counts": {
+            "within": 39,
+            "outside": 82,
+            "missing": 81
+          },
+          "severe_count": 67,
+          "cloud_mm_median": 72.18398449241748,
+          "angle_deg_median": 56.462191788400325,
+          "filter_decisions": {
+            "initialized": 1,
+            "corrected": 80,
+            "innovation_conflict": 7,
+            "reinitialized_after_contradiction": 32,
+            "lost": 79,
+            "no_observation_information": 3,
+            "fused_pose_contradicts_observation": 1
+          },
+          "correct_candidate_rejected": [
+            16,
+            17,
+            18,
+            22,
+            23
+          ],
+          "wrong_candidate_accepted": [
+            29,
+            30,
+            31,
+            32,
+            33,
+            34,
+            35,
+            60,
+            62,
+            63,
+            64,
+            88,
+            89,
+            90,
+            91,
+            92,
+            93,
+            94,
+            95,
+            96,
+            97,
+            100,
+            107,
+            108,
+            109,
+            110,
+            111,
+            112,
+            113,
+            114,
+            115,
+            116,
+            117,
+            141,
+            142,
+            144,
+            145,
+            148,
+            149,
+            150,
+            151,
+            152,
+            153,
+            154,
+            155,
+            156,
+            157,
+            158,
+            159,
+            160,
+            162,
+            163,
+            164,
+            165,
+            166,
+            167,
+            168,
+            169,
+            170,
+            173,
+            175,
+            176,
+            177,
+            178,
+            180,
+            181,
+            182,
+            183,
+            184,
+            195,
+            196,
+            197,
+            198,
+            199,
+            200,
+            201
+          ],
+          "correct_candidate_wrong_output": [
+            17,
+            18,
+            23
+          ],
+          "accepted_over_innovation_limit": [
+            19,
+            24,
+            29,
+            32,
+            45,
+            46,
+            50,
+            88,
+            100,
+            107,
+            109,
+            141,
+            144,
+            145,
+            148,
+            160,
+            170,
+            173,
+            175,
+            195
+          ]
+        },
+        "rotation30": {
+          "run": "/home/feit/.cache/flash-tracker-restart/recovery-audit-20261104/geometry-matrix-rotation30/laval-clock-interaction-hard",
+          "available": 87,
+          "total": 202,
+          "counts": {
+            "within": 37,
+            "outside": 50,
+            "missing": 115
+          },
+          "severe_count": 10,
+          "cloud_mm_median": 23.817768848331525,
+          "angle_deg_median": 14.305937830489452,
+          "filter_decisions": {
+            "initialized": 1,
+            "corrected": 89,
+            "innovation_conflict": 30,
+            "lost": 79,
+            "no_observation_information": 4
+          },
+          "correct_candidate_rejected": [
+            45,
+            46,
+            47,
+            48
+          ],
+          "wrong_candidate_accepted": [
+            28,
+            29,
+            30,
+            31,
+            32,
+            33,
+            34,
+            35,
+            60,
+            62,
+            63,
+            64,
+            73,
+            87,
+            88,
+            89,
+            90,
+            91,
+            92,
+            93,
+            94,
+            95,
+            96,
+            97,
+            98,
+            99,
+            100,
+            101,
+            102,
+            104,
+            105,
+            126,
+            127,
+            128,
+            129,
+            130,
+            131,
+            132,
+            133,
+            134,
+            136,
+            137,
+            138,
+            141,
+            144,
+            184
+          ],
+          "correct_candidate_wrong_output": [],
+          "accepted_over_innovation_limit": []
+        }
+      }
+    },
+    "cracker": {
+      "case": "ycb-cracker_box_yalehand0",
+      "labels": {
+        "object": {
+          "format": "ycb_annotated_pose",
+          "source": "/home/feit/.cache/ycbineoat/cracker_box_yalehand0",
+          "start_frame": 573,
+          "sha256": "92c094dffc286fb8ca7709b4d187074b27b8533b4dbe263542ff1d87e8fcd318"
+        }
+      },
+      "input_sha256": "ccf12c6e31d08c51bd5109a809f68955cd750efca7663bf05c89437a14e4023b",
+      "evaluation_reference_points": 10,
+      "evaluation_reference_extent_m": [
+        0.005709464306950629,
+        0.006404178605019717,
+        0.0029999613761901855
+      ],
+      "variants": {
+        "baseline": {
+          "run": "/home/feit/.cache/flash-tracker-restart/kalman-accept25-all-20261103/runs/042-accept25/ycb-cracker_box_yalehand0",
+          "available": 32,
+          "total": 180,
+          "counts": {
+            "outside": 32,
+            "missing": 148
+          },
+          "severe_count": 31,
+          "cloud_mm_median": 70.0731636224128,
+          "angle_deg_median": 110.03195629694629,
+          "filter_decisions": {
+            "initialized": 1,
+            "reinitialized_after_contradiction": 20,
+            "corrected": 12,
+            "lost": 148
+          },
+          "correct_candidate_rejected": [],
+          "wrong_candidate_accepted": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            27,
+            29,
+            31,
+            85,
+            88,
+            90,
+            98,
+            102,
+            103,
+            107,
+            109,
+            110,
+            115,
+            116,
+            121
+          ],
+          "correct_candidate_wrong_output": [],
+          "accepted_over_innovation_limit": [
+            1,
+            2,
+            10,
+            16,
+            27,
+            29,
+            31,
+            85,
+            88,
+            98,
+            102,
+            107,
+            109,
+            115,
+            116,
+            121
+          ]
+        },
+        "strict": {
+          "run": "/home/feit/.cache/flash-tracker-restart/recovery-audit-20261104/geometry-matrix-strict/ycb-cracker_box_yalehand0",
+          "available": 2,
+          "total": 180,
+          "counts": {
+            "within": 2,
+            "missing": 178
+          },
+          "severe_count": 0,
+          "cloud_mm_median": 4.234727782936098,
+          "angle_deg_median": 2.3167486015374843,
+          "filter_decisions": {
+            "initialized": 1,
+            "corrected": 23,
+            "no_observation_information": 28,
+            "lost": 73,
+            "innovation_conflict": 56
+          },
+          "correct_candidate_rejected": [
+            2
+          ],
+          "wrong_candidate_accepted": [],
+          "correct_candidate_wrong_output": [],
+          "accepted_over_innovation_limit": []
+        },
+        "reset": {
+          "run": "/home/feit/.cache/flash-tracker-restart/recovery-audit-20261104/geometry-matrix-reset-long/ycb-cracker_box_yalehand0",
+          "available": 146,
+          "total": 180,
+          "counts": {
+            "within": 2,
+            "missing": 34,
+            "outside": 144
+          },
+          "severe_count": 144,
+          "cloud_mm_median": 183.01108128611097,
+          "angle_deg_median": 163.26344352451844,
+          "filter_decisions": {
+            "initialized": 1,
+            "corrected": 61,
+            "no_observation_information": 90,
+            "lost": 16,
+            "reinitialized_after_contradiction": 11,
+            "fused_pose_contradicts_observation": 2
+          },
+          "correct_candidate_rejected": [
+            2
+          ],
+          "wrong_candidate_accepted": [
+            7,
+            8,
+            10,
+            14,
+            15,
+            25,
+            26,
+            27,
+            29,
+            30,
+            31,
+            35,
+            36,
+            37,
+            39,
+            40,
+            41,
+            42,
+            45,
+            46,
+            48,
+            50,
+            51,
+            52,
+            53,
+            55,
+            56,
+            58,
+            59,
+            60,
+            61,
+            62,
+            63,
+            64,
+            65,
+            66,
+            67,
+            68,
+            69,
+            70,
+            71,
+            72,
+            73,
+            74,
+            76,
+            78,
+            81,
+            93,
+            98,
+            104,
+            105,
+            128,
+            129,
+            130,
+            131,
+            132,
+            133,
+            134,
+            136,
+            137,
+            145,
+            149,
+            150,
+            152,
+            153,
+            156,
+            171,
+            172,
+            176,
+            177,
+            178
+          ],
+          "correct_candidate_wrong_output": [],
+          "accepted_over_innovation_limit": [
+            7,
+            25,
+            35,
+            37,
+            128
+          ]
+        }
+      }
+    }
+  },
+  "totals": {
+    "baseline": {
+      "within": 355,
+      "outside": 115,
+      "missing": 374
+    },
+    "strict": {
+      "within": 345,
+      "outside": 44,
+      "missing": 455
+    },
+    "reset": {
+      "within": 379,
+      "outside": 320,
+      "missing": 145
+    }
+  },
+  "cautions": [
+    "Pose-label agreement is not calibrated correctness probability.",
+    "Yellow has no independent pose labels.",
+    "Cracker starts from a fragmented input gt_mask; baseline evaluation reference has only 10 points. Treat it as an initialization failure case, not evidence of robust recovery.",
+    "Seven labelled clips total 844 scored frames, initial frames excluded. Same baseline measured reference points score all variants.",
+    "The previous baseline differs in observation filtering, recovery and geometry settings as well as Kalman. Only strict versus reset isolates the bypass."
+  ],
+  "geometry_probe": {
+    "tomato": {
+      "frame": 67,
+      "source_frame": 66,
+      "model_points": 1109,
+      "observed_points": 1386,
+      "candidates": {
+        "label": {
+          "cost": 109980.60950013134,
+          "check": {
+            "accepted": false,
+            "observed_outlier_fraction": 0.0,
+            "free_space_outlier_fraction": 0.016594516594516596,
+            "visible_reference_weight": 0.6251095008365275,
+            "visible_current_weight": 0.6020302340571333,
+            "has_visible_overlap": true,
+            "scene_depth_outlier_fraction": 0.7405357013098786,
+            "scene_depth_exposed_weights": [
+              0.0,
+              30.0353238265884
+            ]
+          },
+          "cloud_mm": 0.0,
+          "angle_deg": 0.01622836503698286,
+          "uncovered_mask_hull_max_px": 22.3301052580243,
+          "uncovered_mask_hull_mean_px": 5.604840806921494
+        },
+        "selected_measurement": {
+          "cost": 1.3474870957664664,
+          "check": {
+            "accepted": true,
+            "observed_outlier_fraction": 0.00013317476999847054,
+            "free_space_outlier_fraction": 0.0,
+            "visible_reference_weight": 83.59924454284157,
+            "visible_current_weight": 1252.6091729467707,
+            "has_visible_overlap": true,
+            "scene_depth_outlier_fraction": 0.0,
+            "scene_depth_exposed_weights": [
+              18.366448040264924,
+              679.0287039150253
+            ]
+          },
+          "cloud_mm": 47.218134755634935,
+          "angle_deg": 95.66133907264968,
+          "uncovered_mask_hull_max_px": 3.8501642441784414,
+          "uncovered_mask_hull_mean_px": 0.8066028132673569
+        },
+        "output": {
+          "cost": 1.3904649289665731,
+          "check": {
+            "accepted": true,
+            "observed_outlier_fraction": 4.146653207868526e-05,
+            "free_space_outlier_fraction": 0.0,
+            "visible_reference_weight": 83.75532314640782,
+            "visible_current_weight": 1162.0233549360441,
+            "has_visible_overlap": true,
+            "scene_depth_outlier_fraction": 0.0,
+            "scene_depth_exposed_weights": [
+              17.955923229769564,
+              514.1180501243958
+            ]
+          },
+          "cloud_mm": 47.786469447749916,
+          "angle_deg": 94.75165160720944,
+          "uncovered_mask_hull_max_px": 3.5687332870358324,
+          "uncovered_mask_hull_mean_px": 0.882044611148785
+        }
+      },
+      "recorded_costs": [
+        11.859732068781824,
+        22943.163274688537,
+        1.3474870957664664,
+        1.3502628777208305,
+        1.3685121703486511,
+        22943.163274688402
+      ],
+      "initial_surface_label_check": {
+        "accepted": false,
+        "observed_outlier_fraction": 0.0,
+        "free_space_outlier_fraction": 0.2784992784992785,
+        "visible_reference_weight": 0.7303263667334468,
+        "visible_current_weight": 0.0,
+        "has_visible_overlap": true,
+        "scene_depth_outlier_fraction": 0.7152433596920987,
+        "scene_depth_exposed_weights": [
+          0.0,
+          599.7727726282412
+        ]
+      },
+      "initial_surface_label_cost": 22.74860775707755,
+      "label_aligned_previous_view_check": {
+        "accepted": true,
+        "observed_outlier_fraction": 0.0,
+        "free_space_outlier_fraction": 0.0,
+        "visible_reference_weight": 0.6251095008365275,
+        "visible_current_weight": 1187.5864295657507,
+        "has_visible_overlap": true,
+        "scene_depth_outlier_fraction": 0.0,
+        "scene_depth_exposed_weights": [
+          0.0,
+          501.903637463545
+        ]
+      }
+    },
+    "tuna": {
+      "frame": 71,
+      "source_frame": 28,
+      "model_points": 756,
+      "observed_points": 373,
+      "candidates": {
+        "label": {
+          "cost": 21.379422827797434,
+          "check": {
+            "accepted": false,
+            "observed_outlier_fraction": 0.0,
+            "free_space_outlier_fraction": 0.0,
+            "visible_reference_weight": 0.0,
+            "visible_current_weight": 0.0,
+            "has_visible_overlap": false,
+            "scene_depth_outlier_fraction": 0.0,
+            "scene_depth_exposed_weights": [
+              0.0,
+              0.0
+            ]
+          },
+          "cloud_mm": 0.0,
+          "angle_deg": 0.0,
+          "uncovered_mask_hull_max_px": 20.287306974387764,
+          "uncovered_mask_hull_mean_px": 9.51449247379454
+        },
+        "selected_measurement": {
+          "cost": 2.2521671945251005,
+          "check": {
+            "accepted": true,
+            "observed_outlier_fraction": 0.05054424477968005,
+            "free_space_outlier_fraction": 0.0,
+            "visible_reference_weight": 55.22704257117184,
+            "visible_current_weight": 0.3073347229810247,
+            "has_visible_overlap": true,
+            "scene_depth_outlier_fraction": 0.18218439533393638,
+            "scene_depth_exposed_weights": [
+              58.54772645271636,
+              2.494256759914488
+            ]
+          },
+          "cloud_mm": 41.1819214658463,
+          "angle_deg": 143.47147969651064,
+          "uncovered_mask_hull_max_px": 4.578310467942965,
+          "uncovered_mask_hull_mean_px": 1.1163167696
+        }
+      },
+      "recorded_costs": [
+        2.2521684521411087,
+        192533.24574376785,
+        2.2521671945251005,
+        2.2521684521411087,
+        192533.24574376785
+      ],
+      "initial_surface_label_check": {
+        "accepted": false,
+        "observed_outlier_fraction": 0.0,
+        "free_space_outlier_fraction": 0.0,
+        "visible_reference_weight": 0.0,
+        "visible_current_weight": 0.0,
+        "has_visible_overlap": false,
+        "scene_depth_outlier_fraction": 0.0,
+        "scene_depth_exposed_weights": [
+          0.0,
+          0.0
+        ]
+      },
+      "initial_surface_label_cost": 23.0485454861182,
+      "label_aligned_previous_view_check": {
+        "accepted": false,
+        "observed_outlier_fraction": 0.0,
+        "free_space_outlier_fraction": 0.0,
+        "visible_reference_weight": 0.0,
+        "visible_current_weight": 0.0,
+        "has_visible_overlap": false,
+        "scene_depth_outlier_fraction": 0.0,
+        "scene_depth_exposed_weights": [
+          0.0,
+          0.0
+        ]
+      }
+    },
+    "banana": {
+      "frame": 65,
+      "source_frame": 46,
+      "model_points": 334,
+      "observed_points": 780,
+      "candidates": {
+        "label": {
+          "cost": 23.33287621384583,
+          "check": {
+            "accepted": false,
+            "observed_outlier_fraction": 0.0,
+            "free_space_outlier_fraction": 0.0,
+            "visible_reference_weight": 0.0,
+            "visible_current_weight": 0.0,
+            "has_visible_overlap": false,
+            "scene_depth_outlier_fraction": 0.0,
+            "scene_depth_exposed_weights": [
+              0.0,
+              0.0
+            ]
+          },
+          "cloud_mm": 0.0,
+          "angle_deg": 0.0,
+          "uncovered_mask_hull_max_px": 27.83675802633962,
+          "uncovered_mask_hull_mean_px": 8.172383374492874
+        },
+        "selected_measurement": {
+          "cost": 2.0335897925319895,
+          "check": {
+            "accepted": true,
+            "observed_outlier_fraction": 0.20446706979833204,
+            "free_space_outlier_fraction": 0.0,
+            "visible_reference_weight": 49.44658104409581,
+            "visible_current_weight": 21.01759788339654,
+            "has_visible_overlap": true,
+            "scene_depth_outlier_fraction": 0.11060195277606527,
+            "scene_depth_exposed_weights": [
+              28.673837804503265,
+              17.658988317407296
+            ]
+          },
+          "cloud_mm": 58.31061218584968,
+          "angle_deg": 48.9369454809963,
+          "uncovered_mask_hull_max_px": 2.984827965296155,
+          "uncovered_mask_hull_mean_px": 0.7024489268275963
+        }
+      },
+      "recorded_costs": [
+        3628.916757079191,
+        455979.4281309854,
+        2.0000000000000018,
+        3628.916757079191,
+        455979.4281309854,
+        2.041008033670925,
+        5.026150637763939,
+        2.0335897925319895,
+        6.142358078548406
+      ],
+      "initial_surface_label_check": {
+        "accepted": false,
+        "observed_outlier_fraction": 0.0,
+        "free_space_outlier_fraction": 0.0,
+        "visible_reference_weight": 0.0,
+        "visible_current_weight": 0.0,
+        "has_visible_overlap": false,
+        "scene_depth_outlier_fraction": 0.0,
+        "scene_depth_exposed_weights": [
+          0.0,
+          0.0
+        ]
+      },
+      "initial_surface_label_cost": 23.459242667473198,
+      "label_aligned_previous_view_check": {
+        "accepted": false,
+        "observed_outlier_fraction": 0.0,
+        "free_space_outlier_fraction": 0.0,
+        "visible_reference_weight": 0.0,
+        "visible_current_weight": 0.0,
+        "has_visible_overlap": false,
+        "scene_depth_outlier_fraction": 0.0,
+        "scene_depth_exposed_weights": [
+          0.0,
+          0.0
+        ]
+      }
+    },
+    "drill": {
+      "frame": 73,
+      "source_frame": 38,
+      "model_points": 502,
+      "observed_points": 779,
+      "candidates": {
+        "label": {
+          "cost": 4340.925652184263,
+          "check": {
+            "accepted": false,
+            "observed_outlier_fraction": 0.9610329649616687,
+            "free_space_outlier_fraction": 0.0,
+            "visible_reference_weight": 131.8420625524854,
+            "visible_current_weight": 3.7296427671380736,
+            "has_visible_overlap": true,
+            "scene_depth_outlier_fraction": 0.9047701921009391,
+            "scene_depth_exposed_weights": [
+              152.09059078164967,
+              0.8389307044407642
+            ]
+          },
+          "cloud_mm": 0.0,
+          "angle_deg": 0.009470718923376314,
+          "uncovered_mask_hull_max_px": 8.145824318763488,
+          "uncovered_mask_hull_mean_px": 3.1469723683240822
+        }
+      },
+      "recorded_costs": [
+        60.96386255091426,
+        82758.2497270638,
+        60.95458598535985,
+        201.2916477366793,
+        76027.96161475725,
+        82758.24972710843,
+        1543.9059567451786,
+        25545.18768929735,
+        269.654251419976,
+        1083.994624414395
+      ],
+      "initial_surface_label_check": {
+        "accepted": false,
+        "observed_outlier_fraction": 0.9583511688247094,
+        "free_space_outlier_fraction": 0.04621309370988447,
+        "visible_reference_weight": 513.8525282457055,
+        "visible_current_weight": 11.061729910143823,
+        "has_visible_overlap": true,
+        "scene_depth_outlier_fraction": 0.9096246487534854,
+        "scene_depth_exposed_weights": [
+          595.5301848494262,
+          44.1926521806474
+        ]
+      },
+      "initial_surface_label_cost": 2977.4067385822095,
+      "label_aligned_previous_view_check": {
+        "accepted": false,
+        "observed_outlier_fraction": 0.9610329649616687,
+        "free_space_outlier_fraction": 0.0012836970474967907,
+        "visible_reference_weight": 131.8420625524854,
+        "visible_current_weight": 75.85057427875937,
+        "has_visible_overlap": true,
+        "scene_depth_outlier_fraction": 0.9047701921009391,
+        "scene_depth_exposed_weights": [
+          152.09059078164967,
+          91.69418055321549
+        ]
+      }
+    }
+  },
+  "cracker_initial_input": {
+    "mask_pixels": 3483,
+    "positive_depth_inside_mask": 3483,
+    "shape": [
+      480,
+      640
+    ],
+    "baseline": {
+      "reference_points": 10,
+      "extent_m": [
+        0.005709464306950629,
+        0.006404178605019717,
+        0.0029999613761901855
+      ]
+    },
+    "new": {
+      "reference_points": 20,
+      "extent_m": [
+        0.09132978315186982,
+        0.04457803352166917,
+        0.026999950408935547
+      ]
+    },
+    "baseline_input": {
+      "raw_count": 3483,
+      "boundary_count": 3449,
+      "edge_count": 0,
+      "clean_count": 34,
+      "detached_count": 18,
+      "surface_points": 28,
+      "sample_spacing_mm": 2.5077718196887795,
+      "compiled_surface_fit": false,
+      "reused_search_workers": 0,
+      "visible_lateral_spread_mm": 1.5182899512298873,
+      "principal_surface_axis_camera": [
+        -0.664941061884691,
+        -0.7406962550111491,
+        0.09603354638936282
+      ],
+      "principal_surface_spreads_m": [
+        0.00019397511422149084,
+        0.0015182899512298873,
+        0.00259630252320817
+      ],
+      "principal_surface_points": 10,
+      "principal_surface_split_axes_camera": [
+        [
+          -0.7035658526266881,
+          -0.6997032053935333,
+          0.12413909690221103
+        ],
+        [
+          -0.45387580616336165,
+          -0.8908506272674471,
+          -0.019542581118012003
+        ]
+      ],
+      "principal_surface_split_gap_rad": 0.34747198917595384,
+      "preprocess_ms": 3.9040290284901857
+    },
+    "recovery_input": {
+      "raw_count": 3483,
+      "boundary_count": 3449,
+      "edge_count": 0,
+      "clean_count": 20,
+      "detached_count": 0,
+      "surface_points": 20,
+      "sample_spacing_mm": 1.427027861747966,
+      "compiled_surface_fit": false,
+      "reused_search_workers": 0,
+      "visible_lateral_spread_mm": 12.926966143281446,
+      "principal_surface_axis_camera": [
+        -0.9115310935693411,
+        0.40761877720744233,
+        -0.05438747948003047
+      ],
+      "principal_surface_spreads_m": [
+        0.0014175246912749035,
+        0.012926966143281446,
+        0.03780777633472813
+      ],
+      "principal_surface_points": 20,
+      "principal_surface_split_axes_camera": [
+        [
+          -0.9385751478449483,
+          0.3251062376573719,
+          -0.11568330080051113
+        ],
+        [
+          -0.9162852383649861,
+          0.39851980947378585,
+          -0.040041521092467044
+        ]
+      ],
+      "principal_surface_split_gap_rad": 0.1077929393995767,
+      "preprocess_ms": 3.272076020948589
+    }
+  },
+  "tomato_axis_error_deg": 25.452653307818547
+}

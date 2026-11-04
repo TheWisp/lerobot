@@ -29,6 +29,14 @@ class SurfaceObservationConfig:
     samples_across_object: int = 64
     min_surface_spacing_m: float = 0.001
     component_gap_m: float | None = 0.01
+    # Experimental robust depth-range cleanup, disabled for compatibility.
+    # Sigma uses Gaussian-consistent MAD, with huber_m as a sensor-noise floor.
+    # This can reject a real minority surface far from the dominant depth layer;
+    # benchmark it together with removal of the largest-component heuristic.
+    depth_outlier_sigma: float | None = None
+    # Experimental: withhold rejected depth readings from pose checks too.
+    # Keep the silhouette unchanged; zero depth means unknown, not free space.
+    filtered_depth_for_fitting: bool = False
     validation_tile_px: int = 4
 
 
@@ -198,6 +206,18 @@ def observation(
     normals = np.cross(horizontal, vertical)
     norm = np.linalg.norm(normals, axis=-1)
     local_valid = raw[region] & interior[region] & reliable[region] & (norm > np.finfo(float).eps)
+    depth_outliers = 0
+    depth_range_rejected = np.zeros(mask.shape, dtype=bool)
+    sigma = config.get("depth_outlier_sigma")
+    if sigma is not None and local_valid.any():
+        measured = depth[region][local_valid]
+        median = np.median(measured)
+        # 1 / Phi^-1(0.75): convert MAD to standard deviation for Gaussian noise.
+        scale = max(1.482602218505602 * np.median(np.abs(measured - median)), config["huber_m"])
+        keep_depth = np.abs(depth[region] - median) <= sigma * scale
+        depth_outliers = int(np.count_nonzero(local_valid & ~keep_depth))
+        depth_range_rejected[region] = raw[region] & ~keep_depth
+        local_valid &= keep_depth
     valid = np.zeros(mask.shape, dtype=bool)
     valid[region] = local_valid
     normals /= np.maximum(norm[..., None], np.finfo(float).eps)
@@ -227,6 +247,8 @@ def observation(
         "edge_count": int((raw & interior & ~reliable).sum()),
         "clean_count": int(valid.sum()),
         "detached_count": detached,
+        "depth_outlier_count": depth_outliers,
+        "depth_range_rejected": depth_range_rejected,
         "spacing_m": spacing,
     }
 

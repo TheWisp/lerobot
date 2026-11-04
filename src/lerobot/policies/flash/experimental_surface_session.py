@@ -16,7 +16,7 @@ from scipy.spatial.transform import Rotation
 
 from .geometry import transform
 from .surface_correspondence import rigid_fit
-from .surface_grounding import SurfaceFitView, WholeSurfaceFit, project
+from .surface_grounding import SurfaceFitView, WholeSurfaceFit, pca_candidates, project
 from .surface_kalman import MeasuredGroupMotion, PoseKalmanFilter
 from .surface_motion import measured_surface_information
 from .surface_observation import move, spatial_sample, voxel_sample
@@ -47,6 +47,13 @@ class GrowingSurfaceConfig:
     # Experiment: use retained measured views to distinguish newly visible
     # surface from contradictions. False preserves the published baseline.
     partial_surface_matching: bool = False
+    # Disabled until wider validation. If ordinary candidates all fail, try
+    # this many distinct PCA orientations; no object-specific symmetry rules.
+    recovery_starts: int = 0
+    # Experimental cost/consistency ablation: use the newest measured views
+    # for visibility checks, while retaining the whole accumulated point map.
+    # None preserves all retained views. This can forget old empty-space evidence.
+    fit_view_limit: int | None = None
     # One later view checks an addition before it can influence fitting.
     confirmations: int = 2
     max_patches: int = 32
@@ -68,6 +75,12 @@ class GrowingSurfaceConfig:
             raise ValueError("uncertainty must be a PoseUncertaintyConfig or its JSON object")
         if self.uncertainty.enabled and not self.surface_priority:
             raise ValueError("uncertainty requires surface_priority")
+        if type(self.recovery_starts) is not int or not 0 <= self.recovery_starts <= 24:
+            raise ValueError("recovery_starts must be between 0 and 24")
+        if self.fit_view_limit is not None and (
+            type(self.fit_view_limit) is not int or self.fit_view_limit < 1
+        ):
+            raise ValueError("fit_view_limit must be a positive integer or None")
         for name in ("spacing_m", "agreement_m", "growth_agreement_m"):
             if not np.isfinite(getattr(self, name)) or getattr(self, name) <= 0:
                 raise ValueError(f"{name} must be finite and positive")
@@ -179,6 +192,7 @@ class SurfaceView:
     depth: np.ndarray | None = None
     mask: np.ndarray | None = None
     measured_points: np.ndarray | None = None
+    scene_depth: np.ndarray | None = None
 
     @classmethod
     def from_observation(cls, observation, intrinsics, shape_config, *, retain_measurement=False):
@@ -197,6 +211,9 @@ class SurfaceView:
             observation["mask"].copy() if retain_measurement else None,
             observation.get("all_surface_points", observation["obs"]["points"]).copy()
             if retain_measurement
+            else None,
+            observation["scene_depth"].copy()
+            if retain_measurement and "scene_depth" in observation
             else None,
         )
 
@@ -266,7 +283,13 @@ class SurfaceStore:
         points = np.asarray(points, dtype=float)
         if points.ndim != 2 or points.shape[1] != 3 or not len(points) or not np.isfinite(points).all():
             raise ValueError("patch needs finite Nx3 camera measurements")
-        points = points[spatial_sample(points, self.config.points_per_patch)].copy()
+        # Use the same object-coordinate grid for the first view and additions.
+        # Sampling a dense initial view by count first made its resolution depend
+        # on the area of that view, while small later patches kept finer detail.
+        local = move(points, np.linalg.inv(pose))
+        selected = voxel_sample(local, self.config.spacing_m)
+        selected = selected[spatial_sample(local[selected], self.config.points_per_patch)]
+        points = points[selected].copy()
         version = self.version if fitted_map_version is None else fitted_map_version
         self.patches[frame] = SurfacePatch(frame, points, checked_pose(pose), version, {frame}, active, view)
         self.events.append({"event": "added" if active else "pending", "frame": frame})
@@ -375,8 +398,12 @@ class SurfaceStore:
         if not accepted:
             return details
         self.confirm(measured, pose, frame)
-        distances = cKDTree(move(self.points, pose)).query(measured)[0]
-        novel = measured[distances > self.config.spacing_m]
+        # A new occupied grid cell extends the surface. A distance exclusion
+        # around old samples leaves holes in adjacent cells and gives growth a
+        # different density from initialization. Keep actual measured points.
+        local = move(measured, np.linalg.inv(pose))
+        selected = voxel_sample(np.concatenate((self.points, local)), self.config.spacing_m)
+        novel = measured[selected[selected >= len(self.points)] - len(self.points)]
         keep = self.compatible_additions(novel, pose)
         consistent = not len(novel) or float(np.mean(keep)) >= self.config.patch_consistency
         details.update(
@@ -417,7 +444,7 @@ class ImageConditionedFit(WholeSurfaceFit):
             blocks.append(residual.ravel() * np.sqrt(weight / len(residual)))
         return np.concatenate(blocks)
 
-    def correct_surface_first(self, proposal, previous, *, uncertainty=None):
+    def correct_surface_first(self, proposal, previous, *, uncertainty=None, recovery_starts=0):
         """Image evidence may choose a geometric fit, not pay to violate it.
 
         Refine from the new motion proposal and the previous estimate. The
@@ -455,6 +482,23 @@ class ImageConditionedFit(WholeSurfaceFit):
                 check_surface_contradiction(geometry, pose, uncertainty) for pose, _ in candidates
             ]
             valid = [i for i, check in enumerate(direct_checks) if check["accepted"]]
+            if not valid and recovery_starts:
+                seeds = pca_candidates(
+                    self.reference, self.observation["obs"]["points"], all_axis_orders=True
+                )
+                seeds.sort(key=geometry.score)
+                for index, seed in enumerate(seeds[:recovery_starts]):
+                    pose, detail = geometry.refine(
+                        seed,
+                        admissible=lambda p: check_surface_contradiction(geometry, p, uncertainty)[
+                            "accepted"
+                        ],
+                    )
+                    candidates.append((pose, detail))
+                    names.append(f"recovery_{index}")
+                    direct_checks.append(check_surface_contradiction(geometry, pose, uncertainty))
+                costs = np.asarray([geometry.score(pose) for pose, _ in candidates])
+                valid = [i for i, check in enumerate(direct_checks) if check["accepted"]]
             if not valid:
                 return None, {
                     "surface_priority": True,
@@ -665,6 +709,7 @@ class GrowingSurfaceSession:
             fitter.correct_surface_first(
                 seed,
                 self.pose,
+                recovery_starts=self.config.recovery_starts,
                 **({"uncertainty": self.config.uncertainty} if self.config.uncertainty.enabled else {}),
             )
             if self.config.surface_priority
@@ -689,7 +734,7 @@ class GrowingSurfaceSession:
             prior_valid = check_surface_contradiction(geometry, self.pose, self.config.uncertainty)[
                 "accepted"
             ]
-            kalman_prior = self.kalman.pose.copy(), self.kalman.covariance.copy()
+            kalman_prior = self.kalman.snapshot()
             measured = fit["uncertainty"]
             correction = self.kalman.correct(
                 candidate,
@@ -699,8 +744,11 @@ class GrowingSurfaceSession:
             )
             details["kalman"] = correction
             candidate = self.kalman.pose.copy()
-            if not check_surface_contradiction(geometry, candidate, self.config.uncertainty)["accepted"]:
-                self.kalman.pose, self.kalman.covariance = kalman_prior
+            if (
+                correction["accepted"]
+                and not check_surface_contradiction(geometry, candidate, self.config.uncertainty)["accepted"]
+            ):
+                self.kalman.restore(kalman_prior)
                 details["kalman"].update(accepted=False, reason="fused_pose_contradicts_observation")
             self.pose = self.kalman.pose.copy()
             if not details["kalman"]["accepted"]:
@@ -708,10 +756,20 @@ class GrowingSurfaceSession:
                 return self._result("predicted", time_s, details, available=prior_valid)
         distances = cKDTree(move(self.store.points, candidate)).query(points)[0]
         overlap = float(np.mean(distances <= self.config.agreement_m))
+        overlap_basis = "all_current_points"
+        if self.config.partial_surface_matching:
+            # Use the same mutually visible measurements as candidate
+            # validation. Newly exposed surface is unknown, not an unmatched
+            # measurement of an already mapped face. Surface growth below
+            # still has its separate stricter tests against stored geometry.
+            partial = fitter.partial_surface_check(candidate)
+            overlap = 1.0 - partial["observed_outlier_fraction"] if partial["has_visible_overlap"] else 0.0
+            overlap_basis = "mutually_visible_points"
         details.update(
             fit=fit,
             image_pairs=len(a),
             observed_overlap=overlap,
+            observed_overlap_basis=overlap_basis,
             surface_median_mm=float(np.median(distances) * 1000),
             candidate_camera_from_reference=candidate.tolist(),
             point_sources=[
@@ -723,7 +781,7 @@ class GrowingSurfaceSession:
         )
         if overlap < self.config.min_overlap:
             if kalman_prior is not None:
-                self.kalman.pose, self.kalman.covariance = kalman_prior
+                self.kalman.restore(kalman_prior)
             return self._missing(hint, time_s, details, "insufficient_surface_overlap")
         if hint is not None:
             details["hint_disagreement_mm"] = float(
@@ -740,7 +798,7 @@ class GrowingSurfaceSession:
                 details["group_comparison"] = comparison
                 if not accepted:
                     if kalman_prior is not None:
-                        self.kalman.pose, self.kalman.covariance = kalman_prior
+                        self.kalman.restore(kalman_prior)
                     return self._missing(hint, time_s, details, "surface_group_disagreement")
         self.pose = candidate
         self.last_observed_time = self.last_supported_time = time_s
@@ -788,6 +846,7 @@ class GrowingSurfaceSession:
                     "depth": patch.view.depth,
                     "mask": patch.view.mask,
                     "obs": {"points": patch.view.measured_points},
+                    **({"scene_depth": patch.view.scene_depth} if patch.view.scene_depth is not None else {}),
                 },
                 patch.view.intrinsics,
                 patch.camera_from_reference,
@@ -801,6 +860,8 @@ class GrowingSurfaceSession:
             views[self.connected_frame] = SurfaceFitView(
                 self.connected_observation, self.connected_intrinsics, self.connected_pose
             )
+        if self.config.fit_view_limit is not None:
+            return tuple(views[f] for f in sorted(views, reverse=True)[: self.config.fit_view_limit])
         return tuple(views.values())
 
     def _missing(self, hint, time_s, details, reason):

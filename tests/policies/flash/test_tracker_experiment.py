@@ -193,6 +193,25 @@ def test_growing_experiment_keeps_baselines_and_archives_original_patches(tmp_pa
             assert len(patch["measured"]) > 0
             np.testing.assert_array_equal(patch["camera_from_reference"], np.eye(4))
         assert (tmp_path / f"growth/surface_models/{method}/item/000001.npz").exists()
+    selected = methods[-1]
+    limited = run_case(
+        case,
+        tmp_path / "limited",
+        None,
+        config,
+        None,
+        None,
+        surface_experiment=GrowingSurfaceConfig(),
+        group_experiment=GroupConfig() if groups else None,
+        surface_methods=(selected,),
+    )
+    assert set(limited["roles"]["item"]["methods"]) == {"ufm_chain", "surface_corrected", selected}
+    assert limited["roles"]["item"]["methods"][selected] == result["roles"]["item"]["methods"][selected]
+    limited_rows = [json.loads(line) for line in (tmp_path / "limited/frames.jsonl").read_text().splitlines()]
+    for full_row, limited_row in zip(rows, limited_rows, strict=True):
+        np.testing.assert_array_equal(
+            full_row["objects"]["item"][selected], limited_row["objects"]["item"][selected]
+        )
 
 
 def test_retry_connects_to_last_good_image_not_the_unregistered_one(monkeypatch):

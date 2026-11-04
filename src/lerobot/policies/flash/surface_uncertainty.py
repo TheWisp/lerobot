@@ -29,6 +29,9 @@ class PoseUncertaintyConfig:
     initial_rotation_std_deg: float = 10.0
     position_process_std_m_sqrt_s: float = 0.002
     rotation_process_std_deg_sqrt_s: float = 2.0
+    # Legacy reset is retained for old recordings. False always uses the
+    # innovation test, including when the prediction conflicts with geometry.
+    reset_on_geometry_conflict: bool = True
     # Standard deviation of independent normal-direction error per measurement.
     independent_error_m: float = 0.001
     # Standard deviation of a spatially correlated 3D error field.
@@ -56,7 +59,10 @@ class PoseUncertaintyConfig:
         ):
             if not np.isfinite(getattr(self, name)) or getattr(self, name) <= 0:
                 raise ValueError(f"{name} must be finite and positive")
-        if type(self.enabled) is not bool or type(self.prefer_supported_prediction) is not bool:
+        if any(
+            type(value) is not bool
+            for value in (self.enabled, self.prefer_supported_prediction, self.reset_on_geometry_conflict)
+        ):
             raise ValueError("uncertainty switches must be booleans")
         for name in ("independent_error_m", "correlated_error_m", "correlation_length_m"):
             value = getattr(self, name)
@@ -159,14 +165,20 @@ class SurfacePoseUncertainty:
 
 def check_surface_contradiction(geometry, pose, config):
     """Absolute observed-shape check, independent of covariance magnitude."""
+    scene = geometry.scene_depth_check(pose) if geometry.config.scene_depth_constraints else {}
+    scene_outliers = scene.get("scene_depth_outlier_fraction", 0.0)
+    coherent_protrusion = scene.get("scene_depth_coherent_protrusion", False)
     if geometry.reverse_fits:
         direct = geometry.partial_surface_check(pose)
         accepted = (
             direct["has_visible_overlap"]
-            and max(direct["observed_outlier_fraction"], direct["free_space_outlier_fraction"])
+            and not coherent_protrusion
+            and max(
+                direct["observed_outlier_fraction"], direct["free_space_outlier_fraction"], scene_outliers
+            )
             <= config.max_visible_outlier_fraction
         )
-        return {"accepted": accepted, **direct}
+        return {"accepted": accepted, **direct, **scene}
     distance = cKDTree(move(geometry.reference, pose)).query(geometry.observation["obs"]["points"])[0]
     outliers = float(np.mean(distance > geometry.config.depth_tolerance_m))
     residual = geometry.residual(pose)
@@ -175,9 +187,13 @@ def check_surface_contradiction(geometry, pose, config):
     # silhouette, depth tolerance, and possible foreground occlusion.
     free = residual[n + m : n + m + n] * np.sqrt(n)
     contradictions = float(np.mean(free > 1))
-    accepted = max(outliers, contradictions) <= config.max_visible_outlier_fraction
+    accepted = (
+        not coherent_protrusion
+        and max(outliers, contradictions, scene_outliers) <= config.max_visible_outlier_fraction
+    )
     return {
         "accepted": accepted,
         "observed_outlier_fraction": outliers,
         "free_space_outlier_fraction": contradictions,
+        **scene,
     }

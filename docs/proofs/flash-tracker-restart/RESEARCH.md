@@ -10,6 +10,23 @@ records what was saved and verified. This research continues separately on
 Current design: [FLASH tracking pipeline](../../../src/lerobot/policies/flash/docs/tracking_pipeline.md).
 That is the maintained proposal; this file preserves dated research and results.
 
+Latest local audit, 2026-11-04: `bcaf3ad39` is the last committed and pushed
+checkpoint. The working tree now contains geometry rejection and partial-surface
+fitting fixes, configurable recovery experiments, benchmark tooling, and recorded
+failure fixtures. Selected Kalman/velocity experiments were restored for comparison;
+the parked stash still exists and overlaps these changes. They are not all promoted
+defaults: scene-depth constraints, extra recovery starts, and disabling the legacy
+Kalman reset remain opt-in; velocity filters remain benchmark-only.
+
+Consolidation verification covered 14 test files: **226 passed, 7 failed, 11
+skipped, 4 expected failures**. The seven failures remain the same recorded recovery
+checks using the baseline profile. Expected failures belong to the velocity and
+pre-fix Kalman controls; the connected-protrusion regression test passes normally.
+Full-sequence checks were skipped without a supplied result directory. The latest
+protrusion guard has not had a complete causal benchmark rerun, and the 9102
+recordings predate it.
+The dated sections below preserve individual experiments and their trade-offs.
+
 ## Did the redesign become worse?
 
 There is no matched end-to-end comparison that establishes a global ranking.
@@ -2560,3 +2577,650 @@ Reproduce fresh timing with `python -m benchmarks.flash_recovery_matrix --output
 DIR --repeats 2`. Use `--hidden-objects 1` or `--hidden-objects 3` in separate
 processes for prediction-only memory and latency. Stage times overlap and must
 not be added; total frame time is observation preparation plus session update.
+
+## Recovery experiments parked — 2026-11-04
+
+The original problem was recovering the object's pose when it becomes visible
+again. Two failures became mixed together: surface matching can reject a newly
+visible side, and the filter can either reject a useful fit or reset to a wrong
+one. The user chose to set the additional filter experiments aside and focus on
+finding an alignment from the visible measurements.
+
+The completed comparisons average the same 21 real labelled UFM clips equally.
+Missing poses count as failures; these scores include occluded frames and do
+not separately measure recovery after reappearance.
+
+| Configuration                                    | Within 10 mm / 10° | Within 20 mm / 20° |
+| ------------------------------------------------ | -----------------: | -----------------: |
+| Committed default                                |             58.01% |             71.10% |
+| Broader position uncertainty, no automatic reset |             57.85% |             69.99% |
+| Pose plus velocity, no automatic reset           |             58.54% |             69.18% |
+| Pose plus velocity, existing reset retained      |             58.97% |             70.94% |
+
+Velocity with the existing reset improves six clips, regresses two, trades one
+accuracy limit for the other in two, and leaves eleven unchanged. It retains
+the known wrong-mug reset. Velocity improves continuous turning in the rendered
+control, but overshoots when the object moves while hidden and then stops.
+Broader position uncertainty alone does not address uncertain rotation.
+
+The final experiment combined velocity without reset and partial-surface
+matching. **Only seven of 25 configurations completed before cancellation at
+the user's request.** Of those seven, five regress at the two accuracy limits,
+one improves at one limit but regresses at the other, and one is unchanged. The pitcher
+still fails to recover; the mug ends approximately 80 mm / 171° wrong. This is
+an incomplete sweep, not a result for all scenes. Fitting is also expensive:
+median pitcher/drill/mug times are approximately 0.67/0.98/6.72 seconds, versus
+0.24/0.20/0.19 seconds for the default. Concurrent workload varied, so these
+timing ratios are approximate.
+
+Recorded diagnostics distinguish two causes. Some pitcher frames produce no
+observation-compatible candidate before Kalman correction. Other frames produce
+a candidate within the looser accuracy limits that Kalman rejects. Trying all
+four geometry-derived starting orientations finds reasonable alignments on two
+missed pitcher frames; that is a single-frame diagnostic, not a validated
+sequence recovery fix. Segmentation drift and depth cleanup discarding real
+object parts remain separate known issues; neither is established here as the
+cause of this pitcher failure.
+
+The focused final tests passed 54 checks with four strict expected failures;
+the failures remain limitations, not successful acceptance tests. Complete
+filter-state rollback was tested with partial-surface matching both on and off.
+
+All uncommitted experiment code, tests, full research notes and figures are
+preserved in stash `ce3923207a64f950314403f03160f9f7f9be1bd6`.
+Restore with `git stash apply ce3923207a64f950314403f03160f9f7f9be1bd6` after
+preserving any newer work; this research file may need a merge.
+A second local backup, manifest, patch and untracked-file archive are under
+`~/.cache/flash-tracker-restart/parked-recovery-experiments-20261104/`.
+Raw runs remain under `kalman-motion-wide-20261103`, `velocity-*-20261103`, and
+`velocity-partial-*-20261104` in that same cache root. The final partial report
+and videos are in `velocity-partial-report-20261104/`.
+
+At that checkpoint code returned to `bcaf3ad39`: the committed Kalman default remained, and the
+previously committed partial-surface option remains experimental and disabled
+by default. No experimental setting was promoted and no robot trial was run.
+
+## Five reviewed recovery failures — 2026-11-04
+
+**Not solved; no experimental setting promoted.** The gamepad's wrong pose at
+11.97 s occurs in both the UI's older 10% run and the committed 25% run. It is
+not explained by stale playback alone.
+
+Added six portable RGB-D checkpoints covering gamepad, mustard, yellow block,
+clock (two frames), and drill. Fourteen acceptance checks initially give seven
+failures. They run real preparation → fitting → Kalman → growth, with frozen
+upstream state. They do not rerun UFM or segmentation. Separate checks read the
+raw pose output of full causal replays, independently of the benchmark's score.
+[Fixture scope and commands](../../../tests/policies/flash/fixtures/recorded_recovery/README.md).
+
+The experiments use the same settings for every scene:
+
+- Keep disconnected depth regions near the dominant measured depth, using
+  median absolute deviation; do not keep only the largest 3D component.
+- Remove rejected depth readings from fitting checks too, preserving the mask.
+- Use mutually visible surface for both fitting and its later overlap check.
+- Try additional coarse orientations when the normal starting guesses all fail;
+  retain valid intermediate optimizer results instead of only its final iterate.
+- Compare all retained source views versus just the most recent accepted view,
+  while keeping the accumulated surface in either case.
+
+The best small-checkpoint variants have **11 passes / 3 failures**. A complete
+replay with shared UFM, groups, partial matching, filtered depth, four extra
+starts and one recent source view gives:
+
+| Scene        | Accurate frames, baseline → experiment | What remains wrong                                                |
+| ------------ | -------------------------------------- | ----------------------------------------------------------------- |
+| Mustard      | 175/180 → **180/180**                  | None at the existing 20 mm / 20° limit                            |
+| Clock        | 25/202 → 31/202                        | 198 poses returned, but most have wrong orientation               |
+| Drill        | 56/73 → **43/73**                      | More poses returned, worse positional accuracy                    |
+| Yellow block | No pose labels                         | Availability 62/74 → 74/74; alignment remains imperfect           |
+| Gamepad      | No pose labels                         | Availability 613/627 → 627/627; wrong orientation at 12 s remains |
+
+Initial frames are excluded; missing poses count as failures. Mustard's stricter
+10 mm / 10° count improves 116 → 166. The full-sequence acceptance checks pass
+mustard, yellow's position-only check and the early clock frame. They fail the
+gamepad's visible-face direction check, later clock (124.5 mm / 136°), and drill
+(26.9 mm / 2.3°). Unlabelled checks do not establish full 6D accuracy.
+[Complete counts and stage timings](recovery-20261104/sequence-comparison.json).
+
+**Comparison limitation:** the experiment above retained the known automatic
+Kalman-reset defect. At gamepad frame 271 the consistency test failed, but the
+reset accepted the new pose anyway. It was therefore incorrect to attribute
+all remaining failures to alignment before combining the parked filter fix.
+
+There is also evidence of weak alignment scoring, independently of availability.
+Searching all 24 coarse orientations on the gamepad finds extremely low-cost
+fits with only about 2–5 visible source points and a wrong face direction.
+Much of the surface is treated as hidden/unknown, so a small residual is not
+strong evidence of correctness. Local covariance is conditional on those
+chosen correspondences; it does not certify their identity. Increasing the
+depth tolerance to 10–15 mm also admits a clock pose over 120 mm wrong. These
+experiments must not be described as fixes merely because they return a pose.
+
+![Gamepad: observed image, baseline, full replay experiment](recovery-20261104/gamepad.jpg)
+![Clock: observed image, baseline, full replay experiment](recovery-20261104/clock.jpg)
+
+A separate confirmed drill problem is depth selection: the largest connected
+patch is at 2.94–2.99 m, while most object readings are near 1 m. Robust range
+cleanup retains the near portions, but does not by itself recover the pose.
+It can also remove legitimate minority surfaces at different depths, so it is
+still experimental. This does not establish whether the original bad readings
+come from sensor failure or imperfect object masks.
+
+![Drill: raw mask, near/far depth, selected far patch](recovery-20261104/drill-depth.jpg)
+
+New opt-in controls are `observation.depth_outlier_sigma` (default `None`),
+`observation.filtered_depth_for_fitting` (`False`), `recovery_starts` (`0`, max
+24), and `fit_view_limit` (`None`, all retained views). Partial matching remains
+off by default. Surface growth keeps its separate stricter checks. Reducing
+source views loses older empty-space evidence; expanding search can introduce
+false fits. No object names, case timings, label poses or handcrafted axes enter
+the runtime algorithm. The filter's rejection reason is now preserved when no
+correction occurred, rather than being overwritten as a fused-pose failure.
+
+Verification: 155 existing/control tests pass with three unchanged expected
+failures; the two later view-budget/diagnostic tests also pass. The depth-check
+test fails when rejected raw depth is deliberately reintroduced. Baseline and
+experimental recovery failures remain ordinary failing assertions, not xfails.
+Full replays used actual UFM and recorded masks; no robot moved and 9102's saved
+results were not replaced. Median fitting times in the recent-view experiment
+are roughly 0.30–0.55 s/object versus 0.13–0.34 s before; concurrent workloads
+differed, so these are diagnostic timings, not a controlled speed benchmark.
+
+All raw traces, input/code snapshots, cancelled all-view experiments (explicitly
+marked incomplete), images and test logs are local under
+`~/.cache/flash-tracker-restart/recovery-audit-20261104/`. The completed run is
+`sequential-filtered-depth-last-view`. Changes remain uncommitted.
+
+### Combine recovery with the parked Kalman fix
+
+The previous comparison omitted the no-reset fix. Restored the strict filter,
+the pose-plus-velocity experiment, and full filter-state rollback from stash
+`ce3923207a64f950314403f03160f9f7f9be1bd6`. These remain experiments; the reset
+variant is an explicitly named baseline. No default or 9102 result changed.
+
+`benchmarks.flash_recovery_combinations` records both fitting and filtering
+choices and replays each recording from frame zero. The same settings apply
+across all five reviewed scenes. The labelled results are:
+
+| Setting                                                                      | Mustard / 180 | Clock / 202 | Drill / 73 |
+| ---------------------------------------------------------------------------- | ------------: | ----------: | ---------: |
+| Committed baseline                                                           |           175 |          25 |         56 |
+| New fitting, old reset retained                                              |           180 |          31 |         43 |
+| New fitting + no reset + broader position uncertainty                        |           180 |          21 |         42 |
+| New fitting + no reset + velocity                                            |           180 |          17 |         39 |
+| Partial matching only + no reset + broader position uncertainty              |           180 |          10 |         34 |
+| Partial matching only + no reset + broader position and rotation uncertainty |           180 |          11 |         33 |
+
+Counts use the existing 20 mm / 20° label comparison; missing poses fail.
+Both new-fitting combinations completed all five recordings. The two minimal
+partial-matching combinations completed the three labelled scenes and yellow;
+their remaining gamepad replays were stopped once the labelled regressions
+disqualified them. Those partial outputs are explicitly marked incomplete.
+[Paired scores, input digests, completion status and proposal audit](recovery-20261104/combined-comparison.json).
+None is a Pareto improvement. Broader position uncertainty is the parked
+30 mm/√s setting; broader rotation is its previously tested 30°/√s setting.
+The minimal partial variants retain the original depth extraction and all
+source views. Thus these regressions cannot all be attributed to the newer
+depth cleanup or reduced view history. Unlabelled gamepad and yellow-block
+results require the separate consistency checks and visual review.
+
+At gamepad frame 271, the real frozen proposal exceeds the Kalman limit with
+both old and new fitting. The reset baseline accepts it; no-reset rejects it.
+In the full combined run, rejection is preserved but the pose is still missing
+at 12 s. This is a fixed rejection defect, **not successful recovery**.
+
+![Gamepad: wrong reset versus withholding the rejected pose](recovery-20261104/combined-gamepad.jpg)
+
+The completed new-fitting/broader-position clock run proposes 148 wrong poses:
+Kalman rejects 124 and accepts 24. It also rejects two proposals within the
+accuracy limits. For drill, 28 wrong proposals pass the ordinary filter test.
+These are measured remaining failures with the bypass removed. No claim is
+made that the candidate search has exhausted every possible correct pose.
+
+`test_combined_recovery.py` pins the reset bug across both fitters; deliberately
+restoring the reset makes its rejection assertion fail. Full-sequence checks
+separately require recovered poses and verify that no accepted correction
+exceeded the Kalman limit. A passing rejection check cannot substitute for a
+passing recovery check. The broader-position and velocity runs each still
+fail gamepad, both clock checkpoints, and drill; mustard and yellow's limited
+position check pass. The restored controls pass 100 checks with four known
+expected failures, including the velocity model's hidden-stop overshoot.
+
+Raw runs and source snapshots are under `recovery-audit-20261104/combined-*` in
+the local FLASH cache. `combined-proposal-audit.json` separates proposed-pose
+quality from the filter decision. Changes are uncommitted.
+
+### Scene depth and gamepad recovery: rejection works, recovery remains incomplete
+
+Missing depth is unknown. A nearer measured surface can occlude the object.
+Only a farther, reliable reading can contradict a proposed object surface in
+front of it. Earlier red-dot illustrations showed disagreement with recorded
+depth, **not proven physical conflict**: a thin wire can be missed by the sensor.
+
+Opt-in `shape.scene_depth_constraints` preserves scene depth separately from
+the trimmed points used for matching. It takes the nearest depth within the
+existing 2 px alignment tolerance; a hole makes that neighborhood unknown.
+It adds metric depth disagreement to fitting and checks contradictions against
+exposed points rather than diluting them over hidden points. This cannot fix
+a sensor that misses an occluder entirely. The option defaults to false.
+
+At frame 271 (11.97 s), the recorded wrong gamepad pose previously passed:
+7.45% of all sampled surface points contradicted the old check. With the new
+scene check, 74.2% of the exposed weighted samples disagree; it is rejected.
+The frozen real-frame replay returns no corrected pose and adds no surface.
+Missing-depth and foreground-occluder controls still pass, as do real motion
+in either direction and native/Python residual parity. Disabling the scene
+check deliberately makes the recorded regression test fail.
+
+Recovery is separate. `benchmarks.flash_scene_depth_recovery` tries 24 generic
+initial alignments plus the old result, using the first measured surface and
+current RGB-D/mask. These are independent frame searches, **not a causal UFM,
+group and Kalman replay**. A geometry-only search can still prefer almost-zero
+overlap because unseen points incur almost-zero error. Its research-only
+`--overlap-objective` instead rewards positive measured agreement without
+calling unknown points contradictions. It finds no accepted candidate at
+11.97 s, still gives poor poses at 13.98 and 19.98 s, and finds a visually
+plausible alignment at 27.82 s. There is no independent pose label here.
+
+At 19.98 s only 1,102 of 3,126 mask pixels have depth. Separate patches report
+266–278 mm and 385–429 mm. The experimental range filter retains the dominant
+far band; retaining all depth bands also fails. Which readings actually belong
+to the gamepad remains unresolved. This is not evidence that more search alone
+solves recovery. Searches take roughly 6–35 s/frame with 25 initializations.
+
+155 focused checks pass. Defaults, GUI results and 9102 are unchanged. Small
+reports and illustrations are in `recovery-20261104/scene-depth-summary.json`
+and `scene-depth-recovery.jpg`; all candidates and settings remain under
+`recovery-audit-20261104/scene-depth-*` in the local cache.
+
+**Outline coverage follow-up.** Missing depth does not erase mask occupancy.
+The reference's projected surface was allowed to leave visible object pixels
+uncovered: `require_full_mask_coverage` was disabled to allow genuinely new
+surface, but that also removed useful constraints when the same face returned.
+The controlled `--visible-outline` experiment constrains the current outline
+while leaving the reverse view partial. At 19.98 s the uncovered mask area,
+after the existing 2 px allowance, falls from 1,231/3,126 pixels (39.4%) to
+40/3,126 (1.3%). At 27.82 s it falls from 318/5,994 (5.3%) to 220/5,994 (3.7%).
+The stored source itself misses 110/6,028 mask pixels after that same allowance
+at identity: filtered and sampled 3D points do not retain the entire outline.
+Thus pose offset and incomplete edge geometry both contribute. The 13.98 s
+pose remains poor. This is not a full recovery fix or a default promotion.
+
+![Outline coverage comparison](recovery-20261104/scene-depth-outline-comparison.jpg)
+
+The known-face assumption matters: an uncovered pixel proves an object exists
+there, but a genuinely partial stored model may simply lack that newly exposed
+surface. A general solution must retain mask evidence with its depth uncertainty
+rather than treat all uncovered pixels as either empty space or a wrong pose.
+The additional controlled test verifies that missing boundary depth does not
+disable outline constraints when the stored surface contains the visible face.
+
+**Full gamepad replay with those checks.** The overlap objective is now a shared
+opt-in setting, `shape.prefer_observed_overlap`; parity tests compare it with the
+earlier standalone experiment. The sequential run enables scene-depth checks,
+forward outline coverage and overlap preference, using the same no-reset Kalman
+and recovery configuration for both objects. All 628 frames were replayed from
+frame zero with UFM, surrounding groups and surface growth; the input digest
+matches the baseline. It took 934.5 seconds. Neither defaults nor 9102 changed.
+
+The pose initially looks aligned. **Review correction:** the earlier claim of
+proven drift at 7–9 s was too strong. The 2D drawing shifts during occlusion,
+but it draws the predicted surface over the gripper even when that surface
+would be hidden. This alone cannot establish a pose error; the gamepad has no
+independent pose labels. It is mostly missing from 9.24–12.84 s, briefly returns,
+and is continuously missing from
+13.98–21.85 s. It recovers at 21.85 s and looks aligned through the final frame
+at 27.82 s. These are visual observations, not ground-truth accuracy scores.
+The recovery test at 11.97 s still fails; the no-Kalman-bypass test passes.
+The 160 compatibility checks pass, but this is **not a tracking acceptance pass**.
+
+The complete video, timestamped stills and availability intervals are in local
+cache `recovery-audit-20261104/sequential-scene-outline-review`; raw outputs and
+source snapshots are beside it in `sequential-scene-outline`. The video renders
+the fixed initial measured surface at each returned pose and explicitly labels
+missing poses, so changes to the accumulated surface cannot hide pose errors.
+The completed result is now published to 9102 in the existing shared-UFM gamepad
+scene slot, labelled `Scene depth + outline · no-reset Kalman · Nov 4`. Its 3D
+viewer uses the corresponding recorded RGB-D, returned poses and grown surface;
+the earlier result remains on disk. Publication does not change tracker defaults.
+
+### Wider check of geometry rejection and Kalman, November 4
+
+The same gamepad configuration was replayed from frame zero on eight additional
+clips. Seven have pose labels; the yellow block does not. UFM, surrounding groups
+and surface growth ran causally; recorded masks were reused. Input hashes,
+timestamps and initialization frames match the baseline. Labels were used only
+after inference. Each variant uses identical settings across scenes.
+
+Counts below are **within 20 mm / 20°, outside those limits, missing**, excluding
+initialization. The same initial measured points score every variant. These are
+label-agreement counts, not confidence probabilities.
+
+| Clip    | Previous baseline | New geometry, no reset | Same new geometry, legacy reset | No reset, wider rotation uncertainty |
+| ------- | ----------------: | ---------------------: | ------------------------------: | -----------------------------------: |
+| Tomato  |       32 / 31 / 4 |            31 / 36 / 0 |                     31 / 36 / 0 |                          31 / 36 / 0 |
+| Tuna    |      28 / 22 / 21 |            28 / 0 / 43 |                    28 / 25 / 18 |                          28 / 0 / 43 |
+| Banana  |      39 / 20 / 12 |            44 / 2 / 25 |                     44 / 22 / 5 |                          43 / 2 / 26 |
+| Drill   |        56 / 8 / 9 |            37 / 0 / 36 |                     55 / 11 / 7 |                          53 / 11 / 9 |
+| Mustard |       175 / 0 / 5 |            180 / 0 / 0 |                     180 / 0 / 0 |                          180 / 0 / 0 |
+| Clock   |      25 / 2 / 175 |           23 / 6 / 173 |                    39 / 82 / 81 |                        37 / 50 / 115 |
+| Cracker |      0 / 32 / 148 |            2 / 0 / 178 |                    2 / 144 / 34 |                              Not run |
+
+The yellow block returns 62, 64 and 74 poses respectively out of 74 evaluated
+frames, but availability alone cannot establish accuracy. The combined change
+reduces outside-limit outputs **115 → 44**, while within-limit outputs decrease
+**355 → 345** and missing outputs increase **374 → 455**. This is not a Pareto
+improvement or a default promotion. The previous baseline also differs in depth
+cleanup and recovery search; only the middle two columns isolate the reset rule.
+
+**The no-reset filter still matters.** On tuna and banana it prevents 25 and 20
+outside-limit outputs without losing within-limit outputs relative to the matched
+legacy-reset run. But drill and clock also lose good candidates. Raising rotation
+process noise from 2 to 30 degrees/√s recovers some, while reintroducing wrong
+outputs. All these arms retain position process noise of 0.03 m/√s. No no-reset
+arm accepted an innovation above its configured limit.
+
+**Why geometry still admits errors:**
+
+- Outline coverage steers the optimizer, but `check_surface_contradiction` does
+  not directly reject uncovered outline. Making that a hard rule is not yet
+  justified for genuinely unseen surface. At the wrong tomato output, the worst
+  uncovered hull vertex is still 3.57 px beyond the existing 2 px allowance.
+- Tomato frame 67 passes the depth checks despite 47.8 mm / 94.8° label error;
+  the initial surface's principal long axis differs by 25.5°, so this is not
+  solely spin about that axis. Its small frame-to-frame updates pass Kalman.
+  An evaluation-only probe changes the previous view's estimated alignment to
+  the labelled alignment: the labelled current pose then passes the scene check,
+  instead of failing with 74% disagreement. This demonstrates dependence on an
+  already-wrong history, not a deployable label-based fix. Initial-only geometry
+  also fails here, so corrupted surface growth is not established as the sole cause.
+- At the final tuna and late banana frames, the labelled pose has no measured
+  overlap with the retained side of the surface; it has no depth contradiction.
+  Wrong candidates do find overlap and pass geometry, then are stopped by
+  Kalman. Looser Kalman cannot supply the missing correct alignment.
+- Clock sometimes proposes a within-limit pose, rejects it through Kalman and
+  returns an outside-limit prior that still passes geometry. Drill has both
+  rejected good candidates and frames with no admissible candidate.
+
+![Tomato: the same initial surface placed by labels and by the returned pose](recovery-20261104/tomato-single.jpg)
+
+Cracker is also an **input/initialization failure**: its supplied `gt_mask` is
+fragmented. Boundary trimming removes 3,449 of 3,483 pixels; the baseline starts
+with only ten measured points covering about 6 × 6 mm. The new run has twenty
+points spread more widely. It is not evidence of successful recovery. Without
+this clip, outside-limit outputs fall 83 → 44 and within-limit outputs 355 → 343.
+
+![Cracker input mask and retained depth pixels](recovery-20261104/cracker-input.jpg)
+
+Six focused combination/scorer checks pass. Full-sequence acceptance still fails
+clock frames 39/100 and drill frame 46 because poses are missing (six other checks
+pass, gamepad checks excluded from this eight-scene suite). Ruff passes. An initial
+test invocation accidentally resolved system pytest; rerunning `python -m pytest`
+inside the experiment environment passed. These are research results, not a
+tracking acceptance pass. No tracker defaults or GUI slots were changed here.
+
+Compact evidence: [counts, diagnostics and protocol](recovery-20261104/geometry-matrix-summary.json)
+and [per-scene comparison](recovery-20261104/quality-comparison.png). Full traces,
+source snapshots and probe scripts remain in local cache
+`recovery-audit-20261104/geometry-matrix-*`. Runs overlapped on the host, so their
+timings are diagnostic only. `benchmarks.flash_recovery_matrix_report` reproduces
+the scores and distinguishes wrong, correct and missing outputs.
+
+**Closer diagnosis of the tomato sequence.** The outline penalty is active;
+"not enforced" means it is not a separate acceptance condition, not that it is
+ignored. At frame 32 both the labelled pose and returned pose pass the current
+depth checks. The labelled pose has total cost 2.79 (outline 1.48); the returned
+pose, 23.8° from the label, costs 1.21 (outline 0.29). Supplying the labelled pose
+for this diagnostic therefore does not improve the score. This is a ranking
+problem as well as an acceptance problem: fitting the partial stored surface to
+cover newly visible object pixels can reward a wrong alignment. The initial
+surface alone, checked against a label-aligned previous view, also gives the
+wrong candidate a lower cost (1.63 versus 2.79); surface growth is not necessary
+for this effect. Removing the outline term alone is not established as a fix.
+
+The model stays at version 22 from frame 29 through 67: it does **not** keep
+growing during the large drift. Meanwhile accepted observations keep replacing
+the previous view. Frame 67 uses frame 66, with frame 66's estimated pose attached.
+Thus the data are fresh but their alignment can remain wrong. Reprojecting the
+same current points using a labelled current pose and the saved previous pose
+reports 74% scene-depth contradiction; changing only the previous pose to its
+label removes that contradiction. Labels are diagnostic only. The code supports
+repositioning stored patches, but the sequential loop does not automatically
+correct their old alignments when a new observation arrives.
+
+The previous three-point explanation should be read as linked mechanisms, not
+three independently isolated causes. [Measurements](recovery-20261104/rejection-diagnostics.json)
+and actual-data illustrations show [the outline penalty](recovery-20261104/rejection-outline.jpg),
+[partial-surface ranking](recovery-20261104/rejection-partial-ranking.jpg), and
+[fresh observations with an incorrect alignment](recovery-20261104/rejection-fresh-observation.jpg).
+No tracking behavior changed during this diagnostic.
+
+### Outline preference strength, November 4
+
+The uncovered-outline cost is now configurable as `shape.mask_coverage_weight`.
+It multiplies the squared cost: 0 disables the preference; 1 preserves its
+previous strength. This is separate from the 25% visible-outlier limit and from
+Kalman uncertainty. Both scalar and compiled fitting paths use it. Depth and
+empty-space rejection are unchanged. The legacy `require_full_mask_coverage`
+flag enables this soft preference; it never was a hard coverage gate.
+Defaults and the 9102 result selection remain unchanged.
+
+**Paired sweep.** Six strengths (0, 0.1, 0.25, 0.5, 1, 2) were replayed from
+frame zero on tomato. Five (all except 0.1) were compared on tuna, banana, drill,
+mustard and the unlabelled yellow block. Same UFM, groups, growth, recovery and
+no-reset Kalman settings in every arm; input hashes match. Labels are used only
+by the evaluator. A fresh weight-one tomato run reproduces every old pose exactly.
+
+The five labelled clips share 462 evaluated frames. Counts are within
+20 mm / 20 degrees, outside either limit, and missing; initialization is excluded.
+
+| Outline cost weight   | Within limits | Outside limits | Missing |
+| --------------------- | ------------: | -------------: | ------: |
+| 0                     |           321 |             64 |      77 |
+| 0.25                  |           327 |             48 |      87 |
+| 0.5                   |           340 |             42 |      80 |
+| 1, comparison control |           320 |             38 |     104 |
+| 2                     |           334 |             41 |      87 |
+
+**Half strength is a candidate compromise, not a uniform improvement.** It adds
+22 within-limit drill outputs and two outside-limit outputs, while losing two
+within-limit banana outputs. The two drill errors are 20.7 and 21.1 mm with
+under 2 degrees rotation error. The additional banana errors are 21.0 and
+20.6 degrees. Smaller errors on several other frames do not cancel these
+regressions. Refining the search at 0.4 and 0.75 on banana/drill did not remove
+the trade-off: their within/outside/missing counts were 45/1/25 and 50/9/14 at
+0.4, versus 39/7/25 and 59/1/13 at 0.75. No tested new strength improves both
+counts on every compared labelled scene. At this point half strength had not been tested on the clock or full gamepad
+replay. The clock follow-up below closes the former gap; the full gamepad
+replay at half strength remains untested.
+
+**Additional quarter-strength checks.** Clock changes from 23/6/173 to
+26/27/149: more returned poses, many more outside the label limits. Cracker is
+unchanged at 2/0/178; its fragmented input-mask limitation still applies. The
+full 628-frame gamepad replay returns 372 poses at either strength, with almost
+the same missing intervals and the same final recovery at 21.85 seconds. It is
+still missing at the reviewed 11.97-second frame. The selected stills look
+similar, not a demonstrated improvement. Its user-observed stationary interval
+through 8 seconds has no missing output in either arm; 95th-percentile point
+displacement changes from 10.57 to 11.21 mm. The yellow block returns more poses
+(64 to 73 at half strength), but has no independent pose labels.
+
+**Half-strength clock follow-up.** A complete 203-frame replay with the same
+inputs and settings changes within/outside/missing counts from 23/6/173 at
+weight one to **23/7/172 at half strength**. The only classification change is
+frame 64: previously missing, now 21.8 mm / 13.5 degrees from the label. This is
+not the large regression observed at quarter strength, but it does not recover
+the clock through its rotation. At frame 180 (6 seconds), a substantial part of
+the clock is visible and both strengths still return no pose. Across the six
+labelled clips now tested at both strengths, half strength adds 20 within-limit
+outputs and five just-outside-limit outputs, while withholding 25 fewer poses.
+This supports half strength as a provisional compromise, not a universal fix;
+no defaults or GUI results were changed.
+
+An evaluation-only full-model distance check also qualifies the clock's rotation
+scores: the same 558 initial measured points have a 1.14 mm median distance to
+the supplied full mesh at initialization. Across returned poses, the worst
+per-frame median is 3.90 mm at weight one, 3.85 mm at half strength, and 8.02 mm
+at quarter strength. Those are nearest-triangle distances without refitting,
+not proof of correct point identity or of a correct front/back assignment.
+The half-strength gain on drill and remaining clock loss are shown in the
+[actual-image comparison](recovery-20261104/outline-half-review.jpg).
+[Clock label results](recovery-20261104/outline-clock-half-report.json) and
+[full-model distances](recovery-20261104/outline-clock-full-model-metrics.json)
+retain per-frame measurements.
+
+**Tomato ranking diagnostic, qualified by the surface comparison below.** All
+six tomato runs diverge from the labelled full pose; that includes axial spin
+of the nearly cylindrical can and is not itself proof of bad geometry. In the
+same frozen frame-32 fit, the labelled pose has cost `1.311 + 1.477 * weight`,
+while the recorded output has cost `0.926 + 0.287 * weight`. Both pass the
+current direct geometry checks. No nonnegative outline weight can reverse that
+pair's ranking with those inputs and history. Disabling the separate overlap
+preference narrows, but does not reverse, the zero-outline ranking (0.274 versus
+0.244). This is a diagnostic comparison, not a tested alternative sequential
+pipeline. The outline term amplifies preference for the non-labelled alignment;
+whether that is physically worse needs a symmetry-tolerant surface comparison.
+
+**Full-model check prompted by review.** The previous green overlay was the
+initial measured partial cloud moved by dataset labels, not the supplied full
+mesh. An evaluation-only check now uses BOP YCBV model 4 with the official
+[DexYCB origin conversion](https://github.com/NVlabs/dex-ycb-toolkit/blob/master/dex_ycb_toolkit/bop_eval.py).
+It measures each of the same 2,405 estimated points to the nearest full-model
+triangle, without refitting either surface or requiring point identities.
+At frame 67, half strength gives median distance **5.4 mm**, 90th percentile
+**12.4 mm**, and **82.3% within 10 mm**, versus 5.7 mm / 12.5 mm / 83.4% at
+weight one. The initial partial measurement itself has a 2.6 mm median gap;
+spinning it 90 degrees about the model's long axis changes this to only 2.7 mm.
+This confirms that the earlier roughly 83-degree pose error overstates the
+geometric discrepancy. However, the labelled full mesh also differs from
+same-frame sensor depth by median 13.8 mm inside the mask after a 2 px trim;
+that mixes model/pose, sensor and possible occluder errors, not proven label
+error. The comparison does not establish physical correctness or a winning
+weight. No tracker defaults or GUI results changed.
+[Measurements](recovery-20261104/tomato-full-model-metrics.json),
+[fitting-step explanation](recovery-20261104/outline-weight-flow.jpg),
+[full-model view](recovery-20261104/tomato-full-model-comparison.jpg).
+
+**Controlled partial observations.** A noiseless rendered box reveals a new
+side at 20, 40 and 60 degrees. The true pose remains admissible at every weight,
+even with over 10 pixels of uncovered outline. Increasing the preference can
+pull the raw fitted proposal away from that pose or cause its rejection; this
+control measures proposals, not full filtered tracker output.
+
+Verification: 94 focused configuration, scalar/compiled parity, geometry,
+recorded-gamepad and existing recovery tests pass. Making the actual residual
+ignore the weight causes the new configuration-effect test to fail. These checks
+do not claim that the known full-sequence recovery failures are solved.
+
+[Full measured results](recovery-20261104/outline-strength-results.json),
+[tomato at all six strengths](recovery-20261104/outline-tomato-comparison.jpg),
+[drill recovery and offset](recovery-20261104/outline-drill-comparison.jpg),
+[gamepad comparison](recovery-20261104/outline-gamepad-comparison.jpg).
+Reproduce recorded runs with `benchmarks.flash_recovery_combinations`, the
+`geometry-matrix-manifest.json` in the recorded cache root, and
+`--filter strict_broader --fitting recovery --scene-depth --prefer-observed-overlap
+--visible-outline --outline-weight W --cases ...`. Raw poses, per-run source
+snapshots, configurations and input hashes remain in that cache.
+
+### Full-outline preference on partial RGB-D maps (November 4)
+
+The later 48-scene half-strength sweep exposed a mistake in the objective, not
+just a bad choice of weight. A saved RGB-D surface covers only observed sides.
+Penalizing every current mask pixel left outside its projected envelope treats
+that partial surface as a complete object. It can pull the fit away from measured
+depth. In a controlled rerun with the same inputs and all other settings held
+fixed, disabling only that full-outline cost changed the group-growing result
+from **2 to 173/179** within 10 mm / 10° on BOP bleach and from **58 to 179/179**
+on BOP large clamp. The bleach direct surface result changed from 50 to 134/179.
+**Correction after review:** the original response added a `reference_complete`
+flag, but no real caller could enable it. Only tests did. That disabled the
+requested soft preference rather than solving its trade-off. The flag has been
+removed: partial RGB-D fitting again honors the configured outline preference.
+The measured regressions above still argue against enabling it by default;
+they do not justify a test-only complete-model API. Projection outside the
+visible mask and disagreement with measured depth remain active evidence.
+
+The global 25% outlier allowance also let a connected strip of predicted surface
+protrude into measured background. It now remains tolerant of isolated depth
+disagreements but rejects a connected patch beyond the existing mask and depth
+tolerances when it spans more than one projected surface-sample neighborhood.
+The formerly expected-failing seven-pixel strip test now passes; controls keep
+the correct pose, real translation, foreground occlusion, missing depth and one
+stray saved point acceptable. In a read-only audit of the four focused labelled
+sequences, this check rejected none of their 721 existing direct-fit poses and
+added about 0.2–0.3 ms per check. This is not a guarantee against all protrusions:
+small or poorly sampled conflicts can remain unresolved. The full half-strength
+sweep was cancelled after the outline cause was established. Wider comparisons
+are still needed before replacing hosted results.
+
+### Local consolidation audit (November 4)
+
+Recovery comparisons now save and consume `reset_on_geometry_conflict` directly.
+Previously the `strict` class override disabled resets while its saved surface
+settings still said `true`; a normal rerun of those settings could execute a
+different policy. The older override remains an independent comparison oracle.
+The overlap-search CLI likewise uses the shared `prefer_observed_overlap` option;
+its older implementation remains only for equivalence tests. Velocity prediction
+and broader recovery settings remain experiments; this cleanup promotes no defaults.
+
+The settings reference is regenerated from the real configuration catalogue and
+checked for missing or stale option rows. In isolated test processes, restoring
+each of three defects made its regression test fail on behavior: the connected
+protrusion was accepted, the partial surface paid a full-outline cost (this test encoded the wrong
+requirement and is superseded by the correction above), and the
+recorded wrong gamepad pose bypassed the saved no-reset policy. All three pass
+with the fixes present. Hosted recordings and historical benchmark outputs were
+not regenerated by this audit.
+
+The changed test files plus the earlier recovery acceptance controls produced
+226 passes, the same seven baseline recovery failures, eleven full-sequence skips,
+and four known expected failures in filter controls. Lint and formatting checks
+passed for all 33 changed/new Python files. This verifies the consolidation and
+the targeted rejection fixes, not successful recovery across all recordings.
+
+### Surface sampling and coverage correction (November 4)
+
+The hosted 3D comparison used the original dense observation for “Starting
+surface” and the sampled stored map for “Expanded surface”. The viewer now
+loads the selected method's first stored map for the former, while keeping the
+original observation for axes and accuracy scoring. Historical poses/maps are
+not rewritten by this display correction.
+
+Initialization and additions now use the same fixed grid in object coordinates.
+Grid sampling precedes the per-patch point cap, so repeated measurements cannot
+crowd out unique cells. Growth fills unoccupied cells instead of excluding a
+sphere around each old point, which left adjacent cells empty. Confirmation,
+geometry checks, grid spacing and memory budgets remain unchanged. New sampling
+requires rerunning a recording; old saved maps retain their original sampling.
+
+The unused complete-reference API was removed. The existing coverage option
+again controls the real partial-surface fitter, with zero weight equivalent to
+disabling it. Uncovered outline contributes a search preference, never a hard
+rejection. This restores configurability; it does not claim that a positive
+weight is uniformly beneficial. The option remains off by default after the
+recorded regressions. No extra model-input path or new tracking default was added.
+
+Tests cover initial sampling, confirmed expansion under translation/rotation,
+non-growth on repeated overlap, bounded storage, configured coverage in the
+image-assisted partial fitter, newly revealed surfaces, and rejection of measured
+protrusions. A browser test follows the selected cloud into the actual renderer.
+Restoring each defect separately makes its regression fail on point coverage or
+fitting cost, rather than a metadata flag.
+
+On frame 1 of both own demos, median local-fit times before/after sampling were
+41.4/26.6 ms (dowel), 17.8/19.9 ms (ring), 22.5/22.6 ms (gamepad), and
+11.4/17.4 ms (cube), across nine alternating rounds after warmup. Initial stored
+point counts changed from 296/352/340/196 to 400/392/407/209 respectively. These
+are one-frame fitting costs, not end-to-end frame rates or full-run accuracy.
+[Timing measurements](recovery-20261104/sampling-density-cost.json).
+
+Verification for this checkpoint: the changed-file suite plus partial-surface
+controls produced 236 passes, the same seven recorded recovery failures, eleven
+full-sequence skips, and one expected velocity-filter failure. Additional motion,
+sampling and ROI controls produced 48 passes and three documented expected
+Kalman-control failures. The tightened initial-density regression is included
+in that second batch. Lint/format and the async-handler check passed. The existing
+9102 tab was refreshed and both initial/expanded views were inspected at frame
+481; the HTTP packet retains the original scoring cloud separately. No full
+benchmark rerun or robot trial is claimed by this checkpoint.

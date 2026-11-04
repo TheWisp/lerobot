@@ -234,7 +234,7 @@ def score_case(case, rows, references, reference_frames):
             result["paired_point_error_mm"] = {
                 name: quantiles(error[paired]) for name, error in errors.items()
             }
-            if "conditioned_growing" in errors:
+            if "conditioned_growing" in errors and "conditioned_fixed" in errors:
                 compared = (
                     available_by_method["conditioned_fixed"] & available_by_method["conditioned_growing"]
                 )
@@ -260,7 +260,7 @@ def score_case(case, rows, references, reference_frames):
                     status: sum(item[name + "_status"] == status for item in details[first + 1 :])
                     for status in ("observed_candidate", "predicted", "lost")
                 }
-        if "group_fixed" in methods:
+        if "group_fixed" in methods or "group_growing" in methods:
             result["timing_ms"]["scene_point_tracking_ms"] = quantiles(
                 [row["scene_point_tracking_ms"] for row in rows[first + 1 :]]
             )
@@ -317,6 +317,7 @@ def run_case(
     group_experiment=None,
     progress=None,
     shared_matching_config=None,
+    surface_methods=None,
 ):
     output.mkdir(parents=True, exist_ok=False)
     shared = SharedFrameTracker(shared_matching_config, model) if shared_matching_config else None
@@ -346,6 +347,10 @@ def run_case(
     variants = [("conditioned_fixed", False), ("conditioned_growing", True)]
     if group_experiment is not None:
         variants += [("group_fixed", False), ("group_growing", True)]
+    if surface_methods is not None:
+        if not surface_experiment or not surface_methods or set(surface_methods) - {n for n, _ in variants}:
+            raise ValueError("surface_methods must select configured surface experiments")
+        variants = [(name, grow) for name, grow in variants if name in surface_methods]
     candidates = (
         {
             name: {

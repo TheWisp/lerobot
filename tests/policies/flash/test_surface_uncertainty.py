@@ -124,6 +124,22 @@ def test_nested_json_roundtrip_reaches_real_consumer_and_cache():
         GrowingSurfaceConfig(uncertainty={"enabledd": True})
 
 
+def test_settings_reference_covers_the_actual_configuration_catalog():
+    from pathlib import Path
+
+    import lerobot.policies.flash as flash
+
+    reference = Path(flash.__file__).parent / "docs" / "pipeline_settings.md"
+    rows = [
+        [cell.strip().strip("`") for cell in line.strip("|").split("|")]
+        for line in reference.read_text().splitlines()
+        if line.startswith("| `")
+    ]
+    import json
+
+    assert rows == [[row["path"], json.dumps(row["default"]), row["description"]] for row in catalog()]
+
+
 @pytest.mark.parametrize(
     "values",
     [

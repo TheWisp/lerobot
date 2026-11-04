@@ -31,7 +31,12 @@ MODES = ("current_reset", "strict", "strict_broader_motion")
 
 
 class StrictPoseKalmanFilter(PoseKalmanFilter):
-    """Experiment-only removal of the reset; all Kalman calculations unchanged."""
+    """Historical comparison oracle for the saved no-reset configuration.
+
+    Kept for equivalence tests and earlier control scripts. New experiments
+    use PoseKalmanFilter with reset_on_geometry_conflict=False so their saved
+    settings describe the policy actually executed.
+    """
 
     def correct(self, observation_pose, information, observation_pivot, *, contradicted=False):
         result = super().correct(observation_pose, information, observation_pivot, contradicted=False)
@@ -39,6 +44,7 @@ class StrictPoseKalmanFilter(PoseKalmanFilter):
         # the filter decision separately so rejection is not called fusion.
         result["filter_reason"] = result["reason"]
         result["prediction_failed_geometry"] = bool(contradicted)
+        result["prior_rejected_by_depth_mask"] = bool(contradicted)
         return result
 
 
@@ -95,7 +101,7 @@ def scene(
     return frames
 
 
-def run_scene(frames, mode, *, grow=False, config=None):
+def run_scene(frames, mode, *, grow=False, config=None, filter_factory=None):
     if mode not in MODES:
         raise ValueError(mode)
     uncertainty = PoseUncertaintyConfig(enabled=True, mode="kalman", max_visible_outlier_fraction=0.25)
@@ -139,9 +145,11 @@ def run_scene(frames, mode, *, grow=False, config=None):
             prepared, frame["time_s"], hint=hint, base_from_camera=frame.get("base_from_camera")
         )
         update_ms = (perf_counter() - started) * 1000
-        if frame["index"] == 0 and mode != "current_reset":
+        if frame["index"] == 0 and (mode != "current_reset" or filter_factory is not None):
             old = session.kalman
-            strict = StrictPoseKalmanFilter(old.pose, old.center_object, old.time_s, old.config)
+            strict = (filter_factory or StrictPoseKalmanFilter)(
+                old.pose, old.center_object, old.time_s, old.config
+            )
             strict.covariance = old.covariance.copy()
             session.kalman = strict
         details = result["diagnostics"]
@@ -163,6 +171,7 @@ def run_scene(frames, mode, *, grow=False, config=None):
             "prepare_ms": prepare_ms,
             "update_ms": update_ms,
             "covariance": session.kalman.covariance.tolist(),
+            "velocity": session.kalman.velocity.tolist() if hasattr(session.kalman, "velocity") else None,
             "growth": details.get("growth"),
             "measurement_count": details.get("fit", {}).get("uncertainty", {}).get("measurement_count"),
             "kalman": {
