@@ -49,6 +49,11 @@ logger = logging.getLogger(__name__)
 #: older than the peek's limit; past that the camera is treated as gone.
 STALE_GIVE_UP = 4
 
+#: The clock frames are stamped with and aged by. A test freezes it to
+#: age a frame without sleeping, so a slow runner cannot move a peek from
+#: one side of its limit to the other.
+_clock = time.perf_counter
+
 INSTALL_HINT = (
     "pyzed, the ZED SDK's Python API, is not importable. It is not on PyPI: install the "
     "ZED SDK on this host (https://www.stereolabs.com/developers/release), then its wheel "
@@ -282,9 +287,9 @@ class ZEDCamera(Camera):
         failures = 0
         while not stop_event.is_set():
             try:
-                t_grab = time.perf_counter()
+                t_grab = _clock()
                 err = zed.grab(runtime)
-                self.last_grab_ms = (time.perf_counter() - t_grab) * 1e3
+                self.last_grab_ms = (_clock() - t_grab) * 1e3
                 if err == sl.ERROR_CODE.CAMERA_NOT_DETECTED:
                     raise DeviceNotConnectedError(f"{self}: camera not detected.")
                 if err != sl.ERROR_CODE.SUCCESS:
@@ -299,7 +304,7 @@ class ZEDCamera(Camera):
                 if self.use_depth:
                     zed.retrieve_measure(depth_mat, sl.MEASURE.DEPTH_U16_MM, sl.MEM.CPU)
                     depth = self._postprocess_depth(depth_mat.get_data())
-                capture_time = time.perf_counter()
+                capture_time = _clock()
                 self.last_cycle_ms = (capture_time - t_grab) * 1e3  # grab + retrieves + conversion
                 with self.frame_lock:
                     self.latest_color_frame = left
@@ -400,7 +405,7 @@ class ZEDCamera(Camera):
             timestamp = self.latest_timestamp
         if left is None or timestamp is None:
             raise RuntimeError(f"{self} has not captured any frames yet.")
-        age_ms = (time.perf_counter() - timestamp) * 1e3
+        age_ms = (_clock() - timestamp) * 1e3
         if age_ms <= max_age_ms:
             return left, right, depth
         # The read cycle occasionally stalls for several frames' worth (seen on
@@ -414,7 +419,7 @@ class ZEDCamera(Camera):
                 f"{self} latest frame is too old: {age_ms:.1f} ms (max allowed: {max_age_ms} ms, gave up at "
                 f"{STALE_GIVE_UP}x); last grab {self.last_grab_ms:.0f} ms, last cycle {self.last_cycle_ms:.0f} ms."
             )
-        now = time.perf_counter()
+        now = _clock()
         if now - self._last_stale_warning > 1.0:
             self._last_stale_warning = now
             logger.warning(

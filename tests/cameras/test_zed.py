@@ -16,6 +16,7 @@ the rig (ZED-M, SDK 5.2.3, HD720): BGRA eyes, uint16 millimetre depth with 0
 for no measurement, rectified intrinsics on the camera information."""
 
 import sys
+import threading
 import time
 import types
 from enum import Enum
@@ -23,6 +24,7 @@ from enum import Enum
 import numpy as np
 import pytest
 
+import lerobot.cameras.zed.camera_zed as camera_zed
 from lerobot.cameras.configs import Cv2Rotation
 from lerobot.cameras.zed import ZEDCamera, ZEDCameraConfig
 from lerobot.utils.errors import DeviceNotConnectedError
@@ -83,8 +85,9 @@ class _Device:
 
 def make_fake_sdk(*, open_ok=True, grab_ok=True, grab_stall_s=0.0, stall_at_grab=None):
     """A ``pyzed.sl`` stand-in. Each grab produces a new frame: the left eye's
-    first pixel counts grabs, the right eye differs from the left, and the
-    depth map is a ramp with a zero (unmeasured) band."""
+    first pixel and the depth map's last count grabs, the right eye differs
+    from the left, and the depth map is a ramp with a zero (unmeasured) band.
+    A stalled grab lasts ``grab_stall_s``, or until a test sets ``stall``."""
     sl = types.ModuleType("pyzed.sl")
     sl.RESOLUTION = _enum("RESOLUTION", ["HD2K", "HD1080", "HD1200", "HD720", "SVGA", "VGA", "AUTO"])
     sl.DEPTH_MODE = _enum(
@@ -116,6 +119,7 @@ def make_fake_sdk(*, open_ok=True, grab_ok=True, grab_stall_s=0.0, stall_at_grab
             self.opened = False
             self.init = None
             self.grabs = 0
+            self.stall = threading.Event()
             Camera.instances.append(self)
 
         def open(self, init):
@@ -144,7 +148,7 @@ def make_fake_sdk(*, open_ok=True, grab_ok=True, grab_stall_s=0.0, stall_at_grab
                 return sl.ERROR_CODE.FAILURE
             # One grab blocks for grab_stall_s, the way the real SDK sometimes does.
             if stall_at_grab is not None and self.grabs == stall_at_grab:
-                time.sleep(grab_stall_s)
+                self.stall.wait(grab_stall_s)
             time.sleep(0.033)  # the real camera's cadence at 30 fps
             return sl.ERROR_CODE.SUCCESS
 
@@ -350,45 +354,50 @@ def _install(monkeypatch, sl):
     monkeypatch.setitem(sys.modules, "pyzed.sl", sl)
 
 
-def test_a_stalled_grab_hands_out_the_last_frame_without_waiting(monkeypatch, caplog):
-    """The SDK paused on one grab: a peek past its limit gets the frame in
-    hand at once, with one warning, rather than blocking the control loop
-    or ending the episode."""
-    _install(monkeypatch, make_fake_sdk(grab_stall_s=1.0, stall_at_grab=60))
+class _FrozenClock:
+    """Stands in for the driver's clock. Frames are stamped at a time that
+    moves only when the test moves it, so a frame's age is set, not slept
+    for, and a slow runner cannot carry a peek across its limit."""
+
+    def __init__(self):
+        self.t = time.perf_counter()
+
+    def __call__(self):
+        return self.t
+
+    def advance(self, seconds: float) -> None:
+        self.t += seconds
+
+
+def test_a_stalled_grab_hands_out_the_last_frame_then_gives_up(monkeypatch, caplog):
+    """The read cycle paused on one grab: a peek past its limit gets the frame
+    in hand at once, with one warning, rather than blocking the control loop
+    or ending the episode; a peek past four times the limit is a timeout."""
+    clock = _FrozenClock()
+    monkeypatch.setattr(camera_zed, "_clock", clock)
+    _install(monkeypatch, make_fake_sdk(grab_stall_s=60.0, stall_at_grab=60))
     cam = ZEDCamera(_config(warmup_s=1))
     cam.connect()
+    sdk_cam = sys.modules["pyzed.sl"].Camera.instances[-1]
     try:
-        sdk_cam = sys.modules["pyzed.sl"].Camera.instances[-1]
-        while sdk_cam.grabs < 60:  # the stalled grab is in flight once the counter reads 60
+        while sdk_cam.grabs < 60:  # past connect's one-second warm-up; grab 60 is the one that stalls
             time.sleep(0.005)
-        time.sleep(0.3)  # the cached frame is now ~300 ms old: past a 100 ms limit, inside 4x
+        clock.advance(0.3)  # the frame in hand is now 300 ms old: past a 100 ms limit, inside 4x
         with caplog.at_level("WARNING"):
-            t = time.perf_counter()
             left, right, depth = cam.read_latest_stereo_and_depth(max_age_ms=100)
-            took_s = time.perf_counter() - t
             cam.read_latest_stereo_and_depth(max_age_ms=100)
-        assert took_s < 0.05  # handed out, not waited for
+        assert sdk_cam.grabs == 60  # answered while the stalled grab was still in flight: not waited for
         assert left.shape == (H, W, 3) and depth.shape == (H, W, 1)
+        assert left[0, 0, 2] == 59  # the last grab that completed
         stale = [r for r in caplog.records if "handing out the last one" in r.message]
         assert len(stale) == 1  # one warning a second, not one per frame
-    finally:
-        cam.disconnect()
 
-
-def test_a_grab_that_stays_away_is_a_timeout(monkeypatch):
-    _install(monkeypatch, make_fake_sdk(grab_stall_s=5.0, stall_at_grab=60))
-    cam = ZEDCamera(_config(warmup_s=1))
-    cam.connect()
-    try:
-        sdk_cam = sys.modules["pyzed.sl"].Camera.instances[-1]
-        while sdk_cam.grabs < 60:  # past connect's one-second warm-up
-            time.sleep(0.005)
-        time.sleep(0.5)  # ~500 ms old: past 4x a 100 ms limit
-        t = time.perf_counter()
+        clock.advance(0.2)  # 500 ms old: past 4x the limit
         with pytest.raises(TimeoutError, match="gave up at 4x"):
             cam.read_latest_stereo_and_depth(max_age_ms=100)
-        assert time.perf_counter() - t < 0.05  # raised at once, not after the 5 s stall
+        assert sdk_cam.grabs == 60  # raised at once, not after the stall
     finally:
+        sdk_cam.stall.set()  # let the stalled grab return so disconnect does not wait on it
         cam.disconnect()
 
 
