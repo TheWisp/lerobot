@@ -122,6 +122,197 @@ def test_fresh_demo_experiment_crosses_real_reader_and_surface_fit(tmp_path, mon
         run_case(case, tmp_path / "result", None, VisionPipelineConfig(), None, None)
 
 
+def test_single_method_runs_same_tracker_without_comparison_fits(tmp_path, monkeypatch):
+    from benchmarks.flash_runtime_benchmark import compare_runs
+    from lerobot.policies.flash.shared_image_tracking import SharedMatchingConfig
+    from lerobot.policies.flash.surface_tracking import SurfaceTrackingSession
+
+    case = demo(tmp_path)
+    options = {
+        "surface_experiment": GrowingSurfaceConfig(),
+        "group_experiment": GroupConfig(),
+        "shared_matching_config": SharedMatchingConfig(backend="lk"),
+    }
+    run_case(case, tmp_path / "all", None, VisionPipelineConfig(), None, None, **options)
+
+    def unexpected_fit(*_):
+        raise AssertionError("runtime benchmark must not compute a comparison baseline")
+
+    monkeypatch.setattr(SurfaceTrackingSession, "finish", unexpected_fit)
+    result = run_case(
+        case,
+        tmp_path / "single",
+        None,
+        VisionPipelineConfig(),
+        None,
+        None,
+        single_method="group_growing",
+        record_surfaces=False,
+        **options,
+    )
+    old = [json.loads(line) for line in (tmp_path / "all/frames.jsonl").read_text().splitlines()]
+    new = [json.loads(line) for line in (tmp_path / "single/frames.jsonl").read_text().splitlines()]
+    for a, b in zip(old, new, strict=True):
+        a, b = a["objects"]["item"], b["objects"]["item"]
+        for key in ("group_growing", "group_growing_status", "group_growing_details"):
+            assert a[key] == b[key]
+        assert "surface_corrected" not in b
+    assert set(result["roles"]["item"]["methods"]) == {"group_growing"}
+    assert result["processing"]["masks"] == "recorded"
+    assert not (tmp_path / "single/surface_models").exists()
+    assert compare_runs(tmp_path / "all", tmp_path / "single", "group_growing")["identical"]
+    # Guard the comparator with changed real outputs: one wrong translation,
+    # an unavailable estimate and a spurious surface-addition event.
+    changed = new[-1]["objects"]["item"]
+    changed["group_growing"] = np.eye(4).tolist()
+    changed["group_growing"][0][3] = 0.2
+    changed["group_growing_status"] = "lost"
+    changed["group_growing_details"]["map_events"].append({"event": "added", "frame": 1})
+    (tmp_path / "single/frames.jsonl").write_text("\n".join(json.dumps(r) for r in new) + "\n")
+    comparison = compare_runs(tmp_path / "all", tmp_path / "single", "group_growing")
+    assert not comparison["identical"]
+    assert comparison["changed_frame_objects"] == {"pose": 1, "status": 1, "surface_events": 1}
+
+
+def test_two_object_parallel_replay_preserves_serial_tracker_results(tmp_path, monkeypatch):
+    from threading import Thread
+
+    from benchmarks.flash_runtime_benchmark import compare_runs
+    from lerobot.policies.flash.shared_image_tracking import SharedMatchingConfig
+
+    case = demo(tmp_path)
+    case["roles"] = ["item", "second"]
+    for path in sorted((tmp_path / "masks").glob("*.json.gz")):
+        with gzip.open(path, "rt") as stream:
+            row = json.load(stream)
+        row["masks_rle"]["second"] = row["masks_rle"]["item"]
+        with gzip.open(path, "wt") as stream:
+            json.dump(row, stream)
+    options = {
+        "surface_experiment": GrowingSurfaceConfig(),
+        "group_experiment": GroupConfig(),
+        "shared_matching_config": SharedMatchingConfig(backend="lk"),
+        "single_method": "group_growing",
+        "record_surfaces": False,
+    }
+    config = VisionPipelineConfig(parallel_surface_objects=True, surface_object_workers=2)
+    run_case(case, tmp_path / "serial", None, config, None, None, parallel_objects=False, **options)
+    starts = []
+    original = Thread.start
+
+    def start(thread):
+        starts.append(thread.name)
+        return original(thread)
+
+    monkeypatch.setattr(Thread, "start", start)
+    run_case(case, tmp_path / "parallel", None, config, None, None, **options)
+    assert len([name for name in starts if name.startswith("ThreadPoolExecutor")]) == 2
+    assert compare_runs(tmp_path / "serial", tmp_path / "parallel", "group_growing")["identical"]
+
+
+@pytest.mark.parametrize("pipelined", [False, True])
+def test_debugger_benchmark_scores_published_pose_not_rejected_candidate(tmp_path, monkeypatch, pipelined):
+    from benchmarks.flash_runtime_benchmark import run_debugger
+    from lerobot.policies.flash import surface_tracking
+
+    points = np.random.default_rng(7).uniform(-0.05, 0.05, (24, 3)) + [0, 0, 1]
+    monkeypatch.setattr(surface_tracking, "ufm_pairs", lambda *_: (points, points.copy()))
+    config = VisionPipelineConfig(
+        pipeline_surface_frames=pipelined,
+        registration_min_inliers=999,  # A real rejection at the public backend boundary.
+    )
+    result = run_debugger(demo(tmp_path), tmp_path / "result", object(), config)
+    rows = [json.loads(line) for line in (tmp_path / "result/frames.jsonl").read_text().splitlines()]
+    assert [r["frame"] for r in rows] == [0, 1]
+    assert rows[0]["objects"]["item"]["surface_corrected"] is not None
+    assert rows[1]["objects"]["item"]["candidate"] is not None
+    assert rows[1]["objects"]["item"]["surface_corrected"] is None
+    assert result["roles"]["item"]["methods"]["surface_corrected"]["available_after_initialization"] == 0
+
+
+def test_runtime_profiling_keeps_real_fits_and_counts_nested_work(tmp_path):
+    from benchmarks.flash_runtime_benchmark import FitProfile, compare_runs
+    from lerobot.policies.flash.shared_image_tracking import SharedMatchingConfig
+
+    case = demo(tmp_path)
+    options = {
+        "surface_experiment": GrowingSurfaceConfig(),
+        "group_experiment": GroupConfig(),
+        "shared_matching_config": SharedMatchingConfig(backend="lk"),
+        "single_method": "group_growing",
+        "record_surfaces": False,
+    }
+    run_case(case, tmp_path / "plain", None, VisionPipelineConfig(), None, None, **options)
+    with FitProfile() as profile:
+        run_case(case, tmp_path / "profiled", None, VisionPipelineConfig(), None, None, **options)
+    assert compare_runs(tmp_path / "plain", tmp_path / "profiled", "group_growing")["identical"]
+    assert profile.stats["fitter.refine"]["calls"] > 0
+    solver = profile.stats["fitter.refine"]
+    assert 0 <= solver["exclusive_ms"] < solver["inclusive_ms"]
+
+
+def test_runtime_cli_fixed_recipe_does_not_inherit_scene_settings(tmp_path, monkeypatch):
+    import sys
+
+    from benchmarks.flash_pipeline_settings import defaults
+    from benchmarks.flash_runtime_benchmark import main
+
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "case.json").write_text(json.dumps(demo(tmp_path)))
+    recipe = defaults()
+    recipe["shared_matching"]["backend"] = "lk"
+    recipe["surface_experiment"]["spacing_m"] = 0.004
+    settings = tmp_path / "recipe.json"
+    settings.write_text(json.dumps(recipe))
+    output = tmp_path / "result"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["benchmark", "--source-run", str(source), "--settings", str(settings), "--output", str(output)],
+    )
+    # No historical provenance exists: the supplied recipe must drive the actual loop.
+    main()
+    result = json.loads((output / "summary.json").read_text())[0]
+    assert result["frames"] == 2
+    assert result["surface_experiment"]["spacing_m"] == 0.004
+    assert result["shared_matching"]["config"]["backend"] == "lk"
+
+
+@pytest.mark.parametrize("limit", [None, 1])
+def test_runtime_mask_source_is_used_and_missing_role_is_empty(tmp_path, limit):
+    from lerobot.policies.flash.shared_image_tracking import SharedMatchingConfig
+
+    case = demo(tmp_path)
+
+    class Masks:
+        calls = []
+
+        def masks(self, frame):
+            self.calls.append(frame.frame_id)
+            return {}  # Recorded nonempty masks must not leak through.
+
+    source = Masks()
+    result = run_case(
+        case,
+        tmp_path / "result",
+        None,
+        VisionPipelineConfig(),
+        None,
+        None,
+        single_method="conditioned_growing",
+        surface_experiment=GrowingSurfaceConfig(),
+        shared_matching_config=SharedMatchingConfig(backend="lk"),
+        mask_source=source,
+        max_frames=limit,
+    )
+    assert source.calls == ([0, 1] if limit is None else [0])
+    assert result["roles"]["item"]["reference_frame"] is None
+    assert result["processing"]["masks"] == "computed"
+    rows = [json.loads(line) for line in (tmp_path / "result/frames.jsonl").read_text().splitlines()]
+    assert all(r["mask_ms"] > 0 and r["processing_ms"] >= r["mask_ms"] for r in rows)
+
+
 def test_score_keeps_missing_poses_and_paired_accuracy_separate(tmp_path):
     labels = tmp_path / "annotated_poses"
     labels.mkdir()

@@ -16,7 +16,13 @@ from scipy.spatial.transform import Rotation
 
 from .geometry import transform
 from .surface_correspondence import rigid_fit
-from .surface_grounding import SurfaceFitView, WholeSurfaceFit, pca_candidates, project
+from .surface_grounding import (
+    PreparedReferenceSurface,
+    SurfaceFitView,
+    WholeSurfaceFit,
+    pca_candidates,
+    project,
+)
 from .surface_kalman import MeasuredGroupMotion, PoseKalmanFilter
 from .surface_motion import measured_surface_information
 from .surface_observation import move, spatial_sample, voxel_sample
@@ -452,15 +458,18 @@ class ImageConditionedFit(WholeSurfaceFit):
         are scored against the current observation. Prefer the image/group
         objective only among solutions indistinguishable at solver precision.
         """
-        joint, joint_detail = self.correct(proposal)
         geometry = WholeSurfaceFit(
             self.reference,
             self.observation,
             self.k,
             self.config,
+            prepared_reference=self.prepared_reference,
+            prepared_target=self.prepared_target,
             fit_kernels=self.fit_kernels,
+            search_pool=self.search_pool,
             reference_views=self.reference_views,
         )
+        joint, joint_detail = self.correct(proposal)
         candidates = [(joint, joint_detail), (proposal, {"unrefined_proposal": True})]
         for initial in (joint, previous):
             candidates.append(geometry.correct(initial))
@@ -604,13 +613,15 @@ class GrowingSurfaceSession:
         self.last_observed_time = None
         self.last_supported_time = None
         self.kalman = None
+        self._prepared_reference = None
 
     def update(self, prepared, time_s, *, hint=None, candidate_check=None, base_from_camera=None):
         """Fit, verify against independent evidence, then commit pose/map changes.
 
         candidate_check receives the pre-update surface and proposed pose and
-        returns (accepted, diagnostic_dict). Rejection preserves the supplied
-        prediction without adding geometry or advancing image correspondences.
+        returns (accepted, diagnostic_dict). Rejection leaves the surface and
+        image correspondences unchanged. A fallback prediction is published
+        only if it passes the geometry check, when a usable observation exists.
         """
         frame = prepared["frame_id"]
         if (
@@ -671,6 +682,8 @@ class GrowingSurfaceSession:
             return self._missing(hint, time_s, details, prepared["status"] or "not_initialized")
         if len(self.store.points) < 3:
             return self._missing(hint, time_s, details, "surface_removed")
+        if self._prepared_reference is None or self._prepared_reference.points is not self.store.points:
+            self._prepared_reference = PreparedReferenceSurface.build(self.store.points, self.shape_config)
         source = prepared.get("match_source_frame")
         step = prepared["step"] if source == self.connected_frame else None
         seed = (
@@ -690,6 +703,7 @@ class GrowingSurfaceSession:
             current,
             prepared["intrinsics"],
             self.shape_config,
+            prepared_reference=self._prepared_reference,
             image_reference=a,
             image_current=b,
             image_scale_m=self.config.agreement_m,
@@ -729,6 +743,9 @@ class GrowingSurfaceSession:
                 current,
                 prepared["intrinsics"],
                 self.shape_config,
+                prepared_reference=self._prepared_reference,
+                prepared_target=fitter.prepared_target,
+                search_pool=self.search_pool,
                 reference_views=self._fit_views(),
             )
             prior_valid = check_surface_contradiction(geometry, self.pose, self.config.uncertainty)[
@@ -748,8 +765,7 @@ class GrowingSurfaceSession:
                 correction["accepted"]
                 and not check_surface_contradiction(geometry, candidate, self.config.uncertainty)["accepted"]
             ):
-                self.kalman.restore(kalman_prior)
-                details["kalman"].update(accepted=False, reason="fused_pose_contradicts_observation")
+                self._rollback_correction(kalman_prior, details, "fused_pose_contradicts_observation")
             self.pose = self.kalman.pose.copy()
             if not details["kalman"]["accepted"]:
                 details.update(fit=fit, reason=details["kalman"]["reason"])
@@ -781,8 +797,8 @@ class GrowingSurfaceSession:
         )
         if overlap < self.config.min_overlap:
             if kalman_prior is not None:
-                self.kalman.restore(kalman_prior)
-            return self._missing(hint, time_s, details, "insufficient_surface_overlap")
+                self._rollback_correction(kalman_prior, details, "insufficient_surface_overlap")
+            return self._missing(hint, time_s, details, "insufficient_surface_overlap", geometry=fitter)
         if hint is not None:
             details["hint_disagreement_mm"] = float(
                 1000
@@ -798,8 +814,8 @@ class GrowingSurfaceSession:
                 details["group_comparison"] = comparison
                 if not accepted:
                     if kalman_prior is not None:
-                        self.kalman.restore(kalman_prior)
-                    return self._missing(hint, time_s, details, "surface_group_disagreement")
+                        self._rollback_correction(kalman_prior, details, "surface_group_disagreement")
+                    return self._missing(hint, time_s, details, "surface_group_disagreement", geometry=fitter)
         self.pose = candidate
         self.last_observed_time = self.last_supported_time = time_s
         self._connect(prepared)
@@ -864,7 +880,14 @@ class GrowingSurfaceSession:
             return tuple(views[f] for f in sorted(views, reverse=True)[: self.config.fit_view_limit])
         return tuple(views.values())
 
-    def _missing(self, hint, time_s, details, reason):
+    def _rollback_correction(self, prior, details, reason):
+        self.kalman.restore(prior)
+        self.pose = self.kalman.pose.copy()
+        # Preserve filter_reason for diagnosis, but don't report an update
+        # discarded by a later acceptance check as an accepted correction.
+        details["kalman"].update(accepted=False, reason=reason)
+
+    def _missing(self, hint, time_s, details, reason, *, geometry=None):
         details["reason"] = reason
         if self.kalman is not None:
             # Prediction already propagated the posterior and group-motion
@@ -874,20 +897,28 @@ class GrowingSurfaceSession:
                 prediction_source=self.kalman.last_prediction.get("motion_source") or "last_world_pose",
                 prediction_age_s=time_s - self.last_observed_time,
             )
-            return self._result(
-                "predicted", time_s, details, available=hint is not None or self.config.retain_unobserved_pose
-            )
-        if hint is not None and self.pose is not None:
+            available = hint is not None or self.config.retain_unobserved_pose
+        elif hint is not None and self.pose is not None:
             self.pose = hint.camera_from_reference.copy()
             self.last_supported_time = time_s
             details.update(prediction_source=hint.source, prediction_age_s=time_s - hint.observed_time_s)
-            return self._result("predicted", time_s, details)
-        if self.config.retain_unobserved_pose and self.pose is not None:
+            available = True
+        elif self.config.retain_unobserved_pose and self.pose is not None:
             details.update(
                 prediction_source="last_world_pose", prediction_age_s=time_s - self.last_supported_time
             )
-            return self._result("predicted", time_s, details)
-        return self._result("lost", time_s, details, available=False)
+            available = True
+        else:
+            return self._result("lost", time_s, details, available=False)
+        if available and geometry is not None:
+            # A failed alignment is not an empty observation. The fallback
+            # still has to satisfy the current measured geometry. With no
+            # usable observation, callers omit geometry and retain prediction.
+            check = check_surface_contradiction(geometry, self.pose, self.config.uncertainty)
+            details["prediction_geometry"] = check
+            if not check["accepted"]:
+                return self._result("lost", time_s, details, available=False)
+        return self._result("predicted", time_s, details, available=available)
 
     def _result(self, status, time_s, details, *, available=True):
         if self.kalman is not None:

@@ -87,6 +87,48 @@ class PreparedReferenceSurface:
 
 
 @dataclass(frozen=True)
+class PreparedTargetSurface:
+    """One frame's measured geometry, shared by independent fit objectives."""
+
+    observation: dict
+    config: ShapeConfig
+    points: np.ndarray
+    tree: cKDTree
+    queries: np.ndarray
+    outside_mask: np.ndarray
+    mask_outline: np.ndarray
+    scene_nearest_depth: np.ndarray | None
+
+    @classmethod
+    def build(cls, observation: dict, config: ShapeConfig):
+        points = observation.get("all_surface_points", observation["obs"]["points"])
+        scene_nearest_depth = None
+        if config.scene_depth_constraints:
+            raw = observation.get("scene_depth", observation["depth"])
+            raw = np.where(np.isfinite(raw) & (raw > 0), raw, 0).astype(np.float32)
+            radius = int(np.ceil(config.mask_boundary_tolerance_px))
+            scene_nearest_depth = cv2.erode(
+                raw,
+                np.ones((2 * radius + 1,) * 2, np.uint8),
+                borderType=cv2.BORDER_CONSTANT,
+                borderValue=0,
+            )
+        mask = observation["mask"]
+        contours, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        mask_pixels = np.concatenate(contours)[:, 0].astype(float)
+        return cls(
+            observation,
+            config,
+            points,
+            cKDTree(points),
+            points[spatial_sample(points, config.max_fit_points)],
+            cv2.distanceTransform((~mask).astype(np.uint8), cv2.DIST_L2, 5),
+            mask_pixels[ConvexHull(mask_pixels).vertices],
+            scene_nearest_depth,
+        )
+
+
+@dataclass(frozen=True)
 class SurfaceFitView:
     """An actual earlier depth/mask and its camera relative to the stored map."""
 
@@ -128,6 +170,7 @@ class WholeSurfaceFit:
         config: ShapeConfig,
         *,
         prepared_reference: PreparedReferenceSurface | None = None,
+        prepared_target: PreparedTargetSurface | None = None,
         fit_kernels=None,
         search_pool=None,
         reference_observation: dict | None = None,
@@ -144,21 +187,27 @@ class WholeSurfaceFit:
         prepared_reference = prepared_reference or PreparedReferenceSurface.build(reference, config)
         if prepared_reference.points is not reference or prepared_reference.config != config:
             raise ValueError("prepared reference belongs to another surface or fit configuration")
+        prepared_target = prepared_target or PreparedTargetSurface.build(observation, config)
+        if prepared_target.observation is not observation or prepared_target.config != config:
+            raise ValueError("prepared target belongs to another observation or fit configuration")
+        self.prepared_reference = prepared_reference
+        self.prepared_target = prepared_target
         self.reference = reference
         self.observation = observation
         self.k = k
         self.config = config
         self.fit_kernels = fit_kernels
-        self.target = observation.get("all_surface_points", observation["obs"]["points"])
+        self.search_pool = search_pool
+        self.target = prepared_target.points
         self.reference_tree = prepared_reference.tree
-        self.target_tree = cKDTree(self.target)
+        self.target_tree = prepared_target.tree
         if search_pool is not None:
             from .surface_acceleration import PooledTree
 
             self.reference_tree = PooledTree(self.reference_tree, search_pool)
             self.target_tree = PooledTree(self.target_tree, search_pool)
         self.reference_queries = prepared_reference.queries
-        self.target_queries = self.target[spatial_sample(self.target, config.max_fit_points)]
+        self.target_queries = prepared_target.queries
         cores = cpu_count() or 1
         self.reference_query_workers = min(
             cores,
@@ -179,26 +228,9 @@ class WholeSurfaceFit:
         # points in front of the camera. Retain its vertices independently of
         # residual sampling, including small but distinctive extremities.
         self.envelope = prepared_reference.envelope
-        self.outside_mask = cv2.distanceTransform((~observation["mask"]).astype(np.uint8), cv2.DIST_L2, 5)
-        self.scene_nearest_depth = None
-        if config.scene_depth_constraints:
-            raw = observation.get("scene_depth", observation["depth"])
-            raw = np.where(np.isfinite(raw) & (raw > 0), raw, 0).astype(np.float32)
-            radius = int(np.ceil(config.mask_boundary_tolerance_px))
-            # Conservative depth bound within the existing image-alignment
-            # tolerance. A hole makes this bound unknown (zero); a foreground
-            # wire makes it near. Neither is replaced with farther background.
-            self.scene_nearest_depth = cv2.erode(
-                raw,
-                np.ones((2 * radius + 1,) * 2, np.uint8),
-                borderType=cv2.BORDER_CONSTANT,
-                borderValue=0,
-            )
-        contours, _ = cv2.findContours(
-            observation["mask"].astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-        )
-        mask_pixels = np.concatenate(contours)[:, 0].astype(float)
-        self.mask_outline = mask_pixels[ConvexHull(mask_pixels).vertices]
+        self.outside_mask = prepared_target.outside_mask
+        self.scene_nearest_depth = prepared_target.scene_nearest_depth
+        self.mask_outline = prepared_target.mask_outline
         if reference_observation is not None and reference_views:
             raise ValueError("supply one source observation or retained source views, not both")
         if reference_observation is not None:

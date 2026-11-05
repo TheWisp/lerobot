@@ -1,0 +1,454 @@
+{
+  "scope": "Publication guard fix, not a new fitting or recovery algorithm. Fixed default recipe; saved masks; actual UFM and sequential group/map updates.",
+  "raw_run": "/home/feit/.cache/flash-tracker-restart/correctness-20261104/experiment-verified",
+  "baseline_run": "/home/feit/.cache/flash-tracker-restart/baseline-audit-20261104/experiment-defaults",
+  "total_frames": 1590,
+  "all_outputs_identical": true,
+  "cases": [
+    {
+      "case": "flash-demo-dowel-ring",
+      "frames": 713,
+      "input_sha256": "9451f8b8a7129105375c6e6ab5ca84f561e86b6d327f83ce83550252bbdc8bf9",
+      "accuracy_labels": false,
+      "roles": {
+        "dowel": {
+          "reference_frame": 0,
+          "accuracy_labels": false,
+          "methods": {
+            "group_growing": {
+              "available_after_initialization": 707,
+              "total_after_initialization": 712,
+              "max_map_points": 651,
+              "pose_sources": {
+                "observed_candidate": 662,
+                "predicted": 45,
+                "lost": 5
+              }
+            }
+          },
+          "timing_ms": {
+            "prepare_ms": {
+              "median": 6.216878013219684,
+              "p90": 8.22772469255142
+            },
+            "group_growing": {
+              "median": 151.5601105056703,
+              "p90": 204.06778287724592
+            },
+            "scene_point_tracking_ms": {
+              "median": 39.6551140001975,
+              "p90": 41.32418052176945
+            }
+          }
+        },
+        "ring": {
+          "reference_frame": 0,
+          "accuracy_labels": false,
+          "methods": {
+            "group_growing": {
+              "available_after_initialization": 712,
+              "total_after_initialization": 712,
+              "max_map_points": 655,
+              "pose_sources": {
+                "observed_candidate": 712,
+                "predicted": 0,
+                "lost": 0
+              }
+            }
+          },
+          "timing_ms": {
+            "prepare_ms": {
+              "median": 10.71391798905097,
+              "p90": 14.304807357257232
+            },
+            "group_growing": {
+              "median": 165.28054350055754,
+              "p90": 245.02733683912084
+            },
+            "scene_point_tracking_ms": {
+              "median": 39.6551140001975,
+              "p90": 41.32418052176945
+            }
+          }
+        }
+      },
+      "comparison": {
+        "identical": true,
+        "changed_frame_objects": {
+          "pose": 0,
+          "status": 0,
+          "surface_events": 0
+        },
+        "first_changes": {
+          "pose": [],
+          "status": [],
+          "surface_events": []
+        },
+        "before_processing": {
+          "method": "group_growing",
+          "masks": "recorded",
+          "includes": "segmentation if computed, shared matching, observation preparation, pose/group/map updates",
+          "excludes": "disk input/output, scoring, playback, camera capture and display",
+          "startup": "models warmed before run except lazy SAM loading in first_frame_ms; steady excludes first frame",
+          "first_frame_ms": 36.837019957602024,
+          "steady_ms": {
+            "median": 342.4738369649276,
+            "p90": 430.7258498040028
+          },
+          "max_ms": 773.1418909388594,
+          "slower_than_source_interval": 712,
+          "intervals": 712
+        },
+        "after_processing": {
+          "method": "group_growing",
+          "masks": "recorded",
+          "includes": "segmentation if computed, shared matching, observation preparation, pose/group/map updates",
+          "excludes": "disk input/output, scoring, playback, camera capture and display",
+          "startup": "models warmed before run except lazy SAM loading in first_frame_ms; steady excludes first frame",
+          "first_frame_ms": 38.01502101123333,
+          "steady_ms": {
+            "median": 382.2810700221453,
+            "p90": 478.07407905347645
+          },
+          "max_ms": 677.5597889791243,
+          "slower_than_source_interval": 712,
+          "intervals": 712
+        }
+      }
+    },
+    {
+      "case": "flash-demo-gamepad-cube",
+      "frames": 628,
+      "input_sha256": "fda3c6528b84615e7e04bed498cbec284fb4837a34f453f37c0b632a701d10cf",
+      "accuracy_labels": false,
+      "roles": {
+        "gamepad": {
+          "reference_frame": 0,
+          "accuracy_labels": false,
+          "methods": {
+            "group_growing": {
+              "available_after_initialization": 618,
+              "total_after_initialization": 627,
+              "max_map_points": 671,
+              "pose_sources": {
+                "observed_candidate": 532,
+                "predicted": 86,
+                "lost": 9
+              }
+            }
+          },
+          "timing_ms": {
+            "prepare_ms": {
+              "median": 5.802294006571174,
+              "p90": 15.404985996428877
+            },
+            "group_growing": {
+              "median": 141.1562839639373,
+              "p90": 205.50647042691708
+            },
+            "scene_point_tracking_ms": {
+              "median": 39.87323702313006,
+              "p90": 41.60170720424503
+            }
+          }
+        },
+        "cube": {
+          "reference_frame": 0,
+          "accuracy_labels": false,
+          "methods": {
+            "group_growing": {
+              "available_after_initialization": 625,
+              "total_after_initialization": 627,
+              "max_map_points": 317,
+              "pose_sources": {
+                "observed_candidate": 517,
+                "predicted": 108,
+                "lost": 2
+              }
+            }
+          },
+          "timing_ms": {
+            "prepare_ms": {
+              "median": 8.361671003513038,
+              "p90": 9.758276212960482
+            },
+            "group_growing": {
+              "median": 100.51349602872506,
+              "p90": 148.4140171785839
+            },
+            "scene_point_tracking_ms": {
+              "median": 39.87323702313006,
+              "p90": 41.60170720424503
+            }
+          }
+        }
+      },
+      "comparison": {
+        "identical": true,
+        "changed_frame_objects": {
+          "pose": 0,
+          "status": 0,
+          "surface_events": 0
+        },
+        "first_changes": {
+          "pose": [],
+          "status": [],
+          "surface_events": []
+        },
+        "before_processing": {
+          "method": "group_growing",
+          "masks": "recorded",
+          "includes": "segmentation if computed, shared matching, observation preparation, pose/group/map updates",
+          "excludes": "disk input/output, scoring, playback, camera capture and display",
+          "startup": "models warmed before run except lazy SAM loading in first_frame_ms; steady excludes first frame",
+          "first_frame_ms": 38.60928904032335,
+          "steady_ms": {
+            "median": 271.12244203453884,
+            "p90": 337.79552162159234
+          },
+          "max_ms": 618.1245190091431,
+          "slower_than_source_interval": 627,
+          "intervals": 627
+        },
+        "after_processing": {
+          "method": "group_growing",
+          "masks": "recorded",
+          "includes": "segmentation if computed, shared matching, observation preparation, pose/group/map updates",
+          "excludes": "disk input/output, scoring, playback, camera capture and display",
+          "startup": "models warmed before run except lazy SAM loading in first_frame_ms; steady excludes first frame",
+          "first_frame_ms": 40.12084304122254,
+          "steady_ms": {
+            "median": 307.9701379756443,
+            "p90": 377.5502547970973
+          },
+          "max_ms": 591.0631840233691,
+          "slower_than_source_interval": 627,
+          "intervals": 627
+        }
+      }
+    },
+    {
+      "case": "dexycb-tomato-can-20201002_105506",
+      "frames": 68,
+      "input_sha256": "197e33c66de5adacf25e5278f8ef5c5c9b4ee80285eff937c86eb0f676e3d23f",
+      "accuracy_labels": true,
+      "roles": {
+        "object": {
+          "reference_frame": 0,
+          "accuracy_labels": true,
+          "methods": {
+            "group_growing": {
+              "available_after_initialization": 60,
+              "total_after_initialization": 67,
+              "pose_error": {
+                "available": 60,
+                "total": 67,
+                "cloud_mm_median": 7.262445196361377,
+                "cloud_mm_p90": 62.21371026929515,
+                "angle_deg_median": 7.332924024091227,
+                "angle_deg_p90": 114.98948052416095,
+                "center_mm_median": 6.508325902361497,
+                "within_10mm_10deg": 31,
+                "within_20mm_20deg": 32,
+                "final_cloud_mm": 59.936156553818414,
+                "final_angle_deg": 114.95450215330295
+              },
+              "max_map_points": 1808,
+              "pose_sources": {
+                "observed_candidate": 52,
+                "predicted": 8,
+                "lost": 7
+              }
+            }
+          },
+          "timing_ms": {
+            "prepare_ms": {
+              "median": 7.513044984079897,
+              "p90": 8.510704804211855
+            },
+            "group_growing": {
+              "median": 228.65642997203395,
+              "p90": 395.78357979189605
+            },
+            "scene_point_tracking_ms": {
+              "median": 38.17530500236899,
+              "p90": 39.461328415200114
+            }
+          }
+        }
+      },
+      "comparison": {
+        "identical": true,
+        "changed_frame_objects": {
+          "pose": 0,
+          "status": 0,
+          "surface_events": 0
+        },
+        "first_changes": {
+          "pose": [],
+          "status": [],
+          "surface_events": []
+        },
+        "before_processing": {
+          "method": "group_growing",
+          "masks": "recorded",
+          "includes": "segmentation if computed, shared matching, observation preparation, pose/group/map updates",
+          "excludes": "disk input/output, scoring, playback, camera capture and display",
+          "startup": "models warmed before run except lazy SAM loading in first_frame_ms; steady excludes first frame",
+          "first_frame_ms": 20.406727970112115,
+          "steady_ms": {
+            "median": 254.20073402347043,
+            "p90": 396.53667341917753
+          },
+          "max_ms": 516.6014750138856,
+          "slower_than_source_interval": 67,
+          "intervals": 67
+        },
+        "after_processing": {
+          "method": "group_growing",
+          "masks": "recorded",
+          "includes": "segmentation if computed, shared matching, observation preparation, pose/group/map updates",
+          "excludes": "disk input/output, scoring, playback, camera capture and display",
+          "startup": "models warmed before run except lazy SAM loading in first_frame_ms; steady excludes first frame",
+          "first_frame_ms": 21.99093799572438,
+          "steady_ms": {
+            "median": 272.87763403728604,
+            "p90": 439.07927979016677
+          },
+          "max_ms": 602.5543679716066,
+          "slower_than_source_interval": 67,
+          "intervals": 67
+        }
+      }
+    },
+    {
+      "case": "ycb-mustard_easy_00_02",
+      "frames": 181,
+      "input_sha256": "2ca33583b95ed8d6e091777efe9285bd8e6343389d3d3ab90b2b48fef1399852",
+      "accuracy_labels": true,
+      "roles": {
+        "object": {
+          "reference_frame": 0,
+          "accuracy_labels": true,
+          "methods": {
+            "group_growing": {
+              "available_after_initialization": 169,
+              "total_after_initialization": 180,
+              "pose_error": {
+                "available": 169,
+                "total": 180,
+                "cloud_mm_median": 5.668841816165675,
+                "cloud_mm_p90": 11.823382518537537,
+                "angle_deg_median": 3.109787119239104,
+                "angle_deg_p90": 8.36714799868929,
+                "center_mm_median": 5.273480551053826,
+                "within_10mm_10deg": 121,
+                "within_20mm_20deg": 169,
+                "final_cloud_mm": null,
+                "final_angle_deg": null
+              },
+              "max_map_points": 385,
+              "pose_sources": {
+                "observed_candidate": 161,
+                "predicted": 8,
+                "lost": 11
+              }
+            }
+          },
+          "timing_ms": {
+            "prepare_ms": {
+              "median": 5.441925022751093,
+              "p90": 5.762671475531533
+            },
+            "group_growing": {
+              "median": 104.74017501110211,
+              "p90": 142.1526898688171
+            },
+            "scene_point_tracking_ms": {
+              "median": 37.330554478103295,
+              "p90": 38.7011433893349
+            }
+          }
+        }
+      },
+      "comparison": {
+        "identical": true,
+        "changed_frame_objects": {
+          "pose": 0,
+          "status": 0,
+          "surface_events": 0
+        },
+        "first_changes": {
+          "pose": [],
+          "status": [],
+          "surface_events": []
+        },
+        "before_processing": {
+          "method": "group_growing",
+          "masks": "recorded",
+          "includes": "segmentation if computed, shared matching, observation preparation, pose/group/map updates",
+          "excludes": "disk input/output, scoring, playback, camera capture and display",
+          "startup": "models warmed before run except lazy SAM loading in first_frame_ms; steady excludes first frame",
+          "first_frame_ms": 12.24055205238983,
+          "steady_ms": {
+            "median": 135.41973501560278,
+            "p90": 166.76907123764974
+          },
+          "max_ms": 221.22961899731308,
+          "slower_than_source_interval": 176,
+          "intervals": 180
+        },
+        "after_processing": {
+          "method": "group_growing",
+          "masks": "recorded",
+          "includes": "segmentation if computed, shared matching, observation preparation, pose/group/map updates",
+          "excludes": "disk input/output, scoring, playback, camera capture and display",
+          "startup": "models warmed before run except lazy SAM loading in first_frame_ms; steady excludes first frame",
+          "first_frame_ms": 12.911454017739743,
+          "steady_ms": {
+            "median": 147.5773455167655,
+            "p90": 185.70529911667109
+          },
+          "max_ms": 368.9821069710888,
+          "slower_than_source_interval": 176,
+          "intervals": 180
+        }
+      }
+    }
+  ],
+  "tests": {
+    "new_publication_cases": 20,
+    "related_unique_passes": 232,
+    "related_skipped": 1,
+    "pre_existing_expected_failures": 3,
+    "recorded_recovery_passes": 7,
+    "recorded_recovery_failures": 7,
+    "recorded_failures": [
+      "mustard_180 recovery",
+      "clock_39 recovery",
+      "clock_100 recovery",
+      "drill_46 recovery",
+      "drill_46 depth cleanup",
+      "yellow_68 recovery",
+      "gamepad_271 visible face direction"
+    ],
+    "environment_note": "The broad run passed 231 checks but could not import threadpoolctl in one runtime CLI test. That test and all 20 publication tests passed in the inference environment. No code or expectations were changed for the missing dependency.",
+    "mutation_unchecked_fallback": {
+      "failed": 10,
+      "passed": 10
+    },
+    "mutation_stale_accepted_flag": {
+      "failed": 12,
+      "passed": 8
+    },
+    "logs": {
+      "verification.log": "bf706a1ac5a35eb6cf8bfcccba9c05b8fab20526e2adea01349f044ab13001c2",
+      "runtime-environment-tests.log": "c216a0e9bce20ff4efcbb4b75f28e185cf9ddeeb837a3f47ece2db1cbacf0eb8",
+      "recorded-recovery.log": "9177a8069a3de333c166d535a05f5e2aec2d7e8ff7dfde891dc3d40cbbe05578",
+      "mutation-fallback.log": "1d80ad7cd00df90b6c30bb193f183a12a4f6964de353b4a3d46357209cd5e3ef",
+      "mutation-rollback.log": "756243e33efbe37346eb1ad39cccc3b252c5adfe9378a8731fc6d4ed31f9b66b"
+    }
+  },
+  "performance_note": "This was a correctness replay while other CPU tests ran concurrently; timings are retained but are not a paired speed comparison. No runtime improvement claimed.",
+  "server_note": "9102 saved results and running server were not replaced."
+}

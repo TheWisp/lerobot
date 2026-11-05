@@ -1,0 +1,719 @@
+{
+  "scope": "One full pass per variant, recorded masks, every input frame; timings are a baseline rather than a repeated-trial speed guarantee.",
+  "same_inputs_verified": true,
+  "same_tracker_source_verified": true,
+  "scheduling_outputs_identical": true,
+  "variants": {
+    "debugger-defaults": [
+      {
+        "case": "flash-demo-dowel-ring",
+        "frames": 713,
+        "input_sha256": "9451f8b8a7129105375c6e6ab5ca84f561e86b6d327f83ce83550252bbdc8bf9",
+        "accuracy_labels": false,
+        "evaluation": {},
+        "processing": {
+          "completion_interval_ms": {
+            "median": 84.49304100940935,
+            "p90": 136.21288281865415
+          },
+          "mean_completion_interval_ms": 96.24831106739703,
+          "latency_ms": {
+            "median": 159.020828519715,
+            "p90": 276.1098253366072
+          },
+          "max_latency_ms": 556.921973999124,
+          "elapsed_s": 68.55329234601231
+        },
+        "roles": {
+          "dowel": {
+            "reference_frame": 0,
+            "accuracy_labels": false,
+            "methods": {
+              "surface_corrected": {
+                "available_after_initialization": 169,
+                "total_after_initialization": 712
+              }
+            },
+            "timing_ms": {}
+          },
+          "ring": {
+            "reference_frame": 0,
+            "accuracy_labels": false,
+            "methods": {
+              "surface_corrected": {
+                "available_after_initialization": 702,
+                "total_after_initialization": 712
+              }
+            },
+            "timing_ms": {}
+          }
+        }
+      },
+      {
+        "case": "flash-demo-gamepad-cube",
+        "frames": 628,
+        "input_sha256": "fda3c6528b84615e7e04bed498cbec284fb4837a34f453f37c0b632a701d10cf",
+        "accuracy_labels": false,
+        "evaluation": {},
+        "processing": {
+          "completion_interval_ms": {
+            "median": 86.19239897234365,
+            "p90": 144.16989679448304
+          },
+          "mean_completion_interval_ms": 94.58704368899052,
+          "latency_ms": {
+            "median": 176.5026740031317,
+            "p90": 262.65185022493824
+          },
+          "max_latency_ms": 519.1429469850846,
+          "elapsed_s": 59.3311161090387
+        },
+        "roles": {
+          "gamepad": {
+            "reference_frame": 0,
+            "accuracy_labels": false,
+            "methods": {
+              "surface_corrected": {
+                "available_after_initialization": 334,
+                "total_after_initialization": 627
+              }
+            },
+            "timing_ms": {}
+          },
+          "cube": {
+            "reference_frame": 0,
+            "accuracy_labels": false,
+            "methods": {
+              "surface_corrected": {
+                "available_after_initialization": 457,
+                "total_after_initialization": 627
+              }
+            },
+            "timing_ms": {}
+          }
+        }
+      },
+      {
+        "case": "dexycb-tomato-can-20201002_105506",
+        "frames": 68,
+        "input_sha256": "197e33c66de5adacf25e5278f8ef5c5c9b4ee80285eff937c86eb0f676e3d23f",
+        "accuracy_labels": true,
+        "evaluation": {
+          "object": {
+            "format": "poses_npy",
+            "path": "/home/feit/.cache/flash-tracker-restart/labelled-expansion-20261102/clips/dexycb-tomato-can-20201002_105506/evaluation/poses.npy",
+            "sha256": "d72c84d6db68cc30f2a659ceb9fc52a65b7457d123df9f0d7b357ba11721377b"
+          }
+        },
+        "processing": {
+          "completion_interval_ms": {
+            "median": 59.43675996968523,
+            "p90": 97.72940821712837
+          },
+          "mean_completion_interval_ms": 67.45542307495515,
+          "latency_ms": {
+            "median": 120.78400596510619,
+            "p90": 190.88340201415122
+          },
+          "max_latency_ms": 309.0063590207137,
+          "elapsed_s": 4.532915201038122
+        },
+        "roles": {
+          "object": {
+            "reference_frame": 0,
+            "accuracy_labels": true,
+            "methods": {
+              "surface_corrected": {
+                "available_after_initialization": 36,
+                "total_after_initialization": 67,
+                "pose_error": {
+                  "available": 36,
+                  "total": 67,
+                  "cloud_mm_median": 1.0560491304989361,
+                  "cloud_mm_p90": 18.361787640422136,
+                  "angle_deg_median": 1.4127001856651538,
+                  "angle_deg_p90": 28.70506746167895,
+                  "center_mm_median": 0.6842109445667435,
+                  "within_10mm_10deg": 31,
+                  "within_20mm_20deg": 31,
+                  "final_cloud_mm": null,
+                  "final_angle_deg": null
+                }
+              }
+            },
+            "timing_ms": {}
+          }
+        }
+      },
+      {
+        "case": "ycb-mustard_easy_00_02",
+        "frames": 181,
+        "input_sha256": "2ca33583b95ed8d6e091777efe9285bd8e6343389d3d3ab90b2b48fef1399852",
+        "accuracy_labels": true,
+        "evaluation": {
+          "object": {
+            "format": "ycb_annotated_pose",
+            "source": "/home/feit/.cache/ycbineoat/mustard_easy_00_02",
+            "start_frame": 254,
+            "sha256": "332c01c27fec0b7a990805bed64c69ca3bd2b1e94f882a3ae14c3222e2f27812"
+          }
+        },
+        "processing": {
+          "completion_interval_ms": {
+            "median": 40.801049006404355,
+            "p90": 67.39222218166105
+          },
+          "mean_completion_interval_ms": 47.100912483357305,
+          "latency_ms": {
+            "median": 76.53383151046,
+            "p90": 117.15103048481978
+          },
+          "max_latency_ms": 268.6070730560459,
+          "elapsed_s": 8.488588136970066
+        },
+        "roles": {
+          "object": {
+            "reference_frame": 0,
+            "accuracy_labels": true,
+            "methods": {
+              "surface_corrected": {
+                "available_after_initialization": 21,
+                "total_after_initialization": 180,
+                "pose_error": {
+                  "available": 21,
+                  "total": 180,
+                  "cloud_mm_median": 0.30059432649194634,
+                  "cloud_mm_p90": 0.7671626177941032,
+                  "angle_deg_median": 0.4630566029465359,
+                  "angle_deg_p90": 0.7287071115333078,
+                  "center_mm_median": 0.26648870951387943,
+                  "within_10mm_10deg": 21,
+                  "within_20mm_20deg": 21,
+                  "final_cloud_mm": null,
+                  "final_angle_deg": null
+                }
+              }
+            },
+            "timing_ms": {}
+          }
+        }
+      }
+    ],
+    "debugger-serial": [
+      {
+        "case": "flash-demo-dowel-ring",
+        "frames": 713,
+        "input_sha256": "9451f8b8a7129105375c6e6ab5ca84f561e86b6d327f83ce83550252bbdc8bf9",
+        "accuracy_labels": false,
+        "evaluation": {},
+        "processing": {
+          "completion_interval_ms": {
+            "median": 161.43757198005915,
+            "p90": 217.4209717661142
+          },
+          "mean_completion_interval_ms": 173.57394908567278,
+          "latency_ms": {
+            "median": 161.05970498756506,
+            "p90": 216.95891744457182
+          },
+          "max_latency_ms": 453.22869799565524,
+          "elapsed_s": 123.61364582099486
+        },
+        "roles": {
+          "dowel": {
+            "reference_frame": 0,
+            "accuracy_labels": false,
+            "methods": {
+              "surface_corrected": {
+                "available_after_initialization": 169,
+                "total_after_initialization": 712
+              }
+            },
+            "timing_ms": {}
+          },
+          "ring": {
+            "reference_frame": 0,
+            "accuracy_labels": false,
+            "methods": {
+              "surface_corrected": {
+                "available_after_initialization": 702,
+                "total_after_initialization": 712
+              }
+            },
+            "timing_ms": {}
+          }
+        }
+      },
+      {
+        "case": "flash-demo-gamepad-cube",
+        "frames": 628,
+        "input_sha256": "fda3c6528b84615e7e04bed498cbec284fb4837a34f453f37c0b632a701d10cf",
+        "accuracy_labels": false,
+        "evaluation": {},
+        "processing": {
+          "completion_interval_ms": {
+            "median": 167.84309997456148,
+            "p90": 230.43445983203125
+          },
+          "mean_completion_interval_ms": 164.8374292519548,
+          "latency_ms": {
+            "median": 167.77882899623364,
+            "p90": 230.19215781241653
+          },
+          "max_latency_ms": 462.07761601544917,
+          "elapsed_s": 103.38154026697157
+        },
+        "roles": {
+          "gamepad": {
+            "reference_frame": 0,
+            "accuracy_labels": false,
+            "methods": {
+              "surface_corrected": {
+                "available_after_initialization": 334,
+                "total_after_initialization": 627
+              }
+            },
+            "timing_ms": {}
+          },
+          "cube": {
+            "reference_frame": 0,
+            "accuracy_labels": false,
+            "methods": {
+              "surface_corrected": {
+                "available_after_initialization": 457,
+                "total_after_initialization": 627
+              }
+            },
+            "timing_ms": {}
+          }
+        }
+      },
+      {
+        "case": "dexycb-tomato-can-20201002_105506",
+        "frames": 68,
+        "input_sha256": "197e33c66de5adacf25e5278f8ef5c5c9b4ee80285eff937c86eb0f676e3d23f",
+        "accuracy_labels": true,
+        "evaluation": {
+          "object": {
+            "format": "poses_npy",
+            "path": "/home/feit/.cache/flash-tracker-restart/labelled-expansion-20261102/clips/dexycb-tomato-can-20201002_105506/evaluation/poses.npy",
+            "sha256": "d72c84d6db68cc30f2a659ceb9fc52a65b7457d123df9f0d7b357ba11721377b"
+          }
+        },
+        "processing": {
+          "completion_interval_ms": {
+            "median": 95.67834797780961,
+            "p90": 133.09463360346854
+          },
+          "mean_completion_interval_ms": 103.82857786599241,
+          "latency_ms": {
+            "median": 95.34071601228788,
+            "p90": 132.59892401983961
+          },
+          "max_latency_ms": 302.9058300307952,
+          "elapsed_s": 6.969843357044738
+        },
+        "roles": {
+          "object": {
+            "reference_frame": 0,
+            "accuracy_labels": true,
+            "methods": {
+              "surface_corrected": {
+                "available_after_initialization": 36,
+                "total_after_initialization": 67,
+                "pose_error": {
+                  "available": 36,
+                  "total": 67,
+                  "cloud_mm_median": 1.0560491304989361,
+                  "cloud_mm_p90": 18.361787640422136,
+                  "angle_deg_median": 1.4127001856651538,
+                  "angle_deg_p90": 28.70506746167895,
+                  "center_mm_median": 0.6842109445667435,
+                  "within_10mm_10deg": 31,
+                  "within_20mm_20deg": 31,
+                  "final_cloud_mm": null,
+                  "final_angle_deg": null
+                }
+              }
+            },
+            "timing_ms": {}
+          }
+        }
+      },
+      {
+        "case": "ycb-mustard_easy_00_02",
+        "frames": 181,
+        "input_sha256": "2ca33583b95ed8d6e091777efe9285bd8e6343389d3d3ab90b2b48fef1399852",
+        "accuracy_labels": true,
+        "evaluation": {
+          "object": {
+            "format": "ycb_annotated_pose",
+            "source": "/home/feit/.cache/ycbineoat/mustard_easy_00_02",
+            "start_frame": 254,
+            "sha256": "332c01c27fec0b7a990805bed64c69ca3bd2b1e94f882a3ae14c3222e2f27812"
+          }
+        },
+        "processing": {
+          "completion_interval_ms": {
+            "median": 69.22679851413704,
+            "p90": 97.64340898254886
+          },
+          "mean_completion_interval_ms": 76.50049701106683,
+          "latency_ms": {
+            "median": 68.97113000741228,
+            "p90": 97.28823790792376
+          },
+          "max_latency_ms": 272.87297300063074,
+          "elapsed_s": 13.778911786037497
+        },
+        "roles": {
+          "object": {
+            "reference_frame": 0,
+            "accuracy_labels": true,
+            "methods": {
+              "surface_corrected": {
+                "available_after_initialization": 21,
+                "total_after_initialization": 180,
+                "pose_error": {
+                  "available": 21,
+                  "total": 180,
+                  "cloud_mm_median": 0.30059432649194634,
+                  "cloud_mm_p90": 0.7671626177941032,
+                  "angle_deg_median": 0.4630566029465359,
+                  "angle_deg_p90": 0.7287071115333078,
+                  "center_mm_median": 0.26648870951387943,
+                  "within_10mm_10deg": 21,
+                  "within_20mm_20deg": 21,
+                  "final_cloud_mm": null,
+                  "final_angle_deg": null
+                }
+              }
+            },
+            "timing_ms": {}
+          }
+        }
+      }
+    ],
+    "experiment-defaults": [
+      {
+        "case": "flash-demo-dowel-ring",
+        "frames": 713,
+        "input_sha256": "9451f8b8a7129105375c6e6ab5ca84f561e86b6d327f83ce83550252bbdc8bf9",
+        "accuracy_labels": false,
+        "evaluation": {},
+        "processing": {
+          "method": "group_growing",
+          "masks": "recorded",
+          "includes": "segmentation if computed, shared matching, observation preparation, pose/group/map updates",
+          "excludes": "disk input/output, scoring, playback, camera capture and display",
+          "startup": "models warmed before run except lazy SAM loading in first_frame_ms; steady excludes first frame",
+          "first_frame_ms": 36.837019957602024,
+          "steady_ms": {
+            "median": 342.4738369649276,
+            "p90": 430.7258498040028
+          },
+          "max_ms": 773.1418909388594,
+          "slower_than_source_interval": 712,
+          "intervals": 712,
+          "mean_ms": 343.20796631359013
+        },
+        "roles": {
+          "dowel": {
+            "reference_frame": 0,
+            "accuracy_labels": false,
+            "methods": {
+              "group_growing": {
+                "available_after_initialization": 707,
+                "total_after_initialization": 712,
+                "max_map_points": 651,
+                "pose_sources": {
+                  "observed_candidate": 662,
+                  "predicted": 45,
+                  "lost": 5
+                }
+              }
+            },
+            "timing_ms": {
+              "prepare_ms": {
+                "median": 5.744081980083138,
+                "p90": 7.7617832866963
+              },
+              "group_growing": {
+                "median": 134.49855102226138,
+                "p90": 181.66082522366196
+              },
+              "scene_point_tracking_ms": {
+                "median": 36.60136947291903,
+                "p90": 38.42361409915611
+              }
+            }
+          },
+          "ring": {
+            "reference_frame": 0,
+            "accuracy_labels": false,
+            "methods": {
+              "group_growing": {
+                "available_after_initialization": 712,
+                "total_after_initialization": 712,
+                "max_map_points": 655,
+                "pose_sources": {
+                  "observed_candidate": 712,
+                  "predicted": 0,
+                  "lost": 0
+                }
+              }
+            },
+            "timing_ms": {
+              "prepare_ms": {
+                "median": 9.587981505319476,
+                "p90": 12.909814034355804
+              },
+              "group_growing": {
+                "median": 147.4657884973567,
+                "p90": 221.89205309259705
+              },
+              "scene_point_tracking_ms": {
+                "median": 36.60136947291903,
+                "p90": 38.42361409915611
+              }
+            }
+          }
+        }
+      },
+      {
+        "case": "flash-demo-gamepad-cube",
+        "frames": 628,
+        "input_sha256": "fda3c6528b84615e7e04bed498cbec284fb4837a34f453f37c0b632a701d10cf",
+        "accuracy_labels": false,
+        "evaluation": {},
+        "processing": {
+          "method": "group_growing",
+          "masks": "recorded",
+          "includes": "segmentation if computed, shared matching, observation preparation, pose/group/map updates",
+          "excludes": "disk input/output, scoring, playback, camera capture and display",
+          "startup": "models warmed before run except lazy SAM loading in first_frame_ms; steady excludes first frame",
+          "first_frame_ms": 38.60928904032335,
+          "steady_ms": {
+            "median": 271.12244203453884,
+            "p90": 337.79552162159234
+          },
+          "max_ms": 618.1245190091431,
+          "slower_than_source_interval": 627,
+          "intervals": 627,
+          "mean_ms": 251.22526399945346
+        },
+        "roles": {
+          "gamepad": {
+            "reference_frame": 0,
+            "accuracy_labels": false,
+            "methods": {
+              "group_growing": {
+                "available_after_initialization": 618,
+                "total_after_initialization": 627,
+                "max_map_points": 671,
+                "pose_sources": {
+                  "observed_candidate": 532,
+                  "predicted": 86,
+                  "lost": 9
+                }
+              }
+            },
+            "timing_ms": {
+              "prepare_ms": {
+                "median": 4.960905993357301,
+                "p90": 14.246024377644062
+              },
+              "group_growing": {
+                "median": 121.7193059856072,
+                "p90": 182.08970399573445
+              },
+              "scene_point_tracking_ms": {
+                "median": 36.55656799674034,
+                "p90": 38.459794176742435
+              }
+            }
+          },
+          "cube": {
+            "reference_frame": 0,
+            "accuracy_labels": false,
+            "methods": {
+              "group_growing": {
+                "available_after_initialization": 625,
+                "total_after_initialization": 627,
+                "max_map_points": 317,
+                "pose_sources": {
+                  "observed_candidate": 517,
+                  "predicted": 108,
+                  "lost": 2
+                }
+              }
+            },
+            "timing_ms": {
+              "prepare_ms": {
+                "median": 7.522190979216248,
+                "p90": 8.79919659346342
+              },
+              "group_growing": {
+                "median": 89.62646499276161,
+                "p90": 129.11349623464045
+              },
+              "scene_point_tracking_ms": {
+                "median": 36.55656799674034,
+                "p90": 38.459794176742435
+              }
+            }
+          }
+        }
+      },
+      {
+        "case": "dexycb-tomato-can-20201002_105506",
+        "frames": 68,
+        "input_sha256": "197e33c66de5adacf25e5278f8ef5c5c9b4ee80285eff937c86eb0f676e3d23f",
+        "accuracy_labels": true,
+        "evaluation": {
+          "object": {
+            "format": "poses_npy",
+            "path": "/home/feit/.cache/flash-tracker-restart/labelled-expansion-20261102/clips/dexycb-tomato-can-20201002_105506/evaluation/poses.npy",
+            "sha256": "d72c84d6db68cc30f2a659ceb9fc52a65b7457d123df9f0d7b357ba11721377b"
+          }
+        },
+        "processing": {
+          "method": "group_growing",
+          "masks": "recorded",
+          "includes": "segmentation if computed, shared matching, observation preparation, pose/group/map updates",
+          "excludes": "disk input/output, scoring, playback, camera capture and display",
+          "startup": "models warmed before run except lazy SAM loading in first_frame_ms; steady excludes first frame",
+          "first_frame_ms": 20.406727970112115,
+          "steady_ms": {
+            "median": 254.20073402347043,
+            "p90": 396.53667341917753
+          },
+          "max_ms": 516.6014750138856,
+          "slower_than_source_interval": 67,
+          "intervals": 67,
+          "mean_ms": 274.43109989451216
+        },
+        "roles": {
+          "object": {
+            "reference_frame": 0,
+            "accuracy_labels": true,
+            "methods": {
+              "group_growing": {
+                "available_after_initialization": 60,
+                "total_after_initialization": 67,
+                "pose_error": {
+                  "available": 60,
+                  "total": 67,
+                  "cloud_mm_median": 7.262445196361377,
+                  "cloud_mm_p90": 62.21371026929515,
+                  "angle_deg_median": 7.332924024091227,
+                  "angle_deg_p90": 114.98948052416095,
+                  "center_mm_median": 6.508325902361497,
+                  "within_10mm_10deg": 31,
+                  "within_20mm_20deg": 32,
+                  "final_cloud_mm": 59.936156553818414,
+                  "final_angle_deg": 114.95450215330295
+                },
+                "max_map_points": 1808,
+                "pose_sources": {
+                  "observed_candidate": 52,
+                  "predicted": 8,
+                  "lost": 7
+                }
+              }
+            },
+            "timing_ms": {
+              "prepare_ms": {
+                "median": 6.975026044528931,
+                "p90": 8.038098213728517
+              },
+              "group_growing": {
+                "median": 213.5981720057316,
+                "p90": 355.14573039254174
+              },
+              "scene_point_tracking_ms": {
+                "median": 34.902382001746446,
+                "p90": 36.68434098362923
+              }
+            }
+          }
+        }
+      },
+      {
+        "case": "ycb-mustard_easy_00_02",
+        "frames": 181,
+        "input_sha256": "2ca33583b95ed8d6e091777efe9285bd8e6343389d3d3ab90b2b48fef1399852",
+        "accuracy_labels": true,
+        "evaluation": {
+          "object": {
+            "format": "ycb_annotated_pose",
+            "source": "/home/feit/.cache/ycbineoat/mustard_easy_00_02",
+            "start_frame": 254,
+            "sha256": "332c01c27fec0b7a990805bed64c69ca3bd2b1e94f882a3ae14c3222e2f27812"
+          }
+        },
+        "processing": {
+          "method": "group_growing",
+          "masks": "recorded",
+          "includes": "segmentation if computed, shared matching, observation preparation, pose/group/map updates",
+          "excludes": "disk input/output, scoring, playback, camera capture and display",
+          "startup": "models warmed before run except lazy SAM loading in first_frame_ms; steady excludes first frame",
+          "first_frame_ms": 12.24055205238983,
+          "steady_ms": {
+            "median": 135.41973501560278,
+            "p90": 166.76907123764974
+          },
+          "max_ms": 221.22961899731308,
+          "slower_than_source_interval": 176,
+          "intervals": 180,
+          "mean_ms": 140.15234331244653
+        },
+        "roles": {
+          "object": {
+            "reference_frame": 0,
+            "accuracy_labels": true,
+            "methods": {
+              "group_growing": {
+                "available_after_initialization": 169,
+                "total_after_initialization": 180,
+                "pose_error": {
+                  "available": 169,
+                  "total": 180,
+                  "cloud_mm_median": 5.668841816165675,
+                  "cloud_mm_p90": 11.823382518537537,
+                  "angle_deg_median": 3.109787119239104,
+                  "angle_deg_p90": 8.36714799868929,
+                  "center_mm_median": 5.273480551053826,
+                  "within_10mm_10deg": 121,
+                  "within_20mm_20deg": 169,
+                  "final_cloud_mm": null,
+                  "final_angle_deg": null
+                },
+                "max_map_points": 385,
+                "pose_sources": {
+                  "observed_candidate": 161,
+                  "predicted": 8,
+                  "lost": 11
+                }
+              }
+            },
+            "timing_ms": {
+              "prepare_ms": {
+                "median": 5.106628988869488,
+                "p90": 5.30828227638267
+              },
+              "group_growing": {
+                "median": 95.77931853709742,
+                "p90": 127.8830208000727
+              },
+              "scene_point_tracking_ms": {
+                "median": 34.501802030717954,
+                "p90": 36.271011509234086
+              }
+            }
+          }
+        }
+      }
+    ]
+  }
+}

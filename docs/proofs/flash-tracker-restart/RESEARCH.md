@@ -10,22 +10,26 @@ records what was saved and verified. This research continues separately on
 Current design: [FLASH tracking pipeline](../../../src/lerobot/policies/flash/docs/tracking_pipeline.md).
 That is the maintained proposal; this file preserves dated research and results.
 
-Latest local audit, 2026-11-04: `bcaf3ad39` is the last committed and pushed
-checkpoint. The working tree now contains geometry rejection and partial-surface
-fitting fixes, configurable recovery experiments, benchmark tooling, and recorded
-failure fixtures. Selected Kalman/velocity experiments were restored for comparison;
-the parked stash still exists and overlaps these changes. They are not all promoted
-defaults: scene-depth constraints, extra recovery starts, and disabling the legacy
-Kalman reset remain opt-in; velocity filters remain benchmark-only.
+Current checkpoint, 2026-11-05: rejected fits can no longer publish an unchecked
+fallback pose or leave a rolled-back Kalman correction marked accepted. Caching
+measured geometry and fitting independent objects concurrently preserve every pose,
+status and surface update across four complete replays (1,590 frames). The two
+robot demos take **269 and 223 ms/frame (3.7 and 4.5 fps)** with saved masks,
+excluding live SAM, camera capture and display. [Baseline and verification](runtime-baseline-20261104/publication-fix.json).
 
-Consolidation verification covered 14 test files: **226 passed, 7 failed, 11
-skipped, 4 expected failures**. The seven failures remain the same recorded recovery
-checks using the baseline profile. Expected failures belong to the velocity and
-pre-fix Kalman controls; the connected-protrusion regression test passes normally.
-Full-sequence checks were skipped without a supplied result directory. The latest
-protrusion guard has not had a complete causal benchmark rerun, and the 9102
-recordings predate it.
-The dated sections below preserve individual experiments and their trade-offs.
+**Overall tracking correctness is not solved.** Seven recorded recovery checks
+still fail, and the cube's segmentation identity drift remains a separate issue.
+Our own demos have no independent full-sequence pose labels. The fresh focused
+suite passes 195 tests, with one optional Open3D test skipped in the inference
+environment; the four Open3D experiment/adapter tests also passed in isolation.
+Passing these guards does not establish that every wrong alignment is rejected.
+
+The faster coarse-to-fine and shortened-solve variants remain benchmark-only:
+they have accuracy/availability trade-offs and do not replace defaults. Newer
+scene-depth checks, recovery starts and Kalman-reset changes remain opt-in;
+velocity experiments remain benchmark-only. The running server and its saved
+playback results have not been replaced by these timing experiments. The dated
+sections below preserve the measurements and remaining failures.
 
 ## Did the redesign become worse?
 
@@ -3224,3 +3228,310 @@ in that second batch. Lint/format and the async-handler check passed. The existi
 9102 tab was refreshed and both initial/expanded views were inspected at frame
 481; the HTTP packet retains the original scoring cloud separately. No full
 benchmark rerun or robot trial is claimed by this checkpoint.
+
+### Correctness and runtime cost (November 4)
+
+Performance is an acceptance criterion alongside pose quality. The GUI rerun
+executes seven comparison methods; its wall time is not one tracker's frame
+time. `benchmarks.flash_runtime_benchmark` now runs just one existing method,
+using the saved scene configuration and the same processing code. It records
+median, slow-frame and worst-frame time, and can compare every pose, status and
+surface-growth event with an earlier run on identical inputs.
+
+Saved masks isolate fitting cost. `--sam-prompts` instead runs the shared SAM3
+source, with segmentation included in frame time. Missing detections stay empty;
+they are never replaced by saved masks. Model warmup, first-frame initialization,
+disk I/O, accuracy scoring and rendering are kept separate. This is sequential
+recorded-stream processing, not a camera-to-controller latency measurement.
+
+The camera debugger is not this full experimental loop. It uses
+`SurfaceTrackingSession` through `PerceptionRunner`, with parallel object fits
+and one frame of overlapping preparation; camera acquisition selects the latest
+frame. Its optional group estimator runs separately. This experiment uses
+`GrowingSurfaceSession`, with accumulated surfaces, multiple fitting attempts,
+group evidence and Kalman checks, serially through the benchmark driver. They
+share low-level fitting code, not the complete estimator or scheduler. Earlier
+live measurements around four updates/s for three objects therefore cannot be
+treated as the before value for the timings below. A direct comparison needs
+the same recorded inputs through both paths.
+
+Profiling found that additional geometry fitters omitted the existing nearest-
+point search pool. Forwarding that pool removes repeated thread creation without
+changing fitting equations, point density, tolerances or candidate counts.
+Recorded-fixture tests check exact results and bounded thread creation; restoring
+the omission makes those tests fail. The related suite has 112 passes. This does
+not fix the seven previously documented recovery failures or establish absolute
+accuracy on the two unlabelled own demos.
+
+One full pass before/after, both objects processed serially, saved masks:
+
+| Scene          | Frames | Median ms, before → after | 90th percentile ms |    Worst ms |
+| -------------- | -----: | ------------------------: | -----------------: | ----------: |
+| Dowel / ring   |    713 |                 373 → 355 |          461 → 435 |   635 → 706 |
+| Gamepad / cube |    628 |               1263 → 1217 |        2696 → 2828 | 4515 → 4838 |
+
+Every pose, status and surface-growth event was unchanged. Gamepad's mean time
+was slightly worse (1471 → 1489 ms); this is not a demonstrated overall speedup.
+Both methods missed every source-frame interval. Neither is ready for real-time
+use at the recorded frame rate. Dowel's configuration has no extra recovery
+starts; gamepad's has four and enables partial-surface matching. These are each
+scene's current settings, held fixed across its comparison, not a comparison of
+object complexity with identical settings.
+
+Before the change, pose/group/map updates consumed 85% of dowel's processing time
+and 97% of gamepad's; shared image tracking took about 38 ms/frame. The main
+remaining work is reducing the cost of fitting and recovery while preserving
+their geometric checks. Reducing quality settings is not an equivalent speedup.
+
+A separate 90-frame opening segment with freshly computed SAM3 masks took
+317 ms/frame on dowel/ring and 1119 ms/frame on gamepad/cube (medians, excluding
+initialization). Segmentation itself took about 25 ms/frame. Both roles
+initialized in both clips. These changed inputs and short segments cannot
+establish full-clip quality or recovery latency. [Measured timings and settings](runtime-cost-20261104.json).
+Raw runs and source snapshots are retained locally under
+`~/.cache/flash-tracker-restart/runtime-20261104/`.
+
+### Fixed runtime baseline and cost attribution (November 4)
+
+The runtime harness now also replays the **actual camera-debugger backend and
+runner**, using the same recorded RGB-D and masks. It scores published estimates;
+a rejected candidate retained for display does not count as a usable pose.
+Every source frame is processed, so a faster result cannot come from skipping
+frames. `--serial` isolates object/frame scheduling from the debugger's estimator.
+The debugger's optional asynchronous group fallback is excluded from this
+comparison; the experimental group method includes its own group calculation.
+
+`--settings` supplies one complete existing pipeline configuration to every
+scene, instead of inheriting different historical settings per scene. The fixed
+default recipe is a measurement anchor, **not a change to tracking defaults or a
+claim that default tracking is correct**. The two own demos plus labelled tomato
+and mustard clips form the initial small suite; the earlier full benchmark and
+recorded recovery tests remain the wider correctness checks.
+
+One full pass, median milliseconds between completed updates, saved masks:
+
+| Scene                      | Debugger, parallel | Same debugger, serial | Experimental loop, serial |
+| -------------------------- | -----------------: | --------------------: | ------------------------: |
+| Dowel / ring, 713 frames   |                 84 |                   161 |                       342 |
+| Gamepad / cube, 628 frames |                 86 |                   168 |                       271 |
+| DexYCB tomato, 68 frames   |                 59 |                    96 |                       254 |
+| YCB mustard, 181 frames    |                 41 |                    69 |                       135 |
+
+All 1,590 frames have identical input hashes across variants. Every debugger
+pose and missing-pose decision is identical with/without parallel scheduling.
+Parallel debugger frame latency is still 159 ms (dowel) and 177 ms (gamepad):
+throughput is not latency. These are single-pass baselines, not repeated-trial
+speed guarantees. The earlier 1,217 ms gamepad result used its heavier hosted
+configuration; the 271 ms result uses the common default recipe. Neither
+measurement replaces the other, and neither changes the hosted configuration.
+
+Quality is mixed. At the existing 20 mm / 20 degree label budget:
+
+| Scene / estimator    | Within budget | Outside budget | Missing |
+| -------------------- | ------------: | -------------: | ------: |
+| Tomato / debugger    |            31 |              5 |      31 |
+| Tomato / experiment  |            32 |             28 |       7 |
+| Mustard / debugger   |            21 |              0 |     159 |
+| Mustard / experiment |           169 |              0 |      11 |
+
+These are comparisons with dataset labels, with the previously documented label
+and symmetry limitations. Our demos have no full pose labels. During gamepad's
+existing human-annotated stationary interval, the experimental recipe kept all
+193 poses within the existing 5 mm / 5 degree budgets (maximum 1.49 mm / 4.93
+degrees). The debugger missed 30 poses and reached 8.82 degrees. This supports
+that limited interval, not post-grasp correctness.
+
+[Frozen settings](runtime-baseline-20261104/settings.json),
+[inputs, hardware and model revision](runtime-baseline-20261104/manifest.json),
+[full timing and quality results](runtime-baseline-20261104/results.json), and
+[stationary-interval check](runtime-baseline-20261104/gamepad-stationary.json).
+
+On the opening 12 frames of the hosted demos, profiling found 66 local solves
+for 22 object updates: three solves per object/frame, before additional recovery.
+For gamepad/cube, those solves consumed about 8.1 of 10.1 seconds. Calculating
+covariance and updating Kalman together took about 29 milliseconds. The costly
+work is repeated surface-distance, visibility and outline evaluation. Forward
+finite-difference queries are batched, but comparisons against retained earlier
+views call the scalar evaluator separately for each candidate/view. This is a
+target for equivalent computation, not a reason to remove geometry checks.
+Further instrumentation of the same short gamepad segment counted 12,010
+visibility evaluations and 11,878 scene-depth evaluations, consuming 1.49 and
+1.34 seconds respectively. About 3.45 seconds remained in surface-distance
+query/residual assembly outside those nested evaluations. [Profile and exact
+settings](runtime-baseline-20261104/profile.json).
+
+Limiting numerical libraries to one thread reduced the short instrumented
+gamepad median from 913 to 823 ms, and dowel from 269 to 258 ms. It also changed
+solver results (maximum differences 0.85 mm / 0.12 degrees over these short
+segments, plus one surface event). It is **not** an established equivalent
+optimization. The new baseline pins this environment for all its variants;
+the hosted server remains unchanged. Profiling runs are separate from timing
+runs because instrumentation adds overhead.
+
+Acceptance for the next change:
+
+- Fix inputs, model revision, settings and thread counts; preserve their hashes
+  and the source snapshot. Run one tracker, with no comparison render/export.
+- For an execution-only optimization, compare every pose, missing-pose decision
+  and surface update. Investigate numerical differences before accepting them.
+- For algorithm changes, report correct, wrong and missing frames per labelled
+  scene at both existing accuracy budgets, plus median errors. Keep reviewed
+  recovery cases and both own demos; do not hide regressions in an average.
+- Report processing throughput **and** frame latency, median and slow frames.
+  Repeat paired runs before claiming a speedup. Saved-mask measurements exclude
+  SAM, capture and display; separately measure the complete live path before
+  claiming real-time readiness.
+
+No new fitting algorithm, threshold, point density or recovery policy was
+changed during this audit. Known recovery failures remain failures. The first
+optimization to test should preserve the fitting equations and batch/cache
+their repeated calculations, rather than weaken the estimator to meet a timer.
+
+Verification: 122 related tests pass. Both benchmark publication tests fail when
+deliberately changed to score rejected display candidates as published poses.
+The recorded recovery suite still has the same seven failures (mustard, clock
+at two checkpoints, drill recovery and depth preparation, yellow block, gamepad)
+and seven passes. These restored-state checkpoints are distinct from the full
+sequential baseline above. No recovery fix is claimed. Raw runs, snapshots and
+verification logs are in `~/.cache/flash-tracker-restart/baseline-audit-20261104/`.
+
+### Publication checks before further optimization (November 4)
+
+The audit separates **publishing a contradicted fallback** from **finding a good
+fit**. A failed alignment was treated like an empty observation in two paths:
+insufficient overlap and a downstream source declining the fitted candidate.
+Both could return a group prediction without checking it against the observation
+that was still present. A rolled-back Kalman correction could also remain marked
+`accepted: true` in the diagnostics.
+
+The fallback now passes the same geometry check as other poses before publication.
+Empty observations still permit prediction. Rejection leaves the measured map and
+last accepted image connection unchanged; rolled-back corrections are reported as
+rejected. No fitting equation, threshold, growth setting or recovery policy changed.
+
+Twenty controlled RGB-D tests cover compatible/contradicted support, partial-view
+matching and background-depth checks on/off, Kalman on/off, overlap rejection,
+unchanged surface/covariance after rejection, and recovery in the next clear frame.
+Restoring unchecked fallback produces ten failures; restoring the misleading
+accepted flag produces twelve. These test the real fitter/filter with deliberately
+conflicting support, not a claimed reproduction of every recorded failure.
+
+All 1,590 frames across the complete dowel/ring, gamepad/cube, tomato and mustard
+replays preserve every pose, availability decision and surface-growth event under
+the frozen default recipe. The related suite has 232 passing checks, one skip and
+three pre-existing expected failures. One runtime test initially lacked
+`threadpoolctl` in the test environment; it and all twenty new cases pass in the
+inference environment. [Results and verification](runtime-baseline-20261104/publication-fix.json).
+CPU tests ran alongside this correctness replay, so its timings are not a fair
+speed comparison. The running server and its saved playback results were not replaced.
+
+The six recorded checkpoints still contain seven failing checks: five missing
+recoveries, drill depth cleanup selecting a far patch, and the gamepad's wrong
+orientation. This is the same failure set as before. They restore historical state
+and settings, unlike a complete causal replay. The default recipe also leaves the
+newer partial-view/background-depth checks opt-in. Passing publication tests does
+not establish that the geometry checks themselves reject every wrong alignment.
+
+External implementations reviewed for the later performance experiment:
+
+- [Open3D RGB-D odometry](https://www.open3d.org/docs/release/tutorial/pipelines/rgbd_odometry.html)
+  combines image and geometry residuals in a multiscale local solve. It is a useful
+  small comparison for consecutive-frame fitting, not a complete object tracker.
+- [BundleTrack](https://github.com/wenbowen123/BundleTrack) uses retained views and
+  GPU pose-graph optimization without a supplied object model. Its bounded view
+  selection is relevant; adopting it would change the estimator, not just speed it up.
+- [FoundationPose's GPU runtime](https://github.com/nvidia-isaac/foundation-pose-inference-library/blob/main/doc/ARCHITECTURE.md)
+  separates one-pose tracking from batched recovery search and reuses GPU resources.
+  Its tracking score is fixed at 1.0, so it cannot replace our acceptance checks.
+  Its model/reference preparation also needs separate evaluation for growing partial surfaces.
+- [KV-Tracker](https://github.com/Marwan99/kv_tracker) caches learned multi-view
+  features and has an object mode. It is RGB-based; retaining our measured-depth
+  constraints would be additional integration, not behavior supplied by that model.
+
+These are investigated alternatives, not installed replacements or measured speedups
+on our data. The immediate lower-risk experiment remains reusing/batching repeated
+visibility and surface calculations while keeping the current acceptance checks.
+
+### Exact runtime experiment (November 5)
+
+Caching the measured target/reference geometry and preparing each frame once,
+then fitting independent objects concurrently, preserved **every pose, status,
+and surface update** across the same four full replays. Median processing time
+changed from 342→269 ms/frame (dowel/ring), 271→223 (gamepad/cube), 254→248
+(tomato), and 135→135 (mustard). This is saved-mask processing, not live camera
+or SAM latency; the two-object method is still about 4 fps, short of 10 fps.
+The local solver dominates: on the first 120 dowel/ring frames it made 714
+refinements and spent most measured time in nearest-surface queries and depth
+residuals. Batching retained-view queries and disabling the reusable query
+pool each slowed the paired short replay, so neither change was retained.
+
+A one-start local-search trial was faster, but its earlier reported **89 mm
+"divergence" was an invalid accuracy measure**: that compares the transform's
+camera-origin translation. At frame 177 the transformed dowel surfaces differ
+by 3.0 mm median nearest-point distance, 8.5 mm at their centroids, and 12.4°
+in the long-axis direction. The object is only 163 mask pixels there. This is
+not pure axial symmetry, but neither the pose-translation number nor that small
+partial view establishes which result is correct. The one-start trial was
+reverted pending an observation-grounded comparison over the whole sequence.
+
+### Coarse-to-fine fitting, isolated experiment (November 5)
+
+The earlier trials used PCA orientation guesses or lowered one point limit
+from 2,048 to 1,024; neither was a multiscale solve. The new isolated harness,
+`benchmarks.flash_coarse_to_fine`, tested sparse-point fitting and Open3D
+point-to-plane ICP at two voxel sizes before the existing detailed fit.
+The server, saved masks, full-resolution geometry checks, Kalman and surface
+growth rules were unchanged. These are experiments, not new defaults.
+
+**Simply thinning the points did not help.** A 256-point, four-evaluation
+coarse pass followed by the ordinary detailed fit was 3–10% slower across all
+four full clips. Its stationary-gamepad rotation reached 5.05° versus the
+existing 5° acceptance budget (baseline 4.93°). Coarser nearest-point geometry
+changed the objective without consistently reducing the detailed work.
+
+**Shortening the detailed solve was faster; the coarse stage added little.**
+The second trial used 12 mm then 6 mm voxel surfaces, up to 12 point-to-plane
+iterations at each level, followed by up to eight detailed evaluations instead
+of 50. It retained the original starting pose whenever the coarse proposal
+scored worse against the full objective. Only 43 of 8,703 coarse proposals
+were used. A separate full replay with just the eight-evaluation limit was
+slightly faster and had the same headline quality results:
+
+| Full clip    | Existing detailed fit | Coarse + short detailed fit | Short detailed fit alone |
+| ------------ | --------------------: | --------------------------: | -----------------------: |
+| Dowel/ring   |                269 ms |                      169 ms |                   165 ms |
+| Gamepad/cube |                223 ms |                      148 ms |                   146 ms |
+| Tomato can   |                248 ms |                      157 ms |                   155 ms |
+| Mustard      |                135 ms |                      106 ms |                   102 ms |
+
+Median processing time per frame, all objects together, with recorded masks;
+camera capture, SAM, display and disk I/O are excluded. Each full-clip variant
+ran once, sequentially on identical input hashes. Small timing differences
+need repetitions; none establishes 10 fps end-to-end.
+
+The shorter variants passed the unchanged stationary-gamepad budget
+(1.19 mm / 4.69°, all 193 frames available). Tomato median labelled point
+error improved from 7.26 to 5.74 mm, but its large late label discrepancy remained
+(this metric does not resolve the can's rotational symmetry).
+Mustard's median changed only 5.67→5.79 mm, yet frames within the existing
+10 mm / 10° limits fell from 121 to 107 out of 180. Dowel missing poses rose
+from five to nine frames. No full-demo pose truth exists for our own demos.
+These trade-offs prevent adopting either faster configuration as a proven
+non-regressing optimization.
+
+Controlled box rotations (three repetitions each) showed that a coarse plane
+initializer can help: with the short detailed pass it took 37–41 ms versus
+45–55 ms for the short pass alone. However, on the recorded thin ring the
+unguarded plane fit wandered to an invalid alignment; its apparent speed gain
+was a failed fit. Checking proposals against the full objective prevented that
+failure. A coarse surface objective lacks our outline/depth constraints and
+can leave some motions poorly constrained; a fast solve alone is insufficient.
+
+Verification: all four adapter tests and 20 existing publication/fallback
+guardrail tests passed (24 total); Ruff and `git diff --check` passed. Open3D
+0.20 was isolated from the server environment; NumPy 2.2.6 and SciPy 1.17.1
+were retained. Pytest used its timeout plugin explicitly because unrelated
+plugin entry points in the isolated dependency set conflicted during startup.
+
+[Measured results, settings and local artifact paths](runtime-baseline-20261104/coarse-to-fine.json).
+[Open3D's multiscale ICP reference](https://www.open3d.org/docs/latest/tutorial/t_pipelines/t_icp_registration.html).

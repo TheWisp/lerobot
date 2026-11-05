@@ -1,0 +1,25 @@
+{
+  "related_suite": {
+    "passed": 122,
+    "failed": 0
+  },
+  "recorded_recovery": {
+    "passed": 7,
+    "failed": 7,
+    "failures": [
+      "mustard_180 recovery",
+      "clock_39 recovery",
+      "clock_100 recovery",
+      "drill_46 recovery",
+      "drill_46 depth preparation",
+      "yellow_68 recovery",
+      "gamepad_271 recovery"
+    ]
+  },
+  "mutation": {
+    "injected": "Score rejected display candidate instead of published debugger pose",
+    "result": "Both serial and pipelined tests fail on a non-null pose where publication is rejected.",
+    "tests_failed": 2
+  },
+  "raw_logs": "/home/feit/.cache/flash-tracker-restart/baseline-audit-20261104"
+}

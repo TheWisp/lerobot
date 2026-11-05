@@ -1,0 +1,45 @@
+{
+  "scope": "Human-annotated stationary period only, not full-demo pose ground truth. Existing 5 mm / 5 degree budget; no tracker-specific tolerance.",
+  "annotation": {
+    "case": {
+      "id": "flash-demo-gamepad-cube",
+      "kind": "flash_prepared_demo",
+      "artifact_root": "~/.cache/huggingface/lerobot/demos/pick_place",
+      "mask_evidence_dir": "~/.cache/huggingface/lerobot/demos/pick_place/flash/v1/preparation-cache/flash-gamepad-cube-20261031-gripper-scene-2ddfef845654.scene-evidence",
+      "expected_frames": 628,
+      "roles": [
+        "gamepad",
+        "cube"
+      ]
+    },
+    "role": "gamepad",
+    "stationary_last_frame": 192,
+    "run_last_frame": 280,
+    "input_sha256": "c66268f6cf9eff2d7786b0b1c14243edad15a5f057d8f445b229c66dd31c71d3",
+    "annotation": "The body and visible buttons remain fixed through frame 164 (7.24 s). The demonstrator reports grasp around 9 s with approximately 0.5 s uncertainty, so the stationary check extends through frame 192 (8.47149 s), the last frame before the earliest reported grasp at 8.5 s. The later part is heavily occluded and uses that human annotation, not independent 6D pose labels. The earlier claim that pickup began at frames 165-170 was unsupported.",
+    "max_center_displacement_mm": 5.0,
+    "max_rotation_deg": 5.0,
+    "tolerance_rationale": "Regression acceptance budgets fixed before the fix: 5 mm matches the existing surface depth budget; 5 degrees limits false rotation of this roughly 90 mm object to about 4 mm at its extremity. Neither value is passed to the tracker.",
+    "ufm_revision": "980825b59331413bb51e5773f9272bfce525bce2"
+  },
+  "variants": {
+    "debugger-defaults": {
+      "available": 163,
+      "frames": 193,
+      "max_center_mm": 3.759876286143007,
+      "max_rotation_deg": 8.819078668335992,
+      "max_center_frame": 172,
+      "max_rotation_frame": 168,
+      "within_existing_budget": false
+    },
+    "experiment-defaults": {
+      "available": 193,
+      "frames": 193,
+      "max_center_mm": 1.4937525859878618,
+      "max_rotation_deg": 4.926434887006544,
+      "max_center_frame": 168,
+      "max_rotation_frame": 177,
+      "within_existing_budget": true
+    }
+  }
+}

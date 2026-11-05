@@ -17,6 +17,93 @@ from lerobot.policies.flash.tracking_debug_worker import debug_reference
 from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig, build_vision_backend
 
 
+def test_prepared_frame_geometry_reuses_trees_without_changing_residual():
+    from lerobot.policies.flash.experimental_surface_session import ImageConditionedFit
+
+    with np.load(Path(__file__).with_name("fixtures") / "ring_visible_motion_20261016.npz") as data:
+        points = data["source_surface"]
+        depth = data["target_depth_mm"].astype(np.float32) * 0.001
+        mask = data["target_mask"].astype(bool)
+        k = data["intrinsics"]
+    obs = observation(depth, mask, k, asdict(SurfaceObservationConfig()))
+    current = {"obs": obs, "mask": mask, "depth": depth, "all_surface_points": obs["points"]}
+    config = ShapeConfig()
+    image = ImageConditionedFit(
+        points,
+        current,
+        k,
+        config,
+        image_reference=np.empty((0, 3)),
+        image_current=np.empty((0, 3)),
+        image_scale_m=config.depth_tolerance_m,
+        image_weight=0,
+    )
+    reused = WholeSurfaceFit(
+        points,
+        current,
+        k,
+        config,
+        prepared_reference=image.prepared_reference,
+        prepared_target=image.prepared_target,
+    )
+    independent = WholeSurfaceFit(points, current, k, config)
+    assert reused.reference_tree is image.reference_tree
+    assert reused.target_tree is image.target_tree
+    np.testing.assert_array_equal(reused.residual(np.eye(4)), independent.residual(np.eye(4)))
+
+
+@pytest.mark.parametrize("fixture", ["ring_visible_motion_20261016", "dowel_held_frame_315"])
+def test_surface_priority_reuses_search_pool_without_changing_solution(fixture, monkeypatch):
+    from threading import Thread
+
+    from lerobot.policies.flash.experimental_surface_session import ImageConditionedFit
+    from lerobot.policies.flash.surface_acceleration import SearchPool
+    from lerobot.policies.flash.surface_uncertainty import PoseUncertaintyConfig
+
+    with np.load(Path(__file__).with_name("fixtures") / f"{fixture}.npz") as data:
+        ring = "source_surface" in data
+        points = data["source_surface" if ring else "model_points"]
+        depth = data["target_depth_mm" if ring else "depth"].astype(np.float32) * 0.001
+        mask = data["target_mask" if ring else "mask"].astype(bool)
+        k = data["intrinsics"]
+        initial = np.eye(4) if ring else data["candidate"]
+    obs = observation(depth, mask, k, asdict(SurfaceObservationConfig()))
+    current = {"obs": obs, "mask": mask, "depth": depth, "all_surface_points": obs["points"]}
+    shape = ShapeConfig(max_evaluations=5, batch_query_workers=2)
+    kwargs = {
+        "image_reference": np.empty((0, 3)),
+        "image_current": np.empty((0, 3)),
+        "image_scale_m": 0.005,
+        "image_weight": 1,
+    }
+    uncertainty = PoseUncertaintyConfig(enabled=True)
+    expected, old_detail = ImageConditionedFit(points, current, k, shape, **kwargs).correct_surface_first(
+        initial,
+        initial,
+        uncertainty=uncertainty,
+    )
+    starts = []
+    original = Thread.start
+
+    def start(thread):
+        starts.append(thread.name)
+        return original(thread)
+
+    monkeypatch.setattr(Thread, "start", start)
+    with SearchPool(2) as pool:
+        actual, detail = ImageConditionedFit(
+            points, current, k, shape, search_pool=pool, **kwargs
+        ).correct_surface_first(
+            initial,
+            initial,
+            uncertainty=uncertainty,
+        )
+    np.testing.assert_array_equal(actual, expected)
+    assert detail == old_detail
+    assert starts and len(starts) <= 2
+    assert all(name.startswith("flash-surface-search") for name in starts)
+
+
 @pytest.mark.parametrize("fixture", ["ring_visible_motion_20261016", "dowel_held_frame_315"])
 def test_batched_solver_matches_scalar_on_recorded_surfaces(fixture, monkeypatch):
     data = np.load(Path(__file__).with_name("fixtures") / f"{fixture}.npz")

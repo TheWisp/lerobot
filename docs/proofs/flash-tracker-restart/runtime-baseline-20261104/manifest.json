@@ -1,0 +1,21 @@
+{
+  "scope": "Measurement recipe, not a tracking-default change. Every source frame, saved masks, single tracker; debugger excludes asynchronous group fallback.",
+  "ufm_revision": "980825b59331413bb51e5773f9272bfce525bce2",
+  "environment": {
+    "OPENBLAS_NUM_THREADS": "1",
+    "OMP_NUM_THREADS": "1",
+    "MKL_NUM_THREADS": "1",
+    "opencv_threads": 1
+  },
+  "hardware": {
+    "cpu": "AMD Ryzen 9 9950X 16-Core Processor",
+    "gpu": "NVIDIA GeForce RTX 5090"
+  },
+  "sources": [
+    "/home/feit/.cache/flash-tracker-restart/browser/.rebuild/rebuild-20261104-212930-09213c8d/runs/000/flash-demo-dowel-ring",
+    "/home/feit/.cache/flash-tracker-restart/recovery-audit-20261104/sequential-scene-outline/flash-demo-gamepad-cube",
+    "/home/feit/.cache/flash-tracker-restart/browser/.rebuild/rebuild-20261103-064305-f2be40a5/runs/008/on/dexycb-tomato-can-20201002_105506",
+    "/home/feit/.cache/flash-tracker-restart/browser/.rebuild/rebuild-20261104-173810-f70c5c52/worker-4/runs/000/ycb-mustard_easy_00_02"
+  ],
+  "raw_runs": "/home/feit/.cache/flash-tracker-restart/baseline-audit-20261104"
+}

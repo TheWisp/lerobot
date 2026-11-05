@@ -1,0 +1,3534 @@
+{
+  "scope": "One sequential full replay per method and scene, fixed saved RGB-D/masks and UFM revision; camera, SAM, GUI and disk I/O excluded. Unit: milliseconds per frame for all objects together. No independent pose labels for own demos.",
+  "controls": {
+    "coarse-control-20261105": {
+      "root": "/home/feit/.cache/flash-tracker-restart/coarse-control-20261105",
+      "results": [
+        {
+          "case": "box-20",
+          "variant": "baseline",
+          "repeats": 3,
+          "median_fit_ms": 169.97592599363998,
+          "median_full_cost": 0.05391093556960566,
+          "accepted": 3,
+          "median_truth_error": {
+            "median_point_error_mm": 3.393658612275521,
+            "rotation_error_deg": 0.1320633118237164
+          },
+          "stages_first_repetition": null
+        },
+        {
+          "case": "box-20",
+          "variant": "coarse128",
+          "repeats": 3,
+          "median_fit_ms": 296.55959899537265,
+          "median_full_cost": 0.05478516402282697,
+          "accepted": 3,
+          "median_truth_error": {
+            "median_point_error_mm": 4.7556422046931734,
+            "rotation_error_deg": 0.24282498488291876
+          },
+          "stages_first_repetition": {
+            "points": 128,
+            "coarse_max_evaluations": 12,
+            "simplify_trees": true,
+            "refinements": 1,
+            "mean_per_refinement": {
+              "prepare_ms": 1.3272880460135639,
+              "coarse_ms": 22.766418987885118,
+              "fine_ms": 267.4436160014011,
+              "coarse_evaluations": 12.0,
+              "fine_evaluations": 50.0,
+              "coarse_reference_queries": 96.0,
+              "coarse_target_queries": 126.0,
+              "fine_reference_queries": 1380.0,
+              "fine_target_queries": 1466.0
+            }
+          }
+        },
+        {
+          "case": "box-20",
+          "variant": "coarse256",
+          "repeats": 3,
+          "median_fit_ms": 151.48717199917883,
+          "median_full_cost": 0.05799229130458981,
+          "accepted": 3,
+          "median_truth_error": {
+            "median_point_error_mm": 2.156678566245071,
+            "rotation_error_deg": 0.010951029520682625
+          },
+          "stages_first_repetition": {
+            "points": 256,
+            "coarse_max_evaluations": 12,
+            "simplify_trees": true,
+            "refinements": 1,
+            "mean_per_refinement": {
+              "prepare_ms": 1.349709986243397,
+              "coarse_ms": 20.099661021959037,
+              "fine_ms": 130.34263998270035,
+              "coarse_evaluations": 12.0,
+              "fine_evaluations": 24.0,
+              "coarse_reference_queries": 187.0,
+              "coarse_target_queries": 243.0,
+              "fine_reference_queries": 1380.0,
+              "fine_target_queries": 1466.0
+            }
+          }
+        },
+        {
+          "case": "box-20",
+          "variant": "queries256",
+          "repeats": 3,
+          "median_fit_ms": 274.0833800053224,
+          "median_full_cost": 0.052879281849730314,
+          "accepted": 3,
+          "median_truth_error": {
+            "median_point_error_mm": 0.8374276432534029,
+            "rotation_error_deg": 0.6327480079231578
+          },
+          "stages_first_repetition": {
+            "points": 256,
+            "coarse_max_evaluations": 12,
+            "simplify_trees": false,
+            "refinements": 1,
+            "mean_per_refinement": {
+              "prepare_ms": 1.0413440177217126,
+              "coarse_ms": 23.752980981953442,
+              "fine_ms": 253.88390303123742,
+              "coarse_evaluations": 12.0,
+              "fine_evaluations": 50.0,
+              "coarse_reference_queries": 187.0,
+              "coarse_target_queries": 243.0,
+              "fine_reference_queries": 1380.0,
+              "fine_target_queries": 1466.0
+            }
+          }
+        },
+        {
+          "case": "box-40",
+          "variant": "baseline",
+          "repeats": 3,
+          "median_fit_ms": 109.34407002059743,
+          "median_full_cost": 0.05336980925989579,
+          "accepted": 3,
+          "median_truth_error": {
+            "median_point_error_mm": 2.944410067911507,
+            "rotation_error_deg": 0.15831927816952493
+          },
+          "stages_first_repetition": null
+        },
+        {
+          "case": "box-40",
+          "variant": "coarse128",
+          "repeats": 3,
+          "median_fit_ms": 172.471574973315,
+          "median_full_cost": 0.06263119825318536,
+          "accepted": 3,
+          "median_truth_error": {
+            "median_point_error_mm": 5.408128361168902,
+            "rotation_error_deg": 0.2016570170806167
+          },
+          "stages_first_repetition": {
+            "points": 128,
+            "coarse_max_evaluations": 12,
+            "simplify_trees": true,
+            "refinements": 1,
+            "mean_per_refinement": {
+              "prepare_ms": 1.1713969870470464,
+              "coarse_ms": 17.61386002181098,
+              "fine_ms": 152.01300400076434,
+              "coarse_evaluations": 12.0,
+              "fine_evaluations": 28.0,
+              "coarse_reference_queries": 96.0,
+              "coarse_target_queries": 122.0,
+              "fine_reference_queries": 1380.0,
+              "fine_target_queries": 1452.0
+            }
+          }
+        },
+        {
+          "case": "box-40",
+          "variant": "coarse256",
+          "repeats": 3,
+          "median_fit_ms": 152.95872901333496,
+          "median_full_cost": 0.055115847428169024,
+          "accepted": 3,
+          "median_truth_error": {
+            "median_point_error_mm": 2.657153878577758,
+            "rotation_error_deg": 0.13282827557175844
+          },
+          "stages_first_repetition": {
+            "points": 256,
+            "coarse_max_evaluations": 12,
+            "simplify_trees": true,
+            "refinements": 1,
+            "mean_per_refinement": {
+              "prepare_ms": 1.2034560204483569,
+              "coarse_ms": 22.349190956447273,
+              "fine_ms": 126.4378700288944,
+              "coarse_evaluations": 12.0,
+              "fine_evaluations": 26.0,
+              "coarse_reference_queries": 187.0,
+              "coarse_target_queries": 242.0,
+              "fine_reference_queries": 1380.0,
+              "fine_target_queries": 1452.0
+            }
+          }
+        },
+        {
+          "case": "box-40",
+          "variant": "queries256",
+          "repeats": 3,
+          "median_fit_ms": 200.82934200763702,
+          "median_full_cost": 0.05336077386678259,
+          "accepted": 3,
+          "median_truth_error": {
+            "median_point_error_mm": 2.935171854732633,
+            "rotation_error_deg": 0.15225685929973262
+          },
+          "stages_first_repetition": {
+            "points": 256,
+            "coarse_max_evaluations": 12,
+            "simplify_trees": false,
+            "refinements": 1,
+            "mean_per_refinement": {
+              "prepare_ms": 1.1166640324518085,
+              "coarse_ms": 23.0015889974311,
+              "fine_ms": 175.88371399324387,
+              "coarse_evaluations": 12.0,
+              "fine_evaluations": 35.0,
+              "coarse_reference_queries": 187.0,
+              "coarse_target_queries": 242.0,
+              "fine_reference_queries": 1380.0,
+              "fine_target_queries": 1452.0
+            }
+          }
+        },
+        {
+          "case": "box-60",
+          "variant": "baseline",
+          "repeats": 3,
+          "median_fit_ms": 124.40744001651183,
+          "median_full_cost": 0.06648076207238517,
+          "accepted": 3,
+          "median_truth_error": {
+            "median_point_error_mm": 2.9213006296407795,
+            "rotation_error_deg": 0.5800555816852332
+          },
+          "stages_first_repetition": null
+        },
+        {
+          "case": "box-60",
+          "variant": "coarse128",
+          "repeats": 3,
+          "median_fit_ms": 212.18947897432372,
+          "median_full_cost": 0.0799359370596928,
+          "accepted": 3,
+          "median_truth_error": {
+            "median_point_error_mm": 4.843667066469269,
+            "rotation_error_deg": 1.3735433677874078
+          },
+          "stages_first_repetition": {
+            "points": 128,
+            "coarse_max_evaluations": 12,
+            "simplify_trees": true,
+            "refinements": 1,
+            "mean_per_refinement": {
+              "prepare_ms": 1.4400079962797463,
+              "coarse_ms": 16.460838029161096,
+              "fine_ms": 218.7300689984113,
+              "coarse_evaluations": 12.0,
+              "fine_evaluations": 36.0,
+              "coarse_reference_queries": 96.0,
+              "coarse_target_queries": 120.0,
+              "fine_reference_queries": 1380.0,
+              "fine_target_queries": 1635.0
+            }
+          }
+        },
+        {
+          "case": "box-60",
+          "variant": "coarse256",
+          "repeats": 3,
+          "median_fit_ms": 229.8883480252698,
+          "median_full_cost": 0.07687089477918212,
+          "accepted": 3,
+          "median_truth_error": {
+            "median_point_error_mm": 2.9525830164634943,
+            "rotation_error_deg": 1.3779917970575895
+          },
+          "stages_first_repetition": {
+            "points": 256,
+            "coarse_max_evaluations": 12,
+            "simplify_trees": true,
+            "refinements": 1,
+            "mean_per_refinement": {
+              "prepare_ms": 1.5372699708677828,
+              "coarse_ms": 26.34295600000769,
+              "fine_ms": 205.9328590403311,
+              "coarse_evaluations": 12.0,
+              "fine_evaluations": 39.0,
+              "coarse_reference_queries": 187.0,
+              "coarse_target_queries": 216.0,
+              "fine_reference_queries": 1380.0,
+              "fine_target_queries": 1635.0
+            }
+          }
+        },
+        {
+          "case": "box-60",
+          "variant": "queries256",
+          "repeats": 3,
+          "median_fit_ms": 127.43881897768006,
+          "median_full_cost": 0.06645571114504324,
+          "accepted": 3,
+          "median_truth_error": {
+            "median_point_error_mm": 2.9078930464320663,
+            "rotation_error_deg": 0.5899018251254383
+          },
+          "stages_first_repetition": {
+            "points": 256,
+            "coarse_max_evaluations": 12,
+            "simplify_trees": false,
+            "refinements": 1,
+            "mean_per_refinement": {
+              "prepare_ms": 1.4232370303943753,
+              "coarse_ms": 20.384803996421397,
+              "fine_ms": 105.87800899520516,
+              "coarse_evaluations": 12.0,
+              "fine_evaluations": 20.0,
+              "coarse_reference_queries": 187.0,
+              "coarse_target_queries": 216.0,
+              "fine_reference_queries": 1380.0,
+              "fine_target_queries": 1635.0
+            }
+          }
+        },
+        {
+          "case": "ring_visible_motion_20261016",
+          "variant": "baseline",
+          "repeats": 3,
+          "median_fit_ms": 258.4744119667448,
+          "median_full_cost": 0.10825001949996871,
+          "accepted": 3,
+          "median_truth_error": null,
+          "stages_first_repetition": null
+        },
+        {
+          "case": "ring_visible_motion_20261016",
+          "variant": "coarse128",
+          "repeats": 3,
+          "median_fit_ms": 233.33221703069285,
+          "median_full_cost": 0.06961480763197182,
+          "accepted": 3,
+          "median_truth_error": null,
+          "stages_first_repetition": {
+            "points": 128,
+            "coarse_max_evaluations": 12,
+            "simplify_trees": true,
+            "refinements": 1,
+            "mean_per_refinement": {
+              "prepare_ms": 1.0151250171475112,
+              "coarse_ms": 12.014348001684994,
+              "fine_ms": 221.576040959917,
+              "coarse_evaluations": 12.0,
+              "fine_evaluations": 50.0,
+              "coarse_reference_queries": 115.0,
+              "coarse_target_queries": 113.0,
+              "fine_reference_queries": 1909.0,
+              "fine_target_queries": 1976.0
+            }
+          }
+        },
+        {
+          "case": "ring_visible_motion_20261016",
+          "variant": "coarse256",
+          "repeats": 3,
+          "median_fit_ms": 252.22881196532398,
+          "median_full_cost": 0.08643322373455445,
+          "accepted": 3,
+          "median_truth_error": null,
+          "stages_first_repetition": {
+            "points": 256,
+            "coarse_max_evaluations": 12,
+            "simplify_trees": true,
+            "refinements": 1,
+            "mean_per_refinement": {
+              "prepare_ms": 1.0635560029186308,
+              "coarse_ms": 13.79338902188465,
+              "fine_ms": 231.01241601398215,
+              "coarse_evaluations": 12.0,
+              "fine_evaluations": 50.0,
+              "coarse_reference_queries": 229.0,
+              "coarse_target_queries": 232.0,
+              "fine_reference_queries": 1909.0,
+              "fine_target_queries": 1976.0
+            }
+          }
+        },
+        {
+          "case": "ring_visible_motion_20261016",
+          "variant": "queries256",
+          "repeats": 3,
+          "median_fit_ms": 246.8000779626891,
+          "median_full_cost": 0.07893434485205442,
+          "accepted": 3,
+          "median_truth_error": null,
+          "stages_first_repetition": {
+            "points": 256,
+            "coarse_max_evaluations": 12,
+            "simplify_trees": false,
+            "refinements": 1,
+            "mean_per_refinement": {
+              "prepare_ms": 1.0291010257788002,
+              "coarse_ms": 20.422092988155782,
+              "fine_ms": 223.86125702178106,
+              "coarse_evaluations": 12.0,
+              "fine_evaluations": 50.0,
+              "coarse_reference_queries": 229.0,
+              "coarse_target_queries": 232.0,
+              "fine_reference_queries": 1909.0,
+              "fine_target_queries": 1976.0
+            }
+          }
+        },
+        {
+          "case": "dowel_held_frame_315",
+          "variant": "baseline",
+          "repeats": 3,
+          "median_fit_ms": 76.13466499606147,
+          "median_full_cost": 2.160623191936285,
+          "accepted": 0,
+          "median_truth_error": null,
+          "stages_first_repetition": null
+        },
+        {
+          "case": "dowel_held_frame_315",
+          "variant": "coarse128",
+          "repeats": 3,
+          "median_fit_ms": 111.41114897327498,
+          "median_full_cost": 1.9704280997669283,
+          "accepted": 0,
+          "median_truth_error": null,
+          "stages_first_repetition": {
+            "points": 128,
+            "coarse_max_evaluations": 12,
+            "simplify_trees": true,
+            "refinements": 2,
+            "mean_per_refinement": {
+              "prepare_ms": 0.09207200491800904,
+              "coarse_ms": 8.016876003239304,
+              "fine_ms": 46.72364649013616,
+              "coarse_evaluations": 12.0,
+              "fine_evaluations": 39.0,
+              "coarse_reference_queries": 55.0,
+              "coarse_target_queries": 100.0,
+              "fine_reference_queries": 780.0,
+              "fine_target_queries": 100.0
+            }
+          }
+        },
+        {
+          "case": "dowel_held_frame_315",
+          "variant": "coarse256",
+          "repeats": 3,
+          "median_fit_ms": 89.86713096965104,
+          "median_full_cost": 1.7741917049670808,
+          "accepted": 0,
+          "median_truth_error": null,
+          "stages_first_repetition": {
+            "points": 256,
+            "coarse_max_evaluations": 12,
+            "simplify_trees": true,
+            "refinements": 2,
+            "mean_per_refinement": {
+              "prepare_ms": 0.09703650721348822,
+              "coarse_ms": 8.49598998320289,
+              "fine_ms": 34.45241949521005,
+              "coarse_evaluations": 12.0,
+              "fine_evaluations": 34.0,
+              "coarse_reference_queries": 96.0,
+              "coarse_target_queries": 100.0,
+              "fine_reference_queries": 780.0,
+              "fine_target_queries": 100.0
+            }
+          }
+        },
+        {
+          "case": "dowel_held_frame_315",
+          "variant": "queries256",
+          "repeats": 3,
+          "median_fit_ms": 51.7687409883365,
+          "median_full_cost": 2.7997181766140162,
+          "accepted": 0,
+          "median_truth_error": null,
+          "stages_first_repetition": {
+            "points": 256,
+            "coarse_max_evaluations": 12,
+            "simplify_trees": false,
+            "refinements": 2,
+            "mean_per_refinement": {
+              "prepare_ms": 0.08019449887797236,
+              "coarse_ms": 8.197528019081801,
+              "fine_ms": 17.214545980095863,
+              "coarse_evaluations": 12.0,
+              "fine_evaluations": 18.5,
+              "coarse_reference_queries": 96.0,
+              "coarse_target_queries": 100.0,
+              "fine_reference_queries": 780.0,
+              "fine_target_queries": 100.0
+            }
+          }
+        }
+      ]
+    },
+    "coarse-control4-20261105": {
+      "root": "/home/feit/.cache/flash-tracker-restart/coarse-control4-20261105",
+      "results": [
+        {
+          "case": "box-20",
+          "variant": "baseline",
+          "repeats": 3,
+          "median_fit_ms": 188.00152302719653,
+          "median_full_cost": 0.05391093556960566,
+          "accepted": 3,
+          "median_truth_error": {
+            "median_point_error_mm": 3.393658612275521,
+            "rotation_error_deg": 0.1320633118237164
+          },
+          "stages_first_repetition": null
+        },
+        {
+          "case": "box-20",
+          "variant": "coarse128",
+          "repeats": 3,
+          "median_fit_ms": 193.18340596510097,
+          "median_full_cost": 0.05660951225128065,
+          "accepted": 3,
+          "median_truth_error": {
+            "median_point_error_mm": 4.0281423680536745,
+            "rotation_error_deg": 0.6605994122752052
+          },
+          "stages_first_repetition": {
+            "points": 128,
+            "coarse_max_evaluations": 4,
+            "simplify_trees": true,
+            "refinements": 1,
+            "mean_per_refinement": {
+              "prepare_ms": 1.1018470395356417,
+              "coarse_ms": 7.142923946958035,
+              "fine_ms": 202.805578999687,
+              "coarse_evaluations": 4.0,
+              "fine_evaluations": 32.0,
+              "coarse_reference_queries": 96.0,
+              "coarse_target_queries": 126.0,
+              "fine_reference_queries": 1380.0,
+              "fine_target_queries": 1466.0
+            }
+          }
+        },
+        {
+          "case": "box-20",
+          "variant": "coarse256",
+          "repeats": 3,
+          "median_fit_ms": 301.97952198795974,
+          "median_full_cost": 0.053975701875109645,
+          "accepted": 3,
+          "median_truth_error": {
+            "median_point_error_mm": 3.3701063303878676,
+            "rotation_error_deg": 0.28483933843161086
+          },
+          "stages_first_repetition": {
+            "points": 256,
+            "coarse_max_evaluations": 4,
+            "simplify_trees": true,
+            "refinements": 1,
+            "mean_per_refinement": {
+              "prepare_ms": 1.3601789833046496,
+              "coarse_ms": 8.37095599854365,
+              "fine_ms": 290.33987398725003,
+              "coarse_evaluations": 4.0,
+              "fine_evaluations": 50.0,
+              "coarse_reference_queries": 187.0,
+              "coarse_target_queries": 243.0,
+              "fine_reference_queries": 1380.0,
+              "fine_target_queries": 1466.0
+            }
+          }
+        },
+        {
+          "case": "box-20",
+          "variant": "queries256",
+          "repeats": 3,
+          "median_fit_ms": 272.1856039715931,
+          "median_full_cost": 0.05069629915868184,
+          "accepted": 3,
+          "median_truth_error": {
+            "median_point_error_mm": 0.5583259171523317,
+            "rotation_error_deg": 0.7063970310694296
+          },
+          "stages_first_repetition": {
+            "points": 256,
+            "coarse_max_evaluations": 4,
+            "simplify_trees": false,
+            "refinements": 1,
+            "mean_per_refinement": {
+              "prepare_ms": 1.058566034771502,
+              "coarse_ms": 8.356509963050485,
+              "fine_ms": 249.67479199403897,
+              "coarse_evaluations": 4.0,
+              "fine_evaluations": 50.0,
+              "coarse_reference_queries": 187.0,
+              "coarse_target_queries": 243.0,
+              "fine_reference_queries": 1380.0,
+              "fine_target_queries": 1466.0
+            }
+          }
+        },
+        {
+          "case": "box-40",
+          "variant": "baseline",
+          "repeats": 3,
+          "median_fit_ms": 109.39046501880512,
+          "median_full_cost": 0.05336980925989579,
+          "accepted": 3,
+          "median_truth_error": {
+            "median_point_error_mm": 2.944410067911507,
+            "rotation_error_deg": 0.15831927816952493
+          },
+          "stages_first_repetition": null
+        },
+        {
+          "case": "box-40",
+          "variant": "coarse128",
+          "repeats": 3,
+          "median_fit_ms": 162.2564530116506,
+          "median_full_cost": 0.0626291065361405,
+          "accepted": 3,
+          "median_truth_error": {
+            "median_point_error_mm": 5.376679369281443,
+            "rotation_error_deg": 0.19497142324929229
+          },
+          "stages_first_repetition": {
+            "points": 128,
+            "coarse_max_evaluations": 4,
+            "simplify_trees": true,
+            "refinements": 1,
+            "mean_per_refinement": {
+              "prepare_ms": 1.157962018623948,
+              "coarse_ms": 7.532791991252452,
+              "fine_ms": 149.07638903241605,
+              "coarse_evaluations": 4.0,
+              "fine_evaluations": 29.0,
+              "coarse_reference_queries": 96.0,
+              "coarse_target_queries": 122.0,
+              "fine_reference_queries": 1380.0,
+              "fine_target_queries": 1452.0
+            }
+          }
+        },
+        {
+          "case": "box-40",
+          "variant": "coarse256",
+          "repeats": 3,
+          "median_fit_ms": 147.41920598316938,
+          "median_full_cost": 0.058492959833878234,
+          "accepted": 3,
+          "median_truth_error": {
+            "median_point_error_mm": 4.068155135289244,
+            "rotation_error_deg": 0.1493958914741556
+          },
+          "stages_first_repetition": {
+            "points": 256,
+            "coarse_max_evaluations": 4,
+            "simplify_trees": true,
+            "refinements": 1,
+            "mean_per_refinement": {
+              "prepare_ms": 1.1982870055362582,
+              "coarse_ms": 9.067556995432824,
+              "fine_ms": 124.59745304659009,
+              "coarse_evaluations": 4.0,
+              "fine_evaluations": 27.0,
+              "coarse_reference_queries": 187.0,
+              "coarse_target_queries": 242.0,
+              "fine_reference_queries": 1380.0,
+              "fine_target_queries": 1452.0
+            }
+          }
+        },
+        {
+          "case": "box-40",
+          "variant": "queries256",
+          "repeats": 3,
+          "median_fit_ms": 157.4585770140402,
+          "median_full_cost": 0.053360136627484865,
+          "accepted": 3,
+          "median_truth_error": {
+            "median_point_error_mm": 2.932197212761726,
+            "rotation_error_deg": 0.15200410702591802
+          },
+          "stages_first_repetition": {
+            "points": 256,
+            "coarse_max_evaluations": 4,
+            "simplify_trees": false,
+            "refinements": 1,
+            "mean_per_refinement": {
+              "prepare_ms": 1.1308310204185545,
+              "coarse_ms": 8.378038997761905,
+              "fine_ms": 134.4987569609657,
+              "coarse_evaluations": 4.0,
+              "fine_evaluations": 30.0,
+              "coarse_reference_queries": 187.0,
+              "coarse_target_queries": 242.0,
+              "fine_reference_queries": 1380.0,
+              "fine_target_queries": 1452.0
+            }
+          }
+        },
+        {
+          "case": "box-60",
+          "variant": "baseline",
+          "repeats": 3,
+          "median_fit_ms": 121.9768599839881,
+          "median_full_cost": 0.06648076207238517,
+          "accepted": 3,
+          "median_truth_error": {
+            "median_point_error_mm": 2.9213006296407795,
+            "rotation_error_deg": 0.5800555816852332
+          },
+          "stages_first_repetition": null
+        },
+        {
+          "case": "box-60",
+          "variant": "coarse128",
+          "repeats": 3,
+          "median_fit_ms": 141.4827440166846,
+          "median_full_cost": 0.0759096768218746,
+          "accepted": 3,
+          "median_truth_error": {
+            "median_point_error_mm": 2.974917916381126,
+            "rotation_error_deg": 1.3809210073511138
+          },
+          "stages_first_repetition": {
+            "points": 128,
+            "coarse_max_evaluations": 4,
+            "simplify_trees": true,
+            "refinements": 1,
+            "mean_per_refinement": {
+              "prepare_ms": 1.4595850370824337,
+              "coarse_ms": 5.656217981595546,
+              "fine_ms": 132.7652310137637,
+              "coarse_evaluations": 4.0,
+              "fine_evaluations": 27.0,
+              "coarse_reference_queries": 96.0,
+              "coarse_target_queries": 120.0,
+              "fine_reference_queries": 1380.0,
+              "fine_target_queries": 1635.0
+            }
+          }
+        },
+        {
+          "case": "box-60",
+          "variant": "coarse256",
+          "repeats": 3,
+          "median_fit_ms": 119.40806597704068,
+          "median_full_cost": 0.06489631524808546,
+          "accepted": 3,
+          "median_truth_error": {
+            "median_point_error_mm": 2.68696894321005,
+            "rotation_error_deg": 0.5830672359817581
+          },
+          "stages_first_repetition": {
+            "points": 256,
+            "coarse_max_evaluations": 4,
+            "simplify_trees": true,
+            "refinements": 1,
+            "mean_per_refinement": {
+              "prepare_ms": 1.5028350171633065,
+              "coarse_ms": 8.471273991744965,
+              "fine_ms": 106.10094398725778,
+              "coarse_evaluations": 4.0,
+              "fine_evaluations": 22.0,
+              "coarse_reference_queries": 187.0,
+              "coarse_target_queries": 216.0,
+              "fine_reference_queries": 1380.0,
+              "fine_target_queries": 1635.0
+            }
+          }
+        },
+        {
+          "case": "box-60",
+          "variant": "queries256",
+          "repeats": 3,
+          "median_fit_ms": 174.1239270195365,
+          "median_full_cost": 0.06642430916858905,
+          "accepted": 3,
+          "median_truth_error": {
+            "median_point_error_mm": 2.872422693830331,
+            "rotation_error_deg": 0.6246055896141949
+          },
+          "stages_first_repetition": {
+            "points": 256,
+            "coarse_max_evaluations": 4,
+            "simplify_trees": false,
+            "refinements": 1,
+            "mean_per_refinement": {
+              "prepare_ms": 1.3901150086894631,
+              "coarse_ms": 8.104098029434681,
+              "fine_ms": 162.4595819739625,
+              "coarse_evaluations": 4.0,
+              "fine_evaluations": 34.0,
+              "coarse_reference_queries": 187.0,
+              "coarse_target_queries": 216.0,
+              "fine_reference_queries": 1380.0,
+              "fine_target_queries": 1635.0
+            }
+          }
+        },
+        {
+          "case": "ring_visible_motion_20261016",
+          "variant": "baseline",
+          "repeats": 3,
+          "median_fit_ms": 252.82888999208808,
+          "median_full_cost": 0.10825001949996871,
+          "accepted": 3,
+          "median_truth_error": null,
+          "stages_first_repetition": null
+        },
+        {
+          "case": "ring_visible_motion_20261016",
+          "variant": "coarse128",
+          "repeats": 3,
+          "median_fit_ms": 232.39317099796608,
+          "median_full_cost": 0.08719530007420273,
+          "accepted": 3,
+          "median_truth_error": null,
+          "stages_first_repetition": {
+            "points": 128,
+            "coarse_max_evaluations": 4,
+            "simplify_trees": true,
+            "refinements": 1,
+            "mean_per_refinement": {
+              "prepare_ms": 1.0174390044994652,
+              "coarse_ms": 4.323871980886906,
+              "fine_ms": 225.76736198971048,
+              "coarse_evaluations": 4.0,
+              "fine_evaluations": 50.0,
+              "coarse_reference_queries": 115.0,
+              "coarse_target_queries": 113.0,
+              "fine_reference_queries": 1909.0,
+              "fine_target_queries": 1976.0
+            }
+          }
+        },
+        {
+          "case": "ring_visible_motion_20261016",
+          "variant": "coarse256",
+          "repeats": 3,
+          "median_fit_ms": 245.01181702362373,
+          "median_full_cost": 0.09625184233785933,
+          "accepted": 3,
+          "median_truth_error": null,
+          "stages_first_repetition": {
+            "points": 256,
+            "coarse_max_evaluations": 4,
+            "simplify_trees": true,
+            "refinements": 1,
+            "mean_per_refinement": {
+              "prepare_ms": 1.5423890436068177,
+              "coarse_ms": 5.368451005779207,
+              "fine_ms": 236.81882297387347,
+              "coarse_evaluations": 4.0,
+              "fine_evaluations": 50.0,
+              "coarse_reference_queries": 229.0,
+              "coarse_target_queries": 232.0,
+              "fine_reference_queries": 1909.0,
+              "fine_target_queries": 1976.0
+            }
+          }
+        },
+        {
+          "case": "ring_visible_motion_20261016",
+          "variant": "queries256",
+          "repeats": 3,
+          "median_fit_ms": 243.55942604597658,
+          "median_full_cost": 0.08635300620796374,
+          "accepted": 3,
+          "median_truth_error": null,
+          "stages_first_repetition": {
+            "points": 256,
+            "coarse_max_evaluations": 4,
+            "simplify_trees": false,
+            "refinements": 1,
+            "mean_per_refinement": {
+              "prepare_ms": 1.0609009768813848,
+              "coarse_ms": 8.978450030554086,
+              "fine_ms": 232.10211796686053,
+              "coarse_evaluations": 4.0,
+              "fine_evaluations": 50.0,
+              "coarse_reference_queries": 229.0,
+              "coarse_target_queries": 232.0,
+              "fine_reference_queries": 1909.0,
+              "fine_target_queries": 1976.0
+            }
+          }
+        },
+        {
+          "case": "dowel_held_frame_315",
+          "variant": "baseline",
+          "repeats": 3,
+          "median_fit_ms": 76.83656498556957,
+          "median_full_cost": 2.160623191936285,
+          "accepted": 0,
+          "median_truth_error": null,
+          "stages_first_repetition": null
+        },
+        {
+          "case": "dowel_held_frame_315",
+          "variant": "coarse128",
+          "repeats": 3,
+          "median_fit_ms": 68.21752595715225,
+          "median_full_cost": 2.273139364799982,
+          "accepted": 0,
+          "median_truth_error": null,
+          "stages_first_repetition": {
+            "points": 128,
+            "coarse_max_evaluations": 4,
+            "simplify_trees": true,
+            "refinements": 2,
+            "mean_per_refinement": {
+              "prepare_ms": 0.12766348663717508,
+              "coarse_ms": 3.7504155188798904,
+              "fine_ms": 31.222975987475365,
+              "coarse_evaluations": 4.0,
+              "fine_evaluations": 26.0,
+              "coarse_reference_queries": 55.0,
+              "coarse_target_queries": 100.0,
+              "fine_reference_queries": 780.0,
+              "fine_target_queries": 100.0
+            }
+          }
+        },
+        {
+          "case": "dowel_held_frame_315",
+          "variant": "coarse256",
+          "repeats": 3,
+          "median_fit_ms": 80.42144705541432,
+          "median_full_cost": 2.4677614898154037,
+          "accepted": 0,
+          "median_truth_error": null,
+          "stages_first_repetition": {
+            "points": 256,
+            "coarse_max_evaluations": 4,
+            "simplify_trees": true,
+            "refinements": 2,
+            "mean_per_refinement": {
+              "prepare_ms": 0.09785700240172446,
+              "coarse_ms": 2.898250997532159,
+              "fine_ms": 36.82509801001288,
+              "coarse_evaluations": 4.0,
+              "fine_evaluations": 32.0,
+              "coarse_reference_queries": 96.0,
+              "coarse_target_queries": 100.0,
+              "fine_reference_queries": 780.0,
+              "fine_target_queries": 100.0
+            }
+          }
+        },
+        {
+          "case": "dowel_held_frame_315",
+          "variant": "queries256",
+          "repeats": 3,
+          "median_fit_ms": 54.77948999032378,
+          "median_full_cost": 2.2960162742953316,
+          "accepted": 0,
+          "median_truth_error": null,
+          "stages_first_repetition": {
+            "points": 256,
+            "coarse_max_evaluations": 4,
+            "simplify_trees": false,
+            "refinements": 2,
+            "mean_per_refinement": {
+              "prepare_ms": 0.07960351649671793,
+              "coarse_ms": 2.9215240210760385,
+              "fine_ms": 24.52639996772632,
+              "coarse_evaluations": 4.0,
+              "fine_evaluations": 23.0,
+              "coarse_reference_queries": 96.0,
+              "coarse_target_queries": 100.0,
+              "fine_reference_queries": 780.0,
+              "fine_target_queries": 100.0
+            }
+          }
+        }
+      ]
+    },
+    "coarse-planes-20261105": {
+      "root": "/home/feit/.cache/flash-tracker-restart/coarse-planes-20261105",
+      "results": [
+        {
+          "case": "box-20",
+          "variant": "baseline",
+          "repeats": 3,
+          "median_fit_ms": 171.2520340224728,
+          "median_full_cost": 0.05391093556960566,
+          "accepted": 3,
+          "median_truth_error": {
+            "median_point_error_mm": 3.393658612275521,
+            "rotation_error_deg": 0.1320633118237164
+          },
+          "stages_first_repetition": null
+        },
+        {
+          "case": "box-20",
+          "variant": "planes6-3mm",
+          "repeats": 3,
+          "median_fit_ms": 271.789696009364,
+          "median_full_cost": 0.05837380544592051,
+          "accepted": 3,
+          "median_truth_error": {
+            "median_point_error_mm": 4.362558559527404,
+            "rotation_error_deg": 1.49651007920214
+          },
+          "stages_first_repetition": {
+            "initializer": "open3d_point_to_plane",
+            "voxel_sizes_m": [
+              0.006,
+              0.003
+            ],
+            "max_iterations_per_level": 20,
+            "fine_max_evaluations": null,
+            "refinements": 1,
+            "mean_per_refinement": {
+              "prepare_ms": 4.250825033523142,
+              "coarse_ms": 1.4328549732454121,
+              "fine_ms": 264.1668660216965,
+              "fine_evaluations": 50.0,
+              "coarse_reference_queries": 260.0,
+              "coarse_target_queries": 535.0,
+              "fine_reference_queries": 1380.0,
+              "fine_target_queries": 1466.0
+            }
+          }
+        },
+        {
+          "case": "box-20",
+          "variant": "planes12-6mm",
+          "repeats": 3,
+          "median_fit_ms": 285.8157089794986,
+          "median_full_cost": 0.05319652582718869,
+          "accepted": 3,
+          "median_truth_error": {
+            "median_point_error_mm": 2.987638747332844,
+            "rotation_error_deg": 0.32066646928674936
+          },
+          "stages_first_repetition": {
+            "initializer": "open3d_point_to_plane",
+            "voxel_sizes_m": [
+              0.012,
+              0.006
+            ],
+            "max_iterations_per_level": 20,
+            "fine_max_evaluations": null,
+            "refinements": 1,
+            "mean_per_refinement": {
+              "prepare_ms": 0.6560249603353441,
+              "coarse_ms": 0.258011044934392,
+              "fine_ms": 282.89732098346576,
+              "fine_evaluations": 50.0,
+              "coarse_reference_queries": 77.0,
+              "coarse_target_queries": 161.0,
+              "fine_reference_queries": 1380.0,
+              "fine_target_queries": 1466.0
+            }
+          }
+        },
+        {
+          "case": "box-40",
+          "variant": "baseline",
+          "repeats": 3,
+          "median_fit_ms": 109.0694289887324,
+          "median_full_cost": 0.05336980925989579,
+          "accepted": 3,
+          "median_truth_error": {
+            "median_point_error_mm": 2.944410067911507,
+            "rotation_error_deg": 0.15831927816952493
+          },
+          "stages_first_repetition": null
+        },
+        {
+          "case": "box-40",
+          "variant": "planes6-3mm",
+          "repeats": 3,
+          "median_fit_ms": 215.5206699972041,
+          "median_full_cost": 0.05337748734224776,
+          "accepted": 3,
+          "median_truth_error": {
+            "median_point_error_mm": 2.918621968506935,
+            "rotation_error_deg": 0.1665559713300779
+          },
+          "stages_first_repetition": {
+            "initializer": "open3d_point_to_plane",
+            "voxel_sizes_m": [
+              0.006,
+              0.003
+            ],
+            "max_iterations_per_level": 20,
+            "fine_max_evaluations": null,
+            "refinements": 1,
+            "mean_per_refinement": {
+              "prepare_ms": 1.5148880193009973,
+              "coarse_ms": 0.7459120242856443,
+              "fine_ms": 210.21575696067885,
+              "fine_evaluations": 43.0,
+              "coarse_reference_queries": 260.0,
+              "coarse_target_queries": 556.0,
+              "fine_reference_queries": 1380.0,
+              "fine_target_queries": 1452.0
+            }
+          }
+        },
+        {
+          "case": "box-40",
+          "variant": "planes12-6mm",
+          "repeats": 3,
+          "median_fit_ms": 270.73482697596774,
+          "median_full_cost": 0.04885948934817668,
+          "accepted": 3,
+          "median_truth_error": {
+            "median_point_error_mm": 1.8886225468959394,
+            "rotation_error_deg": 0.13307811017075857
+          },
+          "stages_first_repetition": {
+            "initializer": "open3d_point_to_plane",
+            "voxel_sizes_m": [
+              0.012,
+              0.006
+            ],
+            "max_iterations_per_level": 20,
+            "fine_max_evaluations": null,
+            "refinements": 1,
+            "mean_per_refinement": {
+              "prepare_ms": 0.7468840340152383,
+              "coarse_ms": 0.3338429960422218,
+              "fine_ms": 266.92962396191433,
+              "fine_evaluations": 50.0,
+              "coarse_reference_queries": 77.0,
+              "coarse_target_queries": 161.0,
+              "fine_reference_queries": 1380.0,
+              "fine_target_queries": 1452.0
+            }
+          }
+        },
+        {
+          "case": "box-60",
+          "variant": "baseline",
+          "repeats": 3,
+          "median_fit_ms": 123.11825295910239,
+          "median_full_cost": 0.06648076207238517,
+          "accepted": 3,
+          "median_truth_error": {
+            "median_point_error_mm": 2.9213006296407795,
+            "rotation_error_deg": 0.5800555816852332
+          },
+          "stages_first_repetition": null
+        },
+        {
+          "case": "box-60",
+          "variant": "planes6-3mm",
+          "repeats": 3,
+          "median_fit_ms": 285.5291329906322,
+          "median_full_cost": 0.05968049460114466,
+          "accepted": 3,
+          "median_truth_error": {
+            "median_point_error_mm": 4.569552932250452,
+            "rotation_error_deg": 0.10710674262063968
+          },
+          "stages_first_repetition": {
+            "initializer": "open3d_point_to_plane",
+            "voxel_sizes_m": [
+              0.006,
+              0.003
+            ],
+            "max_iterations_per_level": 20,
+            "fine_max_evaluations": null,
+            "refinements": 1,
+            "mean_per_refinement": {
+              "prepare_ms": 1.5227320254780352,
+              "coarse_ms": 2.1826339652761817,
+              "fine_ms": 298.782033030875,
+              "fine_evaluations": 50.0,
+              "coarse_reference_queries": 260.0,
+              "coarse_target_queries": 592.0,
+              "fine_reference_queries": 1380.0,
+              "fine_target_queries": 1635.0
+            }
+          }
+        },
+        {
+          "case": "box-60",
+          "variant": "planes12-6mm",
+          "repeats": 3,
+          "median_fit_ms": 275.79028403852135,
+          "median_full_cost": 0.052834644866623474,
+          "accepted": 3,
+          "median_truth_error": {
+            "median_point_error_mm": 3.336571458395117,
+            "rotation_error_deg": 0.23562610490377048
+          },
+          "stages_first_repetition": {
+            "initializer": "open3d_point_to_plane",
+            "voxel_sizes_m": [
+              0.012,
+              0.006
+            ],
+            "max_iterations_per_level": 20,
+            "fine_max_evaluations": null,
+            "refinements": 1,
+            "mean_per_refinement": {
+              "prepare_ms": 0.8173660025931895,
+              "coarse_ms": 0.6721849786117673,
+              "fine_ms": 301.8029010272585,
+              "fine_evaluations": 50.0,
+              "coarse_reference_queries": 77.0,
+              "coarse_target_queries": 168.0,
+              "fine_reference_queries": 1380.0,
+              "fine_target_queries": 1635.0
+            }
+          }
+        },
+        {
+          "case": "ring_visible_motion_20261016",
+          "variant": "baseline",
+          "repeats": 3,
+          "median_fit_ms": 262.02803396154195,
+          "median_full_cost": 0.10825001949996871,
+          "accepted": 3,
+          "median_truth_error": null,
+          "stages_first_repetition": null
+        },
+        {
+          "case": "ring_visible_motion_20261016",
+          "variant": "planes6-3mm",
+          "repeats": 3,
+          "median_fit_ms": 137.39481300581247,
+          "median_full_cost": 36.0,
+          "accepted": 0,
+          "median_truth_error": null,
+          "stages_first_repetition": {
+            "initializer": "open3d_point_to_plane",
+            "voxel_sizes_m": [
+              0.006,
+              0.003
+            ],
+            "max_iterations_per_level": 20,
+            "fine_max_evaluations": null,
+            "refinements": 2,
+            "mean_per_refinement": {
+              "prepare_ms": 0.7697870023548603,
+              "coarse_ms": 0.37475451244972646,
+              "fine_ms": 66.07340349000879,
+              "fine_evaluations": 13.0,
+              "coarse_reference_queries": 131.0,
+              "coarse_target_queries": 113.0,
+              "fine_reference_queries": 1909.0,
+              "fine_target_queries": 1976.0
+            }
+          }
+        },
+        {
+          "case": "ring_visible_motion_20261016",
+          "variant": "planes12-6mm",
+          "repeats": 3,
+          "median_fit_ms": 96.68832697207108,
+          "median_full_cost": 36.0,
+          "accepted": 0,
+          "median_truth_error": null,
+          "stages_first_repetition": {
+            "initializer": "open3d_point_to_plane",
+            "voxel_sizes_m": [
+              0.012,
+              0.006
+            ],
+            "max_iterations_per_level": 20,
+            "fine_max_evaluations": null,
+            "refinements": 2,
+            "mean_per_refinement": {
+              "prepare_ms": 0.633117015240714,
+              "coarse_ms": 0.11575547978281975,
+              "fine_ms": 46.183755999663845,
+              "fine_evaluations": 9.0,
+              "coarse_reference_queries": 43.0,
+              "coarse_target_queries": 40.0,
+              "fine_reference_queries": 1909.0,
+              "fine_target_queries": 1976.0
+            }
+          }
+        },
+        {
+          "case": "dowel_held_frame_315",
+          "variant": "baseline",
+          "repeats": 3,
+          "median_fit_ms": 82.33033498981968,
+          "median_full_cost": 2.160623191936285,
+          "accepted": 0,
+          "median_truth_error": null,
+          "stages_first_repetition": null
+        },
+        {
+          "case": "dowel_held_frame_315",
+          "variant": "planes6-3mm",
+          "repeats": 3,
+          "median_fit_ms": 59.960998012684286,
+          "median_full_cost": 15.801868232492223,
+          "accepted": 0,
+          "median_truth_error": null,
+          "stages_first_repetition": {
+            "initializer": "open3d_point_to_plane",
+            "voxel_sizes_m": [
+              0.006,
+              0.003
+            ],
+            "max_iterations_per_level": 20,
+            "fine_max_evaluations": null,
+            "refinements": 2,
+            "mean_per_refinement": {
+              "prepare_ms": 0.12572502600960433,
+              "coarse_ms": 0.18050149083137512,
+              "fine_ms": 26.926377991912887,
+              "fine_evaluations": 25.0,
+              "coarse_reference_queries": 173.0,
+              "coarse_target_queries": 25.0,
+              "fine_reference_queries": 780.0,
+              "fine_target_queries": 100.0
+            }
+          }
+        },
+        {
+          "case": "dowel_held_frame_315",
+          "variant": "planes12-6mm",
+          "repeats": 3,
+          "median_fit_ms": 5.374862987082452,
+          "median_full_cost": 36.0,
+          "accepted": 0,
+          "median_truth_error": null,
+          "stages_first_repetition": {
+            "initializer": "open3d_point_to_plane",
+            "voxel_sizes_m": [
+              0.012,
+              0.006
+            ],
+            "max_iterations_per_level": 20,
+            "fine_max_evaluations": null,
+            "refinements": 2,
+            "mean_per_refinement": {
+              "prepare_ms": 0.06667949492111802,
+              "coarse_ms": 0.0688179861754179,
+              "fine_ms": 2.054119511740282,
+              "fine_evaluations": 1.0,
+              "coarse_reference_queries": 61.0,
+              "coarse_target_queries": 17.0,
+              "fine_reference_queries": 780.0,
+              "fine_target_queries": 100.0
+            }
+          }
+        }
+      ]
+    },
+    "coarse-planes-short-20261105": {
+      "root": "/home/feit/.cache/flash-tracker-restart/coarse-planes-short-20261105",
+      "results": [
+        {
+          "case": "box-20",
+          "variant": "baseline",
+          "repeats": 3,
+          "median_fit_ms": 173.54494304163381,
+          "median_full_cost": 0.05391093556960566,
+          "accepted": 3,
+          "median_truth_error": {
+            "median_point_error_mm": 3.393658612275521,
+            "rotation_error_deg": 0.1320633118237164
+          },
+          "stages_first_repetition": null
+        },
+        {
+          "case": "box-20",
+          "variant": "planes6-3mm",
+          "repeats": 3,
+          "median_fit_ms": 42.01725299935788,
+          "median_full_cost": 0.06337116833971518,
+          "accepted": 3,
+          "median_truth_error": {
+            "median_point_error_mm": 5.060622345609649,
+            "rotation_error_deg": 1.6150925137482945
+          },
+          "stages_first_repetition": {
+            "initializer": "open3d_point_to_plane",
+            "voxel_sizes_m": [
+              0.006,
+              0.003
+            ],
+            "max_iterations_per_level": 12,
+            "fine_max_evaluations": 8,
+            "refinements": 1,
+            "mean_per_refinement": {
+              "prepare_ms": 1.7064950079657137,
+              "coarse_ms": 0.8507479797117412,
+              "fine_ms": 45.311323017813265,
+              "fine_evaluations": 8.0,
+              "coarse_reference_queries": 260.0,
+              "coarse_target_queries": 535.0,
+              "fine_reference_queries": 1380.0,
+              "fine_target_queries": 1466.0
+            }
+          }
+        },
+        {
+          "case": "box-20",
+          "variant": "planes12-6mm",
+          "repeats": 3,
+          "median_fit_ms": 44.47652300586924,
+          "median_full_cost": 0.05636429189369522,
+          "accepted": 3,
+          "median_truth_error": {
+            "median_point_error_mm": 2.436133819511647,
+            "rotation_error_deg": 0.353584708863045
+          },
+          "stages_first_repetition": {
+            "initializer": "open3d_point_to_plane",
+            "voxel_sizes_m": [
+              0.012,
+              0.006
+            ],
+            "max_iterations_per_level": 12,
+            "fine_max_evaluations": 8,
+            "refinements": 1,
+            "mean_per_refinement": {
+              "prepare_ms": 0.7127510034479201,
+              "coarse_ms": 0.28692500200122595,
+              "fine_ms": 42.4362649791874,
+              "fine_evaluations": 8.0,
+              "coarse_reference_queries": 77.0,
+              "coarse_target_queries": 161.0,
+              "fine_reference_queries": 1380.0,
+              "fine_target_queries": 1466.0
+            }
+          }
+        },
+        {
+          "case": "box-40",
+          "variant": "baseline",
+          "repeats": 3,
+          "median_fit_ms": 107.53561498131603,
+          "median_full_cost": 0.05336980925989579,
+          "accepted": 3,
+          "median_truth_error": {
+            "median_point_error_mm": 2.944410067911507,
+            "rotation_error_deg": 0.15831927816952493
+          },
+          "stages_first_repetition": null
+        },
+        {
+          "case": "box-40",
+          "variant": "planes6-3mm",
+          "repeats": 3,
+          "median_fit_ms": 39.77689100429416,
+          "median_full_cost": 0.0594134316595827,
+          "accepted": 3,
+          "median_truth_error": {
+            "median_point_error_mm": 2.2579894143970036,
+            "rotation_error_deg": 0.36001753632935257
+          },
+          "stages_first_repetition": {
+            "initializer": "open3d_point_to_plane",
+            "voxel_sizes_m": [
+              0.006,
+              0.003
+            ],
+            "max_iterations_per_level": 12,
+            "fine_max_evaluations": 8,
+            "refinements": 1,
+            "mean_per_refinement": {
+              "prepare_ms": 1.3338800054043531,
+              "coarse_ms": 0.6942159961909056,
+              "fine_ms": 34.74682098021731,
+              "fine_evaluations": 8.0,
+              "coarse_reference_queries": 260.0,
+              "coarse_target_queries": 556.0,
+              "fine_reference_queries": 1380.0,
+              "fine_target_queries": 1452.0
+            }
+          }
+        },
+        {
+          "case": "box-40",
+          "variant": "planes12-6mm",
+          "repeats": 3,
+          "median_fit_ms": 34.92238896433264,
+          "median_full_cost": 0.049641976570037105,
+          "accepted": 3,
+          "median_truth_error": {
+            "median_point_error_mm": 1.8354254804284453,
+            "rotation_error_deg": 0.233373430933984
+          },
+          "stages_first_repetition": {
+            "initializer": "open3d_point_to_plane",
+            "voxel_sizes_m": [
+              0.012,
+              0.006
+            ],
+            "max_iterations_per_level": 12,
+            "fine_max_evaluations": 8,
+            "refinements": 1,
+            "mean_per_refinement": {
+              "prepare_ms": 0.6568160024471581,
+              "coarse_ms": 0.3163000219501555,
+              "fine_ms": 31.129028007853776,
+              "fine_evaluations": 8.0,
+              "coarse_reference_queries": 77.0,
+              "coarse_target_queries": 161.0,
+              "fine_reference_queries": 1380.0,
+              "fine_target_queries": 1452.0
+            }
+          }
+        },
+        {
+          "case": "box-60",
+          "variant": "baseline",
+          "repeats": 3,
+          "median_fit_ms": 123.38597199413925,
+          "median_full_cost": 0.06648076207238517,
+          "accepted": 3,
+          "median_truth_error": {
+            "median_point_error_mm": 2.9213006296407795,
+            "rotation_error_deg": 0.5800555816852332
+          },
+          "stages_first_repetition": null
+        },
+        {
+          "case": "box-60",
+          "variant": "planes6-3mm",
+          "repeats": 3,
+          "median_fit_ms": 40.92477395897731,
+          "median_full_cost": 0.06079152072347011,
+          "accepted": 3,
+          "median_truth_error": {
+            "median_point_error_mm": 4.3976473108883125,
+            "rotation_error_deg": 0.10774133992579779
+          },
+          "stages_first_repetition": {
+            "initializer": "open3d_point_to_plane",
+            "voxel_sizes_m": [
+              0.006,
+              0.003
+            ],
+            "max_iterations_per_level": 12,
+            "fine_max_evaluations": 8,
+            "refinements": 1,
+            "mean_per_refinement": {
+              "prepare_ms": 1.502303988672793,
+              "coarse_ms": 1.5539710293523967,
+              "fine_ms": 35.026052966713905,
+              "fine_evaluations": 8.0,
+              "coarse_reference_queries": 260.0,
+              "coarse_target_queries": 592.0,
+              "fine_reference_queries": 1380.0,
+              "fine_target_queries": 1635.0
+            }
+          }
+        },
+        {
+          "case": "box-60",
+          "variant": "planes12-6mm",
+          "repeats": 3,
+          "median_fit_ms": 35.42745200684294,
+          "median_full_cost": 0.054423496379873315,
+          "accepted": 3,
+          "median_truth_error": {
+            "median_point_error_mm": 3.2865147473623066,
+            "rotation_error_deg": 0.25125083526707925
+          },
+          "stages_first_repetition": {
+            "initializer": "open3d_point_to_plane",
+            "voxel_sizes_m": [
+              0.012,
+              0.006
+            ],
+            "max_iterations_per_level": 12,
+            "fine_max_evaluations": 8,
+            "refinements": 1,
+            "mean_per_refinement": {
+              "prepare_ms": 0.6547730299644172,
+              "coarse_ms": 0.47077902127057314,
+              "fine_ms": 32.635920972097665,
+              "fine_evaluations": 8.0,
+              "coarse_reference_queries": 77.0,
+              "coarse_target_queries": 168.0,
+              "fine_reference_queries": 1380.0,
+              "fine_target_queries": 1635.0
+            }
+          }
+        },
+        {
+          "case": "ring_visible_motion_20261016",
+          "variant": "baseline",
+          "repeats": 3,
+          "median_fit_ms": 262.5871970085427,
+          "median_full_cost": 0.10825001949996871,
+          "accepted": 3,
+          "median_truth_error": null,
+          "stages_first_repetition": null
+        },
+        {
+          "case": "ring_visible_motion_20261016",
+          "variant": "planes6-3mm",
+          "repeats": 3,
+          "median_fit_ms": 56.14068696741015,
+          "median_full_cost": 36.0,
+          "accepted": 0,
+          "median_truth_error": null,
+          "stages_first_repetition": {
+            "initializer": "open3d_point_to_plane",
+            "voxel_sizes_m": [
+              0.006,
+              0.003
+            ],
+            "max_iterations_per_level": 12,
+            "fine_max_evaluations": 8,
+            "refinements": 2,
+            "mean_per_refinement": {
+              "prepare_ms": 0.8070219773799181,
+              "coarse_ms": 0.36601751344278455,
+              "fine_ms": 26.997606473742053,
+              "fine_evaluations": 4.5,
+              "coarse_reference_queries": 131.0,
+              "coarse_target_queries": 113.0,
+              "fine_reference_queries": 1909.0,
+              "fine_target_queries": 1976.0
+            }
+          }
+        },
+        {
+          "case": "ring_visible_motion_20261016",
+          "variant": "planes12-6mm",
+          "repeats": 3,
+          "median_fit_ms": 54.8265739926137,
+          "median_full_cost": 36.0,
+          "accepted": 0,
+          "median_truth_error": null,
+          "stages_first_repetition": {
+            "initializer": "open3d_point_to_plane",
+            "voxel_sizes_m": [
+              0.012,
+              0.006
+            ],
+            "max_iterations_per_level": 12,
+            "fine_max_evaluations": 8,
+            "refinements": 2,
+            "mean_per_refinement": {
+              "prepare_ms": 0.6028954812791198,
+              "coarse_ms": 0.10782599565573037,
+              "fine_ms": 25.24271552101709,
+              "fine_evaluations": 4.5,
+              "coarse_reference_queries": 43.0,
+              "coarse_target_queries": 40.0,
+              "fine_reference_queries": 1909.0,
+              "fine_target_queries": 1976.0
+            }
+          }
+        },
+        {
+          "case": "dowel_held_frame_315",
+          "variant": "baseline",
+          "repeats": 3,
+          "median_fit_ms": 76.0445210034959,
+          "median_full_cost": 2.160623191936285,
+          "accepted": 0,
+          "median_truth_error": null,
+          "stages_first_repetition": null
+        },
+        {
+          "case": "dowel_held_frame_315",
+          "variant": "planes6-3mm",
+          "repeats": 3,
+          "median_fit_ms": 20.010423031635582,
+          "median_full_cost": 28.460751532161687,
+          "accepted": 0,
+          "median_truth_error": null,
+          "stages_first_repetition": {
+            "initializer": "open3d_point_to_plane",
+            "voxel_sizes_m": [
+              0.006,
+              0.003
+            ],
+            "max_iterations_per_level": 12,
+            "fine_max_evaluations": 8,
+            "refinements": 2,
+            "mean_per_refinement": {
+              "prepare_ms": 0.12761849211528897,
+              "coarse_ms": 0.19265999435447156,
+              "fine_ms": 9.057071525603533,
+              "fine_evaluations": 8.0,
+              "coarse_reference_queries": 173.0,
+              "coarse_target_queries": 25.0,
+              "fine_reference_queries": 780.0,
+              "fine_target_queries": 100.0
+            }
+          }
+        },
+        {
+          "case": "dowel_held_frame_315",
+          "variant": "planes12-6mm",
+          "repeats": 3,
+          "median_fit_ms": 5.118725006468594,
+          "median_full_cost": 36.0,
+          "accepted": 0,
+          "median_truth_error": null,
+          "stages_first_repetition": {
+            "initializer": "open3d_point_to_plane",
+            "voxel_sizes_m": [
+              0.012,
+              0.006
+            ],
+            "max_iterations_per_level": 12,
+            "fine_max_evaluations": 8,
+            "refinements": 2,
+            "mean_per_refinement": {
+              "prepare_ms": 0.0656524789519608,
+              "coarse_ms": 0.06675452459603548,
+              "fine_ms": 2.055662509519607,
+              "fine_evaluations": 1.0,
+              "coarse_reference_queries": 61.0,
+              "coarse_target_queries": 17.0,
+              "fine_reference_queries": 780.0,
+              "fine_target_queries": 100.0
+            }
+          }
+        }
+      ]
+    },
+    "coarse-planes-guarded-20261105": {
+      "root": "/home/feit/.cache/flash-tracker-restart/coarse-planes-guarded-20261105",
+      "results": [
+        {
+          "case": "box-20",
+          "variant": "baseline",
+          "repeats": 3,
+          "median_fit_ms": 174.90450001787394,
+          "median_full_cost": 0.05391093556960566,
+          "accepted": 3,
+          "median_truth_error": {
+            "median_point_error_mm": 3.393658612275521,
+            "rotation_error_deg": 0.1320633118237164
+          },
+          "stages_first_repetition": null
+        },
+        {
+          "case": "box-20",
+          "variant": "planes6-3mm",
+          "repeats": 3,
+          "median_fit_ms": 41.6932679945603,
+          "median_full_cost": 0.0634345133290872,
+          "accepted": 3,
+          "median_truth_error": {
+            "median_point_error_mm": 5.06081474934581,
+            "rotation_error_deg": 1.6259758573260583
+          },
+          "stages_first_repetition": {
+            "initializer": "open3d_point_to_plane",
+            "voxel_sizes_m": [
+              0.006,
+              0.003
+            ],
+            "max_iterations_per_level": 12,
+            "fine_max_evaluations": 8,
+            "keep_better_seed": true,
+            "refinements": 1,
+            "mean_per_refinement": {
+              "prepare_ms": 1.7243680194951594,
+              "coarse_ms": 3.744940971955657,
+              "fine_ms": 35.6725089950487,
+              "fine_evaluations": 8.0,
+              "coarse_reference_queries": 260.0,
+              "coarse_target_queries": 535.0,
+              "coarse_seed_used": 1.0,
+              "fine_reference_queries": 1380.0,
+              "fine_target_queries": 1466.0
+            }
+          }
+        },
+        {
+          "case": "box-20",
+          "variant": "planes12-6mm",
+          "repeats": 3,
+          "median_fit_ms": 40.76859197812155,
+          "median_full_cost": 0.05636432044439104,
+          "accepted": 3,
+          "median_truth_error": {
+            "median_point_error_mm": 2.4361313502889828,
+            "rotation_error_deg": 0.35358470918697393
+          },
+          "stages_first_repetition": {
+            "initializer": "open3d_point_to_plane",
+            "voxel_sizes_m": [
+              0.012,
+              0.006
+            ],
+            "max_iterations_per_level": 12,
+            "fine_max_evaluations": 8,
+            "keep_better_seed": true,
+            "refinements": 1,
+            "mean_per_refinement": {
+              "prepare_ms": 0.6724349805153906,
+              "coarse_ms": 2.5302640278823674,
+              "fine_ms": 34.70685600768775,
+              "fine_evaluations": 8.0,
+              "coarse_reference_queries": 77.0,
+              "coarse_target_queries": 161.0,
+              "coarse_seed_used": 1.0,
+              "fine_reference_queries": 1380.0,
+              "fine_target_queries": 1466.0
+            }
+          }
+        },
+        {
+          "case": "box-20",
+          "variant": "detail-only-short",
+          "repeats": 3,
+          "median_fit_ms": 54.508670000359416,
+          "median_full_cost": 0.05711127058702573,
+          "accepted": 3,
+          "median_truth_error": {
+            "median_point_error_mm": 3.663636517329037,
+            "rotation_error_deg": 0.5976742950827255
+          },
+          "stages_first_repetition": {
+            "initializer": "open3d_point_to_plane",
+            "voxel_sizes_m": [],
+            "max_iterations_per_level": 12,
+            "fine_max_evaluations": 8,
+            "keep_better_seed": true,
+            "refinements": 1,
+            "mean_per_refinement": {
+              "prepare_ms": 0.018905033357441425,
+              "coarse_ms": 3.0112009844742715,
+              "fine_ms": 49.45524700451642,
+              "fine_evaluations": 8.0,
+              "coarse_reference_queries": 0.0,
+              "coarse_target_queries": 0.0,
+              "coarse_seed_used": 0.0,
+              "fine_reference_queries": 1380.0,
+              "fine_target_queries": 1466.0
+            }
+          }
+        },
+        {
+          "case": "box-40",
+          "variant": "baseline",
+          "repeats": 3,
+          "median_fit_ms": 108.69216301944107,
+          "median_full_cost": 0.05336980925989579,
+          "accepted": 3,
+          "median_truth_error": {
+            "median_point_error_mm": 2.944410067911507,
+            "rotation_error_deg": 0.15831927816952493
+          },
+          "stages_first_repetition": null
+        },
+        {
+          "case": "box-40",
+          "variant": "planes6-3mm",
+          "repeats": 3,
+          "median_fit_ms": 42.23616101080552,
+          "median_full_cost": 0.059413326313608225,
+          "accepted": 3,
+          "median_truth_error": {
+            "median_point_error_mm": 2.257989661627031,
+            "rotation_error_deg": 0.360471401670006
+          },
+          "stages_first_repetition": {
+            "initializer": "open3d_point_to_plane",
+            "voxel_sizes_m": [
+              0.006,
+              0.003
+            ],
+            "max_iterations_per_level": 12,
+            "fine_max_evaluations": 8,
+            "keep_better_seed": true,
+            "refinements": 1,
+            "mean_per_refinement": {
+              "prepare_ms": 1.5569659881293774,
+              "coarse_ms": 3.0079950229264796,
+              "fine_ms": 34.7390670212917,
+              "fine_evaluations": 8.0,
+              "coarse_reference_queries": 260.0,
+              "coarse_target_queries": 556.0,
+              "coarse_seed_used": 1.0,
+              "fine_reference_queries": 1380.0,
+              "fine_target_queries": 1452.0
+            }
+          }
+        },
+        {
+          "case": "box-40",
+          "variant": "planes12-6mm",
+          "repeats": 3,
+          "median_fit_ms": 37.32787998160347,
+          "median_full_cost": 0.04964197660413335,
+          "accepted": 3,
+          "median_truth_error": {
+            "median_point_error_mm": 1.835425479993632,
+            "rotation_error_deg": 0.2333734245612643
+          },
+          "stages_first_repetition": {
+            "initializer": "open3d_point_to_plane",
+            "voxel_sizes_m": [
+              0.012,
+              0.006
+            ],
+            "max_iterations_per_level": 12,
+            "fine_max_evaluations": 8,
+            "keep_better_seed": true,
+            "refinements": 1,
+            "mean_per_refinement": {
+              "prepare_ms": 0.8319629705511034,
+              "coarse_ms": 2.5478660245426,
+              "fine_ms": 30.465079005807638,
+              "fine_evaluations": 8.0,
+              "coarse_reference_queries": 77.0,
+              "coarse_target_queries": 161.0,
+              "coarse_seed_used": 1.0,
+              "fine_reference_queries": 1380.0,
+              "fine_target_queries": 1452.0
+            }
+          }
+        },
+        {
+          "case": "box-40",
+          "variant": "detail-only-short",
+          "repeats": 3,
+          "median_fit_ms": 44.87548803444952,
+          "median_full_cost": 0.05455984799660046,
+          "accepted": 3,
+          "median_truth_error": {
+            "median_point_error_mm": 3.033585377954686,
+            "rotation_error_deg": 0.17461872420161376
+          },
+          "stages_first_repetition": {
+            "initializer": "open3d_point_to_plane",
+            "voxel_sizes_m": [],
+            "max_iterations_per_level": 12,
+            "fine_max_evaluations": 8,
+            "keep_better_seed": true,
+            "refinements": 1,
+            "mean_per_refinement": {
+              "prepare_ms": 0.033091986551880836,
+              "coarse_ms": 2.8964460361748934,
+              "fine_ms": 40.340523002669215,
+              "fine_evaluations": 8.0,
+              "coarse_reference_queries": 0.0,
+              "coarse_target_queries": 0.0,
+              "coarse_seed_used": 0.0,
+              "fine_reference_queries": 1380.0,
+              "fine_target_queries": 1452.0
+            }
+          }
+        },
+        {
+          "case": "box-60",
+          "variant": "baseline",
+          "repeats": 3,
+          "median_fit_ms": 125.46064500929788,
+          "median_full_cost": 0.06648076207238517,
+          "accepted": 3,
+          "median_truth_error": {
+            "median_point_error_mm": 2.9213006296407795,
+            "rotation_error_deg": 0.5800555816852332
+          },
+          "stages_first_repetition": null
+        },
+        {
+          "case": "box-60",
+          "variant": "planes6-3mm",
+          "repeats": 3,
+          "median_fit_ms": 43.94447000231594,
+          "median_full_cost": 0.060791520829577284,
+          "accepted": 3,
+          "median_truth_error": {
+            "median_point_error_mm": 4.397647299315105,
+            "rotation_error_deg": 0.10774134013458159
+          },
+          "stages_first_repetition": {
+            "initializer": "open3d_point_to_plane",
+            "voxel_sizes_m": [
+              0.006,
+              0.003
+            ],
+            "max_iterations_per_level": 12,
+            "fine_max_evaluations": 8,
+            "keep_better_seed": true,
+            "refinements": 1,
+            "mean_per_refinement": {
+              "prepare_ms": 1.5058410353958607,
+              "coarse_ms": 4.457010014448315,
+              "fine_ms": 37.04834694508463,
+              "fine_evaluations": 8.0,
+              "coarse_reference_queries": 260.0,
+              "coarse_target_queries": 592.0,
+              "coarse_seed_used": 1.0,
+              "fine_reference_queries": 1380.0,
+              "fine_target_queries": 1635.0
+            }
+          }
+        },
+        {
+          "case": "box-60",
+          "variant": "planes12-6mm",
+          "repeats": 3,
+          "median_fit_ms": 36.97540098801255,
+          "median_full_cost": 0.054423496334439755,
+          "accepted": 3,
+          "median_truth_error": {
+            "median_point_error_mm": 3.286514747514226,
+            "rotation_error_deg": 0.2512508336857666
+          },
+          "stages_first_repetition": {
+            "initializer": "open3d_point_to_plane",
+            "voxel_sizes_m": [
+              0.012,
+              0.006
+            ],
+            "max_iterations_per_level": 12,
+            "fine_max_evaluations": 8,
+            "keep_better_seed": true,
+            "refinements": 1,
+            "mean_per_refinement": {
+              "prepare_ms": 0.8456089999526739,
+              "coarse_ms": 2.9599950066767633,
+              "fine_ms": 32.32035198016092,
+              "fine_evaluations": 8.0,
+              "coarse_reference_queries": 77.0,
+              "coarse_target_queries": 168.0,
+              "coarse_seed_used": 1.0,
+              "fine_reference_queries": 1380.0,
+              "fine_target_queries": 1635.0
+            }
+          }
+        },
+        {
+          "case": "box-60",
+          "variant": "detail-only-short",
+          "repeats": 3,
+          "median_fit_ms": 55.046865018084645,
+          "median_full_cost": 0.06939671653587169,
+          "accepted": 3,
+          "median_truth_error": {
+            "median_point_error_mm": 3.195134733050432,
+            "rotation_error_deg": 0.6099247463432476
+          },
+          "stages_first_repetition": {
+            "initializer": "open3d_point_to_plane",
+            "voxel_sizes_m": [],
+            "max_iterations_per_level": 12,
+            "fine_max_evaluations": 8,
+            "keep_better_seed": true,
+            "refinements": 1,
+            "mean_per_refinement": {
+              "prepare_ms": 0.028453010600060225,
+              "coarse_ms": 3.0173230334185064,
+              "fine_ms": 49.58879598416388,
+              "fine_evaluations": 8.0,
+              "coarse_reference_queries": 0.0,
+              "coarse_target_queries": 0.0,
+              "coarse_seed_used": 0.0,
+              "fine_reference_queries": 1380.0,
+              "fine_target_queries": 1635.0
+            }
+          }
+        },
+        {
+          "case": "ring_visible_motion_20261016",
+          "variant": "baseline",
+          "repeats": 3,
+          "median_fit_ms": 258.4382210043259,
+          "median_full_cost": 0.10825001949996871,
+          "accepted": 3,
+          "median_truth_error": null,
+          "stages_first_repetition": null
+        },
+        {
+          "case": "ring_visible_motion_20261016",
+          "variant": "planes6-3mm",
+          "repeats": 3,
+          "median_fit_ms": 91.61304199369624,
+          "median_full_cost": 0.07520440525375495,
+          "accepted": 3,
+          "median_truth_error": null,
+          "stages_first_repetition": {
+            "initializer": "open3d_point_to_plane",
+            "voxel_sizes_m": [
+              0.006,
+              0.003
+            ],
+            "max_iterations_per_level": 12,
+            "fine_max_evaluations": 8,
+            "keep_better_seed": true,
+            "refinements": 2,
+            "mean_per_refinement": {
+              "prepare_ms": 0.759598013246432,
+              "coarse_ms": 3.1444594787899405,
+              "fine_ms": 39.61531899403781,
+              "fine_evaluations": 8.0,
+              "coarse_reference_queries": 131.0,
+              "coarse_target_queries": 113.0,
+              "coarse_seed_used": 0.0,
+              "fine_reference_queries": 1909.0,
+              "fine_target_queries": 1976.0
+            }
+          }
+        },
+        {
+          "case": "ring_visible_motion_20261016",
+          "variant": "planes12-6mm",
+          "repeats": 3,
+          "median_fit_ms": 90.80597502179444,
+          "median_full_cost": 0.07520440525375495,
+          "accepted": 3,
+          "median_truth_error": null,
+          "stages_first_repetition": {
+            "initializer": "open3d_point_to_plane",
+            "voxel_sizes_m": [
+              0.012,
+              0.006
+            ],
+            "max_iterations_per_level": 12,
+            "fine_max_evaluations": 8,
+            "keep_better_seed": true,
+            "refinements": 2,
+            "mean_per_refinement": {
+              "prepare_ms": 0.6698904908262193,
+              "coarse_ms": 2.3786299861967564,
+              "fine_ms": 38.615192024735734,
+              "fine_evaluations": 8.0,
+              "coarse_reference_queries": 43.0,
+              "coarse_target_queries": 40.0,
+              "coarse_seed_used": 0.0,
+              "fine_reference_queries": 1909.0,
+              "fine_target_queries": 1976.0
+            }
+          }
+        },
+        {
+          "case": "ring_visible_motion_20261016",
+          "variant": "detail-only-short",
+          "repeats": 3,
+          "median_fit_ms": 88.74689199728891,
+          "median_full_cost": 0.07520440525375495,
+          "accepted": 3,
+          "median_truth_error": null,
+          "stages_first_repetition": {
+            "initializer": "open3d_point_to_plane",
+            "voxel_sizes_m": [],
+            "max_iterations_per_level": 12,
+            "fine_max_evaluations": 8,
+            "keep_better_seed": true,
+            "refinements": 2,
+            "mean_per_refinement": {
+              "prepare_ms": 0.4493890155572444,
+              "coarse_ms": 2.2877404699102044,
+              "fine_ms": 39.94089653133415,
+              "fine_evaluations": 8.0,
+              "coarse_reference_queries": 0.0,
+              "coarse_target_queries": 0.0,
+              "coarse_seed_used": 0.0,
+              "fine_reference_queries": 1909.0,
+              "fine_target_queries": 1976.0
+            }
+          }
+        },
+        {
+          "case": "dowel_held_frame_315",
+          "variant": "baseline",
+          "repeats": 3,
+          "median_fit_ms": 77.90837995707989,
+          "median_full_cost": 2.160623191936285,
+          "accepted": 0,
+          "median_truth_error": null,
+          "stages_first_repetition": null
+        },
+        {
+          "case": "dowel_held_frame_315",
+          "variant": "planes6-3mm",
+          "repeats": 3,
+          "median_fit_ms": 21.534197963774204,
+          "median_full_cost": 2.6100640476620307,
+          "accepted": 0,
+          "median_truth_error": null,
+          "stages_first_repetition": {
+            "initializer": "open3d_point_to_plane",
+            "voxel_sizes_m": [
+              0.006,
+              0.003
+            ],
+            "max_iterations_per_level": 12,
+            "fine_max_evaluations": 8,
+            "keep_better_seed": true,
+            "refinements": 2,
+            "mean_per_refinement": {
+              "prepare_ms": 0.12454701936803758,
+              "coarse_ms": 0.8390264993067831,
+              "fine_ms": 9.467171999858692,
+              "fine_evaluations": 8.0,
+              "coarse_reference_queries": 173.0,
+              "coarse_target_queries": 25.0,
+              "coarse_seed_used": 0.0,
+              "fine_reference_queries": 780.0,
+              "fine_target_queries": 100.0
+            }
+          }
+        },
+        {
+          "case": "dowel_held_frame_315",
+          "variant": "planes12-6mm",
+          "repeats": 3,
+          "median_fit_ms": 20.928155980072916,
+          "median_full_cost": 2.6100640476620307,
+          "accepted": 0,
+          "median_truth_error": null,
+          "stages_first_repetition": {
+            "initializer": "open3d_point_to_plane",
+            "voxel_sizes_m": [
+              0.012,
+              0.006
+            ],
+            "max_iterations_per_level": 12,
+            "fine_max_evaluations": 8,
+            "keep_better_seed": true,
+            "refinements": 2,
+            "mean_per_refinement": {
+              "prepare_ms": 0.12167150271125138,
+              "coarse_ms": 0.7564424886368215,
+              "fine_ms": 9.125078504439443,
+              "fine_evaluations": 8.0,
+              "coarse_reference_queries": 61.0,
+              "coarse_target_queries": 17.0,
+              "coarse_seed_used": 0.0,
+              "fine_reference_queries": 780.0,
+              "fine_target_queries": 100.0
+            }
+          }
+        },
+        {
+          "case": "dowel_held_frame_315",
+          "variant": "detail-only-short",
+          "repeats": 3,
+          "median_fit_ms": 19.023982051294297,
+          "median_full_cost": 2.6100640476620307,
+          "accepted": 0,
+          "median_truth_error": null,
+          "stages_first_repetition": {
+            "initializer": "open3d_point_to_plane",
+            "voxel_sizes_m": [],
+            "max_iterations_per_level": 12,
+            "fine_max_evaluations": 8,
+            "keep_better_seed": true,
+            "refinements": 2,
+            "mean_per_refinement": {
+              "prepare_ms": 0.009127019438892603,
+              "coarse_ms": 0.586504495004192,
+              "fine_ms": 8.430321991909295,
+              "fine_evaluations": 8.0,
+              "coarse_reference_queries": 0.0,
+              "coarse_target_queries": 0.0,
+              "coarse_seed_used": 0.0,
+              "fine_reference_queries": 780.0,
+              "fine_target_queries": 100.0
+            }
+          }
+        }
+      ]
+    }
+  },
+  "replays": {
+    "baseline": {
+      "root": "/home/feit/.cache/flash-tracker-restart/perf-exact-full2-20261105",
+      "scenes": [
+        {
+          "case": "flash-demo-dowel-ring",
+          "frames": 713,
+          "input_sha256": "9451f8b8a7129105375c6e6ab5ca84f561e86b6d327f83ce83550252bbdc8bf9",
+          "processing": {
+            "method": "group_growing",
+            "masks": "recorded",
+            "includes": "segmentation if computed, shared matching, observation preparation, pose/group/map updates",
+            "excludes": "disk input/output, scoring, playback, camera capture and display",
+            "startup": "models warmed before run except lazy SAM loading in first_frame_ms; steady excludes first frame",
+            "first_frame_ms": 29.07692495500669,
+            "steady_ms": {
+              "median": 268.6149105138611,
+              "p90": 338.6918436270207
+            },
+            "max_ms": 611.3739379798062,
+            "slower_than_source_interval": 712,
+            "intervals": 712
+          },
+          "roles": {
+            "dowel": {
+              "reference_frame": 0,
+              "accuracy_labels": false,
+              "methods": {
+                "group_growing": {
+                  "available_after_initialization": 707,
+                  "total_after_initialization": 712,
+                  "max_map_points": 651,
+                  "pose_sources": {
+                    "observed_candidate": 662,
+                    "predicted": 45,
+                    "lost": 5
+                  }
+                }
+              },
+              "timing_ms": {
+                "prepare_ms": {
+                  "median": 4.546896496322006,
+                  "p90": 6.666181905893609
+                },
+                "group_growing": {
+                  "median": 200.47690652427264,
+                  "p90": 261.24658689368516
+                },
+                "scene_point_tracking_ms": {
+                  "median": 40.029049530858174,
+                  "p90": 40.725526795722544
+                }
+              }
+            },
+            "ring": {
+              "reference_frame": 0,
+              "accuracy_labels": false,
+              "methods": {
+                "group_growing": {
+                  "available_after_initialization": 712,
+                  "total_after_initialization": 712,
+                  "max_map_points": 655,
+                  "pose_sources": {
+                    "observed_candidate": 712,
+                    "predicted": 0,
+                    "lost": 0
+                  }
+                }
+              },
+              "timing_ms": {
+                "prepare_ms": {
+                  "median": 10.004190495237708,
+                  "p90": 12.911366211483255
+                },
+                "group_growing": {
+                  "median": 199.8805945040658,
+                  "p90": 280.0620506226551
+                },
+                "scene_point_tracking_ms": {
+                  "median": 40.029049530858174,
+                  "p90": 40.725526795722544
+                }
+              }
+            }
+          }
+        },
+        {
+          "case": "flash-demo-gamepad-cube",
+          "frames": 628,
+          "input_sha256": "fda3c6528b84615e7e04bed498cbec284fb4837a34f453f37c0b632a701d10cf",
+          "processing": {
+            "method": "group_growing",
+            "masks": "recorded",
+            "includes": "segmentation if computed, shared matching, observation preparation, pose/group/map updates",
+            "excludes": "disk input/output, scoring, playback, camera capture and display",
+            "startup": "models warmed before run except lazy SAM loading in first_frame_ms; steady excludes first frame",
+            "first_frame_ms": 30.140966991893947,
+            "steady_ms": {
+              "median": 223.25166902737692,
+              "p90": 278.08782294159755
+            },
+            "max_ms": 553.4551870659925,
+            "slower_than_source_interval": 627,
+            "intervals": 627
+          },
+          "roles": {
+            "gamepad": {
+              "reference_frame": 0,
+              "accuracy_labels": false,
+              "methods": {
+                "group_growing": {
+                  "available_after_initialization": 618,
+                  "total_after_initialization": 627,
+                  "max_map_points": 671,
+                  "pose_sources": {
+                    "observed_candidate": 532,
+                    "predicted": 86,
+                    "lost": 9
+                  }
+                }
+              },
+              "timing_ms": {
+                "prepare_ms": {
+                  "median": 4.229092039167881,
+                  "p90": 15.26080317562446
+                },
+                "group_growing": {
+                  "median": 165.3785850503482,
+                  "p90": 222.72274361457676
+                },
+                "scene_point_tracking_ms": {
+                  "median": 40.115286014042795,
+                  "p90": 40.75992238940671
+                }
+              }
+            },
+            "cube": {
+              "reference_frame": 0,
+              "accuracy_labels": false,
+              "methods": {
+                "group_growing": {
+                  "available_after_initialization": 625,
+                  "total_after_initialization": 627,
+                  "max_map_points": 317,
+                  "pose_sources": {
+                    "observed_candidate": 517,
+                    "predicted": 108,
+                    "lost": 2
+                  }
+                }
+              },
+              "timing_ms": {
+                "prepare_ms": {
+                  "median": 7.036483031697571,
+                  "p90": 8.980162173975259
+                },
+                "group_growing": {
+                  "median": 124.4980359915644,
+                  "p90": 181.69152203481642
+                },
+                "scene_point_tracking_ms": {
+                  "median": 40.115286014042795,
+                  "p90": 40.75992238940671
+                }
+              }
+            }
+          }
+        },
+        {
+          "case": "dexycb-tomato-can-20201002_105506",
+          "frames": 68,
+          "input_sha256": "197e33c66de5adacf25e5278f8ef5c5c9b4ee80285eff937c86eb0f676e3d23f",
+          "processing": {
+            "method": "group_growing",
+            "masks": "recorded",
+            "includes": "segmentation if computed, shared matching, observation preparation, pose/group/map updates",
+            "excludes": "disk input/output, scoring, playback, camera capture and display",
+            "startup": "models warmed before run except lazy SAM loading in first_frame_ms; steady excludes first frame",
+            "first_frame_ms": 20.057912974152714,
+            "steady_ms": {
+              "median": 248.45568399177864,
+              "p90": 384.12292399443686
+            },
+            "max_ms": 505.9286269824952,
+            "slower_than_source_interval": 67,
+            "intervals": 67
+          },
+          "roles": {
+            "object": {
+              "reference_frame": 0,
+              "accuracy_labels": true,
+              "methods": {
+                "group_growing": {
+                  "available_after_initialization": 60,
+                  "total_after_initialization": 67,
+                  "pose_error": {
+                    "available": 60,
+                    "total": 67,
+                    "cloud_mm_median": 7.262445196361377,
+                    "cloud_mm_p90": 62.21371026929515,
+                    "angle_deg_median": 7.332924024091227,
+                    "angle_deg_p90": 114.98948052416095,
+                    "center_mm_median": 6.508325902361497,
+                    "within_10mm_10deg": 31,
+                    "within_20mm_20deg": 32,
+                    "final_cloud_mm": 59.936156553818414,
+                    "final_angle_deg": 114.95450215330295
+                  },
+                  "max_map_points": 1808,
+                  "pose_sources": {
+                    "observed_candidate": 52,
+                    "predicted": 8,
+                    "lost": 7
+                  }
+                }
+              },
+              "timing_ms": {
+                "prepare_ms": {
+                  "median": 5.145064962562174,
+                  "p90": 6.463718612212688
+                },
+                "group_growing": {
+                  "median": 205.83168498706073,
+                  "p90": 339.97085239971057
+                },
+                "scene_point_tracking_ms": {
+                  "median": 38.59047399600968,
+                  "p90": 39.25147480331361
+                }
+              }
+            }
+          }
+        },
+        {
+          "case": "ycb-mustard_easy_00_02",
+          "frames": 181,
+          "input_sha256": "2ca33583b95ed8d6e091777efe9285bd8e6343389d3d3ab90b2b48fef1399852",
+          "processing": {
+            "method": "group_growing",
+            "masks": "recorded",
+            "includes": "segmentation if computed, shared matching, observation preparation, pose/group/map updates",
+            "excludes": "disk input/output, scoring, playback, camera capture and display",
+            "startup": "models warmed before run except lazy SAM loading in first_frame_ms; steady excludes first frame",
+            "first_frame_ms": 12.165661028120667,
+            "steady_ms": {
+              "median": 134.52616444556043,
+              "p90": 168.23917693691328
+            },
+            "max_ms": 214.3972729681991,
+            "slower_than_source_interval": 176,
+            "intervals": 180
+          },
+          "roles": {
+            "object": {
+              "reference_frame": 0,
+              "accuracy_labels": true,
+              "methods": {
+                "group_growing": {
+                  "available_after_initialization": 169,
+                  "total_after_initialization": 180,
+                  "pose_error": {
+                    "available": 169,
+                    "total": 180,
+                    "cloud_mm_median": 5.668841816165675,
+                    "cloud_mm_p90": 11.823382518537537,
+                    "angle_deg_median": 3.109787119239104,
+                    "angle_deg_p90": 8.36714799868929,
+                    "center_mm_median": 5.273480551053826,
+                    "within_10mm_10deg": 121,
+                    "within_20mm_20deg": 169,
+                    "final_cloud_mm": null,
+                    "final_angle_deg": null
+                  },
+                  "max_map_points": 385,
+                  "pose_sources": {
+                    "observed_candidate": 161,
+                    "predicted": 8,
+                    "lost": 11
+                  }
+                }
+              },
+              "timing_ms": {
+                "prepare_ms": {
+                  "median": 3.5833170113619417,
+                  "p90": 3.8142233970575035
+                },
+                "group_growing": {
+                  "median": 91.22660098364577,
+                  "p90": 125.33728259732014
+                },
+                "scene_point_tracking_ms": {
+                  "median": 37.964136485243216,
+                  "p90": 38.778459443710744
+                }
+              }
+            }
+          }
+        }
+      ],
+      "gamepad_stationary": {
+        "last_frame": 192,
+        "available": 193,
+        "frames": 193,
+        "max_center_mm": 1.4937525859878618,
+        "max_rotation_deg": 4.926434887006544,
+        "within_existing_5mm_5deg_budget": true
+      }
+    },
+    "sparse256": {
+      "root": "/home/feit/.cache/flash-tracker-restart/coarse-replay256-4-20261105",
+      "scenes": [
+        {
+          "case": "flash-demo-dowel-ring",
+          "frames": 713,
+          "input_sha256": "9451f8b8a7129105375c6e6ab5ca84f561e86b6d327f83ce83550252bbdc8bf9",
+          "processing": {
+            "method": "group_growing",
+            "masks": "recorded",
+            "includes": "segmentation if computed, shared matching, observation preparation, pose/group/map updates",
+            "excludes": "disk input/output, scoring, playback, camera capture and display",
+            "startup": "models warmed before run except lazy SAM loading in first_frame_ms; steady excludes first frame",
+            "first_frame_ms": 29.275631066411734,
+            "steady_ms": {
+              "median": 285.52609248436056,
+              "p90": 349.8539100517519
+            },
+            "max_ms": 609.1860869782977,
+            "slower_than_source_interval": 712,
+            "intervals": 712
+          },
+          "roles": {
+            "dowel": {
+              "reference_frame": 0,
+              "accuracy_labels": false,
+              "methods": {
+                "group_growing": {
+                  "available_after_initialization": 707,
+                  "total_after_initialization": 712,
+                  "max_map_points": 633,
+                  "pose_sources": {
+                    "observed_candidate": 646,
+                    "predicted": 61,
+                    "lost": 5
+                  }
+                }
+              },
+              "timing_ms": {
+                "prepare_ms": {
+                  "median": 4.535641492111608,
+                  "p90": 6.657112023094669
+                },
+                "group_growing": {
+                  "median": 206.89512050012127,
+                  "p90": 292.0826946734451
+                },
+                "scene_point_tracking_ms": {
+                  "median": 35.907118988689035,
+                  "p90": 36.70692360610701
+                }
+              }
+            },
+            "ring": {
+              "reference_frame": 0,
+              "accuracy_labels": false,
+              "methods": {
+                "group_growing": {
+                  "available_after_initialization": 712,
+                  "total_after_initialization": 712,
+                  "max_map_points": 628,
+                  "pose_sources": {
+                    "observed_candidate": 712,
+                    "predicted": 0,
+                    "lost": 0
+                  }
+                }
+              },
+              "timing_ms": {
+                "prepare_ms": {
+                  "median": 11.222318484215066,
+                  "p90": 13.455578591674566
+                },
+                "group_growing": {
+                  "median": 217.6636650110595,
+                  "p90": 288.9641406771261
+                },
+                "scene_point_tracking_ms": {
+                  "median": 35.907118988689035,
+                  "p90": 36.70692360610701
+                }
+              }
+            }
+          }
+        },
+        {
+          "case": "flash-demo-gamepad-cube",
+          "frames": 628,
+          "input_sha256": "fda3c6528b84615e7e04bed498cbec284fb4837a34f453f37c0b632a701d10cf",
+          "processing": {
+            "method": "group_growing",
+            "masks": "recorded",
+            "includes": "segmentation if computed, shared matching, observation preparation, pose/group/map updates",
+            "excludes": "disk input/output, scoring, playback, camera capture and display",
+            "startup": "models warmed before run except lazy SAM loading in first_frame_ms; steady excludes first frame",
+            "first_frame_ms": 29.854469932615757,
+            "steady_ms": {
+              "median": 246.40228203497827,
+              "p90": 306.75554199842736
+            },
+            "max_ms": 613.3411159389652,
+            "slower_than_source_interval": 627,
+            "intervals": 627
+          },
+          "roles": {
+            "gamepad": {
+              "reference_frame": 0,
+              "accuracy_labels": false,
+              "methods": {
+                "group_growing": {
+                  "available_after_initialization": 621,
+                  "total_after_initialization": 627,
+                  "max_map_points": 663,
+                  "pose_sources": {
+                    "observed_candidate": 542,
+                    "predicted": 79,
+                    "lost": 6
+                  }
+                }
+              },
+              "timing_ms": {
+                "prepare_ms": {
+                  "median": 4.065509012434632,
+                  "p90": 15.631431806832552
+                },
+                "group_growing": {
+                  "median": 192.2579579986632,
+                  "p90": 254.56251418218014
+                },
+                "scene_point_tracking_ms": {
+                  "median": 36.082565027754754,
+                  "p90": 36.82076979894191
+                }
+              }
+            },
+            "cube": {
+              "reference_frame": 0,
+              "accuracy_labels": false,
+              "methods": {
+                "group_growing": {
+                  "available_after_initialization": 586,
+                  "total_after_initialization": 627,
+                  "max_map_points": 327,
+                  "pose_sources": {
+                    "observed_candidate": 478,
+                    "predicted": 108,
+                    "lost": 41
+                  }
+                }
+              },
+              "timing_ms": {
+                "prepare_ms": {
+                  "median": 7.062885037157685,
+                  "p90": 9.714575996622443
+                },
+                "group_growing": {
+                  "median": 145.87136899353936,
+                  "p90": 204.58800200140098
+                },
+                "scene_point_tracking_ms": {
+                  "median": 36.082565027754754,
+                  "p90": 36.82076979894191
+                }
+              }
+            }
+          }
+        },
+        {
+          "case": "dexycb-tomato-can-20201002_105506",
+          "frames": 68,
+          "input_sha256": "197e33c66de5adacf25e5278f8ef5c5c9b4ee80285eff937c86eb0f676e3d23f",
+          "processing": {
+            "method": "group_growing",
+            "masks": "recorded",
+            "includes": "segmentation if computed, shared matching, observation preparation, pose/group/map updates",
+            "excludes": "disk input/output, scoring, playback, camera capture and display",
+            "startup": "models warmed before run except lazy SAM loading in first_frame_ms; steady excludes first frame",
+            "first_frame_ms": 20.04308404866606,
+            "steady_ms": {
+              "median": 258.7280069710687,
+              "p90": 398.9315733895637
+            },
+            "max_ms": 519.2546600592323,
+            "slower_than_source_interval": 67,
+            "intervals": 67
+          },
+          "roles": {
+            "object": {
+              "reference_frame": 0,
+              "accuracy_labels": true,
+              "methods": {
+                "group_growing": {
+                  "available_after_initialization": 59,
+                  "total_after_initialization": 67,
+                  "pose_error": {
+                    "available": 59,
+                    "total": 67,
+                    "cloud_mm_median": 6.19008760729708,
+                    "cloud_mm_p90": 62.01165244451747,
+                    "angle_deg_median": 6.143250097062053,
+                    "angle_deg_p90": 114.09006139593227,
+                    "center_mm_median": 5.671571248003758,
+                    "within_10mm_10deg": 31,
+                    "within_20mm_20deg": 31,
+                    "final_cloud_mm": 59.712527509040356,
+                    "final_angle_deg": 112.98137899849979
+                  },
+                  "max_map_points": 1801,
+                  "pose_sources": {
+                    "observed_candidate": 53,
+                    "predicted": 6,
+                    "lost": 8
+                  }
+                }
+              },
+              "timing_ms": {
+                "prepare_ms": {
+                  "median": 5.315051996149123,
+                  "p90": 6.444678595289588
+                },
+                "group_growing": {
+                  "median": 216.62473195465282,
+                  "p90": 357.70673538791016
+                },
+                "scene_point_tracking_ms": {
+                  "median": 34.71182595239952,
+                  "p90": 35.42915757279843
+                }
+              }
+            }
+          }
+        },
+        {
+          "case": "ycb-mustard_easy_00_02",
+          "frames": 181,
+          "input_sha256": "2ca33583b95ed8d6e091777efe9285bd8e6343389d3d3ab90b2b48fef1399852",
+          "processing": {
+            "method": "group_growing",
+            "masks": "recorded",
+            "includes": "segmentation if computed, shared matching, observation preparation, pose/group/map updates",
+            "excludes": "disk input/output, scoring, playback, camera capture and display",
+            "startup": "models warmed before run except lazy SAM loading in first_frame_ms; steady excludes first frame",
+            "first_frame_ms": 12.235249974764884,
+            "steady_ms": {
+              "median": 138.33044000784867,
+              "p90": 163.84716660249978
+            },
+            "max_ms": 182.37825500546023,
+            "slower_than_source_interval": 176,
+            "intervals": 180
+          },
+          "roles": {
+            "object": {
+              "reference_frame": 0,
+              "accuracy_labels": true,
+              "methods": {
+                "group_growing": {
+                  "available_after_initialization": 169,
+                  "total_after_initialization": 180,
+                  "pose_error": {
+                    "available": 169,
+                    "total": 180,
+                    "cloud_mm_median": 7.645889311748554,
+                    "cloud_mm_p90": 11.822790105617615,
+                    "angle_deg_median": 6.069112518347531,
+                    "angle_deg_p90": 8.107174318639801,
+                    "center_mm_median": 7.198330678348448,
+                    "within_10mm_10deg": 125,
+                    "within_20mm_20deg": 169,
+                    "final_cloud_mm": null,
+                    "final_angle_deg": null
+                  },
+                  "max_map_points": 385,
+                  "pose_sources": {
+                    "observed_candidate": 165,
+                    "predicted": 4,
+                    "lost": 11
+                  }
+                }
+              },
+              "timing_ms": {
+                "prepare_ms": {
+                  "median": 3.5945499839726835,
+                  "p90": 3.7884222983848304
+                },
+                "group_growing": {
+                  "median": 99.86257299897261,
+                  "p90": 124.30419967859052
+                },
+                "scene_point_tracking_ms": {
+                  "median": 33.95763348089531,
+                  "p90": 34.73815339966677
+                }
+              }
+            }
+          }
+        }
+      ],
+      "trial": {
+        "points": 256,
+        "coarse_max_evaluations": 4,
+        "simplify_trees": true,
+        "refinements": 8476,
+        "mean_per_refinement": {
+          "prepare_ms": 0.4503551604186236,
+          "coarse_ms": 6.579279822881998,
+          "fine_ms": 44.91490136993436,
+          "coarse_evaluations": 3.9983482774893817,
+          "fine_evaluations": 18.93747050495517,
+          "coarse_reference_queries": 188.48596035865975,
+          "coarse_target_queries": 156.8021472392638,
+          "fine_reference_queries": 575.4720386974989,
+          "fine_target_queries": 976.3495752713544
+        }
+      },
+      "gamepad_stationary": {
+        "last_frame": 192,
+        "available": 193,
+        "frames": 193,
+        "max_center_mm": 1.550984003496102,
+        "max_rotation_deg": 5.050048116589032,
+        "within_existing_5mm_5deg_budget": false
+      }
+    },
+    "planes_short": {
+      "root": "/home/feit/.cache/flash-tracker-restart/coarse-replay-planes-short2-20261105",
+      "scenes": [
+        {
+          "case": "flash-demo-dowel-ring",
+          "frames": 713,
+          "input_sha256": "9451f8b8a7129105375c6e6ab5ca84f561e86b6d327f83ce83550252bbdc8bf9",
+          "processing": {
+            "method": "group_growing",
+            "masks": "recorded",
+            "includes": "segmentation if computed, shared matching, observation preparation, pose/group/map updates",
+            "excludes": "disk input/output, scoring, playback, camera capture and display",
+            "startup": "models warmed before run except lazy SAM loading in first_frame_ms; steady excludes first frame",
+            "first_frame_ms": 31.445158005226403,
+            "steady_ms": {
+              "median": 169.03884001658298,
+              "p90": 180.39499918813817
+            },
+            "max_ms": 412.9590590018779,
+            "slower_than_source_interval": 712,
+            "intervals": 712
+          },
+          "roles": {
+            "dowel": {
+              "reference_frame": 0,
+              "accuracy_labels": false,
+              "methods": {
+                "group_growing": {
+                  "available_after_initialization": 703,
+                  "total_after_initialization": 712,
+                  "max_map_points": 631,
+                  "pose_sources": {
+                    "observed_candidate": 665,
+                    "predicted": 38,
+                    "lost": 9
+                  }
+                }
+              },
+              "timing_ms": {
+                "prepare_ms": {
+                  "median": 4.570476448861882,
+                  "p90": 6.695443816715851
+                },
+                "group_growing": {
+                  "median": 109.0584704943467,
+                  "p90": 129.41550820250995
+                },
+                "scene_point_tracking_ms": {
+                  "median": 35.94904948840849,
+                  "p90": 36.72297189477831
+                }
+              }
+            },
+            "ring": {
+              "reference_frame": 0,
+              "accuracy_labels": false,
+              "methods": {
+                "group_growing": {
+                  "available_after_initialization": 712,
+                  "total_after_initialization": 712,
+                  "max_map_points": 631,
+                  "pose_sources": {
+                    "observed_candidate": 712,
+                    "predicted": 0,
+                    "lost": 0
+                  }
+                }
+              },
+              "timing_ms": {
+                "prepare_ms": {
+                  "median": 9.736620500916615,
+                  "p90": 12.942101212684065
+                },
+                "group_growing": {
+                  "median": 120.27154248789884,
+                  "p90": 130.19767413497902
+                },
+                "scene_point_tracking_ms": {
+                  "median": 35.94904948840849,
+                  "p90": 36.72297189477831
+                }
+              }
+            }
+          }
+        },
+        {
+          "case": "flash-demo-gamepad-cube",
+          "frames": 628,
+          "input_sha256": "fda3c6528b84615e7e04bed498cbec284fb4837a34f453f37c0b632a701d10cf",
+          "processing": {
+            "method": "group_growing",
+            "masks": "recorded",
+            "includes": "segmentation if computed, shared matching, observation preparation, pose/group/map updates",
+            "excludes": "disk input/output, scoring, playback, camera capture and display",
+            "startup": "models warmed before run except lazy SAM loading in first_frame_ms; steady excludes first frame",
+            "first_frame_ms": 29.159270983655006,
+            "steady_ms": {
+              "median": 148.4880279749632,
+              "p90": 183.22010218398646
+            },
+            "max_ms": 401.22149704257026,
+            "slower_than_source_interval": 627,
+            "intervals": 627
+          },
+          "roles": {
+            "gamepad": {
+              "reference_frame": 0,
+              "accuracy_labels": false,
+              "methods": {
+                "group_growing": {
+                  "available_after_initialization": 618,
+                  "total_after_initialization": 627,
+                  "max_map_points": 692,
+                  "pose_sources": {
+                    "observed_candidate": 538,
+                    "predicted": 80,
+                    "lost": 9
+                  }
+                }
+              },
+              "timing_ms": {
+                "prepare_ms": {
+                  "median": 4.199187969788909,
+                  "p90": 14.730941189918667
+                },
+                "group_growing": {
+                  "median": 98.50204997928813,
+                  "p90": 130.13372778659686
+                },
+                "scene_point_tracking_ms": {
+                  "median": 36.15199396153912,
+                  "p90": 36.788353812880814
+                }
+              }
+            },
+            "cube": {
+              "reference_frame": 0,
+              "accuracy_labels": false,
+              "methods": {
+                "group_growing": {
+                  "available_after_initialization": 624,
+                  "total_after_initialization": 627,
+                  "max_map_points": 328,
+                  "pose_sources": {
+                    "observed_candidate": 517,
+                    "predicted": 107,
+                    "lost": 3
+                  }
+                }
+              },
+              "timing_ms": {
+                "prepare_ms": {
+                  "median": 6.940886029042304,
+                  "p90": 8.964642020873724
+                },
+                "group_growing": {
+                  "median": 85.6933009927161,
+                  "p90": 100.85328700952232
+                },
+                "scene_point_tracking_ms": {
+                  "median": 36.15199396153912,
+                  "p90": 36.788353812880814
+                }
+              }
+            }
+          }
+        },
+        {
+          "case": "dexycb-tomato-can-20201002_105506",
+          "frames": 68,
+          "input_sha256": "197e33c66de5adacf25e5278f8ef5c5c9b4ee80285eff937c86eb0f676e3d23f",
+          "processing": {
+            "method": "group_growing",
+            "masks": "recorded",
+            "includes": "segmentation if computed, shared matching, observation preparation, pose/group/map updates",
+            "excludes": "disk input/output, scoring, playback, camera capture and display",
+            "startup": "models warmed before run except lazy SAM loading in first_frame_ms; steady excludes first frame",
+            "first_frame_ms": 20.67210798850283,
+            "steady_ms": {
+              "median": 156.7735230200924,
+              "p90": 190.77658561291173
+            },
+            "max_ms": 202.78619398595765,
+            "slower_than_source_interval": 67,
+            "intervals": 67
+          },
+          "roles": {
+            "object": {
+              "reference_frame": 0,
+              "accuracy_labels": true,
+              "methods": {
+                "group_growing": {
+                  "available_after_initialization": 59,
+                  "total_after_initialization": 67,
+                  "pose_error": {
+                    "available": 59,
+                    "total": 67,
+                    "cloud_mm_median": 5.7356586500610005,
+                    "cloud_mm_p90": 61.872205615859144,
+                    "angle_deg_median": 5.05091588041171,
+                    "angle_deg_p90": 114.00873449856324,
+                    "center_mm_median": 5.285314686867496,
+                    "within_10mm_10deg": 31,
+                    "within_20mm_20deg": 33,
+                    "final_cloud_mm": 59.72336694839592,
+                    "final_angle_deg": 113.71798476135648
+                  },
+                  "max_map_points": 1811,
+                  "pose_sources": {
+                    "observed_candidate": 55,
+                    "predicted": 4,
+                    "lost": 8
+                  }
+                }
+              },
+              "timing_ms": {
+                "prepare_ms": {
+                  "median": 5.228078982327133,
+                  "p90": 6.459958793129772
+                },
+                "group_growing": {
+                  "median": 116.03731202194467,
+                  "p90": 149.9399469816126
+                },
+                "scene_point_tracking_ms": {
+                  "median": 34.73272395785898,
+                  "p90": 35.16877017682418
+                }
+              }
+            }
+          }
+        },
+        {
+          "case": "ycb-mustard_easy_00_02",
+          "frames": 181,
+          "input_sha256": "2ca33583b95ed8d6e091777efe9285bd8e6343389d3d3ab90b2b48fef1399852",
+          "processing": {
+            "method": "group_growing",
+            "masks": "recorded",
+            "includes": "segmentation if computed, shared matching, observation preparation, pose/group/map updates",
+            "excludes": "disk input/output, scoring, playback, camera capture and display",
+            "startup": "models warmed before run except lazy SAM loading in first_frame_ms; steady excludes first frame",
+            "first_frame_ms": 12.151042057666928,
+            "steady_ms": {
+              "median": 105.94621597556397,
+              "p90": 110.2414992172271
+            },
+            "max_ms": 349.33986101532355,
+            "slower_than_source_interval": 176,
+            "intervals": 180
+          },
+          "roles": {
+            "object": {
+              "reference_frame": 0,
+              "accuracy_labels": true,
+              "methods": {
+                "group_growing": {
+                  "available_after_initialization": 170,
+                  "total_after_initialization": 180,
+                  "pose_error": {
+                    "available": 170,
+                    "total": 180,
+                    "cloud_mm_median": 5.794744302360941,
+                    "cloud_mm_p90": 12.022225979711116,
+                    "angle_deg_median": 3.104401502179404,
+                    "angle_deg_p90": 9.385897071518382,
+                    "center_mm_median": 5.302009493749586,
+                    "within_10mm_10deg": 107,
+                    "within_20mm_20deg": 170,
+                    "final_cloud_mm": null,
+                    "final_angle_deg": null
+                  },
+                  "max_map_points": 385,
+                  "pose_sources": {
+                    "observed_candidate": 161,
+                    "predicted": 9,
+                    "lost": 10
+                  }
+                }
+              },
+              "timing_ms": {
+                "prepare_ms": {
+                  "median": 3.5788555105682462,
+                  "p90": 3.7993361824192107
+                },
+                "group_growing": {
+                  "median": 66.79038496804424,
+                  "p90": 70.84602030809037
+                },
+                "scene_point_tracking_ms": {
+                  "median": 33.87004850083031,
+                  "p90": 34.681944525800645
+                }
+              }
+            }
+          }
+        }
+      ],
+      "trial": {
+        "initializer": "open3d_point_to_plane",
+        "voxel_sizes_m": [
+          0.012,
+          0.006
+        ],
+        "max_iterations_per_level": 12,
+        "fine_max_evaluations": 8,
+        "keep_better_seed": true,
+        "refinements": 8703,
+        "mean_per_refinement": {
+          "prepare_ms": 0.16378664154535616,
+          "coarse_ms": 1.4711503788145472,
+          "fine_ms": 19.98364434933312,
+          "fine_evaluations": 7.763529817304378,
+          "coarse_reference_queries": 44.99850626220844,
+          "coarse_target_queries": 34.78742962196944,
+          "coarse_seed_used": 0.004940825002872573,
+          "fine_reference_queries": 583.4256003676893,
+          "fine_target_queries": 974.0476847064231
+        }
+      },
+      "gamepad_stationary": {
+        "last_frame": 192,
+        "available": 193,
+        "frames": 193,
+        "max_center_mm": 1.1870423360111502,
+        "max_rotation_deg": 4.6893960219452415,
+        "within_existing_5mm_5deg_budget": true
+      }
+    },
+    "short_only": {
+      "root": "/home/feit/.cache/flash-tracker-restart/runtime-short8-20261105",
+      "scenes": [
+        {
+          "case": "flash-demo-dowel-ring",
+          "frames": 713,
+          "input_sha256": "9451f8b8a7129105375c6e6ab5ca84f561e86b6d327f83ce83550252bbdc8bf9",
+          "processing": {
+            "method": "group_growing",
+            "masks": "recorded",
+            "includes": "segmentation if computed, shared matching, observation preparation, pose/group/map updates",
+            "excludes": "disk input/output, scoring, playback, camera capture and display",
+            "startup": "models warmed before run except lazy SAM loading in first_frame_ms; steady excludes first frame",
+            "first_frame_ms": 31.427273992449045,
+            "steady_ms": {
+              "median": 165.23572948062792,
+              "p90": 176.02250548661686
+            },
+            "max_ms": 469.7392630041577,
+            "slower_than_source_interval": 712,
+            "intervals": 712
+          },
+          "roles": {
+            "dowel": {
+              "reference_frame": 0,
+              "accuracy_labels": false,
+              "methods": {
+                "group_growing": {
+                  "available_after_initialization": 703,
+                  "total_after_initialization": 712,
+                  "max_map_points": 635,
+                  "pose_sources": {
+                    "observed_candidate": 665,
+                    "predicted": 38,
+                    "lost": 9
+                  }
+                }
+              },
+              "timing_ms": {
+                "prepare_ms": {
+                  "median": 4.536257532890886,
+                  "p90": 6.600407685618848
+                },
+                "group_growing": {
+                  "median": 103.09532404062338,
+                  "p90": 124.86676957341841
+                },
+                "scene_point_tracking_ms": {
+                  "median": 35.97788899787702,
+                  "p90": 36.777511780383065
+                }
+              }
+            },
+            "ring": {
+              "reference_frame": 0,
+              "accuracy_labels": false,
+              "methods": {
+                "group_growing": {
+                  "available_after_initialization": 712,
+                  "total_after_initialization": 712,
+                  "max_map_points": 631,
+                  "pose_sources": {
+                    "observed_candidate": 712,
+                    "predicted": 0,
+                    "lost": 0
+                  }
+                }
+              },
+              "timing_ms": {
+                "prepare_ms": {
+                  "median": 9.751888021128252,
+                  "p90": 12.933127785800025
+                },
+                "group_growing": {
+                  "median": 116.56246200436726,
+                  "p90": 126.02383180637844
+                },
+                "scene_point_tracking_ms": {
+                  "median": 35.97788899787702,
+                  "p90": 36.777511780383065
+                }
+              }
+            }
+          }
+        },
+        {
+          "case": "flash-demo-gamepad-cube",
+          "frames": 628,
+          "input_sha256": "fda3c6528b84615e7e04bed498cbec284fb4837a34f453f37c0b632a701d10cf",
+          "processing": {
+            "method": "group_growing",
+            "masks": "recorded",
+            "includes": "segmentation if computed, shared matching, observation preparation, pose/group/map updates",
+            "excludes": "disk input/output, scoring, playback, camera capture and display",
+            "startup": "models warmed before run except lazy SAM loading in first_frame_ms; steady excludes first frame",
+            "first_frame_ms": 30.58071300620213,
+            "steady_ms": {
+              "median": 145.69228800246492,
+              "p90": 179.8090900061652
+            },
+            "max_ms": 463.8400709955022,
+            "slower_than_source_interval": 627,
+            "intervals": 627
+          },
+          "roles": {
+            "gamepad": {
+              "reference_frame": 0,
+              "accuracy_labels": false,
+              "methods": {
+                "group_growing": {
+                  "available_after_initialization": 618,
+                  "total_after_initialization": 627,
+                  "max_map_points": 692,
+                  "pose_sources": {
+                    "observed_candidate": 538,
+                    "predicted": 80,
+                    "lost": 9
+                  }
+                }
+              },
+              "timing_ms": {
+                "prepare_ms": {
+                  "median": 4.0873989928513765,
+                  "p90": 14.999705168884248
+                },
+                "group_growing": {
+                  "median": 94.43252300843596,
+                  "p90": 126.99388419277966
+                },
+                "scene_point_tracking_ms": {
+                  "median": 36.12175700254738,
+                  "p90": 36.84609483461827
+                }
+              }
+            },
+            "cube": {
+              "reference_frame": 0,
+              "accuracy_labels": false,
+              "methods": {
+                "group_growing": {
+                  "available_after_initialization": 624,
+                  "total_after_initialization": 627,
+                  "max_map_points": 328,
+                  "pose_sources": {
+                    "observed_candidate": 517,
+                    "predicted": 107,
+                    "lost": 3
+                  }
+                }
+              },
+              "timing_ms": {
+                "prepare_ms": {
+                  "median": 6.986701977439225,
+                  "p90": 8.933162782341242
+                },
+                "group_growing": {
+                  "median": 82.87828497122973,
+                  "p90": 97.54541181027889
+                },
+                "scene_point_tracking_ms": {
+                  "median": 36.12175700254738,
+                  "p90": 36.84609483461827
+                }
+              }
+            }
+          }
+        },
+        {
+          "case": "dexycb-tomato-can-20201002_105506",
+          "frames": 68,
+          "input_sha256": "197e33c66de5adacf25e5278f8ef5c5c9b4ee80285eff937c86eb0f676e3d23f",
+          "processing": {
+            "method": "group_growing",
+            "masks": "recorded",
+            "includes": "segmentation if computed, shared matching, observation preparation, pose/group/map updates",
+            "excludes": "disk input/output, scoring, playback, camera capture and display",
+            "startup": "models warmed before run except lazy SAM loading in first_frame_ms; steady excludes first frame",
+            "first_frame_ms": 20.224682986736298,
+            "steady_ms": {
+              "median": 154.89568695193157,
+              "p90": 190.5369964079
+            },
+            "max_ms": 205.81394503824413,
+            "slower_than_source_interval": 67,
+            "intervals": 67
+          },
+          "roles": {
+            "object": {
+              "reference_frame": 0,
+              "accuracy_labels": true,
+              "methods": {
+                "group_growing": {
+                  "available_after_initialization": 63,
+                  "total_after_initialization": 67,
+                  "pose_error": {
+                    "available": 63,
+                    "total": 67,
+                    "cloud_mm_median": 10.92948519750352,
+                    "cloud_mm_p90": 61.493799209330554,
+                    "angle_deg_median": 15.770647466054704,
+                    "angle_deg_p90": 114.64988041948969,
+                    "center_mm_median": 8.83904049598215,
+                    "within_10mm_10deg": 31,
+                    "within_20mm_20deg": 32,
+                    "final_cloud_mm": 59.67476784100957,
+                    "final_angle_deg": 113.49564152675424
+                  },
+                  "max_map_points": 1808,
+                  "pose_sources": {
+                    "observed_candidate": 59,
+                    "predicted": 4,
+                    "lost": 4
+                  }
+                }
+              },
+              "timing_ms": {
+                "prepare_ms": {
+                  "median": 5.310072039719671,
+                  "p90": 6.57489919103682
+                },
+                "group_growing": {
+                  "median": 113.28600603155792,
+                  "p90": 149.31520841782913
+                },
+                "scene_point_tracking_ms": {
+                  "median": 34.748995036352426,
+                  "p90": 35.58663841104135
+                }
+              }
+            }
+          }
+        },
+        {
+          "case": "ycb-mustard_easy_00_02",
+          "frames": 181,
+          "input_sha256": "2ca33583b95ed8d6e091777efe9285bd8e6343389d3d3ab90b2b48fef1399852",
+          "processing": {
+            "method": "group_growing",
+            "masks": "recorded",
+            "includes": "segmentation if computed, shared matching, observation preparation, pose/group/map updates",
+            "excludes": "disk input/output, scoring, playback, camera capture and display",
+            "startup": "models warmed before run except lazy SAM loading in first_frame_ms; steady excludes first frame",
+            "first_frame_ms": 12.175738054793328,
+            "steady_ms": {
+              "median": 102.2319870244246,
+              "p90": 106.72687886981294
+            },
+            "max_ms": 115.15013402095065,
+            "slower_than_source_interval": 176,
+            "intervals": 180
+          },
+          "roles": {
+            "object": {
+              "reference_frame": 0,
+              "accuracy_labels": true,
+              "methods": {
+                "group_growing": {
+                  "available_after_initialization": 170,
+                  "total_after_initialization": 180,
+                  "pose_error": {
+                    "available": 170,
+                    "total": 180,
+                    "cloud_mm_median": 5.794744302360941,
+                    "cloud_mm_p90": 12.022225979711116,
+                    "angle_deg_median": 3.104401502179404,
+                    "angle_deg_p90": 9.385897071518382,
+                    "center_mm_median": 5.302009493749586,
+                    "within_10mm_10deg": 107,
+                    "within_20mm_20deg": 170,
+                    "final_cloud_mm": null,
+                    "final_angle_deg": null
+                  },
+                  "max_map_points": 385,
+                  "pose_sources": {
+                    "observed_candidate": 161,
+                    "predicted": 9,
+                    "lost": 10
+                  }
+                }
+              },
+              "timing_ms": {
+                "prepare_ms": {
+                  "median": 3.6068179761059582,
+                  "p90": 3.8288974028546363
+                },
+                "group_growing": {
+                  "median": 63.00531452870928,
+                  "p90": 67.69352867850102
+                },
+                "scene_point_tracking_ms": {
+                  "median": 33.898121502716094,
+                  "p90": 34.767989290412515
+                }
+              }
+            }
+          }
+        }
+      ],
+      "gamepad_stationary": {
+        "last_frame": 192,
+        "available": 193,
+        "frames": 193,
+        "max_center_mm": 1.1870423360111502,
+        "max_rotation_deg": 4.6893960219452415,
+        "within_existing_5mm_5deg_budget": true
+      }
+    }
+  },
+  "verification": {
+    "tests": "test_coarse_to_fine_experiment.py and test_surface_publication.py",
+    "passed": 24,
+    "skipped": 0,
+    "ruff": "passed",
+    "git_diff_check": "passed",
+    "environment": {
+      "open3d": "0.20.0 (isolated optional dependency)",
+      "numpy": "2.2.6",
+      "scipy": "1.17.1"
+    },
+    "pytest": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 with -p pytest_timeout to avoid unrelated isolated-environment entry-point conflicts"
+  }
+}

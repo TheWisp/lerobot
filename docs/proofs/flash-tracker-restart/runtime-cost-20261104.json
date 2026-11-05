@@ -1,0 +1,644 @@
+{
+  "scope": "One selected group_growing pipeline, two objects serially; recorded masks; no disk I/O, rendering or capture in processing timings. One full pass per variant, not a statistical speed guarantee.",
+  "verification": {
+    "tests_passed": 112,
+    "existing_recovery_failures_solved": false,
+    "exact_comparison_fields": [
+      "pose",
+      "status",
+      "surface-growth events and counts"
+    ],
+    "mutation": "Removing pooled search from geometry fitting fails both recorded-fixture thread-count tests."
+  },
+  "cases": [
+    {
+      "case": "flash-demo-dowel-ring",
+      "frames": 713,
+      "input_sha256": "9451f8b8a7129105375c6e6ab5ca84f561e86b6d327f83ce83550252bbdc8bf9",
+      "source_run": "/home/feit/.cache/flash-tracker-restart/browser/.rebuild/rebuild-20261104-212930-09213c8d/runs/000/flash-demo-dowel-ring",
+      "surface_experiment": {
+        "spacing_m": 0.003,
+        "agreement_m": 0.005,
+        "min_overlap": 0.25,
+        "growth_agreement_m": 0.003,
+        "growth_min_overlap": 0.75,
+        "patch_consistency": 0.95,
+        "patch_overlap": 0.8,
+        "image_weight": 1,
+        "surface_priority": true,
+        "partial_surface_matching": false,
+        "recovery_starts": 0,
+        "fit_view_limit": null,
+        "confirmations": 2,
+        "max_patches": 32,
+        "max_pending": 8,
+        "points_per_patch": 1024,
+        "max_points": 8192,
+        "grow": true,
+        "retain_unobserved_pose": false,
+        "uncertainty": {
+          "enabled": true,
+          "mode": "kalman",
+          "initial_position_std_m": 0.005,
+          "initial_rotation_std_deg": 10,
+          "position_process_std_m_sqrt_s": 0.002,
+          "rotation_process_std_deg_sqrt_s": 2,
+          "reset_on_geometry_conflict": true,
+          "independent_error_m": 0.001,
+          "correlated_error_m": 0.002,
+          "correlation_length_m": 0.01,
+          "max_measurements": 256,
+          "compatibility_probability": 0.95,
+          "max_visible_outlier_fraction": 0.1,
+          "prefer_supported_prediction": true
+        }
+      },
+      "config": {
+        "backend": "surface",
+        "sam_resolution": 504,
+        "min_similarity": 0.75,
+        "registration_threshold_m": 0.005,
+        "registration_min_inliers": 12,
+        "registration_trials": 100,
+        "visible_shape_fallback": false,
+        "parallel_surface_objects": true,
+        "pipeline_surface_frames": true,
+        "surface_object_workers": 2,
+        "surface_reference_max_points_per_view": 15000,
+        "compiled_surface_fit": true,
+        "reuse_surface_search": true,
+        "detection_correction": {
+          "enabled": false,
+          "offline_interval_frames": 16,
+          "runtime_interval_frames": 60,
+          "min_detector_score": 0.8,
+          "min_tracker_score": 0.8,
+          "min_mask_overlap": 0.5
+        },
+        "observation": {
+          "mask_margin_px": 2,
+          "depth_span_m": 0.01,
+          "depth_neighborhood_px": 3,
+          "normal_bilateral_diameter_px": 5,
+          "normal_bilateral_sigma_px": 2,
+          "huber_m": 0.005,
+          "surface_spacing_m": 0.003,
+          "samples_across_object": 64,
+          "min_surface_spacing_m": 0.001,
+          "component_gap_m": 0.01,
+          "depth_outlier_sigma": null,
+          "filtered_depth_for_fitting": false,
+          "validation_tile_px": 4
+        },
+        "shape": {
+          "depth_tolerance_m": 0.005,
+          "surface_spacing_m": 0.003,
+          "mask_boundary_tolerance_px": 2,
+          "require_full_mask_coverage": false,
+          "mask_coverage_weight": 1.0,
+          "scene_depth_constraints": false,
+          "prefer_observed_overlap": false,
+          "max_surface_distance_m": 0.03,
+          "max_evaluations": 50,
+          "solver_tolerance": 1e-05,
+          "max_fit_points": 2048,
+          "nn_queries_per_worker": 512,
+          "batch_jacobian": true,
+          "batch_query_workers": 8
+        },
+        "motion": {
+          "crop_min_px": 160,
+          "crop_max_px": 480,
+          "crop_extent_multiplier": 2.5,
+          "input_size_px": 320,
+          "grid_step_px": 4,
+          "covisibility_min": 0.5,
+          "min_ransac_pairs": 6,
+          "ransac_distance_m": 0.006,
+          "ransac_confidence": 0.99,
+          "refinement_steps": 2,
+          "connected_dilation_px": 7
+        }
+      },
+      "shared_matching": {
+        "backend": "ufm",
+        "max_image_size_px": 640,
+        "scene_points": 800,
+        "object_points": 256,
+        "spacing_px": 5,
+        "history_frames": 64,
+        "depth_support_radius_px": 1,
+        "lk": {
+          "window_size_px": 21,
+          "pyramid_levels": 3,
+          "forward_backward_limit_px": 1
+        },
+        "ufm": {
+          "covisibility_min": 0.5
+        }
+      },
+      "group_experiment": {
+        "context_radius_m": 0.25,
+        "min_inliers": 12,
+        "fit_threshold_m": 0.005,
+        "object_max_points": 120,
+        "object_max_frame_gap_s": 0.1,
+        "object_fb_threshold_px": 1,
+        "object_image_scale": 1,
+        "depth_support_radius_px": 1,
+        "support_confirmation_s": 1,
+        "point_evidence_weight": 1
+      },
+      "comparison": {
+        "identical": true,
+        "changed_frame_objects": {
+          "pose": 0,
+          "status": 0,
+          "surface_events": 0
+        },
+        "first_changes": {
+          "pose": [],
+          "status": [],
+          "surface_events": []
+        },
+        "before_processing": {
+          "method": "group_growing",
+          "masks": "recorded",
+          "includes": "segmentation if computed, shared matching, observation preparation, pose/group/map updates",
+          "excludes": "model loading, disk input/output, scoring, playback, camera capture and display",
+          "first_frame_ms": 36.854755016975105,
+          "steady_ms": {
+            "median": 373.4313990280498,
+            "p90": 461.1133567756042
+          },
+          "max_ms": 635.2402220363729,
+          "slower_than_source_interval": 712,
+          "intervals": 712
+        },
+        "after_processing": {
+          "method": "group_growing",
+          "masks": "recorded",
+          "includes": "segmentation if computed, shared matching, observation preparation, pose/group/map updates",
+          "excludes": "model loading, disk input/output, scoring, playback, camera capture and display",
+          "first_frame_ms": 36.949312954675406,
+          "steady_ms": {
+            "median": 354.7888135071844,
+            "p90": 435.1436793571338
+          },
+          "max_ms": 706.2881060410291,
+          "slower_than_source_interval": 712,
+          "intervals": 712
+        }
+      },
+      "baseline": {
+        "evidence_directory": "/home/feit/.cache/flash-tracker-restart/runtime-20261104/baseline/000/flash-demo-dowel-ring",
+        "processing": {
+          "method": "group_growing",
+          "masks": "recorded",
+          "includes": "segmentation if computed, shared matching, observation preparation, pose/group/map updates",
+          "excludes": "model loading, disk input/output, scoring, playback, camera capture and display",
+          "first_frame_ms": 36.854755016975105,
+          "steady_ms": {
+            "median": 373.4313990280498,
+            "p90": 461.1133567756042
+          },
+          "max_ms": 635.2402220363729,
+          "slower_than_source_interval": 712,
+          "intervals": 712
+        },
+        "total_processing_s_excluding_first_frame": 265.73977014550474,
+        "mean_processing_ms": 373.2300142493044,
+        "stage_share_percent": {
+          "shared_image_tracking": 10.439724418375508,
+          "observation_preparation": 4.381319265878196,
+          "pose_group_surface": 85.17338716513963
+        }
+      },
+      "optimized": {
+        "evidence_directory": "/home/feit/.cache/flash-tracker-restart/runtime-20261104/optimized/000/flash-demo-dowel-ring",
+        "processing": {
+          "method": "group_growing",
+          "masks": "recorded",
+          "includes": "segmentation if computed, shared matching, observation preparation, pose/group/map updates",
+          "excludes": "model loading, disk input/output, scoring, playback, camera capture and display",
+          "first_frame_ms": 36.949312954675406,
+          "steady_ms": {
+            "median": 354.7888135071844,
+            "p90": 435.1436793571338
+          },
+          "max_ms": 706.2881060410291,
+          "slower_than_source_interval": 712,
+          "intervals": 712
+        },
+        "total_processing_s_excluding_first_frame": 252.75576168711996,
+        "mean_processing_ms": 354.99404731337074,
+        "stage_share_percent": {
+          "shared_image_tracking": 10.645813205102973,
+          "observation_preparation": 4.510918184203734,
+          "pose_group_surface": 84.83804188777746
+        }
+      }
+    },
+    {
+      "case": "flash-demo-gamepad-cube",
+      "frames": 628,
+      "input_sha256": "fda3c6528b84615e7e04bed498cbec284fb4837a34f453f37c0b632a701d10cf",
+      "source_run": "/home/feit/.cache/flash-tracker-restart/recovery-audit-20261104/sequential-scene-outline/flash-demo-gamepad-cube",
+      "surface_experiment": {
+        "spacing_m": 0.003,
+        "agreement_m": 0.005,
+        "min_overlap": 0.25,
+        "growth_agreement_m": 0.003,
+        "growth_min_overlap": 0.75,
+        "patch_consistency": 0.95,
+        "patch_overlap": 0.8,
+        "image_weight": 1.0,
+        "surface_priority": true,
+        "partial_surface_matching": true,
+        "recovery_starts": 4,
+        "fit_view_limit": 1,
+        "confirmations": 2,
+        "max_patches": 32,
+        "max_pending": 8,
+        "points_per_patch": 1024,
+        "max_points": 8192,
+        "grow": true,
+        "retain_unobserved_pose": false,
+        "uncertainty": {
+          "enabled": true,
+          "mode": "kalman",
+          "initial_position_std_m": 0.005,
+          "initial_rotation_std_deg": 10.0,
+          "position_process_std_m_sqrt_s": 0.03,
+          "rotation_process_std_deg_sqrt_s": 2.0,
+          "reset_on_geometry_conflict": true,
+          "independent_error_m": 0.001,
+          "correlated_error_m": 0.002,
+          "correlation_length_m": 0.01,
+          "max_measurements": 256,
+          "compatibility_probability": 0.95,
+          "max_visible_outlier_fraction": 0.25,
+          "prefer_supported_prediction": true
+        }
+      },
+      "config": {
+        "backend": "surface",
+        "sam_resolution": 504,
+        "min_similarity": 0.75,
+        "registration_threshold_m": 0.005,
+        "registration_min_inliers": 12,
+        "registration_trials": 100,
+        "visible_shape_fallback": false,
+        "parallel_surface_objects": true,
+        "pipeline_surface_frames": true,
+        "surface_object_workers": 2,
+        "surface_reference_max_points_per_view": 15000,
+        "compiled_surface_fit": true,
+        "reuse_surface_search": true,
+        "detection_correction": {
+          "enabled": false,
+          "offline_interval_frames": 16,
+          "runtime_interval_frames": 60,
+          "min_detector_score": 0.8,
+          "min_tracker_score": 0.8,
+          "min_mask_overlap": 0.5
+        },
+        "observation": {
+          "mask_margin_px": 2,
+          "depth_span_m": 0.01,
+          "depth_neighborhood_px": 3,
+          "normal_bilateral_diameter_px": 5,
+          "normal_bilateral_sigma_px": 2.0,
+          "huber_m": 0.005,
+          "surface_spacing_m": 0.003,
+          "samples_across_object": 64,
+          "min_surface_spacing_m": 0.001,
+          "component_gap_m": null,
+          "depth_outlier_sigma": 3.0,
+          "filtered_depth_for_fitting": true,
+          "validation_tile_px": 4
+        },
+        "shape": {
+          "depth_tolerance_m": 0.005,
+          "surface_spacing_m": 0.003,
+          "mask_boundary_tolerance_px": 2.0,
+          "require_full_mask_coverage": true,
+          "mask_coverage_weight": 1.0,
+          "scene_depth_constraints": true,
+          "prefer_observed_overlap": true,
+          "max_surface_distance_m": 0.03,
+          "max_evaluations": 50,
+          "solver_tolerance": 1e-05,
+          "max_fit_points": 2048,
+          "nn_queries_per_worker": 512,
+          "batch_jacobian": true,
+          "batch_query_workers": 8
+        },
+        "motion": {
+          "crop_min_px": 160,
+          "crop_max_px": 480,
+          "crop_extent_multiplier": 2.5,
+          "input_size_px": 320,
+          "grid_step_px": 4,
+          "covisibility_min": 0.5,
+          "min_ransac_pairs": 6,
+          "ransac_distance_m": 0.006,
+          "ransac_confidence": 0.99,
+          "refinement_steps": 2,
+          "connected_dilation_px": 7
+        }
+      },
+      "shared_matching": {
+        "backend": "ufm",
+        "max_image_size_px": 640,
+        "scene_points": 800,
+        "object_points": 256,
+        "spacing_px": 5,
+        "history_frames": 64,
+        "depth_support_radius_px": 1,
+        "lk": {
+          "window_size_px": 21,
+          "pyramid_levels": 3,
+          "forward_backward_limit_px": 1.0
+        },
+        "ufm": {
+          "covisibility_min": 0.5
+        }
+      },
+      "group_experiment": {
+        "context_radius_m": 0.25,
+        "min_inliers": 12,
+        "fit_threshold_m": 0.005,
+        "object_max_points": 120,
+        "object_max_frame_gap_s": 0.1,
+        "object_fb_threshold_px": 1.0,
+        "object_image_scale": 1.0,
+        "depth_support_radius_px": 1,
+        "support_confirmation_s": 1.0,
+        "point_evidence_weight": 1.0
+      },
+      "comparison": {
+        "identical": true,
+        "changed_frame_objects": {
+          "pose": 0,
+          "status": 0,
+          "surface_events": 0
+        },
+        "first_changes": {
+          "pose": [],
+          "status": [],
+          "surface_events": []
+        },
+        "before_processing": {
+          "method": "group_growing",
+          "masks": "recorded",
+          "includes": "segmentation if computed, shared matching, observation preparation, pose/group/map updates",
+          "excludes": "model loading, disk input/output, scoring, playback, camera capture and display",
+          "first_frame_ms": 26.651280000805855,
+          "steady_ms": {
+            "median": 1262.8234050353058,
+            "p90": 2695.5610128236003
+          },
+          "max_ms": 4515.4284800519235,
+          "slower_than_source_interval": 627,
+          "intervals": 627
+        },
+        "after_processing": {
+          "method": "group_growing",
+          "masks": "recorded",
+          "includes": "segmentation if computed, shared matching, observation preparation, pose/group/map updates",
+          "excludes": "model loading, disk input/output, scoring, playback, camera capture and display",
+          "first_frame_ms": 26.088355982210487,
+          "steady_ms": {
+            "median": 1217.0234429650009,
+            "p90": 2828.1888760160655
+          },
+          "max_ms": 4838.061926013324,
+          "slower_than_source_interval": 627,
+          "intervals": 627
+        }
+      },
+      "baseline": {
+        "evidence_directory": "/home/feit/.cache/flash-tracker-restart/runtime-20261104/baseline/001/flash-demo-gamepad-cube",
+        "processing": {
+          "method": "group_growing",
+          "masks": "recorded",
+          "includes": "segmentation if computed, shared matching, observation preparation, pose/group/map updates",
+          "excludes": "model loading, disk input/output, scoring, playback, camera capture and display",
+          "first_frame_ms": 26.651280000805855,
+          "steady_ms": {
+            "median": 1262.8234050353058,
+            "p90": 2695.5610128236003
+          },
+          "max_ms": 4515.4284800519235,
+          "slower_than_source_interval": 627,
+          "intervals": 627
+        },
+        "total_processing_s_excluding_first_frame": 922.564389979234,
+        "mean_processing_ms": 1471.394561370389,
+        "stage_share_percent": {
+          "shared_image_tracking": 2.542133929548394,
+          "observation_preparation": 0.6324487713101608,
+          "pose_group_surface": 96.82402248718289
+        }
+      },
+      "optimized": {
+        "evidence_directory": "/home/feit/.cache/flash-tracker-restart/runtime-20261104/optimized/001/flash-demo-gamepad-cube",
+        "processing": {
+          "method": "group_growing",
+          "masks": "recorded",
+          "includes": "segmentation if computed, shared matching, observation preparation, pose/group/map updates",
+          "excludes": "model loading, disk input/output, scoring, playback, camera capture and display",
+          "first_frame_ms": 26.088355982210487,
+          "steady_ms": {
+            "median": 1217.0234429650009,
+            "p90": 2828.1888760160655
+          },
+          "max_ms": 4838.061926013324,
+          "slower_than_source_interval": 627,
+          "intervals": 627
+        },
+        "total_processing_s_excluding_first_frame": 933.735211247229,
+        "mean_processing_ms": 1489.2108632332202,
+        "stage_share_percent": {
+          "shared_image_tracking": 2.5106252026368843,
+          "observation_preparation": 0.6157261969476375,
+          "pose_group_surface": 96.87231226590532
+        }
+      }
+    }
+  ],
+  "fresh_sam": {
+    "scope": "First 90 consecutive frames of each clip, actual SAM3 at 504 resolution; no comparison to recorded-mask accuracy because segmentation inputs changed. Both roles initialized. Does not cover full occlusion or recovery.",
+    "cases": [
+      {
+        "case": "flash-demo-dowel-ring",
+        "frames": 90,
+        "processing": {
+          "method": "group_growing",
+          "masks": "computed",
+          "includes": "segmentation if computed, shared matching, observation preparation, pose/group/map updates",
+          "excludes": "disk input/output, scoring, playback, camera capture and display",
+          "startup": "models warmed before run except lazy SAM loading in first_frame_ms; steady excludes first frame",
+          "first_frame_ms": 2062.861071957741,
+          "steady_ms": {
+            "median": 316.51713605970144,
+            "p90": 344.0393610508181
+          },
+          "max_ms": 407.6962060062215,
+          "slower_than_source_interval": 89,
+          "intervals": 89
+        },
+        "median_mask_ms": 24.878212017938495,
+        "startup_s": 3.642720204021316,
+        "roles": {
+          "dowel": {
+            "reference_frame": 0,
+            "accuracy_labels": false,
+            "methods": {
+              "group_growing": {
+                "available_after_initialization": 89,
+                "total_after_initialization": 89,
+                "max_map_points": 582,
+                "pose_sources": {
+                  "observed_candidate": 89,
+                  "predicted": 0,
+                  "lost": 0
+                }
+              }
+            },
+            "timing_ms": {
+              "prepare_ms": {
+                "median": 7.746034010779113,
+                "p90": 8.145461801905185
+              },
+              "group_growing": {
+                "median": 108.35417098132893,
+                "p90": 123.89788280706853
+              },
+              "scene_point_tracking_ms": {
+                "median": 36.72170697245747,
+                "p90": 38.69494200916961
+              }
+            }
+          },
+          "ring": {
+            "reference_frame": 0,
+            "accuracy_labels": false,
+            "methods": {
+              "group_growing": {
+                "available_after_initialization": 89,
+                "total_after_initialization": 89,
+                "max_map_points": 600,
+                "pose_sources": {
+                  "observed_candidate": 89,
+                  "predicted": 0,
+                  "lost": 0
+                }
+              }
+            },
+            "timing_ms": {
+              "prepare_ms": {
+                "median": 14.10088298143819,
+                "p90": 14.962165174074471
+              },
+              "group_growing": {
+                "median": 121.90936296246946,
+                "p90": 139.95614299783483
+              },
+              "scene_point_tracking_ms": {
+                "median": 36.72170697245747,
+                "p90": 38.69494200916961
+              }
+            }
+          }
+        },
+        "evidence_directory": "/home/feit/.cache/flash-tracker-restart/runtime-20261104/sam/000/flash-demo-dowel-ring"
+      },
+      {
+        "case": "flash-demo-gamepad-cube",
+        "frames": 90,
+        "processing": {
+          "method": "group_growing",
+          "masks": "computed",
+          "includes": "segmentation if computed, shared matching, observation preparation, pose/group/map updates",
+          "excludes": "disk input/output, scoring, playback, camera capture and display",
+          "startup": "models warmed before run except lazy SAM loading in first_frame_ms; steady excludes first frame",
+          "first_frame_ms": 1307.4900489882566,
+          "steady_ms": {
+            "median": 1119.2756629316136,
+            "p90": 1387.8599706222303
+          },
+          "max_ms": 1652.3252539336681,
+          "slower_than_source_interval": 89,
+          "intervals": 89
+        },
+        "median_mask_ms": 24.742156034335494,
+        "startup_s": 0.00486130197532475,
+        "roles": {
+          "gamepad": {
+            "reference_frame": 0,
+            "accuracy_labels": false,
+            "methods": {
+              "group_growing": {
+                "available_after_initialization": 89,
+                "total_after_initialization": 89,
+                "max_map_points": 598,
+                "pose_sources": {
+                  "observed_candidate": 89,
+                  "predicted": 0,
+                  "lost": 0
+                }
+              }
+            },
+            "timing_ms": {
+              "prepare_ms": {
+                "median": 5.500599043443799,
+                "p90": 5.746384977828711
+              },
+              "group_growing": {
+                "median": 555.7705640094355,
+                "p90": 752.9070780263282
+              },
+              "scene_point_tracking_ms": {
+                "median": 36.525828996673226,
+                "p90": 38.722294417675585
+              }
+            }
+          },
+          "cube": {
+            "reference_frame": 0,
+            "accuracy_labels": false,
+            "methods": {
+              "group_growing": {
+                "available_after_initialization": 89,
+                "total_after_initialization": 89,
+                "max_map_points": 271,
+                "pose_sources": {
+                  "observed_candidate": 89,
+                  "predicted": 0,
+                  "lost": 0
+                }
+              }
+            },
+            "timing_ms": {
+              "prepare_ms": {
+                "median": 4.607607028447092,
+                "p90": 4.8074110061861575
+              },
+              "group_growing": {
+                "median": 475.9667589678429,
+                "p90": 632.490212796256
+              },
+              "scene_point_tracking_ms": {
+                "median": 36.525828996673226,
+                "p90": 38.722294417675585
+              }
+            }
+          }
+        },
+        "evidence_directory": "/home/feit/.cache/flash-tracker-restart/runtime-20261104/sam/001/flash-demo-gamepad-cube"
+      }
+    ]
+  }
+}

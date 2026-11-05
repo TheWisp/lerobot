@@ -15,9 +15,11 @@ import importlib.metadata
 import json
 import subprocess
 import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from dataclasses import asdict
 from functools import partial
+from itertools import islice
 from pathlib import Path
 
 import cv2
@@ -33,6 +35,7 @@ from lerobot.policies.flash.scene_groups import ScenePointTracker
 from lerobot.policies.flash.shared_image_tracking import SharedFrameTracker, SharedMatchingConfig
 from lerobot.policies.flash.surface_acceleration import SearchPool, compiled_kernels
 from lerobot.policies.flash.surface_correspondence import crop_pair, measured_pairs, robust_fit, ufm_pairs
+from lerobot.policies.flash.surface_observation import prepare_surface_frame
 from lerobot.policies.flash.surface_tracking import SurfaceTrackingSession, load_ufm
 from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig
 
@@ -204,7 +207,7 @@ def score_case(case, rows, references, reference_frames):
             continue
         available_by_method = {}
         errors = {}
-        methods = ["ufm_chain", "surface_corrected"]
+        methods = [name for name in ("ufm_chain", "surface_corrected") if name in details[0]]
         if "ufm_retained_reference" in details[0]:
             methods.append("ufm_retained_reference")
         methods += [
@@ -227,7 +230,7 @@ def score_case(case, rows, references, reference_frames):
                 metrics["pose_error"] = summarize(available, *error)
                 errors[name] = error[0]
             result["methods"][name] = metrics
-        if truth is not None:
+        if truth is not None and "ufm_chain" in errors and "surface_corrected" in errors:
             paired = available_by_method["ufm_chain"] & available_by_method["surface_corrected"]
             paired[0] = False
             result["paired_frames"] = int(paired.sum())
@@ -249,6 +252,7 @@ def score_case(case, rows, references, reference_frames):
         result["timing_ms"] = {
             key: quantiles([item[key] for item in details[first + 1 :]])
             for key in ("prepare_ms", "finish_ms")
+            if key in details[0]
         }
         for name in ("conditioned_fixed", "conditioned_growing", "group_fixed", "group_growing"):
             if name in methods:
@@ -318,7 +322,18 @@ def run_case(
     progress=None,
     shared_matching_config=None,
     surface_methods=None,
+    single_method=None,
+    record_surfaces=True,
+    mask_source=None,
+    max_frames=None,
+    parallel_objects=True,
 ):
+    if max_frames is not None and (type(max_frames) is not int or max_frames < 1):
+        raise ValueError("max_frames must be a positive integer")
+    if single_method is not None:
+        if surface_methods is not None or retain_motion_reference:
+            raise ValueError("single_method cannot also select comparison methods or a retry baseline")
+        surface_methods = [single_method]
     output.mkdir(parents=True, exist_ok=False)
     shared = SharedFrameTracker(shared_matching_config, model) if shared_matching_config else None
     sessions = {
@@ -395,8 +410,29 @@ def run_case(
         (
             gzip.open(output / "correspondences.jsonl.gz", "wt") if record_correspondences else nullcontext()
         ) as match_journal,
+        (
+            ThreadPoolExecutor(max_workers=min(config.surface_object_workers, len(sessions)))
+            if parallel_objects
+            and shared is not None
+            and single_method is not None
+            and config.parallel_surface_objects
+            and len(sessions) > 1
+            else nullcontext(None)
+        ) as object_pool,
     ):
-        for frame, masks in samples(case):
+        for frame, masks in islice(samples(case), max_frames):
+            # Disk decoding and output serialization are outside this timer.
+            # A supplied live mask source is inside it; saved masks cost zero.
+            frame_started = time.perf_counter()
+            mask_started = time.perf_counter()
+            if mask_source is not None:
+                measured_masks = mask_source.masks(frame)
+                masks = {
+                    role: measured_masks.get(role, np.zeros(frame.depth.shape, bool)) for role in sessions
+                }
+            mask_ms = (time.perf_counter() - mask_started) * 1000 if mask_source else 0.0
+            excluded_s = 0.0
+            hash_started = time.perf_counter()
             for value in (
                 frame.rgb,
                 frame.depth,
@@ -406,7 +442,8 @@ def run_case(
             ):
                 a = np.asarray(value)
                 digest.update(str((a.shape, a.dtype)).encode() + a.tobytes())
-            row = {"frame": frame.frame_id, "time_s": frame.source_time_s, "objects": {}}
+            excluded_s += time.perf_counter() - hash_started
+            row = {"frame": frame.frame_id, "time_s": frame.source_time_s, "mask_ms": mask_ms, "objects": {}}
             if shared is not None:
                 scene = shared.update(frame, masks)
                 row["shared_matching"] = dict(shared.diagnostics)
@@ -415,16 +452,30 @@ def run_case(
                 begin = time.perf_counter()
                 scene = scene_tracker.update(frame)
                 row["scene_point_tracking_ms"] = (time.perf_counter() - begin) * 1000
+            depth_m = frame.depth.astype(np.float32) * frame.depth_m_per_unit
+            frame_filters = prepare_surface_frame(depth_m, asdict(config.observation))
             match_row = {"frame": frame.frame_id, "objects": {}}
-            for role, session in sessions.items():
+
+            def process_role(
+                role_session,
+                frame=frame,
+                masks=masks,
+                scene=scene if shared is not None or scene_tracker is not None else None,
+                depth_m=depth_m,
+                frame_filters=frame_filters,
+            ):
+                role, session = role_session
+                new_reference = new_reference_frame = None
+                excluded_role_s = 0.0
                 begin = time.perf_counter()
                 previous = session.previous
                 prepared = session.prepare(
                     frame.rgb,
-                    frame.depth.astype(np.float32) * frame.depth_m_per_unit,
+                    depth_m,
                     masks[role],
                     frame.intrinsics,
                     frame.frame_id,
+                    frame_filters=frame_filters,
                 )
                 prepare_ms = (time.perf_counter() - begin) * 1000
                 pair = None
@@ -438,27 +489,30 @@ def run_case(
                         config.motion,
                         paths=paths[role],
                     )
-                match_row["objects"][role] = {"pair": pair}
-                chain = chains[role].update(prepared)
-                begin = time.perf_counter()
-                fitted = session.finish(prepared)
-                finish_ms = (time.perf_counter() - begin) * 1000
-                if role not in references and session.reference is not None:
-                    references[role] = session.reference.copy()
-                    reference_frames[role] = frame.frame_id
-                row["objects"][role] = {
-                    "ufm_chain": chain.tolist() if chain is not None else None,
-                    "surface_corrected": fitted.get("camera_from_reference"),
-                    "status": fitted["status"],
-                    "motion_chain_broken": chains[role].broken,
+                match_object = {"pair": pair}
+                if role not in references and prepared["status"] is None:
+                    new_reference = prepared["current"]["obs"]["points"].copy()
+                    new_reference_frame = frame.frame_id
+                object_row = {
                     "prepare_ms": prepare_ms,
-                    "finish_ms": finish_ms,
-                    "diagnostics": fitted["diagnostics"],
                 }
+                if single_method is None:
+                    chain = chains[role].update(prepared)
+                    begin = time.perf_counter()
+                    fitted = session.finish(prepared)
+                    finish_ms = (time.perf_counter() - begin) * 1000
+                    object_row.update(
+                        ufm_chain=chain.tolist() if chain is not None else None,
+                        surface_corrected=fitted.get("camera_from_reference"),
+                        status=fitted["status"],
+                        motion_chain_broken=chains[role].broken,
+                        finish_ms=finish_ms,
+                        diagnostics=fitted["diagnostics"],
+                    )
                 if retain_motion_reference:
                     retry_pose, retry_diagnostics = retained[role].update(prepared, previous)
-                    match_row["objects"][role]["retry"] = retained[role].evidence
-                    row["objects"][role].update(
+                    match_object["retry"] = retained[role].evidence
+                    object_row.update(
                         ufm_retained_reference=retry_pose.tolist() if retry_pose is not None else None,
                         retained_reference_diagnostics=retry_diagnostics,
                     )
@@ -535,7 +589,7 @@ def run_case(
                             **({"object_usable": prepared["current"]["usable"]} if shared else {}),
                         )
                         details["group"] = group_details
-                    row["objects"][role].update(
+                    object_row.update(
                         {
                             name: result["camera_from_reference"],
                             name + "_ms": (time.perf_counter() - begin) * 1000,
@@ -543,6 +597,9 @@ def run_case(
                             name + "_details": details,
                         }
                     )
+                    if not record_surfaces:
+                        continue
+                    archive_started = time.perf_counter()
                     # Original sampled camera measurements and their placement are
                     # separate from derived clouds, so an addition can be undone.
                     archive = output / "surface_patches" / name / role
@@ -563,6 +620,30 @@ def run_case(
                         np.savez_compressed(
                             models / f"{track.store.version:06d}.npz", points=track.store.points
                         )
+                    excluded_role_s += time.perf_counter() - archive_started
+                return role, object_row, match_object, new_reference, new_reference_frame, excluded_role_s
+
+            role_results = (
+                object_pool.map(process_role, sessions.items())
+                if object_pool is not None
+                else map(process_role, sessions.items())
+            )
+            for (
+                role,
+                object_row,
+                match_object,
+                new_reference,
+                new_reference_frame,
+                excluded_role_s,
+            ) in role_results:
+                row["objects"][role] = object_row
+                match_row["objects"][role] = match_object
+                if new_reference is not None:
+                    references[role] = new_reference
+                    reference_frames[role] = new_reference_frame
+                excluded_s += excluded_role_s
+
+            row["processing_ms"] = (time.perf_counter() - frame_started - excluded_s) * 1000
             if match_journal is not None:
                 match_journal.write(json.dumps(match_row, allow_nan=False, separators=(",", ":")) + "\n")
             journal.write(json.dumps(row, allow_nan=False) + "\n")
@@ -573,6 +654,21 @@ def run_case(
                 print(f"{case['id']}: {frame.frame_id + 1}/{case['expected_frames']}", flush=True)
     report = score_case(case, rows, references, reference_frames)
     report.update(input_sha256=digest.hexdigest(), offline_wall_s=time.perf_counter() - started)
+    report["processing"] = {
+        "method": single_method or "all_comparisons",
+        "masks": "computed" if mask_source is not None else "recorded",
+        "includes": "segmentation if computed, shared matching, observation preparation, pose/group/map updates",
+        "excludes": "disk input/output, scoring, playback, camera capture and display",
+        "startup": "models warmed before run except lazy SAM loading in first_frame_ms; steady excludes first frame",
+        "first_frame_ms": rows[0]["processing_ms"],
+        "steady_ms": quantiles([r["processing_ms"] for r in rows[1:]]),
+        "max_ms": max(r["processing_ms"] for r in rows[1:]) if len(rows) > 1 else None,
+        "slower_than_source_interval": sum(
+            b["processing_ms"] > 1000 * (b["time_s"] - a["time_s"])
+            for a, b in zip(rows, rows[1:], strict=False)
+        ),
+        "intervals": len(rows) - 1,
+    }
     report["surface_experiment"] = asdict(surface_experiment) if surface_experiment else None
     if shared is not None:
         report["shared_matching"] = {
