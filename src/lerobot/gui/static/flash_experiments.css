@@ -1,14 +1,6 @@
 /* Two sources, one shared tracker: recorded examples and a live RGB-D camera. */
-#flash-experiment-sidebar, #flash-experiment-view { display: none; }
-#tab-run.flash-experiments #run-sidebar { width: 280px; min-width: 210px; }
-#tab-run.flash-experiments .run-form { padding: 10px; min-height: 0; overflow: hidden; }
-#tab-run.flash-experiments #run-section-flash { height: 100%; min-height: 0; }
-#tab-run.flash-experiments #run-section-flash > :not(#flash-experiment-sidebar),
-#tab-run.flash-experiments #run-main > :not(#flash-experiment-view),
-#tab-run.flash-experiments .run-actions,
-#tab-run.flash-experiments #overlays-panel-run,
-#tab-run.flash-experiments #run-overlays-resize { display: none !important; }
-#tab-run.flash-experiments #flash-experiment-sidebar { display: flex; flex-direction: column; height: 100%; min-height: 0; gap: 8px; }
+#tab-flash #flash-sidebar { width: 280px; min-width: 210px; padding: 10px; box-sizing: border-box; }
+#tab-flash #flash-experiment-sidebar { display: flex; flex-direction: column; height: 100%; min-height: 0; gap: 8px; }
 .flash-experiment-list-heading { display: flex; align-items: center; justify-content: space-between; }
 #flash-experiment-rebuild-status, #flash-experiment-rebuild-errors { font-size: 12px; overflow-wrap: anywhere; color: #b8c7d8; }
 #flash-experiment-rebuild-progress { width: 100%; }
@@ -21,7 +13,7 @@
 .flash-experiment-item { display: block; width: 100%; border: 0; border-radius: 4px; background: transparent; color: #c7d4e5; text-align: left; padding: 12px 8px; cursor: pointer; font: inherit; font-size: 13px; overflow-wrap: anywhere; }
 .flash-experiment-item:hover { background: #23354d; }
 .flash-experiment-item[aria-pressed="true"] { background: #254363; color: #fff; }
-#tab-run.flash-experiments #flash-experiment-view { display: flex; flex: 1; min-width: 0; min-height: 0; flex-direction: column; gap: 10px; padding: 16px; }
+#tab-flash #flash-experiment-view { display: flex; flex: 1; min-width: 0; min-height: 0; flex-direction: column; gap: 10px; padding: 16px; }
 #flash-experiment-title { font-size: 18px; font-weight: 500; }
 #flash-experiment-detail { color: #a7b5c8; font-size: 12px; }
 .flash-experiment-tools { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; font-size: 13px; }
@@ -37,8 +29,8 @@
 #flash-experiment-status { color: #b8c7d8; font-size: 13px; min-height: 20px; }
 #flash-experiment-sidebar button:not(.flash-experiment-item), .flash-experiment-tools button { background: #16263c; color: #c7d4e5; border: 1px solid #31516c; border-radius: 4px; padding: 5px 9px; cursor: pointer; }
 @media (max-width: 700px) {
-    #tab-run.flash-experiments #run-sidebar { width: 180px; min-width: 150px; }
-    #tab-run.flash-experiments #flash-experiment-view { padding: 8px; }
+    #tab-flash #flash-sidebar { width: 180px; min-width: 150px; }
+    #tab-flash #flash-experiment-view { padding: 8px; }
 }
 
 /* Dim RGB, as in TrackEverything, so small coloured heads and paths read clearly. */
@@ -113,5 +105,6 @@
 .flash-source-tabs { display: flex; gap: 8px; margin-bottom: 12px; }
 .flash-source-tabs button { padding: 8px 16px; border: 1px solid #31516c; border-radius: 5px; background: #16263c; color: #d8e4f3; cursor: pointer; }
 .flash-source-tabs button[aria-pressed="true"] { background: #254363; border-color: #72b7ff; }
-#tab-run.flash-live-source #run-sidebar, #tab-run.flash-live-source .sidebar-resize-handle { display: none; }
+#tab-flash.flash-live-source #flash-sidebar,
+#tab-flash.flash-live-source .sidebar-resize-handle { display: none; }
 #flash-live-panel { overflow: auto; min-height: 0; }

@@ -44,7 +44,6 @@ function flashMethodExplanation(method, data = flashExperiments.data) {
 const flashRebuild = { timer: null, request: null, starting: false, active: false, id: null, completed: null };
 
 async function showFlashExperiments() {
-    _flashUpdateWorkspace();
     initFlashExperimentPlayer();
     await loadFlashExperiments();
     pollFlashRebuild();
@@ -127,7 +126,7 @@ async function rebuildFlashExamples(selectedOnly = false) {
 async function pollFlashRebuild() {
     clearTimeout(flashRebuild.timer);
     flashRebuild.timer = null;
-    if (flashRebuild.request || selectedWorkflow !== 'flash') return;
+    if (flashRebuild.request || !document.getElementById('tab-flash')?.classList.contains('active')) return;
     const request = new AbortController();
     flashRebuild.request = request;
     let active = false;
@@ -135,7 +134,7 @@ async function pollFlashRebuild() {
         const response = await fetch('/api/run/flash/experiments/rebuild', { signal: request.signal });
         if (!response.ok) throw new Error(`Cannot read rerun progress (${response.status})`);
         const state = await response.json();
-        if (selectedWorkflow !== 'flash') return;
+        if (!document.getElementById('tab-flash')?.classList.contains('active')) return;
         active = ['starting', 'running', 'cancelling'].includes(state.state);
         flashRebuild.active = active;
         // Loading saved Run settings can replace the form while a request is
@@ -180,7 +179,7 @@ async function pollFlashRebuild() {
         active = true; // Retry status after a temporary server interruption.
     } finally {
         flashRebuild.request = null;
-        if (selectedWorkflow === 'flash') {
+        if (document.getElementById('tab-flash')?.classList.contains('active')) {
             flashRebuild.timer = setTimeout(pollFlashRebuild, active ? 1000 : 5000);
         }
     }
@@ -964,7 +963,7 @@ async function showFlashPipelineSettings() {
 function setFlashSource(live) {
     document.getElementById('flash-source-examples').setAttribute('aria-pressed', String(!live));
     document.getElementById('flash-source-live').setAttribute('aria-pressed', String(live));
-    document.getElementById('tab-run').classList.toggle('flash-live-source', live);
+    document.getElementById('tab-flash').classList.toggle('flash-live-source', live);
 }
 async function showFlashExamples() {
     if (flashLive.visible && !(await hideFlashLive())) return;

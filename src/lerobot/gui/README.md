@@ -161,7 +161,7 @@ connect an agent.
 
 ### FLASH 3D inspection
 
-In **Run → FLASH**, select a recording and press **3D scene**. Left-drag rotates,
+In **FLASH → Video examples**, select a recording and press **3D scene**. Left-drag rotates,
 right-drag pans, and the wheel zooms. **Camera view** restores the recorded
 calibration; **Focus objects** frames the compared surfaces. The bottom playback
 bar works in both 2D and 3D. Orange is the selected tracker's surface; green is a

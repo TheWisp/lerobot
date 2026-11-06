@@ -22,8 +22,9 @@
       _openDatasetThenMaybe(params.repo_id, Number(params.episode_id));
     } else if (view === "local-episode" && params && params.path && params.episode_id != null) {
       _openDatasetThenMaybe(params.path, Number(params.episode_id));
-    } else if (view === "run" && params?.run_id === "flash" && typeof window.selectWorkflow === "function") {
-      window.selectWorkflow("flash");
+    } else if (view === "flash") {
+      if (params?.source === "live") window.showFlashLive?.();
+      else window.showFlashExamples?.();
     }
   });
 

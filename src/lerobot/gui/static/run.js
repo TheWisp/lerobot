@@ -2,18 +2,12 @@
 
 let runTabInitialized = false;
 let runEventSource = null;
-let selectedWorkflow = 'teleop'; // 'teleop' | 'replay' | 'policy' | 'flash'
+let selectedWorkflow = 'teleop'; // 'teleop' | 'replay' | 'policy'
 let obsStreamMeta = null; // {available, obs_scalar_keys, action_keys, image_keys}
 let obsStreamTimer = null; // interval ID for camera polling
 let liveVideo = null;      // the Low Bandwidth stream client, when that is the path
 let obsStreamGen = 0; // bumped on stop/restart to cancel an in-flight "wait for the obs-stream" loop
 let _runFormRendered = false; // true once all workflow sections are in the DOM
-function _flashUpdateWorkspace() {
-    const active = selectedWorkflow === 'flash';
-    document.getElementById('tab-run').classList.toggle('flash-experiments', active);
-    if (!active) document.getElementById('flash-experiment-video')?.pause();
-}
-
 // ============================================================================
 // Initialization
 // ============================================================================
@@ -49,8 +43,6 @@ async function runTabInit() {
 
     initSplitHandle();
     renderRunForm();
-    _flashUpdateWorkspace();
-    if (selectedWorkflow === 'flash') await showFlashExperiments();
     _initSelectTitleSync();
     await _ensureModelDataLoaded();
     await pollRunStatus();
@@ -88,23 +80,23 @@ function _initSelectTitleSync() {
 // ============================================================================
 
 async function selectWorkflow(workflow) {
-    if (workflow !== 'flash' && flashLive.visible && !(await hideFlashLive(false))) return;
+    // Keep old links and callers working; FLASH now owns a top-level tab.
+    if (workflow === 'flash') return switchTab('flash');
+    if (!document.getElementById('tab-run').classList.contains('active')) switchTab('run');
     selectedWorkflow = workflow;
-    _flashUpdateWorkspace();
     document.querySelectorAll('.workflow-btn').forEach(b => {
         b.classList.toggle('active', b.dataset.workflow === workflow);
     });
     // Toggle visibility of workflow sections (no re-render)
-    for (const wf of ['teleop', 'replay', 'policy', 'flash']) {
+    for (const wf of ['teleop', 'replay', 'policy']) {
         const section = document.getElementById(`run-section-${wf}`);
         if (section) section.style.display = (wf === workflow) ? '' : 'none';
     }
     const episodeControl = document.getElementById('run-episode-control');
-    if (episodeControl) episodeControl.style.display = workflow === 'flash' ? 'none' : '';
+    if (episodeControl) episodeControl.style.display = '';
     if (workflow === 'policy' || workflow === 'teleop') {
         await _ensureModelDataLoaded();
     }
-    if (workflow === 'flash') await showFlashExperiments();
     _updateLaunchButton();
 }
 
@@ -193,7 +185,7 @@ function _validateLaunch() {
         return { ready: false, reason: 'A process is already running — Stop it first.' };
     }
     // Robot profile is the universal prerequisite for every workflow.
-    if (selectedWorkflow !== 'flash' && !_val(_getActiveRobotSelectId())) {
+    if (!_val(_getActiveRobotSelectId())) {
         return { ready: false, reason: 'Select a robot profile.' };
     }
     const workflowValidator = _WORKFLOW_VALIDATORS[selectedWorkflow];
@@ -210,7 +202,7 @@ function _updateLaunchButton() {
     if (!btn) return;
     const { ready, reason } = _validateLaunch();
     btn.disabled = !ready;
-    btn.textContent = selectedWorkflow === 'flash' ? 'Run FLASH' : 'Launch';
+    btn.textContent = 'Launch';
     // Native `title` shows on hover; gives the missing-field hint without
     // needing extra inline text below the button.
     btn.title = reason;
@@ -1306,10 +1298,6 @@ function renderRunForm() {
     html += '</div>'; // end standard fields
     html += '</div>'; // end policy section
 
-    html += `<div id="run-section-flash" style="${selectedWorkflow === 'flash' ? '' : 'display:none'}">`;
-    html += '<div id="flash-experiment-sidebar"><div class="flash-experiment-list-heading"><strong>Video examples</strong><button type="button" onclick="loadFlashExperiments()" aria-label="Refresh tracking experiments">↻</button></div><button type="button" id="flash-experiment-rebuild" onclick="rebuildFlashExamples()" title="Reuse unchanged results; benchmark new or changed inputs, settings and code. Existing results stay available.">Rerun all benchmarks</button><label title="Recompute every clip, including unchanged ones. Use this for fresh timing measurements."><input type="checkbox" id="flash-experiment-ignore-cache"> Ignore cache</label><button type="button" id="flash-experiment-cancel" onclick="cancelFlashBenchmarks()" hidden>Cancel rerun</button><progress id="flash-experiment-rebuild-progress" hidden></progress><div id="flash-experiment-rebuild-status" role="status"></div><div id="flash-experiment-report"><button type="button" id="flash-experiment-report-view" onclick="showFlashComparison(true)" aria-pressed="false">View results</button><a id="flash-experiment-report-download" hidden>Download JSON</a></div><details id="flash-experiment-rebuild-errors" hidden><summary>Failures</summary><ul></ul></details><div id="flash-experiment-list">Loading recordings…</div></div>';
-    html += '</div>';
-
     // ---- Episode control (active while a record subprocess runs) ----
     // Sends episode-transition commands to the running lerobot-record
     // subprocess via POST /api/run/control — mirrors the keyboard events
@@ -1318,7 +1306,7 @@ function renderRunForm() {
     // record, HVLA), so it lives outside the per-workflow sections.
     // Buttons start disabled; updateRunUI enables them while a subprocess
     // runs (the endpoint 409s otherwise).
-    html += `<div class="form-section" id="run-episode-control" style="${selectedWorkflow === 'flash' ? 'display:none' : ''}">`;
+    html += '<div class="form-section" id="run-episode-control">';
     // Live phase readout sits right in the section title so the operator can
     // see what a "Next episode" click will interrupt ("recording episode 3" /
     // "resetting" / ...). Fed by pollRunStatus from /api/run/status.
@@ -1382,7 +1370,6 @@ function _getActiveFpsInputId() {
 }
 
 async function launchRun() {
-    if (selectedWorkflow === 'flash') return; // Camera inspection has its own controls.
 
     const robotSelect = document.getElementById(_getActiveRobotSelectId());
     if (!robotSelect || !robotSelect.value) {
@@ -2128,7 +2115,7 @@ async function pollRunStatus() {
         const status = await res.json();
         _reportRunFailure(status.last_error);
         updateRunUI(status.running, status.command);
-        if (status.running && status.command === 'flash_surface_live' && selectedWorkflow === 'flash' && !flashLive.visible) await showFlashLive();
+        if (status.running && status.command === 'flash_surface_live' && document.getElementById('tab-flash')?.classList.contains('active') && !flashLive.visible) await showFlashLive();
 
         // Live record-phase readout next to the episode-control buttons
         // ("recording episode 3" / "resetting" / ...). Empty when idle or
@@ -2194,7 +2181,6 @@ function _reportRunFailure(failure) {
 function updateRunUI(isRunning, command = null) {
     _isRunning = isRunning;  // mirror for _validateLaunch
     _runCommand = command;  // mirror for the N/R hotkey gate
-    _flashUpdateWorkspace();
     const stopBtn = document.getElementById('run-stop-btn');
     const formInputs = document.querySelectorAll('#run-form input, #run-form select');
     const workflowBtns = document.querySelectorAll('.workflow-btn');
@@ -2207,7 +2193,7 @@ function updateRunUI(isRunning, command = null) {
         if (btn) btn.disabled = !controlsLive;
     }
 
-    formInputs.forEach(el => el.disabled = isRunning && !el.closest('#run-section-flash'));
+    formInputs.forEach(el => el.disabled = isRunning);
     workflowBtns.forEach(el => el.disabled = isRunning);
 
     const indicator = document.getElementById('run-status-indicator');

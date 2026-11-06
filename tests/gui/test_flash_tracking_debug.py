@@ -196,6 +196,41 @@ def test_shared_live_view_freezes_clicked_frame_and_never_paints_new_preview_ove
 
 
 @pytest.mark.requires_playwright
+def test_flash_has_its_own_tab_with_video_and_live_subtabs(gui_page):
+    from lerobot.policies.flash.surface_registration import MATCHERS
+    from lerobot.policies.flash.surface_session_config import defaults
+
+    page = gui_page
+    page.route("**/api/run/flash/experiments", lambda r: r.fulfill(json=[]))
+    page.route("**/api/run/flash/tracking/state", lambda r: r.fulfill(json={"running": False}))
+    page.route(
+        "**/api/run/flash/tracking/shared-defaults",
+        lambda r: r.fulfill(json={"settings": defaults(), "matchers": MATCHERS}),
+    )
+    page.route("**/api/run/flash/tracking/stop", lambda r: r.fulfill(json={"status": "stopped"}))
+
+    page.locator('.tab[data-tab="flash"]').click()
+    page.wait_for_function("document.getElementById('tab-flash').classList.contains('active')")
+    assert page.locator("#flash-experiment-sidebar").is_visible()
+    assert page.locator("#flash-experiment-view").is_visible()
+    assert not page.locator("#run-launch-btn").is_visible()
+    assert page.locator('.workflow-btn[data-workflow="flash"]').count() == 0
+
+    page.locator("#flash-source-live").click()
+    page.wait_for_function("flashLive.visible && flashLive.settings !== null")
+    assert page.locator("#flash-live-panel").is_visible()
+    assert not page.locator("#flash-experiment-sidebar").is_visible()
+    page.locator("#flash-source-examples").click()
+    page.wait_for_function("!flashLive.visible")
+    assert page.locator("#flash-experiment-sidebar").is_visible()
+
+    # Saved links to the former Run workflow open the new top-level FLASH tab.
+    page.locator('.tab[data-tab="run"]').click()
+    page.evaluate("window.location.hash = '#/run/flash'")
+    page.wait_for_function("document.getElementById('tab-flash').classList.contains('active')")
+
+
+@pytest.mark.requires_playwright
 def test_source_navigation_stops_camera_before_returning_to_examples(gui_page):
     from lerobot.policies.flash.surface_registration import MATCHERS
     from lerobot.policies.flash.surface_session_config import defaults

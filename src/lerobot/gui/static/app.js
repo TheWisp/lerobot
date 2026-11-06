@@ -1520,10 +1520,13 @@ document.addEventListener('DOMContentLoaded', () => {
 // Keyboard controls
 // Tab switching
 function switchTab(tabName) {
-    if (tabName !== 'run') document.getElementById('flash-experiment-video')?.pause();
     // Captured before the active classes are cleared below — the camera release
     // hook at the end of this function needs to know which tab we are leaving.
     const previousTab = document.querySelector('.tab.active')?.dataset.tab || null;
+    if (tabName !== 'flash') document.getElementById('flash-experiment-video')?.pause();
+    if (previousTab === 'flash' && tabName !== 'flash' && typeof hideFlashLive === 'function' && flashLive.visible) {
+        void hideFlashLive(false);
+    }
     document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
     document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
     document.querySelector(`.tab[data-tab="${tabName}"]`).classList.add('active');
@@ -1540,6 +1543,8 @@ function switchTab(tabName) {
     if (tabName === 'run' && typeof runTabInit === 'function') {
         runTabInit();
     }
+    const flashInit = tabName === 'flash' && typeof showFlashExperiments === 'function'
+        ? showFlashExperiments() : null;
     // Notify model tab
     if (tabName === 'model' && typeof modelTabInit === 'function') {
         modelTabInit();
@@ -1566,6 +1571,7 @@ function switchTab(tabName) {
     if (tabName !== 'run' && typeof disconnectOutputSSE === 'function') {
         disconnectOutputSSE();
     }
+    return flashInit;
 }
 
 document.addEventListener('keydown', (e) => {

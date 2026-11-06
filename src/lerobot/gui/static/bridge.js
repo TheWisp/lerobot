@@ -39,6 +39,7 @@
     episode: "data",
     "local-episode": "data",
     run: "run",
+    flash: "flash",
     model: "model",
     robot: "robot",
   };
@@ -77,6 +78,7 @@
     if (view === "run" && params.run_id != null) {
       return `#/run/${encodeURIComponent(params.run_id)}`;
     }
+    if (view === "flash") return params.source === "live" ? "#/flash/live" : "#/flash/examples";
     if (view === "home") return "#/home";
     if (view === "model") return "#/model";
     if (view === "robot") return "#/robot";
@@ -111,7 +113,11 @@
       };
     }
     if (head === "run" && parts.length >= 2) {
+      if (parts[1] === "flash") return { view: "flash", params: { source: "examples" } };
       return { view: "run", params: { run_id: decodeURIComponent(parts[1]) } };
+    }
+    if (head === "flash") {
+      return { view: "flash", params: { source: parts[1] === "live" ? "live" : "examples" } };
     }
     return null;
   }
