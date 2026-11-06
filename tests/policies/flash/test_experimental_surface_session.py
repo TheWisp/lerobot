@@ -140,7 +140,7 @@ def prepared_frames(monkeypatch):
 
     cloud = points()
     monkeypatch.setattr(surface_tracking, "ufm_pairs", lambda *_args, **_kw: (cloud, cloud.copy()))
-    prepare = SurfaceTrackingSession(None, shape_config=ShapeConfig(batch_jacobian=False))
+    prepare = SurfaceTrackingSession(None, shape_config=ShapeConfig())
     rgb = np.zeros((80, 100, 3), np.uint8)
     depth = np.full((80, 100), 1.0, np.float32)
     mask = np.zeros((80, 100), bool)
@@ -274,7 +274,7 @@ def test_growth_checks_previous_rays_without_removing_hidden_back_surface(monkey
         store.compatible_additions(move(local, pose), pose), [False, True, False, True]
     )
     # No depth means unknown, not a reason to remove the back or complete it.
-    unknown = dict(first["current"], depth=np.zeros_like(depth))
+    unknown = dict(first["current"], depth=np.zeros_like(depth), scene_depth=np.zeros_like(depth))
     empty_view = SurfaceView.from_observation(unknown, k, prepare.shape_config)
     assert not empty_view.contradicts(local).any()
 

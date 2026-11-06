@@ -27,6 +27,7 @@ from benchmarks.flash_experiment_groups import GroupConfig
 from benchmarks.flash_experiment_inputs import samples
 from benchmarks.flash_experiment_labels import load_pose_labels
 from benchmarks.flash_full_pose_score import score_transforms, summarize
+from benchmarks.flash_surface_score import save_surface_version, score_surface_trace
 from lerobot.policies.flash.experimental_surface_session import GrowingSurfaceConfig
 from lerobot.policies.flash.shared_image_tracking import SharedMatchingConfig
 from lerobot.policies.flash.surface_acceleration import SearchPool, compiled_kernels
@@ -89,18 +90,16 @@ def score_case(case, rows, references, reference_frames, *, run=None):
                 relative_truth = truth[first:] @ np.linalg.inv(truth[first])
                 error = score_transforms(transforms, available, relative_truth, references[role])
                 metrics["pose_error"] = summarize(available, *error)
-                from benchmarks.flash_surface_score import score_surface_trace
-
-                metrics["surface_error"] = score_surface_trace(
-                    case.get("evaluation_surfaces", {}).get(role),
-                    truth[first:],
-                    details[first:],
-                    name,
-                    references[role],
-                    run=run,
-                    role=role,
-                )
                 errors[name] = error[0]
+            metrics["surface_error"] = score_surface_trace(
+                case.get("evaluation_surfaces", {}).get(role),
+                truth[first:] if truth is not None else None,
+                details[first:],
+                name,
+                references[role],
+                run=run,
+                role=role,
+            )
             result["methods"][name] = metrics
         if truth is not None and "ufm_chain" in errors and "surface_corrected" in errors:
             paired = available_by_method["ufm_chain"] & available_by_method["surface_corrected"]
@@ -227,10 +226,14 @@ def run_case(
     (output / "case.json").write_text(json.dumps(case, indent=2) + "\n")
 
     def archive_surface(name, role, track, details):
+        # Performance runs can omit patch history, but must retain the actual
+        # versioned surfaces needed by the same accuracy scorer as full runs.
+        if not record_surfaces and role not in case.get("evaluation_surfaces", {}):
+            return
         # Original sampled camera measurements and their placement are
         # separate from derived clouds, so an addition can be undone.
         archive = output / "surface_patches" / name / role
-        for event in details["map_events"]:
+        for event in details["map_events"] if record_surfaces else ():
             if event["event"] not in ("pending", "added"):
                 continue
             patch = track.store.patches[event["frame"]]
@@ -241,10 +244,7 @@ def run_case(
                 camera_from_reference=patch.camera_from_reference,
                 fitted_map_version=patch.fitted_map_version,
             )
-        if details["map_version_after"] != details["map_version_used"]:
-            models = output / "surface_models" / name / role
-            models.mkdir(parents=True, exist_ok=True)
-            np.savez_compressed(models / f"{track.store.version:06d}.npz", points=track.store.points)
+        save_surface_version(output, name, role, track, details)
 
     # A JSONL survives a stopped process. summary.json exists only after completion.
     with (
@@ -278,7 +278,7 @@ def run_case(
                 frame,
                 masks,
                 mask_ms=mask_ms,
-                archive_callback=archive_surface if record_surfaces else None,
+                archive_callback=archive_surface,
             )
             if match_journal is not None:
                 match_journal.write(json.dumps(match_row, allow_nan=False, separators=(",", ":")) + "\n")

@@ -78,6 +78,12 @@ def case_identity(case, settings, execution, *, check_cancel=lambda: None):
     labels, provenance = load_pose_labels(case, rows)
     for role in sorted(labels):
         digest.update(role.encode() + labels[role].tobytes())
+    # A changed evaluation model must not reuse scores for the old shape.
+    surfaces = {
+        role: file_hash(path) if path.is_file() else None
+        for role, spec in case.get("evaluation_surfaces", {}).items()
+        for path in (Path(spec["points_m"]).expanduser().resolve(),)
+    }
     return canonical_hash(
         {
             "execution": execution,
@@ -85,6 +91,7 @@ def case_identity(case, settings, execution, *, check_cancel=lambda: None):
             "settings": settings,
             "inputs": digest.hexdigest(),
             "labels": provenance,
+            "surfaces": surfaces,
         }
     )
 

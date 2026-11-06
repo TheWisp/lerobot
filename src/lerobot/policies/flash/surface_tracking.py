@@ -26,6 +26,7 @@ from .surface_observation import (
     initial_landmarks,
     move,
     observation,
+    reliable_observation_depth,
     voxel_sample,
 )
 
@@ -237,12 +238,10 @@ class SurfaceTrackingSession:
             "intrinsics": intrinsics,
             "all_surface_points": all_points,
         }
-        # Boundary trimming removes precise correspondences, not scene
-        # evidence. Explicit depth-range outliers remain unknown in both.
-        current["scene_depth"] = np.where(obs["depth_range_rejected"], 0, depth_m)
-        if self.observation_config.filtered_depth_for_fitting:
-            reliable_depth = np.where(mask, obs["valid_image"], obs["depth_reliable"])
-            current["depth"] = np.where(reliable_depth, depth_m, 0)
+        # The same unknown pixels apply to matching and rejection. The full
+        # mask remains available; reliable background still constrains the pose.
+        current["depth"] = reliable_observation_depth(current)
+        current["scene_depth"] = current["depth"]
         detail = {
             key: obs[key]
             for key in ("raw_count", "boundary_count", "edge_count", "clean_count", "detached_count")

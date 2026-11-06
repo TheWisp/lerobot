@@ -77,7 +77,157 @@ def test_added_bad_geometry_is_scored_and_absent_surface_is_not_substituted(tmp_
 
 
 def test_no_full_model_has_no_surface_accuracy_score():
-    result = score_surface_trace(None, None, [{}, {}], "ufm_chain", np.eye(3))
+    result = score_surface_trace(None, np.eye(4)[None], [{}, {}], "ufm_chain", np.eye(3))
     assert result["frames_scored"] == 0
     assert "median_mm" not in result
     assert result["reason"] == "No full labelled surface model"
+
+
+def test_runtime_and_full_run_score_the_same_actual_surfaces(tmp_path):
+    import json
+
+    from benchmarks.flash_tracker_experiment import run_case
+    from lerobot.policies.flash.experimental_surface_session import GrowingSurfaceConfig
+    from lerobot.policies.flash.shared_image_tracking import SharedMatchingConfig
+    from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig
+    from tests.policies.flash.test_tracker_experiment import demo
+
+    case = demo(tmp_path)
+    x, y = np.meshgrid((np.arange(64) - 32) / 100, (np.arange(64) - 32) / 100)
+    model = np.column_stack((x.ravel(), y.ravel(), np.ones(x.size)))
+    np.save(tmp_path / "model.npy", model)
+    np.save(tmp_path / "poses.npy", np.repeat(np.eye(4)[None], 2, axis=0))
+    case["evaluation"] = {"item": {"format": "poses_npy", "path": str(tmp_path / "poses.npy")}}
+    case["evaluation_surfaces"] = {"item": {"points_m": str(tmp_path / "model.npy")}}
+    reports = []
+    for archive in (True, False):
+        destination = tmp_path / str(archive)
+        report = run_case(
+            case,
+            destination,
+            None,
+            VisionPipelineConfig(),
+            None,
+            None,
+            single_method="conditioned_growing",
+            surface_experiment=GrowingSurfaceConfig(),
+            shared_matching_config=SharedMatchingConfig(backend="lk"),
+            record_surfaces=archive,
+        )
+        metrics = report["roles"]["item"]["methods"]["conditioned_growing"]
+        assert metrics["surface_error"]["frames_scored"] == 1
+        assert metrics["surface_error"]["median_mm"] < 1
+        assert list((destination / "surface_models").rglob("*.npz"))
+        rows = [json.loads(line) for line in (destination / "frames.jsonl").read_text().splitlines()]
+        assert rows[-1]["objects"]["item"]["conditioned_growing_details"]["map_version_after"] > 0
+        reports.append(metrics)
+    assert reports[0] == reports[1]
+    assert not (tmp_path / "False/surface_patches").exists()
+
+
+def test_unlabelled_runs_explicitly_report_surface_accuracy_unavailable(tmp_path):
+    case, rows, _ = labelled_case(tmp_path)
+    case.pop("evaluation")
+    report = score_case(case, rows, {"part": np.eye(3)}, {"part": 1})
+    for method in report["roles"]["part"]["methods"].values():
+        assert method["surface_error"]["reason"] == "No reference poses"
+        assert "median_mm" not in method["surface_error"]
+
+
+def test_live_runtime_cli_uses_the_shared_quality_scorer(tmp_path, monkeypatch):
+    import json
+    import sys
+
+    from benchmarks.flash_live_runtime import main
+    from lerobot.policies.flash.surface_session_config import defaults
+    from tests.policies.flash.test_tracker_experiment import demo
+
+    case = demo(tmp_path)
+    model = np.array([[x / 100, y / 100, 1.0] for x in range(-32, 32) for y in range(-32, 32)])
+    np.save(tmp_path / "model.npy", model)
+    np.save(tmp_path / "poses.npy", np.repeat(np.eye(4)[None], 2, axis=0))
+    case["evaluation"] = {"item": {"format": "poses_npy", "path": str(tmp_path / "poses.npy")}}
+    case["evaluation_surfaces"] = {"item": {"points_m": str(tmp_path / "model.npy")}}
+    (tmp_path / "case.json").write_text(json.dumps(case))
+    (tmp_path / "settings.json").write_text(json.dumps(defaults()))
+    out = tmp_path / "live"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "flash_live_runtime",
+            "--case",
+            str(tmp_path / "case.json"),
+            "--settings",
+            str(tmp_path / "settings.json"),
+            "--output",
+            str(out),
+            "--frames",
+            "2",
+        ],
+    )
+    main()  # Real source reader, live session, RGB-D scene encoder and evaluator.
+    report = json.loads((out / "summary.json").read_text())
+    quality = report["quality"]["roles"]["item"]["methods"]["group_growing"]
+    assert quality["surface_error"]["frames_scored"] == 1
+    assert quality["surface_error"]["median_mm"] < 1
+    rows = [json.loads(line) for line in (out / "frames.jsonl").read_text().splitlines()]
+    with np.load(out / "reference_points.npz") as references:
+        rescored = score_case(case, rows, dict(references), {"item": 0}, run=out)
+    assert rescored == report["quality"]
+    from benchmarks.flash_runtime_benchmark import compare_runs
+
+    comparison = compare_runs(out, out, "group_growing")
+    assert comparison["identical"]
+    assert comparison["quality"]["item"]["before"] == quality
+    assert comparison["before_processing"] == report["steady"]
+
+
+def test_live_comparison_hashes_fresh_masks_not_only_saved_seed_masks(tmp_path, monkeypatch):
+    import json
+    import sys
+
+    from benchmarks import flash_live_runtime
+    from benchmarks.flash_runtime_benchmark import compare_runs
+    from lerobot.policies.flash.surface_session_config import defaults
+    from tests.policies.flash.test_tracker_experiment import demo
+
+    case = demo(tmp_path)
+    (tmp_path / "case.json").write_text(json.dumps(case))
+    (tmp_path / "settings.json").write_text(json.dumps(defaults()))
+    outputs = []
+    for inset in (4, 8):
+
+        class Segmenter:
+            def __init__(self, prompts, **kwargs):
+                self.prompts = prompts
+
+            def masks(self, frame, inset=inset):
+                mask = np.zeros(frame.depth.shape, bool)
+                mask[inset:-inset, inset:-inset] = True
+                return {"item": mask}
+
+        # Only replace the external model. Real source, tracking, encoding,
+        # hashing and the comparison consumer run normally.
+        monkeypatch.setattr(flash_live_runtime, "Sam3MaskSource", Segmenter)
+        out = tmp_path / str(inset)
+        outputs.append(out)
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "flash_live_runtime",
+                "--case",
+                str(tmp_path / "case.json"),
+                "--settings",
+                str(tmp_path / "settings.json"),
+                "--output",
+                str(out),
+                "--frames",
+                "2",
+                "--sam",
+            ],
+        )
+        flash_live_runtime.main()
+    with pytest.raises(ValueError, match="identical frames, depth and masks"):
+        compare_runs(*outputs, "group_growing")

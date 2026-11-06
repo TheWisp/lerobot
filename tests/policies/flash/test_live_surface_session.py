@@ -44,11 +44,61 @@ class SuppliedMasks:
 
 
 @pytest.mark.parametrize("backend", ["lk", "ufm"])
+def test_live_timing_command_loads_the_selected_image_matcher(tmp_path, monkeypatch, backend):
+    import sys
+
+    import torch
+
+    from benchmarks import flash_live_runtime as runtime
+
+    # Run the timing command through the real session, stubbing only neural inference
+    # and file input. Previously UFM was selectable but its model was never supplied.
+    monkeypatch.setattr(torch.Tensor, "cuda", lambda self: self)
+    monkeypatch.setattr(runtime, "samples", lambda _: iter(sequence()))
+    model, loads = TranslationModel(), []
+
+    def load():
+        loads.append(backend)
+        return model
+
+    monkeypatch.setattr(runtime, "load_ufm", load)
+    settings = defaults()
+    settings["shared_matching"]["backend"] = backend
+    settings["config"]["compiled_surface_fit"] = False
+    settings["config"]["reuse_surface_search"] = False
+    case = {"id": "live-command", "kind": "recorded_rgbd", "roles": ["left", "right"]}
+    case_path, settings_path, output = tmp_path / "case.json", tmp_path / "settings.json", tmp_path / "run"
+    case_path.write_text(json.dumps(case))
+    settings_path.write_text(json.dumps(settings))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "live-runtime",
+            "--case",
+            str(case_path),
+            "--settings",
+            str(settings_path),
+            "--output",
+            str(output),
+            "--frames",
+            "5",
+        ],
+    )
+    runtime.main()
+    report = json.loads((output / "summary.json").read_text())
+    assert report["frames"] == 5
+    assert loads == (["ufm"] if backend == "ufm" else [])
+    assert model.calls == (4 if backend == "ufm" else 0)
+
+
+@pytest.mark.parametrize("backend", ["lk", "ufm"])
+@pytest.mark.parametrize("matcher", ["visible_icp"])
 @pytest.mark.parametrize(
     "method", ["conditioned_fixed", "conditioned_growing", "group_fixed", "group_growing"]
 )
 def test_live_and_recorded_inputs_have_identical_poses_surfaces_groups_and_covariance(
-    tmp_path, monkeypatch, backend, method
+    tmp_path, monkeypatch, backend, method, matcher
 ):
     import torch
 
@@ -57,6 +107,7 @@ def test_live_and_recorded_inputs_have_identical_poses_surfaces_groups_and_covar
     frames = list(sequence())
     monkeypatch.setattr("benchmarks.flash_tracker_experiment.samples", lambda _: iter(frames))
     settings = defaults()
+    settings["config"]["shape"]["registration"]["backend"] = matcher
     settings["shared_matching"]["backend"] = backend
     settings["group_experiment"]["support_confirmation_s"] = 0.03
     source = SuppliedMasks(frames)
@@ -129,6 +180,39 @@ def test_new_selection_has_no_old_surface_or_point_memory():
     assert not new.engine.references and new.engine.shared.previous is None
     assert new.engine.candidates["group_growing"]["left"].reference is None
     new.close()
+
+
+def test_group_checks_and_matching_share_the_current_frame_geometry(monkeypatch):
+    from lerobot.policies.flash.experimental_surface_session import ImageConditionedFit
+    from lerobot.policies.flash.surface_group_hints import GroupHints
+
+    prepared = {}
+    consumed = []
+    original_predict = GroupHints.predict
+    original_correct = ImageConditionedFit.correct_surface_first
+
+    def predict(self, *args, **kwargs):
+        geometry = kwargs.get("prepared_geometry")
+        if geometry is not None:
+            prepared[id(geometry.observation)] = geometry
+        return original_predict(self, *args, **kwargs)
+
+    def correct(self, *args, **kwargs):
+        assert self.geometry is prepared[id(self.observation)]
+        consumed.append(self.geometry)
+        return original_correct(self, *args, **kwargs)
+
+    monkeypatch.setattr(GroupHints, "predict", predict)
+    monkeypatch.setattr(ImageConditionedFit, "correct_surface_first", correct)
+    frames = list(sequence())
+    live = LiveSurfaceSession(defaults(), "group_growing", SuppliedMasks(frames))
+    try:
+        for frame, _ in frames:
+            live.step(frame)
+    finally:
+        live.close()
+    assert len(consumed) >= 2
+    assert len({id(g.observation) for g in consumed}) == len(consumed)
 
 
 def test_worker_module_has_a_real_cli_entrypoint():

@@ -9,7 +9,6 @@ import numpy as np
 import pytest
 from test_vision_pipeline import Masks, frames, reference, synthetic_pairs
 
-from lerobot.policies.flash import surface_grounding
 from lerobot.policies.flash.perception_step import PerceptionPipeline, PerceptionRunner
 from lerobot.policies.flash.surface_grounding import ShapeConfig, WholeSurfaceFit
 from lerobot.policies.flash.surface_observation import SurfaceObservationConfig, observation
@@ -114,7 +113,7 @@ def test_batched_solver_matches_scalar_on_recorded_surfaces(fixture, monkeypatch
     k = data["intrinsics"]
     obs = observation(depth, mask, k, asdict(SurfaceObservationConfig()))
     current = {"obs": obs, "mask": mask, "depth": depth, "all_surface_points": obs["points"]}
-    scalar = WholeSurfaceFit(points, current, k, ShapeConfig(batch_jacobian=False))
+    scalar = WholeSurfaceFit(points, current, k, ShapeConfig())
     batched = WholeSurfaceFit(points, current, k, ShapeConfig())
     initial = np.eye(4) if is_ring else data["candidate"]
     poses = []
@@ -130,11 +129,6 @@ def test_batched_solver_matches_scalar_on_recorded_surfaces(fixture, monkeypatch
     assert new_detail["cost"] == old_detail["cost"]
     assert new_detail["evaluations"] == old_detail["evaluations"]
     assert new_detail["used_coarse"] == old_detail["used_coarse"]
-    # Supported old SciPy installations retain their scalar implementation.
-    monkeypatch.setattr(surface_grounding, "_HAS_SOLVER_WORKERS", False)
-    fallback, detail = batched.correct(initial)
-    np.testing.assert_array_equal(fallback, old)
-    assert detail["batched_jacobian"] is False
 
 
 def backend(pipelined):

@@ -20,11 +20,11 @@ from threading import Event, Thread
 import cv2
 import numpy as np
 
+from .live_surface_io import image_snapshot, new_selection, seed_frame, write_snapshot
 from .live_surface_session import LiveSurfaceSession
 from .perception import LatestRGBDFrameStore, RGBDFrame
 from .surface_acceleration import SearchPool, compiled_kernels
 from .surface_tracking import load_ufm
-from .tracking_debug_worker import image_snapshot, new_selection, seed_frame, write_snapshot
 from .vision_pipeline import VisionPipelineConfig
 
 

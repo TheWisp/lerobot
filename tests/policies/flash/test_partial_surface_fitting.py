@@ -1,7 +1,5 @@
 """Exact ray-cast observations; unseen sides are not correspondence failures."""
 
-from dataclasses import replace
-
 import numpy as np
 import pytest
 
@@ -10,16 +8,20 @@ from lerobot.policies.flash.experimental_surface_session import ImageConditioned
 from lerobot.policies.flash.surface_acceleration import compiled_kernels
 from lerobot.policies.flash.surface_grounding import ShapeConfig, SurfaceFitView, WholeSurfaceFit
 from lerobot.policies.flash.surface_observation import move
+from lerobot.policies.flash.surface_registration import LibraryConfig
 from lerobot.policies.flash.surface_uncertainty import PoseUncertaintyConfig, check_surface_contradiction
 
 
 @pytest.mark.parametrize("angle", [20, 40, 60])
 @pytest.mark.parametrize("perturb", [False, True])
-def test_newly_visible_side_does_not_pull_old_surface_off_correct_alignment(angle, perturb):
+@pytest.mark.parametrize("backend", ["visible_icp"])
+def test_newly_visible_side_does_not_pull_old_surface_off_correct_alignment(angle, perturb, backend):
     source, k, _ = box_observation(0)
     current, _, truth = box_observation(angle)
     reference = source["obs"]["points"]
-    fit = WholeSurfaceFit(reference, current, k, ShapeConfig(), reference_observation=source)
+    fit = WholeSurfaceFit(
+        reference, current, k, ShapeConfig(registration=LibraryConfig(backend)), reference_observation=source
+    )
     initial = perturbed_pose(truth) if perturb else truth
     result, _ = fit.correct(initial)
     errors = pose_error(reference, result, truth)
@@ -54,14 +56,22 @@ def test_exact_pose_is_not_rejected_for_having_a_newly_visible_side(angle):
 
 
 @pytest.mark.parametrize("source_angle,target_angle", [(40, 0), (20, -20)])
-def test_disappearing_surface_and_different_camera_intrinsics_are_symmetric(source_angle, target_angle):
+@pytest.mark.parametrize("backend", ["visible_icp"])
+def test_disappearing_surface_and_different_camera_intrinsics_are_symmetric(
+    source_angle, target_angle, backend
+):
     source, source_k, source_pose = box_observation(source_angle)
     target_k = np.array([[540.0, 0, 117], [0, 570.0, 92], [0, 0, 1]])
     current, k, current_pose = box_observation(target_angle, k=target_k)
     truth = current_pose @ np.linalg.inv(source_pose)
     reference = source["obs"]["points"]
     fit = WholeSurfaceFit(
-        reference, current, k, ShapeConfig(), reference_observation=source, reference_intrinsics=source_k
+        reference,
+        current,
+        k,
+        ShapeConfig(registration=LibraryConfig(backend)),
+        reference_observation=source,
+        reference_intrinsics=source_k,
     )
     result, _ = fit.correct(truth)
     errors = pose_error(reference, result, truth)
@@ -85,7 +95,8 @@ def test_no_visible_overlap_is_not_evidence_of_a_valid_alignment():
     assert not direct["accepted"]
 
 
-def test_image_assisted_candidate_selection_keeps_both_measured_views():
+@pytest.mark.parametrize("backend", ["visible_icp"])
+def test_image_assisted_candidate_selection_keeps_both_measured_views(backend):
     source, k, _ = box_observation(0)
     current, _, truth = box_observation(40)
     reference = source["obs"]["points"]
@@ -94,7 +105,7 @@ def test_image_assisted_candidate_selection_keeps_both_measured_views():
         reference,
         current,
         k,
-        ShapeConfig(),
+        ShapeConfig(registration=LibraryConfig(backend)),
         reference_observation=source,
         image_reference=reference,
         image_current=move(reference, wrong),
@@ -114,11 +125,9 @@ def test_two_view_scalar_batched_and_compiled_paths_agree():
     source, k, _ = box_observation(0)
     current, _, truth = box_observation(40)
     reference = source["obs"]["points"]
-    config = ShapeConfig(batch_jacobian=False)
+    config = ShapeConfig()
     scalar = WholeSurfaceFit(reference, current, k, config, reference_observation=source)
-    batched = WholeSurfaceFit(
-        reference, current, k, replace(config, batch_jacobian=True), reference_observation=source
-    )
+    batched = WholeSurfaceFit(reference, current, k, config, reference_observation=source)
     poses = [truth, perturbed_pose(truth)]
     for actual, expected in zip(batched.batch_residuals(poses), map(scalar.residual, poses), strict=True):
         np.testing.assert_array_equal(actual, expected)
@@ -135,6 +144,30 @@ def test_two_view_scalar_batched_and_compiled_paths_agree():
     errors = pose_error(reference, c, truth)
     assert errors["rotation_error_deg"] < 1
     assert errors["median_point_error_mm"] < 5
+
+
+def test_reverse_observation_uses_one_batched_query_with_identical_residuals():
+    from types import SimpleNamespace
+
+    source, k, _ = box_observation(0)
+    current, _, truth = box_observation(40)
+    reference = source["obs"]["points"]
+    scalar = WholeSurfaceFit(reference, current, k, ShapeConfig(), reference_observation=source)
+    batched = WholeSurfaceFit(reference, current, k, ShapeConfig(), reference_observation=source)
+    poses = [truth, perturbed_pose(truth), np.eye(4)]
+    reverse = batched.reverse_fits[0][1]
+    original = reverse.target_tree.query
+    queries = []
+
+    def query(points, **kwargs):
+        queries.append(len(points))
+        return original(points, **kwargs)
+
+    reverse.target_tree = SimpleNamespace(query=query)
+    actual = batched.batch_residuals(poses)
+    for result, pose in zip(actual, poses, strict=True):
+        np.testing.assert_array_equal(result, scalar.residual(pose))
+    assert queries == [len(poses) * len(reverse.reference_queries)]
 
 
 def test_retained_view_pose_is_respected_and_duplicate_views_do_not_add_weight():
@@ -163,13 +196,16 @@ def test_retained_view_pose_is_respected_and_duplicate_views_do_not_add_weight()
     assert single_check == repeated_check
 
 
-def test_partial_matching_is_used_by_sequential_session_and_its_kalman_checks():
+@pytest.mark.parametrize("backend", ["visible_icp"])
+def test_partial_matching_is_used_by_sequential_session_and_its_kalman_checks(backend):
     from lerobot.policies.flash.experimental_surface_session import (
         GrowingSurfaceConfig,
         GrowingSurfaceSession,
     )
 
-    tracker = GrowingSurfaceSession(ShapeConfig(), GrowingSurfaceConfig(partial_surface_matching=True))
+    tracker = GrowingSurfaceSession(
+        ShapeConfig(registration=LibraryConfig(backend)), GrowingSurfaceConfig(partial_surface_matching=True)
+    )
     previous = None
     for frame, angle in enumerate((0, 5, 10, 15, 20)):
         current, k, truth = box_observation(angle)

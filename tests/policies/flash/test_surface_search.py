@@ -1,6 +1,7 @@
 """Search owns validity, including every solver and retry path."""
 
 from collections import Counter
+from dataclasses import replace
 
 import numpy as np
 import pytest
@@ -9,6 +10,7 @@ from lerobot.policies.flash.experimental_surface_session import ImageConditioned
 from lerobot.policies.flash.surface_grounding import ShapeConfig, WholeSurfaceFit
 from lerobot.policies.flash.surface_observation import move
 from lerobot.policies.flash.surface_uncertainty import PoseUncertaintyConfig
+from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig
 from tests.policies.flash.test_surface_publication import frame
 
 
@@ -45,21 +47,8 @@ def test_lower_cost_invalid_start_cannot_displace_valid_start(monkeypatch):
             [(fit.score(initial), initial)],
         ),
     )
-    monkeypatch.setattr(fit, "_refine_visible_correspondences", lambda *a: iter([wrong]))
     result, _ = fit.correct(np.eye(4))
     assert_static(fit, result)
-
-
-def test_valid_intermediate_correction_is_kept_when_last_step_is_wrong(monkeypatch):
-    fit = fitter()
-    wrong = protruding()
-    monkeypatch.setattr(
-        fit, "_solve", lambda initial, limit: (wrong, {"evaluations": 1, "converged": True}, [(0.0, wrong)])
-    )
-    monkeypatch.setattr(fit, "_refine_visible_correspondences", lambda *a: iter([np.eye(4), wrong]))
-    result, detail = fit.refine(wrong)
-    assert_static(fit, result)
-    assert detail["visible_correction_iterations"] == 2
 
 
 def test_no_valid_pose_returns_no_pose_not_lowest_cost_invalid_pose(monkeypatch):
@@ -68,7 +57,6 @@ def test_no_valid_pose_returns_no_pose_not_lowest_cost_invalid_pose(monkeypatch)
     monkeypatch.setattr(
         fit, "_solve", lambda initial, limit: (wrong, {"evaluations": 1, "converged": True}, [(0.0, wrong)])
     )
-    monkeypatch.setattr(fit, "_refine_visible_correspondences", lambda *a: iter([wrong]))
     pose, detail = fit.correct(wrong)
     assert pose is None
     assert detail["reason"] == "no_observation_compatible_candidate"
@@ -150,7 +138,6 @@ def test_disabling_uncertainty_cannot_admit_nonoverlapping_pose(monkeypatch, ena
     monkeypatch.setattr(
         WholeSurfaceFit, "_solve", lambda *a: (behind, {"evaluations": 1, "converged": True}, [(0.0, behind)])
     )
-    monkeypatch.setattr(WholeSurfaceFit, "_refine_visible_correspondences", lambda *a: iter(()))
     pose, _ = fit.correct_surface_first(
         behind, behind, uncertainty=PoseUncertaintyConfig(enabled=enabled, mode=mode)
     )
@@ -184,7 +171,6 @@ def test_valid_numerical_iterate_survives_lower_cost_invalid_final_step(monkeypa
         "_solve",
         lambda *a: (wrong, {"evaluations": 2, "converged": True}, [(1.0, np.eye(4)), (0.0, wrong)]),
     )
-    monkeypatch.setattr(fit, "_refine_visible_correspondences", lambda *a: iter(()))
     result, _ = fit.refine(wrong)
     assert_static(fit, result)
 
@@ -209,3 +195,54 @@ def test_stationary_frame_uses_one_numerical_fit(monkeypatch):
     pose, _ = fit.correct_surface_first(np.eye(4), np.eye(4))
     assert_static(fit, pose)
     assert len(calls) == 1
+
+
+def test_independent_starts_do_not_refit_the_result_of_another_start(monkeypatch):
+    fit = fitter(
+        ImageConditionedFit,
+        image_reference=np.empty((0, 3)),
+        image_current=np.empty((0, 3)),
+        image_scale_m=0.005,
+        image_weight=1.0,
+    )
+    proposal, previous = np.eye(4), np.eye(4)
+    proposal[0, 3], previous[0, 3] = 0.001, -0.001
+    calls = []
+    original = WholeSurfaceFit._solve
+
+    def measured(self, initial, limit):
+        calls.append(initial.copy())
+        return original(self, initial, limit)
+
+    monkeypatch.setattr(WholeSurfaceFit, "_solve", measured)
+    candidates, _ = fit.search(proposal, geometry=fit.geometry, previous=previous, coarse=False)
+    assert any(c["check"]["accepted"] for c in candidates)
+    assert len(calls) == 2
+    np.testing.assert_array_equal(calls, [proposal, previous])
+
+
+@pytest.mark.parametrize("iterations", [1, 2, 8])
+def test_one_iteration_budget_bounds_the_actual_solver(monkeypatch, iterations):
+    from lerobot.policies.flash import surface_rigid_fit
+
+    fit = fitter()
+    wrong = protruding()
+    limits = []
+
+    def steps(problem, initial, limit):
+        limits.append(limit)
+        for _ in range(limit):
+            yield wrong.copy()
+
+    monkeypatch.setattr(surface_rigid_fit, "rigid_steps", steps)
+    fit.config = replace(fit.config, max_evaluations=iterations)
+    pose, detail = fit.refine(wrong)
+    assert limits == [iterations]
+    assert pose is None
+    assert detail["evaluations"] == iterations
+
+
+@pytest.mark.parametrize("value", [0, -1, 2.5, True])
+def test_invalid_solver_budget_is_rejected(value):
+    with pytest.raises(ValueError, match="max_evaluations"):
+        VisionPipelineConfig.from_dict({"shape": {"max_evaluations": value}})

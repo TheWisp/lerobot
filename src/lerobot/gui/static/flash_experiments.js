@@ -44,9 +44,6 @@ function flashMethodExplanation(method, data = flashExperiments.data) {
 const flashRebuild = { timer: null, request: null, starting: false, active: false, id: null, completed: null };
 
 async function showFlashExperiments() {
-    flashUiMode = 'experiments';
-    if (flashReplayTimer) { clearTimeout(flashReplayTimer); flashReplayTimer = null; }
-    stopFlashTelemetry();
     _flashUpdateWorkspace();
     initFlashExperimentPlayer();
     await loadFlashExperiments();
@@ -83,7 +80,7 @@ async function loadFlashExperiments() {
         }
         refreshFlashMetrics();
         if (!items.length) list.textContent = 'No exported experiments yet.';
-        if (items.length && !items.some(item => item.id === flashExperiments.selected) && flashUiMode === 'experiments' && !flashLive.visible) {
+        if (items.length && !items.some(item => item.id === flashExperiments.selected) && !flashLive.visible) {
             await selectFlashExperiment(items.find(item => (item.slot_id || item.id) === oldSlot) || items[0]);
         }
     } catch (error) {
@@ -130,7 +127,7 @@ async function rebuildFlashExamples(selectedOnly = false) {
 async function pollFlashRebuild() {
     clearTimeout(flashRebuild.timer);
     flashRebuild.timer = null;
-    if (flashRebuild.request || selectedWorkflow !== 'flash' || flashUiMode !== 'experiments') return;
+    if (flashRebuild.request || selectedWorkflow !== 'flash') return;
     const request = new AbortController();
     flashRebuild.request = request;
     let active = false;
@@ -138,7 +135,7 @@ async function pollFlashRebuild() {
         const response = await fetch('/api/run/flash/experiments/rebuild', { signal: request.signal });
         if (!response.ok) throw new Error(`Cannot read rerun progress (${response.status})`);
         const state = await response.json();
-        if (selectedWorkflow !== 'flash' || flashUiMode !== 'experiments') return;
+        if (selectedWorkflow !== 'flash') return;
         active = ['starting', 'running', 'cancelling'].includes(state.state);
         flashRebuild.active = active;
         // Loading saved Run settings can replace the form while a request is
@@ -183,7 +180,7 @@ async function pollFlashRebuild() {
         active = true; // Retry status after a temporary server interruption.
     } finally {
         flashRebuild.request = null;
-        if (selectedWorkflow === 'flash' && flashUiMode === 'experiments') {
+        if (selectedWorkflow === 'flash') {
             flashRebuild.timer = setTimeout(pollFlashRebuild, active ? 1000 : 5000);
         }
     }
@@ -358,7 +355,7 @@ function drawFlashExperiment() {
         if (!points) { lost.push(role); continue; }
         if (object.pose_status?.[method] === 'predicted') predicted.push(role);
         if (!showPose) continue;
-        // Same white point-cloud + coloured axes convention as flash_surface_cloud.js.
+        // Surface points and axes use the same convention as the RGB-D scene.
         // This is the moved reference cloud, never a current measurement or a UFM match.
         context.fillStyle = 'rgba(255,255,255,0.85)';
         context.shadowColor = '#07131f';
@@ -583,7 +580,7 @@ function renderFlashResults() {
     const method = document.getElementById('flash-experiment-method').value;
     flashText(panel, 'p', flashMethodLabel(method, item), 'flash-metric-muted');
     const registration = item.surface_registration?.backend || 'scipy';
-    const matchers = {scipy: 'Current fitter (SciPy)', small_gicp: 'small_gicp — GICP',
+    const matchers = {visible_icp: 'Surface fit', scipy: 'SciPy (retired)', small_gicp: 'small_gicp — GICP',
         open3d_plane: 'Open3D — point-to-plane', open3d_color: 'Open3D — geometry + color'};
     if (!['ufm_chain', 'ufm_retained_reference'].includes(method))
         flashText(panel, 'p', `Surface matcher: ${matchers[registration] || registration}`, 'flash-metric-muted');
@@ -888,7 +885,7 @@ async function showFlashPipelineSettings() {
         if (!response.ok) throw new Error('Could not load pipeline settings');
         const data = await response.json();
         if (!dialog.isConnected) return;
-        status.textContent = 'Settings from this recording. Changes take effect only after rerunning this scene. Saved masks are reused; SAM and robot-control settings are not executed by this benchmark.';
+        status.textContent = 'Settings for the next rerun. Old SciPy configurations use the new surface fitter; saved playback is unchanged. Changes take effect only after rerunning this scene. Saved masks are reused; SAM and robot-control settings are not executed by this benchmark.';
         const matcherLabel = document.createElement('label');
         matcherLabel.append('Surface matcher ');
         const matcher = document.createElement('select');
@@ -961,4 +958,16 @@ async function showFlashPipelineSettings() {
         }
         details.append(table); dialog.append(details);
     } catch (error) { status.textContent = error.message; }
+}
+
+// Both sources use one shared tracker; changing the source changes acquisition only.
+function setFlashSource(live) {
+    document.getElementById('flash-source-examples').setAttribute('aria-pressed', String(!live));
+    document.getElementById('flash-source-live').setAttribute('aria-pressed', String(live));
+    document.getElementById('tab-run').classList.toggle('flash-live-source', live);
+}
+async function showFlashExamples() {
+    if (flashLive.visible && !(await hideFlashLive())) return;
+    setFlashSource(false);
+    showFlashComparison(false);
 }

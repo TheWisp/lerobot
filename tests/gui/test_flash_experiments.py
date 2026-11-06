@@ -574,7 +574,18 @@ def test_benchmark_report_serves_results_without_claiming_unlabelled_accuracy(tm
                             "method": {
                                 "available_after_initialization": 1,
                                 "total_after_initialization": 2,
-                            }
+                                "surface_error": {"frames_scored": 0, "reason": "No reference poses"},
+                            },
+                            "scored_method": {
+                                "available_after_initialization": 1,
+                                "total_after_initialization": 2,
+                                "surface_error": {
+                                    "median_mm": 2.3,
+                                    "p90_mm": 8.2,
+                                    "within_10mm_percent": 94.5,
+                                    "frames_scored": 1,
+                                },
+                            },
                         }
                     }
                 },
@@ -590,6 +601,9 @@ def test_benchmark_report_serves_results_without_claiming_unlabelled_accuracy(tm
         assert page.status_code == 200
         assert "Unmeasured" in page.text and "&lt;object&gt;" in page.text
         assert "<object>" not in page.text and "1 / 2" in page.text
+        assert "Surface distance" in page.text and "Surface points within 10 mm" in page.text
+        assert "2.30 / 8.20" in page.text and "94.50" in page.text
+        assert "No reference poses" in page.text
         result = client.get(base + "/report.json")
         assert "attachment" in result.headers["content-disposition"]
         assert result.json()["cases"][0]["summary"] == outcomes["one"]["summary"]
@@ -1403,8 +1417,9 @@ def test_browser_names_matching_backend_from_selected_recording(gui_page, tmp_pa
 
 @pytest.mark.parametrize("mode", ["selection", "kalman", "default"])
 @pytest.mark.parametrize("settings_location", ["request", "item"])
+@pytest.mark.parametrize("matcher", ["scipy", "visible_icp"])
 def test_pipeline_settings_roundtrip_through_http_worker_and_real_fitter(
-    tmp_path, monkeypatch, mode, settings_location, matcher="scipy"
+    tmp_path, monkeypatch, mode, settings_location, matcher
 ):
     """Edit covariance through the HTTP contract and inspect real saved fitting diagnostics."""
     from pathlib import Path
@@ -1434,7 +1449,9 @@ def test_pipeline_settings_roundtrip_through_http_worker_and_real_fitter(
     assert any(o["path"] == "surface_experiment.uncertainty.enabled" for o in data["options"])
     edited = data["settings"]
     edited["config"]["shape"]["registration"]["backend"] = matcher
-    assert set(data["matchers"]) == {"scipy", "small_gicp", "open3d_plane", "open3d_color"}
+    from lerobot.policies.flash.surface_registration import MATCHERS
+
+    assert data["matchers"] == MATCHERS
     if mode != "default":
         edited["surface_experiment"]["uncertainty"]["enabled"] = True
         edited["surface_experiment"]["uncertainty"]["mode"] = mode
@@ -1484,13 +1501,16 @@ def test_pipeline_settings_roundtrip_through_http_worker_and_real_fitter(
     assert saved["surface_experiment"]["uncertainty"]["enabled"]
     assert saved["surface_experiment"]["uncertainty"]["reset_on_geometry_conflict"] is False
     assert saved["config"]["shape"]["mask_coverage_weight"] == 0.5
-    assert saved["config"]["shape"]["registration"]["backend"] == matcher
-    assert latest["surface_registration"]["backend"] == matcher
+    assert saved["config"]["shape"]["registration"]["backend"] == (
+        "visible_icp" if matcher == "scipy" else matcher
+    )
+    assert latest["surface_registration"]["backend"] == ("visible_icp" if matcher == "scipy" else matcher)
     rows = [json.loads(line) for line in (new_run / "frames.jsonl").read_text().splitlines()]
     # Check the actual fit ran the new mode, not merely a saved setting.
     assert "uncertainty" in rows[1]["objects"]["object"]["group_growing_details"]["fit"]
-    if matcher != "scipy":
-        assert rows[1]["objects"]["object"]["diagnostics"]["library"] == matcher
+    assert rows[1]["objects"]["object"]["diagnostics"]["library"] == (
+        "visible_icp" if matcher == "scipy" else matcher
+    )
     growth = rows[1]["objects"]["object"]["group_growing_details"]["growth"]
     assert growth["required_overlap"] == 0.9
     assert growth["agreement_m"] == 0.0025
@@ -1520,7 +1540,7 @@ def test_browser_surface_matcher_edits_rerun_without_relabeling_recorded_result(
     page.wait_for_selector('#flash-experiment-overlay[data-frame="0"]')
     page.select_option("#flash-experiment-method", "surface_corrected")
     results = page.locator("#flash-experiment-results")
-    assert "Surface matcher: Current fitter (SciPy)" in results.inner_text()
+    assert "Surface matcher: SciPy (retired)" in results.inner_text()
     page.get_by_role("button", name="Pipeline settings", exact=True).click()
     matcher = page.get_by_label("Surface matcher", exact=True)
     editor = page.get_by_label("Pipeline configuration JSON", exact=True)
@@ -1539,7 +1559,7 @@ def test_browser_surface_matcher_edits_rerun_without_relabeling_recorded_result(
     with page.expect_request(lambda request: request.method == "POST" and "/rebuild?" in request.url) as sent:
         page.get_by_role("button", name="Rerun this scene with these settings").click()
     assert sent.value.post_data_json["config"]["shape"]["registration"]["backend"] == "open3d_color"
-    assert "Surface matcher: Current fitter (SciPy)" in results.inner_text()
+    assert "Surface matcher: SciPy (retired)" in results.inner_text()
 
 
 @pytest.mark.parametrize("matcher", ["small_gicp", "open3d_plane", "open3d_color"])

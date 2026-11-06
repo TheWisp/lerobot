@@ -14,19 +14,23 @@ from lerobot.policies.flash.experimental_surface_session import (
 )
 from lerobot.policies.flash.surface_grounding import ShapeConfig, WholeSurfaceFit
 from lerobot.policies.flash.surface_kalman import MeasuredGroupMotion
+from lerobot.policies.flash.surface_registration import LibraryConfig
 from lerobot.policies.flash.surface_tracking import SurfaceTrackingSession
 from lerobot.policies.flash.surface_uncertainty import PoseUncertaintyConfig, check_surface_contradiction
 
 
 @pytest.mark.parametrize("kalman,surface_priority", [(False, False), (False, True), (True, True)])
+@pytest.mark.parametrize("backend", ["visible_icp"])
 def test_any_matcher_proposal_must_pass_empty_space_check_before_publication_and_growth(
-    monkeypatch, kalman, surface_priority
+    monkeypatch, kalman, surface_priority, backend
 ):
     config = GrowingSurfaceConfig(
         surface_priority=surface_priority,
         uncertainty=PoseUncertaintyConfig(enabled=kalman, mode="kalman", max_visible_outlier_fraction=0.99),
     )
-    session = GrowingSurfaceSession(ShapeConfig(scene_depth_constraints=False), config)
+    session = GrowingSurfaceSession(
+        ShapeConfig(scene_depth_constraints=False, registration=LibraryConfig(backend)), config
+    )
     initial = frame(0)
     session.update(initial, 0.0)
     original = session.store.points.copy()
@@ -39,7 +43,6 @@ def test_any_matcher_proposal_must_pass_empty_space_check_before_publication_and
         return wrong.copy(), {"evaluations": 1, "converged": True}, [(0.0, wrong.copy())]
 
     monkeypatch.setattr(WholeSurfaceFit, "_solve", propose_wrong)
-    monkeypatch.setattr(WholeSurfaceFit, "_refine_visible_correspondences", lambda *a: iter(()))
     result = session.update(frame(1), 0.1)
     returned = result["camera_from_reference"]
     if returned is not None:
@@ -63,14 +66,17 @@ def frame(index, *, extension=0):
 @pytest.mark.parametrize("wrong_support", [False, True])
 @pytest.mark.parametrize("partial", [False, True])
 @pytest.mark.parametrize("scene_depth", [False, True])
+@pytest.mark.parametrize("backend", ["visible_icp"])
 def test_downstream_rejection_cannot_publish_a_geometrically_impossible_fallback(
-    kalman, wrong_support, partial, scene_depth
+    kalman, wrong_support, partial, scene_depth, backend
 ):
     config = GrowingSurfaceConfig(
         partial_surface_matching=partial,
         uncertainty=PoseUncertaintyConfig(enabled=kalman, mode="kalman", max_visible_outlier_fraction=0.25),
     )
-    session = GrowingSurfaceSession(ShapeConfig(scene_depth_constraints=scene_depth), config)
+    session = GrowingSurfaceSession(
+        ShapeConfig(scene_depth_constraints=scene_depth, registration=LibraryConfig(backend)), config
+    )
     session.update(frame(0), 0.0)
     original = session.store.points.copy()
     pose = np.eye(4)

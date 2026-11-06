@@ -14,7 +14,7 @@ from lerobot.policies.flash.surface_uncertainty import PoseUncertaintyConfig, ch
 from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig
 
 
-def test_rejected_depth_cannot_reenter_pose_validation_when_filter_enabled():
+def test_rejected_depth_cannot_reenter_pose_validation_with_either_legacy_setting():
     depth = np.ones((100, 120), np.float32)
     mask = np.zeros(depth.shape, bool)
     mask[10:90, 10:110] = True
@@ -44,14 +44,14 @@ def test_rejected_depth_cannot_reenter_pose_validation_when_filter_enabled():
             ShapeConfig(),
             reference_observation=source["current"],
         )
-        assert check_surface_contradiction(fit, np.eye(4), PoseUncertaintyConfig())["accepted"] == enabled
+        assert check_surface_contradiction(fit, np.eye(4), PoseUncertaintyConfig())["accepted"]
         wrong = np.eye(4)
         wrong[0, 3] = 0.2
         assert not check_surface_contradiction(fit, wrong, PoseUncertaintyConfig())["accepted"]
     np.testing.assert_array_equal(bad_depth, original)
     np.testing.assert_array_equal(results[0]["obs"]["points"], results[1]["obs"]["points"])
-    assert results[0]["depth"] is bad_depth
-    assert results[1]["depth"][40, 30] == 0
+    np.testing.assert_array_equal(results[0]["depth"], results[1]["depth"])
+    assert results[0]["depth"][40, 30] == 0
 
 
 def test_depth_range_filter_retains_disconnected_visible_parts():

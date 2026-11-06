@@ -24,7 +24,12 @@ from .surface_grounding import (
 )
 from .surface_kalman import MeasuredGroupMotion, PoseKalmanFilter
 from .surface_motion import measured_surface_information
-from .surface_observation import move, spatial_sample, voxel_sample
+from .surface_observation import (
+    move,
+    reliable_observation_depth,
+    spatial_sample,
+    voxel_sample,
+)
 from .surface_uncertainty import PoseUncertaintyConfig, SurfacePoseUncertainty, check_surface_contradiction
 
 
@@ -202,10 +207,14 @@ class SurfaceView:
     @classmethod
     def from_observation(cls, observation, intrinsics, shape_config, *, retain_measurement=False):
         radius = int(np.ceil(shape_config.mask_boundary_tolerance_px))
-        kernel = np.ones((2 * radius + 1, 2 * radius + 1), np.uint8)
-        depth = np.asarray(observation["depth"], dtype=np.float32)
-        depth = np.where(np.isfinite(depth) & (depth > 0), depth, 0)
-        nearest = cv2.erode(depth, kernel, borderType=cv2.BORDER_CONSTANT, borderValue=0)
+        kernel = np.ones((2 * radius + 1,) * 2, np.uint8)
+        depth = reliable_observation_depth(observation)
+        scene_depth = (
+            reliable_observation_depth(observation, observation["scene_depth"])
+            if "scene_depth" in observation
+            else depth
+        )
+        nearest = cv2.erode(scene_depth, kernel, borderType=cv2.BORDER_CONSTANT, borderValue=0)
         outside = cv2.distanceTransform((~observation["mask"]).astype(np.uint8), cv2.DIST_L2, 5)
         return cls(
             nearest,
@@ -217,9 +226,7 @@ class SurfaceView:
             observation.get("all_surface_points", observation["obs"]["points"]).copy()
             if retain_measurement
             else None,
-            observation["scene_depth"].copy()
-            if retain_measurement and "scene_depth" in observation
-            else None,
+            scene_depth.copy() if retain_measurement else None,
         )
 
     def contradicts(self, camera_points):
@@ -428,24 +435,42 @@ class ImageConditionedFit(WholeSurfaceFit):
     """Keep image correspondences in the objective, not only in its initial guess."""
 
     def __init__(
-        self, *args, image_reference, image_current, image_scale_m, image_weight, point_evidence=(), **kwargs
+        self,
+        *args,
+        image_reference,
+        image_current,
+        image_scale_m,
+        image_weight,
+        point_evidence=(),
+        geometry=None,
+        **kwargs,
     ):
+        if geometry is not None:
+            kwargs.update(
+                prepared_reference=geometry.prepared_reference,
+                prepared_target=geometry.prepared_target,
+                prepared_reverse_fits=geometry.reverse_fits,
+            )
         super().__init__(*args, **kwargs)
         self.image_reference, self.image_current = image_reference, image_current
         self.image_scale_m, self.image_weight = image_scale_m, image_weight
         self.point_evidence = point_evidence
-        self.geometry = WholeSurfaceFit(
-            self.reference,
-            self.observation,
-            self.k,
-            self.config,
-            prepared_reference=self.prepared_reference,
-            prepared_target=self.prepared_target,
-            fit_kernels=self.fit_kernels,
-            search_pool=self.search_pool,
-            reference_views=self.reference_views,
-            appearance_views=self.appearance_views,
-            prepared_reverse_fits=self.reverse_fits,
+        self.geometry = (
+            geometry
+            if geometry is not None
+            else WholeSurfaceFit(
+                self.reference,
+                self.observation,
+                self.k,
+                self.config,
+                prepared_reference=self.prepared_reference,
+                prepared_target=self.prepared_target,
+                fit_kernels=self.fit_kernels,
+                search_pool=self.search_pool,
+                reference_views=self.reference_views,
+                appearance_views=self.appearance_views,
+                prepared_reverse_fits=self.reverse_fits,
+            )
         )
 
     @property
@@ -478,7 +503,9 @@ class ImageConditionedFit(WholeSurfaceFit):
             for surface, pose in zip(self.geometry.batch_residuals(poses), poses, strict=True)
         ]
 
-    def correct_surface_first(self, proposal, previous, *, uncertainty=None, recovery_starts=0, check=None):
+    def correct_surface_first(
+        self, proposal, previous, *, uncertainty=None, recovery_starts=0, check=None, extra=()
+    ):
         """Rank geometrically valid candidates, then optionally measure uncertainty."""
         uncertainty = uncertainty or PoseUncertaintyConfig()
         geometry = self.geometry
@@ -489,7 +516,10 @@ class ImageConditionedFit(WholeSurfaceFit):
                     pose, max_outlier_fraction=uncertainty.max_visible_outlier_fraction
                 )
 
-        extra = [(p.source, rigid_fit(p.reference, p.current)) for p in self.point_evidence if p.weight > 0]
+        extra = list(extra)
+        extra.extend(
+            (p.source, rigid_fit(p.reference, p.current)) for p in self.point_evidence if p.weight > 0
+        )
         candidates, detail = self.search(
             proposal,
             geometry=geometry,
@@ -585,7 +615,27 @@ class GrowingSurfaceSession:
         self.kalman = None
         self._prepared_reference = None
 
-    def update(self, prepared, time_s, *, hint=None, candidate_check=None, base_from_camera=None):
+    def prepare_geometry(self, prepared):
+        """One measured geometry context for this frame's group checks and fit."""
+        if prepared["status"] is not None or self.pose is None or len(self.store.points) < 3:
+            return None
+        if self._prepared_reference is None or self._prepared_reference.points is not self.store.points:
+            self._prepared_reference = PreparedReferenceSurface.build(self.store.points, self.shape_config)
+        return WholeSurfaceFit(
+            self.store.points,
+            prepared["current"],
+            prepared["intrinsics"],
+            self.shape_config,
+            prepared_reference=self._prepared_reference,
+            fit_kernels=self.fit_kernels,
+            search_pool=self.search_pool,
+            reference_views=self._fit_views(),
+            appearance_views=self._appearance_views(),
+        )
+
+    def update(
+        self, prepared, time_s, *, hint=None, candidate_check=None, base_from_camera=None, geometry=None
+    ):
         """Fit, verify against independent evidence, then commit pose/map changes.
 
         candidate_check receives the pre-update surface and proposed pose and
@@ -655,8 +705,7 @@ class GrowingSurfaceSession:
             return self._missing(hint, time_s, details, prepared["status"] or "not_initialized")
         if len(self.store.points) < 3:
             return self._missing(hint, time_s, details, "surface_removed")
-        if self._prepared_reference is None or self._prepared_reference.points is not self.store.points:
-            self._prepared_reference = PreparedReferenceSurface.build(self.store.points, self.shape_config)
+        geometry = geometry if geometry is not None else self.prepare_geometry(prepared)
         source = prepared.get("match_source_frame")
         step = prepared["step"] if source == self.connected_frame else None
         seed = (
@@ -676,7 +725,7 @@ class GrowingSurfaceSession:
             current,
             prepared["intrinsics"],
             self.shape_config,
-            prepared_reference=self._prepared_reference,
+            geometry=geometry,
             image_reference=a,
             image_current=b,
             image_scale_m=self.config.agreement_m,
@@ -690,8 +739,8 @@ class GrowingSurfaceSession:
             point_evidence=hint.points if hint else (),
             fit_kernels=self.fit_kernels,
             search_pool=self.search_pool,
-            reference_views=self._fit_views(),
-            appearance_views=self._appearance_views(),
+            reference_views=geometry.reference_views,
+            appearance_views=geometry.appearance_views,
         )
         geometry_checks = {}
 
@@ -713,6 +762,12 @@ class GrowingSurfaceSession:
                 recovery_starts=self.config.recovery_starts,
                 uncertainty=self.config.uncertainty,
                 check=check_pose,
+                # Prediction can move away from the last accepted observation.
+                # Test that existing placement too; it still needs current
+                # geometry support and does not bypass search or Kalman.
+                extra=(("last_observation", self.connected_pose),)
+                if self.connected_pose is not None and not np.array_equal(self.connected_pose, self.pose)
+                else (),
             )
             if self.config.surface_priority
             else fitter.correct(seed, check=check_pose)

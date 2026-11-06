@@ -48,15 +48,16 @@ def test_background_contradiction_is_not_diluted_by_hidden_model_points():
 def test_coherent_protrusion_cannot_hide_below_global_outlier_fraction():
     """A local strip in measured empty space is a contradiction, even if most points fit.
 
-    The adjacent eight-pixel control already failed through the global
-    fraction. Reducing the strip by one pixel requires spatial evidence.
+    A generous global outlier allowance must not override spatial evidence
+    that this coherent strip occupies measured empty space.
     """
     source, current, k = scene()
     wrong = np.eye(4)
     wrong[0, 3] = 7 * 0.4 / k[0, 0]
-    _, result = check(source, current, k, wrong)
+    fit, _ = check(source, current, k, wrong)
+    result = check_surface_contradiction(fit, wrong, PoseUncertaintyConfig(max_visible_outlier_fraction=0.99))
     assert result["scene_depth_outlier_fraction"] > 0
-    assert result["scene_depth_outlier_fraction"] < 0.25
+    assert result["scene_depth_outlier_fraction"] < 0.99
     assert not result["accepted"]
     assert result["scene_depth_coherent_protrusion"]
 
@@ -78,7 +79,8 @@ def test_surface_in_front_of_measured_depth_conflicts_even_inside_the_mask():
     reference = source["obs"]["points"].copy()
     # A narrow saved patch floats in front of the observed face, entirely
     # inside the object's outline. Most of the cloud still agrees perfectly.
-    strip = reference[:, 0] > np.quantile(reference[:, 0], 0.9)
+    # Keep the patch in reliable interior depth; a withheld edge is unknown.
+    strip = np.abs(reference[:, 0] - np.median(reference[:, 0])) < 0.001
     reference[strip, 2] -= 0.008
     fit = WholeSurfaceFit(reference, source, k, ShapeConfig())
     assert not check_surface_contradiction(
@@ -89,7 +91,7 @@ def test_surface_in_front_of_measured_depth_conflicts_even_inside_the_mask():
 def test_isolated_wrong_map_point_does_not_reject_correct_pose():
     source, current, k = scene()
     # One incorrectly retained surface point lies in measured background.
-    stray = np.array([[(77 - k[0, 2]) * 0.4 / k[0, 0], 0.0, 0.4]])
+    stray = np.array([[(85 - k[0, 2]) * 0.4 / k[0, 0], 0.0, 0.4]])
     reference = np.concatenate((source["obs"]["points"], stray))
     fit = WholeSurfaceFit(reference, current, k, ShapeConfig(scene_depth_constraints=True))
     result = check_surface_contradiction(
@@ -130,7 +132,7 @@ def test_missing_depth_or_nearer_occluder_is_not_empty_space(background):
 
 
 @pytest.mark.parametrize("enabled", [False, True])
-def test_surface_filter_preserves_scene_readings_and_missing_depth(enabled):
+def test_surface_filter_preserves_reliable_scene_readings_and_missing_depth(enabled):
     source, current, k = scene()
     depth = current["depth"].copy()
     depth[30:70, 76:79] = 0  # Unresolved thin occluder / sensor hole.
@@ -140,9 +142,12 @@ def test_surface_filter_preserves_scene_readings_and_missing_depth(enabled):
     filtered = SurfaceTrackingSession(
         None, observation_config=config, shape_config=ShapeConfig(scene_depth_constraints=enabled)
     ).prepare(np.zeros((*depth.shape, 3), np.uint8), depth, current["mask"], k, 0)["current"]
-    np.testing.assert_array_equal(filtered["scene_depth"], depth)
-    assert filtered["depth"][35, 65] == 0  # Trimmed for precise correspondence.
-    assert filtered["scene_depth"][35, 65] == pytest.approx(0.4)
+    np.testing.assert_array_equal(filtered["scene_depth"], filtered["depth"])
+    assert filtered["depth"][35, 65] == 0  # Withheld everywhere, including validation.
+    assert filtered["scene_depth"][35, 65] == 0
+    assert filtered["scene_depth"][35, 100] == pytest.approx(0.8)  # Reliable background survives.
+    assert filtered["scene_depth"][35, 77] == 0  # No hole filling.
+    np.testing.assert_array_equal(filtered["mask"], current["mask"])
     fit, _ = check(source, filtered, k, np.eye(4))
     assert fit.scene_depth_check(np.eye(4))["scene_depth_outlier_fraction"] == 0
 
@@ -216,7 +221,9 @@ def test_search_does_not_reward_hiding_all_surface_outside_both_images():
     new = OverlapSeekingFit(source["obs"]["points"], current, k, config, **kwargs)
     hidden = np.eye(4)
     hidden[0, 3] = 1
-    assert old.score(hidden) < old.score(np.eye(4))
+    # With consistent validity, the true alignment can now also have zero
+    # residual. The old objective still cannot prefer evidence over no evidence.
+    assert old.score(hidden) <= old.score(np.eye(4))
     assert new.score(np.eye(4)) < new.score(hidden)
     # No evidence still cannot establish a valid pose under either objective.
     assert not check_surface_contradiction(new, hidden, PoseUncertaintyConfig())["accepted"]

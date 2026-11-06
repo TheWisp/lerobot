@@ -12,7 +12,7 @@ from benchmarks.flash_experiment_labels import load_pose_labels
 from benchmarks.flash_import_labelled_rgbd import import_clip
 
 
-def imported_bop(tmp_path):
+def imported_bop(tmp_path, **options):
     raw = tmp_path / "bop"
     for d in ("rgb", "depth", "mask_visib"):
         (raw / d).mkdir(parents=True)
@@ -30,7 +30,7 @@ def imported_bop(tmp_path):
         cv2.imwrite(str(raw / "mask_visib" / f"{i:06d}_000000.png"), np.full((20, 24), 255, np.uint8))
     (raw / "scene_camera.json").write_text(json.dumps(cameras))
     (raw / "scene_gt.json").write_text(json.dumps(poses))
-    return import_clip("bop", raw, tmp_path / "imported", object_id=5, start=7, count=2, fps=30)
+    return import_clip("bop", raw, tmp_path / "imported", object_id=5, start=7, count=2, fps=30, **options)
 
 
 def test_bop_import_keeps_units_pose_direction_and_consecutive_frame_identity(tmp_path):
@@ -50,10 +50,12 @@ def test_bop_import_keeps_units_pose_direction_and_consecutive_frame_identity(tm
 
 
 @pytest.mark.parametrize(
-    "changed", ["rgb", "depth", "mask", "calibration", "labels", "config", "code", "weights"]
+    "changed", ["rgb", "depth", "mask", "calibration", "labels", "surface", "config", "code", "weights"]
 )
 def test_cache_rejects_changes_even_with_unchanged_paths_and_frame_counts(tmp_path, changed):
-    case = imported_bop(tmp_path)
+    model_path = tmp_path / "model.npy"
+    np.save(model_path, [[0.0, 0.0, 0.0], [0.01, 0.0, 0.0], [0.0, 0.01, 0.0]])
+    case = imported_bop(tmp_path, surface_points=model_path)
     settings, execution = {"setting": 1}, {"code": "a", "weights": "a"}
     identity = case_identity(case, settings, execution)
     assert case_identity(case, settings, execution) == identity
@@ -74,6 +76,9 @@ def test_cache_rejects_changes_even_with_unchanged_paths_and_frame_counts(tmp_pa
         poses = np.load(file)
         poses[1, 0, 3] += 0.01
         np.save(file, poses)
+    elif changed == "surface":
+        file = root / "evaluation/surface_points_m.npy"
+        np.save(file, np.load(file) + 0.01)
     elif changed == "config":
         settings["setting"] = 2
     else:

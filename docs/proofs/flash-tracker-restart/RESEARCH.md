@@ -4113,3 +4113,307 @@ pre-grasp gamepad drift. The retained search policy therefore still has multiple
 starts. **This is not the completed simpler-search rewrite or a 10 FPS result.**
 Server 9102 and its default matcher were not changed. Measurements, rejected-run
 paths and test limitations are in the [work-reuse evidence](library-registration-20261105/matcher-work-reuse-20261106.json).
+
+### 2026-11-06 — One-loop replacement trial: not promoted
+
+The flattened local baseline shares per-frame preparation and batches scoring,
+but still has numerical fitting followed by conditional correspondence correction.
+Its isolated two-object gamepad run through `LiveSurfaceSession`, including SAM3
+and scene encoding, averages **144.2 ms / 6.93 FPS over 193 frames**. Both complete
+object masks were checked. Camera capture, transport and browser rendering are
+excluded; initialization is separate. This is not a full-demo live endurance test.
+
+An isolated replacement used one vectorized rigid-correspondence loop per start,
+refreshing visible depth evidence each iteration. Image/group pairs supplied
+additional weighted correspondences. Geometry acceptance, Kalman and growth rules
+were unchanged. It is **not the selected small_gicp backend**: its injected source
+and hash are preserved with the run. It never replaced the hosted matcher.
+
+| Gamepad check                                            | Current local baseline | One-loop trial |
+| -------------------------------------------------------- | ---------------------: | -------------: |
+| Pre-grasp frames with pose                               |                193/193 |        187/193 |
+| Maximum pre-grasp rotation change                        |                  4.52° |          7.80° |
+| Clear placement frames within 5 mm at annotated controls |                118/118 |        110/118 |
+| Median placement error                                   |                2.04 mm |        3.10 mm |
+
+![Gamepad comparison: rotation before grasp and annotated control error after placement](library-registration-20261105/single-loop-comparison-20261106.png)
+
+Full replays also covered dowel/ring, mustard, yellow block, clock, drill and
+tomato can. Labelled accurate-frame counts improve for mustard (178→179), drill
+(35→40) and tomato (24→25), but clock falls (23→18). These counts require both
+10 mm and 10°; they are not surface-equivalence scores. These numbers alone do not
+establish an overall geometry regression. In particular, 2.04→3.10 mm at gamepad
+controls is a small change, not sufficient by itself to reject a replacement.
+The trial showed no speed advantage in these runs; concurrent
+small tests mean their timings are unsuitable for a precise speed comparison.
+
+Focused checks: **69 passed, one failed**; three tests asserting execution of a
+particular external library were deliberately excluded from this differently
+named solver experiment. Looser physical stopping tolerances increased failures
+to five and were rejected. The remaining controlled rotation failure exposes
+history dependence: accepted alignment errors are stored with earlier depth
+views, which can later reject the known true pose. Disabling Kalman does not
+eliminate it. Given the identical resulting state, both the old and trial fitters
+fail to find an accepted pose. This isolates a stored-observation issue, but does
+not yet explain every real-video regression or establish its fix.
+
+**Decision:** retain the current default and geometry checks; do not remove the
+old fitting path on this evidence. Full counts and local artifact locations are
+in the [comparison record](library-registration-20261105/single-loop-comparison-20261106.json).
+
+The secondary surface metric existed, but recent runtime trials omitted model
+metadata and disabled the saved surfaces it needed. This is now guarded: runtime
+and full benchmark runs use the same scorer, preserve actual grown surfaces for
+labelled-model evaluation, and report missing labels/models explicitly. HTML
+reports and runtime comparisons include median/p90 surface distance, percentage
+within 10 mm and scoring coverage beside pose error and availability. The live
+session replay also saves its predictions and uses that scorer after timing.
+Model contents participate in the cache key. Labelled RGB-D imports accept an
+evaluation-only model in the label's object coordinates; it is never tracker input.
+
+Fresh full-model scoring (all returned post-initialization frames):
+
+| Scene      | Current surface median / p90 | Trial surface median / p90 | Current / trial availability |
+| ---------- | ---------------------------- | -------------------------- | ---------------------------- |
+| Clock      | 3.61 / 10.20 mm              | 4.18 / 11.14 mm            | 20 / 40 of 202               |
+| Tomato can | 4.55 / 14.29 mm              | 4.29 / 14.16 mm            | 58 / 54 of 67                |
+
+These are small median differences; the tails and unavailable frames remain
+important. **Repeatability limitation:** the native baseline's clock availability
+changed from 39 to 20 on repeat; the one-loop trial reproduced exactly. The cause
+is not yet established, so these results do not backfill the old baseline or
+establish a decisive solver ranking. Paired-frame surface scores and model
+provenance are in the comparison record. The available mustard scan uses a
+model coordinate convention inconsistent with its labels and was not scored;
+drill still needs a verified model. Our two demos lack full-model/pose labels.
+
+Validation: 53 metric/report/import/cache/live parity tests and 6 existing
+rescoring/3D-consumer tests pass. Restoring each reporting/archive/cache omission
+makes its regression test fail. No solver default or hosted playback was changed.
+
+### Repeatable matcher comparison, 2026-11-06 follow-up
+
+Identical saved fitting inputs produce rounding-scale differences with two
+small_gicp threads. One thread reproduced exactly, including two complete clock
+replays: 39/202 returned poses and identical scores, statuses and map events.
+This provides a repeatable comparison setting; it does not make the tracker
+robust to measurement noise. Earlier parallel runs remain separate evidence.
+
+The native solver now batches the scoring of its proposed poses. A regression
+test crosses the actual solver/scorer boundary: residual scores and geometry
+verdicts equal individual evaluation, with one spatial-query batch per view.
+Restoring individual scoring makes that test fail.
+
+Fresh sequential timing on 193 gamepad/cube frames through the live session,
+with actual SAM3 and scene encoding, one native thread, no concurrent tests:
+
+| Configuration                 | Mean frame time | Two-object FPS |
+| ----------------------------- | --------------: | -------------: |
+| Existing local matcher        |       145.15 ms |           6.89 |
+| Same matcher, batched scoring |       139.48 ms |           7.17 |
+| Single-loop prototype         |       145.71 ms |           6.86 |
+
+Camera capture, transport, browser rendering and initialization are excluded.
+Actual RGB-D and generated-mask hashes match across these three runs. The first
+two also have identical poses, statuses and surface events. Both objects return
+193/193 poses; this stationary opening segment is not a full-demo accuracy claim.
+The demos have no independent full model/pose labels, so their secondary surface
+score remains explicitly unavailable.
+
+The prototype's 20-iteration trial offered no speed gain: most fits already stop
+before the cap. It also fails two additional placement checks. Neither that cap
+nor the prototype is promoted. Removing image pairs from its update did not fix
+the rotating-box failure either. The retained change passes 120 fitting/geometry/
+placement tests plus 9 scoring/live-consumer tests. The comparison reader now
+handles live summaries, and live hashes include the masks actually consumed,
+rather than only saved seed masks; restored defects fail their tests.
+
+Local evidence: `~/.cache/flash-tracker-restart/matcher-rewrite-20261106/` under
+`repeatability`, `live-comparison-*-50` and `followup-20261106/comparison.json`.
+Early live reports lacking `input_hash_includes_tracked_masks` cannot certify
+SAM-mask parity. Hosted defaults are unchanged. A 2–3 mm score difference alone
+does not establish a decisive regression.
+
+**Controlled failure diagnosis, 2026-11-06:** two problems coexist. With the
+exact pose and noiseless 15° → 20° box observations, 26.99% of the weighted
+correspondences fail after depth cleanup removes the narrow side. Using the raw
+measured cloud gives 0%; mask trimming alone also gives 0%. The visibility check
+uses the original depth/mask but demands a neighbour in the filtered cloud,
+mistaking withheld measurements for incompatible geometry. This needs a separate
+test from pose uncertainty; restoring known earlier poses does not fix it.
+
+Earlier estimated alignments also cause false empty-space contradictions. In
+the sequential trial, correcting just the retained view transforms to their
+known poses eliminates those contradictions, while the correspondence check
+still fails. The old pipeline returns a pose about 5.12 mm displaced in this
+sequence; its passing availability/rotation test does not establish that these
+shared checks are sound. These are diagnostics, not a proposed relaxation of
+current measured-empty-space rejection. Scripts and results:
+`~/.cache/flash-tracker-restart/matcher-rewrite-20261106/history-rejection-diagnosis/`.
+
+### Excluded depth remains unknown, 2026-11-06
+
+Implemented locally: readings excluded by depth/boundary cleanup are now omitted
+from fitting, rejection and retained depth views. Validity comes from pixels
+before voxel sampling. The complete segmentation outline and reliable scene
+depth remain available; recordings are unchanged. The old
+`filtered_depth_for_fitting` setting remains readable but no longer changes this
+invariant. This reduces false rejection, at the cost of less evidence wherever
+cleanup has removed a real surface.
+
+The exact 15° ↔ 20° box poses now pass; displaced poses still fail. The complete
+controlled rotating-box sequence also passes with the isolated single-loop
+matcher. A separate recovery check exposed an omitted candidate: after a bad
+group prediction, search had not considered the last visually accepted pose.
+It now checks that existing pose under the same geometry and Kalman rules.
+No rejection threshold, iteration budget or scene-specific timing changed.
+
+Validation: 93 focused tests pass, including Python/compiled agreement, retained
+views, protrusion and publication. Another 95 live/registration/search/placement
+tests pass, but **four Open3D history-based gamepad placements regress to
+5.06–5.72 mm** against the existing 5 mm control-point limit (seven failing
+assertions). Restoring raw depth makes all 25 placement checks pass. The current
+SciPy and small_gicp placement checks pass with the fix. These optional-matcher
+regressions are retained as failures, not hidden by wider tolerances.
+Exceeding this feature-error limit by 0.06–0.72 mm does not itself establish a
+visibly wrong surface fit; full replay and geometry review remain necessary.
+
+The extended one-loop trial has 91 passes and eight placement failures; three
+library-identity tests are excluded because this injected prototype replaces
+their solver. Fixing the controlled box does not establish full equivalence.
+Seventeen tests of a historical acceleration experiment fail on both HEAD and
+the local code, independently of this fix. Production compiled-path checks pass.
+Restoring excluded readings, restoring them only in saved views, and dropping the
+last-observation candidate each makes its respective regression test fail.
+
+No hosted defaults, playback results or commits changed. Full recorded-scene
+quality and end-to-end speed have not been remeasured for this change. Small
+test logs and mutation scripts are under
+`~/.cache/flash-tracker-restart/matcher-rewrite-20261106/filtered-depth-unknown/`.
+
+### Yellow-block visual assessment correction, 2026-11-06
+
+The configured single-loop replacement (`visible_icp`) returns 28/74 poses after
+initialization versus 52/74 for the old fitter in `depth-clean-baseline`. **This
+is not an established accuracy regression.** The recording has no pose labels;
+counting the extra old outputs as successful tracking was incorrect.
+
+After the user's visual review, the same initial measured surface was projected
+through both recorded pose sequences over all 75 frames. The 24 old-only outputs
+(28–40, 42 and 65–74) show a displaced surface. Across these frames 10.2–16.7% of
+its points project more than 2 pixels outside the current mask. That alone is not
+a rejection argument: surface behind an occluder is allowed. At frame 65 (2.67 s),
+however, 30 of 1099 points also lie over 10 mm **in front of** locally continuous
+sensor depth. The old fit therefore has actual depth disagreement as well as the
+visible offset. Missing/unstable depth was excluded from that diagnostic.
+
+The replacement withholding these fits is preferable under the agreed
+missing-over-visibly-wrong policy. Neither method reliably recovers the moving
+block; improving recovery must not restore the displaced old fits. This audit
+changes the interpretation, not a matcher, threshold or benchmark score.
+Evidence: `visual-review/yellow_visual_audit.py`, `yellow-ray-audit.json`, the two
+`yellow-audit-*.jpg` contact sheets, and the complete side-by-side video under
+`~/.cache/flash-tracker-restart/matcher-rewrite-20261106/`.
+
+### Corrected matcher comparison against hosted settings, 2026-11-06
+
+The earlier report mislabelled an experimental small_gicp + LK configuration
+as “Current”. It differs from the actual hosted SciPy + UFM configuration in
+16 settings. Its low dowel availability therefore does not describe the hosted
+result. That conclusion is withdrawn; the hosted dowel has 684/712 poses.
+
+A fresh seven-scene comparison separates the archived hosted result, current
+shared code with those same settings, and the same current code with only the
+surface fitter changed to `visible_icp`. Effective settings and source are saved;
+RGB-D/mask hashes match the hosted inputs. Every old/new UFM correspondence
+record is identical. `retain_motion_reference=False` was also verified for all
+seven hosted records. Labels are evaluation-only.
+
+The new fitter is not yet a clean replacement. Clear gamepad placement passes
+all 118 frames with both local fitters, with median control-point error changing
+3.75→2.42 mm. Dowel availability changes 707→669/712. Mustard changes from
+180/180 correct labelled poses to 168/180 because 12 late frames are rejected.
+Drill's correct count stays 57. Clock has two fewer poses within 20 mm/20°
+(26→24), while full-model surface median improves 3.31→2.68 mm. Tomato changes
+35→32 within that pose limit and 3.55→4.50 mm surface median. Surface errors
+summarize returned poses, so availability must be read alongside them.
+
+Yellow block returns 56→37/74 poses without independent labels. At frame 65,
+both hosted and local-old surfaces are visibly displaced; new withholds the
+pose. More returned poses are not automatically better tracking. The prior
+24-frame yellow audit describes the earlier experimental configuration, not
+these new counts.
+
+Full three-column videos, frame rows, actual accumulated surface versions,
+settings and comparison JSON are preserved under
+`~/.cache/flash-tracker-restart/controlled-hosted-comparison-20261106/`.
+The existing review URL now serves this comparison. No default or experiment
+playback source was replaced. The separate fresh-SAM live timing comparison
+must not be confused with the earlier small_gicp/LK 6.9 FPS result.
+
+The separate two-object live-consumer measurement is now complete: 193 recorded
+frames with fresh SAM3 and shared UFM, including scene encoding, average
+209.75 ms / 4.77 FPS with local SciPy and 164.54 ms / 6.08 FPS with visible_icp.
+Consumed RGB-D and generated mask hashes are identical; both return 179 observed
+and 13 predicted gamepad frames plus 192 observed cube frames after initialization.
+Tracking time is 168.85→123.37 ms; SAM is ~26.6 ms and encoding ~14.4 ms.
+Startup, camera transport, disk decoding and browser are excluded. This is one
+sequential paired run, not repeated hardware-camera timing. It supersedes no
+small_gicp/LK result; that was a different configuration.
+
+The timing command had not loaded the model when UFM was selected, and correctly
+failed before generating a result. It now loads/passes UFM as the experiment
+command does; a command-through-real-session test covers both backend choices.
+Failed attempts remain separately named and are excluded from all reported
+scores. Evidence: `live-old/`, `live-new/`, `live-comparison.json`.
+
+After reviewing the corrected comparison, the user said “so this seems working
+for me.” This establishes visual acceptance of the simpler matcher as a usable
+baseline for consolidation. It does not erase the measured mustard losses or
+other remaining recovery gaps. The geometry rejection tests remain mandatory;
+changing defaults and removing the old implementation have not happened yet.
+
+## 2026-11-06 — Retire the old solver and duplicate inspectors
+
+The user accepted the controlled seven-scene comparison, including small visual
+trade-offs. The default is now the single-loop surface fitter (`visible_icp`).
+The SciPy least-squares solver, numerical Jacobian path and second correspondence
+correction loop were removed. This is a consolidation of the accepted algorithm,
+not another change to geometry tolerances, Kalman or growth thresholds.
+
+The post-deletion replay used the identical UFM inputs/settings from
+`controlled-hosted-comparison-20261106/new`. All 1,942 frames across both demos,
+drill, tomato can, clock, yellow block and mustard have exactly identical
+non-timing frame diagnostics, poses, statuses and saved surfaces. The only
+excluded retired diagnostic is `visible_correction_iterations`.
+[Per-scene parity results](library-registration-20261105/cleanup-parity-20261106.json).
+The replay script and raw results are retained locally under
+`simple-matcher-cleanup-20261106`. This establishes preservation, not new accuracy.
+Mustard's 12 late-frame rejections and imperfect carry/recovery remain.
+
+The GUI now has two source choices: **Video examples** and **Live camera**.
+The older demo editor and separate four-view camera inspector were removed from
+GUI assets, routing and styles. The live endpoint always starts the same
+SurfaceFrameSession-based worker used in the recorded experiment pipeline.
+Historical experiment data and the research/compiler APIs remain available.
+Old results still say which solver produced them; reruns explicitly normalize
+old SciPy settings to the maintained solver.
+
+Optional Open3D comparisons retain the seven previously known placement-test
+failures (5 mm criterion); no tolerance was relaxed. They remain research options,
+not the default. The single-loop placement and geometry tests pass.
+
+Final validation covers measured-empty-space rejection, missing/filtered depth,
+partial-surface matching, stored-surface scoring, iteration budgets and shared
+live/recorded sessions. GUI tests cover source switching, camera shutdown,
+click-to-frame identity, old-result provenance and ordinary Run controls.
+The targeted core/UI suite and the geometry/scoring guard suite pass.
+
+On the actual D435 camera, name selection tracked the green gamepad; a frozen
+click selected the yellow block. Image overlays, 3D reconstruction and orbit
+controls worked. Returning to Video examples stopped the camera. This was a
+stationary, one-object smoke test: the displayed rate varied around 4–6 FPS,
+not a new two-object performance benchmark. Both demos and the five reviewed
+external scenes are refreshed on 9102 with the accepted surface-fit results.
+
+![Video examples with shared 3D inspection](library-registration-20261105/cleaned-examples-ui-20261106.png)

@@ -26,7 +26,9 @@ class CalibrationLoader(yaml.SafeLoader):
 CalibrationLoader.add_constructor("tag:yaml.org,2002:python/tuple", CalibrationLoader.construct_sequence)
 
 
-def import_clip(kind, source, output, *, object_id, start, count, fps, intrinsics=None, name=None):
+def import_clip(
+    kind, source, output, *, object_id, start, count, fps, intrinsics=None, name=None, surface_points=None
+):
     if count < 2 or start < 0 or not np.isfinite(fps) or fps <= 0:
         raise ValueError("Need at least two consecutive frames and a positive nominal rate")
     source, output = Path(source).resolve(), Path(output).resolve()
@@ -120,6 +122,15 @@ def import_clip(kind, source, output, *, object_id, start, count, fps, intrinsic
         "mask_source": "Dataset visible-mask annotation (SAM not evaluated)",
         "evaluation": {"object": {"format": "poses_npy", "path": str(pose_file)}},
     }
+    if surface_points is not None:
+        from benchmarks.flash_surface_score import LabelledSurface
+
+        model = Path(surface_points).expanduser().resolve()
+        # Validate finite Nx3 coordinates; the caller supplies the label convention.
+        LabelledSurface(np.load(model, allow_pickle=False))
+        destination = output / "evaluation/surface_points_m.npy"
+        shutil.copyfile(record(model), destination)
+        case["evaluation_surfaces"] = {"object": {"points_m": str(destination)}}
     # Validate through the actual consumers before publishing a case.
     from benchmarks.flash_experiment_inputs import samples
     from benchmarks.flash_experiment_labels import load_pose_labels
@@ -154,6 +165,11 @@ def main():
     parser.add_argument("--fps", type=float, required=True)
     parser.add_argument("--intrinsics", type=Path, help="DexYCB camera calibration YAML")
     parser.add_argument("--name")
+    parser.add_argument(
+        "--surface-points",
+        type=Path,
+        help="Full labelled model: Nx3 .npy in metres, in the object coordinates used by the pose labels",
+    )
     args = vars(parser.parse_args())
     print(json.dumps(import_clip(**args), indent=2))
 

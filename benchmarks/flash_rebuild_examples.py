@@ -47,17 +47,18 @@ def write_report(job: Path, request: dict, state: dict, outcomes: dict):
         name = escape(case["name"])
         if case["status"] != "completed":
             message = escape(case.get("error", "Not completed in this job"))
-            rows.append(f'<tr><td>{name}</td><td colspan="7">{message}</td></tr>')
+            rows.append(f'<tr><td>{name}</td><td colspan="10">{message}</td></tr>')
             continue
         summary = case["summary"]
         for role, result in summary["roles"].items():
             methods = result["methods"]
             if not methods:
                 rows.append(
-                    f'<tr><td>{name}</td><td>{escape(role)}</td><td colspan="6">No initialization</td></tr>'
+                    f'<tr><td>{name}</td><td>{escape(role)}</td><td colspan="9">No initialization</td></tr>'
                 )
             for method, data in methods.items():
                 errors = data.get("pose_error", {})
+                surface = data.get("surface_error", {})
                 labels = result.get("accuracy_labels", summary["accuracy_labels"])
                 cloud = " / ".join(number(errors.get(f"cloud_mm_{q}")) for q in ("median", "p90"))
                 angle = " / ".join(number(errors.get(f"angle_deg_{q}")) for q in ("median", "p90"))
@@ -72,6 +73,13 @@ def write_report(job: Path, request: dict, state: dict, outcomes: dict):
                     f"{data['available_after_initialization']} / {data['total_after_initialization']}",
                     cloud if labels else "Unmeasured",
                     angle if labels else "Unmeasured",
+                    (
+                        f"{number(surface['median_mm'])} / {number(surface['p90_mm'])}"
+                        if "median_mm" in surface
+                        else surface.get("reason", "Not scored in this saved result")
+                    ),
+                    number(surface.get("within_10mm_percent")),
+                    f"{surface.get('frames_scored', 0)} / {data['total_after_initialization']}",
                     f"{prepare} / {fit}",
                     case["mask_source"],
                 ]
@@ -90,6 +98,11 @@ def write_report(job: Path, request: dict, state: dict, outcomes: dict):
         "<p>Point error measures displacement of the same initial 3D points against annotated motion. "
         "Rotation error uses the annotated orientation without symmetry adjustment. "
         "Unlabelled examples have no accuracy score.</p>"
+        "<p>Surface distance is the secondary, symmetry-tolerant check: distance from each predicted "
+        "surface point to the nearest point on the full labelled model. It does not require unobserved "
+        "model parts to be reconstructed. Compare median, p90, points within 10 mm and pose availability "
+        "together; a small median alone does not prove the whole fit is correct. Model sampling and label "
+        "errors matter when interpreting differences of a few millimetres.</p>"
         "<p>Preparation includes the shared image matching and initial rigid fit. "
         "The second time is each method's additional fitting stage when separately timed, "
         "not independent end-to-end FPS. "
@@ -97,6 +110,8 @@ def write_report(job: Path, request: dict, state: dict, outcomes: dict):
         '<a href="report.json">Download full results (JSON)</a></p><main><table><thead><tr>'
         "<th>Example</th><th>Object</th><th>Method</th><th>Poses / frames</th>"
         "<th>Point error mm<br>median / p90</th><th>Rotation error °<br>median / p90</th>"
+        "<th>Surface distance mm<br>median / p90</th><th>Surface points within 10 mm %</th>"
+        "<th>Surface-scored frames</th>"
         "<th>Prepare / fit ms<br>medians</th><th>Mask source</th></tr></thead><tbody>"
         + "".join(rows)
         + "</tbody></table></main></html>"

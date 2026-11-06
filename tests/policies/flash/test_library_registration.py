@@ -52,6 +52,39 @@ def test_registration_config_roundtrip_and_validation():
             LibraryConfig(**change)
 
 
+def test_native_iterates_share_queries_without_changing_scores_or_geometry():
+    from dataclasses import replace
+    from types import SimpleNamespace
+
+    pytest.importorskip("small_gicp")
+    source, current, k, truth = textured_box_pair()
+    config = replace(ShapeConfig(), registration=LibraryConfig("small_gicp", threads=1))
+    reference = source["obs"]["points"]
+    fit = WholeSurfaceFit(reference, current, k, config, reference_observation=source)
+    scalar = WholeSurfaceFit(reference, current, k, config, reference_observation=source)
+    queries = []
+    for index, view in enumerate([fit, *(view for _, view in fit.reverse_fits)]):
+        original = view.target_tree.query
+
+        def query(points, *, original=original, index=index, **kwargs):
+            queries.append((index, len(points)))
+            return original(points, **kwargs)
+
+        view.target_tree = SimpleNamespace(query=query)
+    _, _, iterates = fit._solve(perturbed_pose(truth), 40)
+    assert len(iterates) > 2
+    # Through the real native solver and production scorer: one query batch per
+    # measured view, rather than one dispatch per returned pose.
+    assert queries == [
+        (index, len(iterates) * len(view.reference_queries))
+        for index, view in enumerate([fit, *(view for _, view in fit.reverse_fits)])
+    ]
+    for score, pose in iterates:
+        assert score == scalar.score(pose)
+        assert fit.check_pose(pose) == scalar.check_pose(pose)
+    assert any(fit.check_pose(pose)["accepted"] for _, pose in iterates)
+
+
 @pytest.mark.parametrize("backend", ["small_gicp", "open3d_plane"])
 def test_hidden_back_surface_is_not_pulled_onto_visible_front(backend):
     from tests.policies.flash.test_surface_publication import frame

@@ -9,7 +9,11 @@ async function liveRequest(path, body) {
     return response.json();
 }
 async function showFlashLive() {
+    if (flashLive.visible) return;
+    const generation = ++flashLive.generation;
     try {
+        setFlashSource(true);
+        document.getElementById('flash-experiment-comparison').hidden = true;
         document.getElementById('flash-experiment-video').pause();
         flashLive.visible = true;
         document.getElementById('flash-experiment-playback').hidden = true;
@@ -22,6 +26,7 @@ async function showFlashLive() {
         document.getElementById('flash-experiment-detail').hidden = true;
         const data = await liveRequest('shared-defaults');
         const current = await liveRequest('state');
+        if (!flashLive.visible || generation !== flashLive.generation) return;
         if(current.running && current.config?.engine === 'experiment') {
             data.settings = current.config.pipeline_settings;
             liveElement('method').value = current.config.method;
@@ -31,15 +36,20 @@ async function showFlashLive() {
         liveElement('matcher').replaceChildren(...Object.entries(data.matchers).map(([value,text]) => new Option(text,value)));
         liveElement('matcher').value = data.settings.config.shape.registration.backend;
         liveElement('config').value = JSON.stringify(data.settings, null, 2);
-        liveElement('status').textContent = 'Open camera, then enter an object name or freeze and click. Shared pipeline defaults: LK and the current surface fitter.';
+        liveElement('status').textContent = 'Open camera, then enter an object name or freeze and click. ';
         flashLive.busy = false;
         await pollFlashLive();
     } catch (error) { liveElement('status').textContent = error.message; }
     finally { flashLive.busy = false; }
 }
 async function hideFlashLive(restore = true) {
-    try { await liveRequest('stop', {}); }
-    catch(error) { liveElement('status').textContent = error.message; return; }
+    flashLive.generation++;
+    clearTimeout(flashLive.timer);
+    try {
+        await flashLive.starting?.catch(() => {});
+        await liveRequest('stop', {});
+    } catch(error) { liveElement('status').textContent = error.message; pollFlashLive(); return false; }
+    setFlashSource(false);
     flashLive.visible = false; flashLive.generation++; clearTimeout(flashLive.timer);
     flashLive.viewer?.dispose(); flashLive.viewer = null;
     flashLive.bitmap?.close(); flashLive.bitmap = null; flashLive.packet = null;
@@ -48,10 +58,13 @@ async function hideFlashLive(restore = true) {
     document.getElementById('flash-experiment-detail').hidden = false;
     const selected = flashExperiments.items?.find(item => item.id === flashExperiments.selected);
     if(restore && selected) await selectFlashExperiment(selected);
+    else document.getElementById('flash-experiment-title').textContent = 'Video examples';
+    return true;
 }
 async function startFlashLive() {
     if(flashLive.busy) return;
     flashLive.busy = true;
+    const generation = flashLive.generation;
     try {
         const settings = JSON.parse(liveElement('config').value);
         settings.config.shape.registration.backend = liveElement('matcher').value;
@@ -59,16 +72,19 @@ async function startFlashLive() {
         else if(liveElement('matching').value === 'lk') throw new Error('Enable shared_matching in settings to use LK');
         flashLive.settings = settings;
         const cameras = await liveRequest('cameras', {});
+        if (!flashLive.visible || generation !== flashLive.generation) return;
         const picker = liveElement('camera'), saved = picker.value;
         picker.replaceChildren(...cameras.cameras.map(c => new Option(c.name || c.id, c.id)));
         if(saved) picker.value = saved;
         if(!picker.value) throw new Error('No RGB-D camera found');
-        await liveRequest('start', {engine: 'experiment', pipeline_settings: settings,
+        flashLive.starting = liveRequest('start', {engine: 'experiment', pipeline_settings: settings,
             method: liveElement('method').value, serial: picker.value, width:1280, height:720, fps:30});
+        await flashLive.starting;
+        if (!flashLive.visible || generation !== flashLive.generation) return;
         flashLive.processed = null; flashLive.packet = null; flashLive.frame = null;
         liveElement('status').textContent = 'Opening camera…';
     } catch(error) { liveElement('status').textContent = error.message; }
-    finally { flashLive.busy = false; }
+    finally { flashLive.busy = false; flashLive.starting = null; }
 }
 async function stopFlashLive() {
     try { await liveRequest('stop', {}); }

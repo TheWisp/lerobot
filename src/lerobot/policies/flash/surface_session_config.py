@@ -10,8 +10,8 @@ from .vision_pipeline import VisionPipelineConfig
 
 def defaults():
     # The validated research recipe, shared by fresh live and recorded sessions.
-    # Dataclass defaults also load older recordings, so changing those would silently
-    # reinterpret saved experiments. Keep that compatibility separate from this recipe.
+    # Stored playback retains its original metadata. Reruns normalize retired
+    # solver settings to the maintained surface fitter via VisionPipelineConfig.
     config = asdict(VisionPipelineConfig())
     config["observation"].update(component_gap_m=None, depth_outlier_sigma=3, filtered_depth_for_fitting=True)
     config["shape"].update(

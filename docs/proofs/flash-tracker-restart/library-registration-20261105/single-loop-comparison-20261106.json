@@ -1,0 +1,790 @@
+{
+  "decision": "Do not promote yet: the remaining controlled-sequence failure and repeatability need investigation. The 2.04 to 3.10 mm gamepad control-point change alone does not establish a meaningful quality regression.",
+  "scope": "The new visible-ICP loop was injected only in the isolated benchmark. The hosted server and defaults are unchanged. Recorded masks; no SAM during full seven-case runs.",
+  "timing_limit": "Replay timing is not a clean performance comparison: small correctness tests ran concurrently with parts of each suite. Existing isolated 193-frame two-object SAM run remains 144.2 ms mean (6.93 FPS), excludes camera/network/browser.",
+  "tests": {
+    "one_loop": {
+      "passed": 69,
+      "failed": 1,
+      "deselected": 3,
+      "deselection_reason": "Library-backend identity assertions do not apply to a new explicitly named solver."
+    },
+    "looser_stopping": {
+      "passed": 65,
+      "failed": 5
+    },
+    "controlled_sequence": "At frame 4, both old and new fitters reject the identical state produced by the new tracker. Disabling Kalman still loses this sequence. Prior alignment errors in retained observations participate in the later contradiction. This does not yet establish the root cause of every real-video regression."
+  },
+  "runs": [
+    {
+      "version": "flat-fifty-reference",
+      "artifact_path": "/home/feit/.cache/flash-tracker-restart/matcher-rewrite-20261106/flat-fifty-reference",
+      "pregrasp": {
+        "frames": 193,
+        "available": 193,
+        "max_rotation_deg": 4.518062678974409
+      },
+      "placement": {
+        "source_run": "/home/feit/.cache/flash-tracker-restart/matcher-rewrite-20261106/flat-fifty-reference/flash-demo-gamepad-cube",
+        "reference_frame": 0,
+        "frames": 118,
+        "available": 118,
+        "median_feature_error_mm": 2.0396002988404645,
+        "p95_feature_error_mm": 2.237353965230284,
+        "within_5mm": 118
+      },
+      "scenes": [
+        {
+          "case": "flash-demo-gamepad-cube",
+          "frames": 628,
+          "roles": {
+            "gamepad": {
+              "available_after_initialization": 553,
+              "total_after_initialization": 627,
+              "max_map_points": 666,
+              "pose_sources": {
+                "observed_candidate": 520,
+                "predicted": 54,
+                "lost": 53
+              },
+              "surface_error": {
+                "frames_scored": 0,
+                "reason": "No reference poses and full model"
+              }
+            },
+            "cube": {
+              "available_after_initialization": 457,
+              "total_after_initialization": 627,
+              "max_map_points": 308,
+              "pose_sources": {
+                "observed_candidate": 351,
+                "predicted": 267,
+                "lost": 9
+              },
+              "surface_error": {
+                "frames_scored": 0,
+                "reason": "No reference poses and full model"
+              }
+            }
+          }
+        },
+        {
+          "case": "flash-demo-dowel-ring",
+          "frames": 713,
+          "roles": {
+            "dowel": {
+              "available_after_initialization": 236,
+              "total_after_initialization": 712,
+              "max_map_points": 632,
+              "pose_sources": {
+                "observed_candidate": 210,
+                "predicted": 449,
+                "lost": 53
+              },
+              "surface_error": {
+                "frames_scored": 0,
+                "reason": "No reference poses and full model"
+              }
+            },
+            "ring": {
+              "available_after_initialization": 704,
+              "total_after_initialization": 712,
+              "max_map_points": 628,
+              "pose_sources": {
+                "observed_candidate": 703,
+                "predicted": 9,
+                "lost": 0
+              },
+              "surface_error": {
+                "frames_scored": 0,
+                "reason": "No reference poses and full model"
+              }
+            }
+          }
+        },
+        {
+          "case": "ycb-mustard_easy_00_02",
+          "frames": 181,
+          "roles": {
+            "object": {
+              "available_after_initialization": 178,
+              "total_after_initialization": 180,
+              "pose_error": {
+                "available": 178,
+                "total": 180,
+                "cloud_mm_median": 1.7659974687693705,
+                "cloud_mm_p90": 4.65695016347886,
+                "angle_deg_median": 0.7991767200225217,
+                "angle_deg_p90": 3.9691630267953038,
+                "center_mm_median": 1.2836508890151364,
+                "within_10mm_10deg": 178,
+                "within_20mm_20deg": 178,
+                "final_cloud_mm": 5.158581876616054,
+                "final_angle_deg": 4.707783580835333
+              },
+              "surface_error": {
+                "frames_scored": 0,
+                "reason": "Not scored in original run; no archived grown surface/full-model pair"
+              },
+              "max_map_points": 2815,
+              "pose_sources": {
+                "observed_candidate": 178,
+                "predicted": 2,
+                "lost": 0
+              }
+            }
+          }
+        },
+        {
+          "case": "rig-yellow-block",
+          "frames": 75,
+          "roles": {
+            "object": {
+              "available_after_initialization": 29,
+              "total_after_initialization": 74,
+              "max_map_points": 358,
+              "pose_sources": {
+                "observed_candidate": 29,
+                "predicted": 42,
+                "lost": 3
+              },
+              "surface_error": {
+                "frames_scored": 0,
+                "reason": "No reference poses and full model"
+              }
+            }
+          }
+        },
+        {
+          "case": "laval-clock-interaction-hard",
+          "frames": 203,
+          "roles": {
+            "clock": {
+              "available_after_initialization": 39,
+              "total_after_initialization": 202,
+              "pose_error": {
+                "available": 39,
+                "total": 202,
+                "cloud_mm_median": 7.316090808193385,
+                "cloud_mm_p90": 9.765698413393643,
+                "angle_deg_median": 8.973552219789385,
+                "angle_deg_p90": 11.561430167439681,
+                "center_mm_median": 3.4950147233386724,
+                "within_10mm_10deg": 23,
+                "within_20mm_20deg": 39,
+                "final_cloud_mm": null,
+                "final_angle_deg": null
+              },
+              "surface_error": {
+                "frames_scored": 0,
+                "reason": "Not scored in original run; no archived grown surface/full-model pair"
+              },
+              "max_map_points": 2487,
+              "pose_sources": {
+                "observed_candidate": 33,
+                "predicted": 127,
+                "lost": 42
+              }
+            }
+          }
+        },
+        {
+          "case": "dexycb-drill-20201002_111923",
+          "frames": 74,
+          "roles": {
+            "object": {
+              "available_after_initialization": 48,
+              "total_after_initialization": 73,
+              "pose_error": {
+                "available": 48,
+                "total": 73,
+                "cloud_mm_median": 2.858858291303286,
+                "cloud_mm_p90": 16.40488406669675,
+                "angle_deg_median": 1.5540668871678727,
+                "angle_deg_p90": 5.290223152979611,
+                "center_mm_median": 2.281071549777447,
+                "within_10mm_10deg": 35,
+                "within_20mm_20deg": 44,
+                "final_cloud_mm": 10.647142331302776,
+                "final_angle_deg": 2.435222715025208
+              },
+              "surface_error": {
+                "frames_scored": 0,
+                "reason": "Not scored in original run; no archived grown surface/full-model pair"
+              },
+              "max_map_points": 502,
+              "pose_sources": {
+                "observed_candidate": 48,
+                "predicted": 22,
+                "lost": 3
+              }
+            }
+          }
+        },
+        {
+          "case": "dexycb-tomato-can-20201002_105506",
+          "frames": 68,
+          "roles": {
+            "object": {
+              "available_after_initialization": 58,
+              "total_after_initialization": 67,
+              "pose_error": {
+                "available": 58,
+                "total": 67,
+                "cloud_mm_median": 30.62129567816813,
+                "cloud_mm_p90": 50.875321621588654,
+                "angle_deg_median": 33.797605404456604,
+                "angle_deg_p90": 74.04539299828726,
+                "center_mm_median": 27.584624217313717,
+                "within_10mm_10deg": 24,
+                "within_20mm_20deg": 27,
+                "final_cloud_mm": 50.441141036344916,
+                "final_angle_deg": 73.4310672981429
+              },
+              "surface_error": {
+                "frames_scored": 0,
+                "reason": "Not scored in original run; no archived grown surface/full-model pair"
+              },
+              "max_map_points": 1885,
+              "pose_sources": {
+                "observed_candidate": 54,
+                "predicted": 12,
+                "lost": 1
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "version": "one-loop-joint-trial",
+      "artifact_path": "/home/feit/.cache/flash-tracker-restart/matcher-rewrite-20261106/one-loop-joint-trial",
+      "pregrasp": {
+        "frames": 193,
+        "available": 187,
+        "max_rotation_deg": 7.801820916762531
+      },
+      "placement": {
+        "source_run": "/home/feit/.cache/flash-tracker-restart/matcher-rewrite-20261106/one-loop-joint-trial/flash-demo-gamepad-cube",
+        "reference_frame": 0,
+        "frames": 118,
+        "available": 118,
+        "median_feature_error_mm": 3.101659744496025,
+        "p95_feature_error_mm": 5.158057159475393,
+        "within_5mm": 110
+      },
+      "scenes": [
+        {
+          "case": "flash-demo-gamepad-cube",
+          "frames": 628,
+          "roles": {
+            "gamepad": {
+              "available_after_initialization": 544,
+              "total_after_initialization": 627,
+              "max_map_points": 686,
+              "pose_sources": {
+                "observed_candidate": 515,
+                "predicted": 48,
+                "lost": 64
+              },
+              "surface_error": {
+                "frames_scored": 0,
+                "reason": "No reference poses and full model"
+              }
+            },
+            "cube": {
+              "available_after_initialization": 436,
+              "total_after_initialization": 627,
+              "max_map_points": 298,
+              "pose_sources": {
+                "observed_candidate": 331,
+                "predicted": 287,
+                "lost": 9
+              },
+              "surface_error": {
+                "frames_scored": 0,
+                "reason": "No reference poses and full model"
+              }
+            }
+          }
+        },
+        {
+          "case": "flash-demo-dowel-ring",
+          "frames": 713,
+          "roles": {
+            "dowel": {
+              "available_after_initialization": 235,
+              "total_after_initialization": 712,
+              "max_map_points": 631,
+              "pose_sources": {
+                "observed_candidate": 209,
+                "predicted": 447,
+                "lost": 56
+              },
+              "surface_error": {
+                "frames_scored": 0,
+                "reason": "No reference poses and full model"
+              }
+            },
+            "ring": {
+              "available_after_initialization": 696,
+              "total_after_initialization": 712,
+              "max_map_points": 643,
+              "pose_sources": {
+                "observed_candidate": 696,
+                "predicted": 16,
+                "lost": 0
+              },
+              "surface_error": {
+                "frames_scored": 0,
+                "reason": "No reference poses and full model"
+              }
+            }
+          }
+        },
+        {
+          "case": "ycb-mustard_easy_00_02",
+          "frames": 181,
+          "roles": {
+            "object": {
+              "available_after_initialization": 179,
+              "total_after_initialization": 180,
+              "pose_error": {
+                "available": 179,
+                "total": 180,
+                "cloud_mm_median": 2.519144030944024,
+                "cloud_mm_p90": 5.016962802625692,
+                "angle_deg_median": 2.3451582027998987,
+                "angle_deg_p90": 5.01286326990089,
+                "center_mm_median": 1.5517307795909112,
+                "within_10mm_10deg": 179,
+                "within_20mm_20deg": 179,
+                "final_cloud_mm": 5.476403772769461,
+                "final_angle_deg": 5.5368660878536815
+              },
+              "surface_error": {
+                "frames_scored": 0,
+                "reason": "Not scored in original run; no archived grown surface/full-model pair"
+              },
+              "max_map_points": 2869,
+              "pose_sources": {
+                "observed_candidate": 179,
+                "predicted": 1,
+                "lost": 0
+              }
+            }
+          }
+        },
+        {
+          "case": "rig-yellow-block",
+          "frames": 75,
+          "roles": {
+            "object": {
+              "available_after_initialization": 28,
+              "total_after_initialization": 74,
+              "max_map_points": 345,
+              "pose_sources": {
+                "observed_candidate": 28,
+                "predicted": 43,
+                "lost": 3
+              },
+              "surface_error": {
+                "frames_scored": 0,
+                "reason": "No reference poses and full model"
+              }
+            }
+          }
+        },
+        {
+          "case": "laval-clock-interaction-hard",
+          "frames": 203,
+          "roles": {
+            "clock": {
+              "available_after_initialization": 40,
+              "total_after_initialization": 202,
+              "pose_error": {
+                "available": 40,
+                "total": 202,
+                "cloud_mm_median": 9.559127829953166,
+                "cloud_mm_p90": 13.655721542992552,
+                "angle_deg_median": 12.078994777399817,
+                "angle_deg_p90": 15.644741925043496,
+                "center_mm_median": 4.178923164980365,
+                "within_10mm_10deg": 18,
+                "within_20mm_20deg": 40,
+                "final_cloud_mm": null,
+                "final_angle_deg": null
+              },
+              "surface_error": {
+                "frames_scored": 0,
+                "reason": "Not scored in original run; no archived grown surface/full-model pair"
+              },
+              "max_map_points": 2137,
+              "pose_sources": {
+                "observed_candidate": 39,
+                "predicted": 127,
+                "lost": 36
+              }
+            }
+          }
+        },
+        {
+          "case": "dexycb-drill-20201002_111923",
+          "frames": 74,
+          "roles": {
+            "object": {
+              "available_after_initialization": 47,
+              "total_after_initialization": 73,
+              "pose_error": {
+                "available": 47,
+                "total": 73,
+                "cloud_mm_median": 3.0389388381770637,
+                "cloud_mm_p90": 10.689921980264735,
+                "angle_deg_median": 2.349080809081153,
+                "angle_deg_p90": 6.735947456070241,
+                "center_mm_median": 2.5191157536782867,
+                "within_10mm_10deg": 40,
+                "within_20mm_20deg": 47,
+                "final_cloud_mm": 9.470366368581569,
+                "final_angle_deg": 3.2794287479249924
+              },
+              "surface_error": {
+                "frames_scored": 0,
+                "reason": "Not scored in original run; no archived grown surface/full-model pair"
+              },
+              "max_map_points": 502,
+              "pose_sources": {
+                "observed_candidate": 47,
+                "predicted": 13,
+                "lost": 13
+              }
+            }
+          }
+        },
+        {
+          "case": "dexycb-tomato-can-20201002_105506",
+          "frames": 68,
+          "roles": {
+            "object": {
+              "available_after_initialization": 54,
+              "total_after_initialization": 67,
+              "pose_error": {
+                "available": 54,
+                "total": 67,
+                "cloud_mm_median": 10.289464076891427,
+                "cloud_mm_p90": 49.79392848170755,
+                "angle_deg_median": 15.45524312425319,
+                "angle_deg_p90": 65.1034984671716,
+                "center_mm_median": 9.333832241104648,
+                "within_10mm_10deg": 25,
+                "within_20mm_20deg": 28,
+                "final_cloud_mm": 46.21253839589362,
+                "final_angle_deg": 64.0014088285918
+              },
+              "surface_error": {
+                "frames_scored": 0,
+                "reason": "Not scored in original run; no archived grown surface/full-model pair"
+              },
+              "max_map_points": 1999,
+              "pose_sources": {
+                "observed_candidate": 54,
+                "predicted": 13,
+                "lost": 0
+              }
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "same_input_diagnosis": {
+    "source": "/tmp/flash-captured-solvers.json",
+    "gamepad_frame_163": {
+      "current_candidate_rotation_deg": 4.6578042688627965,
+      "trial_candidate_rotation_deg": 8.487022814768146,
+      "current_used_correspondence_correction": false
+    },
+    "interpretation": "The same stored surface, observation and prior produce different candidates. The native GICP path finds a better candidate without secondary correction. This confirms a solver regression independently of the separately reproduced stored-observation issue; it does not establish which solver detail causes that regression."
+  },
+  "surface_metric_rerun": {
+    "artifact_root": "/home/feit/.cache/flash-tracker-restart/matcher-rewrite-20261106/surface-metrics",
+    "cases": {
+      "laval-clock-interaction-hard": {
+        "paired_frames": 18,
+        "paired_surface_error": {
+          "baseline": {
+            "frames_total": 202,
+            "frames_scored": 18,
+            "missing_surface_frames": 0,
+            "model_points": 200000,
+            "metric": "partial_to_labelled_surface_v1",
+            "points_scored": 38355,
+            "mean_mm": 4.617772115813066,
+            "median_mm": 3.4149895192937065,
+            "p90_mm": 9.949357809138837,
+            "within_5mm_percent": 59.13440229435536,
+            "within_10mm_percent": 90.27506192152262
+          },
+          "trial": {
+            "frames_total": 202,
+            "frames_scored": 18,
+            "missing_surface_frames": 0,
+            "model_points": 200000,
+            "metric": "partial_to_labelled_surface_v1",
+            "points_scored": 34418,
+            "mean_mm": 4.681178043667394,
+            "median_mm": 3.59985571394241,
+            "p90_mm": 9.915510113218412,
+            "within_5mm_percent": 57.98419431692719,
+            "within_10mm_percent": 90.44685920158057
+          }
+        },
+        "all_returned_frames": {
+          "baseline": {
+            "available_after_initialization": 20,
+            "total_after_initialization": 202,
+            "pose_error": {
+              "available": 20,
+              "total": 202,
+              "cloud_mm_median": 2.9012577107936472,
+              "cloud_mm_p90": 9.668407749171454,
+              "angle_deg_median": 2.8478498591309966,
+              "angle_deg_p90": 11.03629738606801,
+              "center_mm_median": 2.5603879731473302,
+              "within_10mm_10deg": 17,
+              "within_20mm_20deg": 19,
+              "final_cloud_mm": null,
+              "final_angle_deg": null
+            },
+            "surface_error": {
+              "frames_total": 202,
+              "frames_scored": 20,
+              "missing_surface_frames": 0,
+              "model_points": 200000,
+              "metric": "partial_to_labelled_surface_v1",
+              "points_scored": 43325,
+              "mean_mm": 4.7829252325959155,
+              "median_mm": 3.6085291957175634,
+              "p90_mm": 10.198566438311587,
+              "within_5mm_percent": 57.894979803808425,
+              "within_10mm_percent": 88.88863242931333
+            },
+            "max_map_points": 2485,
+            "pose_sources": {
+              "observed_candidate": 17,
+              "predicted": 119,
+              "lost": 66
+            }
+          },
+          "trial": {
+            "available_after_initialization": 40,
+            "total_after_initialization": 202,
+            "pose_error": {
+              "available": 40,
+              "total": 202,
+              "cloud_mm_median": 9.559127829953166,
+              "cloud_mm_p90": 13.655721542992552,
+              "angle_deg_median": 12.078994777399817,
+              "angle_deg_p90": 15.644741925043496,
+              "center_mm_median": 4.178923164980365,
+              "within_10mm_10deg": 18,
+              "within_20mm_20deg": 40,
+              "final_cloud_mm": null,
+              "final_angle_deg": null
+            },
+            "surface_error": {
+              "frames_total": 202,
+              "frames_scored": 40,
+              "missing_surface_frames": 0,
+              "model_points": 200000,
+              "metric": "partial_to_labelled_surface_v1",
+              "points_scored": 81432,
+              "mean_mm": 5.20831595647558,
+              "median_mm": 4.175999859427911,
+              "p90_mm": 11.137173262431242,
+              "within_5mm_percent": 55.451173985656744,
+              "within_10mm_percent": 84.25434718538168
+            },
+            "max_map_points": 2137,
+            "pose_sources": {
+              "observed_candidate": 39,
+              "predicted": 127,
+              "lost": 36
+            }
+          }
+        },
+        "same_predictions_as_original": {
+          "baseline": false,
+          "trial": true
+        }
+      },
+      "dexycb-tomato-can-20201002_105506": {
+        "paired_frames": 53,
+        "paired_surface_error": {
+          "baseline": {
+            "frames_total": 67,
+            "frames_scored": 53,
+            "missing_surface_frames": 0,
+            "model_points": 200000,
+            "metric": "partial_to_labelled_surface_v1",
+            "points_scored": 92692,
+            "mean_mm": 6.305693578945325,
+            "median_mm": 4.388250192657795,
+            "p90_mm": 13.730687203483702,
+            "within_5mm_percent": 55.184913476891204,
+            "within_10mm_percent": 76.34315798558667
+          },
+          "trial": {
+            "frames_total": 67,
+            "frames_scored": 53,
+            "missing_surface_frames": 0,
+            "model_points": 200000,
+            "metric": "partial_to_labelled_surface_v1",
+            "points_scored": 95942,
+            "mean_mm": 6.354523077685464,
+            "median_mm": 4.339337517540384,
+            "p90_mm": 14.243714096988136,
+            "within_5mm_percent": 55.64403493777491,
+            "within_10mm_percent": 76.35237956265244
+          }
+        },
+        "all_returned_frames": {
+          "baseline": {
+            "available_after_initialization": 58,
+            "total_after_initialization": 67,
+            "pose_error": {
+              "available": 58,
+              "total": 67,
+              "cloud_mm_median": 30.62129567816819,
+              "cloud_mm_p90": 50.87532162158854,
+              "angle_deg_median": 33.797605404457016,
+              "angle_deg_p90": 74.0453929982876,
+              "center_mm_median": 27.584624217313632,
+              "within_10mm_10deg": 24,
+              "within_20mm_20deg": 27,
+              "final_cloud_mm": 50.44114103634448,
+              "final_angle_deg": 73.43106729814339
+            },
+            "surface_error": {
+              "frames_total": 67,
+              "frames_scored": 58,
+              "missing_surface_frames": 0,
+              "model_points": 200000,
+              "metric": "partial_to_labelled_surface_v1",
+              "points_scored": 102117,
+              "mean_mm": 6.554110370760277,
+              "median_mm": 4.5464676649492555,
+              "p90_mm": 14.29455271160257,
+              "within_5mm_percent": 53.558173467689016,
+              "within_10mm_percent": 74.82201788144971
+            },
+            "max_map_points": 1885,
+            "pose_sources": {
+              "observed_candidate": 54,
+              "predicted": 12,
+              "lost": 1
+            }
+          },
+          "trial": {
+            "available_after_initialization": 54,
+            "total_after_initialization": 67,
+            "pose_error": {
+              "available": 54,
+              "total": 67,
+              "cloud_mm_median": 10.289464076891427,
+              "cloud_mm_p90": 49.79392848170755,
+              "angle_deg_median": 15.45524312425319,
+              "angle_deg_p90": 65.1034984671716,
+              "center_mm_median": 9.333832241104648,
+              "within_10mm_10deg": 25,
+              "within_20mm_20deg": 28,
+              "final_cloud_mm": 46.21253839589362,
+              "final_angle_deg": 64.0014088285918
+            },
+            "surface_error": {
+              "frames_total": 67,
+              "frames_scored": 54,
+              "missing_surface_frames": 0,
+              "model_points": 200000,
+              "metric": "partial_to_labelled_surface_v1",
+              "points_scored": 97941,
+              "mean_mm": 6.289562814674415,
+              "median_mm": 4.292679494144082,
+              "p90_mm": 14.158083970371406,
+              "within_5mm_percent": 56.17667779581584,
+              "within_10mm_percent": 76.832991290675
+            },
+            "max_map_points": 1999,
+            "pose_sources": {
+              "observed_candidate": 54,
+              "predicted": 13,
+              "lost": 0
+            }
+          }
+        },
+        "same_predictions_as_original": {
+          "baseline": false,
+          "trial": true
+        }
+      }
+    },
+    "limitations": [
+      "Fresh runs retain the actual evolving surface; the original performance runs did not.",
+      "Native baseline rerun is not numerically identical to the original (clock availability 39 to 20); trial reproduces its original predictions exactly. These are fresh evaluations, not a backfill of the old baseline. Repeatability remains to investigate.",
+      "Mustard available Google scan uses different coordinates from the YCB-Video pose labels; not scored with that model. Drill does not yet have a verified full model in the local evaluation manifest.",
+      "Our demos and yellow block lack independent full model/pose ground truth. Their surface accuracy is unscored; annotated gamepad controls remain separate."
+    ]
+  },
+  "repeatable_live_followup": {
+    "evidence": "/home/feit/.cache/flash-tracker-restart/matcher-rewrite-20261106/followup-20261106/comparison.json",
+    "scope": "193 sequential gamepad/cube frames through LiveSurfaceSession with actual SAM3 named objects and scene encoding. Native solver threads=1 for repeatability. Runs sequential, no concurrent tests. Camera/decode/transport/browser and initialization excluded. No robot motion. Own demo has no full model/pose labels; angle drift is a stationary diagnostic, not the symmetry-aware surface metric.",
+    "verified_runs": [
+      {
+        "variant": "baseline-50",
+        "mean_total_ms": 145.14690687307544,
+        "fps": 6.889571548875346,
+        "p95_total_ms": 195.12493897927925,
+        "input_hash": "1c9b65429ef8a361d386c054ed463c9c96826cf476f9e748b2cf406a08fd2af8",
+        "returned_gamepad_poses": 193
+      },
+      {
+        "variant": "batch-50",
+        "mean_total_ms": 139.4754975529698,
+        "fps": 7.169718104932527,
+        "p95_total_ms": 184.1551249788608,
+        "input_hash": "1c9b65429ef8a361d386c054ed463c9c96826cf476f9e748b2cf406a08fd2af8",
+        "returned_gamepad_poses": 193
+      },
+      {
+        "variant": "one-loop-50",
+        "mean_total_ms": 145.71174417081542,
+        "fps": 6.862864799886801,
+        "p95_total_ms": 177.81077112304044,
+        "input_hash": "1c9b65429ef8a361d386c054ed463c9c96826cf476f9e748b2cf406a08fd2af8",
+        "returned_gamepad_poses": 193
+      }
+    ],
+    "batching_exact_output_parity": true,
+    "decision": "Do not promote the one-loop prototype or the 20-iteration cap. Current batching is a small exactly equivalent scheduling change, not a demonstrated large speed gain. Stored-observation alignment uncertainty still blocks a universal replacement.",
+    "tests": {
+      "current_with_batched_native_scores": {
+        "passed": 120
+      },
+      "one_loop_20": {
+        "passed": 71,
+        "failed": 3,
+        "deselected_library_identity": 3
+      },
+      "geometry_only_one_loop_ablation": {
+        "passed": 50,
+        "controlled_sequence_failed": 1,
+        "library_identity_failed": 3
+      },
+      "metric_live_comparison": {
+        "passed": 9,
+        "restored_hash_defect_failed": true,
+        "restored_live_summary_defect_failed": true
+      }
+    }
+  }
+}

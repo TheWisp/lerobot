@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>LeRobot GUI</title>
     <script>document.title = `LeRobot GUI [${window.location.host}]`;</script>
-    <link rel="stylesheet" href="/static/style.css?v=172">
-    <link rel="stylesheet" href="/static/flash_experiments.css?v=12">
+    <link rel="stylesheet" href="/static/style.css?v=173">
+    <link rel="stylesheet" href="/static/flash_experiments.css?v=13">
     <script type="importmap">{"imports":{"three":"/static/vendor/three.module.js"}}</script>
 </head>
 <body>
@@ -295,13 +295,15 @@
             </div>
             <div class="sidebar-resize-handle"></div>
             <div class="main run-main-split" id="run-main">
-                <section id="flash-experiment-view" aria-label="Tracker experiment playback">
-                    <h2 id="flash-experiment-title">Tracking experiments</h2>
-                    <div class="flash-experiment-tools"><button type="button" onclick="showFlashLive()">Live camera</button></div>
+                <section id="flash-experiment-view" aria-label="FLASH perception">
+                    <nav class="flash-source-tabs" aria-label="FLASH source">
+                        <button id="flash-source-examples" type="button" aria-pressed="true" onclick="showFlashExamples()">Video examples</button>
+                        <button id="flash-source-live" type="button" aria-pressed="false" onclick="showFlashLive()">Live camera</button>
+                    </nav>
+                    <h2 id="flash-experiment-title">Video examples</h2>
                     <div id="flash-experiment-detail">Select a recording from the list.</div>
                     <section id="flash-live-panel" hidden aria-label="Live tracking inspector">
                         <div class="flash-experiment-tools">
-                            <button type="button" onclick="hideFlashLive()">← Recordings</button>
                             <select id="flash-live-camera" aria-label="Live RGB-D camera"><option value="">Auto camera</option></select>
                             <button id="flash-live-start" type="button" onclick="startFlashLive()">Open camera</button>
                             <button id="flash-live-stop" type="button" onclick="stopFlashLive()" disabled>Stop camera</button>
@@ -395,28 +397,11 @@
                 </section>
                 <div class="rerun-viewer" id="rerun-viewer">
                     <div class="rerun-placeholder" id="rerun-placeholder">Camera view will appear here when a process is running</div>
-                    <section class="flash-tracker-panel" id="flash-tracker-panel" hidden aria-label="FLASH tracker inspection">
-                        <div class="flash-tracker-heading" id="flash-tracker-heading" title="Drag to move overlay"><strong>FLASH tracker inspection</strong><div class="flash-tracker-heading-actions"><span id="flash-tracker-mode">Live</span><button type="button" id="flash-tracker-collapse" onclick="toggleFlashTrackerPanel()" aria-expanded="true">Hide details</button></div></div>
-                        <div id="flash-tracker-content">Waiting for tracker data…</div>
-                    </section>
                     <!-- TODO: generalize this overlay — currently hardcoded for HVLA S2
                          subtask text. When we support multiple debug model types, this
                          should be driven by a model output schema (the model declares
                          its output fields + types, user picks which to overlay). -->
                     <div class="debug-model-overlay" id="debug-model-overlay"></div>
-                </div>
-                <div class="flash-tracker-replay-controls" id="flash-tracker-replay-controls" hidden>
-                    <button type="button" id="flash-tracker-play" onclick="toggleFlashReplay()">Play</button>
-                    <button type="button" class="flash-frame-step" onclick="stepFlashReplay(-1)" aria-label="Previous frame" title="Previous frame">‹</button>
-                    <div class="flash-replay-timeline">
-                        <input type="range" id="flash-tracker-scrub" min="0" max="0" value="0" oninput="seekFlashReplay(Number(this.value))" aria-label="FLASH recording time">
-                        <div id="flash-timeline-markers" class="flash-timeline-markers" aria-label="Demo events"></div>
-                        <div class="flash-timeline-legend"><span>● key frame</span><span>● grasp</span><span>● release</span></div>
-                    </div>
-                    <button type="button" class="flash-frame-step" onclick="stepFlashReplay(1)" aria-label="Next frame" title="Next frame">›</button>
-                    <span id="flash-tracker-frame">0 / 0</span>
-                    <label id="flash-track-tools" class="flash-track-tools" hidden><input id="flash-track-visible" type="checkbox" checked onchange="_flashDrawOverlay()">Points <input id="flash-track-trail" type="range" min="0" max="3" step="0.25" value="0.75" oninput="document.getElementById('flash-track-trail-value').textContent = this.value + 's'; _flashDrawOverlay()" aria-label="Point trail duration"><output id="flash-track-trail-value">0.75s</output></label>
-                    <button type="button" id="flash-demo-edit-toggle" onclick="toggleFlashReplayEditor()" hidden>Edit demo</button>
                 </div>
                 <div class="run-split-handle" id="run-split-handle"></div>
                 <!-- Below the divider, above the bottom tabs — the same place
@@ -903,13 +888,9 @@ nebius iam auth-public-key generate \
     <script src="/static/add_feature_dialog.js?v=6"></script>
     <script src="/static/charts.js?v=5"></script>
     <script src="/static/robot.js?v=27"></script>
-    <script src="/static/flash_live_tracking.js?v=12"></script>
-    <script src="/static/run.js?v=193"></script>
-    <script src="/static/flash_experiments.js?v=33"></script>
-    <script src="/static/flash_live.js?v=3"></script>
-    <script src="/static/flash_demo_editor.js?v=41"></script>
-    <script src="/static/flash_recorded_editor.js?v=7"></script>
-    <script src="/static/flash_observation_editor.js?v=6"></script>
+    <script src="/static/run.js?v=194"></script>
+    <script src="/static/flash_experiments.js?v=34"></script>
+    <script src="/static/flash_live.js?v=4"></script>
     <script src="/static/overlay_gate.js?v=1"></script>
     <script src="/static/mask_seed.js?v=4"></script>
     <script src="/static/overlay_pull_gate.js?v=3"></script>

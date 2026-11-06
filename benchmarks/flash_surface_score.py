@@ -37,9 +37,19 @@ def distance_statistics(values):
     }
 
 
+def save_surface_version(run, method, role, track, details):
+    """Retain only changed point clouds, outside the inference timer, for scoring."""
+    if details["map_version_after"] != details["map_version_used"]:
+        models = Path(run) / "surface_models" / method / role
+        models.mkdir(parents=True, exist_ok=True)
+        np.savez_compressed(models / f"{track.store.version:06d}.npz", points=track.store.points)
+
+
 def score_surface_trace(spec, truth, details, method, reference, *, run=None, role=None):
     """Score returned surfaces after initialization; no pose or model is altered."""
     result = {"frames_total": len(details) - 1, "frames_scored": 0}
+    if truth is None:
+        return {**result, "reason": "No reference poses"}
     if not spec:
         return {**result, "reason": "No full labelled surface model"}
     path = Path(spec["points_m"]).expanduser().resolve()

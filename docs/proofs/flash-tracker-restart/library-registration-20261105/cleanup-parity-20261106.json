@@ -1,0 +1,65 @@
+[
+  {
+    "scene": "flash-demo-dowel-ring",
+    "frames": 713,
+    "changed_fields": 0,
+    "examples": [],
+    "surface_differences": [],
+    "input_identical": true,
+    "image_matches_identical": true
+  },
+  {
+    "scene": "flash-demo-gamepad-cube",
+    "frames": 628,
+    "changed_fields": 0,
+    "examples": [],
+    "surface_differences": [],
+    "input_identical": true,
+    "image_matches_identical": true
+  },
+  {
+    "scene": "dexycb-drill-20201002_111923",
+    "frames": 74,
+    "changed_fields": 0,
+    "examples": [],
+    "surface_differences": [],
+    "input_identical": true,
+    "image_matches_identical": true
+  },
+  {
+    "scene": "dexycb-tomato-can-20201002_105506",
+    "frames": 68,
+    "changed_fields": 0,
+    "examples": [],
+    "surface_differences": [],
+    "input_identical": true,
+    "image_matches_identical": true
+  },
+  {
+    "scene": "laval-clock-interaction-hard",
+    "frames": 203,
+    "changed_fields": 0,
+    "examples": [],
+    "surface_differences": [],
+    "input_identical": true,
+    "image_matches_identical": true
+  },
+  {
+    "scene": "rig-yellow-block",
+    "frames": 75,
+    "changed_fields": 0,
+    "examples": [],
+    "surface_differences": [],
+    "input_identical": true,
+    "image_matches_identical": true
+  },
+  {
+    "scene": "ycb-mustard_easy_00_02",
+    "frames": 181,
+    "changed_fields": 0,
+    "examples": [],
+    "surface_differences": [],
+    "input_identical": true,
+    "image_matches_identical": true
+  }
+]

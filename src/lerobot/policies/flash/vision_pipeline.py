@@ -107,7 +107,6 @@ class VisionPipelineConfig:
                 self.pipeline_surface_frames,
                 self.compiled_surface_fit,
                 self.reuse_surface_search,
-                self.shape.batch_jacobian,
                 self.shape.require_full_mask_coverage,
                 self.shape.scene_depth_constraints,
                 self.shape.prefer_observed_overlap,
@@ -136,7 +135,6 @@ class VisionPipelineConfig:
         for key, value in asdict(self.shape).items():
             if key in {
                 "registration",
-                "batch_jacobian",
                 "require_full_mask_coverage",
                 "scene_depth_constraints",
                 "prefer_observed_overlap",
@@ -177,7 +175,17 @@ class VisionPipelineConfig:
             ("motion", SurfaceMotionConfig),
         ):
             if key in values and isinstance(values[key], dict):
-                values[key] = kind(**values[key])
+                section = dict(values[key])
+                if key == "shape":
+                    # Old recordings remain labelled by their stored provenance.
+                    # Reruns use the supported solver and save its actual settings.
+                    section.pop("batch_jacobian", None)
+                    section.pop("max_correction_iterations", None)
+                    registration = dict(section.get("registration", {}))
+                    if registration.get("backend") == "scipy":
+                        registration["backend"] = "visible_icp"
+                    section["registration"] = registration
+                values[key] = kind(**section)
         return cls(**values)
 
     def to_dict(self):

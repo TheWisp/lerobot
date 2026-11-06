@@ -11,29 +11,24 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from dataclasses import dataclass, field, replace
-from inspect import signature
 from itertools import permutations
+from numbers import Integral
 from os import cpu_count
 
 import cv2
 import numpy as np
 from scipy.ndimage import map_coordinates
-from scipy.optimize import least_squares
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import connected_components
 from scipy.spatial import ConvexHull, cKDTree
-from scipy.spatial.transform import Rotation
 
-from .surface_observation import move, spatial_sample
+from .surface_observation import move, reliable_observation_depth, spatial_sample
 from .surface_registration import LibraryConfig
-
-# SciPy < 1.16 remains supported: use its original scalar derivative path.
-_HAS_SOLVER_WORKERS = "workers" in signature(least_squares).parameters
 
 
 @dataclass(frozen=True)
 class ShapeConfig:
-    registration: LibraryConfig = field(default_factory=lambda: LibraryConfig(backend="scipy"))
+    registration: LibraryConfig = field(default_factory=LibraryConfig)
     # Observation tolerances inherited from the existing depth experiment.
     depth_tolerance_m: float = 0.005
     surface_spacing_m: float = 0.003
@@ -57,13 +52,14 @@ class ShapeConfig:
     max_fit_points: int = 2048
     # Amortize cKDTree's per-query thread startup over this many residual points.
     nn_queries_per_worker: int = 512
-    # Exact finite-difference candidates share nearest-neighbour tree queries.
-    batch_jacobian: bool = True
     batch_query_workers: int = 8
 
     def __post_init__(self):
         if isinstance(self.registration, dict):
             object.__setattr__(self, "registration", LibraryConfig(**self.registration))
+        value = self.max_evaluations
+        if not isinstance(value, Integral) or isinstance(value, bool) or value < 1:
+            raise ValueError("max_evaluations must be an integer >= 1")
 
 
 @dataclass(frozen=True)
@@ -104,6 +100,7 @@ class PreparedTargetSurface:
     points: np.ndarray
     tree: cKDTree
     queries: np.ndarray
+    depth: np.ndarray
     outside_mask: np.ndarray
     mask_outline: np.ndarray
     scene_nearest_depth: np.ndarray
@@ -111,8 +108,12 @@ class PreparedTargetSurface:
     @classmethod
     def build(cls, observation: dict, config: ShapeConfig):
         points = observation.get("all_surface_points", observation["obs"]["points"])
-        raw = observation.get("scene_depth", observation["depth"])
-        raw = np.where(np.isfinite(raw) & (raw > 0), raw, 0).astype(np.float32)
+        depth = reliable_observation_depth(observation)
+        raw = (
+            reliable_observation_depth(observation, observation["scene_depth"])
+            if "scene_depth" in observation
+            else depth
+        )
         radius = int(np.ceil(config.mask_boundary_tolerance_px))
         scene_nearest_depth = cv2.erode(
             raw,
@@ -129,6 +130,7 @@ class PreparedTargetSurface:
             points,
             cKDTree(points),
             points[spatial_sample(points, config.max_fit_points)],
+            depth,
             cv2.distanceTransform((~mask).astype(np.uint8), cv2.DIST_L2, 5),
             mask_pixels[ConvexHull(mask_pixels).vertices],
             scene_nearest_depth,
@@ -238,6 +240,7 @@ class WholeSurfaceFit:
         # residual sampling, including small but distinctive extremities.
         self.envelope = prepared_reference.envelope
         self.outside_mask = prepared_target.outside_mask
+        self.depth = prepared_target.depth
         self.scene_nearest_depth = prepared_target.scene_nearest_depth
         self.mask_outline = prepared_target.mask_outline
         if reference_observation is not None and reference_views:
@@ -334,7 +337,7 @@ class WholeSurfaceFit:
             self._residual_cache.popitem(last=False)
         return residual
 
-    def batch_residuals(self, poses: list[np.ndarray]) -> list[np.ndarray]:
+    def batch_residuals(self, poses: list[np.ndarray], *, include_coverage=True) -> list[np.ndarray]:
         """Same residuals, with two exact tree searches for all candidate poses."""
         if not poses:
             return []
@@ -346,12 +349,18 @@ class WholeSurfaceFit:
                 np.concatenate([(self.target_queries - pose[:3, 3]) @ pose[:3, :3] for pose in poses]),
                 workers=workers,
             )[0]
-            if not self.reverse_fits
+            if include_coverage and not self.reverse_fits
             else np.zeros(len(poses) * len(self.target_queries))
         )
+        # Prepare the reverse observations in a batch too. Otherwise every
+        # forward candidate immediately starts another scalar tree query.
+        if self.reverse_fits:
+            inverses = np.linalg.inv(np.asarray(poses))
+            for camera, fit in self.reverse_fits:
+                fit.batch_residuals(list(camera @ inverses), include_coverage=False)
         return [
             self._remember_residual(
-                (self.config, True, pose.tobytes()),
+                (self.config, include_coverage, pose.tobytes()),
                 self._residual_with_distances(pose, points, model, target),
             )
             for pose, points, model, target in zip(
@@ -412,7 +421,7 @@ class WholeSurfaceFit:
                 model_distance,
                 target_distance,
                 mask_distance,
-                self.observation["depth"],
+                self.depth,
                 self.observation["mask"],
                 uv,
                 self.config.depth_tolerance_m,
@@ -466,7 +475,7 @@ class WholeSurfaceFit:
                 predicted,
                 uv,
                 mask_distance,
-                self.observation["depth"],
+                self.depth,
                 self.observation["mask"],
                 self.config.depth_tolerance_m,
                 self.config.mask_boundary_tolerance_px,
@@ -484,7 +493,7 @@ class WholeSurfaceFit:
         x1, y1 = np.minimum(x0 + 1, width - 1), np.minimum(y0 + 1, height - 1)
         fx, fy = cx - x0, cy - y0
         weights = np.column_stack(((1 - fx) * (1 - fy), fx * (1 - fy), (1 - fx) * fy, fx * fy))
-        depth = self.observation["depth"]
+        depth = self.depth
         rays = np.column_stack((depth[y0, x0], depth[y0, x1], depth[y1, x0], depth[y1, x1]))
         mask = self.observation["mask"]
         object_rays = np.column_stack((mask[y0, x0], mask[y0, x1], mask[y1, x0], mask[y1, x1]))
@@ -697,124 +706,25 @@ class WholeSurfaceFit:
     def score(self, pose: np.ndarray) -> float:
         residual = self.residual(pose)
         cost = float(np.dot(residual, residual))
-        if self.config.registration.backend != "scipy" and self.config.registration.appearance_weight:
+        if self.config.registration.appearance_weight:
             from .surface_registration import LibraryMatcher
 
             cost += self.config.registration.appearance_weight * LibraryMatcher.appearance_cost(self, pose)
         return cost
 
-    def _refine_visible_correspondences(self, initial, max_iterations):
-        """Correct a rejected local fit without differentiating visibility.
-
-        Freeze measured correspondences for each rigid update, then recompute
-        them. Otherwise the optimizer can reduce its error by moving samples
-        across an occlusion/mask boundary instead of aligning them. Unknown or
-        hidden samples supply no pairs; measured empty space requires a move
-        toward the observed object, never toward the background depth itself.
-        The result still has to pass the ordinary acceptance checks.
-        """
-        pose = initial.copy()
-
-        def pairs(fit, predicted):
-            visible, _, _ = fit._projection_evidence(predicted)
-            _, _, contradicted = fit._scene_depth_evidence(predicted)
-            weight = np.maximum(visible, contradicted)
-            distance, indices = fit.target_tree.query(predicted)
-            weight[distance > fit.config.max_surface_distance_m] = 0
-            return fit.target[indices], weight / len(predicted)
-
-        for _iteration in range(max_iterations):
-            predicted = move(self.reference, pose)
-            target, weight = pairs(self, predicted)
-            sources, targets, weights = [predicted], [target], [weight]
-            reverse_pairs = []
-            for camera, reverse in self.reverse_fits:
-                predicted_old = move(reverse.reference, camera @ np.linalg.inv(pose))
-                target_old, old_weight = pairs(reverse, predicted_old)
-                reverse_pairs.append(
-                    (move(target_old, pose @ np.linalg.inv(camera)), reverse.reference, old_weight)
-                )
-            if reverse_pairs:
-                # Match the existing max-over-views objective: repeating an
-                # earlier view must not multiply its influence on a point.
-                errors = np.asarray([np.sum((a - b) ** 2, axis=1) * w for a, b, w in reverse_pairs])
-                chosen, indices = errors.argmax(axis=0), np.arange(errors.shape[1])
-                sources.append(np.asarray([a for a, _, _ in reverse_pairs])[chosen, indices])
-                targets.append(reverse_pairs[0][1])
-                weights.append(np.asarray([w for _, _, w in reverse_pairs])[chosen, indices])
-            source, target, weight = np.concatenate(sources), np.concatenate(targets), np.concatenate(weights)
-            active = weight > 0
-            if np.count_nonzero(active) < 3:
-                break
-            source, target, weight = source[active], target[active], weight[active]
-            weight /= weight.sum()
-            x, y = np.sum(source * weight[:, None], axis=0), np.sum(target * weight[:, None], axis=0)
-            cross = ((source - x) * weight[:, None]).T @ (target - y)
-            if np.linalg.matrix_rank(cross) < 2:
-                break
-            u, _, vh = np.linalg.svd(cross)
-            rotation = (u @ np.diag([1, 1, np.linalg.det(u @ vh)]) @ vh).T
-            step = np.eye(4)
-            step[:3, :3], step[:3, 3] = rotation, y - rotation @ x
-            pose = step @ pose
-            yield pose.copy()
-            if np.linalg.norm(step - np.eye(4)) < self.config.solver_tolerance:
-                break
-
     def _solve(self, initial, max_evaluations):
-        """Propose numerical iterates. This routine neither accepts nor publishes."""
-        if self.config.registration.backend != "scipy":
-            from .surface_registration import LibraryMatcher
+        """Propose poses; shared search owns validation and selection."""
+        if self.config.registration.backend == "visible_icp":
+            from .surface_rigid_fit import solve
 
-            if self._registration_solver is None:
-                self._registration_solver = LibraryMatcher(self.config.registration)
-            solver = self._registration_solver
-            pose, detail = solver.refine(self, initial, max_evaluations=max_evaluations)
-            return pose, detail, [(self.score(p), p) for p in solver._local.proposals]
-        center = move(self.reference, initial).mean(0)
-        iterates = []
+            return solve(self, initial, max_evaluations)
+        from .surface_registration import LibraryMatcher
 
-        def record(pose, residual):
-            iterates.append((float(residual @ residual), pose.copy()))
-            return residual
-
-        def pose_from_delta(delta):
-            rotation = Rotation.from_rotvec(delta[:3]).as_matrix()
-            pose = initial.copy()
-            pose[:3, :3] = rotation @ initial[:3, :3]
-            pose[:3, 3] = rotation @ (initial[:3, 3] - center) + center + delta[3:]
-            return pose
-
-        def batch_map(_fun, deltas):
-            poses = [pose_from_delta(delta) for delta in deltas]
-            return [record(p, r) for p, r in zip(poses, self.batch_residuals(poses), strict=True)]
-
-        def residual(delta):
-            pose = pose_from_delta(delta)
-            return record(pose, self.residual(pose))
-
-        batched = self.config.batch_jacobian and _HAS_SOLVER_WORKERS
-        solution = least_squares(
-            residual,
-            np.zeros(6),
-            x_scale="jac",
-            max_nfev=max_evaluations,
-            ftol=self.config.solver_tolerance,
-            xtol=self.config.solver_tolerance,
-            gtol=self.config.solver_tolerance,
-            **({"workers": batch_map} if batched else {}),
-        )
-        return (
-            pose_from_delta(solution.x),
-            {
-                "evaluations": solution.nfev,
-                "converged": bool(solution.success),
-                "batched_jacobian": batched,
-                "fit_reference_points": len(self.reference_queries),
-                "fit_target_points": len(self.target_queries),
-            },
-            iterates,
-        )
+        if self._registration_solver is None:
+            self._registration_solver = LibraryMatcher(self.config.registration)
+        solver = self._registration_solver
+        pose, detail = solver.refine(self, initial, max_evaluations=max_evaluations)
+        return pose, detail, [(self.score(p), p) for p in solver._local.proposals]
 
     def search(
         self,

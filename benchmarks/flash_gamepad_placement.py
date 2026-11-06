@@ -93,7 +93,7 @@ def outline_score(reference, current, k, pose):
     }
 
 
-def replay(method, frame=540, *, clean_start=False, iterations=20):
+def replay(method, frame=540, *, clean_start=False, iterations=20, matcher=None):
     """Run actual observation cleanup, local solver and common geometry check.
 
     history: recorded pre-frame map and seed, without rerunning the occlusion.
@@ -122,7 +122,7 @@ def replay(method, frame=540, *, clean_start=False, iterations=20):
     shape = replace(
         config.shape,
         registration=LibraryConfig(
-            "scipy" if method == "baseline" else method, iterations_per_level=iterations
+            matcher or ("visible_icp" if method == "baseline" else method), iterations_per_level=iterations
         ),
     )
     # Match the real session: its first measured RGB-D view remains an appearance
@@ -196,7 +196,7 @@ def rerun_clear_interval(source_run, output, method):
         settings = Path(directory) / "settings.json"
         recipe = metadata["settings"]
         recipe["config"]["shape"]["registration"] = asdict(
-            LibraryConfig("scipy" if method == "baseline" else method)
+            LibraryConfig("visible_icp" if method == "baseline" else method)
         )
         settings.write_text(json.dumps(recipe))
         stack.enter_context(

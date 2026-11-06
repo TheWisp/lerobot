@@ -9,7 +9,7 @@ Status: experimental implementation; accuracy and runtime remain limited.
 differ. The live adapter uses aligned camera RGB-D and the same SAM3 adapter as
 the Data tab; recorded experiments use saved RGB-D/masks. Identical inputs and
 settings produce identical poses, surfaces, groups and covariance in parity tests.
-Fresh sessions use shared **LK**, SciPy fitting, groups, growing surface and Kalman
+Fresh sessions use shared **LK**, the single-loop **Surface fit**, groups, growing surface and Kalman
 with the current geometry checks. UFM and the library solvers remain selectable.
 Saved experiments retain their actual settings; playback never reruns inference.
 
@@ -18,6 +18,13 @@ to the current camera, its evidence/uncertainty, and versioned measured surface
 patches. The initial origin never moves when the surface grows. Image and 3D views
 now use the same fixed display axes. Full labelled models, when available, add a
 secondary nearest-surface distance score; labelled pose error remains primary.
+Every new benchmark report includes surface median/p90 distance, the fraction of
+points within 10 mm, and scored-frame coverage alongside pose availability and
+pose error. Runtime replays retain the actual grown surface for this evaluation;
+scoring and archival are outside inference timing. Without a full labelled model
+or pose labels, the surface metric is explicitly unscored. Differences of a few
+millimetres alone do not establish a meaningful regression: inspect the error
+tail, availability, geometry conflicts and label quality too.
 
 **Robot execution is not connected to this new session yet.** The older demo
 compiler/run engine still uses its earlier representation. This live view is a
@@ -44,8 +51,11 @@ override that evidence. This applies to UFM, LK and future 2D trackers alike.
   usable object observation remains, a valid group or gripper relationship can
   still supply a **predicted** pose; otherwise report lost.
 - Apply the same mask/depth quality checks to every hypothesis. Bad or missing
-  depth is unknown, not evidence against an object behind it. Mask and depth
-  are not infallible; deciding their reliability remains part of the
+  depth is unknown. Once cleanup excludes a reading, fitting, pose rejection
+  and retained views all leave that reading out. The full segmentation outline
+  and reliable background depth remain available. Pixel validity is recorded
+  before point subsampling, so sampling fewer points does not create holes.
+  Mask and depth are not infallible; deciding their reliability remains part of the
   [uncertainty problem](#uncertainty-and-correction).
 - Add **measured** new surface only after checking its alignment. Hidden frames
   can update pose through prediction, but provide no new object surface.
@@ -164,22 +174,46 @@ it does not contradict the measurements; it cannot update the surface.
 residual-array layout and the uncertainty switch. Rechecking a Kalman-adjusted
 pose is necessary because fusion changes its position/orientation.
 
-**Selectable 3D matchers (2026-11-05):** FLASH → Pipeline settings → Surface
-matcher chooses the current SciPy fitter, small_gicp GICP, Open3D point-to-plane,
-or Open3D geometry + color. Rerun the scene to compute that choice; playback
-reports the matcher actually used. SciPy remains the default. Optional libraries
-must be installed in the benchmark worker's Python environment (tested with
-small_gicp 1.0.1 and Open3D 0.20.0).
+**Acceptance and optimization have different jobs.** A returned measured pose
+must pass the geometry checks: no coherent protrusion into measured empty space,
+and agreement where the two measured surfaces are mutually visible, within the
+configured depth/boundary uncertainty. Texture similarity and outline coverage
+rank poses that pass; neither can compensate for a failed geometry check.
+Uncovered outline is a preference, because the saved surface may be incomplete.
+Missing depth and occluded surface provide no direct contradiction. If no tested
+pose passes, return no measured pose. These rules are exercised with real RGB-D
+checks in [matching criteria tests](../../../../../tests/policies/flash/test_matching_criteria.py),
+including a better texture score attached to an impossible pose.
 
-All use the shared search, depth/mask rejection, Kalman and growth checks. Their
-numerical objectives differ: the library solver does not directly optimize the
-UFM/group residual. Those sources supply starting poses and candidate ranking.
-The library paths retain a point-to-point intermediate before plane/GICP fitting;
-hidden surface points do not get paired with the visible face. They compare
-measured colors from the first and latest connected observations to help rank
-geometrically valid poses. Earlier measured colors take precedence, so a drifting
-pose does not immediately repaint the stored surface. This is an experimental
-appearance cost, not calibrated confidence; it cannot override depth rejection.
+**Surface fitting:** the default `visible_icp` solver refreshes visible point
+correspondences and applies one weighted rigid update per iteration. Array and
+compiled operations perform transforms, nearest-neighbour queries and SVD.
+`shape.max_evaluations` caps iterations per start; `solver_tolerance` stops small
+updates. There is no second correction loop or numerical six-axis Jacobian.
+
+The shared matcher tries the image/group prediction and previous pose, with
+bounded recovery starts when needed. It checks candidate geometry and ranks only
+passing poses. Kalman fusion and the final geometry check remain downstream;
+surface growth has its own stricter checks. Removing the old solver did not
+change these checks or the reviewed single-loop results.
+
+FLASH offers **Video examples** and **Live camera**, each with image and 3D modes.
+Both use `SurfaceFrameSession`; the retired editor and separate camera tracker
+are no longer GUI entry points. The robot compiler/execution APIs are retained
+for research, not exposed as a third inspector.
+
+Pipeline settings also retain small_gicp and Open3D as explicit comparison
+solvers. They use the same geometry checks, but different numerical objectives.
+Open3D still misses the 5 mm limit in recorded gamepad placement tests; it is not
+the default. Hidden surface points must not be paired with a visible front face.
+Measured image colours help rank geometrically valid poses and cannot override
+depth rejection.
+
+Old playback keeps the solver name actually recorded. When rerunning an old
+SciPy configuration, the loader selects `visible_icp`, drops the removed
+Jacobian/correction-budget options, and saves the normalized configuration.
+It does not relabel or change the previous result. Historical comparisons live
+in the research log; reproducing the retired solver requires its old revision.
 
 Only the visible part of the saved surface must match the current measured
 surface. Outside the visible mask, nearer or unknown depth can hide a point;

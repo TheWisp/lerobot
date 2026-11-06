@@ -8,7 +8,6 @@ No robot or motor API is imported. State files are atomic, bounded snapshots.
 from __future__ import annotations
 
 import argparse
-import base64
 import json
 import signal
 import sys
@@ -21,8 +20,8 @@ from threading import Event, Lock, Thread
 import cv2
 import numpy as np
 
-from .appearance import Sam3MaskSource
 from .causal_service import CausalTrackingConfig, build_causal_pose_service
+from .live_surface_io import image_snapshot, new_selection, seed_frame, write_snapshot
 from .perception import LatestPoseStore, LatestRGBDFrameStore, ObjectReference, ReferenceSnippet, RGBDFrame
 from .perception_step import PerceptionPipeline, PerceptionResult, PerceptionRunner
 from .surface_tracking import load_ufm
@@ -100,62 +99,6 @@ class RGBDTrace:
 
     def status(self) -> dict:
         return {"path": str(self.path), "frames": self.frames, "complete": self.complete}
-
-
-def write_snapshot(path: Path, value: dict) -> None:
-    temporary = path.with_suffix(".tmp")
-    temporary.write_text(json.dumps(value, allow_nan=False))
-    temporary.replace(path)
-
-
-def image_snapshot(frame: RGBDFrame) -> dict:
-    ok, encoded = cv2.imencode(".jpg", cv2.cvtColor(frame.rgb, cv2.COLOR_RGB2BGR))
-    if not ok:
-        raise RuntimeError("Could not encode the camera image")
-    return {
-        "frame_id": frame.frame_id,
-        "captured_s": frame.source_time_s,
-        "width": frame.rgb.shape[1],
-        "height": frame.rgb.shape[0],
-        "intrinsics": frame.intrinsics.tolist(),
-        "depth_m_per_unit": frame.depth_m_per_unit,
-        "image": "data:image/jpeg;base64," + base64.b64encode(encoded).decode(),
-    }
-
-
-def seed_frame(command: dict, frozen: RGBDFrame | None, latest: RGBDFrame | None) -> RGBDFrame:
-    """Never reinterpret a click on a later camera image."""
-    if command.get("point") is not None:
-        if frozen is None or command.get("frame_id") != frozen.frame_id:
-            raise ValueError("Freeze the camera image again before selecting a point")
-        x, y = command["point"]
-        if not (0 <= x < frozen.rgb.shape[1] and 0 <= y < frozen.rgb.shape[0]):
-            raise ValueError("The selected point is outside the camera image")
-        return frozen
-    frame = frozen if frozen is not None else latest
-    if frame is None:
-        raise ValueError("Wait for the camera image")
-    return frame
-
-
-def new_selection(adapter, label: str, point, sequence: int):
-    """Reuse weights, explicitly forget the old instance, and advance click IDs.
-
-    SAM's video reset preserves clicked masks for scrub/recovery; selecting a
-    different object must clear those masks through its public control API.
-    """
-    sequence += 1
-    adapter.set_control({"click_seq": sequence, "clicks": {"debug": []}})
-    adapter.reset()
-    sequence += 1
-    source = Sam3MaskSource(
-        {"object": label},
-        camera_id="debug",
-        seed_points_by_role={"object": tuple(point)} if point else None,
-        click_sequence_start=sequence,
-        adapter_factory=lambda **_: adapter,
-    )
-    return source, sequence
 
 
 def debug_reference(role: str, frame: RGBDFrame) -> ObjectReference:

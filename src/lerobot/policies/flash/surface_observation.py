@@ -34,8 +34,8 @@ class SurfaceObservationConfig:
     # This can reject a real minority surface far from the dominant depth layer;
     # benchmark it together with removal of the largest-component heuristic.
     depth_outlier_sigma: float | None = None
-    # Experimental: withhold rejected depth readings from pose checks too.
-    # Keep the silhouette unchanged; zero depth means unknown, not free space.
+    # Legacy configuration field, accepted for saved runs. Rejected depth is
+    # now always unknown in both fitting and validation, regardless of this flag.
     filtered_depth_for_fitting: bool = False
     validation_tile_px: int = 4
 
@@ -47,6 +47,26 @@ class SurfaceFrameFilters:
     depth: np.ndarray
     reliable: np.ndarray
     smoothed: np.ndarray
+
+
+def reliable_observation_depth(observation: dict, depth: np.ndarray | None = None) -> np.ndarray:
+    """Withheld readings are missing evidence, not unmatched object surface.
+
+    Use pixel validity before point sampling, so voxel subsampling does not
+    create artificial depth holes. Outside the object keep reliable scene depth
+    for occlusion/empty-space checks. Older raw observations without cleanup
+    metadata retain their finite positive readings. The input is never modified.
+    """
+    depth = observation["depth"] if depth is None else depth
+    valid = np.isfinite(depth) & (depth > 0)
+    measured = observation["obs"]
+    if "depth_reliable" in measured:
+        valid &= measured["depth_reliable"]
+    if "valid_image" in measured:
+        valid &= ~observation["mask"] | measured["valid_image"]
+    if "depth_range_rejected" in measured:
+        valid &= ~measured["depth_range_rejected"]
+    return np.where(valid, depth, 0).astype(np.float32, copy=False)
 
 
 def depth_quality_mask(depth: np.ndarray, mask: np.ndarray, config: SurfaceObservationConfig) -> np.ndarray:

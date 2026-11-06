@@ -11,7 +11,6 @@ import sys
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict
 from pathlib import Path
 from typing import Literal
 
@@ -19,7 +18,6 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from lerobot.policies.flash.causal_service import CausalTrackingConfig, default_causal_tracking_config
 from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig
 
 router = APIRouter(prefix="/api/run/flash/tracking", tags=["flash-tracking"])
@@ -29,7 +27,7 @@ _directory: Path | None = None
 
 class TrackingStart(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
-    engine: Literal["legacy", "experiment"] = "legacy"
+    engine: Literal["experiment"] = "experiment"
     pipeline_settings: dict | None = None
     method: Literal["conditioned_fixed", "conditioned_growing", "group_fixed", "group_growing"] = (
         "group_growing"
@@ -39,56 +37,34 @@ class TrackingStart(BaseModel):
     height: int = Field(default=720, gt=0)
     fps: int = Field(default=30, gt=0)
     preview_fps: int = Field(default=10, gt=0)
-    vision_pipeline: VisionPipelineConfig = Field(default_factory=VisionPipelineConfig)
-    group_fallback: bool = False
-    causal_tracking: dict = Field(default_factory=lambda: asdict(default_causal_tracking_config()))
 
     @model_validator(mode="before")
     @classmethod
-    def migrate_filter_settings(cls, values):
-        # Accept the original debugger payload, but publish only one canonical
-        # configuration so snapshots can be used for preparation and live runs.
-        values = dict(values)
-        legacy = {
-            key: values.pop(key)
-            for key in ("observation", "shape", "motion", "sam_resolution")
-            if key in values
-        }
-        if legacy:
-            pipeline = dict(values.get("vision_pipeline") or {})
-            if set(legacy) & set(pipeline):
-                raise ValueError("provide each tracking setting only once")
-            values["vision_pipeline"] = {**pipeline, **legacy}
-        if isinstance(values.get("vision_pipeline"), dict):
-            try:
-                values["vision_pipeline"] = VisionPipelineConfig.from_dict(values["vision_pipeline"])
-            except TypeError as exc:
-                raise ValueError(str(exc)) from exc
-        if "causal_tracking" in values:
-            CausalTrackingConfig.from_config(values["causal_tracking"])
-        if values.get("engine") == "experiment":
-            from lerobot.policies.flash.surface_session_config import defaults, validate
+    def shared_pipeline_settings(cls, values):
+        from lerobot.policies.flash.surface_session_config import defaults, validate
 
-            values["pipeline_settings"] = validate(values.get("pipeline_settings") or defaults())
-            settings = values["pipeline_settings"]
-            if settings["surface_experiment"] is None:
-                raise ValueError("Live surface inspection requires a surface experiment")
-            if (
-                values.get("method", "group_growing").startswith("group_")
-                and settings["group_experiment"] is None
-            ):
-                raise ValueError("Selected method requires group settings")
+        values = dict(values)
+        settings = validate(values.get("pipeline_settings") or defaults())
+        if VisionPipelineConfig.from_dict(settings["config"]).backend != "surface":
+            raise ValueError("Camera inspection requires the shared surface pipeline")
+        if settings["surface_experiment"] is None:
+            raise ValueError("Live surface inspection requires surface settings")
+        if (
+            values.get("method", "group_growing").startswith("group_")
+            and settings["group_experiment"] is None
+        ):
+            raise ValueError("Selected method requires group settings")
+        values["pipeline_settings"] = settings
         return values
 
 
 class TrackingControl(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
-    action: Literal["freeze", "clear", "select", "record"]
+    action: Literal["freeze", "clear", "select"]
     id: str
     prompt: str = ""
     point: tuple[float, float] | None = None
     frame_id: int | None = None
-    duration_s: float | None = Field(default=None, gt=0, le=120)
 
 
 def _python() -> str:
@@ -133,10 +109,6 @@ async def cameras() -> dict:
 async def start(req: TrackingStart) -> dict:
     from . import run
 
-    if req.vision_pipeline.backend != "surface":
-        raise HTTPException(
-            400, "Camera-only inspection uses a local surface reference; appearance needs a prepared demo"
-        )
     async with run._launch_lock:
         run._ensure_no_active_process()
         global _directory
@@ -155,10 +127,9 @@ async def start(req: TrackingStart) -> dict:
         from .robot import release_preview_cameras
 
         await asyncio.get_running_loop().run_in_executor(_io, release_preview_cameras)
-        module = "live_surface_worker" if req.engine == "experiment" else "tracking_debug_worker"
         await run._launch_subprocess(
-            [_python(), "-u", "-m", f"lerobot.policies.flash.{module}", str(_directory)],
-            command="flash_surface_live" if req.engine == "experiment" else "flash_tracking",
+            [_python(), "-u", "-m", "lerobot.policies.flash.live_surface_worker", str(_directory)],
+            command="flash_surface_live",
             config=req.model_dump(),
         )
         return {"status": "started"}
@@ -169,16 +140,10 @@ async def control(req: TrackingControl) -> dict:
     from . import run
 
     proc = run._active_process
-    if (
-        run._active_command not in {"flash_tracking", "flash_surface_live"}
-        or proc is None
-        or proc.returncode is not None
-    ):
+    if run._active_command != "flash_surface_live" or proc is None or proc.returncode is not None:
         raise HTTPException(409, "Open the tracking camera first")
     if req.action == "select" and req.point is None and not req.prompt.strip():
         raise HTTPException(400, "Enter an object name or select a point")
-    if req.action == "record" and req.duration_s is None:
-        raise HTTPException(400, "Set a diagnostic recording duration")
     if "." in req.prompt:
         raise HTTPException(400, "Select one object; the name must not contain a period")
     try:
@@ -194,7 +159,7 @@ async def state() -> dict:
     from . import run
 
     directory = _directory
-    running = run._active_command in {"flash_tracking", "flash_surface_live"} and run.is_run_active()
+    running = run._active_command == "flash_surface_live" and run.is_run_active()
 
     def read():
         result = {"running": running, "server_time_s": time.perf_counter()}
@@ -216,7 +181,7 @@ async def state() -> dict:
 async def stop() -> dict:
     from . import run
 
-    if run._active_command not in {"flash_tracking", "flash_surface_live"} or not run.is_run_active():
+    if run._active_command != "flash_surface_live" or not run.is_run_active():
         return {"status": "stopped"}
     return await run.stop_process()
 

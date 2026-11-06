@@ -141,7 +141,28 @@ class GroupHints:
         shape_config=None,
         reference_views=(),
         surface_reference=None,
+        prepared_geometry=None,
     ):
+        geometry = None
+
+        def measured_geometry():
+            nonlocal geometry
+            if geometry is None:
+                shared = prepared_geometry
+                geometry = WholeSurfaceFit(
+                    self.reference if surface_reference is None else surface_reference,
+                    observation,
+                    frame.intrinsics,
+                    shape_config or ShapeConfig(),
+                    reference_views=shared.reference_views if shared is not None else reference_views,
+                    prepared_reference=shared.prepared_reference if shared is not None else None,
+                    prepared_target=shared.prepared_target if shared is not None else None,
+                    prepared_reverse_fits=shared.reverse_fits if shared is not None else None,
+                    fit_kernels=shared.fit_kernels if shared is not None else None,
+                    search_pool=shared.search_pool if shared is not None else None,
+                )
+            return geometry
+
         previous_scene, previous_object_support = self.previous_scene, self.object_support
         self.previous_scene = scene
         self.environment_prediction = None
@@ -223,13 +244,7 @@ class GroupHints:
         environment_scene = select(scene, outside)
         environment_pose, environment_indices = self._predict(self.environment, environment_scene)
         if environment_pose is not None and observation is not None and self.uncertainty_config.enabled:
-            geometry = WholeSurfaceFit(
-                self.reference if surface_reference is None else surface_reference,
-                observation,
-                frame.intrinsics,
-                shape_config or ShapeConfig(),
-                reference_views=reference_views,
-            )
+            geometry = measured_geometry()
             check = check_surface_contradiction(
                 geometry, camera_from_base @ environment_pose, self.uncertainty_config
             )
@@ -269,13 +284,7 @@ class GroupHints:
                 # measured surface before discarding established support.
                 object_supported = True
                 if observation is not None:
-                    geometry = WholeSurfaceFit(
-                        self.reference if surface_reference is None else surface_reference,
-                        observation,
-                        frame.intrinsics,
-                        shape_config or ShapeConfig(),
-                        reference_views=reference_views,
-                    )
+                    geometry = measured_geometry()
                     object_cost = geometry.score(camera_from_base @ object_pose)
                     environment_cost = geometry.score(camera_from_base @ environment_pose)
                     details["separation_surface_costs"] = {

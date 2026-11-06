@@ -1,4 +1,4 @@
-/* A list and one player. The old editor remains accessible, outside this view. */
+/* Two sources, one shared tracker: recorded examples and a live RGB-D camera. */
 #flash-experiment-sidebar, #flash-experiment-view { display: none; }
 #tab-run.flash-experiments #run-sidebar { width: 280px; min-width: 210px; }
 #tab-run.flash-experiments .run-form { padding: 10px; min-height: 0; overflow: hidden; }
@@ -109,3 +109,9 @@
 .flash-pipeline-settings textarea { display: block; box-sizing: border-box; width: 100%; height: 38vh; margin: 12px 0; font: 13px monospace; background: #101820; color: #eee; padding: 12px; }
 .flash-pipeline-settings table { width: 100%; font-size: 12px; border-collapse: collapse; }
 .flash-pipeline-settings th, .flash-pipeline-settings td { text-align: left; border-bottom: 1px solid #657488; padding: 6px; overflow-wrap: anywhere; }
+
+.flash-source-tabs { display: flex; gap: 8px; margin-bottom: 12px; }
+.flash-source-tabs button { padding: 8px 16px; border: 1px solid #31516c; border-radius: 5px; background: #16263c; color: #d8e4f3; cursor: pointer; }
+.flash-source-tabs button[aria-pressed="true"] { background: #254363; border-color: #72b7ff; }
+#tab-run.flash-live-source #run-sidebar, #tab-run.flash-live-source .sidebar-resize-handle { display: none; }
+#flash-live-panel { overflow: auto; min-height: 0; }

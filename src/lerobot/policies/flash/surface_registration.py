@@ -15,7 +15,7 @@ import numpy as np
 from .surface_observation import move
 
 MATCHERS = {
-    "scipy": "Current fitter (SciPy)",
+    "visible_icp": "Surface fit",
     "small_gicp": "small_gicp — GICP",
     "open3d_plane": "Open3D — point-to-plane",
     "open3d_color": "Open3D — geometry + color",
@@ -24,7 +24,7 @@ MATCHERS = {
 
 @dataclass(frozen=True)
 class LibraryConfig:
-    backend: str = "small_gicp"
+    backend: str = "visible_icp"
     voxel_sizes_m: tuple[float, ...] = (0.006, 0.003)
     iterations_per_level: int = 20
     correspondence_voxels: float = 3.0
@@ -81,8 +81,10 @@ def measured_colors(points, observation, intrinsics, camera_from_reference, tole
 
 
 class LibraryMatcher:
-    def __init__(self, config=LibraryConfig()):
+    def __init__(self, config):
         self.config = config
+        if config.backend not in {"small_gicp", "open3d_plane", "open3d_color"}:
+            raise ValueError("LibraryMatcher requires an optional library backend")
         if config.backend == "small_gicp":
             import small_gicp
 
@@ -329,6 +331,11 @@ class LibraryMatcher:
                 break
         self._local.proposals = candidates
         solved = time.perf_counter()
+        # Evaluate native iterates together. The shared fitter caches these exact
+        # residuals, so diagnostics and selection do not dispatch a spatial query
+        # for each pose. Standalone point-cloud callers may supply only score().
+        if hasattr(fitter, "batch_residuals"):
+            fitter.batch_residuals(candidates)
         valid = [p for p in candidates if admissible(p)] if admissible is not None else []
         if valid:
             pose = min(valid, key=fitter.score)

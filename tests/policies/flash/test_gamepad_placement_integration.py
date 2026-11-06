@@ -97,11 +97,11 @@ def test_geometry_check_does_not_accept_known_wrong_clear_view_solution(method):
 
 @recorded
 @pytest.mark.parametrize("method", METHODS[1:])
-def test_library_recovery_does_not_secretly_call_scipy(method, monkeypatch):
+def test_library_recovery_does_not_secretly_call_another_solver(method, monkeypatch):
     def forbidden(*a, **kw):
-        raise AssertionError("Library selection must not silently fall back to SciPy")
+        raise AssertionError("Library selection must not silently fall back to another solver")
 
-    monkeypatch.setattr("lerobot.policies.flash.surface_grounding.least_squares", forbidden)
+    monkeypatch.setattr("lerobot.policies.flash.surface_rigid_fit.solve", forbidden)
     report = replay(method, 627, clean_start=False)
     assert report["solver"]["library"] == method
     assert report["geometry"]["accepted"], report

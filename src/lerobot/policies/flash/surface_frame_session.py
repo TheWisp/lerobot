@@ -400,6 +400,7 @@ class SurfaceFrameSession:
                     candidate_input.update(
                         step=step, point_pairs=(source, target), match_source_frame=track.connected_frame
                     )
+                geometry = track.prepare_geometry(candidate_input)
                 hint = None
                 if name in groups:
                     hint, group_details = groups[name][role].predict(
@@ -415,6 +416,7 @@ class SurfaceFrameSession:
                         surface_reference=track.store.points
                         if track.config.partial_surface_matching
                         else None,
+                        prepared_geometry=geometry if track.config.partial_surface_matching else None,
                     )
                 candidate_check = (
                     partial(
@@ -435,6 +437,7 @@ class SurfaceFrameSession:
                     hint=hint,
                     candidate_check=candidate_check,
                     base_from_camera=frame.base_from_camera,
+                    geometry=geometry,
                 )
                 details = result["diagnostics"]
                 if name in groups:

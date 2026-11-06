@@ -157,7 +157,7 @@ def test_independent_view_fit_reports_alternatives_without_using_the_pose_trace(
     with np.load(Path(__file__).parent / "fixtures" / "gamepad_reference_depth_20261028.npz") as fixture:
         mask = fixture["mask_290"].astype(bool)
     original = model.view_points_object_m[0].copy()
-    config = ShapeConfig(max_fit_points=256, max_evaluations=30, batch_jacobian=False)
+    config = ShapeConfig(max_fit_points=256, max_evaluations=30)
     first = fit_reference_view_candidates(
         model.view_points_object_m[0], measured[290], mask, intrinsics, config
     )

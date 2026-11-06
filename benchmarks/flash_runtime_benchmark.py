@@ -97,7 +97,6 @@ class FitProfile(ExitStack):
             "refine",
             "search",
             "_solve",
-            "_refine_visible_correspondences",
             "residual",
             "batch_residuals",
             "score",
@@ -235,6 +234,8 @@ def compare_runs(before: Path, after: Path, method: str) -> dict:
     """Exact-output regression check; it does not establish absolute pose accuracy."""
     old_summary = json.loads((before / "summary.json").read_text())
     new_summary = json.loads((after / "summary.json").read_text())
+    old_quality = old_summary.get("quality", old_summary)
+    new_quality = new_summary.get("quality", new_summary)
     if (old_summary["input_sha256"], old_summary["frames"]) != (
         new_summary["input_sha256"],
         new_summary["frames"],
@@ -259,8 +260,17 @@ def compare_runs(before: Path, after: Path, method: str) -> dict:
         "identical": not any(changes.values()),
         "changed_frame_objects": {key: len(values) for key, values in changes.items()},
         "first_changes": {key: values[:10] for key, values in changes.items()},
-        "before_processing": old_summary.get("processing"),
-        "after_processing": new_summary.get("processing"),
+        "before_processing": old_summary.get("processing", old_summary.get("steady")),
+        "after_processing": new_summary.get("processing", new_summary.get("steady")),
+        # Exact equality detects numerical changes, not whether geometry is
+        # worse. Keep primary pose, secondary surface and availability together.
+        "quality": {
+            role: {
+                "before": old_quality["roles"][role]["methods"].get(method),
+                "after": new_quality["roles"][role]["methods"].get(method),
+            }
+            for role in old_quality["roles"]
+        },
     }
 
 
